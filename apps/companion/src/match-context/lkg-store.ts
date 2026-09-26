@@ -27,6 +27,14 @@ export interface MatchContextBinding {
   readonly diagnostics: readonly ContractDiagnostic[];
 }
 
+export function isLocalMatchContextBinding(
+  binding: Pick<MatchContextBinding, 'origin' | 'cachedFrom'> | undefined,
+): boolean {
+  return (
+    binding?.origin === 'local' || (binding?.origin === 'cache' && binding.cachedFrom === 'local')
+  );
+}
+
 export type MatchContextStoreIssueCode =
   | 'lkg_not_found'
   | 'lkg_read_failed'

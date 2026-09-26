@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LOCAL_BP_MAP_POOL,
   LOCAL_BP_MAP_CATALOG,
+  inspectBp,
   localBpSequence,
 } from '@rivalhub-broadcast/core/projection';
 import { localBpDraftSchema, type LocalBpDraft } from '@rivalhub-broadcast/protocol/bp';
 import type { BroadcastManifestV1, BroadcastSide } from '@rivalhub-broadcast/rivalhub';
 import { canonicalizeCs2MapName } from '@rivalhub-broadcast/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
+import { isLocalMatchContextBinding } from '../match-context/lkg-store.js';
 
 export type LocalBpDraftResult =
   | { readonly ok: true; readonly manifest: BroadcastManifestV1 }
@@ -48,19 +50,50 @@ function localSlug(value: string): string {
   return slug || 'local-match';
 }
 
-export function createLocalBpManifest(input: unknown): LocalBpDraftResult {
+export function createLocalBpManifest(
+  input: unknown,
+  baseBinding?: MatchContextBinding,
+): LocalBpDraftResult {
   const parsed = localBpDraftSchema.safeParse(input);
   if (!parsed.success) return invalid('bp_draft_invalid', '本地 BP 信息格式有误，请检查填写内容。');
   const draft = parsed.data;
+  const baseManifest = baseBinding?.manifest;
+  const editableBoundMatch = isLocalMatchContextBinding(baseBinding);
+  const inheritedLogoMatches = (entrant: 'a' | 'b') => {
+    const baseLogo = baseManifest?.entrants[entrant].logoUrl?.trim() || null;
+    return (draft.entrants[entrant].logoUrl?.trim() || null) === baseLogo;
+  };
+  const shouldValidateLogo = (entrant: 'a' | 'b') =>
+    baseManifest === undefined || (editableBoundMatch && !inheritedLogoMatches(entrant));
+  if (
+    baseManifest !== undefined &&
+    !editableBoundMatch &&
+    (draft.competitionName.trim() !== baseManifest.match.competition.name.trim() ||
+      draft.stage.trim() !== baseManifest.match.stage.trim() ||
+      draft.format !== baseManifest.match.format ||
+      draft.entrants.a.name.trim() !== baseManifest.entrants.a.name.trim() ||
+      draft.entrants.b.name.trim() !== baseManifest.entrants.b.name.trim() ||
+      !inheritedLogoMatches('a') ||
+      !inheritedLogoMatches('b'))
+  )
+    return invalid(
+      'bp_bound_identity_locked',
+      '当前比赛身份已绑定；本地补录只修改 BP，不会更改赛事、赛制、队伍或队标。',
+    );
   const pool = draft.mapPool.map((name) => canonicalizeCs2MapName(name));
   const bans = draft.bans.map((name) => canonicalizeCs2MapName(name));
   const picks = draft.picks.map((pick) => ({
     mapName: canonicalizeCs2MapName(pick.mapName),
     side: pick.side,
   }));
-  if (draft.entrants.a.name.trim() === '' || draft.entrants.b.name.trim() === '')
+  if (
+    (baseManifest === undefined || editableBoundMatch) &&
+    (draft.entrants.a.name.trim() === '' || draft.entrants.b.name.trim() === '')
+  )
     return invalid('bp_draft_names_required', '请填写两支队伍的名称。');
-  if (!safeLogoUrl(draft.entrants.a.logoUrl ?? '') || !safeLogoUrl(draft.entrants.b.logoUrl ?? ''))
+  if (shouldValidateLogo('a') && !safeLogoUrl(draft.entrants.a.logoUrl ?? ''))
+    return invalid('bp_draft_logo_invalid', '队标地址需使用 HTTPS 或本地相对路径。');
+  if (shouldValidateLogo('b') && !safeLogoUrl(draft.entrants.b.logoUrl ?? ''))
     return invalid('bp_draft_logo_invalid', '队标地址需使用 HTTPS 或本地相对路径。');
   if (
     pool.length !== 7 ||
@@ -100,8 +133,10 @@ export function createLocalBpManifest(input: unknown): LocalBpDraftResult {
   if (remaining.length !== 1)
     return invalid('bp_draft_decider_invalid', '剩余地图不唯一，无法确定决胜图。');
 
-  const entryId = { a: randomUUID(), b: randomUUID() };
-  const matchId = randomUUID();
+  const entryId = baseManifest
+    ? { a: baseManifest.entrants.a.entryId, b: baseManifest.entrants.b.entryId }
+    : { a: randomUUID(), b: randomUUID() };
+  const matchId = baseManifest?.match.matchId ?? randomUUID();
   const mapForPick = draft.picks.map((pick) => canonicalizeCs2MapName(pick.mapName)!);
   const deciderMap = remaining[0]!;
   const sequence = localBpSequence(draft.format, draft.vetoA);
@@ -136,7 +171,7 @@ export function createLocalBpManifest(input: unknown): LocalBpDraftResult {
     };
   });
   const pickMapNames = [...mapForPick, deciderMap];
-  const maps = pickMapNames.map((mapName, index) => {
+  const plannedMaps = pickMapNames.map((mapName, index) => {
     const choice = sequence.find(
       (action) =>
         action.kind === 'side_pick' &&
@@ -157,7 +192,6 @@ export function createLocalBpManifest(input: unknown): LocalBpDraftResult {
             : 'ct';
     const picker = sequence.find((action) => action.kind === 'pick' && action.valueIndex === index);
     return {
-      mapId: randomUUID(),
       mapOrder: index + 1,
       mapName,
       pickedByEntryId:
@@ -168,70 +202,159 @@ export function createLocalBpManifest(input: unknown): LocalBpDraftResult {
       completedAt: null,
     };
   });
+  const maps: BroadcastManifestV1['maps'][number][] = [];
+  for (const planned of plannedMaps) {
+    const existing = baseManifest?.maps.find((map) => map.mapOrder === planned.mapOrder);
+    const played =
+      existing !== undefined &&
+      (existing.scoreA !== null || existing.scoreB !== null || existing.completedAt !== null);
+    if (played) {
+      if (
+        existing.mapName !== planned.mapName ||
+        (existing.pickedByEntryId !== null &&
+          existing.pickedByEntryId !== planned.pickedByEntryId) ||
+        (existing.teamAStartSide !== null && existing.teamAStartSide !== planned.teamAStartSide)
+      )
+        return invalid(
+          'bp_played_map_conflict',
+          '已完成地图的地图顺序、选图方或起始边不能通过本地 BP 修改。',
+        );
+      maps.push(existing);
+      continue;
+    }
+    maps.push({
+      ...planned,
+      mapId: existing?.mapName === planned.mapName ? existing.mapId : randomUUID(),
+    });
+  }
   const competitionName = draft.competitionName.trim() || '本地赛事';
-  const manifest: BroadcastManifestV1 = {
-    schemaVersion: 'rivalhub.broadcast-manifest.v1',
-    revision: `local-${randomUUID()}`,
-    match: {
-      matchId,
-      competition: {
-        competitionId: `local-${randomUUID()}`,
-        slug: localSlug(competitionName),
-        name: competitionName,
-        themeColor: null,
+  const revision = `local-${randomUUID()}`;
+  const stage = draft.stage.trim() || '本地比赛';
+  let manifest: BroadcastManifestV1;
+  if (baseManifest !== undefined) {
+    const match = editableBoundMatch
+      ? {
+          ...baseManifest.match,
+          competition: {
+            ...baseManifest.match.competition,
+            name: competitionName,
+            slug:
+              competitionName === baseManifest.match.competition.name
+                ? baseManifest.match.competition.slug
+                : localSlug(competitionName),
+          },
+          format: draft.format,
+          stage,
+        }
+      : baseManifest.match;
+    const entrants = editableBoundMatch
+      ? {
+          a: {
+            ...baseManifest.entrants.a,
+            name: draft.entrants.a.name.trim(),
+            logoUrl: draft.entrants.a.logoUrl?.trim() || null,
+          },
+          b: {
+            ...baseManifest.entrants.b,
+            name: draft.entrants.b.name.trim(),
+            logoUrl: draft.entrants.b.logoUrl?.trim() || null,
+          },
+        }
+      : baseManifest.entrants;
+    manifest = { ...baseManifest, revision, match, entrants, maps, veto };
+  } else {
+    manifest = {
+      schemaVersion: 'rivalhub.broadcast-manifest.v1',
+      revision,
+      match: {
+        matchId,
+        competition: {
+          competitionId: `local-${randomUUID()}`,
+          slug: localSlug(competitionName),
+          name: competitionName,
+          themeColor: null,
+        },
+        status: 'scheduled',
+        format: draft.format,
+        stage,
+        round: null,
+        entryRound: null,
+        scheduledAt: null,
+        startedAt: null,
+        completedAt: null,
+        scoreA: null,
+        scoreB: null,
+        isForfeit: false,
       },
-      status: 'scheduled',
-      format: draft.format,
-      stage: draft.stage.trim() || '本地比赛',
-      round: null,
-      entryRound: null,
-      scheduledAt: null,
-      startedAt: null,
-      completedAt: null,
-      scoreA: null,
-      scoreB: null,
-      isForfeit: false,
-    },
-    entrants: {
-      a: {
-        entryId: entryId.a,
-        name: draft.entrants.a.name.trim(),
-        logoUrl: draft.entrants.a.logoUrl?.trim() || null,
-        roster: { rosterId: null, players: [] },
+      entrants: {
+        a: {
+          entryId: entryId.a,
+          name: draft.entrants.a.name.trim(),
+          logoUrl: draft.entrants.a.logoUrl?.trim() || null,
+          roster: { rosterId: null, players: [] },
+        },
+        b: {
+          entryId: entryId.b,
+          name: draft.entrants.b.name.trim(),
+          logoUrl: draft.entrants.b.logoUrl?.trim() || null,
+          roster: { rosterId: null, players: [] },
+        },
       },
-      b: {
-        entryId: entryId.b,
-        name: draft.entrants.b.name.trim(),
-        logoUrl: draft.entrants.b.logoUrl?.trim() || null,
-        roster: { rosterId: null, players: [] },
-      },
-    },
-    maps,
-    veto,
-    commentators: [],
-  };
+      maps,
+      veto,
+      commentators: [],
+    };
+  }
   return { ok: true, manifest };
 }
 
-export function localBpDraftFromBinding(binding: MatchContextBinding): LocalBpDraft | null {
-  if (binding.origin !== 'local' && binding.cachedFrom !== 'local') return null;
+export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): LocalBpDraft {
   const manifest = binding.manifest;
   const firstBan = manifest.veto.find((step) => step.actionType === 'ban');
   const vetoA = firstBan?.entryId === manifest.entrants.b.entryId ? 'b' : 'a';
-  const sideChoices = new Map<string, 'CT' | 'T' | null>(
-    manifest.veto
-      .filter((step) => step.actionType === 'side_pick')
-      .map((step) => [step.mapName, step.side === 'ct' ? 'CT' : step.side === 't' ? 'T' : null]),
+  const projection = inspectBp(binding.context).projection;
+  const sideChoices = new Map(
+    projection?.cards.flatMap((card) =>
+      card.sideChoice === null ? [] : [[card.mapName, card.sideChoice.side] as const],
+    ) ?? [],
   );
-  const picks = manifest.veto
-    .filter((step) => step.actionType === 'pick')
-    .map((step) => ({ mapName: step.mapName, side: sideChoices.get(step.mapName) ?? null }));
-  const decider = manifest.veto.find((step) => step.actionType === 'decider');
-  const deciderSide = decider === undefined ? null : (sideChoices.get(decider.mapName) ?? null);
-  const poolNames = new Set(manifest.veto.map((step) => canonicalizeCs2MapName(step.mapName)));
+  const poolNames = new Set(
+    [...manifest.veto.map((step) => step.mapName), ...manifest.maps.map((map) => map.mapName)]
+      .map((name) => canonicalizeCs2MapName(name))
+      .filter((name): name is string => name !== null && mapCatalog.has(name)),
+  );
   const catalogOrder = LOCAL_BP_MAP_CATALOG.map(({ mapName }) => mapName);
-  const mapPool = catalogOrder.filter((mapName) => poolNames.has(mapName));
-  if (mapPool.length !== 7) return null;
+  const mapPool = catalogOrder.filter((mapName) => poolNames.has(mapName)).slice(0, 7);
+  for (const mapName of [...DEFAULT_LOCAL_BP_MAP_POOL, ...catalogOrder]) {
+    if (mapPool.length === 7) break;
+    if (!mapPool.includes(mapName)) mapPool.push(mapName);
+  }
+  const expectedBans =
+    manifest.match.format === 'bo1' ? 6 : manifest.match.format === 'bo3' ? 4 : 2;
+  const expectedPicks =
+    manifest.match.format === 'bo1' ? 0 : manifest.match.format === 'bo3' ? 2 : 4;
+  const bans = manifest.veto
+    .filter((step) => step.actionType === 'ban')
+    .slice(0, expectedBans)
+    .map((step) => canonicalizeCs2MapName(step.mapName) ?? '');
+  while (bans.length < expectedBans) bans.push('');
+  const pickSteps = manifest.veto
+    .filter((step) => step.actionType === 'pick')
+    .slice(0, expectedPicks);
+  const picks = pickSteps.map((step) => ({
+    mapName: canonicalizeCs2MapName(step.mapName) ?? '',
+    side:
+      sideChoices.get(canonicalizeCs2MapName(step.mapName) ?? step.mapName) ??
+      (step.side === 'ct' ? 'CT' : step.side === 't' ? 'T' : null),
+  }));
+  while (picks.length < expectedPicks) picks.push({ mapName: '', side: null });
+  const decider = manifest.veto.find((step) => step.actionType === 'decider');
+  const deciderName = decider === undefined ? null : canonicalizeCs2MapName(decider.mapName);
+  const deciderSide =
+    deciderName === null || deciderName === undefined
+      ? null
+      : (sideChoices.get(deciderName) ??
+        (decider?.side === 'ct' ? 'CT' : decider?.side === 't' ? 'T' : null));
   return {
     competitionName: manifest.match.competition.name,
     stage: manifest.match.stage,
@@ -242,10 +365,14 @@ export function localBpDraftFromBinding(binding: MatchContextBinding): LocalBpDr
     },
     vetoA,
     mapPool: [...mapPool],
-    bans: manifest.veto.filter((step) => step.actionType === 'ban').map((step) => step.mapName),
+    bans,
     picks,
     deciderSide: manifest.match.format === 'bo5' ? null : deciderSide,
   };
+}
+
+export function localBpDraftFromBinding(binding: MatchContextBinding): LocalBpDraft | null {
+  return isLocalMatchContextBinding(binding) ? bpAuthoringDraftFromBinding(binding) : null;
 }
 
 export const localBpMapOptions = LOCAL_BP_MAP_CATALOG;

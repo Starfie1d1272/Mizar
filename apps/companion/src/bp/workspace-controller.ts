@@ -5,9 +5,13 @@ import {
 } from '@rivalhub-broadcast/core/projection';
 import { bpWorkspaceSchema, localBpDraftSchema } from '@rivalhub-broadcast/protocol/bp';
 import type { MatchContextController } from '../match-context/index.js';
+import {
+  bpAuthoringDraftFromBinding,
+  createLocalBpManifest,
+  localBpDraftFromBinding,
+} from './local-draft.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
-import { createLocalBpManifest, localBpDraftFromBinding } from './local-draft.js';
 
 function canMutate(policy: LocalWebOriginPolicy, origin: string | undefined): boolean {
   return policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -27,6 +31,7 @@ export function registerBpWorkspaceRoutes(
 ) {
   app.get('/local/v1/bp-workspace', (_request, reply) => {
     const binding = options.controller?.getActiveBinding();
+    const pending = options.controller?.getPendingOnlineCandidate();
     const publicSource =
       binding?.origin === 'online'
         ? 'online'
@@ -55,7 +60,7 @@ export function registerBpWorkspaceRoutes(
             },
           };
     const response = bpWorkspaceSchema.parse({
-      schemaVersion: 'rivalhub.bp-workspace.v1',
+      schemaVersion: 'rivalhub.bp-workspace.v2',
       source: publicSource,
       contextRevision: options.controller?.getActiveRevision() ?? 'unavailable',
       freshness: binding?.freshness ?? 'none',
@@ -66,8 +71,21 @@ export function registerBpWorkspaceRoutes(
             ? 'missing'
             : assessment.readiness,
       match,
-      rivalhubAvailable: options.controller?.getPendingOnlineBinding() !== undefined,
+      authoringDraft: binding === undefined ? null : bpAuthoringDraftFromBinding(binding),
       localDraft: binding === undefined ? null : localBpDraftFromBinding(binding),
+      pendingRivalhub:
+        pending === undefined
+          ? null
+          : {
+              revision: pending.revision,
+              competition: pending.binding.context.competition.name,
+              stage: pending.binding.context.stage,
+              format: pending.binding.context.format,
+              entrants: {
+                a: { name: pending.binding.context.entrants.a.name },
+                b: { name: pending.binding.context.entrants.b.name },
+              },
+            },
       mapPoolOptions: LOCAL_BP_MAP_CATALOG,
       defaultMapPool: DEFAULT_LOCAL_BP_MAP_POOL,
     });
@@ -91,7 +109,12 @@ export function registerBpWorkspaceRoutes(
       return reply
         .code(400)
         .send({ error: 'bp_draft_invalid', message: '本地 BP 信息格式有误，请检查填写内容。' });
-    const compiled = createLocalBpManifest(parsed.data);
+    if (body.expectedContextRevision !== options.controller.getActiveRevision())
+      return reply.code(409).send({
+        error: 'bp_context_conflict',
+        message: '比赛上下文已更新，请核对后再保存。',
+      });
+    const compiled = createLocalBpManifest(parsed.data, options.controller.getActiveBinding());
     if (!compiled.ok)
       return reply.code(400).send({ error: compiled.code, message: compiled.message });
     const result = await options.controller.selectLocalMatch(
@@ -100,20 +123,27 @@ export function registerBpWorkspaceRoutes(
     );
     if (!result.ok) {
       const stale = result.diagnostics.some((diagnostic) => diagnostic.code === 'selection_stale');
+      const identityConflict = result.diagnostics.some(
+        (diagnostic) => diagnostic.code === 'local_identity_mismatch',
+      );
       const persistenceFailed = result.diagnostics.some(
         (diagnostic) => diagnostic.code === 'lkg_persistence_failed',
       );
-      return reply.code(stale ? 409 : persistenceFailed ? 500 : 400).send({
+      return reply.code(stale || identityConflict ? 409 : persistenceFailed ? 500 : 400).send({
         error: stale
           ? 'bp_context_conflict'
-          : persistenceFailed
-            ? 'bp_save_failed'
-            : 'bp_draft_invalid',
+          : identityConflict
+            ? 'bp_identity_conflict'
+            : persistenceFailed
+              ? 'bp_save_failed'
+              : 'bp_draft_invalid',
         message: stale
           ? '比赛上下文已更新，请核对后再保存。'
-          : persistenceFailed
-            ? '保存失败，当前 BP 保持不变。'
-            : '本地 BP 无法转换为有效比赛上下文。',
+          : identityConflict
+            ? '当前比赛身份已改变，请重新载入 BP 工作台。'
+            : persistenceFailed
+              ? '保存失败，当前 BP 保持不变。'
+              : '本地 BP 无法转换为有效比赛上下文。',
       });
     }
     return { ok: true, message: '本地 BP 已保存。' };
@@ -127,10 +157,15 @@ export function registerBpWorkspaceRoutes(
         .code(503)
         .send({ error: 'rivalhub_unavailable', message: 'RivalHub 来源尚未接入。' });
     const body = request.body;
-    if (!isRecord(body) || typeof body.expectedContextRevision !== 'string')
+    if (
+      !isRecord(body) ||
+      typeof body.expectedContextRevision !== 'string' ||
+      typeof body.expectedPendingRevision !== 'string'
+    )
       return reply.code(400).send({ error: 'invalid_bp_source_command' });
     const result = await options.controller.activatePendingOnlineMatch(
       body.expectedContextRevision,
+      body.expectedPendingRevision,
     );
     if (!result.ok) {
       const persistenceFailed = result.diagnostics.some(

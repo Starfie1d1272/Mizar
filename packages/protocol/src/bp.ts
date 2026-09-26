@@ -142,16 +142,32 @@ const bpWorkspaceMatchSchema = z
   })
   .strict();
 
+const bpWorkspaceCandidateSchema = z
+  .object({
+    revision: z.string().min(1),
+    competition: z.string(),
+    stage: z.string(),
+    format: z.enum(['bo1', 'bo3', 'bo5']),
+    entrants: z
+      .object({
+        a: z.object({ name: z.string().max(80) }).strict(),
+        b: z.object({ name: z.string().max(80) }).strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const bpWorkspaceSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp-workspace.v1'),
+    schemaVersion: z.literal('rivalhub.bp-workspace.v2'),
     source: z.enum(['none', 'online', 'local', 'cache']),
     contextRevision: z.string().min(1),
     freshness: z.enum(['none', 'fresh', 'stale']),
     readiness: z.enum(['unbound', 'ready', 'missing', 'incomplete', 'conflict']),
     match: bpWorkspaceMatchSchema.nullable(),
-    rivalhubAvailable: z.boolean(),
+    authoringDraft: localBpDraftSchema.nullable(),
     localDraft: localBpDraftSchema.nullable(),
+    pendingRivalhub: bpWorkspaceCandidateSchema.nullable(),
     mapPoolOptions: z.array(z.object({ mapName: z.string(), label: z.string() }).strict()).min(7),
     defaultMapPool: z.array(z.string()).length(7),
   })

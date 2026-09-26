@@ -47,11 +47,13 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
   }, [operator]);
 
   async function returnToRivalhub() {
-    if (!workspace || sourceBusy || !workspace.rivalhubAvailable) return;
+    if (!workspace || sourceBusy || !workspace.pendingRivalhub) return;
     setSourceBusy(true);
     setWorkspaceMessage('');
     try {
-      setWorkspaceMessage(await switchToRivalhubBp(workspace.contextRevision));
+      setWorkspaceMessage(
+        await switchToRivalhubBp(workspace.contextRevision, workspace.pendingRivalhub.revision),
+      );
     } catch (error) {
       setWorkspaceMessage(
         error instanceof Error ? error.message : '切换来源失败，当前 BP 保持不变。',
@@ -71,6 +73,8 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
   const localSource =
     workspace?.source === 'local' ||
     (workspace?.source === 'cache' && workspace.localDraft !== null);
+  const showLocalAuthoring = workspace !== null && (localSource || workspace.readiness !== 'ready');
+  const pendingRivalhub = workspace?.pendingRivalhub;
   const snapshotVisible = snapshot !== null && snapshot.state !== 'hidden';
   const source = workspace ? sourceLabel(workspace.source) : loading ? '正在读取' : '服务断开';
 
@@ -155,26 +159,43 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
             </div>
             <div className="bp-control-actions">
               <BpControls snapshot={snapshot} showStatus={false} />
-              <button
-                type="button"
-                className="bp-button"
-                disabled={!workspace || !connected || sourceBusy}
-                onClick={() => setLocalEditorOpen(true)}
-              >
-                {localSource ? '编辑本地 BP' : '本地填写 BP'}
-              </button>
-              {workspace?.source === 'local' || workspace?.source === 'cache' ? (
+              {showLocalAuthoring ? (
+                <button
+                  type="button"
+                  className="bp-button"
+                  disabled={!connected || sourceBusy}
+                  onClick={() => setLocalEditorOpen(true)}
+                >
+                  {localSource
+                    ? '编辑本地 BP'
+                    : workspace?.match
+                      ? '补录当前比赛 BP'
+                      : '本地填写 BP'}
+                </button>
+              ) : null}
+            </div>
+            {localSource && pendingRivalhub ? (
+              <section className="bp-pending-rivalhub" aria-label="待确认的 RivalHub 比赛">
+                <strong>RivalHub 数据已恢复</strong>
+                <span>
+                  {pendingRivalhub.entrants.a.name} vs {pendingRivalhub.entrants.b.name} ·{' '}
+                  {pendingRivalhub.format.toUpperCase()}
+                </span>
+                <small>
+                  {pendingRivalhub.competition}
+                  {pendingRivalhub.stage ? ` · ${pendingRivalhub.stage}` : ''}
+                </small>
                 <button
                   type="button"
                   className="bp-button bp-button--quiet"
-                  disabled={!workspace.rivalhubAvailable || sourceBusy}
+                  disabled={sourceBusy}
                   onClick={() => void returnToRivalhub()}
                 >
                   {sourceBusy ? '正在切换…' : '切回 RivalHub BP'}
                 </button>
-              ) : null}
-            </div>
-            {workspace?.source === 'local' && !workspace.rivalhubAvailable ? (
+              </section>
+            ) : null}
+            {localSource && !pendingRivalhub ? (
               <p className="bp-rivalhub-note">
                 本地 BP 会保持当前播出；RivalHub 数据恢复后，可在这里确认切回。
               </p>

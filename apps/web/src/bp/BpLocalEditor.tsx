@@ -51,7 +51,12 @@ export function BpLocalEditor({
   readonly onSaved: (message: string) => void;
 }) {
   const [baseContextRevision] = useState(workspace.contextRevision);
-  const [initial] = useState(() => workspace.localDraft ?? emptyDraft(workspace));
+  const localSource =
+    workspace.source === 'local' || (workspace.source === 'cache' && workspace.localDraft !== null);
+  const lockedMatch = workspace.match !== null && !localSource;
+  const [initial] = useState(
+    () => workspace.localDraft ?? workspace.authoringDraft ?? emptyDraft(workspace),
+  );
   const [draft, setDraft] = useState<LocalBpDraft>(() => initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -147,10 +152,19 @@ export function BpLocalEditor({
       <div className="bp-editor-heading">
         <div>
           <span className="bp-workspace-eyebrow">LOCAL AUTHORING</span>
-          <h2 id="bp-local-editor-title">本地填写 BP</h2>
-          <p>保存后会切换到本地比赛，并收起当前播出；编辑中的内容不会影响当前画面。</p>
+          <h2 id="bp-local-editor-title">
+            {lockedMatch ? '为当前比赛补录 BP' : localSource ? '编辑本地 BP' : '本地填写 BP'}
+          </h2>
+          <p>
+            {lockedMatch
+              ? '赛事、赛制、队伍和名单来自当前比赛并保持锁定；保存只替换本地 BP。'
+              : localSource
+                ? '本地比赛身份保持稳定；保存只应用你修改的比赛信息和 BP。'
+                : '填写独立比赛的基本信息与 BP；保存后收起当前播出。'}{' '}
+            编辑内容不会影响当前画面。
+          </p>
         </div>
-        <span className="bp-editor-count">1 / 1 · 本地比赛</span>
+        <span className="bp-editor-count">{lockedMatch ? '当前比赛' : '本地比赛'}</span>
       </div>
 
       <div className="bp-editor-match-fields">
@@ -161,6 +175,7 @@ export function BpLocalEditor({
           <input
             value={draft.competitionName}
             maxLength={120}
+            disabled={lockedMatch}
             onChange={(event) => {
               const competitionName = event.currentTarget.value;
               setDraft((value) => ({ ...value, competitionName }));
@@ -175,6 +190,7 @@ export function BpLocalEditor({
           <input
             value={draft.stage}
             maxLength={120}
+            disabled={lockedMatch}
             onChange={(event) => {
               const stage = event.currentTarget.value;
               setDraft((value) => ({ ...value, stage }));
@@ -186,6 +202,7 @@ export function BpLocalEditor({
           <span>比赛赛制</span>
           <select
             value={draft.format}
+            disabled={lockedMatch}
             onChange={(event) => changeFormat(event.currentTarget.value as LocalBpDraft['format'])}
           >
             <option value="bo1">BO1</option>
@@ -218,6 +235,7 @@ export function BpLocalEditor({
                 value={draft.entrants[key].name}
                 maxLength={80}
                 required
+                disabled={lockedMatch}
                 onChange={(event) => {
                   const name = event.currentTarget.value;
                   setDraft((value) => ({
@@ -238,6 +256,7 @@ export function BpLocalEditor({
               <input
                 value={draft.entrants[key].logoUrl ?? ''}
                 maxLength={512}
+                disabled={lockedMatch}
                 onChange={(event) => {
                   const logoUrl = event.currentTarget.value || null;
                   setDraft((value) => ({

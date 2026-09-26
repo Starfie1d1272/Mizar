@@ -559,6 +559,31 @@
   font-size: 11px;
   line-height: 1.5;
 }
+.bp-pending-rivalhub {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid rgba(103, 232, 249, 0.18);
+  border-radius: 12px;
+  background: rgba(8, 145, 178, 0.08);
+}
+.bp-pending-rivalhub strong {
+  color: #a5f3fc;
+  font-size: 12px;
+}
+.bp-pending-rivalhub span {
+  color: #e1eaf2;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.bp-pending-rivalhub small {
+  color: #8ea0b2;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.bp-pending-rivalhub .bp-button {
+  margin-top: 3px;
+}
 .bp-workbench-status {
   min-height: 20px;
   margin: 0;

@@ -139,6 +139,12 @@ export function saveLocalBp(draft: LocalBpDraft, expectedContextRevision: string
   return postBpWorkspaceCommand('/operator/bp-local-save', { draft, expectedContextRevision });
 }
 
-export function switchToRivalhubBp(expectedContextRevision: string) {
-  return postBpWorkspaceCommand('/operator/bp-rivalhub', { expectedContextRevision });
+export function switchToRivalhubBp(
+  expectedContextRevision: string,
+  expectedPendingRevision: string,
+) {
+  return postBpWorkspaceCommand('/operator/bp-rivalhub', {
+    expectedContextRevision,
+    expectedPendingRevision,
+  });
 }

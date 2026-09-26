@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   BroadcastManifestConversionError,
@@ -17,6 +18,7 @@ import {
   type MatchContextStoreIssue,
   type MatchManifestLkgSaveOptions,
   type MatchManifestLkgStore,
+  isLocalMatchContextBinding,
 } from './lkg-store.js';
 
 export interface MatchContextSource {
@@ -35,6 +37,7 @@ export type MatchContextControllerIssueCode =
   | 'lkg_unavailable'
   | 'lkg_persistence_failed'
   | 'rivalhub_candidate_pending'
+  | 'local_identity_mismatch'
   | 'selection_stale';
 
 export interface MatchContextControllerIssue {
@@ -65,6 +68,15 @@ export interface MatchContextControllerOptions {
   readonly onBindingChanged?: (binding: MatchContextBinding | undefined) => void;
 }
 
+export interface PendingOnlineMatchCandidate {
+  readonly binding: MatchContextBinding;
+  readonly revision: string;
+}
+
+interface PendingOnlineMatchCandidateState extends PendingOnlineMatchCandidate {
+  readonly generation: number;
+}
+
 function controllerIssue(
   code: MatchContextControllerIssueCode,
   message: string,
@@ -73,13 +85,65 @@ function controllerIssue(
   return { code, message, ...details };
 }
 
+function isPlayedMap(map: BroadcastManifestV1['maps'][number]): boolean {
+  return map.scoreA !== null || map.scoreB !== null || map.completedAt !== null;
+}
+
+function preservesLocalMatchIdentity(
+  current: BroadcastManifestV1,
+  candidate: BroadcastManifestV1,
+): boolean {
+  const stableMatch = (match: BroadcastManifestV1['match']) => ({
+    ...match,
+    competition: { ...match.competition, name: '', slug: '' },
+    format: 'bo1',
+    stage: '',
+  });
+  const stableEntrants = (manifest: BroadcastManifestV1) => ({
+    a: { entryId: manifest.entrants.a.entryId, roster: manifest.entrants.a.roster },
+    b: { entryId: manifest.entrants.b.entryId, roster: manifest.entrants.b.roster },
+  });
+  if (
+    current.match.matchId !== candidate.match.matchId ||
+    current.match.competition.competitionId !== candidate.match.competition.competitionId ||
+    !isDeepStrictEqual(stableMatch(current.match), stableMatch(candidate.match)) ||
+    !isDeepStrictEqual(stableEntrants(current), stableEntrants(candidate)) ||
+    !isDeepStrictEqual(current.commentators, candidate.commentators)
+  )
+    return false;
+
+  const candidateMaps = new Map(candidate.maps.map((map) => [map.mapOrder, map]));
+  return current.maps
+    .filter(isPlayedMap)
+    .every((map) => isDeepStrictEqual(map, candidateMaps.get(map.mapOrder)));
+}
+
+function preservesBoundMatch(
+  current: MatchContextBinding,
+  candidate: BroadcastManifestV1,
+): boolean {
+  if (isLocalMatchContextBinding(current))
+    return preservesLocalMatchIdentity(current.manifest, candidate);
+  return (
+    isDeepStrictEqual(current.manifest.match, candidate.match) &&
+    isDeepStrictEqual(current.manifest.entrants, candidate.entrants) &&
+    isDeepStrictEqual(current.manifest.commentators, candidate.commentators) &&
+    current.manifest.maps.filter(isPlayedMap).every((map) =>
+      isDeepStrictEqual(
+        map,
+        candidate.maps.find((candidateMap) => candidateMap.mapOrder === map.mapOrder),
+      ),
+    )
+  );
+}
+
 export class MatchContextController {
   private readonly lkgStore: MatchManifestLkgStore;
   private readonly onBindingChanged:
     ((binding: MatchContextBinding | undefined) => void) | undefined;
   private readonly commitQueue = new SerialCommitQueue();
   private activeBinding: MatchContextBinding | undefined;
-  private pendingOnlineBinding: MatchContextBinding | undefined;
+  private pendingOnlineCandidate: PendingOnlineMatchCandidateState | undefined;
   private bindingRevision = 0;
   private readonly revisionEpoch = randomUUID();
   private selectionGeneration = 0;
@@ -99,13 +163,16 @@ export class MatchContextController {
     return `${this.revisionEpoch}:${this.bindingRevision}`;
   }
 
-  getPendingOnlineBinding(): MatchContextBinding | undefined {
-    return this.pendingOnlineBinding;
+  getPendingOnlineCandidate(): PendingOnlineMatchCandidate | undefined {
+    const candidate = this.pendingOnlineCandidate;
+    return candidate === undefined
+      ? undefined
+      : { binding: candidate.binding, revision: candidate.revision };
   }
 
   clearActive(): void {
     this.selectionGeneration += 1;
-    this.pendingOnlineBinding = undefined;
+    this.pendingOnlineCandidate = undefined;
     this.clearActiveBinding();
   }
 
@@ -126,11 +193,12 @@ export class MatchContextController {
     requestedMatchId: string,
     source: MatchContextSource,
   ): Promise<MatchContextSelectionResult> {
-    if (source.kind === 'online' && this.hasLocalOverride()) {
-      return this.stageOnlineCandidate(requestedMatchId, source);
-    }
     const generation = ++this.selectionGeneration;
     const isCurrent = () => generation === this.selectionGeneration;
+    if (source.kind === 'online' && this.hasLocalOverride()) {
+      this.pendingOnlineCandidate = undefined;
+      return this.stageOnlineCandidate(requestedMatchId, source, generation, isCurrent);
+    }
     if (this.activeBinding?.context.matchId !== requestedMatchId) this.clearActiveBinding();
 
     let candidate: unknown;
@@ -212,6 +280,9 @@ export class MatchContextController {
     candidate: unknown,
     expectedBindingRevision: string,
   ): Promise<MatchContextSelectionResult> {
+    const generation = ++this.selectionGeneration;
+    this.pendingOnlineCandidate = undefined;
+    const isCurrent = () => generation === this.selectionGeneration;
     const validated = validateBroadcastManifest(candidate);
     if (!validated.ok) {
       return {
@@ -241,14 +312,23 @@ export class MatchContextController {
     }
 
     return this.commitQueue.run(async () => {
-      if (expectedBindingRevision !== this.getActiveRevision())
+      if (!isCurrent() || expectedBindingRevision !== this.getActiveRevision())
         return this.staleSelectionResult(validated.value.match.matchId);
-      const generation = ++this.selectionGeneration;
-      const isCurrent = () =>
-        generation === this.selectionGeneration &&
-        expectedBindingRevision === this.getActiveRevision();
-      const saved = await this.lkgStore.save(validated.value, 'local', { canCommit: isCurrent });
-      if (!isCurrent() || (!saved.ok && saved.issue.code === 'lkg_commit_stale'))
+      const current = this.activeBinding;
+      if (current !== undefined && !preservesBoundMatch(current, validated.value))
+        return {
+          ok: false,
+          requestedMatchId: validated.value.match.matchId,
+          diagnostics: [
+            controllerIssue(
+              'local_identity_mismatch',
+              '本地 BP 只能更新当前比赛的 BP，不能替换已绑定的比赛或参赛身份。',
+            ),
+          ],
+        };
+      const canCommit = () => isCurrent() && expectedBindingRevision === this.getActiveRevision();
+      const saved = await this.lkgStore.save(validated.value, 'local', { canCommit });
+      if (!canCommit() || (!saved.ok && saved.issue.code === 'lkg_commit_stale'))
         return this.staleSelectionResult(validated.value.match.matchId);
       if (!saved.ok) {
         return {
@@ -268,7 +348,7 @@ export class MatchContextController {
         freshness: 'fresh',
         diagnostics: validated.diagnostics,
       };
-      this.pendingOnlineBinding = undefined;
+      this.pendingOnlineCandidate = undefined;
       this.setActive(binding);
       return { ok: true, binding, diagnostics: [] };
     });
@@ -287,26 +367,34 @@ export class MatchContextController {
 
   async activatePendingOnlineMatch(
     expectedBindingRevision: string,
+    expectedPendingRevision: string,
   ): Promise<MatchContextSelectionResult> {
+    const pending = this.pendingOnlineCandidate;
+    if (
+      pending === undefined ||
+      pending.revision !== expectedPendingRevision ||
+      pending.generation !== this.selectionGeneration ||
+      expectedBindingRevision !== this.getActiveRevision() ||
+      !this.hasLocalOverride()
+    )
+      return this.staleSelectionResult(pending?.binding.context.matchId ?? '');
+    const generation = ++this.selectionGeneration;
+    this.pendingOnlineCandidate = { ...pending, generation };
+    const isCurrent = () =>
+      generation === this.selectionGeneration &&
+      expectedBindingRevision === this.getActiveRevision() &&
+      this.pendingOnlineCandidate?.revision === expectedPendingRevision;
     return this.commitQueue.run(async () => {
-      const pending = this.pendingOnlineBinding;
-      if (
-        pending === undefined ||
-        expectedBindingRevision !== this.getActiveRevision() ||
-        !this.hasLocalOverride()
-      )
-        return this.staleSelectionResult(pending?.context.matchId ?? '');
-      const generation = ++this.selectionGeneration;
-      const isCurrent = () =>
-        generation === this.selectionGeneration &&
-        expectedBindingRevision === this.getActiveRevision();
-      const saved = await this.lkgStore.save(pending.manifest, 'online', { canCommit: isCurrent });
+      if (!isCurrent()) return this.staleSelectionResult(pending.binding.context.matchId);
+      const saved = await this.lkgStore.save(pending.binding.manifest, 'online', {
+        canCommit: isCurrent,
+      });
       if (!isCurrent() || (!saved.ok && saved.issue.code === 'lkg_commit_stale'))
-        return this.staleSelectionResult(pending.context.matchId);
+        return this.staleSelectionResult(pending.binding.context.matchId);
       if (!saved.ok) {
         return {
           ok: false,
-          requestedMatchId: pending.context.matchId,
+          requestedMatchId: pending.binding.context.matchId,
           diagnostics: [
             controllerIssue(
               'lkg_persistence_failed',
@@ -318,28 +406,28 @@ export class MatchContextController {
           ],
         };
       }
-      this.pendingOnlineBinding = undefined;
-      this.setActive(pending);
-      return { ok: true, binding: pending, diagnostics: [] };
+      this.pendingOnlineCandidate = undefined;
+      this.setActive(pending.binding);
+      return { ok: true, binding: pending.binding, diagnostics: [] };
     });
   }
 
   private hasLocalOverride(): boolean {
-    return (
-      this.activeBinding?.origin === 'local' ||
-      (this.activeBinding?.origin === 'cache' && this.activeBinding.cachedFrom === 'local')
-    );
+    return isLocalMatchContextBinding(this.activeBinding);
   }
 
   private async stageOnlineCandidate(
     requestedMatchId: string,
     source: MatchContextSource,
+    generation: number,
+    isCurrent: () => boolean,
   ): Promise<MatchContextSelectionResult> {
     let candidate: unknown;
     try {
       candidate = await source.load();
     } catch (error: unknown) {
       if (!(error instanceof SourceLoadError)) throw error;
+      if (!isCurrent()) return this.staleSelectionResult(requestedMatchId);
       return {
         ok: false,
         requestedMatchId,
@@ -348,6 +436,7 @@ export class MatchContextController {
         ],
       };
     }
+    if (!isCurrent()) return this.staleSelectionResult(requestedMatchId);
     const validated = validateBroadcastManifest(candidate);
     if (!validated.ok || validated.value.match.matchId !== requestedMatchId) {
       return {
@@ -378,7 +467,7 @@ export class MatchContextController {
       };
     }
     return this.commitQueue.run(() => {
-      if (!this.hasLocalOverride() || this.activeBinding === undefined)
+      if (!isCurrent() || !this.hasLocalOverride() || this.activeBinding === undefined)
         return this.staleSelectionResult(requestedMatchId);
       const binding: MatchContextBinding = {
         manifest: validated.value,
@@ -387,7 +476,7 @@ export class MatchContextController {
         freshness: 'fresh',
         diagnostics: validated.diagnostics,
       };
-      this.pendingOnlineBinding = binding;
+      this.pendingOnlineCandidate = { binding, revision: randomUUID(), generation };
       return {
         ok: true,
         binding: this.activeBinding,
