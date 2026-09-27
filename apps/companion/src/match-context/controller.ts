@@ -444,6 +444,7 @@ export class MatchContextController {
   async stageOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
     const generation = ++this.onlineCandidateGeneration;
     this.onlineCandidateAcquisition = generation;
+    this.pendingOnlineCandidate = undefined;
     try {
       const result = await this.stageOnlineCandidate(
         requestedMatchId,

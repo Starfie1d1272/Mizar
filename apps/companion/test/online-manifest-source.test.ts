@@ -56,6 +56,14 @@ it('stages a scoped HTTP Manifest and changes active truth only after explicit c
   expect(activated.ok).toBe(true);
   expect(controller.getActiveBinding()?.context.matchId).toBe(manifest.match.matchId);
   expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+  const failedRefresh = await controller.stageOnlineMatch(manifest.match.matchId, {
+    kind: 'online',
+    load: () => Promise.reject(new SourceLoadError('network unavailable')),
+  });
+  expect(failedRefresh.ok).toBe(false);
+  expect(controller.getActiveBinding()?.freshness).toBe('stale');
+  expect(controller.getActiveBinding()?.context.matchId).toBe(manifest.match.matchId);
+  expect(controller.getPendingOnlineCandidate()).toBeUndefined();
 });
 
 it('never sends a credential to an insecure remote origin or a redirect', async () => {
