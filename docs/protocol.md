@@ -381,7 +381,7 @@ v2 显式增加了以下字段以支持端侧轻量动效与战术标记渲染�
 - `RadarGrenade` 补充从 GSI raw payload 归一化提取的 `effectTimeSeconds: number | null`（缺失/异常为 `null`）；
 - 全部 payload 与 nested 对象采用 strict schema，未知字段 fail closed。
 
-### 4.6 Operator schema v3
+### 4.6 Operator schema v4
 
 Operator 快照包含制作控制需要的比赛上下文、运行转换、身份、ActiveLineup diagnostics、SeriesProgress binding/issues 和 source health。`seriesProgress` 只提供 Operator 恢复所需的有界地图状态、比分与诊断；它可以比 Program 拥有更多运行诊断，但不能成为 Program 的数据来源；`activeLineup.extras` 与 resolver issues 只用于 Operator/debug，不进入正式 Player Rails。
 
