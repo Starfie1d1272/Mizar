@@ -5,10 +5,10 @@ import {
   LOCAL_BP_MAP_CATALOG,
   localBpSequence,
   type BpSideChoice,
-} from '@rivalhub-broadcast/core/projection';
-import { localBpDraftSchema, type LocalBpDraft } from '@rivalhub-broadcast/protocol/bp';
-import type { BroadcastManifestV1, BroadcastSide } from '@rivalhub-broadcast/rivalhub';
-import { canonicalizeCs2MapName } from '@rivalhub-broadcast/core/map-name';
+} from '@mizar/core/projection';
+import { localBpDraftSchema, type LocalBpDraft } from '@mizar/protocol/bp';
+import type { BroadcastManifestV1, BroadcastSide } from '@mizar/rivalhub';
+import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
 import { isLocalBinding, localAuthoringMode } from '../match-context/lkg-store.js';
 

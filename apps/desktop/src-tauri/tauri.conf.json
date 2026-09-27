@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "RivalHub Broadcast",
+  "productName": "Mizar",
   "version": "0.1.0",
-  "identifier": "com.rivalhub.broadcast",
+  "identifier": "top.starfie1d.mizar",
   "build": { "frontendDist": "../../web/dist" },
   "app": {
     "windows": [],
     "security": { "capabilities": ["workspace"] }
   },
-  "bundle": { "active": false }
+  "bundle": { "active": false, "icon": ["icons/icon.ico", "icons/icon.png"] }
 }

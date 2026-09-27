@@ -1,4 +1,4 @@
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+import type { MatchContext } from '@mizar/core/match-context';
 
 import { validateBroadcastManifest } from './validate.js';
 import type { BroadcastEntrantV1, BroadcastManifestV1, BroadcastSide } from './types.js';

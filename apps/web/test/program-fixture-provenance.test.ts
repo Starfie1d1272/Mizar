@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import {
   HUD_EDITOR_FIXTURE_GROUPS,
   programFixtures,

@@ -15,7 +15,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
@@ -191,13 +190,13 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
         .setup(move |app| {
             let handle = app.handle();
             let left = WebviewWindowBuilder::new(handle, "workspace-left", local_url("/workspace/left"))
-                .title("RivalHub Broadcast · 工作区")
+                .title("Mizar · 工作区")
                 .decorations(false).resizable(false).on_navigation(trusted_navigation).build()?;
             let dock = WebviewWindowBuilder::new(handle, "workspace-dock", local_url("/workspace/dock"))
-                .title("RivalHub Broadcast · 现场控制")
+                .title("Mizar · 现场控制")
                 .decorations(false).resizable(false).on_navigation(trusted_navigation).build()?;
             let overlay = WebviewWindowBuilder::new(handle, "program-overlay", local_url("/program"))
-                .title("RivalHub Broadcast · Program HUD")
+                .title("Mizar · Program HUD")
                 .decorations(false).resizable(false).transparent(true).always_on_top(true)
                 .focusable(false).focused(false).skip_taskbar(true).visible(false)
                 .on_navigation(trusted_navigation).build()?;
@@ -207,10 +206,9 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
             dock.set_content_protected(true)?;
             let open = MenuItem::with_id(handle, "open_workspace", "打开工作区", true, None::<&str>)?;
             let control = MenuItem::with_id(handle, "open_operator", "打开制作控制", true, None::<&str>)?;
-            let exit = MenuItem::with_id(handle, "exit", "退出 RivalHub Broadcast", true, None::<&str>)?;
+            let exit = MenuItem::with_id(handle, "exit", "退出 Mizar", true, None::<&str>)?;
             let menu = Menu::with_items(handle, &[&open, &control, &exit])?;
-            let rgba = (0..16 * 16).flat_map(|_| [14, 105, 113, 255]).collect();
-            TrayIconBuilder::new().icon(Image::new_owned(rgba, 16, 16)).menu(&menu)
+            TrayIconBuilder::new().icon(tauri::include_image!("./icons/tray-icon.png")).menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open_workspace" => show_workspace(app),
                     "open_operator" => { let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", &format!("{BASE}/operator")]).spawn(); },
@@ -260,7 +258,7 @@ fn main() {
     }
     let headless = args.iter().any(|arg| arg == "--no-browser");
     let mutex = if headless { 0 } else {
-        let name: Vec<u16> = "Global\\RivalHubBroadcastDesktop\0".encode_utf16().collect();
+        let name: Vec<u16> = "Global\\MizarDesktop\0".encode_utf16().collect();
         let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
         if handle == 0 { eprintln!("桌面工作区锁不可用。"); std::process::exit(1); }
         if unsafe { GetLastError() } == 183 { return; }

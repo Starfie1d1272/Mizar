@@ -1,6 +1,6 @@
 import { builtinModules } from 'node:module';
 
-export const WORKSPACE_PACKAGE_PREFIX = '@rivalhub-broadcast/';
+export const WORKSPACE_PACKAGE_PREFIX = '@mizar/';
 
 export const WORKSPACE_DEPENDENCY_FIELDS = [
   'dependencies',
@@ -16,7 +16,7 @@ export const RUNTIME_DEPENDENCY_FIELDS = [
 ];
 
 export const CSTV_PARSER_PACKAGE = 'cs2parser';
-export const CSTV_PARSER_OWNER = '@rivalhub-broadcast/telemetry-cstv';
+export const CSTV_PARSER_OWNER = '@mizar/telemetry-cstv';
 
 export const CSTV_PARSER_OWNERSHIP_MESSAGE =
   'cs2parser is owned exclusively by packages/telemetry-cstv; keep its direct dependency and imports inside that source adapter.';
@@ -38,22 +38,22 @@ const packageBoundary = ({
 });
 
 export const PACKAGE_BOUNDARIES = Object.freeze({
-  '@rivalhub-broadcast/core': packageBoundary({
+  '@mizar/core': packageBoundary({
     message:
       'Core must remain framework-, transport-, and adapter-neutral; keep HTTP, UI, GSI, RivalHub, and Node-only ownership outside packages/core.',
     forbidden: ['react', 'react-dom', 'fastify', 'ws', 'vite', '@vitejs/', '@supabase/'],
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/telemetry-cstv',
-      '@rivalhub-broadcast/rivalhub',
-      '@rivalhub-broadcast/testkit',
-      '@rivalhub-broadcast/web',
-      '@rivalhub-broadcast/companion',
+      '@mizar/telemetry-gsi',
+      '@mizar/telemetry-cstv',
+      '@mizar/rivalhub',
+      '@mizar/testkit',
+      '@mizar/web',
+      '@mizar/companion',
     ],
     forbiddenWorkspacePaths: ['apps/'],
   }),
-  '@rivalhub-broadcast/protocol': packageBoundary({
+  '@mizar/protocol': packageBoundary({
     message:
       'Protocol owns local wire schemas and DTOs; it must not depend on runtime, presentation, adapter, server, storage, or database owners.',
     forbidden: [
@@ -73,24 +73,21 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     ],
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/core',
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/rivalhub',
-      '@rivalhub-broadcast/radar',
-      '@rivalhub-broadcast/testkit',
+      '@mizar/core',
+      '@mizar/telemetry-gsi',
+      '@mizar/rivalhub',
+      '@mizar/radar',
+      '@mizar/testkit',
     ],
   }),
-  '@rivalhub-broadcast/radar': packageBoundary({
+  '@mizar/radar': packageBoundary({
     message:
       'Radar is a framework-neutral domain package; keep React, DOM, transport, RivalHub, telemetry adapters, and Node-only runtime ownership in their boundaries.',
     forbidden: ['react', 'react-dom', 'fastify', 'ws', 'vite', '@vitejs/', '@supabase/'],
     forbidNodeBuiltins: true,
-    forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/rivalhub',
-    ],
+    forbiddenWorkspacePackages: ['@mizar/telemetry-gsi', '@mizar/rivalhub'],
   }),
-  '@rivalhub-broadcast/cs2-assets': packageBoundary({
+  '@mizar/cs2-assets': packageBoundary({
     message:
       'CS2 assets owns presentation asset metadata, generated SVGs, provenance, and framework-neutral resolution; keep Runtime, telemetry, RivalHub, Radar, and renderer ownership outside the package.',
     forbidden: [
@@ -106,18 +103,18 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     ],
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/core',
-      '@rivalhub-broadcast/protocol',
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/telemetry-cstv',
-      '@rivalhub-broadcast/rivalhub',
-      '@rivalhub-broadcast/radar',
-      '@rivalhub-broadcast/testkit',
-      '@rivalhub-broadcast/web',
-      '@rivalhub-broadcast/companion',
+      '@mizar/core',
+      '@mizar/protocol',
+      '@mizar/telemetry-gsi',
+      '@mizar/telemetry-cstv',
+      '@mizar/rivalhub',
+      '@mizar/radar',
+      '@mizar/testkit',
+      '@mizar/web',
+      '@mizar/companion',
     ],
   }),
-  '@rivalhub-broadcast/telemetry-gsi': packageBoundary({
+  '@mizar/telemetry-gsi': packageBoundary({
     message:
       'Telemetry GSI must remain a pure, replayable, transport-independent source adapter; keep UI, server, storage, RivalHub, Radar, testkit, and Node-only ownership outside the package.',
     forbidden: [
@@ -138,15 +135,15 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     ],
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/protocol',
-      '@rivalhub-broadcast/rivalhub',
-      '@rivalhub-broadcast/radar',
-      '@rivalhub-broadcast/testkit',
-      '@rivalhub-broadcast/web',
-      '@rivalhub-broadcast/companion',
+      '@mizar/protocol',
+      '@mizar/rivalhub',
+      '@mizar/radar',
+      '@mizar/testkit',
+      '@mizar/web',
+      '@mizar/companion',
     ],
   }),
-  '@rivalhub-broadcast/telemetry-cstv': packageBoundary({
+  '@mizar/telemetry-cstv': packageBoundary({
     message:
       'Telemetry CSTV must remain a pure, replayable source adapter; keep UI, server, storage, RivalHub, Radar, GSI, testkit, and Node-only ownership outside the package.',
     forbidden: [
@@ -167,26 +164,23 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     ],
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/protocol',
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/rivalhub',
-      '@rivalhub-broadcast/radar',
-      '@rivalhub-broadcast/testkit',
-      '@rivalhub-broadcast/web',
-      '@rivalhub-broadcast/companion',
+      '@mizar/protocol',
+      '@mizar/telemetry-gsi',
+      '@mizar/rivalhub',
+      '@mizar/radar',
+      '@mizar/testkit',
+      '@mizar/web',
+      '@mizar/companion',
     ],
   }),
-  '@rivalhub-broadcast/web': packageBoundary({
+  '@mizar/web': packageBoundary({
     message:
       'Web consumes normalized projections; it must not own raw telemetry, RivalHub cloud integration, server transport, or Node-only runtime code.',
     forbidden: ['fastify', 'ws', 'vite', '@vitejs/', '@supabase/'],
     forbidNodeBuiltins: true,
-    forbiddenWorkspacePackages: [
-      '@rivalhub-broadcast/telemetry-gsi',
-      '@rivalhub-broadcast/rivalhub',
-    ],
+    forbiddenWorkspacePackages: ['@mizar/telemetry-gsi', '@mizar/rivalhub'],
   }),
-  '@rivalhub-broadcast/rivalhub': packageBoundary({
+  '@mizar/rivalhub': packageBoundary({
     message:
       'RivalHub is a public-contract adapter; it must not access Supabase clients or RivalHub repository source directly.',
     forbidden: [

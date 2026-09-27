@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import type { BpSession } from '../src/bp/controller.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';

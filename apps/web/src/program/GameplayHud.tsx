@@ -2,12 +2,8 @@ import { presentationBoundaryKey } from './presentation-boundary';
 import type { RadarProps } from './widgets/radar/Radar';
 import type { CSSProperties, ReactElement } from 'react';
 
-import {
-  HUD_WIDGET_REGISTRY,
-  placementToBox,
-  type HudResolvedPreset,
-} from '@rivalhub-broadcast/hud-config';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import { HUD_WIDGET_REGISTRY, placementToBox, type HudResolvedPreset } from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import {
   getHudRendererEntry,

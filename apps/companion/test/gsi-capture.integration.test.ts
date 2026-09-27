@@ -3,12 +3,8 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createInitialRuntimeState, reduceRuntime } from '@rivalhub-broadcast/core/runtime';
-import {
-  iterateCaptureFrames,
-  verifyCapture,
-  type CaptureFrameV1,
-} from '@rivalhub-broadcast/testkit';
+import { createInitialRuntimeState, reduceRuntime } from '@mizar/core/runtime';
+import { iterateCaptureFrames, verifyCapture, type CaptureFrameV1 } from '@mizar/testkit';
 
 import { buildApp } from '../src/app.js';
 import {

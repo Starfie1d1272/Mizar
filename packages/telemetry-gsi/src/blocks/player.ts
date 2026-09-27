@@ -5,7 +5,7 @@ import type {
   ObservedWeapon,
   SourceSide,
   WeaponState,
-} from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/telemetry';
 import type { DiagnosticCollector } from '../diagnostics/collector.js';
 import { optionalEnum } from '../parse/enum.js';
 import { asSourceRecord, compareSourceKeys } from '../parse/record.js';

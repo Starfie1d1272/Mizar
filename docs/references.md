@@ -4,7 +4,7 @@
 
 | 项目 | 主要学习点 | 不直接继承 |
 | --- | --- | --- |
-| `papesgit/hot` / HLAE Observer Tools（核验基线：v0.4.0） | Observer Desk、Delayed Observer Cues、Radar / Viewport cue、游戏画面嵌入工作区 | HLAE injection 不是 Broadcast 基础前提；不复制具体布局或把第二个完整 renderer 变成要求 |
+| `papesgit/hot` / HLAE Observer Tools（核验基线：v0.4.0） | Observer Desk、Delayed Observer Cues、Radar / Viewport cue、游戏画面嵌入工作区 | HLAE injection 不是 Mizar 基础前提；不复制具体布局或把第二个完整 renderer 变成要求 |
 | `drweissbrot/cs-hud` | 最小 GSI → 本地服务 → HUD / Radar → OBS，本地优先 | 老旧技术结构和有限产品模型 |
 | `mortenlein/eon` | Waiting / Intermission / Result、Operator、Simulator、Radar、确定性测试纪律 | 不继承单体状态结构，不从 Raw GSI 构造展示测试真相 |
 | `nsnsay/Zhenhai-HUD-Manager` | TypeScript workspace、手雷/烟火、上下层 Radar、监听器生命周期 | 顶层许可证边界不清；不复制应用代码或建立第二套 Team / Match 数据库 |
@@ -18,13 +18,13 @@
 | MulNX | 高级摄像机、电影化能力、localhost API | injection/hook/`-insecure` 属于不同安全域，只作为可选集成研究 |
 | Excel2OBS | BP 图卡的逐步展示体验 | 不引入 Excel / OBS source mutation 中间层 |
 | MatchZy / CounterStrikeSharp | 可靠服务器事件 | 不要求比赛服务器安装插件，因此不能成为基础 HUD 前提 |
-| ValveResourceFormat | Source 2 资源解析、地图数据工具 | 不把完整 Viewer / .NET 应用塞入 Broadcast runtime |
+| ValveResourceFormat | Source 2 资源解析、地图数据工具 | 不把完整 Viewer / .NET 应用塞入 Mizar runtime |
 
 ## HOT 与 Lookahead
 
-HOT **v0.4.0** 的 Delayed Observer Cues 已经证明“较早时间轴 → 延迟 observer cue”有公开 prior art。RivalHub Broadcast 不宣称这一概念首创。后续如果 HOT 行为发生变化，应重新核对版本，不把这里的 v0.4.0 结论自动外推到未来版本。
+HOT **v0.4.0** 的 Delayed Observer Cues 已经证明“较早时间轴 → 延迟 observer cue”有公开 prior art。Mizar 不宣称这一概念首创。后续如果 HOT 行为发生变化，应重新核对版本，不把这里的 v0.4.0 结论自动外推到未来版本。
 
-Broadcast 的差异在于把以下边界组合为同一产品：
+Mizar 的差异在于把以下边界组合为同一产品：
 
 ```text
 headless / no-delay source
@@ -54,7 +54,7 @@ Web Radar Renderer
   temporal interpolation / smoothing / autozoom presentation
 ```
 
-第三方项目可以帮助验证产品体验或算法，但不能把其状态模型、地图 package shape 或应用 runtime 变成 Broadcast 的公共 contract。
+第三方项目可以帮助验证产品体验或算法，但不能把其状态模型、地图 package shape 或应用 runtime 变成 Mizar 的公共 contract。
 
 ## 复用原则
 
@@ -62,7 +62,7 @@ Web Radar Renderer
 2. 产品体验和架构参考不等于源码复用。
 3. GPL / AGPL 项目如果仅作研究参考，保持净室实现；代码级复用必须单独评估许可证后果。
 4. 专有软件只做产品对照。
-5. 第三方内部类型不得成为 Broadcast 公共协议或 Core domain 的 authority。
+5. 第三方内部类型不得成为 Mizar 公共协议或 Core domain 的 authority。
 6. 已存在明确 owner 的共享基础设施优先通过 adapter/provider 接入，不再维护第二份真相。
 7. 研究结论如果依赖具体版本行为，应在相关 Issue / PR 中保留版本证据；长期文档只保留仍有效的设计结论和必要 provenance。
 

@@ -24,7 +24,7 @@ ADR-0002 已冻结 Runtime / Workspace 技术栈，但在正式实现 Core 前�
 - reconnect、restart、wrong match、map restart 必须有明确的 session / epoch / sequence 语义；
 - latest-wins 必须落实为真实 backpressure 行为，而不是只写在文档里；
 - 离线期间不能自动执行危险 canonical command，但可靠 observation 也不能因为短暂断网永久丢失；
-- RivalHub 与 Broadcast 必须通过公开 versioned contract 集成，但各自拥有不同的 contract surface。
+- RivalHub 与 Mizar 必须通过公开 versioned contract 集成，但各自拥有不同的 contract surface。
 
 本 ADR 固定这些 **runtime invariants**。具体 schema 字段、HTTP path、WebSocket message name、持久化实现仍由后续实现/ADR 决定。
 
@@ -32,7 +32,7 @@ ADR-0002 已冻结 Runtime / Workspace 技术栈，但在正式实现 Core 前�
 
 ## 1. Core 只有一份 RuntimeState；state projection 与 edge-derived message 分离
 
-Broadcast Core 维护一份内部事实模型：
+Mizar Core 维护一份内部事实模型：
 
 ```text
 Normalized Telemetry
@@ -123,7 +123,7 @@ manual presentation reset
 
 ### ReliableObservation
 
-表示 Broadcast 准备提交给 RivalHub #610 的低频、高价值观察，例如：
+表示 Mizar 准备提交给 RivalHub #610 的低频、高价值观察，例如：
 
 ```text
 match_started observation
@@ -160,7 +160,7 @@ Incident 用于 Operator / Debug / logging / health；不能因为“也是事�
 
 ```text
 liveSessionId
-  RivalHub Match ↔ 一个被服务端认可的 Broadcast producer session 绑定
+  RivalHub Match ↔ 一个被服务端认可的 Mizar producer session 绑定
 
 producerInstanceId
   一次 Companion process/runtime 实例；进程重启后改变
@@ -384,7 +384,7 @@ requestAnimationFrame scheduling
 OBS/browser-specific rendering details
 ```
 
-地图几何通过 `MapGeometryProvider` 进入 Radar；当前默认 provider 使用 Broadcast 自己持有的、显式版本化的 CS2 overview calibration snapshot。DAK `@cs2dak/maps` 仅作为独立交叉参考，不是 Broadcast 的 build/runtime owner；Radar 不直接把 DAK package shape 作为自己的 domain contract。
+地图几何通过 `MapGeometryProvider` 进入 Radar；当前默认 provider 使用 Mizar 自己持有的、显式版本化的 CS2 overview calibration snapshot。DAK `@cs2dak/maps` 仅作为独立交叉参考，不是 Mizar 的 build/runtime owner；Radar 不直接把 DAK package shape 作为自己的 domain contract。
 
 Boltobserv / Obserview 等用于算法与产品 UX 参考，不作为第二套 GSI runtime/sidecar。
 
@@ -392,9 +392,9 @@ Boltobserv / Obserview 等用于算法与产品 UX 参考，不作为第二套 G
 
 ## 10. 跨仓 contract ownership
 
-### Broadcast-owned local contract
+### Mizar-owned local contract
 
-Broadcast 自己拥有：
+Mizar 自己拥有：
 
 ```text
 Companion ↔ Program
@@ -414,7 +414,7 @@ BroadcastManifest API
 #615 Live Snapshot ingest
 ```
 
-Broadcast 的 `packages/rivalhub` 作为 consumer/producer adapter：
+Mizar 的 `packages/rivalhub` 作为 consumer/producer adapter：
 
 - 使用公开 machine-readable schema / documented contract；
 - 可以生成或维护本地 validator/client；
@@ -428,7 +428,7 @@ Broadcast 的 `packages/rivalhub` 作为 consumer/producer adapter：
 
 ```text
 BroadcastLiveSnapshot
-  Broadcast → RivalHub #615 的 producer payload
+  Mizar → RivalHub #615 的 producer payload
 
 EphemeralLiveProjection
   RivalHub #615 服务端维护的当前实时投影
@@ -437,7 +437,7 @@ PublicLiveMatchProjection
   RivalHub 公共页面消费的公开 read model
 ```
 
-不要在 Broadcast 侧把 producer payload 也称为 `LiveProjection`。
+不要在 Mizar 侧把 producer payload 也称为 `LiveProjection`。
 
 ---
 
@@ -487,7 +487,7 @@ basic Gameplay + player/bomb Radar
 reconnect / backpressure
 2h soak
 
-M2 Broadcast workflow
+M2 Mizar workflow
 utility（grenade/smoke/inferno）
 provisional stats
 Waiting / Matchup / BP / Halftime / MapResult / InterMap / MatchResult
@@ -516,7 +516,7 @@ advanced observer advisory / effects / optional adapters
 - transition-derived ReliableObservation 保留边沿事实与当时 evidence，不依赖事后从 current state 猜历史；
 - reliable observation 可以安全重试，同时不把离线 command 变成危险自动执行；
 - Wrong Match、restart、reconnect、slow consumer 的行为可测试；
-- #610 / #615 与 Broadcast 的 authority/terminology 清晰；
+- #610 / #615 与 Mizar 的 authority/terminology 清晰；
 - Radar、renderer、scene effect 可以独立演进。
 
 ### 代价

@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 
 const cs2AssetsPublicDir = '../../packages/cs2-assets/generated/public';
 const replayPublicDir = resolve(import.meta.dirname, 'public');
+const brandPublicDir = resolve(import.meta.dirname, 'public/brand');
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 
 const replaySources = {
@@ -33,7 +34,7 @@ async function readJsonRequest(request: AsyncIterable<Uint8Array>): Promise<unkn
 
 function replayPrefixDevelopmentApi() {
   return {
-    name: 'rivalhub-replay-prefix-development-api',
+    name: 'mizar-replay-prefix-development-api',
     configureServer(server: import('vite').ViteDevServer) {
       type ReplayModule = {
         readonly replayRealProgram: (options: {
@@ -122,7 +123,7 @@ function replayPrefixDevelopmentApi() {
 
 function replayPublicAssets() {
   return {
-    name: 'rivalhub-replay-public-assets',
+    name: 'mizar-replay-public-assets',
     configureServer(server: import('vite').ViteDevServer) {
       server.middlewares.use('/fixtures', (request, response, next) => {
         const requestUrl = request.url;
@@ -168,9 +169,50 @@ function replayPublicAssets() {
   };
 }
 
+function brandPublicAssets() {
+  return {
+    name: 'mizar-brand-public-assets',
+    configureServer(server: import('vite').ViteDevServer) {
+      server.middlewares.use('/brand', (request, response, next) => {
+        const requestUrl = request.url;
+        if (requestUrl === undefined) return next();
+        let pathname: string;
+        try {
+          pathname = decodeURIComponent(new URL(requestUrl, 'http://localhost').pathname);
+        } catch {
+          return next();
+        }
+        const filePath = resolve(brandPublicDir, `.${pathname}`);
+        if (!filePath.startsWith(`${brandPublicDir}${sep}`)) return next();
+        void readFile(filePath)
+          .then((bytes) => {
+            const contentTypes: Record<string, string> = {
+              '.svg': 'image/svg+xml',
+              '.png': 'image/png',
+            };
+            response.statusCode = 200;
+            response.setHeader(
+              'Content-Type',
+              contentTypes[extname(filePath)] ?? 'application/octet-stream',
+            );
+            response.setHeader('Cache-Control', 'no-cache');
+            response.end(bytes);
+          })
+          .catch(() => next());
+      });
+    },
+    async closeBundle() {
+      await cp(brandPublicDir, resolve(import.meta.dirname, 'dist/brand'), {
+        recursive: true,
+        force: true,
+      });
+    },
+  };
+}
+
 function hostDiagnosticsDevelopmentApi() {
   return {
-    name: 'rivalhub-host-diagnostics-development-api',
+    name: 'mizar-host-diagnostics-development-api',
     configureServer(server: import('vite').ViteDevServer) {
       server.middlewares.use('/debug/hosts', (_request, response) => {
         void (async () => {
@@ -221,7 +263,7 @@ function hostDiagnosticsDevelopmentApi() {
 function productShellStylesheet() {
   const stylesheet = resolve(import.meta.dirname, 'src/product-shell.css');
   return {
-    name: 'rivalhub-product-shell-stylesheet',
+    name: 'mizar-product-shell-stylesheet',
     configureServer(server: import('vite').ViteDevServer) {
       server.middlewares.use('/product-shell.css', (_request, response, next) => {
         void readFile(stylesheet)
@@ -246,6 +288,7 @@ export default defineConfig({
   plugins: [
     react(),
     replayPublicAssets(),
+    brandPublicAssets(),
     replayPrefixDevelopmentApi(),
     productShellStylesheet(),
     hostDiagnosticsDevelopmentApi(),
@@ -256,7 +299,7 @@ export default defineConfig({
       // The replay-prefix API is development-only and loads test support through Vite SSR.
       // Bind it to the current worktree source so seek cannot consume a stale testkit dist
       // or dependency-cache entry after fixture provenance/schema changes.
-      '@rivalhub-broadcast/testkit': resolve(repositoryRoot, 'packages/testkit/src/index.ts'),
+      '@mizar/testkit': resolve(repositoryRoot, 'packages/testkit/src/index.ts'),
     },
   },
   server: {

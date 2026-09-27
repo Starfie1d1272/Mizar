@@ -1,4 +1,4 @@
-import type { ProgramCueWire } from '@rivalhub-broadcast/protocol/program-cue';
+import type { ProgramCueWire } from '@mizar/protocol/program-cue';
 
 import type { ProgramCueClient } from '../realtime/program-cue-client';
 

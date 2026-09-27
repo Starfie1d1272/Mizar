@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RoleScopedGameEventObservation } from '@rivalhub-broadcast/core/game-events';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+import type { RoleScopedGameEventObservation } from '@mizar/core/game-events';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 import { createProgramCueCoordinator } from '../src/projections/program-cue-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';

@@ -1,5 +1,5 @@
-import type { GameEventPlayerRef } from '@rivalhub-broadcast/core/game-events';
-import type { SourceSide } from '@rivalhub-broadcast/core/telemetry';
+import type { GameEventPlayerRef } from '@mizar/core/game-events';
+import type { SourceSide } from '@mizar/core/telemetry';
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null

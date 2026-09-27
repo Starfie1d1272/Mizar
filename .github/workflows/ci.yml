@@ -291,7 +291,7 @@ jobs:
       - name: Upload exact-SHA qualification artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: rivalhub-broadcast-qualification-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
+          name: mizar-qualification-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json

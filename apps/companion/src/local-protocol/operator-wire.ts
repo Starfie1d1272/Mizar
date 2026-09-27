@@ -1,4 +1,4 @@
-import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
+import type { OperatorPayload } from '@mizar/protocol/operator';
 
 import type { OperatorProjection } from '../projections/operator-projection.js';
 

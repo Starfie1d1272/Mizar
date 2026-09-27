@@ -1,5 +1,5 @@
-import type { ContractDiagnostic } from '@rivalhub-broadcast/rivalhub';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+import type { ContractDiagnostic } from '@mizar/rivalhub';
+import type { MatchContext } from '@mizar/core/match-context';
 
 import type { ContextOrigin, MatchContextBinding } from '../match-context/index.js';
 

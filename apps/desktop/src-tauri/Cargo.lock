@@ -2529,7 +2529,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rivalhub-broadcast-desktop"
+name = "mizar-desktop"
 version = "0.1.0"
 dependencies = [
  "serde_json",

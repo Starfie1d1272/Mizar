@@ -4,7 +4,7 @@ import type {
   ProgramCueBaselineV1,
   ProgramCueLaneCursor,
   ProgramCueMessageV1,
-} from '@rivalhub-broadcast/protocol/program-cue';
+} from '@mizar/protocol/program-cue';
 import { getProgramFixture } from '../src/program/fixtures';
 import {
   createProgramCueClient,
@@ -100,7 +100,7 @@ class FakeWebSocket implements BrowserWebSocketLike {
 
   open(): void {
     this.readyState = 1;
-    this.protocol = 'rivalhub-broadcast.local.v1';
+    this.protocol = 'mizar.local.v1';
     this.onopen?.();
   }
 

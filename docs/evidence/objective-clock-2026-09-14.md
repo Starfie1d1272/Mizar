@@ -10,7 +10,7 @@
 - `captureId`：`sanitized-20260914T060149Z-4cda66b7-recovered-match-seq-5522-5544`
 - `sourceCaptureId`：`20260914T060149Z-4cda66b7-recovered-match`
 - 平台：`win32`；Windows `11 Pro for Workstations`
-- Broadcast 提交版本：`08c0239ef2ae5fea1286d0163d3b7b3cb423039b`
+- Mizar 提交版本：`08c0239ef2ae5fea1286d0163d3b7b3cb423039b`
 - 选取的来源序列：`5522..5544`；共 23 帧，记录完整，丢失数据帧 `0`
 - 脱敏来源数据帧 SHA-256：`7a2dfed10f28903de6a94e782ca3f0955593fe2f653e7e831e05305d8e99347a`
 - 仓库测试样例 `frames.jsonl` SHA-256：`188320f5a2637683e55a5cc4e2cbf9b88ccdd5ceaf7a4be64b62c0306d7ad633`

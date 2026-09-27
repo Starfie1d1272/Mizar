@@ -21,7 +21,7 @@ import {
   type HudPreset,
   type HudResolvedPreset,
   type HudTheme,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 import { replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 

@@ -2,9 +2,10 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import type { BroadcastManifestV1, BroadcastScheduleWindowV1 } from '@rivalhub-broadcast/rivalhub';
+import type { BroadcastManifestV1, BroadcastScheduleWindowV1 } from '@mizar/rivalhub';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { MATCH_CONTEXT_CACHE_VERSION } from '../src/match-context/lkg-store.js';
 import {
   createFixtureManifestSource,
   MatchContextController,
@@ -14,6 +15,7 @@ import {
   SourceLoadError,
 } from '../src/match-context/index.js';
 import type { ScheduleWindowRequest } from '../src/match-context/index.js';
+import { SCHEDULE_WINDOW_CACHE_VERSION } from '../src/match-context/schedule-window-store.js';
 import type { DurableJsonCommitPoint } from '../src/match-context/durable-json.js';
 
 const fixtureRoot = resolve(process.cwd(), 'packages/rivalhub/test/fixtures');
@@ -24,7 +26,7 @@ async function readFixture<T>(fileName: string): Promise<T> {
 }
 
 async function temporaryDirectory(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'rivalhub-broadcast-m2-'));
+  const root = await mkdtemp(join(tmpdir(), 'mizar-m2-'));
   temporaryRoots.push(root);
   return root;
 }
@@ -99,7 +101,7 @@ describe('Match Manifest last-known-good seam', () => {
 
     const envelope = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>;
     expect(envelope).toEqual({
-      cacheVersion: 'rivalhub.broadcast-match-context-cache.v2',
+      cacheVersion: MATCH_CONTEXT_CACHE_VERSION,
       metadata: {
         matchId: manifest.match.matchId,
         origin: 'online',
@@ -110,36 +112,6 @@ describe('Match Manifest last-known-good seam', () => {
     });
     await expect(readFile(`${filePath}.meta.json`, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
-    });
-  });
-
-  it('restores legacy local LKG metadata as a locked bound overlay', async () => {
-    const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
-    const filePath = join(root, 'manifest.json');
-    await writeFile(
-      filePath,
-      `${JSON.stringify({
-        cacheVersion: 'rivalhub.broadcast-match-context-cache.v1',
-        metadata: {
-          matchId: manifest.match.matchId,
-          origin: 'local',
-          storedAt: '2026-09-16T12:00:00.000Z',
-        },
-        payload: manifest,
-      })}\n`,
-      'utf8',
-    );
-
-    const restored = await new MatchManifestLkgStore({ filePath }).readLatest();
-
-    expect(restored).toMatchObject({
-      ok: true,
-      value: {
-        origin: 'cache',
-        cachedFrom: 'local',
-        localAuthoringMode: 'bound-overlay',
-      },
     });
   });
 
@@ -487,6 +459,26 @@ describe('Match Manifest last-known-good seam', () => {
 });
 
 describe('independent ScheduleWindow last-known-good seam', () => {
+  it('writes and reads only the canonical Mizar ScheduleWindow cache version', async () => {
+    const root = await temporaryDirectory();
+    const schedule = await readFixture<BroadcastScheduleWindowV1>(
+      'broadcast-schedule-window-v1.valid.json',
+    );
+    const filePath = join(root, 'schedule.json');
+    const request = scheduleRequest(schedule);
+    const writer = new ScheduleWindowLkgStore({ filePath });
+
+    expect((await writer.save(schedule, 'fixture')).ok).toBe(true);
+    const envelope = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>;
+    expect(envelope.cacheVersion).toBe(SCHEDULE_WINDOW_CACHE_VERSION);
+    const restored = await new ScheduleWindowLkgStore({ filePath }).read(request);
+
+    expect(restored).toMatchObject({
+      ok: true,
+      value: { origin: 'cache', cachedFrom: 'fixture' },
+    });
+  });
+
   it('requires a source response to match its requested competition and exact window', async () => {
     const root = await temporaryDirectory();
     const schedule = await readFixture<BroadcastScheduleWindowV1>(

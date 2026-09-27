@@ -10,4 +10,4 @@ export {
   type GsiDiagnosticCode,
   type GsiDiagnosticSeverity,
 } from './diagnostics/types.js';
-export type { TelemetryReceiveContext } from '@rivalhub-broadcast/core/telemetry';
+export type { TelemetryReceiveContext } from '@mizar/core/telemetry';

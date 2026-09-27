@@ -1,14 +1,14 @@
 import {
   createProgramCueAcceptance,
   type ProgramCueAcceptance,
-} from '@rivalhub-broadcast/protocol/program-cue-acceptance';
+} from '@mizar/protocol/program-cue-acceptance';
 import type {
   ProgramCueBaselineV1,
   ProgramCueLaneCursor,
   ProgramCueWire,
-} from '@rivalhub-broadcast/protocol/program-cue';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { LOCAL_PROTOCOL_SUBPROTOCOL } from '@rivalhub-broadcast/protocol/version';
+} from '@mizar/protocol/program-cue';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { LOCAL_PROTOCOL_SUBPROTOCOL } from '@mizar/protocol/version';
 
 import {
   localWebSocketUrl,

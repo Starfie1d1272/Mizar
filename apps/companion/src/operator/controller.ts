@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { OperatorCommand, SeriesProgress } from '@rivalhub-broadcast/core/series-progress';
+import type { OperatorCommand, SeriesProgress } from '@mizar/core/series-progress';
 
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { SeriesOperatorCommandResult } from '../runtime/program-runtime.js';

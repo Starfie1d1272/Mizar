@@ -5,8 +5,8 @@
 ## 决策
 
 - 沿用 `scripts/qualification/build.mjs` 构建同一产品包，正常制作与现场验收共享 bundled Node 24、Companion 和 Web。
-- 根目录 `RivalHub Broadcast.exe` 是薄 Windows x64 launcher，使用 Windows 自带 .NET Framework 编译的 WindowsApplication。它只校验启动文件、协调 single-instance、运行 bundled Node supervisor 和显示中文启动错误，不拥有业务数据。
-- `resources/` 是不可变 payload；`state/data`、`state/logs`、`state/evidence` 是可写状态。`BROADCAST_STATE_ROOT` 可显式指向其它绝对目录，但不能落入 resources。
+- 根目录 `Mizar.exe` 是薄 Windows x64 launcher，使用 Windows 自带 .NET Framework 编译的 WindowsApplication。它只校验启动文件、协调 single-instance、运行 bundled Node supervisor 和显示中文启动错误，不拥有业务数据。
+- `resources/` 是不可变 payload；`state/data`、`state/logs`、`state/evidence` 是可写状态。`MIZAR_STATE_ROOT` 可显式指向其它绝对目录，但不能落入 resources。
 - 正常服务固定为 `127.0.0.1:3000`，浏览器打开 `/operator`。同 artifact 的实例可以复用；未知端口占用和不同 artifact 均失败，不换端口。
 - Companion 管理运行状态和 graceful shutdown。Launcher/supervisor 不解释 Program、Radar 或赛事事实。浏览器关闭不停止 Runtime。
 - Windows launcher 使用同一 named mutex 协调首次启动；脚本 fallback 也调用 EXE。已启动实例由 artifact digest 与 Companion instance identity 校验，停止命令另需 bundle-local 随机 control token。

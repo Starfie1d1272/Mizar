@@ -103,7 +103,7 @@ export interface ScheduleMatchContext {
   };
 }
 
-/** Broadcast-owned lightweight time-window domain model. */
+/** Mizar-owned lightweight time-window domain model. */
 export interface ScheduleWindow {
   readonly competition: MatchCompetitionContext;
   readonly from: string;

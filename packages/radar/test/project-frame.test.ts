@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { unboundIdentityResolution } from '@rivalhub-broadcast/core/identity';
-import { derivePlayerLifeState } from '@rivalhub-broadcast/core/projection';
+import { unboundIdentityResolution } from '@mizar/core/identity';
+import { derivePlayerLifeState } from '@mizar/core/projection';
 import {
   createInitialRuntimeState,
   reduceRuntime,
   type RuntimeContinuityPolicy,
-} from '@rivalhub-broadcast/core/runtime';
-import { selectProgramSafeRuntimeView } from '@rivalhub-broadcast/core/projection';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/runtime';
+import { selectProgramSafeRuntimeView } from '@mizar/core/projection';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 import { projectRadarFrame } from '../src/project-frame.js';
 

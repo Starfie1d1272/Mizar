@@ -1,13 +1,13 @@
-import type { IdentityResolution } from '@rivalhub-broadcast/core/identity';
+import type { IdentityResolution } from '@mizar/core/identity';
 import {
   derivePlayerLifeState,
   getProjectionIdentityState,
   getProgramSafeRuntimeFreshness,
   isProjectionIdentityCurrent,
   type ProgramSafeRuntimeView,
-} from '@rivalhub-broadcast/core/projection';
-import type { RuntimeContinuityPolicy } from '@rivalhub-broadcast/core/runtime';
-import type { ObservedGrenade, ObservedPlayer } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/projection';
+import type { RuntimeContinuityPolicy } from '@mizar/core/runtime';
+import type { ObservedGrenade, ObservedPlayer } from '@mizar/core/telemetry';
 
 import type { RadarFrame, RadarGrenade, RadarPlayer } from './frame.js';
 

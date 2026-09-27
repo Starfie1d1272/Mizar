@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import type { BroadcastManifestV1 } from '@rivalhub-broadcast/rivalhub';
+import type { BroadcastManifestV1 } from '@mizar/rivalhub';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -15,7 +15,7 @@ import {
   type CstvSourceManager,
   type CstvSourceManagers,
 } from '../src/telemetry/cstv-source-manager.js';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   MatchContextController,
   MatchManifestLkgStore,

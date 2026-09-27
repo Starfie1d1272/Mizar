@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  getBuiltinLayout,
-  getBuiltinPreset,
-  getBuiltinTheme,
-} from '@rivalhub-broadcast/hud-config';
+import { getBuiltinLayout, getBuiltinPreset, getBuiltinTheme } from '@mizar/hud-config';
 
 import { hudResourceNavigationBlockReason } from '../src/operator/hud-console-state';
 

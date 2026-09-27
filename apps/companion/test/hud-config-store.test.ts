@@ -7,7 +7,7 @@ import {
   getBuiltinLayout,
   getBuiltinPreset,
   getBuiltinTheme,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { HudConfigStore } from '../src/hud-config/store.js';
@@ -35,9 +35,9 @@ describe('HudConfigStore', () => {
 
     expect(initial.document.activePreset).toEqual({
       kind: 'builtin',
-      sourceId: 'builtin:rivalhub-default-preset',
+      sourceId: 'builtin:mizar-default-preset',
     });
-    expect(initial.resolved.preset.id).toBe('builtin:rivalhub-default-preset');
+    expect(initial.resolved.preset.id).toBe('builtin:mizar-default-preset');
 
     const layoutState = await store.saveAs('layout', {
       ...getBuiltinLayout(),
@@ -92,7 +92,7 @@ describe('HudConfigStore', () => {
     const store = new HudConfigStore({ filePath });
     await store.load();
 
-    expect(store.getState().resolved.preset.id).toBe('builtin:rivalhub-default-preset');
+    expect(store.getState().resolved.preset.id).toBe('builtin:mizar-default-preset');
     await expect(readFile(filePath, 'utf8')).resolves.toBe(malformed);
   });
 

@@ -1,4 +1,4 @@
-# RivalHub Broadcast 贡献指南
+# Mizar 贡献指南
 
 本仓库采用 Issue-driven、agent-assisted 的开发方式。任何实现都必须先理解产品、架构和 ownership，再修改代码。
 

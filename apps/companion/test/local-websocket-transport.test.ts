@@ -74,7 +74,7 @@ class FakePublisher implements LocalChannelPublisher<TransportSnapshot> {
 class FakeSocket extends EventEmitter {
   bufferedAmount = 0;
   readyState = 1;
-  protocol = 'rivalhub-broadcast.local.v1';
+  protocol = 'mizar.local.v1';
   readonly sent: string[] = [];
   readonly closeCalls: Array<{ readonly code: number; readonly reason: string }> = [];
   terminated = 0;

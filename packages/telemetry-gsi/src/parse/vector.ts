@@ -1,5 +1,5 @@
 import { DiagnosticCollector } from '../diagnostics/collector.js';
-import type { ObservedVector3 } from '@rivalhub-broadcast/core/telemetry';
+import type { ObservedVector3 } from '@mizar/core/telemetry';
 import type { SourceRecord } from './record.js';
 
 function vectorFromParts(parts: readonly unknown[]): ObservedVector3 | undefined {

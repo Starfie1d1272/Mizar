@@ -1,11 +1,11 @@
-import { inspectBp } from '@rivalhub-broadcast/core/projection';
+import { inspectBp } from '@mizar/core/projection';
 import {
   getBpDemoManifest,
   validateBroadcastManifest,
   toMatchContext,
   type BpDemoFormat,
-} from '@rivalhub-broadcast/rivalhub';
-import type { BpProjection } from '@rivalhub-broadcast/core/projection';
+} from '@mizar/rivalhub';
+import type { BpProjection } from '@mizar/core/projection';
 
 const projections = new Map<BpDemoFormat, BpProjection>();
 

@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/testkit",
+  "name": "@mizar/testkit",
   "private": true,
   "type": "module",
   "files": [
@@ -20,11 +20,11 @@
     "typecheck": "tsc -b tsconfig.json --pretty false && tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@rivalhub-broadcast/replay": "workspace:*",
-    "@rivalhub-broadcast/telemetry-gsi": "workspace:*"
+    "@mizar/replay": "workspace:*",
+    "@mizar/telemetry-gsi": "workspace:*"
   },
   "devDependencies": {
-    "@rivalhub-broadcast/core": "workspace:*",
+    "@mizar/core": "workspace:*",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:"
   }

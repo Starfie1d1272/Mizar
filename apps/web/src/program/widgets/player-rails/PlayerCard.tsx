@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { ProjectionCursor } from '@rivalhub-broadcast/protocol/shared';
+import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { observerHotkeyLabel } from '../../observer-hotkey';
 import {

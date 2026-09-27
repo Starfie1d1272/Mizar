@@ -1,13 +1,13 @@
-# RivalHub Broadcast
+# Mizar
 
-RivalHub Broadcast 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**。它把赛事上下文、CS2 实时数据、HUD、雷达、场景、制作控制和观察辅助放在同一套可靠运行时上，同时保持播出画面与辅助信息严格隔离。
+Mizar 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**。它把赛事上下文、CS2 实时数据、HUD、雷达、场景、制作控制和观察辅助放在同一套可靠运行时上，同时保持播出画面与辅助信息严格隔离。
 
 产品方向同时包含**独立模式**和 **RivalHub 连接模式**。RivalHub 是最完整的第一方赛事上下文提供方，但不应成为运行 HUD、雷达、播出画面或观察辅助的前置条件。当前实现优先服务自己的真实赛事，并逐步补齐独立模式所需的本地比赛配置、安装与使用体验。
 
 ## 产品形态
 
 ```text
-RivalHub Broadcast
+Mizar
 ├─ 独立模式
 │  ├─ 本地比赛上下文
 │  ├─ HUD / Radar / OBS
@@ -17,13 +17,13 @@ RivalHub Broadcast
    └─ 通过版本化契约读取 RivalHub 的完整赛事上下文
 ```
 
-校园赛、社区赛和小型赛事是重要适用场景，不是第三种运行模式；它们既可以独立使用 Broadcast，也可以选择连接 RivalHub。
+校园赛、社区赛和小型赛事是重要适用场景，不是第三种运行模式；它们既可以独立使用 Mizar，也可以选择连接 RivalHub。
 
 共享运行时、HUD、雷达和观察辅助不依赖 RivalHub 内部数据库或页面实现。两种运行方式共享同一套 Runtime 和领域模型，只在赛事上下文来源上不同。完整产品边界见 ADR-0006。
 
 产品可以从四个层次理解：
 
-- **制播工作区（Broadcast Workspace）**：制作人员实际使用的统一工作环境；CS2 画面保持视觉主体，雷达、状态、控制和辅助信息围绕它组织。
+- **制播工作区（Mizar Workspace）**：制作人员实际使用的统一工作环境；CS2 画面保持视觉主体，雷达、状态、控制和辅助信息围绕它组织。
 
 Windows 正式桌面入口使用 Tauri 2 Host 打开左栏与底部 Workspace，并由 Companion 管理 OBS。浏览器可在 `/workspace` 检查同一套界面；Program Scene 清单由 `packages/protocol` 统一提供。真实 CS2/OBS 的现场验收边界见 [`docs/development-validation.md`](docs/development-validation.md)。
 - **Lookahead 观察辅助**：利用较早的比赛时间轴，为延迟播出画面生成低干扰的确定性提示。
@@ -32,7 +32,7 @@ Windows 正式桌面入口使用 Tauri 2 Host 打开左栏与底部 Workspace，
 
 ## 核心边界
 
-RivalHub Broadcast 不建立第二套官方赛事数据库，也不把实时观测直接当成官方事实。
+Mizar 不建立第二套官方赛事数据库，也不把实时观测直接当成官方事实。
 
 ```text
 赛事上下文提供方
@@ -100,7 +100,7 @@ packages/
   cs2-assets/           CS2 official presentation assets、semantic catalog 与 provenance
   core/                 RuntimeState、连续性、身份、transition、Projection
   hud-config/           HUD preset、layout、theme、组件 registry 与逻辑几何
-  protocol/             Broadcast 自有的 Local Protocol
+  protocol/             Mizar 自有的 Local Protocol
   radar/                与前端框架无关的 Radar domain
   replay/               framework-neutral discrete replay cursor 与 scheduler
   rivalhub/             RivalHub 赛事上下文 adapter
@@ -148,7 +148,7 @@ CI 根据改动面选择必要的验证 lane；未知路径、工具链、workfl
 
 ## 许可证
 
-RivalHub Broadcast 使用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**。
+Mizar 使用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**。
 
 直接第三方依赖及其许可证见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。研究参考项目不等于本仓库包含其代码或资产，相关边界见 [`docs/references.md`](docs/references.md)。
 

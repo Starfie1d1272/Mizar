@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
 import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
 const base = getProgramFixture('real-live-rich')!.payload;

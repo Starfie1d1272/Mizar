@@ -3,7 +3,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { radarSnapshotSchema } from '@rivalhub-broadcast/protocol/radar';
+import { radarSnapshotSchema } from '@mizar/protocol/radar';
 
 import fixtures from '../src/program/fixtures/generated/real-radar-fixtures.generated.json';
 import { Radar } from '../src/program/widgets/radar/Radar';

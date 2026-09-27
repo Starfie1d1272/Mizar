@@ -1,6 +1,6 @@
 # 数据源与功能能力矩阵
 
-本文定义 RivalHub Broadcast 在不同比赛数据源条件下的**功能边界、降级方式和正式运行方案**。它主要回答：
+本文定义 Mizar 在不同比赛数据源条件下的**功能边界、降级方式和正式运行方案**。它主要回答：
 
 > 当前拿到什么数据源时，HUD、Radar、制播工作区、网站实时数据、`ProgramCue` 和 Observer Assist 分别能做到什么？
 
@@ -71,7 +71,7 @@ Broadcast Runtime
 └─ RivalHub 公开实时数据
 ~~~
 
-这里的“实时”表示 Broadcast 收到 Program GSI 后立即更新；它仍然跟随约两分钟延迟的 Program 时间轴。
+这里的“实时”表示 Mizar 收到 Program GSI 后立即更新；它仍然跟随约两分钟延迟的 Program 时间轴。
 
 因此，公开网站如果消费同一份 Program-safe（可公开播出的 Program）数据：
 
@@ -238,7 +238,7 @@ alive → dead
 
 目标仍然是只运行一个承担 Program 画面渲染的 CS2。
 
-**无头 Direct CSTV 客户端后续新建独立仓库研发和维护。** `RivalHub-Broadcast` 不实现 Direct CSTV 网络协议本身，只保留：
+**无头 Direct CSTV 客户端后续新建独立仓库研发和维护。** 本仓库不实现 Direct CSTV 网络协议本身，只保留：
 
 - Lookahead 数据源接入边界；
 - `GameEventObservation`；
@@ -246,7 +246,7 @@ alive → dead
 - Program ↔ Lookahead 时间轴对齐；
 - `ObserverAssistProjection` 和 Observer Assist 产品能力。
 
-独立仓库成熟后，通过明确的版本化接口接回 Broadcast。其研发进度不阻塞 Broadcast V1、制播工作区、Program HUD 或 Radar。
+独立仓库成熟后，通过明确的版本化接口接回 Mizar。其研发进度不阻塞 Mizar V1、制播工作区、Program HUD 或 Radar。
 
 ### 方案 D：HTTP Broadcast 数据源
 
@@ -294,7 +294,7 @@ Radar           正常
 
 ## 10. 后续研发边界
 
-Broadcast V1 / 制播工作区继续完成：
+Mizar V1 / 制播工作区继续完成：
 
 - Program HUD / Radar；
 - Gameplay / BP / 赛前 / 赛中 / 地图结束 / 比赛结束工作区；
@@ -302,7 +302,7 @@ Broadcast V1 / 制播工作区继续完成：
 - 本机 Program Overlay；
 - 网站 Program-safe 实时数据。
 
-Lookahead 作为独立后续能力推进；无头 Direct CSTV 客户端在**新的独立仓库**研发。Broadcast 侧后续只负责：
+Lookahead 作为独立后续能力推进；无头 Direct CSTV 客户端在**新的独立仓库**研发。Mizar 侧后续只负责：
 
 - 接入独立客户端输出；
 - 时间轴对齐；

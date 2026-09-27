@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import type { ProjectionCursor } from '@rivalhub-broadcast/protocol/shared';
+import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { useProgramCueEffectsForPlayer } from '../../ProgramCueRendererBridge';
 import { consecutivePresentationSamples } from '../../presentation-sample';

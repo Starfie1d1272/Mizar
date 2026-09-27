@@ -2,11 +2,7 @@ import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  iterateCaptureFrames,
-  verifyCapture,
-  type CaptureFrameV1,
-} from '@rivalhub-broadcast/testkit';
+import { iterateCaptureFrames, verifyCapture, type CaptureFrameV1 } from '@mizar/testkit';
 
 import { buildApp, type DeliveryHealthSource } from '../src/app.js';
 import type {

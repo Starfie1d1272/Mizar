@@ -56,12 +56,7 @@
 .product-brand__mark {
   width: 32px;
   height: 32px;
-  background: linear-gradient(135deg, #0284c7 0%, var(--broadcast-shell-accent) 100%);
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  color: #ffffff;
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.25);
+  display: block;
 }
 .product-topbar nav {
   display: flex;

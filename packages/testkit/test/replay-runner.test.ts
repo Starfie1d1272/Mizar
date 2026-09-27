@@ -31,7 +31,7 @@ type TestFrameEvent = {
   readonly result: unknown;
 };
 
-const telemetryGsiPackage = '@rivalhub-broadcast/telemetry-gsi';
+const telemetryGsiPackage = '@mizar/telemetry-gsi';
 const productionAdapterModule = (await import(telemetryGsiPackage)) as unknown as {
   readonly adaptGsiPayload: ProductionAdapter;
 };

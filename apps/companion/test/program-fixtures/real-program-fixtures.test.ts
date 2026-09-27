@@ -2,8 +2,8 @@ import { mkdtemp, readFile, writeFile, rm, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { programSnapshotSchema } from '@rivalhub-broadcast/protocol/program';
-import { iterateCaptureFrames, replayCapture } from '@rivalhub-broadcast/testkit';
+import { programSnapshotSchema } from '@mizar/protocol/program';
+import { iterateCaptureFrames, replayCapture } from '@mizar/testkit';
 import {
   generateRealProgramFixtures,
   serializeRealProgramFixtures,

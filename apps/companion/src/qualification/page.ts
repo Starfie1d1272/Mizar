@@ -443,13 +443,13 @@ export function qualificationPageHtml(
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>现场验收 · RivalHub Broadcast</title>
+    <title>现场验收 · Mizar</title>
     <link rel="stylesheet" href="/product-shell.css" />
     <style>${PAGE_STYLE}</style>
   </head>
   <body>
     <header class="product-topbar" aria-label="制作导航">
-      <a class="product-brand" href="/operator"><span class="product-brand__mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.93 4.93a10 10 0 0 1 14.14 0"/><path d="M7.76 7.76a6 6 0 0 1 8.48 0"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 14.5V20"/></svg></span><span>RivalHub <b>Broadcast</b></span></a>
+      <a class="product-brand" href="/operator"><img class="product-brand__mark" src="/brand/mizar-mark.svg" alt="" /><span>Mizar</span></a>
       <nav aria-label="制作导航"><a href="/operator">制作控制</a><a href="/operator/hud">HUD 编辑器</a><a href="/debug">运行诊断</a></nav>
       <div class="product-topbar__actions"><a href="/qualification" aria-current="page">现场验收</a><a class="product-output-link" href="/program" target="_blank" rel="noreferrer">打开播出画面 <span aria-hidden="true">↗</span></a></div>
     </header>
@@ -463,7 +463,7 @@ export function qualificationPageHtml(
       ${releaseMode ? '<div id="restart-banner" class="qualification-banner" hidden><span class="qualification-signal__dot"></span><span>制播服务正在受控重启，页面正在自动重试连接...</span></div>' : ''}
 
       <header class="qualification-header">
-        <p class="qualification-kicker">RivalHub Broadcast / 现场验收</p>
+        <p class="qualification-kicker">Mizar / 现场验收</p>
         <h1>现场验收</h1>
         <p>${objectiveMode ? '这个页面用于目标时钟专项验收：八类场景由 PowerShell 标记明确圈定，页面只显示采集状态与场景窗口进度；最终语义与数值结论由离线证据验证器计算。' : releaseMode ? '这个页面用于生产环境准入验收（Release Profile）：必须连续完成两场 Demo 流程，并通过普通浏览器重载、OBS Browser Source 重载、OBS 场景可见性切换与制播服务受控重启 4 类宿主生产场景及目视画面确认。' : '这个页面用于连续两场 Demo 的真实环境验收：确认第一场数据正常，退出 CS2 并等待比赛数据过期，再开始下一场，验证第二场从干净状态恢复。'}</p>
       </header>

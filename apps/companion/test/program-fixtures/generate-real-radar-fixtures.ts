@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { format } from 'prettier';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-replay.js';
 
 export const RADAR_FIXTURE_PATH = resolve(

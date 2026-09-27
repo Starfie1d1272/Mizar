@@ -5,7 +5,7 @@ import {
   programSceneIdSchema,
   programSceneStateSchema,
   type ProgramSceneId,
-} from '@rivalhub-broadcast/protocol/program-scenes';
+} from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { BpSession } from '../bp/controller.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -55,7 +55,7 @@ export class ProgramSceneController {
       }),
     );
     return programSceneStateSchema.parse({
-      schemaVersion: 'rivalhub.program-scenes.v1',
+      schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       revision: this.revision,
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),

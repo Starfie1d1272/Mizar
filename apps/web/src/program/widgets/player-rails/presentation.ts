@@ -3,8 +3,8 @@ import {
   getCs2Item,
   resolveCs2ItemByGsiName,
   type Cs2ItemMetadata,
-} from '@rivalhub-broadcast/cs2-assets';
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/cs2-assets';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import {
   playerStatusEffectState,
   type PlayerStatusEffectState,

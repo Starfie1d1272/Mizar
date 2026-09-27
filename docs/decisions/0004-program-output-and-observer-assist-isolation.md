@@ -248,7 +248,7 @@ ObserverAssistProjection
 
 ## 决策 5：Lookahead 不自动成为 #610 的赛事事实来源
 
-#610 比赛生命周期不依赖 Broadcast / GSI；Broadcast 仍只是可选观测来源。
+#610 比赛生命周期不依赖 Mizar / GSI；Mizar 仍只是可选观测来源。
 
 当前无延迟数据流的明确业务归属是 **Observer Assist**。
 
@@ -266,7 +266,7 @@ ObserverAssistProjection
 
 ## 决策 6：#610 / identity 的既有边界继续成立
 
-Broadcast 必须自动比较：
+Mizar 必须自动比较：
 
 ```text
 canonical MatchRoster / Steam64
@@ -302,7 +302,7 @@ sourceHealth
 
 其中：
 
-- `liveSessionId` 仍表示 RivalHub Match ↔ Broadcast producer session；
+- `liveSessionId` 仍表示 RivalHub Match ↔ Mizar producer session；
 - `producerInstanceId` 仍表示 Companion Runtime 实例；
 - `mapEpoch` 仍表示一次地图执行；
 - **Lookahead 读取器重连不能因为只是连接重建就推进 Program `mapEpoch`**；

@@ -3,19 +3,21 @@ import { setTimeout, clearTimeout } from 'node:timers';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { readFile, writeFile, access, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, access, readdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const root = resolve(process.argv[2]);
-const exe = join(root, 'RivalHub Broadcast.exe');
+const exe = join(root, 'Mizar.exe');
 const artifact = JSON.parse(await readFile(join(root, 'resources/metadata/artifact.json'), 'utf8'));
 const resources = join(root, 'resources');
 const stateRoot = join(root, 'state');
+const LEGACY_GSI_CFG_NAME = 'gamestate_integration_rivalhub_broadcast.cfg';
+const MIZAR_GSI_CFG_NAME = 'gamestate_integration_mizar.cfg';
 let active;
 function command(file, args, timeout = 60000) {
-  const env = { ...process.env, BROADCAST_STATE_ROOT: stateRoot };
+  const env = { ...process.env, MIZAR_STATE_ROOT: stateRoot };
   // Node must not pass PowerShell 7 module search paths into Windows PowerShell 5.1.
   if (file === 'powershell.exe') delete env.PSModulePath;
   const child = spawn(file, args, {
@@ -96,11 +98,35 @@ async function powershell(script, extra = []) {
   );
 }
 try {
-  // The fake Steam library is supplied by CI. No real CS2 acceptance is implied.
-  await powershell('install-gsi.ps1', ['-Product']);
+  // Use an isolated cfg directory; this does not imply real CS2 acceptance.
+  const cfgDirectory = join(stateRoot, 'gsi-migration-test', 'cfg');
+  const legacyCfgPath = join(cfgDirectory, LEGACY_GSI_CFG_NAME);
+  const mizarCfgPath = join(cfgDirectory, MIZAR_GSI_CFG_NAME);
+  const legacyContents = 'legacy GSI migration regression fixture\n';
   const installationPath = join(stateRoot, 'data/gsi-install/install.json');
+  await mkdir(cfgDirectory, { recursive: true });
+  await mkdir(join(stateRoot, 'data/gsi-install'), { recursive: true });
+  await writeFile(legacyCfgPath, legacyContents, 'utf8');
+  await writeFile(
+    installationPath,
+    JSON.stringify({ schemaVersion: 1, cfgPath: legacyCfgPath, cfgFingerprint: 'pre-release' }),
+    'utf8',
+  );
+  await powershell('install-gsi.ps1', ['-Product', '-Cs2Root', cfgDirectory]);
   const installed = await readFile(installationPath, 'utf8');
+  await assert.rejects(access(legacyCfgPath));
+  assert.deepEqual(
+    (await readdir(cfgDirectory)).filter((name) =>
+      [LEGACY_GSI_CFG_NAME, MIZAR_GSI_CFG_NAME].includes(name),
+    ),
+    [MIZAR_GSI_CFG_NAME],
+    'legacy and Mizar GSI configs must not both remain active',
+  );
+  assert.doesNotMatch(installed, /legacy(?:Cfg|Backup)|hadLegacyConfig/i);
+  await access(mizarCfgPath);
+  await writeFile(legacyCfgPath, legacyContents, 'utf8');
   await powershell('install-gsi.ps1', ['-Product']);
+  await assert.rejects(access(legacyCfgPath));
   assert.equal(
     await readFile(installationPath, 'utf8'),
     installed,
@@ -156,6 +182,9 @@ try {
   await stop();
   await powershell('restore-gsi.ps1', ['-Product']);
   await assert.rejects(access(installationPath));
+  await assert.rejects(access(legacyCfgPath));
+  await assert.rejects(access(mizarCfgPath));
+  await rm(join(stateRoot, 'gsi-migration-test'), { recursive: true, force: true });
   const occupied = createServer((socket) => socket.destroy());
   await new Promise((done) => occupied.listen(3000, '127.0.0.1', done));
   try {

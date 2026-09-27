@@ -2,10 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  createDefaultHudConfigDocument,
-  getBuiltinResolvedPreset,
-} from '@rivalhub-broadcast/hud-config';
+import { createDefaultHudConfigDocument, getBuiltinResolvedPreset } from '@mizar/hud-config';
 
 import {
   HUD_CONFIG_POLL_INTERVAL_MS,

@@ -8,7 +8,7 @@ import {
   type HudLayout,
   type HudPreset,
   type HudTheme,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 import type { HudResource, HudWorkspace } from './hud-console-state';
 

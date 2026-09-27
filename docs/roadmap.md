@@ -47,7 +47,7 @@
 
 包括：
 
-- 制播工作区（Broadcast Workspace）；
+- 制播工作区（Mizar Workspace）；
 - CS2 画面为主体的私有工作区；
 - 更易读的 Radar；
 - 制作控制；
@@ -64,7 +64,7 @@
 
 当前完美平台环境只有直连 GOTV 地址；HTTP Broadcast 支持不能被视为完美平台无延迟数据的现成接入方式。默认方向是保持单个 Program CS2，并由轻量的无头 Direct CSTV 客户端读取较早地址。
 
-**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不承担 Direct CSTV 网络协议实现，只保留 Lookahead 接入、时间轴对齐、FutureKillCue 和 Observer Assist。
+**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** 本仓库不承担 Direct CSTV 网络协议实现，只保留 Lookahead 接入、时间轴对齐、FutureKillCue 和 Observer Assist。
 
 包括：
 

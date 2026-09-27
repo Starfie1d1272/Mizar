@@ -7,4 +7,4 @@ export {
   type ReplaySessionScheduler,
   type ReplaySessionSnapshot,
   type ReplaySessionSource,
-} from '@rivalhub-broadcast/replay';
+} from '@mizar/replay';

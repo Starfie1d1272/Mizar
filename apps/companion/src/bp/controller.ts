@@ -1,7 +1,7 @@
-import type { BpProjection as CoreBpProjection } from '@rivalhub-broadcast/core/projection';
+import type { BpProjection as CoreBpProjection } from '@mizar/core/projection';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { bpSnapshotSchema, type BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
+import { bpSnapshotSchema, type BpSnapshot } from '@mizar/protocol/bp';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 export class BpSession {
@@ -61,7 +61,7 @@ export class BpSession {
             steps: this.projection.steps,
           };
     return bpSnapshotSchema.parse({
-      schemaVersion: 'rivalhub.bp.v2',
+      schemaVersion: 'mizar.bp.v2',
       revision: `${this.epoch}:${this.revision}`,
       projection: presentationProjection,
       state: this.state,

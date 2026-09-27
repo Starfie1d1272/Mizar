@@ -1,9 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import {
-  DEFAULT_LOCAL_BP_MAP_POOL,
-  LOCAL_BP_MAP_CATALOG,
-} from '@rivalhub-broadcast/core/projection';
-import { bpWorkspaceSchema, localBpDraftSchema } from '@rivalhub-broadcast/protocol/bp';
+import { DEFAULT_LOCAL_BP_MAP_POOL, LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
+import { bpWorkspaceSchema, localBpDraftSchema } from '@mizar/protocol/bp';
 import type { MatchContextController } from '../match-context/index.js';
 import {
   bpAuthoringDraftFromBinding,
@@ -63,7 +60,7 @@ export function registerBpWorkspaceRoutes(
             },
           };
     const response = bpWorkspaceSchema.parse({
-      schemaVersion: 'rivalhub.bp-workspace.v4',
+      schemaVersion: 'mizar.bp-workspace.v4',
       demo: { active: options.demoState.getState() },
       source: publicSource,
       authoringMode: localAuthoringMode(binding) ?? 'standalone',

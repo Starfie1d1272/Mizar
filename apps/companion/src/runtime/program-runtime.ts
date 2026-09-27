@@ -12,8 +12,8 @@ import {
   type RuntimeState,
   type RuntimeTime,
   type RuntimeTransition,
-} from '@rivalhub-broadcast/core/runtime';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+} from '@mizar/core/runtime';
+import type { MatchContext } from '@mizar/core/match-context';
 import {
   addSeriesProgressIssue,
   createSeriesProgress,
@@ -27,8 +27,8 @@ import {
   type SeriesProgressCheckpointStore,
   type SeriesProgressEvent,
   type SeriesSideProof,
-} from '@rivalhub-broadcast/core/series-progress';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/series-progress';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 export const PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX = 32;
 export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Object.freeze({

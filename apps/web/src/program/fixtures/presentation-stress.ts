@@ -2,7 +2,7 @@ import {
   programSnapshotSchema,
   type ProgramPayload,
   type ProgramSnapshot,
-} from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/protocol/program';
 
 type Series = NonNullable<ProgramPayload['series']>;
 export interface PresentationStressPatch {

@@ -4,9 +4,9 @@ import {
   createIdentityResolver,
   identityEvidenceFromObservation,
   type IdentityResolver,
-} from '@rivalhub-broadcast/core/identity';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
-import { verifyCapture, replayCapture } from '@rivalhub-broadcast/testkit';
+} from '@mizar/core/identity';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
+import { verifyCapture, replayCapture } from '@mizar/testkit';
 import { describe, expect, it } from 'vitest';
 
 import { contextFromCapture } from './helpers/identity-evidence.js';

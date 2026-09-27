@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+import type { MatchContext } from '@mizar/core/match-context';
 import type {
   SeriesProgressCheckpoint,
   SeriesProgressCheckpointStore,
   SeriesSideProof,
-} from '@rivalhub-broadcast/core/series-progress';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/series-progress';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { JsonSeriesProgressCheckpointStore } from '../src/series-progress/checkpoint-store.js';

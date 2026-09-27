@@ -2,16 +2,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import {
-  DEFAULT_LOCAL_BP_MAP_POOL,
-  inspectBp,
-  localBpSequence,
-} from '@rivalhub-broadcast/core/projection';
+import { DEFAULT_LOCAL_BP_MAP_POOL, inspectBp, localBpSequence } from '@mizar/core/projection';
 import {
   toMatchContext,
   validateBroadcastManifest,
   type BroadcastManifestV1,
-} from '@rivalhub-broadcast/rivalhub';
+} from '@mizar/rivalhub';
 import { describe, expect, it } from 'vitest';
 
 import { bpAuthoringDraftFromBinding, createLocalBpManifest } from '../src/bp/local-draft.js';

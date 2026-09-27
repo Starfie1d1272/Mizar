@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectWorldPosition, defaultMapGeometryProvider } from '@rivalhub-broadcast/radar';
+import { projectWorldPosition, defaultMapGeometryProvider } from '@mizar/radar';
 
 import { getDefaultHudCompositeFixture } from '../src/program/fixtures/default-hud-composite-fixtures';
 import { getProgramFixture } from '../src/program/fixtures';

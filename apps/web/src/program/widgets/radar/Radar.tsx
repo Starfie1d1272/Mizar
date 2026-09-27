@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { projectWorldPosition, projectWorldRadius } from '@rivalhub-broadcast/radar';
-import { getCs2Asset, getRadarMapAsset } from '@rivalhub-broadcast/cs2-assets';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
+import { projectWorldPosition, projectWorldRadius } from '@mizar/radar';
+import { getCs2Asset, getRadarMapAsset } from '@mizar/cs2-assets';
 import type { LocalChannelClient } from '../../../realtime';
 import type { RadarHudWidgetRendererProps } from '../../hud-renderer-registry';
 import { observerHotkeyLabel } from '../../observer-hotkey';

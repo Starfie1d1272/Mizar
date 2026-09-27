@@ -1,19 +1,19 @@
-RivalHub Broadcast Windows x64 便携版
+Mizar Windows x64 便携版
 
-本产品包绑定 git SHA <SHORT_SHA>，并内置 Node <NODE_VERSION>。解压到可写目录后，双击 RivalHub Broadcast.exe 打开制播工作区。
+本产品包绑定 git SHA <SHORT_SHA>，并内置 Node <NODE_VERSION>。解压到可写目录后，双击 Mizar.exe 打开制播工作区。
 不需要安装 Node 或 pnpm。程序只使用 http://127.0.0.1:3000；重复打开会复用同版本服务。关闭工作区窗口后可从托盘重新打开；选择托盘“退出”才停止服务。
 
 正常制作：
 
 1. 初次接入 CS2 前，在此目录运行：powershell -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 -Product
    自动查找 Steam 库；存在多个 CS2 时，加 -Cs2Root "CS2 安装目录" 明确选择。安装前先停止服务。
-2. 双击 RivalHub Broadcast.exe；左栏、底栏围绕 CS2 窗口展开。浏览器预览可打开 http://127.0.0.1:3000/workspace。
+2. 双击 Mizar.exe；左栏、底栏围绕 CS2 窗口展开。浏览器预览可打开 http://127.0.0.1:3000/workspace。
 3. 在工作区连接 OBS，使用“检查配置”和“一键修复”创建制播场景。OBS Browser Source 由工作区按 Program Scene 清单配置；Gameplay 为 http://127.0.0.1:3000/program。
 4. 停止服务：powershell -ExecutionPolicy Bypass -File .\resources\scripts\stop-product.ps1
 5. 恢复安装前的 GSI 配置：停止服务后运行 powershell -ExecutionPolicy Bypass -File .\resources\scripts\restore-gsi.ps1 -Product
 
 resources 是程序资源，不能保存运行数据。设置保存在 state\data，日志在 state\logs，验收记录在 state\evidence。
-可使用 BROADCAST_STATE_ROOT 指向其它绝对运行目录；首次启动与后续脚本必须使用同一设置。请保留 state 以保留 HUD 和系列进度。
+可使用 MIZAR_STATE_ROOT 指向其它绝对运行目录；首次启动与后续脚本必须使用同一设置。请保留 state 以保留 HUD 和系列进度。
 端口被其它程序占用时先停止占用程序；不会静默换端口。文件缺损时重新解压完整 ZIP。日志可用于诊断启动失败。
 
 现场验收模式（先停止正常制作服务）：

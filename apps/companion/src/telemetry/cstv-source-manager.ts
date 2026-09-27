@@ -1,7 +1,4 @@
-import type {
-  RoleScopedGameEventObservation,
-  GameEventSourceRole,
-} from '@rivalhub-broadcast/core/game-events';
+import type { RoleScopedGameEventObservation, GameEventSourceRole } from '@mizar/core/game-events';
 import {
   createCstvLiveSession,
   type CstvDiagnostic,
@@ -11,7 +8,7 @@ import {
   type CstvParserSessionFactory,
   type CstvSessionTerminalStatus,
   type CstvSyncMetadata,
-} from '@rivalhub-broadcast/telemetry-cstv';
+} from '@mizar/telemetry-cstv';
 
 export const CSTV_RECENT_GAME_EVENTS_MAX = 64;
 export const CSTV_RECENT_DIAGNOSTICS_MAX = 32;

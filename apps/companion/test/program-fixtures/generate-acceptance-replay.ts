@@ -4,10 +4,10 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { format } from 'prettier';
 
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { toMatchContext } from '@rivalhub-broadcast/rivalhub';
-import { canonicalJsonLine } from '@rivalhub-broadcast/testkit';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import { toMatchContext } from '@mizar/rivalhub';
+import { canonicalJsonLine } from '@mizar/testkit';
 
 import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-replay.js';
 
@@ -439,7 +439,7 @@ function coverageFor(events: readonly SemanticEvent[]) {
 }
 
 async function generateSource(source: (typeof SOURCES)[number]) {
-  const capture = await import('@rivalhub-broadcast/testkit').then(({ verifyCapture }) =>
+  const capture = await import('@mizar/testkit').then(({ verifyCapture }) =>
     verifyCapture(resolve(REPOSITORY_ROOT, source.capturePath)),
   );
   const provenance = capture.manifest.provenance;

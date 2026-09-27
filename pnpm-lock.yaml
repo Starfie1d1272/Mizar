@@ -229,25 +229,25 @@ importers:
       '@fastify/websocket':
         specifier: 'catalog:'
         version: 11.3.0
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@rivalhub-broadcast/hud-config':
+      '@mizar/hud-config':
         specifier: workspace:*
         version: link:../../packages/hud-config
-      '@rivalhub-broadcast/protocol':
+      '@mizar/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@rivalhub-broadcast/radar':
+      '@mizar/radar':
         specifier: workspace:*
         version: link:../../packages/radar
-      '@rivalhub-broadcast/rivalhub':
+      '@mizar/rivalhub':
         specifier: workspace:*
         version: link:../../packages/rivalhub
-      '@rivalhub-broadcast/telemetry-cstv':
+      '@mizar/telemetry-cstv':
         specifier: workspace:*
         version: link:../../packages/telemetry-cstv
-      '@rivalhub-broadcast/telemetry-gsi':
+      '@mizar/telemetry-gsi':
         specifier: workspace:*
         version: link:../../packages/telemetry-gsi
       fastify:
@@ -257,7 +257,7 @@ importers:
         specifier: 5.0.8
         version: 5.0.8
     devDependencies:
-      '@rivalhub-broadcast/testkit':
+      '@mizar/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
       '@types/node':
@@ -281,22 +281,22 @@ importers:
       '@fontsource/inter':
         specifier: 'catalog:'
         version: 5.3.0
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@rivalhub-broadcast/cs2-assets':
+      '@mizar/cs2-assets':
         specifier: workspace:*
         version: link:../../packages/cs2-assets
-      '@rivalhub-broadcast/hud-config':
+      '@mizar/hud-config':
         specifier: workspace:*
         version: link:../../packages/hud-config
-      '@rivalhub-broadcast/protocol':
+      '@mizar/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@rivalhub-broadcast/radar':
+      '@mizar/radar':
         specifier: workspace:*
         version: link:../../packages/radar
-      '@rivalhub-broadcast/replay':
+      '@mizar/replay':
         specifier: workspace:*
         version: link:../../packages/replay
       react:
@@ -362,7 +362,7 @@ importers:
 
   packages/radar:
     dependencies:
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -378,14 +378,14 @@ importers:
 
   packages/rivalhub:
     dependencies:
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../core
       zod:
         specifier: 'catalog:'
         version: 4.6.2
     devDependencies:
-      '@rivalhub-broadcast/testkit':
+      '@mizar/testkit':
         specifier: workspace:*
         version: link:../testkit
       '@types/node':
@@ -400,7 +400,7 @@ importers:
 
   packages/telemetry-cstv:
     dependencies:
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../core
       cs2parser:
@@ -413,7 +413,7 @@ importers:
 
   packages/telemetry-gsi:
     dependencies:
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -423,14 +423,14 @@ importers:
 
   packages/testkit:
     dependencies:
-      '@rivalhub-broadcast/replay':
+      '@mizar/replay':
         specifier: workspace:*
         version: link:../replay
-      '@rivalhub-broadcast/telemetry-gsi':
+      '@mizar/telemetry-gsi':
         specifier: workspace:*
         version: link:../telemetry-gsi
     devDependencies:
-      '@rivalhub-broadcast/core':
+      '@mizar/core':
         specifier: workspace:*
         version: link:../core
       '@types/node':

@@ -1,12 +1,12 @@
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import {
   createReplaySession,
   type ReplaySession,
   type ReplaySessionEvent,
   type ReplaySessionFrame,
   type ReplaySessionScheduler,
-} from '@rivalhub-broadcast/replay';
+} from '@mizar/replay';
 
 export type ReplaySourceId = 'ancient-round-03' | 'ancient-round-11-defuse';
 

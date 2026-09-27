@@ -1,4 +1,4 @@
-import { HUD_CANVAS_HEIGHT, HUD_CANVAS_WIDTH } from '@rivalhub-broadcast/hud-config';
+import { HUD_CANVAS_HEIGHT, HUD_CANVAS_WIDTH } from '@mizar/hud-config';
 
 export interface HudLogicalPoint {
   readonly x: number;

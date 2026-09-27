@@ -20,7 +20,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm --filter @rivalhub-broadcast/web exec vite --host 127.0.0.1 --port ${acceptancePort}`,
+    command: `pnpm --filter @mizar/web exec vite --host 127.0.0.1 --port ${acceptancePort}`,
     env: { VITE_VISUAL_FIXTURES: '1' },
     reuseExistingServer: !process.env.CI,
     url: `http://127.0.0.1:${acceptancePort}`,

@@ -1,9 +1,9 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
-import type { BpProjection } from '@rivalhub-broadcast/core/projection';
+import type { BpProjection } from '@mizar/core/projection';
 import { BpSession, registerBpRoutes } from '../src/bp/controller.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
-import { bpSnapshotSchema } from '@rivalhub-broadcast/protocol/bp';
+import { bpSnapshotSchema } from '@mizar/protocol/bp';
 
 // Synthetic session boundary; real match rendering is covered in browser acceptance.
 const projection: BpProjection = {

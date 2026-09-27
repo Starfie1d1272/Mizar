@@ -6,7 +6,7 @@
 
 ## 背景
 
-ADR-0001 冻结了 RivalHub 与 Broadcast 的 authority 边界，ADR-0005 又明确了三条产品能力线和第一方集成的可移植性要求。随后 Issue #38 的产品调研进一步形成了一项新的长期产品判断：Broadcast 不应只在连接 RivalHub 时才成立，它本身应能够发展成一个可独立安装和使用的本地 CS2 赛事制播工具；连接 RivalHub 后，再获得更完整的赛事上下文与第一方数据闭环。
+ADR-0001 冻结了 RivalHub 与 Mizar 的 authority 边界，ADR-0005 又明确了三条产品能力线和第一方集成的可移植性要求。随后 Issue #38 的产品调研进一步形成了一项新的长期产品判断：Mizar 不应只在连接 RivalHub 时才成立，它本身应能够发展成一个可独立安装和使用的本地 CS2 赛事制播工具；连接 RivalHub 后，再获得更完整的赛事上下文与第一方数据闭环。
 
 这项判断不是要求当前版本已经具备完整的独立模式配置、安装、引导和全部节目流程，也不是要建立两套 Runtime。它定义的是长期产品边界和依赖方向。
 
@@ -19,10 +19,10 @@ ADR-0001 冻结了 RivalHub 与 Broadcast 的 authority 边界，ADR-0005 又明
 
 ### 1. 产品只定义两种运行方式
 
-RivalHub Broadcast 的长期产品目标包含两种运行方式：
+Mizar 的长期产品目标包含两种运行方式：
 
 ```text
-RivalHub Broadcast
+Mizar
 ├─ 独立模式
 │  ├─ 本地比赛上下文
 │  ├─ HUD / Radar / Program
@@ -42,9 +42,9 @@ RivalHub 连接模式优先消费 RivalHub 已维护的：
 Match / Roster / Steam64 / BP / Schedule / Branding / official result
 ```
 
-Broadcast 不因此把 RivalHub Web、Supabase 表或内部 domain 类型变成 Core、Radar、Program 或 Lookahead 的运行依赖。
+Mizar 不因此把 RivalHub Web、Supabase 表或内部 domain 类型变成 Core、Radar、Program 或 Lookahead 的运行依赖。
 
-如果 RivalHub 不可用或赛事本身不使用 RivalHub，独立模式仍应能够通过 Broadcast-owned 的本地比赛上下文运行基础制播能力。
+如果 RivalHub 不可用或赛事本身不使用 RivalHub，独立模式仍应能够通过 Mizar-owned 的本地比赛上下文运行基础制播能力。
 
 ### 3. 两种模式共享同一套 Runtime 和领域模型
 
@@ -81,7 +81,7 @@ RivalHub adapter ─────────┘
 - BP / veto 与必要品牌信息；
 - 当前节目所需的本地配置。
 
-它不意味着在 Broadcast 内复制 RivalHub 的完整赛事管理、报名、长期 Team / Player 数据库或后台业务流程。
+它不意味着在 Mizar 内复制 RivalHub 的完整赛事管理、报名、长期 Team / Player 数据库或后台业务流程。
 
 ### 5. Authority 边界保持不变
 
@@ -91,7 +91,7 @@ RivalHub adapter ─────────┘
 RivalHub
 = official / canonical tournament facts
 
-Broadcast
+Mizar
 = local realtime observation / presentation runtime
 ```
 
@@ -105,7 +105,7 @@ Broadcast
 
 长期文档可以写：
 
-> Broadcast 的产品目标支持独立模式和 RivalHub 连接模式；RivalHub 不作为本地 HUD、Radar、Program 或观察辅助的运行前置条件。
+> Mizar 的产品目标支持独立模式和 RivalHub 连接模式；RivalHub 不作为本地 HUD、Radar、Program 或观察辅助的运行前置条件。
 
 但如果本地比赛配置、安装引导、独立 BP 或其它必要能力尚未落地，文档不得把它们描述成当前已完成事实。
 
@@ -117,12 +117,12 @@ Broadcast
 
 ADR-0001 的以下内容保持不变：
 
-- Broadcast 是独立仓库和本地制播 Runtime；
-- Broadcast 不建立第二套官方赛事数据库；
-- RivalHub 与 Broadcast 通过版本化 contract 集成；
+- Mizar 是独立仓库和本地制播 Runtime；
+- Mizar 不建立第二套官方赛事数据库；
+- RivalHub 与 Mizar 通过版本化 contract 集成；
 - observation 与 official fact 分离。
 
-本 ADR 对 ADR-0001 中 `RivalHub-native` 的产品定位做后续澄清：它表示 **RivalHub-first / 第一方深度集成**，不表示“必须连接 RivalHub 才能运行 Broadcast”。
+本 ADR 对 ADR-0001 中产品定位做后续澄清：它表示 **RivalHub-first / 第一方深度集成**，不表示“必须连接 RivalHub 才能运行 Mizar”。
 
 ### ADR-0005
 

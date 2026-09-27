@@ -1,4 +1,4 @@
-# RivalHub Broadcast Agent 工作约定
+# Mizar Agent 工作约定
 
 Agent 的首要职责是在既有产品与架构边界内完成可验证实现，而不是重新发明 ownership。
 
@@ -19,9 +19,9 @@ Agent 的首要职责是在既有产品与架构边界内完成可验证实现�
 
 ## 不可破坏的架构边界
 
-- 官方赛事事实与 Broadcast observation 分权。
+- 官方赛事事实与 Mizar observation 分权。
 - 独立模式与 RivalHub 连接模式共享同一 Runtime；RivalHub 不是 Core / Radar / Lookahead 的运行前置条件。
-- Broadcast 不建立第二套官方赛事数据库，不直连 RivalHub / Supabase 内部表。
+- Mizar 不建立第二套官方赛事数据库，不直连 RivalHub / Supabase 内部表。
 - Raw GSI 只存在于 telemetry adapter / capture 边界。
 - GSI frame 按 current source observation 解释；禁止通用 retain-on-omit deep merge。
 - 第三方 CSTV parser 类型不得穿透 `packages/telemetry-cstv`。
@@ -45,7 +45,7 @@ Agent 的首要职责是在既有产品与架构边界内完成可验证实现�
 
 ## 本地协议
 
-Broadcast-owned Local Protocol 使用独立 channel：
+Mizar-owned Local Protocol 使用独立 channel：
 
 ```text
 program

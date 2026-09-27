@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/radar",
+  "name": "@mizar/radar",
   "private": true,
   "type": "module",
   "files": [
@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@rivalhub-broadcast/core": "workspace:*"
+    "@mizar/core": "workspace:*"
   },
   "devDependencies": {
     "@typescript/native": "catalog:"

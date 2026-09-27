@@ -5,7 +5,7 @@ import {
   type RadarCalibrationSnapshot,
   type SupportedRadarMapKey,
 } from './cs2-overview-calibrations.js';
-import { canonicalizeCs2MapName } from '@rivalhub-broadcast/core/map-name';
+import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MapGeometry, MapGeometryProvider } from './map-geometry.js';
 
 const EXPECTED_SPLIT_Z: Readonly<Partial<Record<SupportedRadarMapKey, number>>> = {

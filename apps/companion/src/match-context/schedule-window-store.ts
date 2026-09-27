@@ -6,8 +6,8 @@ import {
   validateBroadcastScheduleWindow,
   type BroadcastScheduleWindowV1,
   type ContractDiagnostic,
-} from '@rivalhub-broadcast/rivalhub';
-import type { ScheduleWindow } from '@rivalhub-broadcast/core/match-context';
+} from '@mizar/rivalhub';
+import type { ScheduleWindow } from '@mizar/core/match-context';
 
 import { replaceDurableJson, type DurableJsonFaultInjector } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
@@ -20,7 +20,7 @@ import type { ContextFreshness, ContextOrigin } from './lkg-store.js';
 
 export type ScheduleWindowOrigin = Exclude<ContextOrigin, 'cache' | 'local'>;
 
-const SCHEDULE_WINDOW_CACHE_VERSION = 'rivalhub.broadcast-schedule-window-cache.v1' as const;
+export const SCHEDULE_WINDOW_CACHE_VERSION = 'mizar.schedule-window-cache.v1' as const;
 
 export interface ScheduleWindowBinding {
   readonly request: ScheduleWindowRequest;

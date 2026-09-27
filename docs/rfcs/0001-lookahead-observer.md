@@ -8,7 +8,7 @@
 
 ## 摘要
 
-Lookahead 利用两个存在时间差的比赛时间轴：较早时间轴上的事件已经真实发生，但延迟 Program 尚未到达。Broadcast 将这种时间优势转换成低干扰的私有提示，帮助同一名解说兼 OB 提前准备切 POV。
+Lookahead 利用两个存在时间差的比赛时间轴：较早时间轴上的事件已经真实发生，但延迟 Program 尚未到达。Mizar 将这种时间优势转换成低干扰的私有提示，帮助同一名解说兼 OB 提前准备切 POV。
 
 这不是 AI 预测未来，也不宣称“延迟观察提示”概念首创。HOT / HLAE Observer Tools 已公开实现 Delayed Observer Cues，是重要参考。
 
@@ -57,9 +57,9 @@ HOT 证明两件事：
 1. CS2 可以作为观察工作台中的主要画面，而不是唯一全屏界面；
 2. 较早的数据源向延迟 OB 提供提示时间轴，是已经被实际产品验证过的模式。
 
-Broadcast 借鉴的是产品范式，不复制 HOT 的具体布局或注入技术。
+Mizar 借鉴的是产品范式，不复制 HOT 的具体布局或注入技术。
 
-Broadcast 的差异化组合是：
+Mizar 的差异化组合是：
 
 ```text
 无头无延迟数据源
@@ -138,13 +138,13 @@ FutureKillCue
 
 这保持“只有一个真正承担 Program 画面渲染的 CS2”的原始目标。
 
-**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不实现直连 CSTV 网络协议本身，只定义接入后的 `GameEventObservation`、时间轴对齐和 Observer Assist 语义。该独立仓库的研发进度不阻塞 Program V1 或制播工作区。
+**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** 本仓库不实现直连 CSTV 网络协议本身，只定义接入后的 `GameEventObservation`、时间轴对齐和 Observer Assist 语义。该独立仓库的研发进度不阻塞 Program V1 或制播工作区。
 
 当前 `cs2parser + HttpBroadcastReader` 只适用于真正提供 HTTP Broadcast URL 的数据提供方，不能由直连 GOTV 的 `IP:port` 自动推导。
 
 优点：
 
-- 不需要 Broadcast 自己实现延迟缓冲；
+- 不需要 Mizar 自己实现延迟缓冲；
 - Program 继续只运行一个真实 CS2；
 - Program GSI 与 Lookahead 接入分责；
 - 上层时间轴对齐和 提示语义不绑定具体接入方式。

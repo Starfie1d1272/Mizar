@@ -1,4 +1,4 @@
-import type { ObservedVector3 } from '@rivalhub-broadcast/core/telemetry';
+import type { ObservedVector3 } from '@mizar/core/telemetry';
 
 export type RadarLayer = 'single' | 'upper' | 'lower' | 'unknown';
 

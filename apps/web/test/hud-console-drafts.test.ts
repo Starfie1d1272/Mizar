@@ -5,7 +5,7 @@ import {
   getBuiltinLayout,
   getBuiltinPreset,
   getBuiltinTheme,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 import {
   mergeHudEditorDocument,

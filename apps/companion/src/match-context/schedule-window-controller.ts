@@ -3,7 +3,7 @@ import {
   toScheduleWindow,
   validateBroadcastScheduleWindow,
   type ContractDiagnostic,
-} from '@rivalhub-broadcast/rivalhub';
+} from '@mizar/rivalhub';
 
 import { SerialCommitQueue } from './serial-commit.js';
 import { SourceLoadError } from './source-error.js';

@@ -1,6 +1,6 @@
 # Telemetry 数据语义
 
-本文定义 CS2 GSI 与 CSTV 输入在 Broadcast 中的职责归属、数据源语义、规范化和证据要求。它不描述某个实施阶段，只记录当前有效规则与仍有长期价值的真实数据源事实。
+本文定义 CS2 GSI 与 CSTV 输入在 Mizar 中的职责归属、数据源语义、规范化和证据要求。它不描述某个实施阶段，只记录当前有效规则与仍有长期价值的真实数据源事实。
 
 ## 1. 数据流
 
@@ -123,7 +123,7 @@ Absence 可能表示：
 
 ### 3.2 地图 canonicalization 与 `map_round_wins`
 
-Core 与 Radar 共用 Broadcast-owned 的显式 CS2 地图别名表，例如 `Mirage / mirage / de_mirage` 归一为 `de_mirage`，`Dust 2 / dust2 / Dust II / de_dust2` 归一为 `de_dust2`。只允许明确别名和空白/大小写规范化，不使用编辑距离或模糊猜测。
+Core 与 Radar 共用 Mizar-owned 的显式 CS2 地图别名表，例如 `Mirage / mirage / de_mirage` 归一为 `de_mirage`，`Dust 2 / dust2 / Dust II / de_dust2` 归一为 `de_dust2`。只允许明确别名和空白/大小写规范化，不使用编辑距离或模糊猜测。
 
 `map.round_wins` 在 `packages/telemetry-gsi` 中解析为 normalized `ObservedRoundWin[]`。已知 `ct_win_* / t_win_*` 原因映射为 `elimination`、`bomb`、`defuse`、`time`；未知原因保留 `winnerSide = unknown` 与 `winCondition = unknown`，并产生 adapter diagnostic。
 
@@ -140,7 +140,7 @@ Raw GSI 中的 `previously` 与 `added` 只作为 change hint 和 diagnostic evi
 - corpus 分析；
 - regression test。
 
-它们不是 Broadcast domain truth，也不能直接生成 `RuntimeTransition`。
+它们不是 Mizar domain truth，也不能直接生成 `RuntimeTransition`。
 
 ## 5. TelemetryObservation
 
@@ -303,7 +303,7 @@ recorded raw input
 
 - 读取 CSTV fragment；
 - 维护 source-local generation / sequence / tick / health；
-- 将支持的 GameEvent 立即复制为 Broadcast-owned scalar observation；
+- 将支持的 GameEvent 立即复制为 Mizar-owned scalar observation；
 - 将 parser exception 转成受控 source diagnostic。
 
 它不负责：

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="8" x2="232" y2="244" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A1D38"/>
+      <stop offset="0.42" stop-color="#041426"/>
+      <stop offset="1" stop-color="#000C19"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(24 18) rotate(39) scale(190)">
+      <stop stop-color="#2B568E" stop-opacity="0.24"/>
+      <stop offset="0.60" stop-color="#173C6B" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#061522" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="24" y1="7" x2="235" y2="244" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5E8DCE" stop-opacity="0.62"/>
+      <stop offset="0.38" stop-color="#254B80" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#16324F" stop-opacity="0.34"/>
+    </linearGradient>
+    <linearGradient id="mizarStar" x1="84" y1="89" x2="139" y2="164" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.46" stop-color="#E0F2FF"/>
+      <stop offset="0.75" stop-color="#9BDAFC"/>
+      <stop offset="1" stop-color="#76BDF1"/>
+    </linearGradient>
+    <radialGradient id="alcorStar" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(170 78) rotate(48) scale(31)">
+      <stop stop-color="#FFF4C2"/>
+      <stop offset="0.45" stop-color="#FFD27A"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </radialGradient>
+    <linearGradient id="orbit" x1="39" y1="194" x2="219" y2="93" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E0F2FF"/>
+      <stop offset="0.14" stop-color="#67E8F9"/>
+      <stop offset="0.57" stop-color="#3180F3"/>
+      <stop offset="1" stop-color="#173A91"/>
+    </linearGradient>
+    <filter id="mainGlow" x="44" y="46" width="142" height="155" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="alcorGlow" x="138" y="45" width="73" height="76" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="orbitGlow" x="24" y="77" width="214" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+    <clipPath id="tileClip"><rect x="1.5" y="1.5" width="253" height="253" rx="50"/></clipPath>
+    <path id="mainStarPath" d="M113 68C114.4 95 119.2 115.2 158 125C119.2 134.8 114.4 152.3 113 178C111.6 152.3 106.8 134.8 68 125C106.8 115.2 111.6 95 113 68Z"/>
+    <path id="alcorPath" d="M174 62C175.4 72.2 178.6 78.6 191 82C178.6 85.4 175.4 91.8 174 102C172.6 91.8 169.4 85.4 157 82C169.4 78.6 172.6 72.2 174 62Z"/>
+    <path id="orbitRibbon" d="M64 145C51 156 40 168 37 181C33 193 42 201 60 205C100 212 156 189 197 158C219 141 227 113 216 90C222 111 214 134 193 151C154 181 103 202 64 196C50 194 44 189 47 180C50 169 57 156 64 145Z"/>
+  </defs>
+  <g clip-path="url(#tileClip)">
+    <rect x="1.5" y="1.5" width="253" height="253" rx="50" fill="url(#bg)"/>
+    <rect x="1.5" y="1.5" width="253" height="253" rx="50" fill="url(#bgGlow)"/>
+    <use href="#orbitRibbon" fill="#2F7FFF" opacity="0.22" filter="url(#orbitGlow)"/>
+    <use href="#mainStarPath" fill="#4EA5FF" opacity="0.88" filter="url(#mainGlow)"/>
+    <use href="#alcorPath" fill="#F59E0B" opacity="0.70" filter="url(#alcorGlow)"/>
+    <use href="#orbitRibbon" fill="url(#orbit)"/>
+    <use href="#mainStarPath" fill="url(#mizarStar)"/>
+    <use href="#alcorPath" fill="url(#alcorStar)"/>
+  </g>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="50" stroke="url(#rim)" stroke-width="0.9"/>
+</svg>

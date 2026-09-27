@@ -65,7 +65,7 @@ export function renderReport({
   hostCheckpoints = [],
 }) {
   const lines = [
-    '# RivalHub Broadcast 现场验收报告',
+    '# Mizar 现场验收报告',
     '',
     `- 结果：**${resultLabel(qualification.result)}**`,
     `- 运行编号：\`${qualification.runId}\``,

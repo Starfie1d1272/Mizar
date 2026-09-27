@@ -2,7 +2,7 @@
 
 ## 1. 定位
 
-RivalHub Broadcast 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**。它的目标不是只画一张 HUD，而是把比赛上下文、实时数据、节目画面、雷达、制作控制和观察辅助组织成一个完整的本地制播工作流。
+Mizar 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**。它的目标不是只画一张 HUD，而是把比赛上下文、实时数据、节目画面、雷达、制作控制和观察辅助组织成一个完整的本地制播工作流。
 
 长期产品目标包含两种运行方式：
 
@@ -36,7 +36,7 @@ RivalHub 是第一方、信息最完整的赛事上下文提供方，但不是�
 
 ## 3. 产品体验核心：制播工作区
 
-传统 HUD 工作流通常把游戏、网页控制、雷达、诊断和辅助信息分散在多个窗口。RivalHub Broadcast 的长期产品形态是一套**私有制播工作区（Broadcast Workspace）**：
+传统 HUD 工作流通常把游戏、网页控制、雷达、诊断和辅助信息分散在多个窗口。Mizar 的长期产品形态是一套**私有制播工作区（Mizar Workspace）**：
 
 - CS2 播出画面保持最大视觉权重；
 - 更易读的雷达、比赛状态和必要控制围绕主画面组织；
@@ -45,7 +45,7 @@ RivalHub 是第一方、信息最完整的赛事上下文提供方，但不是�
 
 制播工作区是产品体验范式。V1 Windows 正式 Host 采用 Tauri 2 和固定布局：真实 CS2 占所选显示器 work area 右上 75% 盒内的最大 16:9 区域，Big Radar 与 Context Panel 在左，Scene / Match / Local / OBS / Status 控制在下。浏览器 `/workspace` 提供相同组件的审查预览，localhost Web-first 页面仍独立可用。窗口与几何只由 Host 管理；比赛与播出状态继续由 Companion 拥有。
 
-Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；制作人员显式切换，数据不足、上下文过期或身份不一致时保持当前安全场景。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 RivalHub 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
+Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；制作人员显式切换，数据不足、上下文过期或身份不一致时保持当前安全场景。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 Mizar 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
 
 ## 4. 现场用户
 
@@ -101,7 +101,7 @@ HUD 至少能够表达：
 
 ProgramProjection 负责完成领域解释；React 组件只负责展示。例如选手存活状态由 Core 统一推导为 `alive | dead | unknown`，Renderer 不再次根据 HP 猜测。
 
-系列赛比分、地图结果和当前地图绑定由 Broadcast 本地 `SeriesProgress` 统一维护。地图结束后本地立即推进，不等待 RivalHub 回写；进程重启使用有界 checkpoint 恢复已冻结事实。实际服务器地图与赛前计划不一致时，比赛 telemetry 仍可继续显示，但 Series 暂停绑定并等待 Operator 明确确认。Round History 恢复不完整时显示 `partial`，不由 Renderer 补猜缺失回合。
+系列赛比分、地图结果和当前地图绑定由 Mizar 本地 `SeriesProgress` 统一维护。地图结束后本地立即推进，不等待 RivalHub 回写；进程重启使用有界 checkpoint 恢复已冻结事实。实际服务器地图与赛前计划不一致时，比赛 telemetry 仍可继续显示，但 Series 暂停绑定并等待 Operator 明确确认。Round History 恢复不完整时显示 `partial`，不由 Renderer 补猜缺失回合。
 
 Default V1 的中央比分条使用固定 envelope 和稳定的 score / center / objective / alive 区域；状态变化优先在既有区域内替换内容，不推动其它 HUD 组件。正常阶段显示回合与时钟；planting 使用中性 C4 与水平 action progress；planted 后才进入 bomb/danger presentation，引信与 defuse action 分别表达独立事实。默认播出画面隐藏精确 objective 秒数；进度分母证据缺失时只显示状态与不可定量的轨道，不补猜时长。存活人数只在完整 current 5+5 证据且出现死亡后显示，左右沿用 entrant A/B。动画只消费已有 semantic state / progress，不拥有 gameplay timer；urgency 局部化，并支持 reduced motion。具体长期约束见 ADR-0007。
 
@@ -243,7 +243,7 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 ## 10. 明确不属于核心产品定义的事项
 
-以下能力可以作为独立增强，但不构成 Broadcast 成立的前提：
+以下能力可以作为独立增强，但不构成 Mizar 成立的前提：
 
 - 自动导播或自动 TAKE；
 - AI 叙事理解；
@@ -262,6 +262,6 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 ## Windows 便携入口（#84）
 
-同一产品包使用 bundled Node 24 和 Companion，根目录 Tauri EXE 默认打开制播工作区；重复打开同版本服务复用当前实例，关闭工作区窗口仅隐藏至 tray，显式退出才停止 Runtime。程序资源与可写数据分离，可写目录默认为 `state`，支持 `BROADCAST_STATE_ROOT` 绝对路径覆盖。停止服务和 GSI 安装/恢复保留明确的脚本入口，现场验收继续使用同包内的现有 controller 与 evidence contract。
+同一产品包使用 bundled Node 24 和 Companion，根目录 Tauri EXE 默认打开制播工作区；重复打开同版本服务复用当前实例，关闭工作区窗口仅隐藏至 tray，显式退出才停止 Runtime。程序资源与可写数据分离，可写目录默认为 `state`，支持 `MIZAR_STATE_ROOT` 绝对路径覆盖。停止服务和 GSI 安装/恢复保留明确的脚本入口，现场验收继续使用同包内的现有 controller 与 evidence contract。
 
 该阶段已交付便携启动与目录隔离，并增加有界 Host 连接诊断。Windows CI 在 exact artifact 上运行三段各 24 回合的脚本化合成地图流程并导出资源、投递、重连与慢消费者指标；这不等同于真实比赛回放。真实 Windows + CS2 + OBS 现场证据及连续完整比赛验收仍按 #35 后续验收项推进。

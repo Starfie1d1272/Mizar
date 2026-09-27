@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
+import type { BpSnapshot } from '@mizar/protocol/bp';
 import { sendBpCommand, useBpSession } from './client';
 import './bp.css';
 const labels = {

@@ -4,8 +4,8 @@ import type {
   ObservedVector3,
   SourceSide,
   TelemetryCoverageStatus,
-} from '@rivalhub-broadcast/core/telemetry';
-import type { ProjectionCursor } from '@rivalhub-broadcast/core/projection';
+} from '@mizar/core/telemetry';
+import type { ProjectionCursor } from '@mizar/core/projection';
 
 export interface RadarPlayer {
   readonly sourcePlayerId: string;
@@ -45,7 +45,7 @@ export interface RadarGrenade {
 export interface RadarFrame {
   readonly cursor: ProjectionCursor;
   readonly telemetryFreshness: 'awaiting' | 'fresh' | 'stale';
-  readonly identityState: import('@rivalhub-broadcast/core/identity').IdentityState;
+  readonly identityState: import('@mizar/core/identity').IdentityState;
   readonly mapName: string | null;
   readonly observedPlayerSourceId: string | null;
   readonly coverage: {

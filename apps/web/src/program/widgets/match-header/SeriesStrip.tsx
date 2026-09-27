@@ -1,4 +1,4 @@
-import { getMapThumbnail, getSideLogo } from '@rivalhub-broadcast/cs2-assets';
+import { getMapThumbnail, getSideLogo } from '@mizar/cs2-assets';
 import type { CSSProperties } from 'react';
 
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import type { RuntimeTime } from '@rivalhub-broadcast/core/runtime';
+import type { RuntimeTime } from '@mizar/core/runtime';
 
 import type { LocalWebChannel } from '../local-web/transport-constants.js';
 import type { LocalWebHostEvent, LocalWebHostKind } from '../local-web/websocket-transport.js';

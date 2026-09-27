@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { MapExecutionResetReason, RuntimeTime } from '@rivalhub-broadcast/core/runtime';
+import type { MapExecutionResetReason, RuntimeTime } from '@mizar/core/runtime';
 
 import type {
   LocalWebHostDiagnostics,

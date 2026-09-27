@@ -1,8 +1,5 @@
-import {
-  createSnapshotAcceptance,
-  type SnapshotAcceptance,
-} from '@rivalhub-broadcast/protocol/acceptance';
-import type { LocalSnapshotChannel } from '@rivalhub-broadcast/protocol/version';
+import { createSnapshotAcceptance, type SnapshotAcceptance } from '@mizar/protocol/acceptance';
+import type { LocalSnapshotChannel } from '@mizar/protocol/version';
 
 import {
   getLocalChannelConfig,

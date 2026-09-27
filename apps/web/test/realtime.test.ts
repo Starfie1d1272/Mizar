@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { programSnapshotSchema } from '@rivalhub-broadcast/protocol/program';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { radarSnapshotSchema } from '@rivalhub-broadcast/protocol/radar';
-import { PROGRAM_SCHEMA_VERSION, RADAR_SCHEMA_VERSION } from '@rivalhub-broadcast/protocol/version';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { programSnapshotSchema } from '@mizar/protocol/program';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
+import { radarSnapshotSchema } from '@mizar/protocol/radar';
+import { PROGRAM_SCHEMA_VERSION, RADAR_SCHEMA_VERSION } from '@mizar/protocol/version';
 import {
   createLocalChannelClient,
   localWebSocketUrl,
@@ -77,7 +77,7 @@ class FakeWebSocket implements BrowserWebSocketLike {
   readonly closeCalls: Array<{ readonly code: number; readonly reason: string }> = [];
   sent: string[] = [];
 
-  open(protocol = 'rivalhub-broadcast.local.v1'): void {
+  open(protocol = 'mizar.local.v1'): void {
     this.readyState = 1;
     this.protocol = protocol;
     this.onopen?.();
@@ -183,7 +183,7 @@ describe('local realtime browser client', () => {
     expect(client.getSnapshot().state).toBe('connecting');
     expect(sockets.sockets).toHaveLength(1);
     expect(sockets.urls[0]).toBe('ws://127.0.0.1:4173/local/v1/program');
-    expect(sockets.protocols[0]).toBe('rivalhub-broadcast.local.v1');
+    expect(sockets.protocols[0]).toBe('mizar.local.v1');
 
     sockets.sockets[0]!.open();
     expect(client.getSnapshot().state).toBe('awaiting-baseline');

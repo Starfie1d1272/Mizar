@@ -5,9 +5,9 @@ import {
   createIdentityResolver,
   resolveIdentity,
   type IdentityResolution,
-} from '@rivalhub-broadcast/core/identity';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
-import type { ObservedPlayer } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/identity';
+import type { MatchContext } from '@mizar/core/match-context';
+import type { ObservedPlayer } from '@mizar/core/telemetry';
 import { describe, expect, it } from 'vitest';
 
 import { toMatchContext, type BroadcastManifestV1 } from '../src/index.js';
