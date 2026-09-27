@@ -5,6 +5,8 @@ import {
   type ProgramSceneState,
 } from '@rivalhub-broadcast/protocol/program-scenes';
 
+const PROGRAM_SCENE_COMMAND_TIMEOUT_MS = 12_000;
+
 export function useProgramScenes(): ProgramSceneState | null {
   const [state, setState] = useState<ProgramSceneState | null>(null);
   useEffect(() => {
@@ -42,7 +44,7 @@ export async function selectProgramScene(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sceneId, expectedRevision }),
-    signal: AbortSignal.timeout(3000),
+    signal: AbortSignal.timeout(PROGRAM_SCENE_COMMAND_TIMEOUT_MS),
   });
   if (!response.ok) {
     const value = (await response.json().catch(() => null)) as { message?: string } | null;
