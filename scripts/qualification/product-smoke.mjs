@@ -103,10 +103,16 @@ try {
   const legacyCfgPath = join(cfgDirectory, LEGACY_GSI_CFG_NAME);
   const mizarCfgPath = join(cfgDirectory, MIZAR_GSI_CFG_NAME);
   const legacyContents = 'legacy GSI migration regression fixture\n';
-  await mkdir(cfgDirectory, { recursive: true });
-  await writeFile(legacyCfgPath, legacyContents, 'utf8');
-  await powershell('install-gsi.ps1', ['-Product', '-Cs2Root', cfgDirectory]);
   const installationPath = join(stateRoot, 'data/gsi-install/install.json');
+  await mkdir(cfgDirectory, { recursive: true });
+  await mkdir(join(stateRoot, 'data/gsi-install'), { recursive: true });
+  await writeFile(legacyCfgPath, legacyContents, 'utf8');
+  await writeFile(
+    installationPath,
+    JSON.stringify({ schemaVersion: 1, cfgPath: legacyCfgPath, cfgFingerprint: 'pre-release' }),
+    'utf8',
+  );
+  await powershell('install-gsi.ps1', ['-Product', '-Cs2Root', cfgDirectory]);
   const installed = await readFile(installationPath, 'utf8');
   await assert.rejects(access(legacyCfgPath));
   assert.deepEqual(

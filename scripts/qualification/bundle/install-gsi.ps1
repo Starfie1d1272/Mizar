@@ -9,20 +9,32 @@ $LEGACY_GSI_CFG_NAME = 'gamestate_integration_rivalhub_broadcast.cfg'
 $MIZAR_GSI_CFG_NAME = 'gamestate_integration_mizar.cfg'
 if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
     $existing = Read-InstallState
-    if ($Cs2Root) { throw '已有安装记录，请先恢复配置后再选择其它 CS2 目录' }
-    if (-not (Test-Path -LiteralPath $existing.cfgPath -PathType Leaf) -or
-        (Get-FileHash -LiteralPath $existing.cfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) { throw '现有 GSI 配置与安装记录不一致，已保留原备份；请先恢复配置' }
-    $existingCfgName = Split-Path -Leaf ([string]$existing.cfgPath)
-    if ($existingCfgName -ieq $MIZAR_GSI_CFG_NAME) {
-        $existingCfgDirectory = Split-Path -Parent ([string]$existing.cfgPath)
-        $legacyCfgPath = Join-Path $existingCfgDirectory $LEGACY_GSI_CFG_NAME
-        if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
-            Remove-Item -LiteralPath $legacyCfgPath -Force
+    $existingCfgPath = [string]$existing.cfgPath
+    $existingCfgName = Split-Path -Leaf $existingCfgPath
+    if ($existingCfgName -ieq $LEGACY_GSI_CFG_NAME) {
+        if (-not $Cs2Root -and $existingCfgPath) {
+            $Cs2Root = Split-Path -Parent $existingCfgPath
         }
-        Write-Output 'Mizar GSI 配置已安装且一致。'
-        exit 0
+        if (Test-Path -LiteralPath $existingCfgPath -PathType Leaf) {
+            Remove-Item -LiteralPath $existingCfgPath -Force
+        }
+        Remove-Item -LiteralPath $script:QualificationStateRoot -Recurse -Force
+        Write-Output '已清理预发布 RivalHub Broadcast GSI 安装记录，继续安装 Mizar。'
+    } else {
+        if ($Cs2Root) { throw '已有安装记录，请先恢复配置后再选择其它 CS2 目录' }
+        if (-not (Test-Path -LiteralPath $existingCfgPath -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) { throw '现有 GSI 配置与安装记录不一致，已保留原备份；请先恢复配置' }
+        if ($existingCfgName -ieq $MIZAR_GSI_CFG_NAME) {
+            $existingCfgDirectory = Split-Path -Parent $existingCfgPath
+            $legacyCfgPath = Join-Path $existingCfgDirectory $LEGACY_GSI_CFG_NAME
+            if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
+                Remove-Item -LiteralPath $legacyCfgPath -Force
+            }
+            Write-Output 'Mizar GSI 配置已安装且一致。'
+            exit 0
+        }
+        throw '现有安装记录不属于 Mizar GSI 配置，已保留原配置；请先恢复配置'
     }
-    throw '现有安装记录不属于 Mizar GSI 配置，已保留原配置；请先恢复配置'
 }
 
 function Get-SteamInstallRoots {
