@@ -304,13 +304,13 @@ Lookahead 数据源
 
 硬约束：
 
-- Lookahead 没有 Program fallback 资格；
+- Lookahead 不能作为 Program 的备用数据源；
 - Lookahead 故障只降级 Assist；
 - Program 故障不会自动切换到 Lookahead；
-- future information 不能先进入 Program 再靠 CSS、window z-order 或 OBS crop 隐藏；
-- Program 与 Assist 可以有不同 Host，但数据安全由 Projection / schema 保证。
+- 未来信息不能先进入 Program，再靠 CSS、窗口层级或 OBS 裁剪隐藏；
+- Program 与 Assist 可以使用不同 Host，但数据安全由 Projection / schema 保证。
 
-观察辅助可以由 transparent/topmost window 承载，也可以是 Broadcast Workspace 的私有区域；Host 技术不改变这一边界。
+观察辅助可以由透明置顶窗口承载，也可以放在制播工作区的私有区域；Host 技术不改变这一边界。
 
 ## 8. Radar 边界
 
