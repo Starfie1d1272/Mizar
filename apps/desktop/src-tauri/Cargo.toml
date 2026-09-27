@@ -20,3 +20,10 @@ tauri-build = "=2.6.3"
 strip = true
 lto = true
 codegen-units = 1
+
+[profile.ci]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16
+strip = true

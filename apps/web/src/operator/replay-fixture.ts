@@ -242,6 +242,7 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
       events,
       rebuild: async (targetCaptureIndex, signal) => {
         const expected = frames[targetCaptureIndex]!;
+        if (import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1') return expected;
         const response = await fetch('/__local/replay-prefix', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

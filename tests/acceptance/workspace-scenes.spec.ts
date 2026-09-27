@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './companion-isolation.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 
 test('Workspace preview shares the scene registry and sends a revisioned command', async ({

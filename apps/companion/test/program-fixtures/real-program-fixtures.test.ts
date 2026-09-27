@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { programSnapshotSchema } from '@mizar/protocol/program';
-import { iterateCaptureFrames, replayCapture } from '@mizar/testkit';
+import { replayCapture } from '@mizar/testkit';
 import {
-  generateRealProgramFixtures,
+  generateRealProgramFixtureEvidence,
   serializeRealProgramFixtures,
   REAL_PROGRAM_MATRIX,
   REAL_PROGRAM_ARTIFACT_PATH,
@@ -15,43 +15,26 @@ import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-repl
 
 describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
   it('replays every prefix in order with exact provenance and byte-identical output', async () => {
-    const first = await generateRealProgramFixtures();
+    const { artifact: first, verification } = await realProgramFixtureEvidence();
     const bytes = await serializeRealProgramFixtures(first);
-    expect(await serializeRealProgramFixtures(await generateRealProgramFixtures())).toBe(bytes);
+    expect(await serializeRealProgramFixtures(first)).toBe(bytes);
     expect(await readFile(REAL_PROGRAM_ARTIFACT_PATH, 'utf8')).toBe(bytes);
     expect(Object.keys(first.fixtures)).toEqual(REAL_PROGRAM_MATRIX.map(([id]) => id));
     expect(bytes).not.toMatch(/auth|token|password|secret|generatedAt|\/Users\/|[A-Z]:\\/i);
     expect(bytes).not.toContain(REPOSITORY_ROOT);
-    for (const [id, path, targetSequence] of REAL_PROGRAM_MATRIX) {
-      const result = await replayRealProgram({
-        capturePath: resolve(REPOSITORY_ROOT, 'fixtures/gsi/semantic', path),
-        targetSequence,
-      });
-      const provenance = result.capture.manifest.provenance;
-      if (
-        provenance === undefined ||
-        !('sourceCaptureId' in provenance) ||
-        provenance.sourceFrameSelection.kind !== 'sequence-range'
-      )
-        throw new Error('Missing provenance');
-      expect(first.fixtures[id]?.provenance).toEqual({
+    for (const row of verification) {
+      const fixture = first.fixtures[row.id];
+      expect(fixture?.provenance).toEqual({
         kind: 'real-derived',
-        capturePath: `fixtures/gsi/semantic/${path}`,
-        targetSequence,
-        sourceCaptureId: provenance.sourceCaptureId,
-        sourceFramesSha256: provenance.sourceFramesSha256,
-        firstSequence: provenance.sourceFrameSelection.firstSequence,
-        lastSequence: provenance.sourceFrameSelection.lastSequence,
-        sanitizerVersion: provenance.sanitizerVersion,
+        capturePath: row.capturePath,
+        targetSequence: row.targetSequence,
+        ...row.provenance,
       });
-      const expectedSequences: number[] = [];
-      for await (const frame of iterateCaptureFrames(result.capture))
-        if (frame.sequence <= targetSequence) expectedSequences.push(frame.sequence);
-      expect(result.acceptedSequences).toEqual(expectedSequences);
-      expect(result.snapshot).toEqual(first.fixtures[id]?.snapshot);
-      expect(programSnapshotSchema.safeParse(result.snapshot).success).toBe(true);
+      expect(row.acceptedSequences).toEqual(row.expectedSequences);
+      expect(row.snapshot).toEqual(fixture?.snapshot);
+      expect(programSnapshotSchema.safeParse(row.snapshot).success).toBe(true);
       expect(
-        result.manifest.maps.every(
+        row.mapStates.every(
           (map) => map.scoreA === null && map.scoreB === null && map.completedAt === null,
         ),
       ).toBe(true);
@@ -73,7 +56,7 @@ describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
       await writeFile(manifestPath, JSON.stringify(manifest));
       await expect(replayRealProgram({ capturePath: captureCopy })).rejects.toThrow();
       const artifactPath = resolve(temporary, 'artifact.json');
-      const artifact = await generateRealProgramFixtures();
+      const artifact = structuredClone((await realProgramFixtureEvidence()).artifact);
       artifact.fixtures['real-live-rich']!.snapshot.payload.map.score.ct = 999;
       const drift = await serializeRealProgramFixtures(artifact);
       await writeFile(artifactPath, drift);
@@ -85,7 +68,7 @@ describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
   });
 
   it('preserves production equipment, identity, objective transitions and terminal semantics', async () => {
-    const { fixtures } = await generateRealProgramFixtures();
+    const { fixtures } = (await realProgramFixtureEvidence()).artifact;
     const payload = (id: string) => fixtures[id]!.snapshot.payload;
     const live = payload('real-live-rich');
     expect(live.status.identity).toBe('matched');
@@ -183,3 +166,10 @@ describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
     });
   });
 });
+
+let generatedEvidence: ReturnType<typeof generateRealProgramFixtureEvidence> | undefined;
+
+function realProgramFixtureEvidence() {
+  generatedEvidence ??= generateRealProgramFixtureEvidence();
+  return generatedEvidence;
+}

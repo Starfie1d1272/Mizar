@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './companion-isolation.js';
 
 test('qualification help uses the shared product shell and development host diagnostics', async ({
   page,

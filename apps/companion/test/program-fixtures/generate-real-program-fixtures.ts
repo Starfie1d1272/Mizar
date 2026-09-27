@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { format } from 'prettier';
+import { iterateCaptureFrames } from '@mizar/testkit';
 
 import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-replay.js';
 
@@ -32,16 +33,16 @@ export const REAL_PROGRAM_ARTIFACT_PATH = resolve(
   'apps/web/src/program/fixtures/generated/real-program-fixtures.generated.json',
 );
 
-async function generateFixture([
-  ,
-  captureName,
-  targetSequence,
-]: (typeof REAL_PROGRAM_MATRIX)[number]) {
+async function generateFixture(
+  [id, captureName, targetSequence]: (typeof REAL_PROGRAM_MATRIX)[number],
+  includeVerification = false,
+) {
   const capturePath = `fixtures/gsi/semantic/${captureName}`;
-  const { capture, snapshot } = await replayRealProgram({
+  const result = await replayRealProgram({
     capturePath: resolve(REPOSITORY_ROOT, capturePath),
     targetSequence,
   });
+  const { capture, snapshot } = result;
   const provenance = capture.manifest.provenance;
   if (
     provenance === undefined ||
@@ -51,7 +52,7 @@ async function generateFixture([
   ) {
     throw new Error(`Expected committed sanitized sequence-range capture: ${capturePath}`);
   }
-  return {
+  const fixture = {
     provenance: {
       kind: 'real-derived' as const,
       capturePath,
@@ -64,11 +65,59 @@ async function generateFixture([
     },
     snapshot,
   };
+
+  if (!includeVerification) return { fixture };
+
+  const expectedSequences: number[] = [];
+  for await (const frame of iterateCaptureFrames(capture))
+    if (frame.sequence <= targetSequence) expectedSequences.push(frame.sequence);
+
+  return {
+    fixture,
+    verification: {
+      id,
+      capturePath,
+      targetSequence,
+      provenance: {
+        sourceCaptureId: provenance.sourceCaptureId,
+        sourceFramesSha256: provenance.sourceFramesSha256,
+        firstSequence: provenance.sourceFrameSelection.firstSequence,
+        lastSequence: provenance.sourceFrameSelection.lastSequence,
+        sanitizerVersion: provenance.sanitizerVersion,
+      },
+      acceptedSequences: result.acceptedSequences,
+      expectedSequences,
+      snapshot,
+      mapStates: result.manifest.maps.map(({ scoreA, scoreB, completedAt }) => ({
+        scoreA,
+        scoreB,
+        completedAt,
+      })),
+    },
+  };
+}
+
+export async function generateRealProgramFixtureEvidence() {
+  const fixtures: Record<string, Awaited<ReturnType<typeof generateFixture>>['fixture']> = {};
+  const verification = [];
+  for (const row of REAL_PROGRAM_MATRIX) {
+    const generated = await generateFixture(row, true);
+    fixtures[row[0]] = generated.fixture;
+    if (!('verification' in generated)) throw new Error('Missing fixture verification evidence');
+    verification.push(generated.verification);
+  }
+  return {
+    artifact: { schemaVersion: 1 as const, fixtures },
+    verification,
+  };
 }
 
 export async function generateRealProgramFixtures() {
-  const fixtures: Record<string, Awaited<ReturnType<typeof generateFixture>>> = {};
-  for (const row of REAL_PROGRAM_MATRIX) fixtures[row[0]] = await generateFixture(row);
+  const fixtures: Record<string, Awaited<ReturnType<typeof generateFixture>>['fixture']> = {};
+  for (const row of REAL_PROGRAM_MATRIX) {
+    const generated = await generateFixture(row);
+    fixtures[row[0]] = generated.fixture;
+  }
   return { schemaVersion: 1 as const, fixtures };
 }
 

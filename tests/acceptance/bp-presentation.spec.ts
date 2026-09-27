@@ -1,4 +1,5 @@
-import { expect, test, type BrowserContext } from '@playwright/test';
+import type { BrowserContext, Locator, Page } from '@playwright/test';
+import { expect, test } from './companion-isolation.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -90,13 +91,78 @@ async function routeCompanionApi(
   );
 }
 
+function createManualBpClock() {
+  let currentTimeMs = 0;
+  return {
+    now: () => currentTimeMs,
+    advanceBy: (durationMs: number) => {
+      currentTimeMs += durationMs;
+    },
+  };
+}
+
+type ManualBpClock = ReturnType<typeof createManualBpClock>;
+
+function buildAppWithManualBpClock(
+  clock: ManualBpClock,
+  options: Parameters<typeof buildApp>[0] = {},
+) {
+  return buildApp({ ...options, bpNowMonotonicMs: clock.now });
+}
+
+async function playAndRevealBp(
+  operator: Page,
+  app: ReturnType<typeof buildApp>,
+  clock: ManualBpClock,
+  surfaces: readonly (Page | Locator)[],
+) {
+  await operator.getByRole('button', { name: '播放 BP', exact: true }).click();
+  for (const surface of surfaces) {
+    const scene = surface.locator('.bp-scene');
+    await expect(scene).toHaveAttribute('data-state', 'revealing');
+    await expect(scene.locator('.bp-card[data-visible=true]')).toHaveCount(1);
+  }
+
+  const initial = JSON.parse((await app.inject('/local/v1/bp')).body) as {
+    projection: { steps: readonly unknown[] } | null;
+    revealedCount: number;
+    state: string;
+  };
+  expect(initial).toMatchObject({ revealedCount: 1, state: 'revealing' });
+  if (initial.projection === null) throw new Error('BP reveal lost its presentation projection');
+  clock.advanceBy(Math.max(0, initial.projection.steps.length - 1) * 1600);
+  for (const surface of surfaces) {
+    await expect(surface.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
+      timeout: 5000,
+    });
+  }
+}
+
+async function hideBp(
+  operator: Page,
+  app: ReturnType<typeof buildApp>,
+  clock: ManualBpClock,
+  surfaces: readonly (Page | Locator)[],
+) {
+  await operator.getByRole('button', { name: '收起 BP', exact: true }).click();
+  const hiding = JSON.parse((await app.inject('/local/v1/bp')).body) as { state: string };
+  expect(hiding.state).toBe('hiding');
+  clock.advanceBy(360);
+  const hidden = JSON.parse((await app.inject('/local/v1/bp')).body) as { state: string };
+  expect(hidden.state).toBe('hidden');
+  for (const surface of surfaces) {
+    await expect(surface.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
+  }
+}
+
 for (const format of ['bo1', 'bo3', 'bo5'] as const) {
   test(`BP ${format} built-in scene demo drives Preview and Program without a match`, async ({
     page,
     context,
   }) => {
     test.setTimeout(90000);
-    const app = buildApp();
+    const bpClock = createManualBpClock();
+    const app = buildAppWithManualBpClock(bpClock);
     await routeCompanionApi(context, () => app);
     await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
     try {
@@ -132,16 +198,7 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
       await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: '切回 RivalHub BP' })).toHaveCount(0);
 
-      await page.getByRole('button', { name: '播放 BP', exact: true }).click();
-      await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
-      await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
-      await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
-        timeout: 30000,
-      });
-      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveAttribute(
-        'data-state',
-        'shown',
-      );
+      await playAndRevealBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
       await expect(program.locator('.bp-card')).toHaveCount(7);
       await expect(program.locator('.bp-card[data-kind="ban"]')).toHaveCount(
         format === 'bo1' ? 6 : format === 'bo3' ? 4 : 2,
@@ -173,9 +230,7 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         await expect(decider).not.toContainText(/SIDE TBD/i);
       }
 
-      await page.getByRole('button', { name: '收起 BP', exact: true }).click();
-      await expect(program.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
-      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
+      await hideBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
       await page.getByRole('button', { name: '退出演示' }).click();
       await expect(page.locator('.bp-source-badge')).toContainText('未连接');
       await expect(page.locator('.bp-scene-testing')).toBeVisible();
@@ -194,7 +249,8 @@ test('BP demo remains stable while the real MatchContext updates and restores it
   const directory = await mkdtemp(join(tmpdir(), 'bp-demo-context-switch-'));
   const manifestPath = join(directory, 'match.json');
   const initial = bindingFor('semifinalA');
-  const app = buildApp({
+  const bpClock = createManualBpClock();
+  const app = buildAppWithManualBpClock(bpClock, {
     matchContextBinding: {
       ...initial,
       origin: 'local',
@@ -213,10 +269,7 @@ test('BP demo remains stable while the real MatchContext updates and restores it
       .filter({ hasText: 'BO3' })
       .getByRole('button', { name: '开始演示' })
       .click();
-    await page.getByRole('button', { name: '播放 BP', exact: true }).click();
-    await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
-      timeout: 30000,
-    });
+    await playAndRevealBp(page, app, bpClock, [program]);
     await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
 
     const before = JSON.parse((await app.inject('/local/v1/bp-workspace')).body) as {
@@ -248,8 +301,7 @@ test('BP demo remains stable while the real MatchContext updates and restores it
     await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
     await expect(program.locator('.bp-teams')).not.toContainText('真实比赛 B');
 
-    await page.getByRole('button', { name: '收起 BP', exact: true }).click();
-    await expect(program.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
+    await hideBp(page, app, bpClock, [program]);
     await page.getByRole('button', { name: '退出演示' }).click();
     const restored = JSON.parse((await app.inject('/local/v1/bp')).body) as {
       projection: { entrants: { a: { name: string }; b: { name: string } } };
@@ -279,7 +331,8 @@ for (const key of ['semifinalA', 'final'] as const) {
   }) => {
     test.setTimeout(90000);
     const directory = await mkdtemp(join(tmpdir(), 'bp-acceptance-'));
-    const app = buildApp({
+    const bpClock = createManualBpClock();
+    const app = buildAppWithManualBpClock(bpClock, {
       matchContextBinding: bindingFor(key),
       matchManifestPath: join(directory, 'match.json'),
     });
@@ -301,12 +354,7 @@ for (const key of ['semifinalA', 'final'] as const) {
       const program = await context.newPage();
       await program.goto('/program/bp');
       await expect(program.locator('.bp-scene')).toHaveCount(0);
-      await page.getByRole('button', { name: '播放 BP', exact: true }).click();
-      await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
-      await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
-      await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
-        timeout: 30000,
-      });
+      await playAndRevealBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
       await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(7);
       await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveAttribute(
         'data-state',
@@ -343,9 +391,7 @@ for (const key of ['semifinalA', 'final'] as const) {
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-animate', 'false');
 
-      await page.getByRole('button', { name: '收起 BP', exact: true }).click();
-      await expect(program.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
-      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
+      await hideBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
       await page.getByRole('button', { name: '播放 BP', exact: true }).click();
       await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
       await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
@@ -362,8 +408,9 @@ test('cache from RivalHub does not offer local override or a redundant source sw
   context,
 }) => {
   const directory = await mkdtemp(join(tmpdir(), 'bp-online-cache-'));
+  const bpClock = createManualBpClock();
   const onlineBinding = bindingFor('semifinalA');
-  const app = buildApp({
+  const app = buildAppWithManualBpClock(bpClock, {
     matchContextBinding: {
       ...onlineBinding,
       origin: 'cache',
@@ -390,7 +437,8 @@ test('local BP shows a bounded RivalHub candidate summary and sends both revisio
   context,
 }) => {
   const directory = await mkdtemp(join(tmpdir(), 'bp-pending-online-'));
-  const app = buildApp({
+  const bpClock = createManualBpClock();
+  const app = buildAppWithManualBpClock(bpClock, {
     matchContextBinding: {
       ...bindingFor('semifinalA'),
       origin: 'local',
@@ -447,7 +495,8 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
   test.setTimeout(60000);
   const directory = await mkdtemp(join(tmpdir(), 'bp-local-acceptance-'));
   const manifestPath = join(directory, 'match.json');
-  let app = buildApp({ matchManifestPath: manifestPath });
+  const bpClock = createManualBpClock();
+  let app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
   await routeCompanionApi(context, () => app);
   try {
     await page.goto('/operator/bp');
@@ -507,7 +556,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     expect(JSON.parse(localWorkspace.body)).toMatchObject({ source: 'local', readiness: 'ready' });
 
     await app.close();
-    app = buildApp({ matchManifestPath: manifestPath });
+    app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'cache');
     await expect(page.getByRole('heading', { name: '本地 BP 已保存' })).toBeVisible();
@@ -554,8 +603,9 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
 }) => {
   const directory = await mkdtemp(join(tmpdir(), 'bp-bound-fallback-'));
   const manifestPath = join(directory, 'match.json');
+  const bpClock = createManualBpClock();
   const original = await partiallyRecordedBinding();
-  let app = buildApp({
+  let app = buildAppWithManualBpClock(bpClock, {
     matchContextBinding: original,
     matchManifestPath: manifestPath,
   });
@@ -599,7 +649,7 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
     expect(saved.maps).toHaveLength(3);
 
     await app.close();
-    app = buildApp({ matchManifestPath: manifestPath });
+    app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
     await page.reload();
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'cache');
     await page

@@ -31,6 +31,7 @@ function usage() {
     '  --output <directory>       输出目录（默认：.agent-tmp/qualification-build）',
     '  --skip-build               复用已有 dist 输出',
     '  --skip-node-runtime        仅做结构 smoke 的 bundle，不是现场验收 artifact',
+    '  --desktop-profile <ci|release>  桌面 Host 构建 profile（默认：release）',
     '  --allow-dirty               本地开发时允许存在未提交的源代码变更',
   ].join('\n');
 }
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     nodeVersion: QUALIFICATION_NODE_VERSION,
     skipBuild: false,
     skipNodeRuntime: false,
+    desktopProfile: 'release',
     allowDirty: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,7 +50,15 @@ function parseArgs(argv) {
     if (argument === '--skip-build') options.skipBuild = true;
     else if (argument === '--skip-node-runtime') options.skipNodeRuntime = true;
     else if (argument === '--allow-dirty') options.allowDirty = true;
-    else if (argument === '--output') {
+    else if (argument === '--desktop-profile') {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('--')) throw new Error(`参数 ${argument} 缺少值`);
+      if (value !== 'ci' && value !== 'release') {
+        throw new Error(`无效的桌面构建 profile：${value}（仅支持 ci 或 release）`);
+      }
+      options.desktopProfile = value;
+      index += 1;
+    } else if (argument === '--output') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`参数 ${argument} 缺少值`);
       options.output = resolve(rootDir, value);
@@ -397,13 +407,14 @@ async function main() {
       const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
       await runCommand('cargo', [
         'build',
-        '--release',
+        '--profile',
+        options.desktopProfile,
         '--locked',
         '--manifest-path',
         join(desktopDir, 'Cargo.toml'),
       ]);
       await cp(
-        join(desktopDir, 'target', 'release', 'mizar-desktop.exe'),
+        join(desktopDir, 'target', options.desktopProfile, 'mizar-desktop.exe'),
         join(stagingDir, 'Mizar.exe'),
       );
     } else if (!options.skipNodeRuntime) {
@@ -417,6 +428,8 @@ async function main() {
       schemaVersion: 1,
       productSchemaVersion: 1,
       desktopHost: 'tauri2',
+      desktopBuildProfile:
+        process.platform === 'win32' && !options.skipNodeRuntime ? options.desktopProfile : null,
       developmentOnly,
       repository: REPOSITORY,
       gitSha,
@@ -445,6 +458,7 @@ async function main() {
         artifactSha256: digest,
         gitSha,
         nodeVersion,
+        desktopBuildProfile: artifact.desktopBuildProfile,
       }),
     );
   } catch (error) {

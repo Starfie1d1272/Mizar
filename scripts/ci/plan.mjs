@@ -93,6 +93,7 @@ function fullPlan(reason, includeOfflineQualification = false) {
     runAcceptance: true,
     runPlatform: true,
     runQualification: true,
+    runOfflineQualification: includeOfflineQualification,
     requiredJobs: CI_JOB_IDS.filter(
       (job) => includeOfflineQualification || job !== 'qualification_offline',
     ),
@@ -100,7 +101,7 @@ function fullPlan(reason, includeOfflineQualification = false) {
   };
 }
 
-function selectivePlan(changedFiles) {
+function selectivePlan(changedFiles, eventName) {
   const runQuality = changedFiles.some(({ path }) => isKnownQualityPath(path));
   const runAcceptance = changedFiles.some(({ path }) => isAcceptancePath(path));
   const runPlatform = changedFiles.some(({ path }) => isPlatformPath(path));
@@ -118,8 +119,9 @@ function selectivePlan(changedFiles) {
     runAcceptance,
     runPlatform,
     runQualification,
+    runOfflineQualification: false,
     requiredJobs,
-    reason: `pull_request changed surface classified (${changedFiles.length} file(s))`,
+    reason: `${eventName} changed surface classified (${changedFiles.length} file(s))`,
   };
 }
 
@@ -154,7 +156,9 @@ export function parseGitDiffNameStatus(output) {
  */
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
-  if (eventName !== 'pull_request') return fullPlan(`forced full for ${eventName}`, true);
+  if (eventName !== 'pull_request' && eventName !== 'push')
+    return fullPlan(`forced full for ${eventName}`, true);
+  const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>
     typeof entry === 'string'
@@ -162,13 +166,17 @@ export function createCiPlan(options = {}) {
       : { path: normalizePath(entry.path), status: entry.status ?? 'M' },
   );
 
-  if (changedFiles.length === 0) return fullPlan('forced full: missing pull request file list');
+  if (changedFiles.length === 0)
+    return fullPlan(`forced full: missing ${eventName} changed paths`, includeOfflineQualification);
   if (
     changedFiles.some(
       ({ path, status }) => path === '' || isUnsafeChangeStatus(status) || isForcedFullPath(path),
     )
   ) {
-    return fullPlan('forced full: unsafe, toolchain, workflow, or planner change');
+    return fullPlan(
+      'forced full: unsafe, toolchain, workflow, or planner change',
+      includeOfflineQualification,
+    );
   }
   if (changedFiles.every(({ path }) => isDocsOnlyPath(path))) {
     return {
@@ -176,14 +184,15 @@ export function createCiPlan(options = {}) {
       runAcceptance: false,
       runPlatform: false,
       runQualification: false,
+      runOfflineQualification: false,
       requiredJobs: [],
       reason: 'docs-only change',
     };
   }
 
-  const plan = selectivePlan(changedFiles);
+  const plan = selectivePlan(changedFiles, eventName);
   if (!isKnownQualityPathForAll(changedFiles)) {
-    return fullPlan('forced full: unknown or unclassified path');
+    return fullPlan('forced full: unknown or unclassified path', includeOfflineQualification);
   }
   return plan;
 }
@@ -221,6 +230,7 @@ function outputPlan(plan) {
     run_acceptance: String(plan.runAcceptance),
     run_platform: String(plan.runPlatform),
     run_qualification: String(plan.runQualification),
+    run_offline_qualification: String(plan.runOfflineQualification),
     required_jobs: JSON.stringify(plan.requiredJobs),
     reason: plan.reason,
   };

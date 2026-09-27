@@ -56,7 +56,7 @@ Browser acceptance uses real-derived Program fixtures whenever committed capture
 
 1.0.0 前不维护 screenshot / pixel baseline。HUD 视觉调整通过本地 fixture 页面、真实回放和 Browser acceptance 的语义/结构断言人工验收；诊断截图可以作为临时证据，但不进入仓库，也不决定 CI pass/fail。
 
-真实 Program fixture 经 production adapter、ProgramRuntime 和 ProjectionCoordinator 生成，包含 capture 路径、目标 sequence 和来源 hash。数据更新流程仍为：提交 capture → `pnpm fixtures:program:generate` → 审查 Program snapshot diff。#76 的连续 replay artifact 通过 `pnpm fixtures:replay:generate` 从固定 Ancient 第 3 回合与第 11 回合 capture 生成；Program、Radar、cursor 和 semantic event index 来自同一 production composition，并由 `pnpm fixtures:replay:verify` 检查 hash 与内容漂移。HUD Editor 只消费本地生成并校验过的 Program/Radar projection；seek 由 Vite 开发期 local-only harness 从 capture 起点重建 production composition 前缀，再返回同一 cursor 的 projection pair 核对 artifact。Web 与 testkit 共用 `packages/replay` 中 framework-neutral 的离散 cursor/scheduler；capture 读取、Raw GSI adapter 与 replay prefix composition 留在 Companion/testkit 边界，不能进入 Web runtime。HUD Replay browser acceptance 使用固定真实 capture，检查语义事件 seek/play、utility handoff、objective progress 和 observer identity handoff。1.0.0 前不生成、提交或比较截图 baseline。合成展示压力测试使用确定性本地/data-URI 图片；#76 的真实头像仅由本机可选导入步骤 materialize 为本地、带来源与 SHA-256 的 fixture asset。导入脚本只从 `STEAM_WEB_API_KEY` 环境变量读取，Replay、HUD editor、acceptance test 与 CI 不访问 Steam。团队名称来自 capture，team logo 单独通过 fixture-local MatchContext presentation enrichment 绑定；无可验证素材时保持 unavailable。CI 使用 `pnpm fixtures:program:verify` 检测生成产物漂移，验证命令不写入文件。
+真实 Program fixture 经 production adapter、ProgramRuntime 和 ProjectionCoordinator 生成，包含 capture 路径、目标 sequence 和来源 hash。数据更新流程仍为：提交 capture → `pnpm fixtures:program:generate` → 审查 Program snapshot diff。#76 的连续 replay artifact 通过 `pnpm fixtures:replay:generate` 从固定 Ancient 第 3 回合与第 11 回合 capture 生成；Program、Radar、cursor 和 semantic event index 来自同一 production composition。`pnpm fixtures:replay:verify` 使用当前 worktree 的 `replayRealProgram` 重建完整 capture，校验来源与内容 hash、schema，并与 checked-in artifacts 比较。HUD Editor 只消费浏览器端已校验的 Program/Radar projection；acceptance seek 直接返回对应 checked-in frame，验证 UI、seek 与 presentation，不重复重建前缀。普通开发模式仍由 Vite local-only harness 从 capture 起点重建 production composition 前缀，再核对同一 cursor 的 projection pair。Web 与 testkit 共用 `packages/replay` 中 framework-neutral 的离散 cursor/scheduler；capture 读取、Raw GSI adapter 与 replay prefix composition 留在 Companion/testkit 边界，不能进入 Web runtime。HUD Replay browser acceptance 使用固定真实 capture，检查语义事件 seek/play、utility handoff、objective progress 和 observer identity handoff。artifact 重建比对与浏览器语义/截图断言共同覆盖数据正确性和 UI 呈现，没有删减任一层的断言。1.0.0 前不生成、提交或比较截图 baseline。合成展示压力测试使用确定性本地/data-URI 图片；#76 的真实头像仅由本机可选导入步骤 materialize 为本地、带来源与 SHA-256 的 fixture asset。导入脚本只从 `STEAM_WEB_API_KEY` 环境变量读取，Replay、HUD editor、acceptance test 与 CI 不访问 Steam。团队名称来自 capture，team logo 单独通过 fixture-local MatchContext presentation enrichment 绑定；无可验证素材时保持 unavailable。CI 使用 `pnpm fixtures:program:verify` 检测生成产物漂移，验证命令不写入文件。
 
 HUD 编辑器的日常场景列表只露出少量真实遥测回放与必要展示边界；完整 fixture 注册表继续服务回归测试。`bp-rivals-*` 使用生产 RivalHub 中 2026 NJU Rivals 总决赛、胜者组半决赛的公开 BP 与赛果生成系列图条切面；背景 GSI 来自另一场已提交的真实回放，**不能作为这些赛事的游戏过程证据**。未进行地图没有赛果，未确认的起始边保持缺失，决胜图不伪造选图方。
 
@@ -96,7 +96,7 @@ CI 绿灯不能替代 D 层。
 
 ## 3. PR 风险规划器
 
-PR 使用 changed-surface planner，只运行与改动面匹配的证据。
+PR 和普通 `main` push 使用 changed-surface planner，只运行与改动面匹配的证据。
 
 ### 仅文档改动
 
@@ -116,6 +116,10 @@ planner + ci-gate
 
 `scripts/qualification/`、`apps/companion/src/qualification/` 和 GSI cfg 模板会触发 Windows qualification artifact / portable smoke。
 
+### 普通 main push
+
+`push` 事件根据 `github.event.before` 到当前 SHA 的 changed paths 选择验证面。普通 selective push 不启动 Linux/macOS offline qualification；Web-only 改动也不会触发 Windows qualification。Desktop、qualification、workflow、工具链和 CI planner 变化仍会运行对应 Windows qualification 或 fail closed 到完整验证。
+
 ### 默认完整验证
 
 以下情况 fail closed 到 full CI：
@@ -127,7 +131,7 @@ planner + ci-gate
 - lockfile / workspace / package manifest；
 - TypeScript / ESLint / Vitest / Playwright 等工具链配置。
 
-非 PR 事件使用完整验证，并包含 offline qualification。
+`schedule` 和 `workflow_dispatch` 使用完整验证，并包含 offline qualification。main push 无法可靠确定 diff、遇到 branch creation 的全零 before SHA、rename/delete 等不安全状态时也 fail closed 到完整验证。
 
 CS2 asset import 是维护者本地资源工作流：CI 不安装 CS2、不下载 VPK、不运行 extraction，只验证 checked-in `@mizar/cs2-assets` catalog、manifest、SVG hash、public output 与 resolver contract。首次生成或更新 asset 时，必须使用 `pnpm cs2-assets:import` 的 pinned Source2Viewer-CLI，并把 Steam build ID、source/output hash 和工具版本提交在 manifest 中。
 
@@ -195,6 +199,8 @@ mizar-<shortSHA>-win-x64/
 `MIZAR_STATE_ROOT` 可以指定 resources 之外的绝对目录；正常运行、GSI 脚本和验收必须使用相同值。HUD 配置、系列进度、capture 和日志均进入该目录。现场验收临时状态位于 `state/qualification`，完成后仍由现有 supervisor 恢复 GSI 配置并清理。
 
 Windows CI 从带空格路径解压 ZIP，以 `product-smoke.mjs` 调用真实 EXE，检查冷启动、同 artifact 复用、停止/重启、未知端口占用、资源损坏和 GSI 安装/恢复。该 smoke 没有 CS2/OBS，不能构成生产验收通过。
+
+常规 CI 的 Windows qualification 使用专用 `ci` Cargo profile（继承 release 设置并关闭 full LTO），Rust build 与 geometry/window-policy tests 共用该 profile 和 target；Release Qualification 不传该选项，使用默认 `release` profile。两类 artifact 的 `desktopBuildProfile` metadata 明确标出所用 profile，Cargo registry、git 与 target cache 按平台、依赖锁文件和 profile 配置隔离。
 
 React 制作界面与 standalone `/qualification` 页面通过打包的 `product-shell.css` 共用颜色、字体、导航和外边距 token；验收页仍由 Companion 独立生成。Windows portable smoke 会确认 exact artifact 提供这份共享样式。
 
