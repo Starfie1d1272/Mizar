@@ -145,6 +145,7 @@ describe('changed-surface CI planner', () => {
     const plan = createCiPlan({ eventName: 'pull_request', changedFiles: files });
     expect(plan).toMatchObject(expected);
     expect(plan.requiredJobs).not.toContain('qualification_offline');
+    expect(plan.runOfflineQualification).toBe(false);
   });
 
   it.each([
@@ -175,6 +176,7 @@ describe('changed-surface CI planner', () => {
       runQualification: false,
     });
     expect(plan.requiredJobs).toEqual(['quality', 'acceptance']);
+    expect(plan.runOfflineQualification).toBe(false);
   });
 
   it.each([
@@ -198,12 +200,14 @@ describe('changed-surface CI planner', () => {
     const plan = createCiPlan({ eventName: 'push', changedFiles });
     expect(plan).toMatchObject(full);
     expect(plan.requiredJobs).toContain('qualification_offline');
+    expect(plan.runOfflineQualification).toBe(true);
   });
 
   it.each(['schedule', 'workflow_dispatch'])('%s forces full CI', (eventName) => {
     const plan = createCiPlan({ eventName, changedFiles: ['docs/product.md'] });
     expect(plan).toMatchObject(full);
     expect(plan.requiredJobs).toContain('qualification_offline');
+    expect(plan.runOfflineQualification).toBe(true);
   });
 
   it('keeps offline qualification out of ordinary PR full CI', () => {
@@ -212,6 +216,7 @@ describe('changed-surface CI planner', () => {
       changedFiles: ['.github/workflows/ci.yml'],
     });
     expect(plan.requiredJobs).not.toContain('qualification_offline');
+    expect(plan.runOfflineQualification).toBe(false);
   });
 });
 

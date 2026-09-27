@@ -93,6 +93,7 @@ function fullPlan(reason, includeOfflineQualification = false) {
     runAcceptance: true,
     runPlatform: true,
     runQualification: true,
+    runOfflineQualification: includeOfflineQualification,
     requiredJobs: CI_JOB_IDS.filter(
       (job) => includeOfflineQualification || job !== 'qualification_offline',
     ),
@@ -118,6 +119,7 @@ function selectivePlan(changedFiles, eventName) {
     runAcceptance,
     runPlatform,
     runQualification,
+    runOfflineQualification: false,
     requiredJobs,
     reason: `${eventName} changed surface classified (${changedFiles.length} file(s))`,
   };
@@ -182,6 +184,7 @@ export function createCiPlan(options = {}) {
       runAcceptance: false,
       runPlatform: false,
       runQualification: false,
+      runOfflineQualification: false,
       requiredJobs: [],
       reason: 'docs-only change',
     };
@@ -227,6 +230,7 @@ function outputPlan(plan) {
     run_acceptance: String(plan.runAcceptance),
     run_platform: String(plan.runPlatform),
     run_qualification: String(plan.runQualification),
+    run_offline_qualification: String(plan.runOfflineQualification),
     required_jobs: JSON.stringify(plan.requiredJobs),
     reason: plan.reason,
   };

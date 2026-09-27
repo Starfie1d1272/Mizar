@@ -118,7 +118,7 @@ planner + ci-gate
 
 ### 普通 main push
 
-`push` 事件根据 `github.event.before` 到当前 SHA 的 changed paths 选择验证面。Web-only 改动不会触发 Windows qualification；Desktop、qualification、workflow、工具链和 CI planner 变化仍会运行对应 Windows qualification 或 fail closed 到完整验证。
+`push` 事件根据 `github.event.before` 到当前 SHA 的 changed paths 选择验证面。普通 selective push 不启动 Linux/macOS offline qualification；Web-only 改动也不会触发 Windows qualification。Desktop、qualification、workflow、工具链和 CI planner 变化仍会运行对应 Windows qualification 或 fail closed 到完整验证。
 
 ### 默认完整验证
 

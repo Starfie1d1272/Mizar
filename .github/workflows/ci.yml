@@ -26,6 +26,7 @@ jobs:
       run_acceptance: ${{ steps.plan.outputs.run_acceptance }}
       run_platform: ${{ steps.plan.outputs.run_platform }}
       run_qualification: ${{ steps.plan.outputs.run_qualification }}
+      run_offline_qualification: ${{ steps.plan.outputs.run_offline_qualification }}
       required_jobs: ${{ steps.plan.outputs.required_jobs }}
       reason: ${{ steps.plan.outputs.reason }}
     steps:
@@ -325,7 +326,7 @@ jobs:
 
   qualification_offline:
     name: qualification / offline / ${{ matrix.name }}
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ needs.plan.outputs.run_offline_qualification == 'true' }}
     needs: [plan]
     runs-on: ${{ matrix.runner }}
     strategy:
