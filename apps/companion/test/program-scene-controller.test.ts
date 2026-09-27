@@ -52,3 +52,16 @@ it('keeps the current Program Scene when identity, freshness or OBS switch fails
   expect(wrongRevision.ok).toBe(false);
   expect(scene.get().active).toBe('gameplay');
 });
+
+it('rechecks live truth after an OBS switch and restores the previous scene when it became stale', async () => {
+  const switched: ProgramSceneId[] = [];
+  const { scene, operator } = controller((id) => {
+    switched.push(id);
+    if (id === 'gameplay') operator.runtime.telemetryFreshness = 'stale';
+    return Promise.resolve();
+  });
+  const result = await scene.select('gameplay', scene.get().revision);
+  expect(result.ok).toBe(false);
+  expect(scene.get().active).toBe('waiting');
+  expect(switched).toEqual(['gameplay', 'waiting']);
+});

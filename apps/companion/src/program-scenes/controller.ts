@@ -80,10 +80,17 @@ export class ProgramSceneController {
       } catch {
         return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
       }
+      const stillBlocked = this.blockedReason(id);
+      if (stillBlocked !== null) {
+        if (this.switchObs) await this.switchObs(this.active).catch(() => undefined);
+        return { ok: false as const, message: stillBlocked };
+      }
       if (id === 'bp') {
         const bp = this.bpSession.get();
-        if (bp.state === 'hidden' && this.bpSession.command('play', bp.revision) === null)
+        if (bp.state === 'hidden' && this.bpSession.command('play', bp.revision) === null) {
+          if (this.switchObs) await this.switchObs(this.active).catch(() => undefined);
           return { ok: false as const, message: 'BP 播放未能启动，当前场景保持不变。' };
+        }
       } else if (this.active === 'bp') {
         const bp = this.bpSession.get();
         if (bp.state !== 'hidden' && bp.state !== 'hiding')
