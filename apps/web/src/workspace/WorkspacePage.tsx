@@ -263,7 +263,7 @@ export function WorkspaceDock() {
   return (
     <main className="workspace-dock" aria-label="现场控制底栏">
       <section>
-        <small>SCENE</small>
+        <small>场景</small>
         <div className="workspace-scene-buttons">
           {PROGRAM_SCENES.map((scene) => (
             <button
@@ -284,7 +284,7 @@ export function WorkspaceDock() {
         </div>
       </section>
       <section>
-        <small>MATCH</small>
+        <small>比赛</small>
         <strong>{payload?.runtime.mapName ?? '等待地图'}</strong>
         <span>
           {payload?.seriesProgress
@@ -342,7 +342,7 @@ export function WorkspaceDock() {
         ) : null}
       </section>
       <section>
-        <small>LOCAL</small>
+        <small>本机</small>
         <button
           onClick={() =>
             void action(async () => {
@@ -461,7 +461,7 @@ export function WorkspaceDock() {
         </form>
       </section>
       <section>
-        <small>STATUS</small>
+        <small>状态</small>
         <span>比赛数据 {payload?.runtime.telemetryFreshness === 'fresh' ? '正常' : '等待'}</span>
         <span>Program {programState.state === 'live' ? '已连接' : '未连接'}</span>
         <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
