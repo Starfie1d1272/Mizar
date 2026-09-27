@@ -11,7 +11,10 @@ import {
 class FakeObs implements ObsRpc {
   collection = 'User Collection';
   collections = new Set(['User Collection']);
-  scenes = new Map<string, { sourceName: string; sceneItemId: number; sceneItemIndex: number }[]>();
+  scenes = new Map<
+    string,
+    { sourceName: string; sceneItemId: number; sceneItemIndex: number; sceneItemEnabled: boolean }[]
+  >();
   inputs = new Map<string, { kind: string; settings: Record<string, unknown> }>();
   transforms = new Map<number, Record<string, unknown>>();
   outputActive = false;
@@ -85,9 +88,16 @@ class FakeObs implements ObsRpc {
     if (type === 'GetSceneItemTransform')
       return { sceneItemTransform: this.transforms.get(Number(data.sceneItemId)) };
     if (type === 'SetSceneItemTransform') {
-      this.transforms.set(
-        Number(data.sceneItemId),
-        data.sceneItemTransform as Record<string, unknown>,
+      this.transforms.set(Number(data.sceneItemId), {
+        ...(data.sceneItemTransform as Record<string, unknown>),
+      });
+      return {};
+    }
+    if (type === 'SetSceneItemEnabled') {
+      this.scenes
+        .get(name)!
+        .find((item) => item.sceneItemId === data.sceneItemId)!.sceneItemEnabled = Boolean(
+        data.sceneItemEnabled,
       );
       return {};
     }
@@ -102,7 +112,7 @@ class FakeObs implements ObsRpc {
   addItem(sceneName: string, sourceName: string) {
     const items = this.scenes.get(sceneName)!;
     const sceneItemId = this.nextId++;
-    items.push({ sourceName, sceneItemId, sceneItemIndex: items.length });
+    items.push({ sourceName, sceneItemId, sceneItemIndex: items.length, sceneItemEnabled: true });
     this.transforms.set(sceneItemId, { positionX: 0, positionY: 0, scaleX: 1, scaleY: 1 });
   }
 }
@@ -123,12 +133,27 @@ it('repairs only RivalHub collection, browser sources and order, then is idempot
     'collection_missing',
   ]);
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
+  const gameplay = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'gameplay')!;
+  const capture = obs.scenes
+    .get(gameplay.sceneName)!
+    .find((item) => item.sourceName === 'RivalHub · CS2 Game Capture')!;
+  expect(obs.transforms.get(capture.sceneItemId)).toMatchObject({
+    boundsType: 'OBS_BOUNDS_STRETCH',
+    boundsWidth: 1920,
+    boundsHeight: 1080,
+  });
+  capture.sceneItemEnabled = false;
+  obs.transforms.get(capture.sceneItemId)!.boundsWidth = 1440;
+  expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toEqual(
+    expect.arrayContaining(['source_disabled', 'transform_drift']),
+  );
+  expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
+  expect(capture.sceneItemEnabled).toBe(true);
   expect(obs.collection).toBe(OBS_COLLECTION);
   expect(obs.scenes.get('My Camera Scene')).toEqual([]);
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
-  const gameplay = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'gameplay')!;
   obs.inputs.get('RivalHub · CS2 Game Capture')!.settings.window = 'other.exe';
   expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(
     'capture_drift',

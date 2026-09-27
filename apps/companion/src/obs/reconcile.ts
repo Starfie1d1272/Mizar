@@ -34,6 +34,49 @@ function ownedScene(name: string): boolean {
   return name.startsWith('RivalHub · ');
 }
 
+const BROWSER_TRANSFORM = {
+  positionX: 0,
+  positionY: 0,
+  rotation: 0,
+  scaleX: 1,
+  scaleY: 1,
+  boundsType: 'OBS_BOUNDS_NONE',
+  cropLeft: 0,
+  cropRight: 0,
+  cropTop: 0,
+  cropBottom: 0,
+};
+const CAPTURE_TRANSFORM = {
+  positionX: 0,
+  positionY: 0,
+  rotation: 0,
+  boundsType: 'OBS_BOUNDS_STRETCH',
+  boundsWidth: OBS_WIDTH,
+  boundsHeight: OBS_HEIGHT,
+  cropLeft: 0,
+  cropRight: 0,
+  cropTop: 0,
+  cropBottom: 0,
+};
+
+function transformMatches(
+  actual: Record<string, unknown> | undefined,
+  desired: Record<string, unknown>,
+): boolean {
+  return Object.entries(desired).every(([key, value]) => actual?.[key] === value);
+}
+
+function sceneTransforms(
+  scene: ReturnType<typeof obsDesiredScenes>[number],
+): [string, Record<string, unknown>][] {
+  return scene.composition === 'gameplay_overlay'
+    ? [
+        [scene.browserInput, BROWSER_TRANSFORM],
+        [OBS_CAPTURE_INPUT, CAPTURE_TRANSFORM],
+      ]
+    : [[scene.browserInput, BROWSER_TRANSFORM]];
+}
+
 async function outputActive(obs: ObsRpc): Promise<boolean> {
   const [stream, record] = await Promise.all([
     obs.call('GetStreamStatus'),
@@ -104,6 +147,12 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
           scene: scene.sceneName,
           message: `${scene.sceneName} 缺少制播来源。`,
         });
+      else if (items.find((item) => item.sourceName === source)?.sceneItemEnabled === false)
+        findings.push({
+          code: 'source_disabled',
+          scene: scene.sceneName,
+          message: `${scene.sceneName} 的制播来源已关闭。`,
+        });
     }
     if (scene.composition === 'gameplay_overlay') {
       const capture = items.find((item) => item.sourceName === OBS_CAPTURE_INPUT);
@@ -115,23 +164,19 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
           message: `${scene.sceneName} 图层顺序需要修复。`,
         });
     }
-    const browserItem = items.find((item) => item.sourceName === scene.browserInput);
-    if (browserItem && typeof browserItem.sceneItemId === 'number') {
+    for (const [source, expected] of sceneTransforms(scene)) {
+      const item = items.find((candidate) => candidate.sourceName === source);
+      if (!item || typeof item.sceneItemId !== 'number') continue;
       const measured = await obs.call('GetSceneItemTransform', {
         sceneName: scene.sceneName,
-        sceneItemId: browserItem.sceneItemId,
+        sceneItemId: item.sceneItemId,
       });
       const transform = measured.sceneItemTransform as Record<string, unknown> | undefined;
-      if (
-        transform?.positionX !== 0 ||
-        transform.positionY !== 0 ||
-        transform.scaleX !== 1 ||
-        transform.scaleY !== 1
-      )
+      if (!transformMatches(transform, expected))
         findings.push({
           code: 'transform_drift',
           scene: scene.sceneName,
-          message: `${scene.sceneName} 浏览器源位置或缩放需要修复。`,
+          message: `${scene.sceneName} 的来源位置或尺寸需要修复。`,
         });
     }
     if (!inputKinds.has(scene.browserInput)) continue;
@@ -253,17 +298,24 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
     items = objects(
       (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
     );
-    const browser = items.find((item) => item.sourceName === scene.browserInput);
-    if (browser) {
+    for (const [source, transform] of sceneTransforms(scene)) {
+      const item = items.find((candidate) => candidate.sourceName === source);
+      if (!item) continue;
+      if (item.sceneItemEnabled === false)
+        await obs.call('SetSceneItemEnabled', {
+          sceneName: scene.sceneName,
+          sceneItemId: item.sceneItemId,
+          sceneItemEnabled: true,
+        });
       await obs.call('SetSceneItemTransform', {
         sceneName: scene.sceneName,
-        sceneItemId: browser.sceneItemId,
-        sceneItemTransform: { positionX: 0, positionY: 0, scaleX: 1, scaleY: 1 },
+        sceneItemId: item.sceneItemId,
+        sceneItemTransform: transform,
       });
-      if (scene.composition === 'gameplay_overlay')
+      if (source === scene.browserInput && scene.composition === 'gameplay_overlay')
         await obs.call('SetSceneItemIndex', {
           sceneName: scene.sceneName,
-          sceneItemId: browser.sceneItemId,
+          sceneItemId: item.sceneItemId,
           sceneItemIndex: items.length - 1,
         });
     }
