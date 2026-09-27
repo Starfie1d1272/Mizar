@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { ESLint } from 'eslint';
@@ -7,9 +7,24 @@ import { describe, expect, it } from 'vitest';
 import { checkArchitecture } from './check.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '../..');
+const syntheticRoot = resolve(repositoryRoot, '__mizar_architecture_test_virtual_root__');
+const syntheticManifests = Object.fromEntries(
+  ['apps', 'packages'].flatMap((root) =>
+    readdirSync(resolve(repositoryRoot, root), { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          existsSync(resolve(repositoryRoot, root, entry.name, 'package.json')),
+      )
+      .map((entry) => {
+        const path = `${root}/${entry.name}/package.json`;
+        return [path, readFileSync(resolve(repositoryRoot, path), 'utf8')];
+      }),
+  ),
+);
 
 function withFiles(files) {
-  return checkArchitecture({ rootDir: repositoryRoot, files });
+  return checkArchitecture({ rootDir: syntheticRoot, files: { ...syntheticManifests, ...files } });
 }
 
 function expectRule(violations, ruleId, target) {
