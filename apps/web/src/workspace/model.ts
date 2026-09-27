@@ -1,5 +1,6 @@
 import type { BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
 import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
+import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
 
 export type WorkspacePhase = 'pre_match' | 'bp' | 'live' | 'map_end' | 'match_end';
 
@@ -14,6 +15,22 @@ export function workspacePhase(
     return 'match_end';
   if (series?.maps.some((map) => map.status === 'completed')) return 'map_end';
   return 'pre_match';
+}
+
+export function workspaceCurrentPov(program: ProgramPayload | null): string | null {
+  if (
+    program?.status.telemetry !== 'fresh' ||
+    program.status.identity === 'mismatch' ||
+    program.observedPlayerSourceId === null
+  )
+    return null;
+  const player = program.players.find(
+    (candidate) =>
+      candidate.sourcePlayerId === program.observedPlayerSourceId &&
+      candidate.lineupEvidence === 'current',
+  );
+  const displayName = player?.displayName?.trim();
+  return displayName ? displayName : null;
 }
 
 export function workspaceIssues(operator: OperatorPayload | null): string[] {
