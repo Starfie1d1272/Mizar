@@ -462,8 +462,24 @@ export function WorkspaceDock() {
       </section>
       <section>
         <small>状态</small>
-        <span>比赛数据 {payload?.runtime.telemetryFreshness === 'fresh' ? '正常' : '等待'}</span>
-        <span>Program {programState.state === 'live' ? '已连接' : '未连接'}</span>
+        <span>
+          比赛数据{' '}
+          {payload?.runtime.telemetryFreshness === 'fresh'
+            ? '正常'
+            : payload?.runtime.telemetryFreshness === 'stale'
+              ? '已中断'
+              : '等待输入'}
+        </span>
+        <span>
+          Program{' '}
+          {programState.state !== 'live'
+            ? '未连接'
+            : programState.current?.payload.status.telemetry === 'fresh'
+              ? '正常'
+              : programState.current?.payload.status.telemetry === 'stale'
+                ? '已中断'
+                : '等待数据'}
+        </span>
         <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
         <a href="/debug">运行诊断</a>
       </section>
