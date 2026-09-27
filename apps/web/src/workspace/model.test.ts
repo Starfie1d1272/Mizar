@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
 import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
 import type { BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
-import { workspaceIssues, workspacePhase } from './model';
+import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 
 const operator = {
   runtime: { telemetryFreshness: 'fresh', mapName: 'de_ancient' },
@@ -34,4 +35,28 @@ it('uses existing series progress for map and match end', () => {
       null,
     ),
   ).toBe('match_end');
+});
+
+
+it('shows the current POV only from fresh, identity-safe current-lineup Program evidence', () => {
+  const program = {
+    status: { telemetry: 'fresh', identity: 'matched' },
+    observedPlayerSourceId: 'player-1',
+    players: [
+      { sourcePlayerId: 'player-1', lineupEvidence: 'current', displayName: 'Observer Target' },
+    ],
+  } as unknown as ProgramPayload;
+  expect(workspaceCurrentPov(program)).toBe('Observer Target');
+  expect(
+    workspaceCurrentPov({
+      ...program,
+      status: { ...program.status, telemetry: 'stale' },
+    }),
+  ).toBeNull();
+  expect(
+    workspaceCurrentPov({
+      ...program,
+      status: { ...program.status, identity: 'mismatch' },
+    }),
+  ).toBeNull();
 });
