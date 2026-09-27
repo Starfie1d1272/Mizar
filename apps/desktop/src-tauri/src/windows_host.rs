@@ -150,6 +150,8 @@ pub struct GameTracker {
     pub managed: bool,
     pub overlay_enabled: bool,
     last_client: Option<Rect>,
+    last_dpi: u32,
+    last_game_monitor: Monitor,
 }
 
 impl GameTracker {
@@ -159,27 +161,44 @@ impl GameTracker {
         self.generation += 1;
         self.managed = false;
         self.last_client = None;
+        self.last_dpi = 0;
+        self.last_game_monitor = 0;
         true
     }
     pub fn restore_layout(&mut self) -> Option<Layout> {
         self.monitor = choose_monitor(self.window);
+        self.apply_locked_layout()
+    }
+    fn apply_locked_layout(&mut self) -> Option<Layout> {
         let work = monitor_work_area(self.monitor)?;
         let layout = workspace_layout(work);
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
+        self.last_dpi = self.window.map_or(0, |window| unsafe { GetDpiForWindow(window.hwnd) });
+        self.last_game_monitor = self.window.map_or(0, |window| unsafe { MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY) });
         Some(layout)
     }
     pub fn tick(&mut self) -> Option<Layout> {
         let found = find_cs2();
         let changed = self.observe(found);
-        if changed || self.monitor == 0 || monitor_work_area(self.monitor).is_none() {
+        if self.monitor == 0 || monitor_work_area(self.monitor).is_none() {
             return self.restore_layout();
         }
+        if changed { return self.apply_locked_layout(); }
         let Some(window) = self.window else { return None; };
         let client = client_rect(window.hwnd);
-        if client != self.last_client {
+        let dpi = unsafe { GetDpiForWindow(window.hwnd) };
+        let game_monitor = unsafe { MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY) };
+        if client != self.last_client || dpi != self.last_dpi || game_monitor != self.last_game_monitor {
             self.last_client = client;
-            self.managed = self.managed && client.is_some();
+            self.last_dpi = dpi;
+            self.last_game_monitor = game_monitor;
+            if self.managed {
+                let work = monitor_work_area(self.monitor)?;
+                let target = workspace_layout(work).game;
+                self.managed = align_cs2(window, target);
+                self.last_client = client_rect(window.hwnd);
+            }
         }
         None
     }
@@ -210,5 +229,8 @@ mod tests {
         assert!(!tracker.observe(Some(Cs2Window { pid: 42, hwnd: 7 })));
         assert!(tracker.observe(None));
         assert_eq!(tracker.generation, 2);
+        tracker.monitor = 42;
+        assert!(tracker.observe(Some(Cs2Window { pid: 43, hwnd: 8 })));
+        assert_eq!(tracker.monitor, 42);
     }
 }
