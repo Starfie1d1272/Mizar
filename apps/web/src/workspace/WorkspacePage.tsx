@@ -6,7 +6,7 @@ import { switchToRivalhubBp, useBpSession, useBpWorkspace } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
-import { workspaceIssues, workspacePhase } from './model';
+import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
 import './workspace.css';
 
@@ -17,6 +17,8 @@ const PHASE_LABEL = {
   map_end: '地图结束 / 图间',
   match_end: '比赛结束',
 } as const;
+
+const ONLINE_MATCH_REFRESH_TIMEOUT_MS = 12_000;
 
 function StateLine({ label, value }: { readonly label: string; readonly value: string }) {
   return (
@@ -71,6 +73,7 @@ function ContextPanel({
   const series = operator?.seriesProgress;
   const completed = [...(series?.maps ?? [])].reverse().find((map) => map.status === 'completed');
   const next = series?.maps.find((map) => map.status === 'pending');
+  const currentPov = workspaceCurrentPov(program);
   const issues = [
     ...workspaceIssues(operator),
     ...(obs?.sceneAligned === false ? ['OBS 当前场景与播出场景不一致，请检查配置。'] : []),
@@ -94,6 +97,7 @@ function ContextPanel({
             已展示 {bp.revealedCount} / {bp.projection.steps.length} 项禁选
           </p>
         ) : null}
+        {phase === 'live' && currentPov ? <p>当前 POV · {currentPov}</p> : null}
         {phase === 'map_end' ? (
           <p>
             {completed?.mapName ?? '上一图'}{' '}
@@ -300,7 +304,7 @@ export function WorkspaceDock() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ matchId: onlineMatchId.trim() }),
-                signal: AbortSignal.timeout(8000),
+                signal: AbortSignal.timeout(ONLINE_MATCH_REFRESH_TIMEOUT_MS),
               });
               if (!response.ok) {
                 const data = (await response.json()) as { message?: string };
