@@ -59,4 +59,5 @@ export {
   type ScheduleWindowSource,
 } from './schedule-window-controller.js';
 export { SourceLoadError } from './source-error.js';
+export { createOnlineManifestSource, type OnlineManifestConfig } from './http-source.js';
 export type { ScheduleWindowRequest } from './schedule-window-request.js';

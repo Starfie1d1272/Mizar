@@ -1,0 +1,169 @@
+.workspace-preview {
+  background: #071019;
+  display: grid;
+  grid-template-columns: 25% 75%;
+  grid-template-rows: minmax(540px, 75vh) minmax(220px, 25vh);
+  min-height: 100vh;
+}
+.workspace-preview__game {
+  align-items: center;
+  background: #080e15;
+  color: #65788a;
+  display: flex;
+  font-size: 24px;
+  justify-content: center;
+}
+.workspace-preview .workspace-dock {
+  grid-column: 1 / -1;
+}
+.workspace-left {
+  background: #0b1823;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-radar {
+  aspect-ratio: 1;
+  flex: none;
+  width: 100%;
+}
+.workspace-radar canvas {
+  height: 100%;
+  width: 100%;
+}
+.workspace-context {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px;
+}
+.workspace-context section {
+  border-top: 1px solid #345063;
+  padding-top: 12px;
+}
+.workspace-context small,
+.workspace-dock small {
+  color: #6dc8ce;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+}
+.workspace-context h1 {
+  font-size: 18px;
+  margin: 6px 0;
+}
+.workspace-context h2 {
+  font-size: 25px;
+  margin: 7px 0;
+}
+.workspace-context p {
+  color: #b6cad7;
+  font-size: 14px;
+  margin: 4px 0;
+}
+.workspace-context a,
+.workspace-dock a {
+  color: #76d6db;
+}
+.workspace-state {
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+.workspace-state strong {
+  font-weight: 600;
+}
+.workspace-issues p {
+  color: #ffd3aa;
+}
+.workspace-dock {
+  align-items: stretch;
+  background: #101e2a;
+  display: grid;
+  gap: 0;
+  grid-template-columns: minmax(380px, 3fr) repeat(4, minmax(150px, 1fr));
+  min-height: 200px;
+  position: relative;
+}
+.workspace-dock section {
+  border-right: 1px solid #2a4657;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+.workspace-dock strong {
+  font-size: 18px;
+}
+.workspace-dock span {
+  color: #aebfcc;
+  font-size: 13px;
+}
+.workspace-dock button {
+  background: #1a3343;
+  border: 1px solid #426071;
+  border-radius: 6px;
+  color: #ecf5f8;
+  cursor: pointer;
+  min-height: 30px;
+}
+.workspace-dock button[aria-pressed='true'] {
+  background: #176a72;
+  border-color: #71d7de;
+}
+.workspace-dock button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+.workspace-scene-buttons {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+}
+.workspace-message {
+  background: #684822;
+  bottom: 0;
+  left: 0;
+  margin: 0;
+  padding: 8px 18px;
+  position: absolute;
+  right: 0;
+}
+.workspace-dock form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.workspace-dock input {
+  background: #091923;
+  border: 1px solid #426071;
+  color: #e8edf5;
+  width: 100%;
+}
+.workspace-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.workspace-candidate strong {
+  font-size: 12px;
+}
+@media (max-width: 1200px) {
+  .workspace-preview {
+    display: block;
+  }
+  .workspace-preview__game {
+    min-height: 35vh;
+  }
+  .workspace-dock {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

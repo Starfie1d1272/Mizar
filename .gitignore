@@ -4,6 +4,7 @@ node_modules/
 
 # Build output
 dist/
+apps/desktop/src-tauri/target/
 build/
 coverage/
 .vite/

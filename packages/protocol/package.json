@@ -49,6 +49,10 @@
     "./bp": {
       "types": "./dist/bp.d.ts",
       "import": "./dist/bp.js"
+    },
+    "./program-scenes": {
+      "types": "./dist/program-scenes.d.ts",
+      "import": "./dist/program-scenes.js"
     }
   },
   "scripts": {

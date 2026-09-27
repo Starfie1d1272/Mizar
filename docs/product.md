@@ -43,7 +43,9 @@ RivalHub 是第一方、信息最完整的赛事上下文提供方，但不是�
 - 观察辅助信息放在私有区域，不污染播出画面；
 - 制作控制和诊断在需要时可见，不长期占据注意力。
 
-制播工作区是产品体验范式，不等于固定布局，也不要求某一种桌面框架。浏览器、OBS Browser Source、透明窗口或桌面容器只是不同 Host。
+制播工作区是产品体验范式。V1 Windows 正式 Host 采用 Tauri 2 和固定布局：真实 CS2 占所选显示器 work area 右上 75% 盒内的最大 16:9 区域，Big Radar 与 Context Panel 在左，Scene / Match / Local / OBS / Status 控制在下。浏览器 `/workspace` 提供相同组件的审查预览，localhost Web-first 页面仍独立可用。窗口与几何只由 Host 管理；比赛与播出状态继续由 Companion 拥有。
+
+Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；制作人员显式切换，数据不足、上下文过期或身份不一致时保持当前安全场景。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 RivalHub 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
 
 ## 4. 现场用户
 
@@ -258,8 +260,8 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 `/` 重定向到 `/operator`。制作控制、BP 工作台、HUD 编辑器与运行诊断共享导航；播出画面单独打开，不进入产品导航 tab。未知用户路径显示中文 404。制作首页复用 OperatorSnapshot 展示比赛、系列赛、数据与异常；地图绑定仅在需要制作确认时显示。诊断首页提供中文状态，原始证据收进高级技术信息。现场验收继续由 Companion 独立提供，普通运行时只提供进入说明，不自动启动验收。OBS 浏览器源状态来自本地 WebSocket 的浏览器标识，只表示观察到相应连接，不能证明画面已加载或可见。
 
-## Windows 便携入口（#35 后续阶段）
+## Windows 便携入口（#84）
 
-同一产品包使用 bundled Node 24 和 Companion，根目录 EXE 默认打开制作控制；重复打开同版本服务复用当前实例，关闭网页不结束 Runtime。程序资源与可写数据分离，可写目录默认为 `state`，支持 `BROADCAST_STATE_ROOT` 绝对路径覆盖。停止服务和 GSI 安装/恢复保留明确的脚本入口，现场验收继续使用同包内的现有 controller 与 evidence contract。
+同一产品包使用 bundled Node 24 和 Companion，根目录 Tauri EXE 默认打开制播工作区；重复打开同版本服务复用当前实例，关闭工作区窗口仅隐藏至 tray，显式退出才停止 Runtime。程序资源与可写数据分离，可写目录默认为 `state`，支持 `BROADCAST_STATE_ROOT` 绝对路径覆盖。停止服务和 GSI 安装/恢复保留明确的脚本入口，现场验收继续使用同包内的现有 controller 与 evidence contract。
 
 该阶段已交付便携启动与目录隔离，并增加有界 Host 连接诊断。Windows CI 在 exact artifact 上运行三段各 24 回合的脚本化合成地图流程并导出资源、投递、重连与慢消费者指标；这不等同于真实比赛回放。真实 Windows + CS2 + OBS 现场证据及连续完整比赛验收仍按 #35 后续验收项推进。

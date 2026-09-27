@@ -15,6 +15,9 @@ import { useBrowserHostDiagnostics } from './debug/host-diagnostics';
 import { ProgramCueRendererBridge } from './program/ProgramCueRendererBridge';
 import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage';
 import { ProgramPage } from './program/ProgramPage';
+import { ProgramScenePage } from './program/ProgramScenePage';
+import { programSceneForPath } from '@rivalhub-broadcast/protocol/program-scenes';
+import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
 import { OperatorPage } from './operator/OperatorPage';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
@@ -134,6 +137,12 @@ function SurfaceConnectionMarker({ channel }: { readonly channel: LocalSnapshotC
 }
 
 function ProgramRoute() {
+  const [desktopWidth, setDesktopWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const resize = () => setDesktopWidth(window.innerWidth);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
   const radarClient = useLocalChannelConnection('radar');
   const programClient = useLocalChannelConnection('program');
   const programConnection = useSyncExternalStore(
@@ -161,7 +170,7 @@ function ProgramRoute() {
     };
   }, [cueClient, programClient]);
 
-  return (
+  const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
         radarClient={radarClient}
@@ -170,6 +179,20 @@ function ProgramRoute() {
         snapshot={programConnection.current}
       />
     </ProgramCueRendererBridge>
+  );
+  return window.__TAURI_INTERNALS__ ? (
+    <div
+      style={{
+        transform: `scale(${desktopWidth / 1920})`,
+        transformOrigin: 'top left',
+        width: 1920,
+        height: 1080,
+      }}
+    >
+      {program}
+    </div>
+  ) : (
+    program
   );
 }
 
@@ -564,6 +587,12 @@ export function App() {
   }
 
   if (pathname === '/program/bp') return <BpPage />;
+  if (pathname === '/workspace') return <WorkspacePreview />;
+  if (pathname === '/workspace/left') return <WorkspaceLeft />;
+  if (pathname === '/workspace/dock') return <WorkspaceDock />;
+  const programScene = programSceneForPath(pathname);
+  if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
+    return <ProgramScenePage sceneId={programScene.id} />;
   if (pathname === '/operator/bp') return <BpPage operator />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)

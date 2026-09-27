@@ -8,6 +8,12 @@
 
 协议字段与精确字符串以代码 schema 为最终机器来源；本文负责解释语义、ownership 和兼容规则。
 
+## Program Scene 与 Workspace 控制面
+
+`packages/protocol/src/program-scenes.ts` 是场景 ID、顺序、中文名称、路径和 composition mode 的唯一 registry。Companion 的 `GET /local/v1/program-scenes` 返回当前 scene、revision、可用 scene 和阻断原因；`POST /operator/program-scene` 使用预期 revision 切换。Workspace 只提交意图，Companion 基于当前 Program/Operator/BP projection 校验并协调 OBS，OBS Browser Source 使用相同 registry 中的路径。Tauri 仅控制本机窗口，不拥有场景真值。
+
+在线比赛入口先按受限 `matchId` 通过配置的只读 HTTPS Manifest URL 获取候选，再走现有 MatchContext 验证、人工确认和 LKG。刷新失败将当前在线来源标记 stale，不清除已确认上下文；本地模式无需在线凭据。OBS 状态与检查/修复通过 Companion 本地控制面提供，密钥不进入浏览器返回值。
+
 ## 1. RivalHub 只读赛事上下文
 
 RivalHub 连接模式通过 `packages/rivalhub` 消费公开、版本化的只读契约。Broadcast 不直连 RivalHub 数据库，也不导入 RivalHub 内部 domain 类型。

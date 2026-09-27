@@ -74,10 +74,14 @@ DAK、OCR 或其它赛后来源属于 evidence / reconciliation 链，不进入�
 apps/companion
   本地服务与 composition root。
   组装 HTTP、GSI/CSTV、比赛上下文、Core、Local Protocol、Web、HUD 配置持久化、capture 与 qualification tooling。
-  拥有 ProgramCueCoordinator 与 transient delivery publisher。
+  拥有 Program Scene controller、OBS adapter、ProgramCueCoordinator 与 transient delivery publisher。
+
+apps/desktop
+  Windows Tauri 2 Host。只拥有 CS2 PID/HWND、窗口几何、焦点、置顶、鼠标穿透和 tray；
+  启动同包 Companion，不复制 Match、Runtime、Program Scene 或 OBS 状态。
 
 apps/web
-  Program、Operator 与 Debug 的 Web Renderer / Host。
+  Program、Operator、Workspace 与 Debug 的 Web Renderer / Host。
   拥有 ProgramCueClient 与 Renderer-local ephemeral cue state；不拥有 RuntimeState，也不直接解释
   Raw GSI / Raw CSTV。
 
@@ -100,7 +104,7 @@ apps/web/src/program
 
 packages/protocol
   Broadcast 自有的 Local Protocol、schema 和 acceptance rules。
-  拥有 snapshot 与 `program-cue` transient wire contract；不拥有 RuntimeState 或业务状态机。
+  拥有 snapshot、Program Scene registry 与 `program-cue` transient wire contract；不拥有 RuntimeState 或业务状态机。
 
 packages/telemetry-gsi
   Raw GSI parsing、source semantics、diagnostics 和 normalization。

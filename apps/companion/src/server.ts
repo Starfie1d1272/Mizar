@@ -171,14 +171,24 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     programRuntime,
     ...(webRoot === undefined ? {} : { webRoot }),
     host,
+    port,
     localWebLanMode,
     localWebAllowedOrigins,
     ...(cstvSourceConfig === undefined ? {} : { cstvSources: cstvSourceConfig }),
     qualificationMode,
     ...(qualificationControlToken === undefined ? {} : { qualificationControlToken }),
     matchManifestPath: join(captureDir, '..', 'match-context.json'),
+    ...(process.env.RIVALHUB_MANIFEST_URL_TEMPLATE && process.env.RIVALHUB_BROADCAST_READ_TOKEN
+      ? {
+          onlineManifestConfig: {
+            urlTemplate: process.env.RIVALHUB_MANIFEST_URL_TEMPLATE,
+            readToken: process.env.RIVALHUB_BROADCAST_READ_TOKEN,
+          },
+        }
+      : {}),
     hudConfigPath,
     hudConfigStore,
+    obsConfigPath: join(captureDir, '..', 'obs.json'),
     ...(qualificationMode
       ? {
           qualificationRunId,

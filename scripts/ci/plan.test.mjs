@@ -112,8 +112,8 @@ describe('changed-surface CI planner', () => {
       },
     ],
     [
-      'portable launcher',
-      ['scripts/qualification/launcher/Program.cs'],
+      'Tauri desktop host',
+      ['apps/desktop/src-tauri/src/main.rs'],
       {
         runQuality: true,
         runAcceptance: false,

@@ -398,8 +398,7 @@ export class MatchContextController {
       pending === undefined ||
       pending.revision !== expectedPendingRevision ||
       this.onlineCandidateAcquisition !== undefined ||
-      expectedBindingRevision !== this.getActiveRevision() ||
-      !this.hasLocalOverride()
+      expectedBindingRevision !== this.getActiveRevision()
     )
       return this.staleSelectionResult(pending?.binding.context.matchId ?? '');
     const generation = ++this.activeSelectionGeneration;
@@ -441,10 +440,44 @@ export class MatchContextController {
     return isLocalBinding(this.activeBinding);
   }
 
+  /** Network refresh only stages a candidate; explicit operator confirmation owns activation. */
+  async stageOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
+    const generation = ++this.onlineCandidateGeneration;
+    this.onlineCandidateAcquisition = generation;
+    this.pendingOnlineCandidate = undefined;
+    try {
+      const result = await this.stageOnlineCandidate(
+        requestedMatchId,
+        source,
+        () => generation === this.onlineCandidateGeneration,
+        true,
+      );
+      if (
+        !result.ok &&
+        this.activeBinding?.origin === 'online' &&
+        this.activeBinding.context.matchId === requestedMatchId &&
+        this.activeBinding.freshness !== 'stale'
+      ) {
+        await this.commitQueue.run(() => {
+          if (
+            this.activeBinding?.origin === 'online' &&
+            this.activeBinding.context.matchId === requestedMatchId
+          )
+            this.setActive({ ...this.activeBinding, freshness: 'stale' });
+        });
+      }
+      return result;
+    } finally {
+      if (this.onlineCandidateAcquisition === generation)
+        this.onlineCandidateAcquisition = undefined;
+    }
+  }
+
   private async stageOnlineCandidate(
     requestedMatchId: string,
     source: MatchContextSource,
     isCurrent: () => boolean,
+    allowWithoutLocal = false,
   ): Promise<MatchContextSelectionResult> {
     let candidate: unknown;
     try {
@@ -491,7 +524,10 @@ export class MatchContextController {
       };
     }
     return this.commitQueue.run(() => {
-      if (!isCurrent() || !this.hasLocalOverride() || this.activeBinding === undefined)
+      if (
+        !isCurrent() ||
+        (!allowWithoutLocal && (!this.hasLocalOverride() || this.activeBinding === undefined))
+      )
         return this.staleSelectionResult(requestedMatchId);
       const binding: MatchContextBinding = {
         manifest: validated.value,
@@ -501,10 +537,19 @@ export class MatchContextController {
         localAuthoringMode: 'bound-overlay',
         diagnostics: validated.diagnostics,
       };
+      if (
+        allowWithoutLocal &&
+        this.activeBinding?.origin === 'online' &&
+        isDeepStrictEqual(this.activeBinding.manifest, binding.manifest)
+      ) {
+        if (this.activeBinding.freshness !== 'fresh')
+          this.setActive({ ...this.activeBinding, freshness: 'fresh' });
+        return { ok: true, binding: this.activeBinding, diagnostics: [] };
+      }
       this.pendingOnlineCandidate = { binding, revision: randomUUID() };
       return {
         ok: true,
-        binding: this.activeBinding,
+        binding: this.activeBinding ?? binding,
         diagnostics: [
           controllerIssue(
             'rivalhub_candidate_pending',

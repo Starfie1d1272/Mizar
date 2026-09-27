@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@fastify/static": "catalog:",
+    "@fastify/websocket": "catalog:",
     "@rivalhub-broadcast/core": "workspace:*",
     "@rivalhub-broadcast/hud-config": "workspace:*",
     "@rivalhub-broadcast/protocol": "workspace:*",
@@ -16,9 +18,8 @@
     "@rivalhub-broadcast/rivalhub": "workspace:*",
     "@rivalhub-broadcast/telemetry-cstv": "workspace:*",
     "@rivalhub-broadcast/telemetry-gsi": "workspace:*",
-    "@fastify/static": "catalog:",
-    "@fastify/websocket": "catalog:",
-    "fastify": "catalog:"
+    "fastify": "catalog:",
+    "obs-websocket-js": "5.0.8"
   },
   "devDependencies": {
     "@rivalhub-broadcast/testkit": "workspace:*",

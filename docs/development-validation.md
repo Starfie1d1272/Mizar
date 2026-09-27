@@ -188,9 +188,9 @@ rivalhub-broadcast-<shortSHA>-win-x64/
     evidence/
 ```
 
-正式包需要 Windows x64 构建，编译系统 .NET Framework 的薄 launcher 并绑定 bundled Node / supervisor 摘要。`--skip-node-runtime` 只生成结构检查包；`--allow-dirty` 生成的包同样标记 `developmentOnly`，不能作为产品启动或真实验收的 exact-revision artifact。
+正式包需要 Windows x64 构建，编译 Tauri 2 桌面 Host 并绑定 bundled Node / supervisor 摘要。`--skip-node-runtime` 只生成结构检查包；`--allow-dirty` 生成的包同样标记 `developmentOnly`，不能作为产品启动或真实验收的 exact-revision artifact。
 
-双击 EXE 默认进入 `/operator`。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。GSI 配置使用 `install-gsi.ps1 -Product` 安装、`restore-gsi.ps1 -Product` 恢复；安装和恢复前停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
+双击 EXE 默认打开 Broadcast Workspace：左侧 `/workspace/left`、底部 `/workspace/dock`，本机 Program Overlay 使用同一套 Program Scene registry。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。GSI 配置使用 `install-gsi.ps1 -Product` 安装、`restore-gsi.ps1 -Product` 恢复；安装和恢复前停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
 
 `BROADCAST_STATE_ROOT` 可以指定 resources 之外的绝对目录；正常运行、GSI 脚本和验收必须使用相同值。HUD 配置、系列进度、capture 和日志均进入该目录。现场验收临时状态位于 `state/qualification`，完成后仍由现有 supervisor 恢复 GSI 配置并清理。
 

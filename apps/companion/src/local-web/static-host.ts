@@ -4,15 +4,20 @@ import { fileURLToPath } from 'node:url';
 
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { PROGRAM_SCENES } from '@rivalhub-broadcast/protocol/program-scenes';
 
 const SURFACE_ROUTES = [
-  '/program',
-  '/program/bp',
-  '/operator',
-  '/operator/bp',
-  '/operator/hud',
-  '/debug',
-] as const;
+  ...new Set([
+    ...PROGRAM_SCENES.map((scene) => scene.path),
+    '/operator',
+    '/operator/bp',
+    '/operator/hud',
+    '/debug',
+    '/workspace',
+    '/workspace/left',
+    '/workspace/dock',
+  ]),
+];
 const RESERVED_PREFIXES = [
   '/debug',
   '/operator/series',

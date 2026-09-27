@@ -1,9 +1,15 @@
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
+import type { OnlineManifestConfig } from './match-context/http-source.js';
+import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import { registerBpRoutes } from './bp/controller.js';
 import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
 import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
+import { ObsAdapter } from './obs/adapter.js';
+import { ObsConfigStore } from './obs/config.js';
+import { registerObsRoutes } from './obs/routes.js';
+import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
@@ -76,6 +82,7 @@ export interface CompanionAppOptions {
   readonly programCueCoordinator?: ProgramCueCoordinator;
   readonly matchContextBinding?: MatchContextBinding;
   readonly matchManifestPath?: string;
+  readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly projectionNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
   readonly debugClock?: DebugRuntimeClock;
@@ -89,6 +96,7 @@ export interface CompanionAppOptions {
   readonly qualificationControlToken?: string;
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
+  readonly obsConfigPath?: string;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
   readonly qualificationHostCheckpointsPath?: string;
@@ -108,6 +116,7 @@ export interface CompanionAppOptions {
   readonly onQualificationFinish?: (input: QualificationFinishInput) => void | Promise<void>;
   readonly webRoot?: string;
   readonly host?: string;
+  readonly port?: number;
   readonly localWebLanMode?: boolean;
   readonly localWebAllowedOrigins?: readonly string[];
 }
@@ -287,6 +296,37 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     session: bpSession,
     state: bpDemoState,
   });
+  const obsConfigStore =
+    options.obsConfigPath === undefined ? undefined : new ObsConfigStore(options.obsConfigPath);
+  const obsAdapter =
+    obsConfigStore === undefined
+      ? undefined
+      : new ObsAdapter(
+          obsConfigStore,
+          `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+        );
+  const sceneController = new ProgramSceneController(
+    projectionCoordinator,
+    bpSession,
+    obsAdapter === undefined
+      ? undefined
+      : async (id) => {
+          const status = await obsAdapter.status();
+          if (status.connection === 'connected') await obsAdapter.switchScene(id);
+        },
+  );
+  registerProgramSceneRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    controller: sceneController,
+  });
+  if (obsConfigStore !== undefined && obsAdapter !== undefined) {
+    registerObsRoutes(app, {
+      originPolicy: localWebTransport.getOriginPolicy(),
+      configStore: obsConfigStore,
+      adapter: obsAdapter,
+      activeScene: () => sceneController.get().active,
+    });
+  }
   const matchContextController =
     options.matchManifestPath === undefined
       ? null
@@ -305,6 +345,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     controller: matchContextController,
     projections: projectionCoordinator,
     demoState: bpDemoState,
+  });
+  registerOnlineManifestRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    controller: matchContextController,
+    ...(options.onlineManifestConfig === undefined ? {} : { config: options.onlineManifestConfig }),
   });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {
