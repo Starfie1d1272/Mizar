@@ -3,6 +3,7 @@ import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import { ObsAdapter } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
+import { obsSceneName } from './desired-state.js';
 
 export function registerObsRoutes(
   app: FastifyInstance,
@@ -16,9 +17,16 @@ export function registerObsRoutes(
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
-  app.get('/local/v1/obs', async (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(await options.adapter.status()),
-  );
+  app.get('/local/v1/obs', async (_request, reply) => {
+    const status = await options.adapter.status();
+    return reply.header('cache-control', 'no-store').send({
+      ...status,
+      sceneAligned:
+        status.connection === 'connected'
+          ? status.currentScene === obsSceneName(options.activeScene())
+          : null,
+    });
+  });
   app.post('/operator/obs/configure', { bodyLimit: 4096 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });

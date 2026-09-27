@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
+  readonly sceneAligned: boolean | null;
   readonly streaming: boolean;
   readonly recording: boolean;
   readonly passwordConfigured: boolean;

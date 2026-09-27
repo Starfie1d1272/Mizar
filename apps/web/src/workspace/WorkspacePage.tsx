@@ -71,7 +71,10 @@ function ContextPanel({
   const series = operator?.seriesProgress;
   const completed = [...(series?.maps ?? [])].reverse().find((map) => map.status === 'completed');
   const next = series?.maps.find((map) => map.status === 'pending');
-  const issues = workspaceIssues(operator);
+  const issues = [
+    ...workspaceIssues(operator),
+    ...(obs?.sceneAligned === false ? ['OBS 当前场景与播出场景不一致，请检查配置。'] : []),
+  ];
   return (
     <section className="workspace-context" aria-label="当前比赛与制作状态">
       <header>
@@ -151,9 +154,11 @@ function ContextPanel({
           label="OBS"
           value={
             obs?.connection === 'connected'
-              ? obs.findings.length
-                ? '配置需检查'
-                : '已连接'
+              ? obs.sceneAligned === false
+                ? '场景待核对'
+                : obs.findings.length
+                  ? '配置需检查'
+                  : '已连接'
               : '未连接'
           }
         />
