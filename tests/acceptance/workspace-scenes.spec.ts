@@ -26,6 +26,16 @@ test('Workspace preview shares the scene registry and sends a revisioned command
   await expect(page.getByRole('main', { name: '现场控制底栏' })).toBeVisible();
   for (const scene of PROGRAM_SCENES)
     await expect(page.getByRole('button', { name: scene.title, exact: true })).toBeVisible();
+  const obsPanel = page.locator('.workspace-dock section').nth(3);
+  await obsPanel.getByLabel('WebSocket 密码').scrollIntoViewIfNeeded();
+  const inputBounds = await obsPanel.getByLabel('WebSocket 密码').boundingBox();
+  const panelBounds = await obsPanel.boundingBox();
+  expect(inputBounds).not.toBeNull();
+  expect(panelBounds).not.toBeNull();
+  expect(inputBounds!.y).toBeGreaterThanOrEqual(panelBounds!.y);
+  expect(inputBounds!.y + inputBounds!.height).toBeLessThanOrEqual(
+    panelBounds!.y + panelBounds!.height,
+  );
   await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect.poll(() => command).toEqual({ sceneId: 'matchup', expectedRevision: 'revision-1' });
 });

@@ -267,7 +267,10 @@ export function WorkspaceDock() {
               aria-pressed={sceneState?.active === scene.id}
               title={sceneState?.blocked?.[scene.id] ?? scene.title}
               onClick={() =>
-                void action(() => selectProgramScene(scene.id, sceneState!.revision), true)
+                void action(
+                  () => selectProgramScene(scene.id, sceneState!.revision),
+                  scene.id === 'gameplay' || scene.id === 'bp',
+                )
               }
             >
               {scene.title}

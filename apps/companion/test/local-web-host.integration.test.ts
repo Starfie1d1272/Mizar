@@ -180,7 +180,23 @@ describe('production local web host', () => {
         recentEvents: [],
       });
 
-      for (const route of ['/program', '/operator', '/operator/hud', '/debug', '/qualification']) {
+      for (const route of [
+        '/program',
+        '/program/waiting',
+        '/program/matchup',
+        '/program/bp',
+        '/program/halftime',
+        '/program/map-result',
+        '/program/intermap',
+        '/program/match-result',
+        '/workspace',
+        '/workspace/left',
+        '/workspace/dock',
+        '/operator',
+        '/operator/hud',
+        '/debug',
+        '/qualification',
+      ]) {
         const response = await app.inject({ method: 'GET', url: route });
         expect(response.statusCode).toBe(200);
         expect(response.headers['cache-control']).toBe('no-store');

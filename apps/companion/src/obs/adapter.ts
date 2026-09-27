@@ -36,7 +36,10 @@ export class ObsAdapter {
     return result;
   }
 
-  private async withObs<T>(operation: (obs: ObsRpc) => Promise<T>): Promise<T> {
+  private async withObs<T>(
+    operation: (obs: ObsRpc) => Promise<T>,
+    timeoutMs = TIMEOUT_MS,
+  ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -57,7 +60,7 @@ export class ObsAdapter {
       return await Promise.race([
         task,
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), TIMEOUT_MS);
+          timeout = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), timeoutMs);
         }),
       ]);
     } finally {
@@ -124,7 +127,7 @@ export class ObsAdapter {
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
         return findings;
-      });
+      }, 12_000);
       return this.findings;
     });
   }

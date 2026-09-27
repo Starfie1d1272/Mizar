@@ -47,7 +47,7 @@ export async function obsCommand(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(action === 'repair' ? 15_000 : 6000),
   });
   const value = (await response.json().catch(() => null)) as { message?: string } | null;
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
