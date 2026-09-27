@@ -1,6 +1,6 @@
 # Telemetry 数据语义
 
-本文定义 CS2 GSI 与 CSTV 输入在 Broadcast 中的 ownership、source semantics、normalization 和 evidence 要求。它不描述某个实施阶段，只记录当前有效规则与仍有长期价值的真实 source facts。
+本文定义 CS2 GSI 与 CSTV 输入在 Broadcast 中的职责归属、数据源语义、规范化和证据要求。它不描述某个实施阶段，只记录当前有效规则与仍有长期价值的真实数据源事实。
 
 ## 1. 数据流
 
@@ -28,10 +28,32 @@ packages/telemetry-cstv
     ↓
       GameEventObservation (role-scoped)
     ↓
-Core / source manager / ProgramCue or Lookahead alignment
+Core / 数据源管理 / ProgramCue 或 Lookahead 时间轴对齐
 ```
 
-Raw GSI 和第三方 parser object 都必须在各自 adapter 边界内终止。
+Raw GSI 和第三方解析器对象都必须在各自适配器边界内终止。
+
+### 1.1 正式运行方案与接入边界
+
+当前完美平台 V1 的 Program 主数据链路是：
+
+```text
+延迟直连 GOTV
+→ 真实 CS2 观战客户端
+→ GSI
+→ TelemetryObservation
+→ Runtime / ProgramProjection / RadarFrame
+```
+
+直连 GOTV 的 `connect IP:port;password ...` 与 HTTP Broadcast 是不同接入方式。只有直连地址时，不能假定存在可供 `HttpBroadcastReader` 使用的 HTTP URL。
+
+因此：
+
+- GSI 是当前完美平台 Program 状态的正式数据入口；
+- Program role 的 GameEvent 数据源属于可选精确事件增强；
+- `packages/telemetry-cstv` 的 HTTP reader 继续服务真正提供 HTTP Broadcast 的数据提供方，以及离线验证、现场验收参考和未来兼容；
+- 精确事件增强未启用或不可用，不等于 Program 比赛数据不可用；
+- 详细能力矩阵见 `docs/data-source-capabilities.md`。
 
 ## 2. GSI observation 不是 patch
 
@@ -273,7 +295,7 @@ recorded raw input
 - slow consumer；
 - source generation change。
 
-## 9. CSTV GameEvent 边界
+## 9. CSTV / GameEvent 边界
 
 `packages/telemetry-cstv` 是第三方 CSTV parser 的 isolation layer。
 
@@ -292,11 +314,11 @@ recorded raw input
 - 渲染 HUD / Radar；
 - 决定 canonical 比赛事实。
 
-Program 与 Lookahead 具有独立 source-local continuity。Lookahead reconnect 必须让旧 timeline alignment 失效，但不能仅因为连接重建就改变 Program `mapEpoch`。
+Program 与 Lookahead 各自维护数据源连接连续性。Lookahead 重连必须让旧时间轴对齐失效，但不能仅因为连接重建就改变 Program `mapEpoch`。
 
-### 9.1 Program CSTV live-only consumer
+### 9.1 可选 Program GameEvent 消费链
 
-`CstvSourceManager<R>` 在类型边界固定 source role，并提供 live-only event subscription：
+`CstvSourceManager<R>` 当前承载 HTTP CSTV 适配器，并在类型边界固定数据源 role、提供仅实时事件订阅：
 
 ```ts
 subscribeLiveGameEvents(
@@ -304,14 +326,14 @@ subscribeLiveGameEvents(
 ): () => void
 ```
 
-事件在 `session.start()` / `connecting` 阶段仍会进入有界 `recentGameEvents`，只作为 Debug/Operator
-evidence；只有 `start()` 返回 `ready`、manager 进入 `live` 后，`run()` 阶段的新事件才会通知 live
-listener。因此 reconnect 的 bootstrap/catch-up event 不会被当作新的 Program edge 补播。
+事件在 `session.start()` / `connecting` 阶段仍会进入有界 `recentGameEvents`，只作为 Debug / 制作控制证据；只有 `start()` 返回 `ready`、manager 进入 `live` 后，`run()` 阶段的新事件才会通知实时 listener。因此重连时的初始化 / 补齐事件不会被当作新的 Program 边沿补播。
 
-`ProgramCueCoordinator` 只能接收 `CstvSourceManager<'program'>`，在 event 到达时读取当前
-Program Runtime 的 freshness、`mapEpoch` 和已知 map name。stale/awaiting telemetry、明确错地图、
-缺少 target/victim stable source player id 或非 live source 的 event 立即 drop，不进入等待队列。
-Lookahead manager 没有进入 Program cue 的类型或 assembly 路径。
+`ProgramCueCoordinator` 当前实现只能接收 `CstvSourceManager<'program'>`，在事件到达时读取当前
+Program Runtime 的 freshness、`mapEpoch` 和已知地图名。数据过期 / 等待遥测、明确错地图、缺少目标 / 被击杀者稳定数据源玩家 ID，或事件并非来自实时数据源时，立即丢弃且不进入等待队列。Lookahead manager 不进入 Program cue 的类型或组装路径。
+
+这一实现约束不代表 Program 必须拥有 HTTP CSTV 数据源。完美平台 Program V1 在该数据源未启用时继续使用 GSI；Renderer 的通用掉血、死亡和低血量表现仍由连续 Program snapshot 驱动。只有依赖精确 `player_hurt / player_death` 元数据的武器类型专属短时特效会缺少增强。未来其它精确事件适配器可以复用同一 Program role 语义，不应把具体接入方式提升为 Core contract。
+
+Lookahead 的无头直连 CSTV 客户端后续在新的独立仓库研发，本仓的 telemetry 边界只定义其接入后的标准 observation 语义。
 
 ## 10. 时间与序列
 
@@ -326,29 +348,29 @@ wall clock → 什么时候发生
 
 sequence value 必须明确 scope，不能把 ingress sequence、runtime sequence、channel sequence 混成同一个编号。
 
-## 11. 真实 Evidence 与 Fixture
+## 11. 真实证据与 Fixture
 
-真实 Windows + CS2 / CSTV 输入用于证明 source behavior；synthetic fixture 用于可重复覆盖边界条件。
+真实 Windows + CS2 / CSTV 输入用于证明数据源行为；synthetic fixture 用于可重复覆盖边界条件。
 
-当真实 capture 与旧 hypothesis 冲突时：
+当真实采集记录与旧假设冲突时：
 
-1. 保留原始 evidence；
-2. 修正 source semantics；
-3. 更新 adapter；
-4. 从真实 capture 派生新的 sanitized fixture；
+1. 保留原始证据；
+2. 修正数据源语义；
+3. 更新适配器；
+4. 从真实采集记录派生新的脱敏 fixture；
 5. 删除已经不成立的兼容假设。
 
-Reference corpus 应覆盖：
+参考样本集应覆盖：
 
 - warmup / freezetime / live / round end；
 - halftime / side switch；
 - map end / map change；
 - disconnect / reconnect；
 - source restart / generation change；
-- Program 与 Lookahead alignment；
-- long-running / slow-consumer behavior。
+- Program 与 Lookahead 时间轴对齐；
+- 长时间运行 / 慢消费方行为。
 
-新增 capture 只为回答明确问题，不为了样本数量重复录制已经充分证明的场景。
+新增采集记录只用于回答明确问题，不为了样本数量重复录制已经充分证明的场景。
 
 ### 11.1 Objective Clock qualification report
 
