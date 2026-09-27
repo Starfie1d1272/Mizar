@@ -77,6 +77,8 @@ Break / Emergency
 
 BP / Veto 只消费已确认赛事事实：制作人员点击“播放 BP”，系统按固定间隔逐项累积展示，完整 BP 保持显示，点击“收起 BP”后统一退场。不提供暂停、上一步、下一步或跳转。`/operator/bp` 提供来源、数据就绪状态、本地填写与同一 Renderer 的预览；未绑定比赛或当前 BP 缺失、不完整、有冲突时，允许本地填写。已绑定比赛的补录保留比赛、赛事、队伍、名单和已完成地图身份，只保存本地 BP；这类 `bound-overlay` 来源模式在保存和缓存恢复后仍锁定 canonical 字段。独立填写创建 `standalone` 本地比赛，可继续编辑本地赛事、阶段、赛制、队名和队标，同时保持稳定 IDs。有效的 RivalHub BP 就绪时隐藏本地补录入口。RivalHub 来源在本地覆盖期间恢复后，先展示比赛摘要并等待制作人员确认切回。独立不透明全屏 `/program/bp` 供 OBS 装载；播放会话由 Companion 持有，不修改 RivalHub canonical BP。Host 与恢复规则见 ADR-0009。
 
+`/operator/bp` 另提供 BO1、BO3、BO5 场景测试，使用 checked-in NJU Rivals 赛事 Manifest 验证 BP 画面、动画和 OBS 输出。Demo 是 ephemeral BP Presentation source：它与真实 BP 共用同一个 `BpSession`，只在 BP Presentation 内生效；不属于本地比赛或 MatchContext source，不持久化，也不写入 RivalHub、LKG、SeriesProgress、IdentityResolver 或 Gameplay Program。Demo 的 Manifest 仍通过标准校验、MatchContext 转换和 `inspectBp` 投影，普通工作台只读取当前 Demo 格式。切换或退出 Demo 需要先收起 BP，退出后恢复最新真实 BP projection。
+
 ### 5.1 Gameplay HUD
 
 HUD 至少能够表达：

@@ -17,6 +17,7 @@ const RESERVED_PREFIXES = [
   '/debug',
   '/operator/series',
   '/operator/bp-command',
+  '/operator/bp-demo',
   '/operator/bp-local-save',
   '/operator/bp-rivalhub',
   '/gsi',

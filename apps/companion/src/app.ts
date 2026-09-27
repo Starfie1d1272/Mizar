@@ -1,5 +1,8 @@
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { registerBpRoutes } from './bp/controller.js';
+import { registerBpDemoRoute } from './bp/demo-controller.js';
+import { getBpDemoProjection } from './bp/demo-projection.js';
+import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -273,9 +276,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
   });
-  registerBpRoutes(app, {
+  const bpDemoState = new BpDemoStateController();
+  const bpSession = registerBpRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
-    getProjection: () => projectionCoordinator.getBpProjection(),
+    getProjection: () =>
+      bpDemoState.getProjection(() => projectionCoordinator.getBpProjection(), getBpDemoProjection),
+  });
+  registerBpDemoRoute(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    session: bpSession,
+    state: bpDemoState,
   });
   const matchContextController =
     options.matchManifestPath === undefined
@@ -294,6 +304,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
     projections: projectionCoordinator,
+    demoState: bpDemoState,
   });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {

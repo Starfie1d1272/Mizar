@@ -13,6 +13,8 @@ Core 从已绑定 MatchContext 派生有限、Program-safe BP projection。不�
 
 Companion 独占内存 Presentation session，状态 hidden / revealing / shown / hiding，不写 RuntimeState、SeriesProgress、MatchContext 或磁盘。基于 monotonic clock，默认每 1600 ms reveal，360 ms exit；不使用客户端时钟续播。HTTP `/local/v1/bp` 仅返回有界当前 baseline，客户端串行轮询，不补离线步骤；重连/reload 首份 baseline 无入场动画。断连/超时隐藏，服务重启 hidden，比赛/BP 内容变化或 mismatch 清空会话。
 
+BP 场景测试是 ephemeral BP Presentation source，不是比赛 source。checked-in Demo Manifest 按 `BroadcastManifest → validateBroadcastManifest → toMatchContext → inspectBp → BpProjection` 派生，并复用同一个 `BpSession`；Demo 状态只保存在 Companion 内存中，不持久化、不写 RivalHub，也不进入 MatchContext、`match-context.json` / LKG、SeriesProgress、IdentityResolver、RuntimeState、Gameplay Program 或 local authoring provenance。真实 MatchContext 在 Demo 期间可继续更新，但当前 Demo projection 不随之变化；退出后使用最新真实 BP projection。进入、切换和退出都要求 session 为 hidden，否则返回 409 `请先收起当前 BP 场景。`。服务重启后 Demo inactive，播放 session hidden。
+
 `POST /operator/bp-command` 仅接受 play/hide 和预期 revision；沿用 loopback + 精确 Origin 校验，LAN 禁写。并发/旧请求返回冲突，不排队重试。只读响应采用独立版本 schema 与 ETag，不更改现有四个 snapshot channel。
 
 ## 比赛来源与本地 authoring
