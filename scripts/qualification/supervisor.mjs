@@ -285,6 +285,7 @@ export async function runCompanionLifecycle({
       shell: false,
       windowsHide: true,
     });
+    const exitPromise = waitForChild(child);
     const companionStdout = createWriteStream(companionStdoutPath, { flags: 'a' });
     const companionStderr = createWriteStream(companionStderrPath, { flags: 'a' });
     child.stdout.pipe(companionStdout);
@@ -293,7 +294,7 @@ export async function runCompanionLifecycle({
     const runState = await readJson(statePath);
     await writeJson(statePath, { ...runState, processId: child.pid });
 
-    const exitResult = await waitForChild(child);
+    const exitResult = await exitPromise;
     await Promise.all([waitForStream(companionStdout), waitForStream(companionStderr)]);
 
     if (exitResult.code === restartExitCode) {
