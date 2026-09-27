@@ -150,6 +150,7 @@ pub struct GameTracker {
     pub managed: bool,
     pub overlay_enabled: bool,
     last_client: Option<Rect>,
+    last_work_area: Option<Rect>,
     last_dpi: u32,
     last_game_monitor: Monitor,
 }
@@ -171,6 +172,7 @@ impl GameTracker {
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
         let work = monitor_work_area(self.monitor)?;
+        self.last_work_area = Some(work);
         let layout = workspace_layout(work);
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
@@ -181,9 +183,11 @@ impl GameTracker {
     pub fn tick(&mut self) -> Option<Layout> {
         let found = find_cs2();
         let changed = self.observe(found);
-        if self.monitor == 0 || monitor_work_area(self.monitor).is_none() {
+        let work = monitor_work_area(self.monitor);
+        if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
         }
+        if work != self.last_work_area { return self.apply_locked_layout(); }
         if changed { return self.apply_locked_layout(); }
         let Some(window) = self.window else { return None; };
         let client = client_rect(window.hwnd);
@@ -194,8 +198,7 @@ impl GameTracker {
             self.last_dpi = dpi;
             self.last_game_monitor = game_monitor;
             if self.managed {
-                let work = monitor_work_area(self.monitor)?;
-                let target = workspace_layout(work).game;
+                let target = workspace_layout(work?).game;
                 self.managed = align_cs2(window, target);
                 self.last_client = client_rect(window.hwnd);
             }
