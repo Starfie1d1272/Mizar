@@ -1,0 +1,103 @@
+.program-scene {
+  --scene-ink: #f0f4f7;
+  color: var(--scene-ink);
+  font-family: Inter, sans-serif;
+}
+
+.program-scene:not(.program-scene--halftime) {
+  background: radial-gradient(circle at 50% 43%, #1d3142, #09121d 72%);
+}
+
+.program-scene--halftime .program-scene__content {
+  background: linear-gradient(90deg, #071320e9, #122537db);
+  bottom: 88px;
+  min-height: 220px;
+  padding: 28px 70px;
+  position: absolute;
+  width: 100%;
+}
+
+.program-scene__content {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100%;
+  padding: 80px 120px;
+  text-align: center;
+}
+
+.program-scene__brand {
+  color: #70ccce;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.28em;
+}
+
+.program-scene__eyebrow {
+  color: #b9c8d4;
+  font-size: 25px;
+}
+.program-scene h1 {
+  font-size: 86px;
+  margin: 22px 0 58px;
+}
+.program-scene__teams {
+  align-items: center;
+  display: flex;
+  gap: 100px;
+  justify-content: center;
+  width: 100%;
+}
+.program-scene__teams div {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  font-size: 49px;
+  gap: 24px;
+  width: 500px;
+}
+.program-scene__teams img {
+  height: 170px;
+  object-fit: contain;
+  width: 170px;
+}
+.program-scene__teams span {
+  color: #70ccce;
+  font-size: 66px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.program-scene__waiting,
+.program-scene__detail {
+  color: #d2e2ea;
+  font-size: 38px;
+  margin-top: 64px;
+}
+.program-scene__maps {
+  color: #b8c9d5;
+  display: flex;
+  gap: 50px;
+  margin-top: 65px;
+}
+.program-scene--halftime h1 {
+  font-size: 48px;
+  margin: 5px 0;
+}
+.program-scene--halftime .program-scene__brand {
+  font-size: 14px;
+}
+.program-scene--halftime .program-scene__eyebrow,
+.program-scene--halftime .program-scene__detail {
+  font-size: 22px;
+  margin: 0;
+}
+.program-scene--halftime .program-scene__teams div {
+  font-size: 28px;
+}
+.program-scene--halftime .program-scene__teams img {
+  display: none;
+}
+.program-scene--halftime .program-scene__teams span {
+  font-size: 38px;
+}
