@@ -37,7 +37,6 @@ it('uses existing series progress for map and match end', () => {
   ).toBe('match_end');
 });
 
-
 it('shows the current POV only from fresh, identity-safe current-lineup Program evidence', () => {
   const program = {
     status: { telemetry: 'fresh', identity: 'matched' },
