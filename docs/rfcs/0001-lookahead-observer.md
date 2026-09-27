@@ -138,7 +138,7 @@ FutureKillCue
 
 这保持“只有一个真正承担 Program 画面渲染的 CS2”的原始目标。
 
-**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不实现 直连 CSTV 网络协议本身，只定义接入后的 `GameEventObservation`、时间轴对齐和 Observer Assist 语义。该独立仓库的研发进度不阻塞 Program V1 或制播工作区。
+**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不实现直连 CSTV 网络协议本身，只定义接入后的 `GameEventObservation`、时间轴对齐和 Observer Assist 语义。该独立仓库的研发进度不阻塞 Program V1 或制播工作区。
 
 当前 `cs2parser + HttpBroadcastReader` 只适用于真正提供 HTTP Broadcast URL 的数据提供方，不能由直连 GOTV 的 `IP:port` 自动推导。
 
