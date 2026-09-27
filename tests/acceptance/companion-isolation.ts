@@ -1,12 +1,19 @@
 import { expect, test as base } from '@playwright/test';
 
+const COMPANION_HTTP_PREFIXES = [
+  '/local/v1',
+  '/operator/hud-config',
+  '/operator/bp-local-save',
+  '/operator/bp-rivalhub',
+  '/operator/bp-command',
+  '/operator/bp-demo',
+  '/operator/series',
+  '/debug/runtime',
+] as const;
+
 function isCompanionHttpPath(url: URL): boolean {
-  return (
-    url.pathname === '/local/v1' ||
-    url.pathname.startsWith('/local/v1/') ||
-    url.pathname === '/operator' ||
-    url.pathname.startsWith('/operator/') ||
-    url.pathname === '/debug/runtime'
+  return COMPANION_HTTP_PREFIXES.some(
+    (prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`),
   );
 }
 
