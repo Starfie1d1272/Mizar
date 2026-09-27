@@ -84,6 +84,7 @@ export interface CompanionAppOptions {
   readonly matchManifestPath?: string;
   readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly projectionNowMonotonicMs?: () => number;
+  readonly bpNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
   readonly debugClock?: DebugRuntimeClock;
   readonly deliveryConsumers?: readonly DeliveryHealthSource[];
@@ -288,6 +289,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const bpDemoState = new BpDemoStateController();
   const bpSession = registerBpRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
+    ...(options.bpNowMonotonicMs === undefined ? {} : { now: options.bpNowMonotonicMs }),
     getProjection: () =>
       bpDemoState.getProjection(() => projectionCoordinator.getBpProjection(), getBpDemoProjection),
   });

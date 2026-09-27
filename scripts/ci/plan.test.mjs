@@ -163,7 +163,44 @@ describe('changed-surface CI planner', () => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);
   });
 
-  it.each(['push', 'schedule', 'workflow_dispatch'])('%s forces full CI', (eventName) => {
+  it('selects only matching evidence for an ordinary main push', () => {
+    const plan = createCiPlan({
+      eventName: 'push',
+      changedFiles: ['apps/web/src/program/widgets/player-rails/PlayerCard.tsx'],
+    });
+    expect(plan).toMatchObject({
+      runQuality: true,
+      runAcceptance: true,
+      runPlatform: false,
+      runQualification: false,
+    });
+    expect(plan.requiredJobs).toEqual(['quality', 'acceptance']);
+  });
+
+  it.each([
+    ['desktop Cargo profile', 'apps/desktop/src-tauri/Cargo.toml'],
+    ['qualification builder', 'scripts/qualification/build.mjs'],
+  ])('requires Windows qualification for %s changes on main push', (_name, path) => {
+    const plan = createCiPlan({
+      eventName: 'push',
+      changedFiles: [path],
+    });
+    expect(plan.runQualification).toBe(true);
+    expect(plan.requiredJobs).toContain('qualification_windows');
+  });
+
+  it.each([
+    ['branch creation with an empty diff', []],
+    ['all-zero before sentinel', [{ path: '', status: 'X' }]],
+    ['rename', [{ path: 'apps/web/src/old.ts', status: 'R100' }]],
+    ['delete', [{ path: 'apps/desktop/src-tauri/src/old.rs', status: 'D' }]],
+  ])('main push %s fails closed to full CI', (_name, changedFiles) => {
+    const plan = createCiPlan({ eventName: 'push', changedFiles });
+    expect(plan).toMatchObject(full);
+    expect(plan.requiredJobs).toContain('qualification_offline');
+  });
+
+  it.each(['schedule', 'workflow_dispatch'])('%s forces full CI', (eventName) => {
     const plan = createCiPlan({ eventName, changedFiles: ['docs/product.md'] });
     expect(plan).toMatchObject(full);
     expect(plan.requiredJobs).toContain('qualification_offline');

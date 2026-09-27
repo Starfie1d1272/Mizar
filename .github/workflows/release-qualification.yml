@@ -23,6 +23,17 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - name: Cache Cargo registry, git, and release target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: cargo-${{ runner.os }}-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-release-
+
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
         with:
@@ -42,6 +53,15 @@ jobs:
 
       - name: Build exact-SHA Windows qualification bundle
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT"
+
+      - name: Verify release desktop profile metadata
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
+          if ($null -eq $bundle) { throw '未生成 release qualification bundle 目录' }
+          $artifactPath = Join-Path $bundle.FullName 'resources/metadata/artifact.json'
+          $artifact = Get-Content -Raw -LiteralPath $artifactPath | ConvertFrom-Json
+          if ($artifact.desktopBuildProfile -ne 'release') { throw "Release Qualification 使用了错误 profile：$($artifact.desktopBuildProfile)" }
 
       - name: Extract portable bundle and smoke test
         shell: pwsh

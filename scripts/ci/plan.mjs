@@ -100,7 +100,7 @@ function fullPlan(reason, includeOfflineQualification = false) {
   };
 }
 
-function selectivePlan(changedFiles) {
+function selectivePlan(changedFiles, eventName) {
   const runQuality = changedFiles.some(({ path }) => isKnownQualityPath(path));
   const runAcceptance = changedFiles.some(({ path }) => isAcceptancePath(path));
   const runPlatform = changedFiles.some(({ path }) => isPlatformPath(path));
@@ -119,7 +119,7 @@ function selectivePlan(changedFiles) {
     runPlatform,
     runQualification,
     requiredJobs,
-    reason: `pull_request changed surface classified (${changedFiles.length} file(s))`,
+    reason: `${eventName} changed surface classified (${changedFiles.length} file(s))`,
   };
 }
 
@@ -154,7 +154,9 @@ export function parseGitDiffNameStatus(output) {
  */
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
-  if (eventName !== 'pull_request') return fullPlan(`forced full for ${eventName}`, true);
+  if (eventName !== 'pull_request' && eventName !== 'push')
+    return fullPlan(`forced full for ${eventName}`, true);
+  const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>
     typeof entry === 'string'
@@ -162,13 +164,17 @@ export function createCiPlan(options = {}) {
       : { path: normalizePath(entry.path), status: entry.status ?? 'M' },
   );
 
-  if (changedFiles.length === 0) return fullPlan('forced full: missing pull request file list');
+  if (changedFiles.length === 0)
+    return fullPlan(`forced full: missing ${eventName} changed paths`, includeOfflineQualification);
   if (
     changedFiles.some(
       ({ path, status }) => path === '' || isUnsafeChangeStatus(status) || isForcedFullPath(path),
     )
   ) {
-    return fullPlan('forced full: unsafe, toolchain, workflow, or planner change');
+    return fullPlan(
+      'forced full: unsafe, toolchain, workflow, or planner change',
+      includeOfflineQualification,
+    );
   }
   if (changedFiles.every(({ path }) => isDocsOnlyPath(path))) {
     return {
@@ -181,9 +187,9 @@ export function createCiPlan(options = {}) {
     };
   }
 
-  const plan = selectivePlan(changedFiles);
+  const plan = selectivePlan(changedFiles, eventName);
   if (!isKnownQualityPathForAll(changedFiles)) {
-    return fullPlan('forced full: unknown or unclassified path');
+    return fullPlan('forced full: unknown or unclassified path', includeOfflineQualification);
   }
   return plan;
 }

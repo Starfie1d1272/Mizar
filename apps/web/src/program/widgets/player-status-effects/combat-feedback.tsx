@@ -86,7 +86,6 @@ export function useCombatFeedback({
       damageTimer.current = null;
       activeGhost.current = null;
       // Presentation boundaries snap to current truth instead of replaying combat motion.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFeedback((value) => (value === EMPTY_FEEDBACK ? value : EMPTY_FEEDBACK));
       return;
     }
@@ -108,7 +107,6 @@ export function useCombatFeedback({
       damageTimer.current = null;
       activeGhost.current = null;
       // A new life/round must not inherit damage presentation from the previous one.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFeedback((value) => (value === EMPTY_FEEDBACK ? value : EMPTY_FEEDBACK));
       return;
     }
@@ -133,7 +131,6 @@ export function useCombatFeedback({
 
     if (damageGhost === null && !deathStarted && !lowHealthStarted) return;
     // Gameplay truth is already current; this state only describes the short handoff.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFeedback((value) => ({
       damageGhost: damageGhost ?? value.damageGhost,
       deathPulseKey: deathStarted ? ++sequence.current : value.deathPulseKey,
