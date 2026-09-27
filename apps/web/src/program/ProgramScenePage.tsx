@@ -13,27 +13,34 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const program = connection.state === 'live' ? connection.current?.payload : undefined;
-  const series = program?.series;
-  const match = program?.match;
-  const safe =
-    sceneId === 'waiting' ||
-    (program?.status.context === 'fresh' &&
-      program.status.identity !== 'mismatch' &&
-      series?.bindingState === 'bound');
+  const contextReady =
+    program?.status.context === 'fresh' &&
+    program.status.identity !== 'mismatch' &&
+    program.series?.bindingState === 'bound';
+  const series = contextReady ? program.series : undefined;
+  const match = contextReady ? program.match : undefined;
   const current = series?.maps.find((map) => map.status === 'current');
   const completed = [...(series?.maps ?? [])].reverse().find((map) => map.status === 'completed');
   const next = series?.maps.find((map) => map.status === 'pending');
   const title = programScene(sceneId).title;
   const a = series?.entrants.a;
   const b = series?.entrants.b;
-  const resultScene = sceneId === 'map_result' || sceneId === 'match_result';
-  const resultSafe =
-    !resultScene ||
-    (sceneId === 'map_result' ? completed?.finalScore != null : series?.status === 'completed');
+  const safe =
+    sceneId === 'waiting' ||
+    (contextReady &&
+      (sceneId === 'halftime'
+        ? program.status.telemetry === 'fresh' && program.map.phase === 'intermission'
+        : sceneId === 'map_result'
+          ? completed?.finalScore != null
+          : sceneId === 'intermap'
+            ? completed?.finalScore != null && series?.status !== 'completed'
+            : sceneId === 'match_result'
+              ? series?.status === 'completed'
+              : true));
 
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
-      {safe && resultSafe ? (
+      {safe ? (
         <main className="program-scene__content" aria-label={title}>
           <p className="program-scene__brand">RIVALHUB BROADCAST</p>
           <p className="program-scene__eyebrow">
