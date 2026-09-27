@@ -305,24 +305,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           obsConfigStore,
           `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
         );
+  const sceneController = new ProgramSceneController(
+    projectionCoordinator,
+    bpSession,
+    obsAdapter === undefined
+      ? undefined
+      : async (id) => {
+          const status = await obsAdapter.status();
+          if (status.connection === 'connected') await obsAdapter.switchScene(id);
+        },
+  );
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
-    controller: new ProgramSceneController(
-      projectionCoordinator,
-      bpSession,
-      obsAdapter === undefined
-        ? undefined
-        : async (id) => {
-            const status = await obsAdapter.status();
-            if (status.connection === 'connected') await obsAdapter.switchScene(id);
-          },
-    ),
+    controller: sceneController,
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
     registerObsRoutes(app, {
       originPolicy: localWebTransport.getOriginPolicy(),
       configStore: obsConfigStore,
       adapter: obsAdapter,
+      activeScene: () => sceneController.get().active,
     });
   }
   const matchContextController =

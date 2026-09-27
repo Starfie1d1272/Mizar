@@ -218,6 +218,11 @@ async function createDeployWorkspace(workspaceDir) {
     for (const entry of await readdir(sourceGroup, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const sourcePackage = join(sourceGroup, entry.name);
+      try {
+        await access(join(sourcePackage, 'package.json'));
+      } catch {
+        continue;
+      }
       const targetPackage = join(targetGroup, entry.name);
       await mkdir(targetPackage, { recursive: true });
       await cp(join(sourcePackage, 'package.json'), join(targetPackage, 'package.json'));

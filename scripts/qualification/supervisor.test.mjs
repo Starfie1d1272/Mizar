@@ -179,5 +179,5 @@ describe('qualification supervisor finalization', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

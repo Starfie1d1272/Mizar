@@ -13,6 +13,7 @@ class FakeObs implements ObsRpc {
   collections = new Set(['User Collection']);
   scenes = new Map<string, { sourceName: string; sceneItemId: number; sceneItemIndex: number }[]>();
   inputs = new Map<string, { kind: string; settings: Record<string, unknown> }>();
+  transforms = new Map<number, Record<string, unknown>>();
   outputActive = false;
   calls: string[] = [];
   nextId = 1;
@@ -81,7 +82,15 @@ class FakeObs implements ObsRpc {
       this.addItem(name, String(data.sourceName));
       return {};
     }
-    if (type === 'SetSceneItemTransform') return {};
+    if (type === 'GetSceneItemTransform')
+      return { sceneItemTransform: this.transforms.get(Number(data.sceneItemId)) };
+    if (type === 'SetSceneItemTransform') {
+      this.transforms.set(
+        Number(data.sceneItemId),
+        data.sceneItemTransform as Record<string, unknown>,
+      );
+      return {};
+    }
     if (type === 'SetSceneItemIndex') {
       this.scenes.get(name)!.find((item) => item.sceneItemId === data.sceneItemId)!.sceneItemIndex =
         Number(data.sceneItemIndex);
@@ -92,7 +101,9 @@ class FakeObs implements ObsRpc {
   }
   addItem(sceneName: string, sourceName: string) {
     const items = this.scenes.get(sceneName)!;
-    items.push({ sourceName, sceneItemId: this.nextId++, sceneItemIndex: items.length });
+    const sceneItemId = this.nextId++;
+    items.push({ sourceName, sceneItemId, sceneItemIndex: items.length });
+    this.transforms.set(sceneItemId, { positionX: 0, positionY: 0, scaleX: 1, scaleY: 1 });
   }
 }
 
@@ -117,6 +128,20 @@ it('repairs only RivalHub collection, browser sources and order, then is idempot
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
+  const gameplay = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'gameplay')!;
+  obs.inputs.get('RivalHub · CS2 Game Capture')!.settings.window = 'other.exe';
+  expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(
+    'capture_drift',
+  );
+  expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
+  const gameplayBrowser = obs.scenes
+    .get(gameplay.sceneName)!
+    .find((item) => item.sourceName === gameplay.browserInput)!;
+  obs.transforms.get(gameplayBrowser.sceneItemId)!.positionX = 50;
+  expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(
+    'transform_drift',
+  );
+  expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   const bp = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'bp')!;
   obs.inputs.get(bp.browserInput)!.settings.url = 'http://127.0.0.1:3000/wrong';
   expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(

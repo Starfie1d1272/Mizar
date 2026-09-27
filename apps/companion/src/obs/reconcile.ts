@@ -78,6 +78,12 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   );
   if (inputKinds.has(OBS_CAPTURE_INPUT) && inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture')
     findings.push({ code: 'source_kind_conflict', message: 'RivalHub 游戏采集来源名称冲突。' });
+  if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
+    const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
+    const settings = capture.inputSettings as Record<string, unknown> | undefined;
+    if (settings?.capture_mode !== 'window' || settings.window !== '::cs2.exe')
+      findings.push({ code: 'capture_drift', message: 'RivalHub 游戏采集来源未指向 CS2。' });
+  }
   for (const scene of desired) {
     if (!sceneNames.includes(scene.sceneName)) {
       findings.push({
@@ -107,6 +113,25 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
           code: 'order_drift',
           scene: scene.sceneName,
           message: `${scene.sceneName} 图层顺序需要修复。`,
+        });
+    }
+    const browserItem = items.find((item) => item.sourceName === scene.browserInput);
+    if (browserItem && typeof browserItem.sceneItemId === 'number') {
+      const measured = await obs.call('GetSceneItemTransform', {
+        sceneName: scene.sceneName,
+        sceneItemId: browserItem.sceneItemId,
+      });
+      const transform = measured.sceneItemTransform as Record<string, unknown> | undefined;
+      if (
+        transform?.positionX !== 0 ||
+        transform.positionY !== 0 ||
+        transform.scaleX !== 1 ||
+        transform.scaleY !== 1
+      )
+        findings.push({
+          code: 'transform_drift',
+          scene: scene.sceneName,
+          message: `${scene.sceneName} 浏览器源位置或缩放需要修复。`,
         });
     }
     if (!inputKinds.has(scene.browserInput)) continue;
@@ -159,6 +184,17 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
     )
       throw new Error('RivalHub 浏览器来源名称冲突，未执行修复。');
   }
+  if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture')
+    await obs.call('SetInputSettings', {
+      inputName: OBS_CAPTURE_INPUT,
+      inputSettings: {
+        capture_mode: 'window',
+        window: '::cs2.exe',
+        priority: 2,
+        capture_cursor: false,
+      },
+      overlay: true,
+    });
   for (const scene of desired) {
     if (!sceneNames.has(scene.sceneName)) {
       await obs.call('CreateScene', { sceneName: scene.sceneName });

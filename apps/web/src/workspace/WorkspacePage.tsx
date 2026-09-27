@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@rivalhub-broadcast/protocol/program-scenes';
 import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
+import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
 import { switchToRivalhubBp, useBpSession, useBpWorkspace } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
@@ -55,7 +56,13 @@ function useCs2HostStatus() {
   return value;
 }
 
-function ContextPanel({ operator }: { readonly operator: OperatorPayload | null }) {
+function ContextPanel({
+  operator,
+  program,
+}: {
+  readonly operator: OperatorPayload | null;
+  readonly program: ProgramPayload | null;
+}) {
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
   const cs2 = useCs2HostStatus();
@@ -132,7 +139,13 @@ function ContextPanel({ operator }: { readonly operator: OperatorPayload | null 
         />
         <StateLine
           label="播出画面"
-          value={operator?.runtime.telemetryFreshness === 'fresh' ? '正常' : '等待数据'}
+          value={
+            program?.status.telemetry === 'fresh' && program.status.identity !== 'mismatch'
+              ? '正常'
+              : program?.status.telemetry === 'stale'
+                ? '已中断'
+                : '等待数据'
+          }
         />
         <StateLine
           label="OBS"
@@ -146,7 +159,14 @@ function ContextPanel({ operator }: { readonly operator: OperatorPayload | null 
         />
         <StateLine
           label="事件增强"
-          value={operator?.sources.cstvProgram.state === 'live' ? '正常' : '未启用'}
+          value={
+            operator?.sources.cstvProgram.state === 'live' &&
+            operator.sources.cstvProgram.lastEventTick !== null
+              ? '可用'
+              : operator?.sources.cstvProgram.state === 'disabled'
+                ? '未启用'
+                : '等待事件'
+          }
         />
         <StateLine label="观察辅助" value="未启用" />
       </section>
@@ -172,29 +192,44 @@ function ContextPanel({ operator }: { readonly operator: OperatorPayload | null 
 export function WorkspaceLeft() {
   const radar = useLocalChannelClient('radar');
   const operator = useLocalChannelClient('operator');
+  const program = useLocalChannelClient('program');
   const state = useSyncExternalStore(
     operator.subscribe,
     operator.getSnapshot,
     operator.getSnapshot,
+  );
+  const programState = useSyncExternalStore(
+    program.subscribe,
+    program.getSnapshot,
+    program.getSnapshot,
   );
   return (
     <main className="workspace-left">
       <div className="workspace-radar">
         <Radar client={radar} zoomMode="auto" />
       </div>
-      <ContextPanel operator={state.state === 'live' ? (state.current?.payload ?? null) : null} />
+      <ContextPanel
+        operator={state.state === 'live' ? (state.current?.payload ?? null) : null}
+        program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
+      />
     </main>
   );
 }
 
 export function WorkspaceDock() {
   const operator = useLocalChannelClient('operator');
+  const program = useLocalChannelClient('program');
   const state = useSyncExternalStore(
     operator.subscribe,
     operator.getSnapshot,
     operator.getSnapshot,
   );
   const payload = state.state === 'live' ? state.current?.payload : undefined;
+  const programState = useSyncExternalStore(
+    program.subscribe,
+    program.getSnapshot,
+    program.getSnapshot,
+  );
   const sceneState = useProgramScenes();
   const obs = useObsStatus();
   const { workspace: bpWorkspace } = useBpWorkspace();
@@ -420,7 +455,7 @@ export function WorkspaceDock() {
       <section>
         <small>STATUS</small>
         <span>比赛数据 {payload?.runtime.telemetryFreshness === 'fresh' ? '正常' : '等待'}</span>
-        <span>Program {state.state === 'live' ? '已连接' : '未连接'}</span>
+        <span>Program {programState.state === 'live' ? '已连接' : '未连接'}</span>
         <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
         <a href="/debug">运行诊断</a>
       </section>

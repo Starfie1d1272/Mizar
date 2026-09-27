@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import { ObsAdapter } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
@@ -9,6 +10,7 @@ export function registerObsRoutes(
     readonly adapter: ObsAdapter;
     readonly configStore: ObsConfigStore;
     readonly originPolicy: LocalWebOriginPolicy;
+    readonly activeScene: () => ProgramSceneId;
   },
 ) {
   const allowed = (origin: string | undefined) =>
@@ -42,7 +44,10 @@ export function registerObsRoutes(
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
         if (action === 'check') return { ok: true, findings: await options.adapter.check() };
-        if (action === 'repair') return { ok: true, findings: await options.adapter.repair() };
+        if (action === 'repair') {
+          const findings = await options.adapter.repair(options.activeScene);
+          return { ok: true, findings };
+        }
         if (action === 'open') {
           await options.adapter.open();
           return { ok: true };

@@ -118,9 +118,13 @@ export class ObsAdapter {
       return this.findings;
     });
   }
-  repair(): Promise<readonly ObsFinding[]> {
+  repair(activeScene: () => ProgramSceneId): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
-      this.findings = await this.withObs((obs) => repairObsConfiguration(obs, this.browserBaseUrl));
+      this.findings = await this.withObs(async (obs) => {
+        const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
+        await switchObsScene(obs, activeScene());
+        return findings;
+      });
       return this.findings;
     });
   }
