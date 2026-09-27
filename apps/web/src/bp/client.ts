@@ -152,7 +152,9 @@ export function switchToRivalhubBp(
   });
 }
 
-export async function sendBpDemoCommand(command: BpDemoCommand): Promise<BpDemoFormat | null> {
+export async function sendBpDemoCommand(
+  command: BpDemoCommand,
+): Promise<{ readonly active: BpDemoFormat | null; readonly bpRevision: string }> {
   const response = await fetch('/operator/bp-demo', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -180,5 +182,6 @@ export async function sendBpDemoCommand(command: BpDemoCommand): Promise<BpDemoF
         (response.status === 409 ? '请先收起当前 BP 场景。' : '操作未完成，请检查当前 BP 状态。'),
     );
   }
-  return bpDemoCommandResultSchema.parse(payload).demo.active;
+  const result = bpDemoCommandResultSchema.parse(payload);
+  return { active: result.demo.active, bpRevision: result.bpRevision };
 }

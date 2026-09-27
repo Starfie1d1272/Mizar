@@ -70,10 +70,16 @@ describe('BP demo state and command route', () => {
     const postDemo = (payload: Record<string, unknown>) =>
       app.inject({ method: 'POST', url: '/operator/bp-demo', headers: localOrigin, payload });
     try {
-      expect((await postDemo({ kind: 'start', format: 'bo1' })).statusCode).toBe(200);
+      const startBo1 = await postDemo({ kind: 'start', format: 'bo1' });
+      expect(startBo1.statusCode).toBe(200);
       expect(state.getState()).toBe('bo1');
       const started = await app.inject('/local/v1/bp');
       const startedSnapshot = bpSnapshotSchema.parse(started.json());
+      expect(startBo1.json()).toMatchObject({
+        ok: true,
+        demo: { active: 'bo1' },
+        bpRevision: startedSnapshot.revision,
+      });
       expect(startedSnapshot.projection).toMatchObject({
         competition: '2026 NJU Rivals',
         entrants: {
@@ -85,10 +91,15 @@ describe('BP demo state and command route', () => {
       expect(started.body).not.toContain('demo-bo1');
       expect(started.body).not.toContain('demo-a');
 
-      expect((await postDemo({ kind: 'start', format: 'bo3' })).statusCode).toBe(200);
+      const startBo3 = await postDemo({ kind: 'start', format: 'bo3' });
+      expect(startBo3.statusCode).toBe(200);
       expect(state.getState()).toBe('bo3');
       const bo3 = await app.inject('/local/v1/bp');
       const bo3Snapshot = bpSnapshotSchema.parse(bo3.json());
+      expect(startBo3.json()).toMatchObject({
+        demo: { active: 'bo3' },
+        bpRevision: bo3Snapshot.revision,
+      });
       const play = await app.inject({
         method: 'POST',
         url: '/operator/bp-command',
@@ -126,9 +137,11 @@ describe('BP demo state and command route', () => {
       expect(hiddenSnapshot.state).toBe('hidden');
       expect((await postDemo({ kind: 'start', format: 'bo5' })).statusCode).toBe(200);
       expect(state.getState()).toBe('bo5');
-      expect((await postDemo({ kind: 'exit' })).statusCode).toBe(200);
+      const exited = await postDemo({ kind: 'exit' });
+      expect(exited.statusCode).toBe(200);
       expect(state.getState()).toBeNull();
       const restoredReal = bpSnapshotSchema.parse((await app.inject('/local/v1/bp')).json());
+      expect(exited.json()).toMatchObject({ bpRevision: restoredReal.revision });
       expect(restoredReal.projection).toMatchObject({
         competition: '真实比赛 A',
         entrants: { a: { name: '真实队 A' } },

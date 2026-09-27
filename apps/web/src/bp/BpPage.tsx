@@ -43,6 +43,7 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
   const [localEditorOpen, setLocalEditorOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
+  const [demoBpRevision, setDemoBpRevision] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState('');
 
   useEffect(() => {
@@ -76,8 +77,10 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
     setDemoBusy(true);
     setWorkspaceMessage('');
     try {
-      await sendBpDemoCommand(command);
+      const result = await sendBpDemoCommand(command);
+      setDemoBpRevision(result.bpRevision);
     } catch (error) {
+      setDemoBpRevision(null);
       setWorkspaceMessage(
         error instanceof Error ? error.message : '操作未完成，请检查当前 BP 状态。',
       );
@@ -216,7 +219,17 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
               {status}
             </div>
             <div className="bp-control-actions">
-              <BpControls snapshot={snapshot} showStatus={false} />
+              <BpControls
+                snapshot={snapshot}
+                showStatus={false}
+                disabled={
+                  demoBusy ||
+                  (demoBpRevision !== null &&
+                    snapshot?.state === 'hidden' &&
+                    snapshot.revision !== demoBpRevision)
+                }
+                onCommand={() => setDemoBpRevision(null)}
+              />
               {showLocalAuthoring ? (
                 <button
                   type="button"

@@ -27,9 +27,11 @@ export function registerBpDemoRoute(
         message: '请先收起当前 BP 场景。',
       });
     }
+    const snapshot = options.session.get();
     return bpDemoCommandResultSchema.parse({
       ok: true,
       demo: { active: options.state.getState() },
+      bpRevision: snapshot.revision,
     });
   });
 }

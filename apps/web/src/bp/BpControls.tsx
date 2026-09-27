@@ -11,9 +11,13 @@ const labels = {
 export function BpControls({
   snapshot,
   showStatus = true,
+  disabled = false,
+  onCommand,
 }: {
   readonly snapshot: BpSnapshot | null;
   readonly showStatus?: boolean;
+  readonly disabled?: boolean;
+  readonly onCommand?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +25,7 @@ export function BpControls({
     if (!snapshot || busy) return;
     setBusy(true);
     setError(null);
+    onCommand?.();
     try {
       await sendBpCommand(kind, snapshot.revision);
     } catch (error) {
@@ -42,13 +47,19 @@ export function BpControls({
       ) : null}
       <div className="bp-actions">
         <button
-          disabled={busy || !snapshot?.projection || snapshot.state !== 'hidden'}
+          disabled={disabled || busy || !snapshot?.projection || snapshot.state !== 'hidden'}
           onClick={() => void send('play')}
         >
           播放 BP
         </button>
         <button
-          disabled={busy || !snapshot || snapshot.state === 'hidden' || snapshot.state === 'hiding'}
+          disabled={
+            disabled ||
+            busy ||
+            !snapshot ||
+            snapshot.state === 'hidden' ||
+            snapshot.state === 'hiding'
+          }
           onClick={() => void send('hide')}
         >
           收起 BP

@@ -115,7 +115,11 @@ export const bpDemoCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type BpDemoCommand = z.infer<typeof bpDemoCommandSchema>;
 export const bpDemoCommandResultSchema = z
-  .object({ ok: z.literal(true), demo: bpDemoStateSchema })
+  .object({
+    ok: z.literal(true),
+    demo: bpDemoStateSchema,
+    bpRevision: z.string().min(1).max(128),
+  })
   .strict();
 
 const localEntrantSchema = z

@@ -475,7 +475,7 @@ reset 都从当前时刻重新开始，不补播旧动画。
 
 `POST /operator/bp-command` 接收 `{kind: "play" | "hide", expectedRevision}`。revision 在命令、比赛/BP 变更和回到 hidden 时变化；自动 reveal 仅改变 ETag，避免正常推进导致收起请求冲突。只允许 loopback 与有效 Origin，旧 revision 返回 409；不自动重试或排队。
 
-`POST /operator/bp-demo` 接收 typed command `{kind: "start", format: "bo1" | "bo3" | "bo5"}` 或 `{kind: "exit"}`，请求体最多 4,096 bytes。它只修改 Companion 内存中的 BP Demo 状态，不调用 MatchContextController 或 LKG。进入、切换和退出都要求同一个 `BpSession` 当前为 `hidden`；其它状态返回 409 和 `请先收起当前 BP 场景。`，不会自动收起。该入口沿用 loopback only 与精确 Origin 校验，LAN 禁写。
+`POST /operator/bp-demo` 接收 typed command `{kind: "start", format: "bo1" | "bo3" | "bo5"}` 或 `{kind: "exit"}`，请求体最多 4,096 bytes。成功响应返回当前 Demo 格式和切换后的 BP revision；工作台收到该 hidden baseline 前暂不允许播放，避免 source 切换期间提交旧 revision。它只修改 Companion 内存中的 BP Demo 状态，不调用 MatchContextController 或 LKG。进入、切换和退出都要求同一个 `BpSession` 当前为 `hidden`；其它状态返回 409 和 `请先收起当前 BP 场景。`，不会自动收起。该入口沿用 loopback only 与精确 Origin 校验，LAN 禁写。
 
 `GET /local/v1/bp-workspace` 返回独立 `rivalhub.bp-workspace.v4` schema，增加 `{ demo: { active: "bo1" | "bo3" | "bo5" | null } }`，只公开当前 Demo 格式，不包含 Demo Manifest 或其内部 ID。其余字段仍是有限的来源、`authoringMode`、就绪状态、比赛双方公开名称、`authoringDraft`、仅 local/cache-local binding 可编辑的 `localDraft`、map catalog 和当前 context revision。`authoringMode` 为 `standalone | bound-overlay`：无 binding 和 standalone local match 可编辑本地赛事字段；从 online/cache-online 补录 BP 后仍为 `bound-overlay`，canonical match、competition、entrant、roster 与 commentator 元数据持续锁定。待确认 RivalHub candidate 只公开不透明 candidate revision、赛事、阶段、赛制和双方队名；不暴露内部 match/entry IDs、队标、roster、诊断或 schema version。来源显示值为 `none | online | local | cache`，Demo 不改变真实来源。Companion 重启后 Demo 状态为 inactive。
 
