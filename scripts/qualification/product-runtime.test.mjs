@@ -39,6 +39,7 @@ async function fixture() {
     repository: PRODUCT_REPOSITORY,
     schemaVersion: 1,
     productSchemaVersion: 1,
+    desktopHost: 'tauri2',
     platform: 'win32-x64',
     gitSha: 'a'.repeat(40),
     artifactSha256: hash(files.map((name) => `${name}\0${hash('fixture')}\n`).join('')),

@@ -36,6 +36,7 @@ export async function verifyPayload(root) {
   if (
     artifact.repository !== PRODUCT_REPOSITORY ||
     artifact.productSchemaVersion !== 1 ||
+    artifact.desktopHost !== 'tauri2' ||
     artifact.platform !== 'win32-x64' ||
     artifact.developmentOnly ||
     !/^[a-f0-9]{40}$/.test(artifact.gitSha) ||

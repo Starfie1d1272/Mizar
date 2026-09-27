@@ -24,6 +24,8 @@ RivalHub Broadcast
 产品可以从四个层次理解：
 
 - **制播工作区（Broadcast Workspace）**：制作人员实际使用的统一工作环境；CS2 画面保持视觉主体，雷达、状态、控制和辅助信息围绕它组织。
+
+Windows 正式桌面入口使用 Tauri 2 Host 打开左栏与底部 Workspace，并由 Companion 管理 OBS。浏览器可在 `/workspace` 检查同一套界面；Program Scene 清单由 `packages/protocol` 统一提供。真实 CS2/OBS 的现场验收边界见 [`docs/development-validation.md`](docs/development-validation.md)。
 - **Lookahead 观察辅助**：利用较早的比赛时间轴，为延迟播出画面生成低干扰的确定性提示。
 - **运行时基础**：负责数据源连续性、身份、状态、Projection、本地协议、replay 和有界投递。
 - **中文、开源、本地优先**：降低校园赛与社区赛的部署门槛，并让赛事方长期掌控自己的制播工具。

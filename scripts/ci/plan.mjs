@@ -17,10 +17,7 @@ const PLATFORM_PREFIXES = [
   'packages/telemetry-gsi/',
   'packages/telemetry-cstv/',
 ];
-const PORTABLE_SMOKE_PREFIXES = [
-  'scripts/qualification/bundle/',
-  'scripts/qualification/launcher/',
-];
+const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/bundle/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
   return (

@@ -18,3 +18,5 @@
 payload 完整性、缺损失败、冷启动、重复启动、端口冲突、停止/重启、状态目录分离由自动化覆盖。Windows 便携 smoke 使用 exact artifact。真实 Windows + CS2 + OBS 的生产结论由独立 evidence 决定，自动 smoke 不构成真实生产 PASS。
 
 Installer、updater、签名、OBS 自动配置与 Workspace 继续留在后续工作。
+
+2026-09-27 后续决定：ADR-0010 将正式 EXE 的 `.NET` launcher 替换为 Tauri 2 Desktop Host；本 ADR 的 bundled Node、Companion supervisor、artifact identity、可写 state 和 Web-first fallback 约束继续有效。

@@ -1,5 +1,5 @@
 import { setTimeout, clearTimeout } from 'node:timers';
-// Runs the actual compiled launcher from the extracted exact-revision Windows artifact.
+// Runs the actual compiled Tauri host from the extracted exact-revision Windows artifact.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -116,7 +116,22 @@ try {
     'duplicate launcher did not reuse runtime',
   );
   assert.equal((await health()).product.instanceId, first.product.instanceId);
-  for (const route of ['/operator', '/operator/hud', '/program', '/debug']) {
+  for (const route of [
+    '/operator',
+    '/operator/hud',
+    '/workspace',
+    '/workspace/left',
+    '/workspace/dock',
+    '/program',
+    '/program/waiting',
+    '/program/matchup',
+    '/program/bp',
+    '/program/halftime',
+    '/program/map-result',
+    '/program/intermap',
+    '/program/match-result',
+    '/debug',
+  ]) {
     assert.equal((await globalThis.fetch(`http://127.0.0.1:3000${route}`)).status, 200);
   }
   const shellStyles = await globalThis.fetch('http://127.0.0.1:3000/product-shell.css');

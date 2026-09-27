@@ -396,29 +396,17 @@ async function main() {
     const developmentOnly =
       options.allowDirty || options.skipNodeRuntime || process.platform !== 'win32';
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
-      const source = (await readFile(join(scriptDir, 'launcher', 'Program.cs'), 'utf8'))
-        .replace('__NODE_SHA256__', await sha256File(join(resourcesDir, 'runtime', 'node.exe')))
-        .replace(
-          '__SUPERVISOR_SHA256__',
-          await sha256File(join(resourcesDir, 'scripts', 'product-runtime.mjs')),
-        );
-      const sourcePath = join(stagingParent, 'Program.cs');
-      await writeFile(sourcePath, source, 'utf8');
-      const compiler = join(
-        process.env.WINDIR,
-        'Microsoft.NET',
-        'Framework64',
-        'v4.0.30319',
-        'csc.exe',
-      );
-      await runCommand(compiler, [
-        '/nologo',
-        '/target:winexe',
-        '/platform:x64',
-        '/reference:System.Windows.Forms.dll',
-        `/out:${join(stagingDir, 'RivalHub Broadcast.exe')}`,
-        sourcePath,
+      const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
+      await runCommand('cargo', [
+        'build',
+        '--release',
+        '--manifest-path',
+        join(desktopDir, 'Cargo.toml'),
       ]);
+      await cp(
+        join(desktopDir, 'target', 'release', 'rivalhub-broadcast-desktop.exe'),
+        join(stagingDir, 'RivalHub Broadcast.exe'),
+      );
     } else if (!options.skipNodeRuntime) {
       throw new Error(
         '正式产品包需要在 Windows x64 构建 EXE；本机结构检查请使用 --skip-node-runtime',
@@ -429,6 +417,7 @@ async function main() {
     const artifact = {
       schemaVersion: 1,
       productSchemaVersion: 1,
+      desktopHost: 'tauri2',
       developmentOnly,
       repository: REPOSITORY,
       gitSha,
