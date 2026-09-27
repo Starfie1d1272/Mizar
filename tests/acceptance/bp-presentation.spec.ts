@@ -50,7 +50,7 @@ async function routeCompanionApi(
   } = {},
 ) {
   await context.route(
-    /\/(?:local\/v1\/bp(?:-workspace)?|operator\/bp-command|operator\/bp-local-save|operator\/bp-rivalhub)$/,
+    /\/(?:local\/v1\/bp(?:-workspace)?|operator\/bp-command|operator\/bp-demo|operator\/bp-local-save|operator\/bp-rivalhub)$/,
     async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
@@ -89,6 +89,188 @@ async function routeCompanionApi(
     },
   );
 }
+
+for (const format of ['bo1', 'bo3', 'bo5'] as const) {
+  test(`BP ${format} built-in scene demo drives Preview and Program without a match`, async ({
+    page,
+    context,
+  }) => {
+    test.setTimeout(90000);
+    const app = buildApp();
+    await routeCompanionApi(context, () => app);
+    await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
+    try {
+      await page.setViewportSize({ width: 320, height: 844 });
+      await page.goto('/operator/bp');
+      await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
+      await expect(page.getByRole('button', { name: '本地填写 BP' })).toBeVisible();
+      for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+      }
+
+      const program = await context.newPage();
+      await program.goto('/program/bp');
+      await expect(program.locator('.bp-scene')).toHaveCount(0);
+      const option = page.locator('.bp-demo-option').filter({ hasText: format.toUpperCase() });
+      await option.getByRole('button', { name: '开始演示' }).click();
+      await expect(page.locator('.bp-source-badge')).toContainText(
+        `演示 · ${format.toUpperCase()}`,
+      );
+      await expect(page.getByRole('region', { name: '当前 BP 演示' })).toContainText(
+        format === 'bo1'
+          ? 'Team Clarys vs Team Plasma · BO1'
+          : format === 'bo3'
+            ? "超级无敌大猛男队 vs Team D'avenir · BO3"
+            : 'Team Plasma vs 車一进一宝贝队 · BO5',
+      );
+      await expect(page.getByRole('button', { name: '退出演示' })).toBeVisible();
+      await expect(page.getByText('退出演示后可修改真实比赛数据。')).toBeVisible();
+      await expect(page.getByRole('button', { name: '本地填写 BP' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '切回 RivalHub BP' })).toHaveCount(0);
+
+      await page.getByRole('button', { name: '播放 BP', exact: true }).click();
+      await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
+      await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
+      await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
+        timeout: 30000,
+      });
+      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveAttribute(
+        'data-state',
+        'shown',
+      );
+      await expect(program.locator('.bp-card')).toHaveCount(7);
+      await expect(program.locator('.bp-card[data-kind="ban"]')).toHaveCount(
+        format === 'bo1' ? 6 : format === 'bo3' ? 4 : 2,
+      );
+      await expect(program.locator('.bp-card[data-kind="pick"]')).toHaveCount(
+        format === 'bo1' ? 0 : format === 'bo3' ? 2 : 4,
+      );
+      await expect(program.locator('.bp-card .bp-side-choice')).toHaveCount(
+        format === 'bo1' ? 1 : format === 'bo3' ? 3 : 4,
+      );
+      await expect(program.locator('.bp-scene')).not.toContainText(/DEMO|TEST|fixture/i);
+      await expect(page.locator('.bp-preview-frame .bp-card')).toHaveCount(7);
+
+      const decider = program.locator('.bp-card[data-kind="decider"]');
+      if (format === 'bo1') {
+        await expect(decider).toContainText('ANCIENT');
+        await expect(decider).toContainText('决胜地图');
+        await expect(decider.locator('.bp-side-choice')).toContainText('Team Plasma');
+        await expect(decider.locator('.bp-side-choice')).toContainText('T 开');
+      } else if (format === 'bo3') {
+        await expect(decider.locator('.bp-side-choice')).toHaveCount(1);
+        await expect(decider.locator('.bp-side-choice')).toContainText("Team D'avenir");
+        await expect(decider.locator('.bp-side-choice')).toContainText('T 开');
+        await expect(decider.locator('.bp-side-choice[data-entrant="a"]')).toHaveCount(0);
+      } else {
+        await expect(decider).toContainText('ANUBIS');
+        await expect(decider).toContainText('决胜地图');
+        await expect(decider.locator('.bp-side-choice')).toHaveCount(0);
+        await expect(decider).not.toContainText(/SIDE TBD/i);
+      }
+
+      await page.getByRole('button', { name: '收起 BP', exact: true }).click();
+      await expect(program.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
+      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
+      await page.getByRole('button', { name: '退出演示' }).click();
+      await expect(page.locator('.bp-source-badge')).toContainText('未连接');
+      await expect(page.locator('.bp-scene-testing')).toBeVisible();
+      await program.close();
+    } finally {
+      await app.close();
+    }
+  });
+}
+
+test('BP demo remains stable while the real MatchContext updates and restores its latest projection on exit', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(90000);
+  const directory = await mkdtemp(join(tmpdir(), 'bp-demo-context-switch-'));
+  const manifestPath = join(directory, 'match.json');
+  const initial = bindingFor('semifinalA');
+  const app = buildApp({
+    matchContextBinding: {
+      ...initial,
+      origin: 'local',
+      localAuthoringMode: 'standalone',
+    },
+    matchManifestPath: manifestPath,
+  });
+  await routeCompanionApi(context, () => app);
+  await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
+  try {
+    await page.goto('/operator/bp');
+    const program = await context.newPage();
+    await program.goto('/program/bp');
+    await page
+      .locator('.bp-demo-option')
+      .filter({ hasText: 'BO3' })
+      .getByRole('button', { name: '开始演示' })
+      .click();
+    await page.getByRole('button', { name: '播放 BP', exact: true }).click();
+    await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
+      timeout: 30000,
+    });
+    await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
+
+    const before = JSON.parse((await app.inject('/local/v1/bp-workspace')).body) as {
+      contextRevision: string;
+      localDraft: Record<string, unknown> & {
+        entrants: {
+          a: { name: string; logoUrl: string | null };
+          b: { name: string; logoUrl: string | null };
+        };
+      };
+    };
+    const updatedDraft = {
+      ...before.localDraft,
+      competitionName: '后台更新后的真实赛事',
+      stage: '后台更新后的阶段',
+      entrants: {
+        a: { ...before.localDraft.entrants.a, name: '真实比赛 B 左队' },
+        b: { ...before.localDraft.entrants.b, name: '真实比赛 B 右队' },
+      },
+    };
+    const updated = await app.inject({
+      method: 'POST',
+      url: '/operator/bp-local-save',
+      headers: { origin: 'http://127.0.0.1' },
+      payload: { draft: updatedDraft, expectedContextRevision: before.contextRevision },
+    });
+    expect(updated.statusCode).toBe(200);
+    await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');
+    await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
+    await expect(program.locator('.bp-teams')).not.toContainText('真实比赛 B');
+
+    await page.getByRole('button', { name: '收起 BP', exact: true }).click();
+    await expect(program.locator('.bp-scene')).toHaveCount(0, { timeout: 5000 });
+    await page.getByRole('button', { name: '退出演示' }).click();
+    const restored = JSON.parse((await app.inject('/local/v1/bp')).body) as {
+      projection: { entrants: { a: { name: string }; b: { name: string } } };
+      state: string;
+    };
+    expect(restored.state).toBe('hidden');
+    expect(restored.projection.entrants).toEqual({
+      a: expect.objectContaining({ name: '真实比赛 B 左队' }),
+      b: expect.objectContaining({ name: '真实比赛 B 右队' }),
+    });
+
+    await page.getByRole('button', { name: '播放 BP', exact: true }).click();
+    await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'revealing');
+    await expect(program.locator('.bp-teams')).toContainText('真实比赛 B 左队');
+    await expect(program.locator('.bp-teams')).toContainText('真实比赛 B 右队');
+    await program.close();
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 for (const key of ['semifinalA', 'final'] as const) {
   test(`BP ${key}: RivalHub context, shared reveal, reload and recovery`, async ({
@@ -271,7 +453,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await page.goto('/operator/bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
     expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
-      schemaVersion: 'rivalhub.bp-workspace.v3',
+      schemaVersion: 'rivalhub.bp-workspace.v4',
       authoringMode: 'standalone',
     });
     await page.getByRole('button', { name: '本地填写 BP', exact: true }).click();

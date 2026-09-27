@@ -1,4 +1,4 @@
-import type { BpProjection } from '@rivalhub-broadcast/core/projection';
+import type { BpProjection as CoreBpProjection } from '@rivalhub-broadcast/core/projection';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { bpSnapshotSchema, type BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
@@ -8,12 +8,12 @@ export class BpSession {
   private readonly epoch = randomUUID();
   private revision = 0;
   private fingerprint = '';
-  private projection: BpProjection | null = null;
+  private projection: CoreBpProjection | null = null;
   private state: BpSnapshot['state'] = 'hidden';
   private count = 0;
   private startedAt = 0;
   constructor(
-    private readonly getProjection: () => BpProjection | null,
+    private readonly getProjection: () => CoreBpProjection | null,
     private readonly now = () => performance.now(),
   ) {}
   get(): BpSnapshot {
@@ -40,10 +40,30 @@ export class BpSession {
       this.count = 0;
       this.revision++;
     }
+    const presentationProjection =
+      this.projection === null
+        ? null
+        : {
+            competition: this.projection.competition,
+            stage: this.projection.stage,
+            format: this.projection.format,
+            entrants: {
+              a: {
+                name: this.projection.entrants.a.name,
+                logoUrl: this.projection.entrants.a.logoUrl,
+              },
+              b: {
+                name: this.projection.entrants.b.name,
+                logoUrl: this.projection.entrants.b.logoUrl,
+              },
+            },
+            cards: this.projection.cards,
+            steps: this.projection.steps,
+          };
     return bpSnapshotSchema.parse({
-      schemaVersion: 'rivalhub.bp.v1',
+      schemaVersion: 'rivalhub.bp.v2',
       revision: `${this.epoch}:${this.revision}`,
-      projection: this.projection,
+      projection: presentationProjection,
       state: this.state,
       revealedCount: this.count,
     });
@@ -68,7 +88,7 @@ export function registerBpRoutes(
   app: FastifyInstance,
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
-    readonly getProjection: () => BpProjection | null;
+    readonly getProjection: () => CoreBpProjection | null;
     readonly now?: () => number;
   },
 ) {

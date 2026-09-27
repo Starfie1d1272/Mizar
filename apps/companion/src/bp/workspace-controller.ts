@@ -13,6 +13,7 @@ import {
 import { localAuthoringMode } from '../match-context/lkg-store.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
+import type { BpDemoStateController } from './demo-state.js';
 
 function canMutate(policy: LocalWebOriginPolicy, origin: string | undefined): boolean {
   return policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -28,6 +29,7 @@ export function registerBpWorkspaceRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly controller: MatchContextController | null;
     readonly projections: ProjectionCoordinator;
+    readonly demoState: BpDemoStateController;
   },
 ) {
   app.get('/local/v1/bp-workspace', (_request, reply) => {
@@ -61,7 +63,8 @@ export function registerBpWorkspaceRoutes(
             },
           };
     const response = bpWorkspaceSchema.parse({
-      schemaVersion: 'rivalhub.bp-workspace.v3',
+      schemaVersion: 'rivalhub.bp-workspace.v4',
+      demo: { active: options.demoState.getState() },
       source: publicSource,
       authoringMode: localAuthoringMode(binding) ?? 'standalone',
       contextRevision: options.controller?.getActiveRevision() ?? 'unavailable',

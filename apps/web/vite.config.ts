@@ -265,6 +265,7 @@ export default defineConfig({
       '/operator/bp-local-save': 'http://127.0.0.1:3000',
       '/operator/bp-rivalhub': 'http://127.0.0.1:3000',
       '/operator/bp-command': 'http://127.0.0.1:3000',
+      '/operator/bp-demo': 'http://127.0.0.1:3000',
       '/operator/series': 'http://127.0.0.1:3000',
       '/debug/runtime': 'http://127.0.0.1:3000',
       '/local/v1': {

@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import {
   bpSnapshotSchema,
   bpWorkspaceSchema,
+  bpDemoCommandResultSchema,
+  type BpDemoCommand,
+  type BpDemoFormat,
   type BpSnapshot,
   type BpWorkspace,
   type LocalBpDraft,
@@ -147,4 +150,38 @@ export function switchToRivalhubBp(
     expectedContextRevision,
     expectedPendingRevision,
   });
+}
+
+export async function sendBpDemoCommand(
+  command: BpDemoCommand,
+): Promise<{ readonly active: BpDemoFormat | null; readonly bpRevision: string }> {
+  const response = await fetch('/operator/bp-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+    signal: AbortSignal.timeout(3000),
+  });
+  let message: string | undefined;
+  let payload: unknown;
+  try {
+    payload = await response.json();
+    if (
+      typeof payload === 'object' &&
+      payload !== null &&
+      'message' in payload &&
+      typeof payload.message === 'string'
+    ) {
+      message = payload.message;
+    }
+  } catch {
+    // Keep a bounded user-facing fallback when the service response is empty.
+  }
+  if (!response.ok) {
+    throw new Error(
+      message ??
+        (response.status === 409 ? '请先收起当前 BP 场景。' : '操作未完成，请检查当前 BP 状态。'),
+    );
+  }
+  const result = bpDemoCommandResultSchema.parse(payload);
+  return { active: result.demo.active, bpRevision: result.bpRevision };
 }

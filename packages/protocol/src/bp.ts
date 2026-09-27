@@ -2,12 +2,9 @@ import { z } from 'zod';
 
 const sideSchema = z.enum(['CT', 'T']);
 
-const entrant = z
-  .object({ entryId: z.string().min(1), name: z.string(), logoUrl: z.string().nullable() })
-  .strict();
+const entrant = z.object({ name: z.string(), logoUrl: z.string().nullable() }).strict();
 export const bpProjectionSchema = z
   .object({
-    matchId: z.string().min(1),
     competition: z.string(),
     stage: z.string(),
     format: z.enum(['bo1', 'bo3', 'bo5']),
@@ -48,7 +45,6 @@ export const bpProjectionSchema = z
       bo5: ['ban', 'ban', 'pick', 'pick', 'pick', 'pick', 'decider'],
     }[p.format];
     if (
-      p.entrants.a.entryId === p.entrants.b.entryId ||
       new Set(p.cards.map((c) => c.mapName)).size !== p.cards.length ||
       p.cards.length !== expectedKinds.length ||
       p.cards.some((card, index) => card.kind !== expectedKinds[index])
@@ -91,7 +87,7 @@ export const bpProjectionSchema = z
   });
 export const bpSnapshotSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp.v1'),
+    schemaVersion: z.literal('rivalhub.bp.v2'),
     revision: z.string().min(1),
     projection: bpProjectionSchema.nullable(),
     state: z.enum(['hidden', 'revealing', 'shown', 'hiding']),
@@ -108,6 +104,23 @@ export const bpSnapshotSchema = z
   );
 export type BpSnapshot = z.infer<typeof bpSnapshotSchema>;
 export type BpProjection = z.infer<typeof bpProjectionSchema>;
+
+export const bpDemoFormatSchema = z.enum(['bo1', 'bo3', 'bo5']);
+export type BpDemoFormat = z.infer<typeof bpDemoFormatSchema>;
+export const bpDemoStateSchema = z.object({ active: bpDemoFormatSchema.nullable() }).strict();
+export type BpDemoState = z.infer<typeof bpDemoStateSchema>;
+export const bpDemoCommandSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('start'), format: bpDemoFormatSchema }).strict(),
+  z.object({ kind: z.literal('exit') }).strict(),
+]);
+export type BpDemoCommand = z.infer<typeof bpDemoCommandSchema>;
+export const bpDemoCommandResultSchema = z
+  .object({
+    ok: z.literal(true),
+    demo: bpDemoStateSchema,
+    bpRevision: z.string().min(1).max(128),
+  })
+  .strict();
 
 const localEntrantSchema = z
   .object({
@@ -159,7 +172,8 @@ const bpWorkspaceCandidateSchema = z
 
 export const bpWorkspaceSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp-workspace.v3'),
+    schemaVersion: z.literal('rivalhub.bp-workspace.v4'),
+    demo: bpDemoStateSchema,
     source: z.enum(['none', 'online', 'local', 'cache']),
     authoringMode: z.enum(['standalone', 'bound-overlay']),
     contextRevision: z.string().min(1),

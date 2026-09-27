@@ -9,7 +9,9 @@
   },
   "scripts": {
     "fixtures:program:generate": "pnpm --filter @rivalhub-broadcast/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --write",
-    "fixtures:program:verify": "pnpm --filter @rivalhub-broadcast/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --check",
+    "fixtures:program:verify": "pnpm fixtures:rivals-bp:verify && pnpm --filter @rivalhub-broadcast/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --check",
+    "fixtures:rivals-bp:sync": "pnpm --filter @rivalhub-broadcast/rivalhub build && node scripts/fixtures/sync-rivals-bp-program-records.mjs",
+    "fixtures:rivals-bp:verify": "pnpm --filter @rivalhub-broadcast/rivalhub build && node scripts/fixtures/sync-rivals-bp-program-records.mjs --check",
     "fixtures:replay:generate": "pnpm --filter @rivalhub-broadcast/companion exec tsx test/program-fixtures/generate-acceptance-replay.ts --write",
     "fixtures:replay:verify": "pnpm --filter @rivalhub-broadcast/companion exec tsx test/program-fixtures/generate-acceptance-replay.ts --check",
     "fixtures:steam:enrich": "node --env-file=.env.local scripts/fixtures/enrich-steam-identities.mjs",

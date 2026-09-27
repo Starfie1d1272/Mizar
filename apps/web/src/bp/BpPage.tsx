@@ -3,8 +3,15 @@ import { OperatorShell } from '../operator/OperatorShell';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
 import { BpPresentation } from './BpPresentation';
-import { switchToRivalhubBp, useBpSession, useBpWorkspace } from './client';
+import type { BpDemoCommand, BpDemoFormat } from '@rivalhub-broadcast/protocol/bp';
+import { sendBpDemoCommand, switchToRivalhubBp, useBpSession, useBpWorkspace } from './client';
 import './bp.css';
+
+const DEMO_MATCHES: Record<BpDemoFormat, { readonly teams: string; readonly title: string }> = {
+  bo1: { teams: 'Team Clarys vs Team Plasma', title: '单图 BP' },
+  bo3: { teams: "超级无敌大猛男队 vs Team D'avenir", title: '三图 BP' },
+  bo5: { teams: 'Team Plasma vs 車一进一宝贝队', title: '五图 BP' },
+};
 
 function sourceLabel(source: 'none' | 'online' | 'local' | 'cache') {
   return source === 'online'
@@ -35,6 +42,8 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
   const [scale, setScale] = useState(1);
   const [localEditorOpen, setLocalEditorOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoBpRevision, setDemoBpRevision] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState('');
 
   useEffect(() => {
@@ -63,20 +72,49 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
     }
   }
 
+  async function changeDemo(command: BpDemoCommand) {
+    if (demoBusy) return;
+    setDemoBusy(true);
+    setWorkspaceMessage('');
+    try {
+      const result = await sendBpDemoCommand(command);
+      setDemoBpRevision(result.bpRevision);
+    } catch (error) {
+      setDemoBpRevision(null);
+      setWorkspaceMessage(
+        error instanceof Error ? error.message : '操作未完成，请检查当前 BP 状态。',
+      );
+    } finally {
+      setDemoBusy(false);
+    }
+  }
+
   if (!operator) return <BpPresentation snapshot={snapshot} animate={animate} />;
 
-  const status = workspace
-    ? readinessLabel(workspace.readiness, connected)
-    : loading
-      ? '正在读取比赛'
-      : '制作服务断开';
   const localSource =
     workspace?.source === 'local' ||
     (workspace?.source === 'cache' && workspace.localDraft !== null);
-  const showLocalAuthoring = workspace !== null && (localSource || workspace.readiness !== 'ready');
-  const pendingRivalhub = workspace?.pendingRivalhub;
+  const demoActive = workspace?.demo.active ?? null;
+  const demoSummary = demoActive === null ? null : DEMO_MATCHES[demoActive];
+  const status =
+    demoActive !== null
+      ? 'BP 已就绪'
+      : workspace
+        ? readinessLabel(workspace.readiness, connected)
+        : loading
+          ? '正在读取比赛'
+          : '制作服务断开';
+  const showLocalAuthoring =
+    demoActive === null && workspace !== null && (localSource || workspace.readiness !== 'ready');
+  const pendingRivalhub = demoActive === null ? workspace?.pendingRivalhub : null;
   const snapshotVisible = snapshot !== null && snapshot.state !== 'hidden';
-  const source = workspace ? sourceLabel(workspace.source) : loading ? '正在读取' : '服务断开';
+  const source = demoActive
+    ? `演示 · ${demoActive.toUpperCase()}`
+    : workspace
+      ? sourceLabel(workspace.source)
+      : loading
+        ? '正在读取'
+        : '服务断开';
 
   return (
     <OperatorShell active="/operator/bp">
@@ -87,7 +125,10 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
             <h1>BP 制作</h1>
             <p>确认比赛数据后，一键播放完整地图禁选场景。</p>
           </div>
-          <span className="bp-source-badge" data-source={workspace?.source ?? 'none'}>
+          <span
+            className="bp-source-badge"
+            data-source={demoActive ? 'demo' : (workspace?.source ?? 'none')}
+          >
             来源：{source}
           </span>
         </header>
@@ -121,44 +162,74 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
 
           <aside className="bp-control-panel" aria-label="播出控制">
             <h2>BP 状态</h2>
-            <div className="bp-source-status">
-              <strong>
-                {workspace
-                  ? sourceLabel(workspace.source)
-                  : loading
-                    ? '正在读取比赛'
-                    : '制作服务断开'}
-              </strong>
-              <p>{status}</p>
-              {workspace?.source === 'cache' ? (
-                <small>当前使用本机缓存中的比赛上下文。</small>
-              ) : null}
-            </div>
-            {workspace?.match ? (
-              <dl className="bp-current-match">
-                <dt>当前比赛 · {workspace.match.format.toUpperCase()}</dt>
-                <dd>
-                  {workspace.match.competition}
-                  {workspace.match.stage ? ` · ${workspace.match.stage}` : ''}
-                </dd>
-                <dd className="bp-current-teams">
-                  <span>{workspace.match.entrants.a.name}</span>
-                  <span aria-hidden="true">VS</span>
-                  <span>{workspace.match.entrants.b.name}</span>
-                </dd>
-              </dl>
+            {demoSummary ? (
+              <section className="bp-demo-active" aria-label="当前 BP 演示">
+                <strong>演示模式</strong>
+                <span>
+                  {demoSummary.teams} · {demoActive?.toUpperCase()}
+                </span>
+                <small>内置赛事数据</small>
+                <button
+                  type="button"
+                  className="bp-button bp-button--quiet"
+                  disabled={demoBusy}
+                  onClick={() => void changeDemo({ kind: 'exit' })}
+                >
+                  退出演示
+                </button>
+              </section>
             ) : (
-              <p className="bp-current-match">尚未选择比赛上下文。</p>
+              <>
+                <div className="bp-source-status">
+                  <strong>
+                    {workspace
+                      ? sourceLabel(workspace.source)
+                      : loading
+                        ? '正在读取比赛'
+                        : '制作服务断开'}
+                  </strong>
+                  <p>{status}</p>
+                  {workspace?.source === 'cache' ? (
+                    <small>当前使用本机缓存中的比赛上下文。</small>
+                  ) : null}
+                </div>
+                {workspace?.match ? (
+                  <dl className="bp-current-match">
+                    <dt>当前比赛 · {workspace.match.format.toUpperCase()}</dt>
+                    <dd>
+                      {workspace.match.competition}
+                      {workspace.match.stage ? ` · ${workspace.match.stage}` : ''}
+                    </dd>
+                    <dd className="bp-current-teams">
+                      <span>{workspace.match.entrants.a.name}</span>
+                      <span aria-hidden="true">VS</span>
+                      <span>{workspace.match.entrants.b.name}</span>
+                    </dd>
+                  </dl>
+                ) : (
+                  <p className="bp-current-match">尚未选择比赛上下文。</p>
+                )}
+              </>
             )}
             <div
               className="bp-readiness"
-              data-state={workspace?.readiness ?? 'unbound'}
+              data-state={demoActive !== null ? 'ready' : (workspace?.readiness ?? 'unbound')}
               role="status"
             >
               {status}
             </div>
             <div className="bp-control-actions">
-              <BpControls snapshot={snapshot} showStatus={false} />
+              <BpControls
+                snapshot={snapshot}
+                showStatus={false}
+                disabled={
+                  demoBusy ||
+                  (demoBpRevision !== null &&
+                    snapshot?.state === 'hidden' &&
+                    snapshot.revision !== demoBpRevision)
+                }
+                onCommand={() => setDemoBpRevision(null)}
+              />
               {showLocalAuthoring ? (
                 <button
                   type="button"
@@ -174,7 +245,10 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
                 </button>
               ) : null}
             </div>
-            {localSource && pendingRivalhub ? (
+            {demoActive !== null ? (
+              <p className="bp-real-data-locked">退出演示后可修改真实比赛数据。</p>
+            ) : null}
+            {demoActive === null && localSource && pendingRivalhub ? (
               <section className="bp-pending-rivalhub" aria-label="待确认的 RivalHub 比赛">
                 <strong>RivalHub 数据已恢复</strong>
                 <span>
@@ -195,7 +269,7 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
                 </button>
               </section>
             ) : null}
-            {localSource && !pendingRivalhub ? (
+            {demoActive === null && localSource && !pendingRivalhub ? (
               <p className="bp-rivalhub-note">
                 本地 BP 会保持当前播出；RivalHub 数据恢复后，可在这里确认切回。
               </p>
@@ -210,7 +284,32 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
           </aside>
         </section>
 
-        {localEditorOpen && workspace ? (
+        <section className="bp-scene-testing" aria-labelledby="bp-scene-testing-title">
+          <div className="bp-demo-heading">
+            <h2 id="bp-scene-testing-title">场景测试</h2>
+            <p>使用内置赛事数据检查 BP 画面、动画与 OBS 输出，不修改当前比赛。</p>
+          </div>
+          <div className="bp-demo-options">
+            {(['bo1', 'bo3', 'bo5'] as const).map((format) => (
+              <article className="bp-demo-option" key={format}>
+                <div>
+                  <strong>{format.toUpperCase()}</strong>
+                  <span>{DEMO_MATCHES[format].title}</span>
+                </div>
+                <button
+                  type="button"
+                  className="bp-button"
+                  disabled={demoBusy || !connected}
+                  onClick={() => void changeDemo({ kind: 'start', format })}
+                >
+                  开始演示
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {demoActive === null && localEditorOpen && workspace ? (
           <BpLocalEditor
             key={workspace.contextRevision}
             workspace={workspace}
@@ -220,7 +319,7 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
               setWorkspaceMessage(message);
             }}
           />
-        ) : localSource && workspace?.localDraft ? (
+        ) : demoActive === null && localSource && workspace?.localDraft ? (
           <section className="bp-local-summary" aria-label="本地 BP">
             <div>
               <span className="bp-workspace-eyebrow">LOCAL MATCH</span>
