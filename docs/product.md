@@ -137,6 +137,32 @@ HUD 配置由本地 Companion 持久化，不以浏览器 `localStorage` 作为�
 
 已发生轨迹与预测轨迹必须区分。没有可靠地图碰撞或物理依据时，不把简单外推包装成精确预测。
 
+### 5.3 生产数据源与功能降级
+
+当前完美平台赛事的 V1 正式运行方案是：
+
+```text
+延迟直连 GOTV
+→ 真实 CS2 观战客户端
+→ GSI
+→ Broadcast Runtime
+```
+
+GSI 是 Gameplay HUD、Radar 与 Program-safe 实时数据的基础输入。HTTP CSTV 或其它精确 GameEvent 数据源属于可选增强，不是 Program 是否可用的前提。
+
+因此，精确事件数据源缺失时：
+
+- 地图、比分、回合、时钟、10 人状态、经济、武器、Radar、C4 与目标计时继续正常；
+- 通用掉血残影、死亡提示和低血量提示继续由连续 GSI 状态提供；
+- HE / Zeus / 狙击枪等武器类型专属命中特效降级为通用受伤反馈；
+- 不通过不可靠推断猜测武器类型和事件来源。
+
+网站若消费 Program-safe 实时数据，会在收到当前 Program GSI 后立即更新，但时间轴仍与延迟 GOTV / OBS 一致，不作为无延迟比赛事实来源。
+
+Lookahead 的无头直连 CSTV 客户端后续在新的独立仓库研发，不阻塞当前 Program、Radar 或制播工作区。
+
+完整矩阵见 `docs/data-source-capabilities.md`。
+
 ## 6. 观察辅助（Observer Assist）
 
 观察辅助利用比播出画面更早的时间轴，把已经真实发生、但延迟 Program 尚未到达的事件转换成低认知负担的提示。

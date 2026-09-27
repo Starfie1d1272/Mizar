@@ -85,7 +85,35 @@ Program down
 
 如果 Program feed 故障，就是节目输入故障；如果 Lookahead feed 故障，Program 正常继续，只关闭/降级 Assist。
 
-Perfect 的 `...5 / ...6` 与约 120 秒 delay 属于 provider deployment fact / discovery heuristic，不能硬编码进 Core。启用 Assist 前仍要校验 same match / map / timeline alignment。
+完美平台的 `...5 / ...6` 与约 120 秒延迟属于当前部署和地址派生规则，不能硬编码进 Core。启用 Assist 前仍要校验同一比赛、同一地图执行和可信的时间轴关系。
+
+### 澄清（2026-09-27）：Program 时间轴、Program 遥测与精确事件增强分责
+
+当前真实完美平台输入进一步确认：解说拿到的是直连 GOTV `connect IP:port;password ...`。该地址不能被视为 `cs2parser HttpBroadcastReader` 可直接消费的 HTTP Broadcast URL。
+
+因此，本 ADR 中的“延迟 Program 数据流（Delayed Program feed）” 不等于“必须再用无头解析器读取一遍延迟 CSTV”。当前 V1 主数据链路是：
+
+```text
+延迟直连 GOTV
+→ 真实 CS2 观战客户端
+→ GSI
+→ Program-safe Runtime
+→ ProgramProjection / RadarFrame
+```
+
+精确 GameEvent 是独立增强：
+
+```text
+可选 Program 事件数据源
+→ GameEventObservation<'program'>
+→ ProgramCue
+```
+
+精确事件数据源不可用时，Program / Radar 仍保持正常；依赖精确事件元数据的 HE / Zeus / 狙击枪武器类型专属命中特效，保守降级为已有的 GSI 通用受伤反馈。
+
+这一澄清不改变 Program / Assist 硬隔离、Lookahead 不能作为 Program 备用数据源或“一份 `RuntimeState`”的决定。详细运行方案与能力矩阵见 `docs/data-source-capabilities.md`。
+
+Lookahead 所需的无头直连 CSTV 客户端后续**新建独立仓库**研发和维护；本仓不实现直连 CSTV 网络协议本身，只保留其接入后的标准事件、时间轴对齐和 Observer Assist 语义。
 
 ---
 
@@ -253,7 +281,7 @@ observed players
 
 ## 决策 7：Program 与 Lookahead 各自拥有 source-local continuity
 
-Program GSI 和 Lookahead headless parser 是两个独立 ingress，它们可能独立 reconnect / restart / lag。不能把一个全局 `seq`、Companion `producerInstanceId` 或 Match `mapEpoch` 当成两个 source 的连接连续性。
+Program GSI、可选 Program 事件数据源和 Lookahead 接入是彼此独立的数据入口，它们可能分别重连、重启或发生延迟。不能把一个全局 `seq`、Companion `producerInstanceId` 或 Match `mapEpoch` 当成两个数据源的连接连续性。
 
 每个 telemetry source 至少要能在 adapter/alignment 层表达等价概念：
 
@@ -298,14 +326,21 @@ sourceHealth
 - Lookahead source generation/reconnect 后旧 alignment 立即失效；
 - timeline reconnect/map change 后重新建立 alignment 才恢复 cue。
 
-真实生产验收至少覆盖：
+真实生产验收分层进行。Program V1 / 制播工作区现场验收至少覆盖：
 
 ```text
-Windows + CS2 delayed observer + OBS
+Windows + CS2 延迟观战 + GSI + OBS
 + local Program Overlay
-+ no-delay headless lookahead feed
-+ independent topmost Assist Overlay
 ```
+
+当 Observer Assist / Lookahead 能力进入可交付状态时，再增加：
+
+```text
+无延迟 Lookahead 数据源
+独立私有 Assist 承载面
+```
+
+Lookahead 的专项验收不再阻塞 Program V1 / 制播工作区的生产验收。
 
 并验证：
 

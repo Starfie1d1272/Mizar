@@ -10,7 +10,7 @@
 
 包括：
 
-- GSI / CSTV 数据源适配；
+- GSI 与可选 GameEvent 数据源适配；
 - RuntimeState / RuntimeTransition；
 - source continuity / generation；
 - identity / match binding；
@@ -30,6 +30,7 @@
 包括：
 
 - 本地比赛上下文；
+- 完美平台 V1 的 `延迟直连 GOTV → 真实 CS2 → GSI` 正式运行方案；
 - Gameplay HUD；
 - Radar Renderer；
 - 基础配置；
@@ -59,13 +60,17 @@
 
 ## D. 观察辅助
 
-目标：使用独立 Lookahead 时间轴帮助同一名解说兼 OB 提前准备切镜。
+目标：使用独立 Lookahead 时间轴帮助同一名解说兼 OB 提前准备切镜。该阶段是独立增强研发线，**不阻塞 B 的 Program 产品或 C 的制播工作区**。
+
+当前完美平台环境只有直连 GOTV 地址；HTTP Broadcast 支持不能被视为完美平台无延迟数据的现成接入方式。默认方向是保持单个 Program CS2，并由轻量的无头 Direct CSTV 客户端读取较早地址。
+
+**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不承担 Direct CSTV 网络协议实现，只保留 Lookahead 接入、时间轴对齐、FutureKillCue 和 Observer Assist。
 
 包括：
 
-- no-delay CSTV acquisition；
-- Program ↔ Lookahead timeline alignment；
-- source reconnect 后重新证明 alignment；
+- 无延迟直连 CSTV 接入；
+- Program ↔ Lookahead 时间轴对齐；
+- 数据源重连后重新证明对齐关系；
 - FutureKillCue；
 - 可配置提前量；
 - 私有 Assist Host；

@@ -261,34 +261,46 @@ sourceGeneration / source sequence
 
 不能用一个全局 `epoch` 或 `seq` 同时代表进程、比赛、地图和数据源。
 
-Program GSI 与 Lookahead CSTV 是独立 source。任一 source generation 改变时，只使依赖该 source 的连续性证明失效；Lookahead 重连不会自动推进 Program 的 `mapEpoch`。
+Program GSI、可选 Program 事件数据源与 Lookahead 数据源各自维护连接连续性。任一数据源的 generation 改变时，只使依赖该数据源的连续性证明失效；Program 事件增强数据源重连不推进 Program `mapEpoch`，Lookahead 重连也不会自动推进 Program 的 `mapEpoch`。
 
 ## 7. Program 与 Observer Assist 隔离
 
+当前完美平台 V1 的 Program 主数据链路是：
+
 ```text
-Delayed Program source
+延迟直连 GOTV
+  → 真实 CS2 观战客户端
+  → GSI
   → Program-safe Runtime
-  → ProgramProjection
+  → ProgramProjection / RadarFrame
   → Program Renderer
   → Program Host / OBS
 ```
 
-```text
-Delayed Program CSTV
-  → role-scoped GameEventObservation
-  → ProgramCueCoordinator / Program-safe semantic cue
-  → program-cue transient channel
-  → ProgramCueClient
-  → Renderer-local ephemeral effect
-```
+精确 GameEvent 是独立、可选的 Program 增强能力：
 
 ```text
-Lookahead source
-  → Assist-private evidence
-  → timeline alignment
-  → ObserverAssistProjection
-  → private Assist Renderer / Host
+可选 Program 事件数据源
+  → GameEventObservation<'program'>
+  → ProgramCueCoordinator
+  → program-cue 短时通道
+  → ProgramCueClient
+  → Renderer 本地短时特效
 ```
+
+当前 `cs2parser + HttpBroadcastReader` 只适用于真正提供 HTTP Broadcast URL 的数据源；直连 GOTV 的 `connect IP:port` 不能当作 HTTP URL。精确事件增强不可用时，Program / Radar 继续由 GSI 正常工作，武器类型专属命中特效等精确短时增强保守降级。
+
+```text
+Lookahead 数据源
+  → Assist 私有证据
+  → 时间轴对齐
+  → ObserverAssistProjection
+  → 私有 Assist Renderer / Host
+```
+
+无头 Direct CSTV 客户端后续在新的独立仓库研发；本仓只保留 Lookahead 接入、时间轴对齐和 Observer Assist 上层语义。
+
+具体运行方案与降级矩阵见 `docs/data-source-capabilities.md`。
 
 硬约束：
 
@@ -336,8 +348,7 @@ program-cue (transient, Program-only)
 ```
 
 Snapshot channel 与 `program-cue` transient channel 各自有 schema version、publisher 和 acceptance
-state。Program cue 只来自 delayed Program CSTV，不进入 snapshot `LocalChannelStore`，也不共享
-Lookahead source 或通用 event bus。protocol version 与 channel schema version 分离，因此单个 payload
+state。Program cue 只来自 Program role 的精确事件数据源；该数据源属于可选增强，不是 Program 是否正常的判断前提。cue 不进入 snapshot `LocalChannelStore`，也不共享 Lookahead 数据源或通用事件总线。protocol version 与 channel schema version 分离，因此单个 payload
 演进不要求整个 Local Protocol 同步升级。
 
 HUD 配置属于独立的 presentation control-plane，不是 Local Protocol channel，也不修改

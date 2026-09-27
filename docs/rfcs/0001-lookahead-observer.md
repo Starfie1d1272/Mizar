@@ -4,7 +4,7 @@
 | --- | --- |
 | 状态 | Draft |
 | 主题 | 较早比赛时间轴、对齐、未来击杀提示、私有制播工作区 |
-| 需要真实验证 | Windows + CS2 + CSTV + OBS |
+| 需要真实验证 | Windows + CS2 + 完美平台直连 CSTV + OBS |
 
 ## 摘要
 
@@ -62,12 +62,12 @@ Broadcast 借鉴的是产品范式，不复制 HOT 的具体布局或 injection 
 Broadcast 的差异化组合是：
 
 ```text
-headless / no-delay source
-+ explicit alignment
-+ strict Program / Assist isolation
-+ single Program renderer workflow
+无头无延迟数据源
++ 显式时间轴对齐
++ Program / Assist 硬隔离
++ 单 Program 渲染流程
 + 本地优先的独立模式
-+ optional RivalHub canonical context
++ 可选 RivalHub canonical 赛事上下文
 ```
 
 ## 产品承载方式
@@ -119,27 +119,37 @@ FutureKillCue
 
 Future cue 不建立第二份长期 `FutureTimelineState` truth；它是 bounded Lookahead evidence 与当前 Program timing 的派生结果。
 
-## 方案 A：双 CSTV
+## 方案 A：完美平台双直连 CSTV（目标方案）
+
+当前真实完美平台输入是 `connect IP:port;password ...`，不是已知 HTTP Broadcast URL。因此目标链路调整为：
 
 ```text
-No-delay CSTV
-  → headless parser
-  → event evidence
-  → alignment / scheduler
+无延迟直连 CSTV
+  → 无头直连 CSTV 客户端
+  → Lookahead 事件证据
+  → 时间轴对齐 / 调度
   → Assist cue
 
-Delayed CSTV
-  → CS2 observer
+延迟直连 CSTV
+  → 真实 CS2 观战客户端
+  → GSI
   → Program
 ```
 
+这保持“只有一个真正承担 Program 画面渲染的 CS2”的原始目标。
+
+**无头直连 CSTV 客户端后续新建独立仓库研发和维护。** RivalHub-Broadcast 不实现 直连 CSTV 网络协议本身，只定义接入后的 `GameEventObservation`、时间轴对齐和 Observer Assist 语义。该独立仓库的研发进度不阻塞 Program V1 或制播工作区。
+
+当前 `cs2parser + HttpBroadcastReader` 只适用于真正提供 HTTP Broadcast URL 的数据提供方，不能由直连 GOTV 的 `IP:port` 自动推导。
+
 优点：
 
-- 不需要 Broadcast 自己实现延迟 buffer；
-- 只有一个 Program renderer；
-- 产品假设与 relay 实现风险分离。
+- 不需要 Broadcast 自己实现延迟缓冲；
+- Program 继续只运行一个真实 CS2；
+- Program GSI 与 Lookahead 接入分责；
+- 上层时间轴对齐和 cue 语义不绑定具体接入方式。
 
-任何 endpoint naming 规律都只能作为 discovery heuristic。启用 Assist 前必须验证 same match、same map 和可信 tick relation。
+任何端口命名或相邻端口规律都只能作为数据提供方专用的地址派生规则。启用 Assist 前必须验证同一比赛、同一地图执行和可信的时间轴关系。
 
 ## 方案 B：单 CSTV + 本地延迟中继
 
@@ -194,7 +204,7 @@ source generation unchanged
 ## 仍需验证的问题
 
 - 最合适的默认 lead time；
-- Dual CSTV 在目标赛事环境中的长期稳定性；
+- 独立无头直连 CSTV 客户端的连接、认证、协议维护与长期稳定性；
 - Program / Lookahead tick relation 的漂移特征；
 - 私有 Workspace 与透明窗口哪种更适合同一名解说兼 OB；
 - kill cue 密度何时需要聚类；
