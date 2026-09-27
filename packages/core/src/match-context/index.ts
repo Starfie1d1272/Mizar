@@ -2,6 +2,7 @@ export type {
   MatchCommentatorContext,
   MatchCompetitionContext,
   MatchContext,
+  MatchDocumentV1,
   MatchEntrantContext,
   MatchFormat,
   MatchMapContext,
@@ -12,4 +13,7 @@ export type {
   MatchVetoActionType,
   ScheduleMatchContext,
   ScheduleWindow,
+  ScheduleWindowV1,
+  ContextEnvelope,
 } from './types.js';
+export { deriveScheduleNeighborhood } from './neighborhood.js';

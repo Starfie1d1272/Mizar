@@ -3,11 +3,14 @@ import { isDeepStrictEqual } from 'node:util';
 
 import {
   BroadcastManifestConversionError,
-  toMatchContext,
+  toMatchDocumentV1,
   validateBroadcastManifest,
   type BroadcastManifestV1,
   type ContractDiagnostic,
 } from '@mizar/rivalhub';
+import type { ContextEnvelope, MatchDocumentV1 } from '@mizar/core/match-context';
+import { parseMatchDocumentV1 } from '@mizar/protocol/context';
+import { localDocumentBindingManifest } from './local-document-adapter.js';
 
 import { SerialCommitQueue } from './serial-commit.js';
 import { SourceLoadError } from './source-error.js';
@@ -141,6 +144,7 @@ export class MatchContextController {
     ((binding: MatchContextBinding | undefined) => void) | undefined;
   private readonly commitQueue = new SerialCommitQueue();
   private activeBinding: MatchContextBinding | undefined;
+  private activeAcquiredAt = new Date().toISOString();
   private pendingOnlineCandidate: PendingOnlineMatchCandidate | undefined;
   private bindingRevision = 0;
   private readonly revisionEpoch = randomUUID();
@@ -159,8 +163,42 @@ export class MatchContextController {
     return this.activeBinding;
   }
 
+  getActiveDocumentEnvelope(): ContextEnvelope<MatchDocumentV1> | null {
+    const binding = this.activeBinding;
+    if (binding === undefined) return null;
+    const document =
+      'schemaVersion' in binding.context
+        ? parseMatchDocumentV1(binding.context)
+        : toMatchDocumentV1(binding.manifest);
+    return {
+      document,
+      source: binding.origin === 'online' ? 'rivalhub' : binding.origin,
+      revision: binding.manifest.revision,
+      freshness: binding.freshness,
+      acquiredAt: binding.storedAt ?? this.activeAcquiredAt,
+      diagnostics: binding.diagnostics.map((diagnostic) => diagnostic.code),
+    };
+  }
+
   getActiveRevision(): string {
     return `${this.revisionEpoch}:${this.bindingRevision}`;
+  }
+
+  /** A Mizar-owned local document is persisted by LocalTournamentStore first. */
+  activateLocalDocument(input: unknown): MatchContextBinding {
+    const document: MatchDocumentV1 = parseMatchDocumentV1(input);
+    const manifest = localDocumentBindingManifest(document);
+    this.activeSelectionGeneration += 1;
+    const binding: MatchContextBinding = {
+      manifest,
+      context: document,
+      origin: 'local',
+      freshness: 'fresh',
+      localAuthoringMode: 'standalone',
+      diagnostics: [],
+    };
+    this.setActive(binding);
+    return binding;
   }
 
   getPendingOnlineCandidate(): PendingOnlineMatchCandidate | undefined {
@@ -197,6 +235,7 @@ export class MatchContextController {
       this.pendingOnlineCandidate = undefined;
     }
     this.activeBinding = binding;
+    this.activeAcquiredAt = new Date().toISOString();
     this.bindingRevision += 1;
     this.onBindingChanged?.(binding);
   }
@@ -246,7 +285,7 @@ export class MatchContextController {
 
     let context;
     try {
-      context = toMatchContext(validated.value);
+      context = toMatchDocumentV1(validated.value);
     } catch (error: unknown) {
       if (!(error instanceof BroadcastManifestConversionError)) throw error;
       return {
@@ -316,7 +355,7 @@ export class MatchContextController {
     }
     let context;
     try {
-      context = toMatchContext(validated.value);
+      context = toMatchDocumentV1(validated.value);
     } catch (error: unknown) {
       if (!(error instanceof BroadcastManifestConversionError)) throw error;
       return {
@@ -510,7 +549,7 @@ export class MatchContextController {
     }
     let context;
     try {
-      context = toMatchContext(validated.value);
+      context = toMatchDocumentV1(validated.value);
     } catch (error: unknown) {
       if (!(error instanceof BroadcastManifestConversionError)) throw error;
       return {

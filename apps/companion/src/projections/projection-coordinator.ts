@@ -70,6 +70,7 @@ export interface ProjectionCoordinatorOptions {
   readonly scheduler?: ProjectionScheduler;
   readonly publishers?: ProjectionPublishers;
   readonly onDiagnostic?: (diagnostic: { readonly code: string }) => void;
+  readonly onProjection?: (bundle: ProjectionBundle) => void;
 }
 
 export interface ProjectionScheduler {
@@ -150,6 +151,7 @@ export class ProjectionCoordinator {
   private readonly scheduler: ProjectionScheduler;
   private readonly publishers: Required<ProjectionPublishers>;
   private readonly onDiagnostic: ((diagnostic: { readonly code: string }) => void) | undefined;
+  private readonly onProjection: ((bundle: ProjectionBundle) => void) | undefined;
   private readonly sourceUnsubscribers: readonly (() => void)[];
   private contextBinding: MatchContextBinding | undefined;
   private boundContext: MatchContext | undefined;
@@ -176,6 +178,7 @@ export class ProjectionCoordinator {
     this.nowMonotonicMs = options.nowMonotonicMs ?? defaultNowMonotonicMs;
     this.scheduler = options.scheduler ?? defaultScheduler;
     this.onDiagnostic = options.onDiagnostic;
+    this.onProjection = options.onProjection;
     this.publishers = mergePublishers(options.publishers, options.onDiagnostic);
     this.contextBinding = options.matchContextBinding;
     if (this.contextBinding !== undefined) {
@@ -287,6 +290,11 @@ export class ProjectionCoordinator {
       const assist = projectObserverAssist(runtimeView);
       this.current = { program, radar, operator, assist, identity };
       this.publish(program, radar, operator, assist);
+      try {
+        this.onProjection?.(this.current);
+      } catch {
+        report(this.onDiagnostic, 'output-projection-failed');
+      }
       this.scheduleStaleDeadline(
         runtimeView,
         program,

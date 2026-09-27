@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "mizar.live-snapshot.v1",
+  "cursor": {
+    "producerInstanceId": "fixture-producer",
+    "liveSessionId": null,
+    "runtimeSeq": 1,
+    "programSourceGeneration": 0,
+    "programReceiveSequence": 1,
+    "mapEpoch": 1
+  },
+  "producedAt": "2026-09-28T00:00:00.000Z",
+  "matchId": "local-match-1",
+  "competitionId": "local-event-1",
+  "format": "bo3",
+  "series": { "scoreA": 0, "scoreB": 0, "currentMapOrder": null },
+  "map": {
+    "mapId": null,
+    "name": "de_ancient",
+    "phase": "live",
+    "roundNumber": 1,
+    "scoreCT": 0,
+    "scoreT": 0
+  },
+  "roundPhase": "live",
+  "clock": null,
+  "teams": {
+    "ct": { "entryId": "team-a", "name": "甲队" },
+    "t": { "entryId": "team-b", "name": "乙队" }
+  },
+  "players": [],
+  "observedPlayerSourceId": null,
+  "bomb": null,
+  "radar": null,
+  "capability": {
+    "telemetryFresh": true,
+    "contextFresh": true,
+    "identity": "matched",
+    "lineupComplete": false,
+    "radarCurrent": false,
+    "canonicalTeams": true
+  }
+}

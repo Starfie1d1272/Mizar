@@ -12,6 +12,7 @@ export interface MatchCompetitionContext {
   readonly competitionId: string;
   readonly slug: string;
   readonly name: string;
+  readonly logoUrl?: string | null;
   readonly themeColor: string | null;
 }
 
@@ -58,7 +59,7 @@ export interface MatchCommentatorContext {
 }
 
 /**
- * Broadcast's provider-neutral domain model for one selected RivalHub match.
+ * Provider-neutral domain model for one selected match.
  * Acquisition metadata such as revision, schema version, and cache origin is
  * intentionally kept outside this model.
  */
@@ -85,6 +86,17 @@ export interface MatchContext {
   readonly commentators: readonly MatchCommentatorContext[];
 }
 
+/** Mizar-owned input document. Optional enrichment is explicit and never inferred by a renderer. */
+export interface MatchDocumentV1 extends MatchContext {
+  readonly schemaVersion: 'mizar.match-document.v1';
+  readonly stageKey: string | null;
+  readonly stageLabel: string;
+  readonly roundLabel: string | null;
+  readonly matchLabel: string | null;
+  readonly stakesLabel: string | null;
+  readonly mapPool: readonly string[];
+}
+
 export interface ScheduleMatchContext {
   readonly matchId: string;
   readonly scheduledAt: string | null;
@@ -106,7 +118,26 @@ export interface ScheduleMatchContext {
 /** Mizar-owned lightweight time-window domain model. */
 export interface ScheduleWindow {
   readonly competition: MatchCompetitionContext;
-  readonly from: string;
-  readonly to: string;
+  readonly from: string | null;
+  readonly to: string | null;
   readonly matches: readonly ScheduleMatchContext[];
+}
+
+export interface ScheduleWindowV1 extends ScheduleWindow {
+  readonly schemaVersion: 'mizar.schedule-window.v1';
+  readonly matches: readonly (ScheduleMatchContext & {
+    readonly stageLabel: string;
+    readonly roundLabel: string | null;
+    readonly matchLabel: string | null;
+  })[];
+}
+
+/** Source and freshness travel beside, never inside, the match or schedule fact. */
+export interface ContextEnvelope<T> {
+  readonly document: T;
+  readonly source: 'local' | 'rivalhub' | 'fixture' | 'cache';
+  readonly revision: string;
+  readonly freshness: 'fresh' | 'stale';
+  readonly acquiredAt: string;
+  readonly diagnostics: readonly string[];
 }

@@ -1,4 +1,12 @@
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
+import { LocalTournamentStore } from './match-context/local-tournament-store.js';
+import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
+import { registerLocalAssetRoutes } from './match-context/local-assets.js';
+import { dirname, join } from 'node:path';
+import { toMatchDocumentV1 } from '@mizar/rivalhub';
+import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
+import { OutputService, type OutputServiceOptions } from './output/service.js';
+import { ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import { registerBpRoutes } from './bp/controller.js';
@@ -82,6 +90,9 @@ export interface CompanionAppOptions {
   readonly programCueCoordinator?: ProgramCueCoordinator;
   readonly matchContextBinding?: MatchContextBinding;
   readonly matchManifestPath?: string;
+  readonly localTournamentPath?: string;
+  readonly reliableOutboxPath?: string;
+  readonly reliableSink?: OutputServiceOptions['sink'];
   readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly projectionNowMonotonicMs?: () => number;
   readonly bpNowMonotonicMs?: () => number;
@@ -149,6 +160,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
   const debugClock = options.debugClock ?? { nowMonotonicMs: () => performance.now() };
   const deliveryConsumers = options.deliveryConsumers ?? [];
+  let outputBinding = options.matchContextBinding;
+  const outputService = new OutputService({
+    ...(options.reliableOutboxPath === undefined
+      ? {}
+      : {
+          outbox: new ReliableOutbox(options.reliableOutboxPath),
+        }),
+    ...(options.reliableSink === undefined ? {} : { sink: options.reliableSink }),
+    onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
+  });
   const cstvSources = options.cstvSources ?? createCstvSourceManagers({});
   const objectiveReferenceSource = options.objectiveReferenceSource;
   const objectiveReferenceUnsubscribe =
@@ -245,6 +266,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : { nowMonotonicMs: projectionNowMonotonicMs }),
       onDiagnostic: ({ code }) =>
         recordRuntimeDiagnostic(code, 'projection', projectionDiagnosticDegradesRuntime(code)),
+      onProjection: (bundle) => outputService.setCurrent(bundle, outputBinding),
     });
   const programCueCoordinator =
     options.programCueCoordinator ??
@@ -338,15 +360,43 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ? {}
             : { initialBinding: options.matchContextBinding }),
           onBindingChanged: (binding) => {
+            outputBinding = binding;
             projectionCoordinator.setMatchContextBinding(binding);
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  const localTournamentStore =
+    options.localTournamentPath === undefined
+      ? null
+      : new LocalTournamentStore(options.localTournamentPath);
+  if (matchContextController !== null) {
+    app.get('/local/v1/match-document', (_request, reply) => {
+      const envelope = matchContextController.getActiveDocumentEnvelope();
+      return envelope === null
+        ? reply
+            .code(404)
+            .header('cache-control', 'no-store')
+            .send({ error: 'match_document_unavailable' })
+        : reply.header('cache-control', 'no-store').send(envelope);
+    });
+  }
+  if (localTournamentStore !== null && matchContextController !== null) {
+    registerLocalTournamentRoutes(app, {
+      store: localTournamentStore,
+      controller: matchContextController,
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+    registerLocalAssetRoutes(app, {
+      directory: join(dirname(options.localTournamentPath!), 'local-assets'),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+  }
   registerBpWorkspaceRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
     projections: projectionCoordinator,
     demoState: bpDemoState,
+    ...(localTournamentStore === null ? {} : { localTournamentStore }),
   });
   registerOnlineManifestRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -355,9 +405,57 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {
-      await matchContextController.restoreLatest();
+      await localTournamentStore?.load();
+      const restored = await matchContextController.restoreLatest();
+      if (localTournamentStore === null) return;
+      const selected = localTournamentStore
+        .getSnapshot()
+        .matches.find(
+          (match) => match.matchId === localTournamentStore.getSnapshot().selectedMatchId,
+        );
+      const localSelectedAt = localTournamentStore.getSnapshot().selectedAt;
+      const localWasSelectedLast =
+        localSelectedAt !== null &&
+        Date.parse(localSelectedAt) >= Date.parse(restored?.storedAt ?? '1970-01-01T00:00:00.000Z');
+      if (
+        selected !== undefined &&
+        (restored === undefined || isStandaloneLocalMatch(restored) || localWasSelectedLast)
+      ) {
+        matchContextController.activateLocalDocument(selected);
+      } else if (restored !== undefined && isStandaloneLocalMatch(restored)) {
+        const migrated = await localTournamentStore.importLegacyMatch(
+          toMatchDocumentV1(restored.manifest),
+        );
+        matchContextController.activateLocalDocument(migrated);
+      }
     });
   }
+  app.addHook('onReady', async () => {
+    outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
+    await outputService.start();
+  });
+  app.get('/local/v1/live-snapshot', (request, reply) => {
+    outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
+    const withRadar = (request.query as Record<string, unknown>).radar === '1';
+    const current = outputService.current(withRadar);
+    return current === null
+      ? reply
+          .code(503)
+          .header('cache-control', 'no-store')
+          .send({ error: 'live_snapshot_unavailable' })
+      : reply.header('cache-control', 'no-store').send(current);
+  });
+  app.get('/local/v1/reliable-output-status', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send({
+      records: outputService.getReliableRecords().map((record) => ({
+        idempotencyKey: record.event.idempotencyKey,
+        kind: record.event.kind,
+        status: record.status,
+        attempts: record.attempts,
+        updatedAt: record.updatedAt,
+      })),
+    }),
+  );
   const qualificationMode = options.qualificationMode ?? false;
 
   app.get('/health', () => {
@@ -435,8 +533,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       },
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       onObservation: (observation) => {
+        const source = programRuntime.getCurrentState().programSource;
+        const lastAccepted = source.lastAccepted;
+        if (
+          lastAccepted !== undefined &&
+          observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
+            programRuntime.getSnapshot().continuityPolicy.staleAfterMs
+        ) {
+          outputService.beforeRuntimeMutation();
+          const changed = programRuntime.advanceProgramSourceGeneration({
+            monotonicMs: observation.receive.receivedMonotonicMs,
+            utc: observation.receive.receivedAt,
+          });
+          const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
+          outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
+          programCueCoordinator.afterRuntimeMutation(changed);
+        }
+        outputService.beforeRuntimeMutation();
         const result = programRuntime.acceptObservation(observation);
-        projectionCoordinator.afterRuntimeMutation(result);
+        const bundle = projectionCoordinator.afterRuntimeMutation(result);
+        outputService.afterRuntimeMutation(result, bundle, outputBinding);
         programCueCoordinator.afterRuntimeMutation(result);
         debugEvidenceStore.recordNormalizedObservation(observation);
         debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
@@ -513,7 +629,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 await result.nextRecorder.finalize();
                 throw new Error('接收链路代际推进失败。');
               }
+              outputService.beforeRuntimeMutation();
               projectionCoordinator.afterRuntimeMutation(generationAdvance);
+              outputService.afterRuntimeMutation(
+                generationAdvance,
+                projectionCoordinator.getCurrent(),
+                outputBinding,
+              );
               programCueCoordinator.afterRuntimeMutation(generationAdvance);
               debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
               recorder = result.nextRecorder;
@@ -524,11 +646,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               };
             },
           }),
-      onAcceptedMapReset: () => {
+      onAcceptedMapReset: (result) => {
+        outputService.beforeRuntimeMutation();
         debugEvidenceStore.clearCurrentTelemetry();
         debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-        projectionCoordinator.afterRuntimeMutation();
-        programCueCoordinator.afterRuntimeMutation();
+        const bundle = projectionCoordinator.afterRuntimeMutation(result);
+        outputService.afterRuntimeMutation(result, bundle, outputBinding);
+        programCueCoordinator.afterRuntimeMutation(result);
       },
       ...(options.onQualificationFinish === undefined
         ? {}
@@ -548,6 +672,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cstvSources.program.stop(),
       cstvSources.lookahead.stop(),
       ...deliveryConsumers.map((consumer) => consumer.close()),
+      outputService.close(),
     ]);
     await Promise.all([projectionCoordinator.close(), programCueCoordinator.close()]);
     await programRuntime.close();

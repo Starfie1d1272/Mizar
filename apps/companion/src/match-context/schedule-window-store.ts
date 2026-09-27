@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   BroadcastScheduleWindowConversionError,
-  toScheduleWindow,
+  toScheduleWindowV1,
   validateBroadcastScheduleWindow,
   type BroadcastScheduleWindowV1,
   type ContractDiagnostic,
@@ -246,7 +246,7 @@ export class ScheduleWindowLkgStore {
       const binding: ScheduleWindowBinding = {
         request: cachedRequest,
         schedule: validated.value,
-        window: toScheduleWindow(validated.value),
+        window: toScheduleWindowV1(validated.value),
         origin: 'cache',
         freshness: 'stale',
         storedAt: envelope.metadata.storedAt,

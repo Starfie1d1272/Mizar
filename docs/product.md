@@ -34,6 +34,10 @@ RivalHub 是第一方、信息最完整的赛事上下文提供方，但不是�
 6. **可靠性优先于炫技。** 高频状态不积压，断流和错场默认安全降级。
 7. **开源与可移植。** Core、Radar、Local Protocol 和 Lookahead 语义不绑定某个云端后台或某个第三方 HUD Manager。
 
+独立模式的比赛入口先保存 Mizar 自有的赛事、可复用队伍与比赛文档。制作人员只填双方队名和 BO 格式即可创建比赛，之后再补阶段、赛程、名单、图片、地图池与 BP；缺少 BP 不阻断 Runtime。赛事可按人工顺序排列比赛并查看上一场、当前场、下一场。没有计划时间时界面保持“未安排”，不生成时间。RivalHub 模式通过只读 adapter 转为同一比赛文档；官方事实仍归 RivalHub，本地编辑不能覆盖在线绑定。
+
+面向本机与后续外部消费者的实时输出分成两类：`LiveSnapshot V1` 只保留最新公开状态，`ReliableEvent V1` 记录有明确证据的比赛、地图、身份及 source continuity 边沿。两者只从 Program/Radar 安全投影与 RuntimeTransition 产生，不含 Observer Assist 或 Raw GSI。高影响事件在身份、比赛或代际证据不足时暂停投递，过期或上下文变化后停止重试。
+
 ## 3. 产品体验核心：制播工作区
 
 传统 HUD 工作流通常把游戏、网页控制、雷达、诊断和辅助信息分散在多个窗口。Mizar 的长期产品形态是一套**私有制播工作区（Mizar Workspace）**：

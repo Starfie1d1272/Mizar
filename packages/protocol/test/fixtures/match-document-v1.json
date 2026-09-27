@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "mizar.match-document.v1",
+  "matchId": "local-match-1",
+  "competition": {
+    "competitionId": "local-event-1",
+    "slug": "local-event-1",
+    "name": "校园赛",
+    "logoUrl": null,
+    "themeColor": null
+  },
+  "status": "scheduled",
+  "format": "bo3",
+  "stage": "小组赛",
+  "stageKey": null,
+  "stageLabel": "小组赛",
+  "round": null,
+  "roundLabel": null,
+  "entryRound": null,
+  "matchLabel": null,
+  "stakesLabel": null,
+  "scheduledAt": null,
+  "startedAt": null,
+  "completedAt": null,
+  "scoreA": null,
+  "scoreB": null,
+  "isForfeit": false,
+  "entrants": {
+    "a": { "entryId": "team-a", "name": "甲队", "logoUrl": null, "rosterId": null, "players": [] },
+    "b": { "entryId": "team-b", "name": "乙队", "logoUrl": null, "rosterId": null, "players": [] }
+  },
+  "mapPool": ["de_ancient", "de_mirage"],
+  "maps": [],
+  "veto": [],
+  "commentators": []
+}

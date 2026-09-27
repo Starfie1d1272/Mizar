@@ -42,6 +42,10 @@
 | latest-wins | latest-wins / 只保留最新值 | 只显示最新状态 |
 | backpressure | backpressure / 背压 | 不直接暴露 |
 | outbox | outbox / 可靠投递队列 | 不直接暴露 |
+| MatchDocument V1 | Mizar 自有比赛文档 | 比赛资料 |
+| ScheduleWindow V1 | Mizar 自有有序赛程窗口 | 比赛顺序 / 上一场 / 下一场 |
+| LiveSnapshot V1 | 当前公开实时快照 | 当前比赛数据 |
+| ReliableEvent V1 | 有证据的可靠边沿事件 | 不直接暴露 |
 | fail closed | fail closed / 默认拒绝 | 为安全起见已停止 / 无法继续自动处理 |
 | marker | marker / 场景标记；协议值保留原文 | 场景标记 |
 

@@ -9,6 +9,9 @@ import {
 } from './local-draft.js';
 import { localAuthoringMode } from '../match-context/lkg-store.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
+import { toMatchDocumentV1 } from '@mizar/rivalhub';
+import type { MatchDocumentV1 } from '@mizar/core/match-context';
+import type { LocalTournamentStore } from '../match-context/local-tournament-store.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { BpDemoStateController } from './demo-state.js';
 
@@ -27,6 +30,7 @@ export function registerBpWorkspaceRoutes(
     readonly controller: MatchContextController | null;
     readonly projections: ProjectionCoordinator;
     readonly demoState: BpDemoStateController;
+    readonly localTournamentStore?: LocalTournamentStore;
   },
 ) {
   app.get('/local/v1/bp-workspace', (_request, reply) => {
@@ -119,6 +123,30 @@ export function registerBpWorkspaceRoutes(
     const compiled = createLocalBpManifest(parsed.data, options.controller.getActiveBinding());
     if (!compiled.ok)
       return reply.code(400).send({ error: compiled.code, message: compiled.message });
+    const active = options.controller.getActiveBinding();
+    if (
+      options.localTournamentStore !== undefined &&
+      (active === undefined ||
+        (active.origin === 'local' && active.localAuthoringMode === 'standalone'))
+    ) {
+      try {
+        const prior = active?.context as MatchDocumentV1 | undefined;
+        const document = {
+          ...toMatchDocumentV1(compiled.manifest),
+          mapPool: parsed.data.mapPool,
+          stageKey: prior?.stageKey ?? null,
+          roundLabel: prior?.roundLabel ?? null,
+          matchLabel: prior?.matchLabel ?? null,
+          stakesLabel: prior?.stakesLabel ?? null,
+        };
+        if (active === undefined) await options.localTournamentStore.importLegacyMatch(document);
+        else await options.localTournamentStore.saveMatch(document);
+        options.controller.activateLocalDocument(document);
+        return { ok: true, message: '本地 BP 已保存。' };
+      } catch {
+        return reply.code(400).send({ error: 'bp_save_failed', message: '本地 BP 保存失败。' });
+      }
+    }
     const result = await options.controller.selectLocalMatch(
       compiled.manifest,
       body.expectedContextRevision,

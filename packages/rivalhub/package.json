@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@mizar/core": "workspace:*",
+    "@mizar/protocol": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {

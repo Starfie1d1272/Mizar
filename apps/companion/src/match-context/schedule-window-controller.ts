@@ -1,6 +1,6 @@
 import {
   BroadcastScheduleWindowConversionError,
-  toScheduleWindow,
+  toScheduleWindowV1,
   validateBroadcastScheduleWindow,
   type ContractDiagnostic,
 } from '@mizar/rivalhub';
@@ -132,7 +132,7 @@ export class ScheduleWindowController {
 
     let window;
     try {
-      window = toScheduleWindow(validated.value);
+      window = toScheduleWindowV1(validated.value);
     } catch (error: unknown) {
       if (!(error instanceof BroadcastScheduleWindowConversionError)) throw error;
       return {

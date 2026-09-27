@@ -1,4 +1,5 @@
-import type { MatchContext } from '@mizar/core/match-context';
+import type { MatchContext, MatchDocumentV1 } from '@mizar/core/match-context';
+import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 
 import { validateBroadcastManifest } from './validate.js';
 import type { BroadcastEntrantV1, BroadcastManifestV1, BroadcastSide } from './types.js';
@@ -38,10 +39,11 @@ export function toMatchContext(input: unknown): MatchContext {
   const result = validateBroadcastManifest(input);
   if (!result.ok) throw new BroadcastManifestConversionError(result.diagnostics);
   const manifest: BroadcastManifestV1 = result.value;
+  const { logoUrl, ...competition } = manifest.match.competition;
 
   return {
     matchId: manifest.match.matchId,
-    competition: { ...manifest.match.competition },
+    competition: logoUrl === undefined ? competition : { ...competition, logoUrl },
     status: manifest.match.status,
     format: manifest.match.format,
     stage: manifest.match.stage,
@@ -85,4 +87,25 @@ export function toMatchContext(input: unknown): MatchContext {
       })),
     commentators: manifest.commentators.map((commentator) => ({ ...commentator })),
   };
+}
+
+/** Adapt the current RivalHub read contract into Mizar's independent input document. */
+export function toMatchDocumentV1(input: unknown): MatchDocumentV1 {
+  const validation = validateBroadcastManifest(input);
+  if (!validation.ok) throw new BroadcastManifestConversionError(validation.diagnostics);
+  const manifest = validation.value;
+  const context = toMatchContext(input);
+  const mapNames =
+    manifest.match.mapPool ?? [...context.maps, ...context.veto].map((item) => item.mapName);
+  return parseMatchDocumentV1({
+    ...context,
+    schemaVersion: 'mizar.match-document.v1',
+    competition: { ...context.competition, logoUrl: context.competition.logoUrl ?? null },
+    stageKey: manifest.match.stageKey ?? null,
+    stageLabel: manifest.match.stageLabel ?? context.stage,
+    roundLabel: manifest.match.roundLabel ?? null,
+    matchLabel: manifest.match.matchLabel ?? null,
+    stakesLabel: manifest.match.stakesLabel ?? null,
+    mapPool: [...new Set(mapNames)],
+  });
 }

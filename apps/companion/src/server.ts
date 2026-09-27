@@ -178,6 +178,8 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     qualificationMode,
     ...(qualificationControlToken === undefined ? {} : { qualificationControlToken }),
     matchManifestPath: join(captureDir, '..', 'match-context.json'),
+    localTournamentPath: join(captureDir, '..', 'local-tournament.json'),
+    reliableOutboxPath: join(captureDir, '..', 'reliable-outbox.json'),
     ...(process.env.RIVALHUB_MANIFEST_URL_TEMPLATE && process.env.RIVALHUB_BROADCAST_READ_TOKEN
       ? {
           onlineManifestConfig: {

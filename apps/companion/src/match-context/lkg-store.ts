@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   BroadcastManifestConversionError,
-  toMatchContext,
+  toMatchDocumentV1,
   validateBroadcastManifest,
   type BroadcastManifestV1,
   type ContractDiagnostic,
@@ -292,7 +292,7 @@ export class MatchManifestLkgStore {
     }
 
     try {
-      const context = toMatchContext(validated.value);
+      const context = toMatchDocumentV1(validated.value);
       const binding: MatchContextBinding = {
         manifest: validated.value,
         context,

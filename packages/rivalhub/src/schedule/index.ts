@@ -13,4 +13,8 @@ export {
   sortScheduleMatches,
   validateBroadcastScheduleWindow,
 } from './validate.js';
-export { BroadcastScheduleWindowConversionError, toScheduleWindow } from './to-schedule-window.js';
+export {
+  BroadcastScheduleWindowConversionError,
+  toScheduleWindow,
+  toScheduleWindowV1,
+} from './to-schedule-window.js';

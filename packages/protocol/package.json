@@ -14,6 +14,14 @@
       "types": "./dist/version.d.ts",
       "import": "./dist/version.js"
     },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "import": "./dist/context.js"
+    },
+    "./output": {
+      "types": "./dist/output.d.ts",
+      "import": "./dist/output.js"
+    },
     "./shared": {
       "types": "./dist/shared.d.ts",
       "import": "./dist/shared.js"

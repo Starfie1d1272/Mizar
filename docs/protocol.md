@@ -14,6 +14,20 @@
 
 在线比赛入口先按受限 `matchId` 通过配置的只读 HTTPS Manifest URL 获取候选，再走现有 MatchContext 验证、人工确认和 LKG。刷新失败将当前在线来源标记 stale，不清除已确认上下文；本地模式无需在线凭据。OBS 状态与检查/修复通过 Companion 本地控制面提供，密钥不进入浏览器返回值。
 
+## Mizar-owned 输入与结构化输出 V1
+
+`packages/protocol/src/context.ts` 定义 `mizar.match-document.v1` 和 `mizar.schedule-window.v1`。比赛文档包含稳定比赛/参赛 ID、赛事、状态、BO、阶段、可选轮次与语义标签、计划/实际时间、名单、地图池、地图结果、veto 和解说。BP、名单、图片和计划时间可渐进填写；未知值使用 `null` 或空数组。赛程窗口包含有序比赛摘要，Local 未设置时间时 `from/to` 为 `null`，不以占位时间冒充赛程。来源、revision、freshness 和 diagnostics 属于 acquisition envelope，不进入文档事实。
+
+RivalHub 赛事 Logo 和正式 Match/Schedule read API 的上游交付由 [RivalHub #764](https://github.com/Starfie1d1272/RivalHub/issues/764) 跟踪；当前 adapter 对缺失 Logo 映射为 `null`，并接受以后增补的公开字段。
+
+当前来源的统一比赛文档通过 `GET /local/v1/match-document` 返回 acquisition envelope。独立模式通过 `GET /local/v1/tournament` 读取赛事、队伍、比赛、当前选择和赛程邻域；`POST /operator/local-match/create|select|save`、`POST /operator/local-event/save`、`POST /operator/local-schedule/reorder` 修改本机状态。创建比赛只要求队名与 BO；复用队伍通过稳定 teamId 显式选择，不根据同名猜测身份。图片上传到 `/operator/local-asset`，只接受限大小的 PNG/JPEG/WebP，本机 URL 可从 `/local/v1/local-assets/:filename` 读取。所有写入受本机 origin policy 约束，比赛保存还必须带当前 context revision。RivalHub DTO 在公开 adapter 边界转成相同文档，旧 standalone BP 缓存在首次恢复时迁移；重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源。
+
+`packages/protocol/src/output.ts` 定义 `mizar.live-snapshot.v1` 与 `mizar.reliable-event.v1`。`GET /local/v1/live-snapshot` 返回当前公开状态，可用 `?radar=1` 请求同代际雷达切片；无新鲜匹配上下文时返回 503。进程内 consumer 使用 latest-wins 有界 lane，重连只取得当前值。快照只复制 Program 与同代际 Radar 允许字段，不承载 Raw GSI、Assist 或整个 RuntimeState。
+
+四个 Mizar-owned V1 payload 都使用严格 schema 和大小上限；未知字段或不支持的 `schemaVersion` 拒绝。发布者不能在同一版本加入接收方未声明的字段；将来可选 enrichment 必须先进入明确的新版本契约和 fixture，破坏字段语义或移除字段同样升级版本。输入文档、赛程、快照和事件分别演进，不联动 Local Protocol channel version。
+
+可靠事件包含 kind、幂等键、transition-time UTC、producer/session/source generation/map epoch cursor、比赛和参赛身份、context revision、证据与有限比分。事件种类为 `match_started`、`map_started`、`map_ended`、`series_ended`、`source_generation_changed`、`map_epoch_changed`、`identity_mismatch`、`lineup_mismatch`。Companion 将事件放入有界持久 outbox；注入的外部 sink 回报 `accepted/rejected/retry`，重试有退避和 24 小时过期。比赛、context revision、producer、session、source generation 或 map epoch 改变即终止旧事件重试；高影响事件要求当前新鲜且 identity matched。`GET /local/v1/reliable-output-status` 只展示本机投递状态，不暴露完整事件。外部消费者必须按幂等键去重，不能把 Mizar observation 当成官方赛果。
+
 ## 1. RivalHub 只读赛事上下文
 
 RivalHub 连接模式通过 `packages/rivalhub` 消费公开、版本化的只读契约。Mizar 不直连 RivalHub 数据库，也不导入 RivalHub 内部 domain 类型。
@@ -485,7 +499,7 @@ reset 都从当前时刻重新开始，不补播旧动画。
 
 `GET /local/v1/bp-workspace` 返回独立 `mizar.bp-workspace.v4` schema，增加 `{ demo: { active: "bo1" | "bo3" | "bo5" | null } }`，只公开当前 Demo 格式，不包含 Demo Manifest 或其内部 ID。其余字段仍是有限的来源、`authoringMode`、就绪状态、比赛双方公开名称、`authoringDraft`、仅 local/cache-local binding 可编辑的 `localDraft`、map catalog 和当前 context revision。`authoringMode` 为 `standalone | bound-overlay`：无 binding 和 standalone local match 可编辑本地赛事字段；从 online/cache-online 补录 BP 后仍为 `bound-overlay`，canonical match、competition、entrant、roster 与 commentator 元数据持续锁定。待确认 RivalHub candidate 只公开不透明 candidate revision、赛事、阶段、赛制和双方队名；不暴露内部 match/entry IDs、队标、roster、诊断或 schema version。来源显示值为 `none | online | local | cache`，Demo 不改变真实来源。Companion 重启后 Demo 状态为 inactive。
 
-`POST /operator/bp-local-save` 接收 `{draft: LocalBpDraft, expectedContextRevision}`，请求体最多 65,536 bytes。Companion 校验结构化输入、按固定赛制生成 veto sequence，编译成标准 BroadcastManifest，再经过现有 validator、MatchContextController、ProjectionCoordinator 和本机 LKG store。无 binding 时创建 `standalone` 本地身份；已有 online/cache-online binding 时创建 `bound-overlay`，只允许补 BP，沿用比赛和参赛身份，拒绝更改 canonical metadata，并保留已完成地图；已有 `standalone` local/cache-local binding 可修改本地显示字段但保持稳定 IDs 和名单；已有 `bound-overlay` local/cache-local binding 仍只允许修改 BP。`localAuthoringMode` 属于 MatchContextBinding acquisition metadata 与 LKG metadata，不进入 MatchContext domain，也不从 ID 推断。LKG 使用 v2 envelope 保存该字段；旧 v1 local cache 没有 provenance 时按 `bound-overlay` 恢复以维持 fail-closed。保存前不清除当前 binding；校验、revision、身份或原子持久化失败时旧 binding 保持有效。成功后来源成为 `local`，播放 session 回到 hidden。该流程不创建第二份 LocalBPState，也不写 RivalHub。
+`POST /operator/bp-local-save` 接收 `{draft: LocalBpDraft, expectedContextRevision}`，请求体最多 65,536 bytes。Companion 校验结构化输入、按固定赛制生成 veto sequence，并通过现有 validator、MatchContextController 与 ProjectionCoordinator。独立模式将 BP 写回 Mizar 本机 MatchDocument；旧 standalone BP Manifest 首次恢复时迁移。在线或 cache-online 比赛的 `bound-overlay` 只补 BP，沿用 canonical match、competition、entrant、roster 和 commentator 元数据，拒绝更改这些字段并保留已完成地图；这类覆盖仍保存在原 LKG。`localAuthoringMode` 是 MatchContextBinding acquisition metadata，不进入 MatchContext domain。旧 v1 local cache 没有 provenance 时按 `bound-overlay` 恢复以维持 fail-closed。保存前不清除当前 binding；校验、revision、身份或原子持久化失败时旧 binding 保持有效。成功后来源成为 `local`，播放 session 回到 hidden。
 
 `POST /operator/bp-rivalhub` 接收 `{expectedContextRevision, expectedPendingRevision}`，只确认切换到 MatchContextController 已暂存的 online candidate，不负责获取网络数据。活动 binding 生命周期与 online candidate acquisition generation 独立：开始 refresh 不清除已有有效 candidate；较新的失败请求保留它，较新的有效请求才原子替换它。本地保存成功或失败都不清除 candidate。激活必须同时匹配 `expectedContextRevision` 与 `expectedPendingRevision`；候选获取在激活期间推进时，旧激活不能清除更新候选。当前 RivalHub `main` 没有正式 BroadcastManifest HTTP endpoint；未来接入必须复用 shared controller。online candidate 恢复时不会自动覆盖 local 或 cached-from-local 比赛，只有制作人员显式确认后才切换并更新 LKG。
 
