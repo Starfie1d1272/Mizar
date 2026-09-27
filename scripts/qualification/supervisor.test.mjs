@@ -20,7 +20,7 @@ const BASE_TIME = '2026-09-15T00:00:00.000Z';
 function artifact() {
   return {
     schemaVersion: 1,
-    repository: 'Starfie1d1272/RivalHub-Broadcast',
+    repository: 'Starfie1d1272/Mizar',
     gitSha: '293f97a000000000000000000000000000000000',
     buildTimestamp: BASE_TIME,
     platform: 'win32-x64',

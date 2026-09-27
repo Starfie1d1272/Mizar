@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 
-const REPOSITORY = 'Starfie1d1272/RivalHub-Broadcast';
+const REPOSITORY = 'Starfie1d1272/Mizar';
 const QUALIFICATION_SCHEMA_VERSION = qualificationContract.schemaVersion;
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const scriptDir = resolve(dirname(fileURLToPath(import.meta.url)));
