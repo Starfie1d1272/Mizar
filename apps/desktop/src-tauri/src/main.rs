@@ -75,7 +75,7 @@ fn health_matches(root: &Path) -> bool {
     if stream.read_to_string(&mut response).is_err() { return false; }
     let Some(body) = response.split("\r\n\r\n").nth(1) else { return false; };
     let Ok(health) = serde_json::from_str::<serde_json::Value>(body) else { return false; };
-    health["product"]["repository"] == "Starfie1d1272/RivalHub-Broadcast"
+    health["product"]["repository"] == "Starfie1d1272/Mizar"
         && health["product"]["mode"] == "product"
         && health["product"]["artifactSha256"] == artifact["artifactSha256"]
 }

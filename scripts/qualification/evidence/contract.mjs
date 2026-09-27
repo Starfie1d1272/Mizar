@@ -72,7 +72,7 @@ function validateQualificationContract(contract) {
 
 export const QUALIFICATION_CONTRACT = validateQualificationContract(loadQualificationContract());
 export const QUALIFICATION_SCHEMA_VERSION = QUALIFICATION_CONTRACT.schemaVersion;
-export const QUALIFICATION_REPOSITORY = 'Starfie1d1272/RivalHub-Broadcast';
+export const QUALIFICATION_REPOSITORY = 'Starfie1d1272/Mizar';
 export const QUALIFICATION_MARKER_KINDS = new Set(QUALIFICATION_CONTRACT.markerKinds);
 export const QUALIFICATION_OBJECTIVE_SCENARIO_MARKER_KINDS = new Set(
   QUALIFICATION_CONTRACT.objectiveScenarioMarkerKinds,

@@ -18,7 +18,7 @@ describe('portable runtime management', () => {
     });
     const health = await app.inject('/health');
     expect(health.json<{ product: unknown }>().product).toEqual({
-      repository: 'Starfie1d1272/RivalHub-Broadcast',
+      repository: 'Starfie1d1272/Mizar',
       artifactSha256: 'a'.repeat(64),
       instanceId: 'instance',
       mode: 'product',

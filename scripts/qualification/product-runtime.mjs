@@ -8,7 +8,7 @@ import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 
-export const PRODUCT_REPOSITORY = 'Starfie1d1272/RivalHub-Broadcast';
+export const PRODUCT_REPOSITORY = 'Starfie1d1272/Mizar';
 export const PRODUCT_PORT = 3000;
 const bundleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 

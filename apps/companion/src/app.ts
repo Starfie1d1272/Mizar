@@ -377,7 +377,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : {
             product: {
-              repository: 'Starfie1d1272/RivalHub-Broadcast',
+              repository: 'Starfie1d1272/Mizar',
               artifactSha256: options.productRuntime.artifactSha256,
               instanceId: options.productRuntime.instanceId,
               mode: 'product',
