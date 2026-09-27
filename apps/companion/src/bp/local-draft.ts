@@ -3,14 +3,14 @@ import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LOCAL_BP_MAP_POOL,
   LOCAL_BP_MAP_CATALOG,
-  inspectBp,
   localBpSequence,
+  type BpSideChoice,
 } from '@rivalhub-broadcast/core/projection';
 import { localBpDraftSchema, type LocalBpDraft } from '@rivalhub-broadcast/protocol/bp';
 import type { BroadcastManifestV1, BroadcastSide } from '@rivalhub-broadcast/rivalhub';
 import { canonicalizeCs2MapName } from '@rivalhub-broadcast/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
-import { isLocalMatchContextBinding } from '../match-context/lkg-store.js';
+import { isLocalBinding, localAuthoringMode } from '../match-context/lkg-store.js';
 
 export type LocalBpDraftResult =
   | { readonly ok: true; readonly manifest: BroadcastManifestV1 }
@@ -50,6 +50,89 @@ function localSlug(value: string): string {
   return slug || 'local-match';
 }
 
+function authoringSideChoices(binding: MatchContextBinding): ReadonlyMap<string, BpSideChoice> {
+  const { context } = binding;
+  const keyFor = (name: string) => canonicalizeCs2MapName(name) ?? name.trim().toLowerCase();
+  const entrantFor = (entryId: string | null): 'a' | 'b' | null => {
+    if (entryId === null) return null;
+    if (entryId === context.entrants.a.entryId && entryId !== context.entrants.b.entryId)
+      return 'a';
+    if (entryId === context.entrants.b.entryId && entryId !== context.entrants.a.entryId)
+      return 'b';
+    return null;
+  };
+  const oppositeEntrant = (entrant: 'a' | 'b') => (entrant === 'a' ? 'b' : 'a');
+  const evidence = new Map<
+    string,
+    { explicit: BpSideChoice[]; legacy: BpSideChoice[]; kind?: 'ban' | 'pick' | 'decider' }
+  >();
+  const ambiguous = new Set<string>();
+  const ordered = [...context.veto].sort((a, b) => a.stepOrder - b.stepOrder);
+  if (new Set(ordered.map((step) => step.stepOrder)).size !== ordered.length) return new Map();
+
+  for (const step of ordered) {
+    const mapKey = keyFor(step.mapName);
+    const record = evidence.get(mapKey) ?? { explicit: [], legacy: [] };
+    if (step.actionType === 'side_pick') {
+      const choiceMaker = entrantFor(step.entryId);
+      if (choiceMaker === null || step.side === null) {
+        evidence.set(mapKey, record);
+        continue;
+      }
+      record.explicit.push({ entrant: choiceMaker, side: step.side });
+      evidence.set(mapKey, record);
+      continue;
+    }
+
+    if (record.kind !== undefined) ambiguous.add(mapKey);
+    record.kind = step.actionType;
+    if (step.side !== null) {
+      const owner = entrantFor(step.entryId);
+      const choiceMaker =
+        step.actionType === 'pick' && owner !== null
+          ? oppositeEntrant(owner)
+          : step.actionType === 'decider'
+            ? owner
+            : null;
+      if (choiceMaker !== null) record.legacy.push({ entrant: choiceMaker, side: step.side });
+    }
+    evidence.set(mapKey, record);
+  }
+
+  const mapCounts = new Map<string, number>();
+  for (const map of context.maps) {
+    const key = keyFor(map.mapName);
+    mapCounts.set(key, (mapCounts.get(key) ?? 0) + 1);
+  }
+  const mapByName = new Map(context.maps.map((map) => [keyFor(map.mapName), map]));
+  const recovered = new Map<string, BpSideChoice>();
+  for (const [mapKey, record] of evidence) {
+    if (
+      ambiguous.has(mapKey) ||
+      record.kind === 'ban' ||
+      record.explicit.length > 1 ||
+      record.legacy.length > 1 ||
+      (mapCounts.get(mapKey) ?? 0) > 1
+    )
+      continue;
+    const explicit = record.explicit[0];
+    const legacy = record.legacy[0];
+    if (
+      explicit !== undefined &&
+      legacy !== undefined &&
+      (explicit.entrant !== legacy.entrant || explicit.side !== legacy.side)
+    )
+      continue;
+    const choice = explicit ?? legacy;
+    if (choice === undefined || (record.kind === 'decider' && context.format === 'bo5')) continue;
+    const map = mapByName.get(mapKey);
+    const expectedTeamA = choice.entrant === 'a' ? choice.side : choice.side === 'CT' ? 'T' : 'CT';
+    if (map?.teamAStartSide != null && map.teamAStartSide !== expectedTeamA) continue;
+    recovered.set(mapKey, choice);
+  }
+  return recovered;
+}
+
 export function createLocalBpManifest(
   input: unknown,
   baseBinding?: MatchContextBinding,
@@ -58,16 +141,17 @@ export function createLocalBpManifest(
   if (!parsed.success) return invalid('bp_draft_invalid', '本地 BP 信息格式有误，请检查填写内容。');
   const draft = parsed.data;
   const baseManifest = baseBinding?.manifest;
-  const editableBoundMatch = isLocalMatchContextBinding(baseBinding);
+  const editableStandalone =
+    baseManifest === undefined || localAuthoringMode(baseBinding) === 'standalone';
   const inheritedLogoMatches = (entrant: 'a' | 'b') => {
     const baseLogo = baseManifest?.entrants[entrant].logoUrl?.trim() || null;
     return (draft.entrants[entrant].logoUrl?.trim() || null) === baseLogo;
   };
   const shouldValidateLogo = (entrant: 'a' | 'b') =>
-    baseManifest === undefined || (editableBoundMatch && !inheritedLogoMatches(entrant));
+    baseManifest === undefined || (editableStandalone && !inheritedLogoMatches(entrant));
   if (
     baseManifest !== undefined &&
-    !editableBoundMatch &&
+    !editableStandalone &&
     (draft.competitionName.trim() !== baseManifest.match.competition.name.trim() ||
       draft.stage.trim() !== baseManifest.match.stage.trim() ||
       draft.format !== baseManifest.match.format ||
@@ -87,7 +171,7 @@ export function createLocalBpManifest(
     side: pick.side,
   }));
   if (
-    (baseManifest === undefined || editableBoundMatch) &&
+    (baseManifest === undefined || editableStandalone) &&
     (draft.entrants.a.name.trim() === '' || draft.entrants.b.name.trim() === '')
   )
     return invalid('bp_draft_names_required', '请填写两支队伍的名称。');
@@ -232,7 +316,7 @@ export function createLocalBpManifest(
   const stage = draft.stage.trim() || '本地比赛';
   let manifest: BroadcastManifestV1;
   if (baseManifest !== undefined) {
-    const match = editableBoundMatch
+    const match = editableStandalone
       ? {
           ...baseManifest.match,
           competition: {
@@ -247,7 +331,7 @@ export function createLocalBpManifest(
           stage,
         }
       : baseManifest.match;
-    const entrants = editableBoundMatch
+    const entrants = editableStandalone
       ? {
           a: {
             ...baseManifest.entrants.a,
@@ -312,12 +396,7 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
   const manifest = binding.manifest;
   const firstBan = manifest.veto.find((step) => step.actionType === 'ban');
   const vetoA = firstBan?.entryId === manifest.entrants.b.entryId ? 'b' : 'a';
-  const projection = inspectBp(binding.context).projection;
-  const sideChoices = new Map(
-    projection?.cards.flatMap((card) =>
-      card.sideChoice === null ? [] : [[card.mapName, card.sideChoice.side] as const],
-    ) ?? [],
-  );
+  const sideChoices = authoringSideChoices(binding);
   const poolNames = new Set(
     [...manifest.veto.map((step) => step.mapName), ...manifest.maps.map((map) => map.mapName)]
       .map((name) => canonicalizeCs2MapName(name))
@@ -343,9 +422,7 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
     .slice(0, expectedPicks);
   const picks = pickSteps.map((step) => ({
     mapName: canonicalizeCs2MapName(step.mapName) ?? '',
-    side:
-      sideChoices.get(canonicalizeCs2MapName(step.mapName) ?? step.mapName) ??
-      (step.side === 'ct' ? 'CT' : step.side === 't' ? 'T' : null),
+    side: sideChoices.get(canonicalizeCs2MapName(step.mapName) ?? step.mapName)?.side ?? null,
   }));
   while (picks.length < expectedPicks) picks.push({ mapName: '', side: null });
   const decider = manifest.veto.find((step) => step.actionType === 'decider');
@@ -353,8 +430,7 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
   const deciderSide =
     deciderName === null || deciderName === undefined
       ? null
-      : (sideChoices.get(deciderName) ??
-        (decider?.side === 'ct' ? 'CT' : decider?.side === 't' ? 'T' : null));
+      : (sideChoices.get(deciderName)?.side ?? null);
   return {
     competitionName: manifest.match.competition.name,
     stage: manifest.match.stage,
@@ -372,7 +448,7 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
 }
 
 export function localBpDraftFromBinding(binding: MatchContextBinding): LocalBpDraft | null {
-  return isLocalMatchContextBinding(binding) ? bpAuthoringDraftFromBinding(binding) : null;
+  return isLocalBinding(binding) ? bpAuthoringDraftFromBinding(binding) : null;
 }
 
 export const localBpMapOptions = LOCAL_BP_MAP_CATALOG;

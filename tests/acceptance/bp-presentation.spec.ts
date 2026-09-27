@@ -16,6 +16,7 @@ function bindingFor(key: 'semifinalA' | 'final'): MatchContextBinding {
     context: toMatchContext(validated.value),
     origin: 'online',
     freshness: 'fresh',
+    localAuthoringMode: 'bound-overlay',
     diagnostics: validated.diagnostics,
   };
 }
@@ -34,6 +35,7 @@ async function partiallyRecordedBinding(): Promise<MatchContextBinding> {
     context: toMatchContext(validated.value),
     origin: 'online',
     freshness: 'fresh',
+    localAuthoringMode: 'bound-overlay',
     diagnostics: validated.diagnostics,
   };
 }
@@ -207,7 +209,11 @@ test('local BP shows a bounded RivalHub candidate summary and sends both revisio
 }) => {
   const directory = await mkdtemp(join(tmpdir(), 'bp-pending-online-'));
   const app = buildApp({
-    matchContextBinding: { ...bindingFor('semifinalA'), origin: 'local' },
+    matchContextBinding: {
+      ...bindingFor('semifinalA'),
+      origin: 'local',
+      localAuthoringMode: 'standalone',
+    },
     matchManifestPath: join(directory, 'match.json'),
   });
   let switchCommand: unknown;
@@ -264,6 +270,10 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
   try {
     await page.goto('/operator/bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
+    expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
+      schemaVersion: 'rivalhub.bp-workspace.v3',
+      authoringMode: 'standalone',
+    });
     await page.getByRole('button', { name: '本地填写 BP', exact: true }).click();
     const editor = page.locator('.bp-local-editor');
     await expect(editor).toBeVisible();
@@ -325,6 +335,16 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
         name: '编辑本地 BP',
       }),
     ).toBeVisible();
+    expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
+      authoringMode: 'standalone',
+    });
+    await page
+      .getByRole('complementary', { name: '播出控制' })
+      .getByRole('button', { name: '编辑本地 BP' })
+      .click();
+    await expect(
+      page.locator('.bp-local-editor .bp-editor-match-fields input').first(),
+    ).toBeEnabled();
     await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
 
     const program = await context.newPage();
@@ -353,7 +373,7 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
   const directory = await mkdtemp(join(tmpdir(), 'bp-bound-fallback-'));
   const manifestPath = join(directory, 'match.json');
   const original = await partiallyRecordedBinding();
-  const app = buildApp({
+  let app = buildApp({
     matchContextBinding: original,
     matchManifestPath: manifestPath,
   });
@@ -384,15 +404,32 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'local');
 
     const envelope = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      metadata: { localAuthoringMode: string };
       payload: typeof original.manifest;
     };
     const saved = envelope.payload;
+    expect(envelope.metadata.localAuthoringMode).toBe('bound-overlay');
     expect(saved.match).toEqual(original.manifest.match);
     expect(saved.entrants).toEqual(original.manifest.entrants);
     expect(saved.commentators).toEqual(original.manifest.commentators);
     expect(saved.maps[0]).toEqual(original.manifest.maps[0]);
     expect(saved.veto).toHaveLength(10);
     expect(saved.maps).toHaveLength(3);
+
+    await app.close();
+    app = buildApp({ matchManifestPath: manifestPath });
+    await page.reload();
+    await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'cache');
+    await page
+      .getByRole('complementary', { name: '播出控制' })
+      .getByRole('button', { name: '编辑本地 BP', exact: true })
+      .click();
+    const restoredEditor = page.locator('.bp-local-editor');
+    await expect(restoredEditor.locator('.bp-editor-match-fields input').nth(0)).toBeDisabled();
+    await expect(restoredEditor.getByRole('combobox', { name: '比赛赛制' })).toBeDisabled();
+    await expect(
+      restoredEditor.locator('.bp-editor-team[data-entrant="a"] input').first(),
+    ).toBeDisabled();
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

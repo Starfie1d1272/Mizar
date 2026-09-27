@@ -53,7 +53,7 @@ export function BpLocalEditor({
   const [baseContextRevision] = useState(workspace.contextRevision);
   const localSource =
     workspace.source === 'local' || (workspace.source === 'cache' && workspace.localDraft !== null);
-  const lockedMatch = workspace.match !== null && !localSource;
+  const lockedMatch = workspace.match !== null && workspace.authoringMode === 'bound-overlay';
   const [initial] = useState(
     () => workspace.localDraft ?? workspace.authoringDraft ?? emptyDraft(workspace),
   );

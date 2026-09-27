@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { bpAuthoringDraftFromBinding, createLocalBpManifest } from '../src/bp/local-draft.js';
 import { MatchContextController } from '../src/match-context/controller.js';
 import { MatchManifestLkgStore, type MatchContextBinding } from '../src/match-context/lkg-store.js';
+import { SourceLoadError } from '../src/match-context/source-error.js';
 
 function draftFor(format: 'bo1' | 'bo3' | 'bo5') {
   const mapPool = [...DEFAULT_LOCAL_BP_MAP_POOL];
@@ -63,6 +64,7 @@ function bindingFor(
     context: toMatchContext(manifest),
     origin,
     freshness: 'fresh',
+    localAuthoringMode: origin === 'local' ? 'standalone' : 'bound-overlay',
     diagnostics: [],
   };
 }
@@ -201,6 +203,90 @@ describe('local BP authoring', () => {
     });
   });
 
+  it('recovers unambiguous explicit and legacy sides from an incomplete BP', async () => {
+    const original = await knownManifest();
+    const entryA = original.entrants.a.entryId;
+    const entryB = original.entrants.b.entryId;
+    const partial = (
+      pickSide: 'ct' | null,
+      explicitSide: 'ct' | 't' | null,
+    ): BroadcastManifestV1 => ({
+      ...original,
+      match: { ...original.match, format: 'bo3' },
+      maps: original.maps.map((map) =>
+        map.mapName === 'de_ancient' ? { ...map, teamAStartSide: null } : map,
+      ),
+      veto: [
+        { stepOrder: 1, actionType: 'ban', mapName: 'de_nuke', entryId: entryA, side: null },
+        { stepOrder: 2, actionType: 'ban', mapName: 'de_inferno', entryId: entryB, side: null },
+        {
+          stepOrder: 3,
+          actionType: 'pick',
+          mapName: 'de_ancient',
+          entryId: entryA,
+          side: pickSide,
+        },
+        ...(explicitSide === null
+          ? []
+          : [
+              {
+                stepOrder: 4,
+                actionType: 'side_pick' as const,
+                mapName: 'de_ancient',
+                entryId: entryB,
+                side: explicitSide,
+              },
+            ]),
+      ],
+    });
+    const explicit = bindingFor(partial(null, 'ct'), 'online');
+    const legacy = bindingFor(partial('ct', null), 'online');
+    const conflict = bindingFor(partial('ct', 't'), 'online');
+    const separatedSource = partial(null, null);
+    const separatedExplicit = bindingFor(
+      {
+        ...separatedSource,
+        veto: [
+          ...separatedSource.veto,
+          { stepOrder: 4, actionType: 'ban', mapName: 'de_mirage', entryId: entryB, side: null },
+          {
+            stepOrder: 5,
+            actionType: 'side_pick',
+            mapName: 'de_ancient',
+            entryId: entryB,
+            side: 'ct',
+          },
+        ],
+      },
+      'online',
+    );
+    const deciderSource = partial(null, null);
+    const legacyDecider = bindingFor(
+      {
+        ...deciderSource,
+        veto: [
+          ...deciderSource.veto.slice(0, 2),
+          {
+            stepOrder: 3,
+            actionType: 'decider',
+            mapName: 'de_ancient',
+            entryId: entryB,
+            side: 'ct',
+          },
+        ],
+      },
+      'online',
+    );
+
+    expect(inspectBp(explicit.context).readiness).toBe('incomplete');
+    expect(inspectBp(separatedExplicit.context).readiness).toBe('conflict');
+    expect(bpAuthoringDraftFromBinding(explicit).picks[0]?.side).toBe('CT');
+    expect(bpAuthoringDraftFromBinding(separatedExplicit).picks[0]?.side).toBe('CT');
+    expect(bpAuthoringDraftFromBinding(legacy).picks[0]?.side).toBe('CT');
+    expect(bpAuthoringDraftFromBinding(legacyDecider).deciderSide).toBe('CT');
+    expect(bpAuthoringDraftFromBinding(conflict).picks[0]?.side).toBeNull();
+  });
+
   it('preserves the current binding on failed save and stores a successful local save in the LKG', async () => {
     const previous = await knownManifest();
     const onlineBinding = bindingFor(previous, 'online');
@@ -254,69 +340,139 @@ describe('local BP authoring', () => {
     }
   });
 
-  it('keeps a bound match identity and played map when BP is completed locally, then edited again', async () => {
+  it('keeps a bound overlay locked after save and cache restore', async () => {
     const previous = await knownManifest();
-    const onlineBinding = bindingFor(previous, 'online');
-    const compiled = createLocalBpManifest(boundBo3Draft(previous), onlineBinding);
+    const incompleteOnline = { ...previous, veto: [] };
+    const onlineBinding = bindingFor(incompleteOnline, 'online');
+    const compiled = createLocalBpManifest(boundBo3Draft(incompleteOnline), onlineBinding);
     expect(compiled.ok).toBe(true);
     if (!compiled.ok) return;
 
-    const localBinding = bindingFor(compiled.manifest, 'local');
-    const editedDraft = {
-      ...bpAuthoringDraftFromBinding(localBinding),
-      competitionName: '本地补录赛事名称',
-      entrants: {
-        a: { name: '补录后的队名 A', logoUrl: null },
-        b: { name: '补录后的队名 B', logoUrl: null },
-      },
-    };
-    const edited = createLocalBpManifest(editedDraft, localBinding);
-    expect(edited.ok).toBe(true);
-    if (!edited.ok) return;
-
-    expect(edited.manifest.match.matchId).toBe(previous.match.matchId);
-    expect(edited.manifest.match.competition.competitionId).toBe(
-      previous.match.competition.competitionId,
-    );
-    expect(edited.manifest.entrants.a.entryId).toBe(previous.entrants.a.entryId);
-    expect(edited.manifest.entrants.b.entryId).toBe(previous.entrants.b.entryId);
-    expect(edited.manifest.entrants.a.roster).toEqual(previous.entrants.a.roster);
-    expect(edited.manifest.entrants.b.roster).toEqual(previous.entrants.b.roster);
-    expect(edited.manifest.maps[0]).toEqual(previous.maps[0]);
-    expect(edited.manifest.entrants.a.name).toBe('补录后的队名 A');
-    const cachedLocalBinding: MatchContextBinding = {
-      ...localBinding,
-      origin: 'cache',
-      cachedFrom: 'local',
-    };
-    const editedAfterRestart = createLocalBpManifest(
-      { ...editedDraft, stage: '重启后的本地编辑' },
-      cachedLocalBinding,
-    );
-    expect(editedAfterRestart.ok).toBe(true);
-    if (editedAfterRestart.ok) {
-      expect(editedAfterRestart.manifest.match.matchId).toBe(previous.match.matchId);
-      expect(editedAfterRestart.manifest.match.competition.competitionId).toBe(
-        previous.match.competition.competitionId,
+    const directory = await mkdtemp(join(tmpdir(), 'bp-bound-provenance-test-'));
+    try {
+      const store = new MatchManifestLkgStore({ filePath: join(directory, 'match.json') });
+      const controller = new MatchContextController({
+        lkgStore: store,
+        initialBinding: onlineBinding,
+      });
+      const saved = await controller.selectLocalMatch(
+        compiled.manifest,
+        controller.getActiveRevision(),
       );
-      expect(editedAfterRestart.manifest.entrants.a.roster).toEqual(previous.entrants.a.roster);
-    }
-    const changedIdentity = boundBo3Draft(previous);
-    expect(
-      createLocalBpManifest(
-        {
-          ...changedIdentity,
-          entrants: {
-            ...changedIdentity.entrants,
-            a: { name: '伪造队名', logoUrl: null },
-          },
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+      const localBinding = controller.getActiveBinding()!;
+      expect(localBinding.localAuthoringMode).toBe('bound-overlay');
+
+      const editedDraft = {
+        ...bpAuthoringDraftFromBinding(localBinding),
+        competitionName: '本地补录赛事名称',
+        stage: '本地补录阶段',
+        entrants: {
+          a: { name: '补录后的队名 A', logoUrl: null },
+          b: { name: '补录后的队名 B', logoUrl: null },
         },
-        onlineBinding,
-      ),
-    ).toMatchObject({
-      ok: false,
-      code: 'bp_bound_identity_locked',
-    });
+      };
+      expect(createLocalBpManifest(editedDraft, localBinding)).toMatchObject({
+        ok: false,
+        code: 'bp_bound_identity_locked',
+      });
+      expect(createLocalBpManifest({ ...editedDraft, format: 'bo5' }, localBinding)).toMatchObject({
+        ok: false,
+        code: 'bp_bound_identity_locked',
+      });
+
+      const bypassedCompiler = {
+        ...compiled.manifest,
+        match: {
+          ...compiled.manifest.match,
+          competition: { ...compiled.manifest.match.competition, name: '伪造赛事名' },
+        },
+      };
+      const rejected = await controller.selectLocalMatch(
+        bypassedCompiler,
+        controller.getActiveRevision(),
+      );
+      expect(rejected).toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: 'local_identity_mismatch' })],
+      });
+
+      const cached = await store.readLatest();
+      expect(cached).toMatchObject({
+        ok: true,
+        value: { origin: 'cache', cachedFrom: 'local', localAuthoringMode: 'bound-overlay' },
+      });
+      if (!cached.ok) return;
+      expect(
+        createLocalBpManifest({ ...editedDraft, stage: '重启后改阶段' }, cached.value),
+      ).toMatchObject({ ok: false, code: 'bp_bound_identity_locked' });
+      expect(cached.value.manifest.entrants.a.roster).toEqual(previous.entrants.a.roster);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('allows standalone match edits while keeping IDs stable through cache restore', async () => {
+    const initial = createLocalBpManifest(draftFor('bo3'));
+    expect(initial.ok).toBe(true);
+    if (!initial.ok) return;
+    const directory = await mkdtemp(join(tmpdir(), 'bp-standalone-provenance-test-'));
+    try {
+      const store = new MatchManifestLkgStore({ filePath: join(directory, 'match.json') });
+      const controller = new MatchContextController({ lkgStore: store });
+      const saved = await controller.selectLocalMatch(
+        initial.manifest,
+        controller.getActiveRevision(),
+      );
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+      const localBinding = controller.getActiveBinding()!;
+      expect(localBinding.localAuthoringMode).toBe('standalone');
+      const originalIds = {
+        matchId: localBinding.manifest.match.matchId,
+        competitionId: localBinding.manifest.match.competition.competitionId,
+        a: localBinding.manifest.entrants.a.entryId,
+        b: localBinding.manifest.entrants.b.entryId,
+      };
+      const editedDraft = {
+        ...bpAuthoringDraftFromBinding(localBinding),
+        competitionName: '本地赛事改名',
+        stage: '本地阶段改名',
+        entrants: {
+          a: { name: '本地队伍 A', logoUrl: null },
+          b: { name: '本地队伍 B', logoUrl: null },
+        },
+      };
+      const edited = createLocalBpManifest(editedDraft, localBinding);
+      expect(edited.ok).toBe(true);
+      if (!edited.ok) return;
+      expect(edited.manifest.match.matchId).toBe(originalIds.matchId);
+      expect(edited.manifest.match.competition.competitionId).toBe(originalIds.competitionId);
+      expect(edited.manifest.entrants.a.entryId).toBe(originalIds.a);
+      expect(edited.manifest.entrants.b.entryId).toBe(originalIds.b);
+      expect(edited.manifest.entrants.a.name).toBe('本地队伍 A');
+
+      const savedEdit = await controller.selectLocalMatch(
+        edited.manifest,
+        controller.getActiveRevision(),
+      );
+      expect(savedEdit.ok).toBe(true);
+      const cached = await store.readLatest();
+      expect(cached).toMatchObject({
+        ok: true,
+        value: { localAuthoringMode: 'standalone', cachedFrom: 'local' },
+      });
+      if (!cached.ok) return;
+      const afterRestart = createLocalBpManifest(
+        { ...editedDraft, stage: '重启后继续编辑' },
+        cached.value,
+      );
+      expect(afterRestart.ok).toBe(true);
+      if (afterRestart.ok) expect(afterRestart.manifest.match.matchId).toBe(originalIds.matchId);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('stages a recovered online match until the operator explicitly switches back', async () => {
@@ -394,7 +550,130 @@ describe('local BP authoring', () => {
     }
   });
 
-  it('makes a local BP save supersede an in-flight online acquisition', async () => {
+  it('keeps a valid pending candidate when a later refresh fails', async () => {
+    const base = createLocalBpManifest(draftFor('bo3'));
+    expect(base.ok).toBe(true);
+    if (!base.ok) return;
+    const first = await knownManifest();
+    const second = { ...first, match: { ...first.match, matchId: 'match-m2-refresh-fail' } };
+    const directory = await mkdtemp(join(tmpdir(), 'bp-candidate-refresh-fail-test-'));
+    try {
+      const controller = new MatchContextController({
+        lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'match.json') }),
+        initialBinding: bindingFor(base.manifest, 'local'),
+      });
+      const staged = await controller.selectMatch(first.match.matchId, {
+        kind: 'online',
+        load: () => Promise.resolve(first),
+      });
+      expect(staged.ok).toBe(true);
+      const pendingBefore = controller.getPendingOnlineCandidate();
+      const refresh = deferred<unknown>();
+      const refreshResult = controller.selectMatch(second.match.matchId, {
+        kind: 'online',
+        load: () => refresh.promise,
+      });
+      expect(controller.getPendingOnlineCandidate()).toEqual(pendingBefore);
+      refresh.reject(new SourceLoadError('offline'));
+      const failedRefresh = await refreshResult;
+
+      expect(failedRefresh.ok).toBe(false);
+      expect(controller.getPendingOnlineCandidate()).toEqual(pendingBefore);
+      expect(controller.getPendingOnlineCandidate()?.binding.manifest.match.matchId).toBe(
+        first.match.matchId,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a pending candidate across failed and successful local BP saves', async () => {
+    const base = createLocalBpManifest(draftFor('bo3'));
+    expect(base.ok).toBe(true);
+    if (!base.ok) return;
+    const online = await knownManifest();
+    const directory = await mkdtemp(join(tmpdir(), 'bp-candidate-local-save-test-'));
+    let failWrites = true;
+    try {
+      const controller = new MatchContextController({
+        lkgStore: new MatchManifestLkgStore({
+          filePath: join(directory, 'match.json'),
+          faultInjector: (point) => {
+            if (failWrites && point === 'before-write') throw new Error('injected save failure');
+          },
+        }),
+        initialBinding: bindingFor(base.manifest, 'local'),
+      });
+      const staged = await controller.selectMatch(online.match.matchId, {
+        kind: 'online',
+        load: () => Promise.resolve(online),
+      });
+      expect(staged.ok).toBe(true);
+      const pendingBefore = controller.getPendingOnlineCandidate();
+      const edited = createLocalBpManifest(
+        { ...draftFor('bo3'), stage: '保存失败后仍可重试' },
+        controller.getActiveBinding(),
+      );
+      expect(edited.ok).toBe(true);
+      if (!edited.ok) return;
+      const failedSave = await controller.selectLocalMatch(
+        edited.manifest,
+        controller.getActiveRevision(),
+      );
+      expect(failedSave.ok).toBe(false);
+      expect(controller.getPendingOnlineCandidate()).toEqual(pendingBefore);
+
+      failWrites = false;
+      const retryDraft = createLocalBpManifest(
+        { ...draftFor('bo3'), stage: '本地 BP 已保存' },
+        controller.getActiveBinding(),
+      );
+      expect(retryDraft.ok).toBe(true);
+      if (!retryDraft.ok) return;
+      const saved = await controller.selectLocalMatch(
+        retryDraft.manifest,
+        controller.getActiveRevision(),
+      );
+      expect(saved.ok).toBe(true);
+      expect(controller.getPendingOnlineCandidate()).toEqual(pendingBefore);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('atomically replaces an older pending candidate with a newer valid one', async () => {
+    const base = createLocalBpManifest(draftFor('bo3'));
+    expect(base.ok).toBe(true);
+    if (!base.ok) return;
+    const fixture = await knownManifest();
+    const first = { ...fixture, match: { ...fixture.match, matchId: 'match-m2-first-valid' } };
+    const second = { ...fixture, match: { ...fixture.match, matchId: 'match-m2-second-valid' } };
+    const directory = await mkdtemp(join(tmpdir(), 'bp-candidate-replace-test-'));
+    try {
+      const controller = new MatchContextController({
+        lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'match.json') }),
+        initialBinding: bindingFor(base.manifest, 'local'),
+      });
+      await controller.selectMatch(first.match.matchId, {
+        kind: 'online',
+        load: () => Promise.resolve(first),
+      });
+      const pendingFirst = controller.getPendingOnlineCandidate();
+      await controller.selectMatch(second.match.matchId, {
+        kind: 'online',
+        load: () => Promise.resolve(second),
+      });
+      const pendingSecond = controller.getPendingOnlineCandidate();
+
+      expect(pendingFirst).toBeDefined();
+      expect(pendingSecond?.revision).not.toBe(pendingFirst?.revision);
+      expect(pendingSecond?.binding.manifest.match.matchId).toBe(second.match.matchId);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a pending candidate when a local BP save overlaps acquisition', async () => {
     const base = createLocalBpManifest(draftFor('bo3'));
     expect(base.ok).toBe(true);
     if (!base.ok) return;
@@ -422,10 +701,12 @@ describe('local BP authoring', () => {
       const acquired = await acquisition;
 
       expect(saved.ok).toBe(true);
-      expect(acquired.ok).toBe(false);
+      expect(acquired.ok).toBe(true);
       expect(controller.getActiveBinding()?.origin).toBe('local');
       expect(controller.getActiveBinding()?.context.stage).toBe('本地最新 BP');
-      expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+      expect(controller.getPendingOnlineCandidate()?.binding.manifest.match.matchId).toBe(
+        online.match.matchId,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

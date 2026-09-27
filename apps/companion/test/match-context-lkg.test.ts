@@ -83,7 +83,7 @@ describe('Match Manifest last-known-good seam', () => {
       clock: () => '2026-09-16T12:00:00.000Z',
     });
 
-    const saved = await store.save(manifest, 'online');
+    const saved = await store.save(manifest, 'online', { localAuthoringMode: 'standalone' });
     const restored = await store.read(manifest.match.matchId);
 
     expect(saved.ok).toBe(true);
@@ -92,22 +92,54 @@ describe('Match Manifest last-known-good seam', () => {
     expect(restored.value.origin).toBe('cache');
     expect(restored.value.freshness).toBe('stale');
     expect(restored.value.cachedFrom).toBe('online');
+    expect(restored.value.localAuthoringMode).toBe('bound-overlay');
     expect(restored.value.storedAt).toBe('2026-09-16T12:00:00.000Z');
     expect(restored.value.manifest).toEqual(manifest);
     expect(restored.value.context.matchId).toBe(manifest.match.matchId);
 
     const envelope = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>;
     expect(envelope).toEqual({
-      cacheVersion: 'rivalhub.broadcast-match-context-cache.v1',
+      cacheVersion: 'rivalhub.broadcast-match-context-cache.v2',
       metadata: {
         matchId: manifest.match.matchId,
         origin: 'online',
         storedAt: '2026-09-16T12:00:00.000Z',
+        localAuthoringMode: 'bound-overlay',
       },
       payload: manifest,
     });
     await expect(readFile(`${filePath}.meta.json`, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
+    });
+  });
+
+  it('restores legacy local LKG metadata as a locked bound overlay', async () => {
+    const root = await temporaryDirectory();
+    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const filePath = join(root, 'manifest.json');
+    await writeFile(
+      filePath,
+      `${JSON.stringify({
+        cacheVersion: 'rivalhub.broadcast-match-context-cache.v1',
+        metadata: {
+          matchId: manifest.match.matchId,
+          origin: 'local',
+          storedAt: '2026-09-16T12:00:00.000Z',
+        },
+        payload: manifest,
+      })}\n`,
+      'utf8',
+    );
+
+    const restored = await new MatchManifestLkgStore({ filePath }).readLatest();
+
+    expect(restored).toMatchObject({
+      ok: true,
+      value: {
+        origin: 'cache',
+        cachedFrom: 'local',
+        localAuthoringMode: 'bound-overlay',
+      },
     });
   });
 

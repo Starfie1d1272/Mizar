@@ -18,7 +18,9 @@ import {
   type MatchContextStoreIssue,
   type MatchManifestLkgSaveOptions,
   type MatchManifestLkgStore,
-  isLocalMatchContextBinding,
+  type LocalAuthoringMode,
+  isLocalBinding,
+  isStandaloneLocalMatch,
 } from './lkg-store.js';
 
 export interface MatchContextSource {
@@ -73,10 +75,6 @@ export interface PendingOnlineMatchCandidate {
   readonly revision: string;
 }
 
-interface PendingOnlineMatchCandidateState extends PendingOnlineMatchCandidate {
-  readonly generation: number;
-}
-
 function controllerIssue(
   code: MatchContextControllerIssueCode,
   message: string,
@@ -122,7 +120,7 @@ function preservesBoundMatch(
   current: MatchContextBinding,
   candidate: BroadcastManifestV1,
 ): boolean {
-  if (isLocalMatchContextBinding(current))
+  if (isStandaloneLocalMatch(current))
     return preservesLocalMatchIdentity(current.manifest, candidate);
   return (
     isDeepStrictEqual(current.manifest.match, candidate.match) &&
@@ -143,10 +141,12 @@ export class MatchContextController {
     ((binding: MatchContextBinding | undefined) => void) | undefined;
   private readonly commitQueue = new SerialCommitQueue();
   private activeBinding: MatchContextBinding | undefined;
-  private pendingOnlineCandidate: PendingOnlineMatchCandidateState | undefined;
+  private pendingOnlineCandidate: PendingOnlineMatchCandidate | undefined;
   private bindingRevision = 0;
   private readonly revisionEpoch = randomUUID();
-  private selectionGeneration = 0;
+  private activeSelectionGeneration = 0;
+  private onlineCandidateGeneration = 0;
+  private onlineCandidateAcquisition: number | undefined;
 
   constructor(options: MatchContextControllerOptions) {
     this.lkgStore = options.lkgStore;
@@ -171,19 +171,31 @@ export class MatchContextController {
   }
 
   clearActive(): void {
-    this.selectionGeneration += 1;
+    this.activeSelectionGeneration += 1;
+    this.onlineCandidateGeneration += 1;
+    this.onlineCandidateAcquisition = undefined;
     this.pendingOnlineCandidate = undefined;
     this.clearActiveBinding();
   }
 
   private clearActiveBinding(): void {
     if (this.activeBinding === undefined) return;
+    if (isLocalBinding(this.activeBinding)) {
+      this.onlineCandidateGeneration += 1;
+      this.onlineCandidateAcquisition = undefined;
+      this.pendingOnlineCandidate = undefined;
+    }
     this.activeBinding = undefined;
     this.bindingRevision += 1;
     this.onBindingChanged?.(undefined);
   }
 
   private setActive(binding: MatchContextBinding): void {
+    if (isLocalBinding(this.activeBinding) && !isLocalBinding(binding)) {
+      this.onlineCandidateGeneration += 1;
+      this.onlineCandidateAcquisition = undefined;
+      this.pendingOnlineCandidate = undefined;
+    }
     this.activeBinding = binding;
     this.bindingRevision += 1;
     this.onBindingChanged?.(binding);
@@ -193,12 +205,19 @@ export class MatchContextController {
     requestedMatchId: string,
     source: MatchContextSource,
   ): Promise<MatchContextSelectionResult> {
-    const generation = ++this.selectionGeneration;
-    const isCurrent = () => generation === this.selectionGeneration;
     if (source.kind === 'online' && this.hasLocalOverride()) {
-      this.pendingOnlineCandidate = undefined;
-      return this.stageOnlineCandidate(requestedMatchId, source, generation, isCurrent);
+      const candidateGeneration = ++this.onlineCandidateGeneration;
+      this.onlineCandidateAcquisition = candidateGeneration;
+      const isLatestCandidate = () => candidateGeneration === this.onlineCandidateGeneration;
+      try {
+        return await this.stageOnlineCandidate(requestedMatchId, source, isLatestCandidate);
+      } finally {
+        if (this.onlineCandidateAcquisition === candidateGeneration)
+          this.onlineCandidateAcquisition = undefined;
+      }
     }
+    const generation = ++this.activeSelectionGeneration;
+    const isCurrent = () => generation === this.activeSelectionGeneration;
     if (this.activeBinding?.context.matchId !== requestedMatchId) this.clearActiveBinding();
 
     let candidate: unknown;
@@ -269,6 +288,7 @@ export class MatchContextController {
         context,
         origin: source.kind,
         freshness: 'fresh',
+        localAuthoringMode: 'bound-overlay',
         diagnostics: validated.diagnostics,
       };
       this.setActive(binding);
@@ -280,9 +300,8 @@ export class MatchContextController {
     candidate: unknown,
     expectedBindingRevision: string,
   ): Promise<MatchContextSelectionResult> {
-    const generation = ++this.selectionGeneration;
-    this.pendingOnlineCandidate = undefined;
-    const isCurrent = () => generation === this.selectionGeneration;
+    const generation = ++this.activeSelectionGeneration;
+    const isCurrent = () => generation === this.activeSelectionGeneration;
     const validated = validateBroadcastManifest(candidate);
     if (!validated.ok) {
       return {
@@ -326,8 +345,13 @@ export class MatchContextController {
             ),
           ],
         };
+      const authoringMode: LocalAuthoringMode =
+        current === undefined || isStandaloneLocalMatch(current) ? 'standalone' : 'bound-overlay';
       const canCommit = () => isCurrent() && expectedBindingRevision === this.getActiveRevision();
-      const saved = await this.lkgStore.save(validated.value, 'local', { canCommit });
+      const saved = await this.lkgStore.save(validated.value, 'local', {
+        canCommit,
+        localAuthoringMode: authoringMode,
+      });
       if (!canCommit() || (!saved.ok && saved.issue.code === 'lkg_commit_stale'))
         return this.staleSelectionResult(validated.value.match.matchId);
       if (!saved.ok) {
@@ -346,20 +370,20 @@ export class MatchContextController {
         context,
         origin: 'local',
         freshness: 'fresh',
+        localAuthoringMode: authoringMode,
         diagnostics: validated.diagnostics,
       };
-      this.pendingOnlineCandidate = undefined;
       this.setActive(binding);
       return { ok: true, binding, diagnostics: [] };
     });
   }
 
   async restoreLatest(): Promise<MatchContextBinding | undefined> {
-    const generation = ++this.selectionGeneration;
+    const generation = ++this.activeSelectionGeneration;
     return this.commitQueue.run(async () => {
       if (this.activeBinding !== undefined) return this.activeBinding;
       const cached = await this.lkgStore.readLatest();
-      if (generation !== this.selectionGeneration || !cached.ok) return undefined;
+      if (generation !== this.activeSelectionGeneration || !cached.ok) return undefined;
       this.setActive(cached.value);
       return cached.value;
     });
@@ -373,15 +397,16 @@ export class MatchContextController {
     if (
       pending === undefined ||
       pending.revision !== expectedPendingRevision ||
-      pending.generation !== this.selectionGeneration ||
+      this.onlineCandidateAcquisition !== undefined ||
       expectedBindingRevision !== this.getActiveRevision() ||
       !this.hasLocalOverride()
     )
       return this.staleSelectionResult(pending?.binding.context.matchId ?? '');
-    const generation = ++this.selectionGeneration;
-    this.pendingOnlineCandidate = { ...pending, generation };
+    const generation = ++this.activeSelectionGeneration;
+    const candidateGeneration = this.onlineCandidateGeneration;
     const isCurrent = () =>
-      generation === this.selectionGeneration &&
+      generation === this.activeSelectionGeneration &&
+      candidateGeneration === this.onlineCandidateGeneration &&
       expectedBindingRevision === this.getActiveRevision() &&
       this.pendingOnlineCandidate?.revision === expectedPendingRevision;
     return this.commitQueue.run(async () => {
@@ -413,13 +438,12 @@ export class MatchContextController {
   }
 
   private hasLocalOverride(): boolean {
-    return isLocalMatchContextBinding(this.activeBinding);
+    return isLocalBinding(this.activeBinding);
   }
 
   private async stageOnlineCandidate(
     requestedMatchId: string,
     source: MatchContextSource,
-    generation: number,
     isCurrent: () => boolean,
   ): Promise<MatchContextSelectionResult> {
     let candidate: unknown;
@@ -474,9 +498,10 @@ export class MatchContextController {
         context,
         origin: 'online',
         freshness: 'fresh',
+        localAuthoringMode: 'bound-overlay',
         diagnostics: validated.diagnostics,
       };
-      this.pendingOnlineCandidate = { binding, revision: randomUUID(), generation };
+      this.pendingOnlineCandidate = { binding, revision: randomUUID() };
       return {
         ok: true,
         binding: this.activeBinding,
@@ -496,7 +521,7 @@ export class MatchContextController {
     diagnostics: MatchContextControllerIssue[],
   ): Promise<MatchContextSelectionResult> {
     return this.commitQueue.run(async () => {
-      if (generation !== this.selectionGeneration)
+      if (generation !== this.activeSelectionGeneration)
         return this.staleSelectionResult(requestedMatchId);
 
       const current = this.activeBinding;
@@ -513,7 +538,7 @@ export class MatchContextController {
       }
 
       const fallback = await this.lkgStore.read(requestedMatchId);
-      if (generation !== this.selectionGeneration)
+      if (generation !== this.activeSelectionGeneration)
         return this.staleSelectionResult(requestedMatchId);
       if (fallback.ok) {
         diagnostics.push(

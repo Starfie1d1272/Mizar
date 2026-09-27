@@ -159,8 +159,9 @@ const bpWorkspaceCandidateSchema = z
 
 export const bpWorkspaceSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp-workspace.v2'),
+    schemaVersion: z.literal('rivalhub.bp-workspace.v3'),
     source: z.enum(['none', 'online', 'local', 'cache']),
+    authoringMode: z.enum(['standalone', 'bound-overlay']),
     contextRevision: z.string().min(1),
     freshness: z.enum(['none', 'fresh', 'stale']),
     readiness: z.enum(['unbound', 'ready', 'missing', 'incomplete', 'conflict']),

@@ -19,8 +19,8 @@ Companion 独占内存 Presentation session，状态 hidden / revealing / shown 
 
 已绑定的 RivalHub MatchContext 是 connected 路径的唯一官方来源。本轮不创建 JSON 导入产品流程或 fixture 普通 UI，也不伪造当前 RivalHub `main` 尚未提供的 BroadcastManifest HTTP endpoint。
 
-没有比赛 binding，或当前 BP 缺失、不完整、有冲突时，制作人员可在 `/operator/bp` 用结构化字段填写地图/选边。已有 RivalHub binding 时，比赛、赛事、队伍、赛制和队标字段锁定；LocalBpDraft 以当前 Manifest 为基线，只替换 BP 字段，保留 match/competition/entry IDs、名单、解说、比赛状态和其他赛事元数据。已完成地图行原样保留；会改变已完成地图身份、选图方或起始边的 BP 被拒绝。写入仍经过同一 validator → MatchContextController → ProjectionCoordinator → BP projection 路径，并进入同一 `match-context.json` LKG。有效 BP 已就绪时不显示本地补录入口。
+没有比赛 binding，或当前 BP 缺失、不完整、有冲突时，制作人员可在 `/operator/bp` 用结构化字段填写地图/选边。独立创建的 `standalone` 本地比赛可编辑赛事、阶段、赛制、队名与队标，并保持 IDs 稳定。已有 RivalHub binding 时生成 `bound-overlay`；比赛、赛事、队伍、赛制、队标、roster 和 commentator 字段在首次保存后、缓存恢复后都持续锁定。LocalBpDraft 以当前 Manifest 为基线，只替换 BP 字段，保留 match/competition/entry IDs、名单、解说、比赛状态和其他赛事元数据。已完成地图行原样保留；会改变已完成地图身份、选图方或起始边的 BP 被拒绝。写入仍经过同一 validator → MatchContextController → ProjectionCoordinator → BP projection 路径，并进入同一 `match-context.json` LKG。有效 BP 已就绪时不显示本地补录入口。
 
-当前本地比赛可编辑赛事显示名、阶段、赛制、队名与队标，但稳定保留 matchId、competitionId、entryIds、名单和解说；已完成地图行仍受保护。没有 binding 的独立填写才生成新的 match/competition/entry IDs 和空名单。不存在平行的 LocalBPState；失败时现有 binding 不变，成功时 source 切到 local 且播放 session 收起。
+`standalone` 本地比赛可编辑赛事显示名、阶段、赛制、队名与队标，但稳定保留 matchId、competitionId、entryIds、名单和解说；已完成地图行仍受保护。没有 binding 的独立填写才生成新的 match/competition/entry IDs 和空名单。不存在平行的 LocalBPState；失败时现有 binding 不变，成功时 source 切到 local 且播放 session 收起。
 
-服务重启后，从同一 LKG 恢复比赛上下文并向普通 UI 标记为“本地缓存”；session 仍从 hidden 开始。在线 source 后续恢复时只能成为待确认候选，工作台显示赛事、阶段、赛制和双方队名，不公开内部 ID、队标或名单；制作人员显式确认后才切回 RivalHub。active selection、在线候选获取、本地保存和候选激活共享 latest-wins generation。候选激活同时校验 active context revision 与候选 revision，旧请求不得清除更新候选。JSON 和内部 revision 不进入普通工作台。
+服务重启后，从同一 LKG 恢复比赛上下文并向普通 UI 标记为“本地缓存”；`localAuthoringMode` 与 Manifest 一起存入 LKG metadata，session 仍从 hidden 开始。在线 source 后续恢复时只能成为待确认候选，工作台显示赛事、阶段、赛制和双方队名，不公开内部 ID、队标或名单；制作人员显式确认后才切回 RivalHub。活动 binding selection 与 online candidate acquisition 使用独立 generation；开始刷新不清除已有候选，失败刷新和本地 BP 保存均保留它，新的有效候选才原子替换。候选激活同时校验 active context revision 与候选 revision，新的候选获取不能被旧激活清除。JSON 和内部 revision 不进入普通工作台。

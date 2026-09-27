@@ -10,6 +10,7 @@ import {
   createLocalBpManifest,
   localBpDraftFromBinding,
 } from './local-draft.js';
+import { localAuthoringMode } from '../match-context/lkg-store.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 
@@ -60,8 +61,9 @@ export function registerBpWorkspaceRoutes(
             },
           };
     const response = bpWorkspaceSchema.parse({
-      schemaVersion: 'rivalhub.bp-workspace.v2',
+      schemaVersion: 'rivalhub.bp-workspace.v3',
       source: publicSource,
+      authoringMode: localAuthoringMode(binding) ?? 'standalone',
       contextRevision: options.controller?.getActiveRevision() ?? 'unavailable',
       freshness: binding?.freshness ?? 'none',
       readiness:
