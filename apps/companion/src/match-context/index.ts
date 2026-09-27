@@ -21,6 +21,7 @@ export {
   MatchManifestLkgStore,
   type ContextFreshness,
   type ContextOrigin,
+  type LocalAuthoringMode,
   type MatchContextBinding,
   type MatchContextStoreFailure,
   type MatchContextStoreIssue,
@@ -29,6 +30,10 @@ export {
   type MatchContextStoreSuccess,
   type MatchManifestLkgSaveOptions,
   type MatchManifestLkgStoreOptions,
+  isLocalBinding,
+  isBoundLocalOverride,
+  isStandaloneLocalMatch,
+  localAuthoringMode,
 } from './lkg-store.js';
 export {
   createScheduleWindowLkgStore,

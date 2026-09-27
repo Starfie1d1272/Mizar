@@ -10,6 +10,7 @@ import {
 } from '@rivalhub-broadcast/core/identity';
 import {
   projectObserverAssist,
+  inspectBp,
   projectProgram,
   selectProgramSafeRuntimeView,
   type ObserverAssistProjection,
@@ -302,6 +303,16 @@ export class ProjectionCoordinator {
     } finally {
       this.refreshing = false;
     }
+  }
+
+  getBpProjection() {
+    return this.getBpAssessment().projection;
+  }
+
+  getBpAssessment() {
+    if (this.getCurrent().identity.state === 'mismatch')
+      return { readiness: 'conflict' as const, projection: null };
+    return inspectBp(this.contextBinding?.context);
   }
 
   getCurrent(): ProjectionBundle {

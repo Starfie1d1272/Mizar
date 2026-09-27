@@ -12,19 +12,53 @@ import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
 import { replaceDurableJson, type DurableJsonFaultInjector } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
 
-export type ContextOrigin = 'online' | 'fixture' | 'cache';
+export type ContextOrigin = 'online' | 'local' | 'fixture' | 'cache';
 export type ContextFreshness = 'fresh' | 'stale';
+export type LocalAuthoringMode = 'standalone' | 'bound-overlay';
 
-const MATCH_MANIFEST_CACHE_VERSION = 'rivalhub.broadcast-match-context-cache.v1' as const;
+const MATCH_MANIFEST_CACHE_VERSION = 'rivalhub.broadcast-match-context-cache.v2' as const;
+const LEGACY_MATCH_MANIFEST_CACHE_VERSION = 'rivalhub.broadcast-match-context-cache.v1' as const;
 
 export interface MatchContextBinding {
   readonly manifest: BroadcastManifestV1;
   readonly context: MatchContext;
   readonly origin: ContextOrigin;
   readonly freshness: ContextFreshness;
+  /** Acquisition metadata; never part of the provider-neutral MatchContext domain. */
+  readonly localAuthoringMode?: LocalAuthoringMode;
   readonly storedAt?: string;
   readonly cachedFrom?: Exclude<ContextOrigin, 'cache'>;
   readonly diagnostics: readonly ContractDiagnostic[];
+}
+
+export function isLocalBinding(
+  binding: Pick<MatchContextBinding, 'origin' | 'cachedFrom'> | undefined,
+): boolean {
+  return (
+    binding?.origin === 'local' || (binding?.origin === 'cache' && binding.cachedFrom === 'local')
+  );
+}
+
+export function localAuthoringMode(
+  binding: Pick<MatchContextBinding, 'origin' | 'cachedFrom' | 'localAuthoringMode'> | undefined,
+): LocalAuthoringMode | undefined {
+  if (binding === undefined) return undefined;
+  // Legacy bindings without provenance fail closed as canonical overlays.
+  if (binding.localAuthoringMode === 'standalone' && !isLocalBinding(binding))
+    return 'bound-overlay';
+  return binding.localAuthoringMode ?? 'bound-overlay';
+}
+
+export function isBoundLocalOverride(
+  binding: Pick<MatchContextBinding, 'origin' | 'cachedFrom' | 'localAuthoringMode'> | undefined,
+): boolean {
+  return isLocalBinding(binding) && localAuthoringMode(binding) === 'bound-overlay';
+}
+
+export function isStandaloneLocalMatch(
+  binding: Pick<MatchContextBinding, 'origin' | 'cachedFrom' | 'localAuthoringMode'> | undefined,
+): boolean {
+  return isLocalBinding(binding) && localAuthoringMode(binding) === 'standalone';
 }
 
 export type MatchContextStoreIssueCode =
@@ -67,16 +101,22 @@ interface MatchManifestCacheMetadata {
   readonly matchId: string;
   readonly origin: Exclude<ContextOrigin, 'cache'>;
   readonly storedAt: string;
+  readonly localAuthoringMode: LocalAuthoringMode;
 }
 
 interface MatchManifestCacheEnvelope {
-  readonly cacheVersion: typeof MATCH_MANIFEST_CACHE_VERSION;
+  readonly cacheVersion:
+    typeof MATCH_MANIFEST_CACHE_VERSION | typeof LEGACY_MATCH_MANIFEST_CACHE_VERSION;
   readonly metadata: MatchManifestCacheMetadata;
   readonly payload: BroadcastManifestV1;
 }
 
 function isSourceOrigin(value: unknown): value is Exclude<ContextOrigin, 'cache'> {
-  return value === 'online' || value === 'fixture';
+  return value === 'online' || value === 'local' || value === 'fixture';
+}
+
+function isLocalAuthoringMode(value: unknown): value is LocalAuthoringMode {
+  return value === 'standalone' || value === 'bound-overlay';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -84,23 +124,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseEnvelope(value: unknown): MatchManifestCacheEnvelope | undefined {
-  if (!isRecord(value) || value.cacheVersion !== MATCH_MANIFEST_CACHE_VERSION) return undefined;
+  if (
+    !isRecord(value) ||
+    (value.cacheVersion !== MATCH_MANIFEST_CACHE_VERSION &&
+      value.cacheVersion !== LEGACY_MATCH_MANIFEST_CACHE_VERSION)
+  )
+    return undefined;
   const metadata = value.metadata;
   if (!isRecord(metadata)) return undefined;
+  const isLegacy = value.cacheVersion === LEGACY_MATCH_MANIFEST_CACHE_VERSION;
   if (
     typeof metadata.matchId !== 'string' ||
     !isSourceOrigin(metadata.origin) ||
     typeof metadata.storedAt !== 'string' ||
+    (!isLegacy && !isLocalAuthoringMode(metadata.localAuthoringMode)) ||
+    (metadata.localAuthoringMode !== undefined &&
+      !isLocalAuthoringMode(metadata.localAuthoringMode)) ||
     value.payload === undefined
   ) {
     return undefined;
   }
   return {
-    cacheVersion: MATCH_MANIFEST_CACHE_VERSION,
+    cacheVersion: value.cacheVersion,
     metadata: {
       matchId: metadata.matchId,
       origin: metadata.origin,
       storedAt: metadata.storedAt,
+      localAuthoringMode:
+        metadata.origin === 'local' && isLocalAuthoringMode(metadata.localAuthoringMode)
+          ? metadata.localAuthoringMode
+          : 'bound-overlay',
     },
     payload: value.payload as BroadcastManifestV1,
   };
@@ -129,6 +182,7 @@ function invalidEnvelope(): MatchContextStoreFailure {
 
 export interface MatchManifestLkgSaveOptions {
   readonly canCommit?: () => boolean;
+  readonly localAuthoringMode?: LocalAuthoringMode;
 }
 
 export class MatchManifestLkgStore {
@@ -158,6 +212,8 @@ export class MatchManifestLkgStore {
           matchId: validated.value.match.matchId,
           origin,
           storedAt: this.clock(),
+          localAuthoringMode:
+            origin === 'local' ? (options.localAuthoringMode ?? 'bound-overlay') : 'bound-overlay',
         },
         payload: validated.value,
       };
@@ -250,6 +306,7 @@ export class MatchManifestLkgStore {
         context,
         origin: 'cache',
         freshness: 'stale',
+        localAuthoringMode: envelope.metadata.localAuthoringMode,
         storedAt: envelope.metadata.storedAt,
         cachedFrom: envelope.metadata.origin,
         diagnostics: validated.diagnostics,
@@ -270,5 +327,40 @@ export class MatchManifestLkgStore {
         },
       };
     }
+  }
+
+  async readLatest(): Promise<MatchContextStoreResult<MatchContextBinding>> {
+    let contents: string;
+    try {
+      contents = await readFile(this.filePath, 'utf8');
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        return {
+          ok: false,
+          issue: { code: 'lkg_not_found', message: '没有可用的 Manifest LKG。' },
+        };
+      }
+      return {
+        ok: false,
+        issue: { code: 'lkg_read_failed', message: 'Manifest LKG 读取失败。' },
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents) as unknown;
+    } catch {
+      return {
+        ok: false,
+        issue: { code: 'lkg_invalid_json', message: 'Manifest LKG 不是有效 JSON。' },
+      };
+    }
+    const envelope = parseEnvelope(parsed);
+    if (envelope === undefined) return invalidEnvelope();
+    return this.read(envelope.metadata.matchId);
   }
 }

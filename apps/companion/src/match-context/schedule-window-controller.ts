@@ -18,10 +18,10 @@ import {
   type ScheduleWindowSaveOptions,
   type ScheduleWindowStoreIssue,
 } from './schedule-window-store.js';
-import type { ContextOrigin } from './lkg-store.js';
+import type { ScheduleWindowOrigin } from './schedule-window-store.js';
 
 export interface ScheduleWindowSource {
-  readonly kind: Exclude<ContextOrigin, 'cache'>;
+  readonly kind: ScheduleWindowOrigin;
   /** The competition and exact time window this source load represents. */
   readonly request: ScheduleWindowRequest;
   /** Expected network/source failures must reject with SourceLoadError. */

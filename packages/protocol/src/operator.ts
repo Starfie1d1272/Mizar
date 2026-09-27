@@ -183,10 +183,10 @@ export const operatorPayloadSchema = z.object({
         entryBName: z.string(),
       })
       .nullable(),
-    origin: z.enum(['online', 'fixture', 'cache']).nullable(),
+    origin: z.enum(['online', 'local', 'fixture', 'cache']).nullable(),
     freshness: z.enum(['unbound', 'fresh', 'stale']),
     storedAt: nullableString,
-    cachedFrom: z.enum(['online', 'fixture']).nullable(),
+    cachedFrom: z.enum(['online', 'local', 'fixture']).nullable(),
     diagnostics: z.array(contractDiagnosticSchema),
   }),
   identity: z.object({

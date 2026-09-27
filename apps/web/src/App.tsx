@@ -1,3 +1,4 @@
+import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -49,6 +50,13 @@ export const surfaceDefinitions = [
     path: '/debug',
     title: '运行诊断',
     description: '查看本地制播服务当前的输入、归一化结果、运行状态与退化信号。',
+    realtimeChannel: null,
+  },
+  {
+    id: 'bp',
+    path: '/operator/bp',
+    title: 'BP 制作',
+    description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
   },
   {
@@ -555,6 +563,8 @@ export function App() {
     );
   }
 
+  if (pathname === '/program/bp') return <BpPage />;
+  if (pathname === '/operator/bp') return <BpPage operator />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (

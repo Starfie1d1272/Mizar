@@ -42,3 +42,5 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 这是一条 ownership clarification，不改变 ADR-0003 的核心决定：Radar domain 与 Renderer 分离，Renderer 不成为第二份 domain truth。
 
 - [`0008-portable-web-product-runtime.md`](0008-portable-web-product-runtime.md)：#35 Web-first 便携产品、不可变 payload / 可写 state、launcher 与 Companion ownership。
+
+- [`0009-bp-presentation-host.md`](0009-bp-presentation-host.md)：BP 全屏 Host、本地 authoring、有限投影、播放会话与来源恢复边界。

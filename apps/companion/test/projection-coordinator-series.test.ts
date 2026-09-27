@@ -299,7 +299,7 @@ describe('Section IV.E: Program / Protocol integration and boundaries', () => {
     expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('rivalhub-broadcast.local.v1');
     expect(LOCAL_PROTOCOL_VERSION).toBe(1);
     expect(PROGRAM_SCHEMA_VERSION).toBe(7);
-    expect(OPERATOR_SCHEMA_VERSION).toBe(3);
+    expect(OPERATOR_SCHEMA_VERSION).toBe(4);
     expect(PROGRAM_CUE_SCHEMA_VERSION).toBe(1);
 
     // 1. Verify programCueMessageSchema is valid and unaffected:
@@ -350,7 +350,7 @@ describe('Section IV.E: Program / Protocol integration and boundaries', () => {
     expect(operatorSnapshot).not.toBeNull();
     const operatorParsed = operatorSnapshotSchema.parse(operatorSnapshot);
     expect(operatorParsed.channel).toBe('operator');
-    expect(operatorParsed.schemaVersion).toBe(3);
+    expect(operatorParsed.schemaVersion).toBe(4);
     expect(operatorParsed.payload).toHaveProperty('seriesProgress');
 
     await coordinator.close();

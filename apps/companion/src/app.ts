@@ -1,3 +1,6 @@
+import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
+import { registerBpRoutes } from './bp/controller.js';
+import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
@@ -69,6 +72,7 @@ export interface CompanionAppOptions {
   readonly projectionCoordinator?: ProjectionCoordinator;
   readonly programCueCoordinator?: ProgramCueCoordinator;
   readonly matchContextBinding?: MatchContextBinding;
+  readonly matchManifestPath?: string;
   readonly projectionNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
   readonly debugClock?: DebugRuntimeClock;
@@ -269,6 +273,33 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
   });
+  registerBpRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    getProjection: () => projectionCoordinator.getBpProjection(),
+  });
+  const matchContextController =
+    options.matchManifestPath === undefined
+      ? null
+      : new MatchContextController({
+          lkgStore: new MatchManifestLkgStore({ filePath: options.matchManifestPath }),
+          ...(options.matchContextBinding === undefined
+            ? {}
+            : { initialBinding: options.matchContextBinding }),
+          onBindingChanged: (binding) => {
+            projectionCoordinator.setMatchContextBinding(binding);
+            programCueCoordinator.afterRuntimeMutation();
+          },
+        });
+  registerBpWorkspaceRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    controller: matchContextController,
+    projections: projectionCoordinator,
+  });
+  if (matchContextController !== null) {
+    app.addHook('onReady', async () => {
+      await matchContextController.restoreLatest();
+    });
+  }
   const qualificationMode = options.qualificationMode ?? false;
 
   app.get('/health', () => {

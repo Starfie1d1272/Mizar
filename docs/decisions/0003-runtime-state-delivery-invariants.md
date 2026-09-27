@@ -115,7 +115,7 @@ map_restart_detected
 
 ```text
 scene override
-BP playback next/previous
+BP playback play/hide（具体控制面见 ADR-0009）
 manual presentation reset
 ```
 

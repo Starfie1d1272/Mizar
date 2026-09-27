@@ -176,6 +176,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     ...(cstvSourceConfig === undefined ? {} : { cstvSources: cstvSourceConfig }),
     qualificationMode,
     ...(qualificationControlToken === undefined ? {} : { qualificationControlToken }),
+    matchManifestPath: join(captureDir, '..', 'match-context.json'),
     hudConfigPath,
     hudConfigStore,
     ...(qualificationMode

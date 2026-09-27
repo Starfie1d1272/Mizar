@@ -39,6 +39,7 @@ export function OperatorShell({
         <nav aria-label="制作导航">
           {[
             ['/operator', '制作控制'],
+            ['/operator/bp', 'BP 制作'],
             ['/operator/hud', 'HUD 编辑器'],
             ['/debug', '运行诊断'],
           ].map(([path, label]) => (

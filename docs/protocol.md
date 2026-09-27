@@ -316,7 +316,7 @@ Program payload 只包含正式节目允许显示的信息：
 - `lineupEvidence: current | retained`，表达当前 entry 是否来自本帧或稳定 baseline；`retained` 不等于已确认掉线；
 - `liveAdr`，由 Core 的 map-scoped accumulator 按已完成 counted rounds 与当前 eligible round 的 damage / rounds 计算；没有可计入分母时为 `null`；
 - `completedAdr`，只按已完成 counted rounds 的 damage / rounds 计算；在当前回合进行中保持稳定，尚无 counted round 时为 `null`；
-- ``lifeState: alive | dead | unknown``；
+- `lifeState: alive | dead | unknown`；
 - C4 的状态、爆炸时钟和当前 plant/defuse action；爆炸时钟只来自 Core 保留的 planted countdown anchor，defusing frame 的 overloaded countdown 不会覆盖它；
 - 数据覆盖状态。
 
@@ -357,7 +357,7 @@ Program 不包含：
 - LKG metadata；
 - Lookahead / future 信息。
 
-``lifeState`` 由 Core 的共享领域 helper 推导，Program 与 Radar 不各自重复根据 health 猜测。
+`lifeState` 由 Core 的共享领域 helper 推导，Program 与 Radar 不各自重复根据 health 猜测。
 
 `ProgramProjection` 不从 renderer 侧推断 active player，也不累计 ADR。Active lineup 只有在 `coverage.allPlayers = present`、10 个唯一稳定 Steam64、CT 5 人 + T 5 人且无歧义时才建立或替换 baseline；稳定 baseline 遇到 transient missing/extra 或 `degraded` evidence 时可以保留并标记 `retained` / `degraded`。没有 previous baseline 时，degraded 的 clean-looking 5+5 仍不得晋升。same-map source generation 变化时，retained membership 重新挂到当前 generation；generation continuity 由 resolution cursor 表达，证据质量由 `lineupEvidence` 表达。RivalHub roster 是 connected mode 的 strongest prior，但未知 Steam64 的稳定 active player 仍可进入节目，canonical identity 保留为 `null` 并通过 Operator/diagnostics 报告 warning。
 
@@ -381,7 +381,7 @@ v2 显式增加了以下字段以支持端侧轻量动效与战术标记渲染�
 - `RadarGrenade` 补充从 GSI raw payload 归一化提取的 `effectTimeSeconds: number | null`（缺失/异常为 `null`）；
 - 全部 payload 与 nested 对象采用 strict schema，未知字段 fail closed。
 
-### 4.6 Operator schema v3
+### 4.6 Operator schema v4
 
 Operator 快照包含制作控制需要的比赛上下文、运行转换、身份、ActiveLineup diagnostics、SeriesProgress binding/issues 和 source health。`seriesProgress` 只提供 Operator 恢复所需的有界地图状态、比分与诊断；它可以比 Program 拥有更多运行诊断，但不能成为 Program 的数据来源；`activeLineup.extras` 与 resolver issues 只用于 Operator/debug，不进入正式 Player Rails。
 
@@ -468,3 +468,17 @@ reset 都从当前时刻重新开始，不补播旧动画。
 - Local Protocol 不承担 RivalHub API 的 authority；
 - Raw GSI、第三方 CSTV parser shape 和整个 RuntimeState 都不能直接成为 wire contract；
 - 用户界面本地化不改变协议精确字符串。
+
+### BP presentation control-plane
+
+`GET /local/v1/bp` 使用独立 `rivalhub.bp.v1` schema：有限 cards/steps、公开参赛实体、比赛标题，以及 hidden/revealing/shown/hiding、revealedCount 与 revision。仅包含 Program-safe 比赛事实；没有 roster、Raw GSI、Lookahead 或诊断。ETag 覆盖 revision、当前状态与 reveal 数量。每个浏览器串行 250 ms conditional polling，1.5 s 请求超时后隐藏；恢复只应用当前 baseline，不重演已显示步骤。此 HTTP 资源不改变现有 snapshot channel schema。
+
+`POST /operator/bp-command` 接收 `{kind: "play" | "hide", expectedRevision}`。revision 在命令、比赛/BP 变更和回到 hidden 时变化；自动 reveal 仅改变 ETag，避免正常推进导致收起请求冲突。只允许 loopback 与有效 Origin，旧 revision 返回 409；不自动重试或排队。
+
+`GET /local/v1/bp-workspace` 返回独立 `rivalhub.bp-workspace.v3` schema，暴露有限的来源、`authoringMode`、就绪状态、比赛双方公开名称、`authoringDraft`、仅 local/cache-local binding 可编辑的 `localDraft`、map catalog 和当前 context revision。`authoringMode` 为 `standalone | bound-overlay`：无 binding 和 standalone local match 可编辑本地赛事字段；从 online/cache-online 补录 BP 后仍为 `bound-overlay`，canonical match、competition、entrant、roster 与 commentator 元数据持续锁定。待确认 RivalHub candidate 只公开不透明 candidate revision、赛事、阶段、赛制和双方队名；不暴露内部 match/entry IDs、队标、roster、诊断或 schema version。来源显示值为 `none | online | local | cache`，测试/开发的 fixture 不进入普通 UI。
+
+`POST /operator/bp-local-save` 接收 `{draft: LocalBpDraft, expectedContextRevision}`，请求体最多 65,536 bytes。Companion 校验结构化输入、按固定赛制生成 veto sequence，编译成标准 BroadcastManifest，再经过现有 validator、MatchContextController、ProjectionCoordinator 和本机 LKG store。无 binding 时创建 `standalone` 本地身份；已有 online/cache-online binding 时创建 `bound-overlay`，只允许补 BP，沿用比赛和参赛身份，拒绝更改 canonical metadata，并保留已完成地图；已有 `standalone` local/cache-local binding 可修改本地显示字段但保持稳定 IDs 和名单；已有 `bound-overlay` local/cache-local binding 仍只允许修改 BP。`localAuthoringMode` 属于 MatchContextBinding acquisition metadata 与 LKG metadata，不进入 MatchContext domain，也不从 ID 推断。LKG 使用 v2 envelope 保存该字段；旧 v1 local cache 没有 provenance 时按 `bound-overlay` 恢复以维持 fail-closed。保存前不清除当前 binding；校验、revision、身份或原子持久化失败时旧 binding 保持有效。成功后来源成为 `local`，播放 session 回到 hidden。该流程不创建第二份 LocalBPState，也不写 RivalHub。
+
+`POST /operator/bp-rivalhub` 接收 `{expectedContextRevision, expectedPendingRevision}`，只确认切换到 MatchContextController 已暂存的 online candidate，不负责获取网络数据。活动 binding 生命周期与 online candidate acquisition generation 独立：开始 refresh 不清除已有有效 candidate；较新的失败请求保留它，较新的有效请求才原子替换它。本地保存成功或失败都不清除 candidate。激活必须同时匹配 `expectedContextRevision` 与 `expectedPendingRevision`；候选获取在激活期间推进时，旧激活不能清除更新候选。当前 RivalHub `main` 没有正式 BroadcastManifest HTTP endpoint；未来接入必须复用 shared controller。online candidate 恢复时不会自动覆盖 local 或 cached-from-local 比赛，只有制作人员显式确认后才切换并更新 LKG。
+
+以上写入口仅允许 loopback 与有效 Origin；LAN 模式拒绝写入。旧 context revision 返回 409，不自动重试或排队。生产 `match-context.json` LKG 在重启后恢复比赛上下文并标记为 `cache`，BP playback session 仍从 hidden 开始。

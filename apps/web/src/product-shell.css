@@ -161,8 +161,19 @@
   .product-topbar nav {
     order: 3;
     width: 100%;
+    min-width: 0;
     min-height: 48px;
     margin-top: 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .product-topbar nav::-webkit-scrollbar {
+    display: none;
+  }
+  .product-topbar nav a {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .product-topbar__actions > a:first-child {
     display: none;

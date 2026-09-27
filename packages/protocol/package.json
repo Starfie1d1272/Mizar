@@ -45,6 +45,10 @@
     "./acceptance": {
       "types": "./dist/acceptance.d.ts",
       "import": "./dist/acceptance.js"
+    },
+    "./bp": {
+      "types": "./dist/bp.d.ts",
+      "import": "./dist/bp.js"
     }
   },
   "scripts": {

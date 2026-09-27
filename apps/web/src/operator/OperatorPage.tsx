@@ -1,3 +1,4 @@
+import { BpDashboardControl } from '../bp/BpControls';
 import { useState, useSyncExternalStore } from 'react';
 import type { FormEvent } from 'react';
 
@@ -165,6 +166,7 @@ export function OperatorPage() {
                 {series?.currentMapOrder ? ` · 第 ${series.currentMapOrder} 张` : ''}
               </p>
             </section>
+            <BpDashboardControl />
             {needsBinding || issues.length > 0 || !connected ? (
               <section className="dashboard-notice" aria-label="需要处理">
                 <h2>需要处理</h2>

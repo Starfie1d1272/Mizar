@@ -18,16 +18,18 @@ import {
 } from './schedule-window-request.js';
 import type { ContextFreshness, ContextOrigin } from './lkg-store.js';
 
+export type ScheduleWindowOrigin = Exclude<ContextOrigin, 'cache' | 'local'>;
+
 const SCHEDULE_WINDOW_CACHE_VERSION = 'rivalhub.broadcast-schedule-window-cache.v1' as const;
 
 export interface ScheduleWindowBinding {
   readonly request: ScheduleWindowRequest;
   readonly schedule: BroadcastScheduleWindowV1;
   readonly window: ScheduleWindow;
-  readonly origin: ContextOrigin;
+  readonly origin: ScheduleWindowOrigin | 'cache';
   readonly freshness: ContextFreshness;
   readonly storedAt?: string;
-  readonly cachedFrom?: Exclude<ContextOrigin, 'cache'>;
+  readonly cachedFrom?: ScheduleWindowOrigin;
   readonly diagnostics: readonly ContractDiagnostic[];
 }
 
@@ -69,7 +71,7 @@ export interface ScheduleWindowStoreOptions {
 }
 
 interface ScheduleWindowCacheMetadata {
-  readonly origin: Exclude<ContextOrigin, 'cache'>;
+  readonly origin: ScheduleWindowOrigin;
   readonly storedAt: string;
 }
 
@@ -83,7 +85,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isSourceOrigin(value: unknown): value is Exclude<ContextOrigin, 'cache'> {
+function isSourceOrigin(value: unknown): value is ScheduleWindowOrigin {
   return value === 'online' || value === 'fixture';
 }
 
@@ -145,7 +147,7 @@ export class ScheduleWindowLkgStore {
 
   async save(
     candidate: unknown,
-    origin: Exclude<ContextOrigin, 'cache'>,
+    origin: ScheduleWindowOrigin,
     options: ScheduleWindowSaveOptions = {},
   ): Promise<ScheduleWindowStoreResult<BroadcastScheduleWindowV1>> {
     const validated = validateBroadcastScheduleWindow(candidate);
