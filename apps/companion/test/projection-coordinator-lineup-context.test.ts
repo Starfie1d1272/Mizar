@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { toMatchContext, type BroadcastManifestV1 } from '@rivalhub-broadcast/rivalhub';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import { expect, it } from 'vitest';
 
 import type { MatchContextBinding } from '../src/match-context/index.js';

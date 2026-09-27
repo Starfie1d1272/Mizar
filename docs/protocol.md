@@ -2,7 +2,7 @@
 
 本文记录当前有效的三类协议边界：
 
-1. Broadcast 从赛事上下文提供方读取的比赛只读契约；
+1. Mizar 从赛事上下文提供方读取的比赛只读契约；
 2. Companion 向本地 Program、Radar、Operator 和 Assist 提供的 WebSocket 快照协议；
 3. Companion 向 Program 提供的短生命周期 transient cue 协议。
 
@@ -16,7 +16,7 @@
 
 ## 1. RivalHub 只读赛事上下文
 
-RivalHub 连接模式通过 `packages/rivalhub` 消费公开、版本化的只读契约。Broadcast 不直连 RivalHub 数据库，也不导入 RivalHub 内部 domain 类型。
+RivalHub 连接模式通过 `packages/rivalhub` 消费公开、版本化的只读契约。Mizar 不直连 RivalHub 数据库，也不导入 RivalHub 内部 domain 类型。
 
 ```text
 RivalHub API / 同形 fixture / 本地 LKG
@@ -86,7 +86,7 @@ startedAt    官方实际开始时间
 completedAt  官方完成时间
 ```
 
-Broadcast 不从本地观测反向改写这些字段。
+Mizar 不从本地观测反向改写这些字段。
 
 ### 1.2 BroadcastScheduleWindowV1
 
@@ -180,7 +180,7 @@ MatchContext 与 ScheduleWindow 分别维护独立的 Last Known Good（LKG）�
 
 ## 4. Local Protocol V1
 
-Broadcast 本地协议用于 Companion → Program / Radar / Operator / Assist 的只读快照，以及
+Mizar 本地协议用于 Companion → Program / Radar / Operator / Assist 的只读快照，以及
 Companion → Program 的短生命周期 transient cue。两类消息共享 WebSocket 承载和安全策略，
 但不共享 snapshot 的 latest-wins 语义。
 
@@ -190,7 +190,7 @@ Companion → Program 的短生命周期 transient cue。两类消息共享 WebS
 数字常量，避免 schema 演进后文档形成第二份版本真相。Local Protocol 版本与各 channel
 schema 版本独立。单个 channel payload 演进时，不要求其它 channel 或 WebSocket 子协议同步升级。
 
-当前 Local Protocol 子协议仍为 `rivalhub-broadcast.local.v1`，路由前缀见下节。
+当前 Local Protocol 子协议仍为 `mizar.local.v1`，路由前缀见下节。
 
 ### 4.2 路由
 
@@ -371,7 +371,7 @@ Stable membership（Steam64 集合）与当前 CT/T side assignment 分离：hal
 
 ### 4.4.1 Series projection
 
-Program 的 `series` 是 Core `SeriesProgress` 的 entrant-oriented 只读 projection，包含 `format`、`requiredWins`、双方 entrant、Broadcast 本地冻结的 `score`、`planned | live | completed` 状态、`bindingState`、`currentMapOrder`、地图 compact strip、原始 veto steps，以及当前/刚结束地图的有限 `roundHistory`。
+Program 的 `series` 是 Core `SeriesProgress` 的 entrant-oriented 只读 projection，包含 `format`、`requiredWins`、双方 entrant、Mizar 本地冻结的 `score`、`planned | live | completed` 状态、`bindingState`、`currentMapOrder`、地图 compact strip、原始 veto steps，以及当前/刚结束地图的有限 `roundHistory`。
 
 `series.score` 与兼容保留的 `teams.ct/t.seriesScore` 必须来自同一份 `SeriesProgress`；不能继续以 `MatchContext.scoreA/scoreB` 作为第二份实时真相。地图异常时 `bindingState = needs_operator`、`currentMapOrder = null`，但当前 GSI map/CT/T score 仍可正常进入 Program。Renderer 不读取 `MatchContext.maps[]`、`veto[]` 或 Raw GSI 自行推导 Series。
 
@@ -448,7 +448,7 @@ Companion 使用同一 Fastify 实例提供网页静态资源和 Local Protocol 
 
 当前传输约束：
 
-- 子协议：`rivalhub-broadcast.local.v1`；
+- 子协议：`mizar.local.v1`；
 - 默认监听：`127.0.0.1`；
 - 本机回环模式只接受本机 HTTP(S) Origin；
 - 非回环监听必须显式开启 `LOCAL_WEB_LAN_MODE=1`；
@@ -477,13 +477,13 @@ reset 都从当前时刻重新开始，不补播旧动画。
 
 ### BP presentation control-plane
 
-`GET /local/v1/bp` 使用独立 `rivalhub.bp.v2` schema：有限 cards/steps、赛事与赛制标题、公开队名和队标，以及 hidden/revealing/shown/hiding、revealedCount 与 revision。Match / entry IDs 留在 Companion 内部，不进入浏览器快照。仅包含 Program-safe BP presentation；没有 Manifest、roster、Raw GSI、Lookahead 或诊断。ETag 覆盖 revision、当前状态与 reveal 数量。每个浏览器串行 250 ms conditional polling，1.5 s 请求超时后隐藏；恢复只应用当前 baseline，不重演已显示步骤。此 HTTP 资源不改变现有 snapshot channel schema。
+`GET /local/v1/bp` 使用独立 `mizar.bp.v2` schema：有限 cards/steps、赛事与赛制标题、公开队名和队标，以及 hidden/revealing/shown/hiding、revealedCount 与 revision。Match / entry IDs 留在 Companion 内部，不进入浏览器快照。仅包含 Program-safe BP presentation；没有 Manifest、roster、Raw GSI、Lookahead 或诊断。ETag 覆盖 revision、当前状态与 reveal 数量。每个浏览器串行 250 ms conditional polling，1.5 s 请求超时后隐藏；恢复只应用当前 baseline，不重演已显示步骤。此 HTTP 资源不改变现有 snapshot channel schema。
 
 `POST /operator/bp-command` 接收 `{kind: "play" | "hide", expectedRevision}`。revision 在命令、比赛/BP 变更和回到 hidden 时变化；自动 reveal 仅改变 ETag，避免正常推进导致收起请求冲突。只允许 loopback 与有效 Origin，旧 revision 返回 409；不自动重试或排队。
 
 `POST /operator/bp-demo` 接收 typed command `{kind: "start", format: "bo1" | "bo3" | "bo5"}` 或 `{kind: "exit"}`，请求体最多 4,096 bytes。成功响应返回当前 Demo 格式和切换后的 BP revision；工作台收到该 hidden baseline 前暂不允许播放，避免 source 切换期间提交旧 revision。它只修改 Companion 内存中的 BP Demo 状态，不调用 MatchContextController 或 LKG。进入、切换和退出都要求同一个 `BpSession` 当前为 `hidden`；其它状态返回 409 和 `请先收起当前 BP 场景。`，不会自动收起。该入口沿用 loopback only 与精确 Origin 校验，LAN 禁写。
 
-`GET /local/v1/bp-workspace` 返回独立 `rivalhub.bp-workspace.v4` schema，增加 `{ demo: { active: "bo1" | "bo3" | "bo5" | null } }`，只公开当前 Demo 格式，不包含 Demo Manifest 或其内部 ID。其余字段仍是有限的来源、`authoringMode`、就绪状态、比赛双方公开名称、`authoringDraft`、仅 local/cache-local binding 可编辑的 `localDraft`、map catalog 和当前 context revision。`authoringMode` 为 `standalone | bound-overlay`：无 binding 和 standalone local match 可编辑本地赛事字段；从 online/cache-online 补录 BP 后仍为 `bound-overlay`，canonical match、competition、entrant、roster 与 commentator 元数据持续锁定。待确认 RivalHub candidate 只公开不透明 candidate revision、赛事、阶段、赛制和双方队名；不暴露内部 match/entry IDs、队标、roster、诊断或 schema version。来源显示值为 `none | online | local | cache`，Demo 不改变真实来源。Companion 重启后 Demo 状态为 inactive。
+`GET /local/v1/bp-workspace` 返回独立 `mizar.bp-workspace.v4` schema，增加 `{ demo: { active: "bo1" | "bo3" | "bo5" | null } }`，只公开当前 Demo 格式，不包含 Demo Manifest 或其内部 ID。其余字段仍是有限的来源、`authoringMode`、就绪状态、比赛双方公开名称、`authoringDraft`、仅 local/cache-local binding 可编辑的 `localDraft`、map catalog 和当前 context revision。`authoringMode` 为 `standalone | bound-overlay`：无 binding 和 standalone local match 可编辑本地赛事字段；从 online/cache-online 补录 BP 后仍为 `bound-overlay`，canonical match、competition、entrant、roster 与 commentator 元数据持续锁定。待确认 RivalHub candidate 只公开不透明 candidate revision、赛事、阶段、赛制和双方队名；不暴露内部 match/entry IDs、队标、roster、诊断或 schema version。来源显示值为 `none | online | local | cache`，Demo 不改变真实来源。Companion 重启后 Demo 状态为 inactive。
 
 `POST /operator/bp-local-save` 接收 `{draft: LocalBpDraft, expectedContextRevision}`，请求体最多 65,536 bytes。Companion 校验结构化输入、按固定赛制生成 veto sequence，编译成标准 BroadcastManifest，再经过现有 validator、MatchContextController、ProjectionCoordinator 和本机 LKG store。无 binding 时创建 `standalone` 本地身份；已有 online/cache-online binding 时创建 `bound-overlay`，只允许补 BP，沿用比赛和参赛身份，拒绝更改 canonical metadata，并保留已完成地图；已有 `standalone` local/cache-local binding 可修改本地显示字段但保持稳定 IDs 和名单；已有 `bound-overlay` local/cache-local binding 仍只允许修改 BP。`localAuthoringMode` 属于 MatchContextBinding acquisition metadata 与 LKG metadata，不进入 MatchContext domain，也不从 ID 推断。LKG 使用 v2 envelope 保存该字段；旧 v1 local cache 没有 provenance 时按 `bound-overlay` 恢复以维持 fail-closed。保存前不清除当前 binding；校验、revision、身份或原子持久化失败时旧 binding 保持有效。成功后来源成为 `local`，播放 session 回到 hidden。该流程不创建第二份 LocalBPState，也不写 RivalHub。
 

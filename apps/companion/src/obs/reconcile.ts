@@ -31,7 +31,7 @@ function names(value: unknown, key: string): string[] {
 }
 
 function ownedScene(name: string): boolean {
-  return name.startsWith('RivalHub · ');
+  return name.startsWith('Mizar · ');
 }
 
 const BROWSER_TRANSFORM = {
@@ -90,13 +90,13 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
   if (!names(collections.sceneCollections, 'sceneCollectionName').includes(OBS_COLLECTION)) {
-    findings.push({ code: 'collection_missing', message: 'RivalHub Broadcast 场景集合尚未创建。' });
+    findings.push({ code: 'collection_missing', message: 'Mizar 场景集合尚未创建。' });
     return findings;
   }
   if (collections.currentSceneCollectionName !== OBS_COLLECTION) {
     findings.push({
       code: 'collection_inactive',
-      message: '当前未使用 RivalHub Broadcast 场景集合。',
+      message: '当前未使用 Mizar 场景集合。',
     });
     return findings;
   }
@@ -120,12 +120,12 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
     objects(inputs.inputs).map((item) => [String(item.inputName), String(item.inputKind)]),
   );
   if (inputKinds.has(OBS_CAPTURE_INPUT) && inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture')
-    findings.push({ code: 'source_kind_conflict', message: 'RivalHub 游戏采集来源名称冲突。' });
+    findings.push({ code: 'source_kind_conflict', message: 'Mizar 游戏采集来源名称冲突。' });
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
     const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
     const settings = capture.inputSettings as Record<string, unknown> | undefined;
     if (settings?.capture_mode !== 'window' || settings.window !== '::cs2.exe')
-      findings.push({ code: 'capture_drift', message: 'RivalHub 游戏采集来源未指向 CS2。' });
+      findings.push({ code: 'capture_drift', message: 'Mizar 游戏采集来源未指向 CS2。' });
   }
   for (const scene of desired) {
     if (!sceneNames.includes(scene.sceneName)) {
@@ -221,13 +221,13 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
     objects(inputs.inputs).map((item) => [String(item.inputName), String(item.inputKind)]),
   );
   if (inputKinds.has(OBS_CAPTURE_INPUT) && inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture')
-    throw new Error('RivalHub 游戏采集来源名称冲突，未执行修复。');
+    throw new Error('Mizar 游戏采集来源名称冲突，未执行修复。');
   for (const scene of desired) {
     if (
       inputKinds.has(scene.browserInput) &&
       inputKinds.get(scene.browserInput) !== 'browser_source'
     )
-      throw new Error('RivalHub 浏览器来源名称冲突，未执行修复。');
+      throw new Error('Mizar 浏览器来源名称冲突，未执行修复。');
   }
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture')
     await obs.call('SetInputSettings', {
@@ -270,7 +270,7 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
       });
       inputKinds.set(scene.browserInput, 'browser_source');
     } else if (inputKinds.get(scene.browserInput) !== 'browser_source') {
-      throw new Error('RivalHub 来源名称与其它类型的 OBS 来源冲突，未执行修复。');
+      throw new Error('Mizar 来源名称与其它类型的 OBS 来源冲突，未执行修复。');
     } else {
       await obs.call('SetInputSettings', {
         inputName: scene.browserInput,
@@ -282,7 +282,7 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
       scene.composition === 'gameplay_overlay' &&
       inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture'
     )
-      throw new Error('RivalHub 游戏采集来源名称冲突，未执行修复。');
+      throw new Error('Mizar 游戏采集来源名称冲突，未执行修复。');
     let items = objects(
       (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
     );
@@ -330,7 +330,7 @@ export async function switchObsScene(
   const name = desiredSceneName(sceneId);
   const collections = await obs.call('GetSceneCollectionList');
   if (collections.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先检查并修复 RivalHub Broadcast 场景集合。');
+    throw new Error('请先检查并修复 Mizar 场景集合。');
   const scenes = names((await obs.call('GetSceneList')).scenes, 'sceneName');
   if (!scenes.includes(name)) throw new Error('目标 OBS 场景尚未就绪，请先检查配置。');
   await obs.call('SetCurrentProgramScene', { sceneName: name });

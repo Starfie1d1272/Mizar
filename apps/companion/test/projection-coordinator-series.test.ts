@@ -3,19 +3,19 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
-import type { BroadcastManifestV1 } from '@rivalhub-broadcast/rivalhub';
-import { programSnapshotSchema } from '@rivalhub-broadcast/protocol/program';
-import { operatorSnapshotSchema } from '@rivalhub-broadcast/protocol/operator';
-import { programCueMessageSchema } from '@rivalhub-broadcast/protocol/program-cue';
+import type { MatchContext } from '@mizar/core/match-context';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
+import type { BroadcastManifestV1 } from '@mizar/rivalhub';
+import { programSnapshotSchema } from '@mizar/protocol/program';
+import { operatorSnapshotSchema } from '@mizar/protocol/operator';
+import { programCueMessageSchema } from '@mizar/protocol/program-cue';
 import {
   LOCAL_PROTOCOL_SUBPROTOCOL,
   LOCAL_PROTOCOL_VERSION,
   PROGRAM_SCHEMA_VERSION,
   OPERATOR_SCHEMA_VERSION,
   PROGRAM_CUE_SCHEMA_VERSION,
-} from '@rivalhub-broadcast/protocol/version';
+} from '@mizar/protocol/version';
 
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
@@ -296,7 +296,7 @@ describe('Section IV.E: Program / Protocol integration and boundaries', () => {
   });
 
   it('E.5, E.6, E.7 verifies Local Protocol v1, Program schema v7, Operator schema v3, ProgramCue v1 completely unaffected', async () => {
-    expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('rivalhub-broadcast.local.v1');
+    expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('mizar.local.v1');
     expect(LOCAL_PROTOCOL_VERSION).toBe(1);
     expect(PROGRAM_SCHEMA_VERSION).toBe(7);
     expect(OPERATOR_SCHEMA_VERSION).toBe(4);

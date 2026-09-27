@@ -71,10 +71,7 @@ export function validateArtifact(artifact) {
   if (artifact.schemaVersion !== 1)
     throw new QualificationEvidenceError('INVALID_EVIDENCE', '验收包身份文件的格式版本不受支持');
   if (artifact.repository !== QUALIFICATION_REPOSITORY)
-    throw new QualificationEvidenceError(
-      'INVALID_EVIDENCE',
-      '验收包身份信息不属于 RivalHub Broadcast',
-    );
+    throw new QualificationEvidenceError('INVALID_EVIDENCE', '验收包身份信息不属于 Mizar');
   requireString(artifact.gitSha, 'artifact.gitSha');
   assertUtc(artifact.buildTimestamp, 'artifact.buildTimestamp');
   if (artifact.platform !== 'win32-x64') {

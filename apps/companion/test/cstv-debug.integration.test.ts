@@ -5,7 +5,7 @@ import type {
   CstvParserSessionFactory,
   CstvParserSessionFactoryOptions,
   CstvSessionRunResult,
-} from '@rivalhub-broadcast/telemetry-cstv';
+} from '@mizar/telemetry-cstv';
 
 import { buildApp } from '../src/app.js';
 import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';

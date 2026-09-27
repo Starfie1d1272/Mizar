@@ -7,7 +7,7 @@ import {
   type ActiveLineupResolution,
   type IdentityResolution,
   type IdentityResolver,
-} from '@rivalhub-broadcast/core/identity';
+} from '@mizar/core/identity';
 import {
   projectObserverAssist,
   inspectBp,
@@ -15,30 +15,24 @@ import {
   selectProgramSafeRuntimeView,
   type ObserverAssistProjection,
   type ProgramProjection,
-} from '@rivalhub-broadcast/core/projection';
-import type { OperatorCommand, SeriesSideProof } from '@rivalhub-broadcast/core/series-progress';
-import {
-  getObjectiveClockLeaseMs,
-  type RuntimeReduceResult,
-} from '@rivalhub-broadcast/core/runtime';
-import { assistSnapshotSchema, type AssistSnapshot } from '@rivalhub-broadcast/protocol/assist';
-import {
-  operatorSnapshotSchema,
-  type OperatorSnapshot,
-} from '@rivalhub-broadcast/protocol/operator';
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+} from '@mizar/core/projection';
+import type { OperatorCommand, SeriesSideProof } from '@mizar/core/series-progress';
+import { getObjectiveClockLeaseMs, type RuntimeReduceResult } from '@mizar/core/runtime';
+import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
+import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import {
   ASSIST_SCHEMA_VERSION,
   LOCAL_PROTOCOL_VERSION,
   OPERATOR_SCHEMA_VERSION,
   PROGRAM_SCHEMA_VERSION,
   RADAR_SCHEMA_VERSION,
-} from '@rivalhub-broadcast/protocol/version';
-import { projectRadarFrame, type RadarFrame } from '@rivalhub-broadcast/radar';
+} from '@mizar/protocol/version';
+import { projectRadarFrame, type RadarFrame } from '@mizar/radar';
 
 import type { MatchContextBinding } from '../match-context/index.js';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+import type { MatchContext } from '@mizar/core/match-context';
 import type { CstvSourceManagers } from '../telemetry/cstv-source-manager.js';
 import type { ProgramRuntime, SeriesOperatorCommandResult } from '../runtime/program-runtime.js';
 import {

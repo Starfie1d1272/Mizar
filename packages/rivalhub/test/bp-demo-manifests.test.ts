@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inspectBp } from '@rivalhub-broadcast/core/projection';
+import { inspectBp } from '@mizar/core/projection';
 import {
   getBpDemoManifest,
   toMatchContext,

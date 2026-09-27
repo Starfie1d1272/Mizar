@@ -3,7 +3,7 @@ import type { MatchContext, MatchFormat, MatchMapContext } from '../match-contex
 import type { ObservedRoundWin, RoundWinCondition, SourceSide } from '../telemetry/index.js';
 
 export const SERIES_ROUND_HISTORY_MAX = 256 as const;
-export const SERIES_PROGRESS_CHECKPOINT_VERSION = 'rivalhub.broadcast-series-progress.v1' as const;
+export const SERIES_PROGRESS_CHECKPOINT_VERSION = 'mizar.series-progress.v1' as const;
 
 export type SeriesBindingState = 'bound' | 'unbound' | 'needs_operator';
 export type SeriesMapStatus = 'pending' | 'current' | 'completed' | 'not_played';

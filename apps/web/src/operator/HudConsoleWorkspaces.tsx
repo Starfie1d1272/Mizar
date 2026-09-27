@@ -10,7 +10,7 @@ import {
   type HudWidgetBox,
   type HudWidgetId,
   type HudWidgetPlacement,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 import { activePresetId, resourceFor, resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';

@@ -1,4 +1,4 @@
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import { PROGRAM_FIXTURE_LABELS, type ProgramFixtureId } from '../fixtures';
 
@@ -94,7 +94,7 @@ export function ProgramFoundationProbe({
       />
 
       <header className="program-foundation-probe__header">
-        <p className="program-foundation-probe__kicker">RivalHub Broadcast / 仅供视觉测试</p>
+        <p className="program-foundation-probe__kicker">Mizar / 仅供视觉测试</p>
         <h1>节目画面基础</h1>
         <p>用于固定逻辑画布的投影检查，不属于正式 HUD、雷达或正式节目页面。</p>
       </header>

@@ -8,7 +8,7 @@ import {
   resolveCs2ItemByGsiName,
 } from '../src/index.js';
 
-describe('@rivalhub-broadcast/cs2-assets resolver', () => {
+describe('@mizar/cs2-assets resolver', () => {
   it('keeps the checked-in catalog and manifest aligned', () => {
     expect(CS2_ITEM_CATALOG).toHaveLength(Object.keys(CS2_ASSET_MANIFEST.assets).length);
     for (const item of CS2_ITEM_CATALOG) {

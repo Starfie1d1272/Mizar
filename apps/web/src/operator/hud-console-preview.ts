@@ -10,7 +10,7 @@ import {
   type HudPreset,
   type HudResolvedPreset,
   type HudTheme,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 import { hudResourceNameError } from './hud-console-state';
 

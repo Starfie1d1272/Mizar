@@ -3,9 +3,9 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { emptyActiveLineup, unboundIdentityResolution } from '@rivalhub-broadcast/core/identity';
-import { projectProgram, selectProgramSafeRuntimeView } from '@rivalhub-broadcast/core/projection';
-import { createInitialRuntimeState, reduceRuntime } from '@rivalhub-broadcast/core/runtime';
+import { emptyActiveLineup, unboundIdentityResolution } from '@mizar/core/identity';
+import { projectProgram, selectProgramSafeRuntimeView } from '@mizar/core/projection';
+import { createInitialRuntimeState, reduceRuntime } from '@mizar/core/runtime';
 import { iterateCaptureFrames, verifyCapture } from '../src/capture/reader.js';
 import type { VerifiedCapture } from '../src/capture/types.js';
 import { replayCapture } from '../src/replay/runner.js';

@@ -1,5 +1,5 @@
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
 import { getProgramFixture } from './program-fixtures';
 import {
   NUKE_LOWER_WORLD_ANCHORS,

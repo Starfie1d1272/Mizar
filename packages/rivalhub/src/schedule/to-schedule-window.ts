@@ -1,4 +1,4 @@
-import type { ScheduleWindow } from '@rivalhub-broadcast/core/match-context';
+import type { ScheduleWindow } from '@mizar/core/match-context';
 
 import { validateBroadcastScheduleWindow } from './validate.js';
 import type { BroadcastScheduleCompetitionV1, BroadcastScheduleWindowV1 } from './types.js';

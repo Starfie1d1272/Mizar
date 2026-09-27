@@ -1,4 +1,4 @@
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramPayload } from '@mizar/protocol/program';
 
 import {
   buildObjectiveCenterPresentation,

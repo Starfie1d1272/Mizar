@@ -2,7 +2,7 @@ import {
   createCstvLiveSession,
   type CstvLiveSession,
   type CstvSessionTerminalStatus,
-} from '@rivalhub-broadcast/telemetry-cstv';
+} from '@mizar/telemetry-cstv';
 
 interface ProbeOptions {
   readonly url: string;

@@ -65,7 +65,7 @@ C4 的 Radar presentation 保持单一主要视觉 owner：`carried / planting` 
 
 ### 8. 官方素材进入受控 asset pipeline
 
-能够从 CS2 官方资源获得的 map、side、weapon、equipment、ammo presentation asset 优先进入 `@rivalhub-broadcast/cs2-assets`，保留 source/hash/provenance。
+能够从 CS2 官方资源获得的 map、side、weapon、equipment、ammo presentation asset 优先进入 `@mizar/cs2-assets`，保留 source/hash/provenance。
 
 不得为了短期视觉方便把来源不明的手工近似素材直接变成长期 canonical asset。
 

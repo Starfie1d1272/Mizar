@@ -1,5 +1,5 @@
-import { getBuiltinResolvedPreset, type HudResolvedPreset } from '@rivalhub-broadcast/hud-config';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import { getBuiltinResolvedPreset, type HudResolvedPreset } from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import type { RadarProps } from './widgets/radar/Radar';
 import type { LocalChannelConnectionState } from '../realtime';

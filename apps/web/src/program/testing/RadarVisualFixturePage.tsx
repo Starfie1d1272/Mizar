@@ -1,4 +1,4 @@
-import { getBuiltinResolvedPreset } from '@rivalhub-broadcast/hud-config';
+import { getBuiltinResolvedPreset } from '@mizar/hud-config';
 import { Radar } from '../widgets/radar/Radar';
 import {
   RADAR_VISUAL_FIXTURES,

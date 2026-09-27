@@ -92,7 +92,7 @@ describe('Local Protocol V1 and channel schema acceptance', () => {
       payload: { ...payload(), futureCue: { shouldNotLeak: true } },
     });
 
-    expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('rivalhub-broadcast.local.v1');
+    expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('mizar.local.v1');
     expect(LOCAL_PROTOCOL_VERSION).toBe(1);
     expect(PROGRAM_SCHEMA_VERSION).toBe(7);
     expect(parsed.channel).toBe('program');

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
-import { getCs2Item } from '@rivalhub-broadcast/cs2-assets';
+import { getCs2Item } from '@mizar/cs2-assets';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

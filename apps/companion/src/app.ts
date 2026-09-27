@@ -18,7 +18,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
-import type { SeriesProgressCheckpointStore } from '@rivalhub-broadcast/core/series-progress';
+import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
 import {
   createProjectionCoordinator,
   type ProjectionCoordinator,

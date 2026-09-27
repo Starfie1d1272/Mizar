@@ -1,14 +1,8 @@
-import {
-  projectProgramCue,
-  type RoleScopedGameEventObservation,
-} from '@rivalhub-broadcast/core/game-events';
-import type { RuntimeReduceResult } from '@rivalhub-broadcast/core/runtime';
-import type { ProgramSourceFreshness } from '@rivalhub-broadcast/core/runtime';
-import {
-  LOCAL_PROTOCOL_VERSION,
-  PROGRAM_CUE_SCHEMA_VERSION,
-} from '@rivalhub-broadcast/protocol/version';
-import type { ProgramCueLaneCursor } from '@rivalhub-broadcast/protocol/program-cue';
+import { projectProgramCue, type RoleScopedGameEventObservation } from '@mizar/core/game-events';
+import type { RuntimeReduceResult } from '@mizar/core/runtime';
+import type { ProgramSourceFreshness } from '@mizar/core/runtime';
+import { LOCAL_PROTOCOL_VERSION, PROGRAM_CUE_SCHEMA_VERSION } from '@mizar/protocol/version';
+import type { ProgramCueLaneCursor } from '@mizar/protocol/program-cue';
 
 import {
   createProgramCuePublisher,

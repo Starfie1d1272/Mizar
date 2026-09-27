@@ -1,4 +1,4 @@
-import type { ObservedGrenade, ObservedGrenadeFlame } from '@rivalhub-broadcast/core/telemetry';
+import type { ObservedGrenade, ObservedGrenadeFlame } from '@mizar/core/telemetry';
 import type { DiagnosticCollector } from '../diagnostics/collector.js';
 import { asSourceRecord, compareSourceKeys, type SourceRecord } from '../parse/record.js';
 import { optionalDecimalString, optionalString } from '../parse/scalar.js';

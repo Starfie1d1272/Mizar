@@ -1,4 +1,4 @@
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import type { LocalChannelConnectionState } from '../realtime';
 

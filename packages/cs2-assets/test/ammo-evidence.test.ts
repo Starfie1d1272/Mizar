@@ -158,7 +158,7 @@ const AMMO_EVIDENCE_TABLE: readonly AmmoEvidenceCase[] = [
   },
 ];
 
-describe('@rivalhub-broadcast/cs2-assets ammo evidence matrix', () => {
+describe('@mizar/cs2-assets ammo evidence matrix', () => {
   it('resolves the pinned Valve reserve-magazine HUD graphic without assigning it a GSI weapon identity', () => {
     const magazine = getCs2Item('ammo.magazine');
 

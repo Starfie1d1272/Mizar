@@ -353,16 +353,16 @@ function checkWorkspaceDependencyDeclarations(workspaces, report) {
       }
     }
 
-    if (info.name === '@rivalhub-broadcast/testkit') continue;
+    if (info.name === '@mizar/testkit') continue;
     for (const field of RUNTIME_DEPENDENCY_FIELDS) {
       const dependencies = info.manifest[field];
       if (!dependencies || typeof dependencies !== 'object') continue;
-      if (!Object.hasOwn(dependencies, '@rivalhub-broadcast/testkit')) continue;
+      if (!Object.hasOwn(dependencies, '@mizar/testkit')) continue;
 
       report({
         ruleId: 'ARCH_TESTKIT_RUNTIME',
         file: info.manifestPath,
-        target: '@rivalhub-broadcast/testkit',
+        target: '@mizar/testkit',
         message:
           'testkit owns capture consumption, replay, simulation, and fault injection; production capture recorder belongs to the Companion telemetry runtime and testkit may be used only as a dev-only dependency.',
       });
@@ -566,11 +566,7 @@ function checkImportEdges(records, repository, workspaces, report) {
         });
       }
 
-      if (
-        record.kind === 'production' &&
-        target.name === '@rivalhub-broadcast/testkit' &&
-        edge.runtime
-      ) {
+      if (record.kind === 'production' && target.name === '@mizar/testkit' && edge.runtime) {
         report({
           ruleId: 'ARCH_TESTKIT_RUNTIME',
           file: record.path,
@@ -602,8 +598,7 @@ function checkCstvParserImportOwnership(records, report) {
 
 function checkProgramProjectionImportOwnership(records, repository, report) {
   const entryRecords = [...records.values()].filter(
-    (record) =>
-      record.owner.name === '@rivalhub-broadcast/core' && isProgramProjectionPath(record.path),
+    (record) => record.owner.name === '@mizar/core' && isProgramProjectionPath(record.path),
   );
   const visited = new Set();
   const queue = entryRecords.map((record) => ({ record, entryPath: record.path }));

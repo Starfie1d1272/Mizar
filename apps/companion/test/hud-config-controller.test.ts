@@ -5,11 +5,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  getBuiltinPreset,
-  getBuiltinTheme,
-  type HudConfigDocument,
-} from '@rivalhub-broadcast/hud-config';
+import { getBuiltinPreset, getBuiltinTheme, type HudConfigDocument } from '@mizar/hud-config';
 
 import { buildApp } from '../src/app.js';
 import { HudConfigStore } from '../src/hud-config/store.js';
@@ -76,7 +72,7 @@ describe('HUD config control plane', () => {
     expect(first.statusCode).toBe(200);
     expect(first.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     expect(first.json()).toMatchObject({
-      resolved: { preset: { id: 'builtin:rivalhub-default-preset' } },
+      resolved: { preset: { id: 'builtin:mizar-default-preset' } },
     });
     const firstBody = parseHudOnAirBody(first.json());
     expect(firstBody.activeRevision).toMatch(/^[0-9a-f]{64}$/);

@@ -1,4 +1,4 @@
-import type { ProjectionCursor } from '@rivalhub-broadcast/protocol/shared';
+import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 function boundary(cursor: ProjectionCursor): string {
   return [

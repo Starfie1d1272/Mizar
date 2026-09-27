@@ -1,7 +1,7 @@
 import type { RadarLayerRule } from './map-geometry.js';
 
 /**
- * Broadcast-owned, checked-in V1 calibration snapshot.
+ * Mizar-owned, checked-in V1 calibration snapshot.
  *
  * The numeric values originate from CS2 overview metadata (`pos_x`, `pos_y`,
  * `scale`, and vertical sections). This snapshot was re-audited on

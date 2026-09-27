@@ -2,14 +2,14 @@ import { timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   adaptGsiPayload,
   PRODUCTION_GSI_CONFIG,
   type GsiAdaptResult,
   type GsiDiagnosticBatch,
   type TelemetryReceiveContext,
-} from '@rivalhub-broadcast/telemetry-gsi';
+} from '@mizar/telemetry-gsi';
 
 import { resolveCaptureRecorder, type CaptureRecorderSource } from './capture-recorder.js';
 

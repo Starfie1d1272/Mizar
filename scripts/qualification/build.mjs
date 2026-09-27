@@ -291,7 +291,7 @@ async function main() {
   await ensureCleanCheckout(options.allowDirty);
   const gitSha = await commandOutput('git', ['rev-parse', 'HEAD']);
   const shortSha = gitSha.slice(0, 7);
-  const bundleName = `rivalhub-broadcast-${shortSha}-win-x64`;
+  const bundleName = `mizar-${shortSha}-win-x64`;
   await mkdir(options.output, { recursive: true });
   const bundleDir = join(options.output, bundleName);
   const archivePath = join(options.output, `${bundleName}.zip`);
@@ -323,14 +323,7 @@ async function main() {
     await createDeployWorkspace(deployWorkspaceDir);
     await runCommand(
       'pnpm',
-      [
-        '--filter',
-        '@rivalhub-broadcast/companion',
-        'deploy',
-        deployedAppDir,
-        '--prod',
-        '--node-linker=hoisted',
-      ],
+      ['--filter', '@mizar/companion', 'deploy', deployedAppDir, '--prod', '--node-linker=hoisted'],
       { cwd: deployWorkspaceDir },
     );
     await cp(deployedAppDir, appDir, { recursive: true, dereference: true });
@@ -383,8 +376,8 @@ async function main() {
       join(resourcesDir, 'scripts', 'qualification-contract.json'),
     );
     await cp(
-      join(rootDir, 'config', 'gamestate_integration_rivalhub_broadcast.cfg.example'),
-      join(resourcesDir, 'config', 'gamestate_integration_rivalhub_broadcast.cfg.template'),
+      join(rootDir, 'config', 'gamestate_integration_mizar.cfg.example'),
+      join(resourcesDir, 'config', 'gamestate_integration_mizar.cfg.template'),
     );
     await writeFile(
       join(stagingDir, 'README.txt'),
@@ -410,8 +403,8 @@ async function main() {
         join(desktopDir, 'Cargo.toml'),
       ]);
       await cp(
-        join(desktopDir, 'target', 'release', 'rivalhub-broadcast-desktop.exe'),
-        join(stagingDir, 'RivalHub Broadcast.exe'),
+        join(desktopDir, 'target', 'release', 'mizar-desktop.exe'),
+        join(stagingDir, 'Mizar.exe'),
       );
     } else if (!options.skipNodeRuntime) {
       throw new Error(

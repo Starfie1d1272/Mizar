@@ -2,7 +2,7 @@ import {
   programSnapshotSchema,
   type ProgramPayload,
   type ProgramSnapshot,
-} from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/protocol/program';
 import { realProgramFixtures } from './real-program-fixtures.js';
 import { derivePresentationStressFixture } from './presentation-stress.js';
 

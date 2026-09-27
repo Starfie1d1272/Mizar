@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/rivalhub",
+  "name": "@mizar/rivalhub",
   "private": true,
   "type": "module",
   "files": [
@@ -16,11 +16,11 @@
     "typecheck": "tsc -b tsconfig.json --pretty false && tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@rivalhub-broadcast/core": "workspace:*",
+    "@mizar/core": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@rivalhub-broadcast/testkit": "workspace:*",
+    "@mizar/testkit": "workspace:*",
     "@typescript/native": "catalog:",
     "@types/node": "catalog:",
     "vitest": "catalog:"

@@ -4,7 +4,7 @@ import type {
   CstvParserSessionFactory,
   CstvParserSessionFactoryOptions,
   CstvSessionRunResult,
-} from '@rivalhub-broadcast/telemetry-cstv';
+} from '@mizar/telemetry-cstv';
 
 import {
   CSTV_RECENT_DIAGNOSTICS_MAX,

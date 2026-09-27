@@ -6,8 +6,8 @@ import {
   validateBroadcastManifest,
   type BroadcastManifestV1,
   type ContractDiagnostic,
-} from '@rivalhub-broadcast/rivalhub';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
+} from '@mizar/rivalhub';
+import type { MatchContext } from '@mizar/core/match-context';
 
 import { replaceDurableJson, type DurableJsonFaultInjector } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
@@ -16,8 +16,7 @@ export type ContextOrigin = 'online' | 'local' | 'fixture' | 'cache';
 export type ContextFreshness = 'fresh' | 'stale';
 export type LocalAuthoringMode = 'standalone' | 'bound-overlay';
 
-const MATCH_MANIFEST_CACHE_VERSION = 'rivalhub.broadcast-match-context-cache.v2' as const;
-const LEGACY_MATCH_MANIFEST_CACHE_VERSION = 'rivalhub.broadcast-match-context-cache.v1' as const;
+export const MATCH_CONTEXT_CACHE_VERSION = 'mizar.match-context-cache.v1' as const;
 
 export interface MatchContextBinding {
   readonly manifest: BroadcastManifestV1;
@@ -105,8 +104,7 @@ interface MatchManifestCacheMetadata {
 }
 
 interface MatchManifestCacheEnvelope {
-  readonly cacheVersion:
-    typeof MATCH_MANIFEST_CACHE_VERSION | typeof LEGACY_MATCH_MANIFEST_CACHE_VERSION;
+  readonly cacheVersion: typeof MATCH_CONTEXT_CACHE_VERSION;
   readonly metadata: MatchManifestCacheMetadata;
   readonly payload: BroadcastManifestV1;
 }
@@ -124,20 +122,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseEnvelope(value: unknown): MatchManifestCacheEnvelope | undefined {
-  if (
-    !isRecord(value) ||
-    (value.cacheVersion !== MATCH_MANIFEST_CACHE_VERSION &&
-      value.cacheVersion !== LEGACY_MATCH_MANIFEST_CACHE_VERSION)
-  )
-    return undefined;
+  if (!isRecord(value) || value.cacheVersion !== MATCH_CONTEXT_CACHE_VERSION) return undefined;
   const metadata = value.metadata;
   if (!isRecord(metadata)) return undefined;
-  const isLegacy = value.cacheVersion === LEGACY_MATCH_MANIFEST_CACHE_VERSION;
   if (
     typeof metadata.matchId !== 'string' ||
     !isSourceOrigin(metadata.origin) ||
     typeof metadata.storedAt !== 'string' ||
-    (!isLegacy && !isLocalAuthoringMode(metadata.localAuthoringMode)) ||
+    !isLocalAuthoringMode(metadata.localAuthoringMode) ||
     (metadata.localAuthoringMode !== undefined &&
       !isLocalAuthoringMode(metadata.localAuthoringMode)) ||
     value.payload === undefined
@@ -207,7 +199,7 @@ export class MatchManifestLkgStore {
 
     return this.commitQueue.run(async () => {
       const envelope: MatchManifestCacheEnvelope = {
-        cacheVersion: MATCH_MANIFEST_CACHE_VERSION,
+        cacheVersion: MATCH_CONTEXT_CACHE_VERSION,
         metadata: {
           matchId: validated.value.match.matchId,
           origin,

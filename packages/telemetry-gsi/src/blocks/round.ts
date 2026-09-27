@@ -3,7 +3,7 @@ import type {
   ObservedRoundBomb,
   RoundBombState,
   RoundPhase,
-} from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/telemetry';
 import type { DiagnosticCollector } from '../diagnostics/collector.js';
 import { optionalEnum } from '../parse/enum.js';
 import { asSourceRecord, type SourceRecord } from '../parse/record.js';

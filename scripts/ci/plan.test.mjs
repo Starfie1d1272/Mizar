@@ -133,7 +133,7 @@ describe('changed-surface CI planner', () => {
     ],
     [
       'GSI config template',
-      ['config/gamestate_integration_rivalhub_broadcast.cfg.template'],
+      ['config/gamestate_integration_mizar.cfg.template'],
       {
         runQuality: true,
         runAcceptance: false,

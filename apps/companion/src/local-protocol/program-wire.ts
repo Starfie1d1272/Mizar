@@ -1,5 +1,5 @@
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
-import type { ProgramProjection } from '@rivalhub-broadcast/core/projection';
+import type { ProgramPayload } from '@mizar/protocol/program';
+import type { ProgramProjection } from '@mizar/core/projection';
 
 function mapSeries(projection: ProgramProjection['series']): ProgramPayload['series'] {
   if (projection === null) return null;

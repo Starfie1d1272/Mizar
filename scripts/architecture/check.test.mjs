@@ -35,14 +35,14 @@ describe('architecture checker', () => {
   it('allows a declared dev-only testkit import and the protocol zod dependency', () => {
     const coreManifest = packageManifest('packages/core/package.json');
     coreManifest.devDependencies = {
-      '@rivalhub-broadcast/testkit': 'workspace:*',
+      '@mizar/testkit': 'workspace:*',
     };
 
     expect(
       withFiles({
         'packages/core/package.json': JSON.stringify(coreManifest),
         'packages/core/test/testkit-fixture.test.ts':
-          "import { fixture } from '@rivalhub-broadcast/testkit';\nvoid fixture;\n",
+          "import { fixture } from '@mizar/testkit';\nvoid fixture;\n",
         'packages/protocol/src/zod-fixture.ts': "import { z } from 'zod';\nvoid z;\n",
       }),
     ).toEqual([]);
@@ -58,27 +58,27 @@ describe('architecture checker', () => {
       },
       {
         manifestPath: 'packages/core/package.json',
-        dependencies: { '@rivalhub-broadcast/rivalhub': 'workspace:*' },
+        dependencies: { '@mizar/rivalhub': 'workspace:*' },
         ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@rivalhub-broadcast/rivalhub',
+        target: '@mizar/rivalhub',
       },
       {
         manifestPath: 'packages/core/package.json',
-        dependencies: { '@rivalhub-broadcast/web': 'workspace:*' },
+        dependencies: { '@mizar/web': 'workspace:*' },
         ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@rivalhub-broadcast/web',
+        target: '@mizar/web',
       },
       {
         manifestPath: 'packages/core/package.json',
-        dependencies: { '@rivalhub-broadcast/companion': 'workspace:*' },
+        dependencies: { '@mizar/companion': 'workspace:*' },
         ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@rivalhub-broadcast/companion',
+        target: '@mizar/companion',
       },
       {
         manifestPath: 'packages/protocol/package.json',
-        dependencies: { '@rivalhub-broadcast/core': 'workspace:*' },
+        dependencies: { '@mizar/core': 'workspace:*' },
         ruleId: 'ARCH_PROTOCOL_BOUNDARY',
-        target: '@rivalhub-broadcast/core',
+        target: '@mizar/core',
       },
       {
         manifestPath: 'packages/radar/package.json',
@@ -88,9 +88,9 @@ describe('architecture checker', () => {
       },
       {
         manifestPath: 'packages/telemetry-gsi/package.json',
-        dependencies: { '@rivalhub-broadcast/protocol': 'workspace:*' },
+        dependencies: { '@mizar/protocol': 'workspace:*' },
         ruleId: 'ARCH_TELEMETRY_GSI_BOUNDARY',
-        target: '@rivalhub-broadcast/protocol',
+        target: '@mizar/protocol',
       },
       {
         manifestPath: 'packages/telemetry-gsi/package.json',
@@ -100,15 +100,15 @@ describe('architecture checker', () => {
       },
       {
         manifestPath: 'packages/telemetry-cstv/package.json',
-        dependencies: { '@rivalhub-broadcast/companion': 'workspace:*' },
+        dependencies: { '@mizar/companion': 'workspace:*' },
         ruleId: 'ARCH_TELEMETRY_CSTV_BOUNDARY',
-        target: '@rivalhub-broadcast/companion',
+        target: '@mizar/companion',
       },
       {
         manifestPath: 'apps/web/package.json',
-        dependencies: { '@rivalhub-broadcast/telemetry-gsi': 'workspace:*' },
+        dependencies: { '@mizar/telemetry-gsi': 'workspace:*' },
         ruleId: 'ARCH_WEB_BOUNDARY',
-        target: '@rivalhub-broadcast/telemetry-gsi',
+        target: '@mizar/telemetry-gsi',
       },
       {
         manifestPath: 'packages/rivalhub/package.json',
@@ -131,7 +131,7 @@ describe('architecture checker', () => {
     const devOnlyManifest = packageManifest('packages/core/package.json');
     devOnlyManifest.devDependencies = {
       fastify: '5.0.0',
-      '@rivalhub-broadcast/web': 'workspace:*',
+      '@mizar/web': 'workspace:*',
     };
     expect(withFiles({ 'packages/core/package.json': JSON.stringify(devOnlyManifest) })).toEqual(
       [],
@@ -167,11 +167,10 @@ describe('architecture checker', () => {
     );
     expectRule(
       withFiles({
-        'packages/protocol/src/boundary.ts':
-          "import type { RuntimeState } from '@rivalhub-broadcast/core';\n",
+        'packages/protocol/src/boundary.ts': "import type { RuntimeState } from '@mizar/core';\n",
       }),
       'ARCH_PROTOCOL_BOUNDARY',
-      '@rivalhub-broadcast/core',
+      '@mizar/core',
     );
     expectRule(
       withFiles({ 'packages/radar/src/boundary.ts': "import React from 'react';\nvoid React;\n" }),
@@ -186,10 +185,10 @@ describe('architecture checker', () => {
     expectRule(
       withFiles({
         'packages/core/src/cstv-edge.ts':
-          "import { create } from '@rivalhub-broadcast/telemetry-cstv';\nvoid create;\n",
+          "import { create } from '@mizar/telemetry-cstv';\nvoid create;\n",
       }),
       'ARCH_CORE_BOUNDARY',
-      '@rivalhub-broadcast/telemetry-cstv',
+      '@mizar/telemetry-cstv',
     );
     expectRule(
       withFiles({ 'packages/telemetry-cstv/src/boundary.ts': "import 'node:fs';\n" }),
@@ -199,26 +198,25 @@ describe('architecture checker', () => {
     expectRule(
       withFiles({
         'packages/telemetry-cstv/src/boundary.ts':
-          "import { adapt } from '@rivalhub-broadcast/telemetry-gsi';\nvoid adapt;\n",
+          "import { adapt } from '@mizar/telemetry-gsi';\nvoid adapt;\n",
       }),
       'ARCH_TELEMETRY_CSTV_BOUNDARY',
-      '@rivalhub-broadcast/telemetry-gsi',
+      '@mizar/telemetry-gsi',
     );
     expectRule(
       withFiles({
         'packages/telemetry-gsi/src/boundary.ts':
-          "import { value } from '@rivalhub-broadcast/protocol';\nvoid value;\n",
+          "import { value } from '@mizar/protocol';\nvoid value;\n",
       }),
       'ARCH_TELEMETRY_GSI_BOUNDARY',
-      '@rivalhub-broadcast/protocol',
+      '@mizar/protocol',
     );
     expectRule(
       withFiles({
-        'apps/web/src/boundary.ts':
-          "import { parse } from '@rivalhub-broadcast/telemetry-gsi';\nvoid parse;\n",
+        'apps/web/src/boundary.ts': "import { parse } from '@mizar/telemetry-gsi';\nvoid parse;\n",
       }),
       'ARCH_WEB_BOUNDARY',
-      '@rivalhub-broadcast/telemetry-gsi',
+      '@mizar/telemetry-gsi',
     );
     expectRule(
       withFiles({
@@ -233,18 +231,18 @@ describe('architecture checker', () => {
   it('rejects Core imports of Web and Companion even with legal workspace declarations', () => {
     const coreManifest = packageManifest('packages/core/package.json');
     coreManifest.dependencies = {
-      '@rivalhub-broadcast/web': 'workspace:*',
-      '@rivalhub-broadcast/companion': 'workspace:*',
+      '@mizar/web': 'workspace:*',
+      '@mizar/companion': 'workspace:*',
     };
 
     const violations = withFiles({
       'packages/core/package.json': JSON.stringify(coreManifest),
-      'packages/core/src/web-edge.ts': "import '@rivalhub-broadcast/web';\n",
-      'packages/core/src/companion-edge.ts': "import '@rivalhub-broadcast/companion';\n",
+      'packages/core/src/web-edge.ts': "import '@mizar/web';\n",
+      'packages/core/src/companion-edge.ts': "import '@mizar/companion';\n",
     });
 
-    expectRule(violations, 'ARCH_CORE_BOUNDARY', '@rivalhub-broadcast/web');
-    expectRule(violations, 'ARCH_CORE_BOUNDARY', '@rivalhub-broadcast/companion');
+    expectRule(violations, 'ARCH_CORE_BOUNDARY', '@mizar/web');
+    expectRule(violations, 'ARCH_CORE_BOUNDARY', '@mizar/companion');
   });
 
   it('rejects direct package-source imports and normalizes Windows separators', () => {
@@ -255,10 +253,10 @@ describe('architecture checker', () => {
       withFiles({
         'packages/core/package.json': JSON.stringify(coreManifest),
         'apps/web/src/deep-import.ts':
-          "import { value } from '@rivalhub-broadcast/core/src/index.js';\nvoid value;\n",
+          "import { value } from '@mizar/core/src/index.js';\nvoid value;\n",
       }),
       'ARCH_CROSS_PACKAGE_SOURCE',
-      '@rivalhub-broadcast/core/src',
+      '@mizar/core/src',
     );
 
     expectRule(
@@ -282,10 +280,10 @@ describe('architecture checker', () => {
 
     expectRule(
       withFiles({
-        'apps/web/src/unexported-subpath.ts': "import '@rivalhub-broadcast/core/dist/index.js';\n",
+        'apps/web/src/unexported-subpath.ts': "import '@mizar/core/dist/index.js';\n",
       }),
       'ARCH_CROSS_PACKAGE_SOURCE',
-      '@rivalhub-broadcast/core/dist',
+      '@mizar/core/dist',
     );
   });
 
@@ -293,50 +291,50 @@ describe('architecture checker', () => {
     expectRule(
       withFiles({
         'apps/web/src/undeclared.ts':
-          "import { value } from '@rivalhub-broadcast/telemetry-gsi';\nvoid value;\n",
+          "import { value } from '@mizar/telemetry-gsi';\nvoid value;\n",
       }),
       'ARCH_UNDECLARED_WORKSPACE_DEP',
-      '@rivalhub-broadcast/telemetry-gsi',
+      '@mizar/telemetry-gsi',
     );
 
     const webManifest = packageManifest('apps/web/package.json');
     webManifest.dependencies = {
-      '@rivalhub-broadcast/telemetry-gsi': '^1.0.0',
+      '@mizar/telemetry-gsi': '^1.0.0',
       ...webManifest.dependencies,
     };
     expectRule(
       withFiles({ 'apps/web/package.json': JSON.stringify(webManifest) }),
       'ARCH_WORKSPACE_PROTOCOL',
-      '@rivalhub-broadcast/telemetry-gsi',
+      '@mizar/telemetry-gsi',
     );
   });
 
   it('rejects runtime testkit dependencies, cycles, and TypeScript paths', () => {
     const coreManifest = packageManifest('packages/core/package.json');
     coreManifest.dependencies = {
-      '@rivalhub-broadcast/testkit': 'workspace:*',
+      '@mizar/testkit': 'workspace:*',
     };
     expectRule(
       withFiles({ 'packages/core/package.json': JSON.stringify(coreManifest) }),
       'ARCH_TESTKIT_RUNTIME',
-      '@rivalhub-broadcast/testkit',
+      '@mizar/testkit',
     );
 
     const cycleA = {
-      name: '@rivalhub-broadcast/cycle-a',
+      name: '@mizar/cycle-a',
       private: true,
       type: 'module',
       files: ['dist'],
       exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } },
-      dependencies: { '@rivalhub-broadcast/cycle-b': 'workspace:*' },
+      dependencies: { '@mizar/cycle-b': 'workspace:*' },
     };
     const cycleB = {
-      name: '@rivalhub-broadcast/cycle-b',
+      name: '@mizar/cycle-b',
       private: true,
       type: 'module',
       files: ['dist'],
       exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } },
-      dependencies: { '@rivalhub-broadcast/cycle-a': 'workspace:*' },
+      dependencies: { '@mizar/cycle-a': 'workspace:*' },
     };
     expectRule(
       withFiles({

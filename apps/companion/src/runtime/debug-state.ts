@@ -4,13 +4,13 @@ import {
   type RuntimeDisposition,
   type RuntimeState,
   type RuntimeTransition,
-} from '@rivalhub-broadcast/core/runtime';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/runtime';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 import type { LatestWinsConsumerHealth } from './latest-wins.js';
 import type { ProgramRuntimeSnapshot } from './program-runtime.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
-import type { GsiDiagnosticBatch } from '@rivalhub-broadcast/telemetry-gsi';
+import type { GsiDiagnosticBatch } from '@mizar/telemetry-gsi';
 import type { CstvSourceSnapshot } from '../telemetry/cstv-source-manager.js';
 
 export const DEBUG_RECENT_TRANSITIONS_MAX = 32;

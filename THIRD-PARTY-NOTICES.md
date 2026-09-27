@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-本文件记录 RivalHub Broadcast 仓库当前直接声明的第三方依赖及其已知许可证。精确依赖版本以 `pnpm-workspace.yaml` 和 `pnpm-lock.yaml` 为机器来源。
+本文件记录 Mizar 仓库当前直接声明的第三方依赖及其已知许可证。精确依赖版本以 `pnpm-workspace.yaml` 和 `pnpm-lock.yaml` 为机器来源。
 
 研究参考项目不属于安装依赖，也不在本文件登记；相关内容见 [`docs/references.md`](docs/references.md)。
 
@@ -37,16 +37,16 @@
 | 工具/来源                               |                              当前版本或来源 | 用途                                                            | 许可证/说明                                                                              |
 | --------------------------------------- | ------------------------------------------: | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | ValveResourceFormat / Source2Viewer-CLI | 20.0.6980+a06886f7d06049052d32a7381ec05523064a2ca0 | 从维护者提供的 CS2 VPK allowlist 提取并 decompile `vsvg_c` | MIT（工具）；reverse-engineered tooling，不是 Valve 官方 SDK |
-| Counter-Strike 2 game resources         | Steam App ID 730；每次导入记录具体 build ID | `@rivalhub-broadcast/cs2-assets` 的 SVG presentation asset 与 10+3 官方 Radar overview 底图来源 | Valve / Counter-Strike 2 origin；本条只记录工程 provenance，不作所有权、商标或再许可判断 |
+| Counter-Strike 2 game resources         | Steam App ID 730；每次导入记录具体 build ID | `@mizar/cs2-assets` 的 SVG presentation asset 与 10+3 官方 Radar overview 底图来源 | Valve / Counter-Strike 2 origin；本条只记录工程 provenance，不作所有权、商标或再许可判断 |
 | FURIA team logo                         | `https://us.furia.gg/images/brand/logotipo-white.svg` | #76 fixture-local MatchContext presentation enrichment；文件 hash 记录于 `fixtures/gsi/acceptance/ancient-round-03/team-context-enrichment.json` | FURIA origin；provenance 记录不构成所有权或再许可声明 |
 | G2 Esports team logo                    | `https://g2esports.com/pages/brand-guidelines` 与官方 CDN PNG | #76 fixture-local MatchContext presentation enrichment；文件 hash 记录于 `fixtures/gsi/acceptance/ancient-round-03/team-context-enrichment.json` | G2 Esports origin；按官方 brand guidance 保持比例、不添加效果；provenance 记录不构成所有权或再许可声明 |
 | Steam public profile avatars            | Steam Web API `ISteamUser/GetPlayerSummaries/v2` 返回的 `avatarfull` | #76 开发期一次性 import，写入本地 fixture asset 并记录 profile ID、source URL 与 SHA-256 | Valve / Steam profile content；仅记录来源，不作用户内容所有权或再许可判断 |
 
-`cs2parser` 只通过 `packages/telemetry-cstv` 内部 binding 使用；其第三方类型不成为 Broadcast 公共 contract。本仓库未因研究参考而复制 HOT、Boltobserv、Lexogrine HUD Manager、Obserview、Zhenhai HUD Manager 等应用的代码或图片资产。
+`cs2parser` 只通过 `packages/telemetry-cstv` 内部 binding 使用；其第三方类型不成为 Mizar 公共 contract。本仓库未因研究参考而复制 HOT、Boltobserv、Lexogrine HUD Manager、Obserview、Zhenhai HUD Manager 等应用的代码或图片资产。
 
 ## Adapted presentation sources
 
-本 Issue 的 HUD presentation adaptation 只借鉴并改写下列已固定版本的 presentation source。它们不是安装依赖；本仓库不携带其 runtime、图片资产或原始数据处理逻辑。改写后的文件只消费 Broadcast `ProgramPayload` / `RadarSnapshot` presentation models，并保留本节 provenance。
+本 Issue 的 HUD presentation adaptation 只借鉴并改写下列已固定版本的 presentation source。它们不是安装依赖；本仓库不携带其 runtime、图片资产或原始数据处理逻辑。改写后的文件只消费 Mizar `ProgramPayload` / `RadarSnapshot` presentation models，并保留本节 provenance。
 
 | 来源                      | 固定版本与改写参考文件                                                                                                                                    | 许可证                              |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |

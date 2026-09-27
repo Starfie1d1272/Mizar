@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/telemetry-cstv",
+  "name": "@mizar/telemetry-cstv",
   "private": true,
   "type": "module",
   "files": [
@@ -16,7 +16,7 @@
     "typecheck": "tsc -b tsconfig.json --pretty false && tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@rivalhub-broadcast/core": "workspace:*",
+    "@mizar/core": "workspace:*",
     "cs2parser": "catalog:"
   },
   "devDependencies": {

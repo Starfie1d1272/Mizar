@@ -1,15 +1,9 @@
-import { assistSnapshotSchema, type AssistSnapshot } from '@rivalhub-broadcast/protocol/assist';
-import {
-  operatorSnapshotSchema,
-  type OperatorSnapshot,
-} from '@rivalhub-broadcast/protocol/operator';
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import type { SnapshotEnvelopeLike, SnapshotSchema } from '@rivalhub-broadcast/protocol/acceptance';
-import {
-  LOCAL_PROTOCOL_SUBPROTOCOL,
-  type LocalSnapshotChannel,
-} from '@rivalhub-broadcast/protocol/version';
+import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
+import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import type { SnapshotEnvelopeLike, SnapshotSchema } from '@mizar/protocol/acceptance';
+import { LOCAL_PROTOCOL_SUBPROTOCOL, type LocalSnapshotChannel } from '@mizar/protocol/version';
 
 export { LOCAL_PROTOCOL_SUBPROTOCOL };
 

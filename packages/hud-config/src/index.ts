@@ -65,9 +65,9 @@ export type HudPanelStyle = (typeof HUD_PANEL_STYLES)[number];
 export const HUD_CORNER_STYLES = ['square', 'soft', 'rounded'] as const;
 export type HudCornerStyle = (typeof HUD_CORNER_STYLES)[number];
 
-export const BUILTIN_PRESET_ID = 'builtin:rivalhub-default-preset' as const;
-export const BUILTIN_LAYOUT_ID = 'builtin:rivalhub-default-layout' as const;
-export const BUILTIN_THEME_ID = 'builtin:rivalhub-default-theme' as const;
+export const BUILTIN_PRESET_ID = 'builtin:mizar-default-preset' as const;
+export const BUILTIN_LAYOUT_ID = 'builtin:mizar-default-layout' as const;
+export const BUILTIN_THEME_ID = 'builtin:mizar-default-theme' as const;
 
 const finiteNumber = z.number().refine(Number.isFinite, '必须是有限数字');
 const resourceNameSchema = z

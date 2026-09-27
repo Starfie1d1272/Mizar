@@ -4,7 +4,7 @@ import {
   isSeriesProgressCheckpoint,
   type SeriesProgressCheckpoint,
   type SeriesProgressCheckpointStore,
-} from '@rivalhub-broadcast/core/series-progress';
+} from '@mizar/core/series-progress';
 
 import { replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';

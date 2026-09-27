@@ -9,7 +9,7 @@ import {
   type RuntimeDisposition,
   type RuntimeState,
   type RuntimeTransition,
-} from '@rivalhub-broadcast/core/runtime';
+} from '@mizar/core/runtime';
 import { describe, expect, it } from 'vitest';
 
 import { verifyCapture } from '../src/capture/reader.js';

@@ -32,9 +32,9 @@ import {
   type HudPreset,
   type HudTheme,
   type HudWidgetId,
-} from '@rivalhub-broadcast/hud-config';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { defaultMapGeometryProvider } from '@rivalhub-broadcast/radar';
+} from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { defaultMapGeometryProvider } from '@mizar/radar';
 
 import {
   getHudEditorFixture,
@@ -67,7 +67,7 @@ import {
 } from './hud-console-state';
 import { type LocalChannelConnectionState, useLocalChannelClient } from '../realtime';
 import { loadReplayFixture, type LoadedReplayFixture, type ReplaySourceId } from './replay-fixture';
-import type { ReplaySessionSnapshot } from '@rivalhub-broadcast/replay';
+import type { ReplaySessionSnapshot } from '@mizar/replay';
 import type { AcceptanceReplayFrame } from './replay-fixture';
 import {
   HudConfigMutationError,
@@ -804,7 +804,7 @@ export function HudConsolePage() {
       <main className="hud-console" data-surface="hud-console">
         <header className="hud-console__header">
           <div>
-            <p className="hud-console__eyebrow">RivalHub Broadcast</p>
+            <p className="hud-console__eyebrow">Mizar</p>
             <h1>HUD 编辑器</h1>
             <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
           </div>

@@ -1,4 +1,4 @@
-import type { BroadcastScheduleWindowV1 } from '@rivalhub-broadcast/rivalhub';
+import type { BroadcastScheduleWindowV1 } from '@mizar/rivalhub';
 
 /** The acquisition identity for one requested ScheduleWindow. */
 export interface ScheduleWindowRequest {

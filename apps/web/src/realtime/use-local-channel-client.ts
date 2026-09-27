@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 
-import type { LocalSnapshotChannel } from '@rivalhub-broadcast/protocol/version';
+import type { LocalSnapshotChannel } from '@mizar/protocol/version';
 
 import { createLocalChannelClient, type LocalChannelClient } from './local-channel-client';
 

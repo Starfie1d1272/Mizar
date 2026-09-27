@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/replay",
+  "name": "@mizar/replay",
   "private": true,
   "type": "module",
   "files": [

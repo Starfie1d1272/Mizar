@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
-import type { BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
-import { getMapThumbnail } from '@rivalhub-broadcast/cs2-assets';
+import type { BpSnapshot } from '@mizar/protocol/bp';
+import { getMapThumbnail } from '@mizar/cs2-assets';
 import { ProgramCanvas } from '../program/ProgramCanvas';
 import './bp.css';
 

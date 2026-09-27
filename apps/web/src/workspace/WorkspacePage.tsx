@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { PROGRAM_SCENES } from '@rivalhub-broadcast/protocol/program-scenes';
-import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import type { OperatorPayload } from '@mizar/protocol/operator';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { switchToRivalhubBp, useBpSession, useBpWorkspace } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';

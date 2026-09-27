@@ -9,7 +9,7 @@ import {
 } from '../src/program/widgets/focused-player/presentation';
 import { FocusedPlayerCard } from '../src/program/widgets/focused-player/FocusedPlayer';
 import { TopScoreBar } from '../src/program/widgets/match-header/TopScoreBar';
-import { getBuiltinResolvedPreset, placementToBox } from '@rivalhub-broadcast/hud-config';
+import { getBuiltinResolvedPreset, placementToBox } from '@mizar/hud-config';
 
 const BUILTIN_RESOLVED_PRESET = getBuiltinResolvedPreset();
 let root: Root | undefined;

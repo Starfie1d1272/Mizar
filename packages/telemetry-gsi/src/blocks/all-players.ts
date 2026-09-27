@@ -1,4 +1,4 @@
-import type { ObservedPlayer } from '@rivalhub-broadcast/core/telemetry';
+import type { ObservedPlayer } from '@mizar/core/telemetry';
 import type { DiagnosticCollector } from '../diagnostics/collector.js';
 import { asSourceRecord, compareSourceKeys } from '../parse/record.js';
 import { parsePlayer } from './player.js';

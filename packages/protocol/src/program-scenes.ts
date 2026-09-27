@@ -35,7 +35,7 @@ export function programSceneForPath(path: string): ProgramScene | undefined {
 }
 
 export const programSceneStateSchema = z.object({
-  schemaVersion: z.literal('rivalhub.program-scenes.v1'),
+  schemaVersion: z.literal('mizar.program-scenes.v1'),
   active: programSceneIdSchema,
   revision: z.string().min(1),
   available: z.array(programSceneIdSchema),

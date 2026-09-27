@@ -13,7 +13,7 @@ import {
   type CstvSessionStartResult,
   type CstvSyncMetadata,
 } from './types.js';
-import type { RoleScopedGameEventObservation } from '@rivalhub-broadcast/core/game-events';
+import type { RoleScopedGameEventObservation } from '@mizar/core/game-events';
 
 function defaultClock(): CstvObservationClock {
   return {

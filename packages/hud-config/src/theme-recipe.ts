@@ -22,7 +22,7 @@ function deepFreeze<T>(value: T): T {
 }
 
 const DEFAULT_THEME_RECIPE: HudThemeRecipe = deepFreeze({
-  id: 'rivalhub-default',
+  id: 'mizar-default',
   colors: {
     textPrimary: '#f3f6fa',
     textMuted: '#aab4c0',

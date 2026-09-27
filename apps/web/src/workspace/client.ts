@@ -3,7 +3,7 @@ import {
   programSceneStateSchema,
   type ProgramSceneId,
   type ProgramSceneState,
-} from '@rivalhub-broadcast/protocol/program-scenes';
+} from '@mizar/protocol/program-scenes';
 
 const PROGRAM_SCENE_COMMAND_TIMEOUT_MS = 12_000;
 

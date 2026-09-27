@@ -129,7 +129,7 @@ planner + ci-gate
 
 非 PR 事件使用完整验证，并包含 offline qualification。
 
-CS2 asset import 是维护者本地资源工作流：CI 不安装 CS2、不下载 VPK、不运行 extraction，只验证 checked-in `@rivalhub-broadcast/cs2-assets` catalog、manifest、SVG hash、public output 与 resolver contract。首次生成或更新 asset 时，必须使用 `pnpm cs2-assets:import` 的 pinned Source2Viewer-CLI，并把 Steam build ID、source/output hash 和工具版本提交在 manifest 中。
+CS2 asset import 是维护者本地资源工作流：CI 不安装 CS2、不下载 VPK、不运行 extraction，只验证 checked-in `@mizar/cs2-assets` catalog、manifest、SVG hash、public output 与 resolver contract。首次生成或更新 asset 时，必须使用 `pnpm cs2-assets:import` 的 pinned Source2Viewer-CLI，并把 Steam build ID、source/output hash 和工具版本提交在 manifest 中。
 
 `ci-gate` 是稳定 required context；条件 job 本身不需要全部设成 branch required check。
 
@@ -172,8 +172,8 @@ HUD 编辑器的浏览器验收覆盖样例、确定性重放与实时来源切�
 稳定结构：
 
 ```text
-rivalhub-broadcast-<shortSHA>-win-x64/
-  RivalHub Broadcast.exe
+mizar-<shortSHA>-win-x64/
+  Mizar.exe
   README.txt
   resources/
     runtime/node.exe
@@ -190,9 +190,9 @@ rivalhub-broadcast-<shortSHA>-win-x64/
 
 正式包需要 Windows x64 构建，编译 Tauri 2 桌面 Host 并绑定 bundled Node / supervisor 摘要。`--skip-node-runtime` 只生成结构检查包；`--allow-dirty` 生成的包同样标记 `developmentOnly`，不能作为产品启动或真实验收的 exact-revision artifact。
 
-双击 EXE 默认打开 Broadcast Workspace：左侧 `/workspace/left`、底部 `/workspace/dock`，本机 Program Overlay 使用同一套 Program Scene registry。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。GSI 配置使用 `install-gsi.ps1 -Product` 安装、`restore-gsi.ps1 -Product` 恢复；安装和恢复前停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
+双击 EXE 默认打开 Mizar Workspace：左侧 `/workspace/left`、底部 `/workspace/dock`，本机 Program Overlay 使用同一套 Program Scene registry。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。GSI 配置使用 `install-gsi.ps1 -Product` 安装、`restore-gsi.ps1 -Product` 恢复；安装和恢复前停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
 
-`BROADCAST_STATE_ROOT` 可以指定 resources 之外的绝对目录；正常运行、GSI 脚本和验收必须使用相同值。HUD 配置、系列进度、capture 和日志均进入该目录。现场验收临时状态位于 `state/qualification`，完成后仍由现有 supervisor 恢复 GSI 配置并清理。
+`MIZAR_STATE_ROOT` 可以指定 resources 之外的绝对目录；正常运行、GSI 脚本和验收必须使用相同值。HUD 配置、系列进度、capture 和日志均进入该目录。现场验收临时状态位于 `state/qualification`，完成后仍由现有 supervisor 恢复 GSI 配置并清理。
 
 Windows CI 从带空格路径解压 ZIP，以 `product-smoke.mjs` 调用真实 EXE，检查冷启动、同 artifact 复用、停止/重启、未知端口占用、资源损坏和 GSI 安装/恢复。该 smoke 没有 CS2/OBS，不能构成生产验收通过。
 

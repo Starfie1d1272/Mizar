@@ -15,7 +15,7 @@ import type {
   PlayerDeathGameEvent,
   PlayerHurtGameEvent,
   WeaponFireGameEvent,
-} from '@rivalhub-broadcast/core/game-events';
+} from '@mizar/core/game-events';
 
 import { asRecord, isSourceUserId, normalizeSourcePlayerRef, readPropertyValue } from './player.js';
 import type { CstvGameEventName } from '../types.js';

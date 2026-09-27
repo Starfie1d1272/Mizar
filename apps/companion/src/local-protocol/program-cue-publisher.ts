@@ -8,7 +8,7 @@ import {
   type ProgramCueLaneMessage,
   type ProgramCueMessageInput,
   type ProgramCueMessageV1,
-} from '@rivalhub-broadcast/protocol/program-cue';
+} from '@mizar/protocol/program-cue';
 
 import type { LocalWebOutboundPublisher } from './channel-publisher.js';
 

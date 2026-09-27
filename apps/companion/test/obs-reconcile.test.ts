@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { PROGRAM_SCENES } from '@rivalhub-broadcast/protocol/program-scenes';
+import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import {
   checkObsConfiguration,
@@ -126,7 +126,7 @@ it('derives all OBS scenes and URLs from the shared registry', () => {
   expect(desired.find((scene) => scene.id === 'bp')?.browserUrl).toBe(`${baseUrl}/program/bp`);
 });
 
-it('repairs only RivalHub collection, browser sources and order, then is idempotently healthy', async () => {
+it('repairs only Mizar collection, browser sources and order, then is idempotently healthy', async () => {
   const obs = new FakeObs();
   obs.scenes.set('My Camera Scene', []);
   expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toEqual([
@@ -136,7 +136,7 @@ it('repairs only RivalHub collection, browser sources and order, then is idempot
   const gameplay = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'gameplay')!;
   const capture = obs.scenes
     .get(gameplay.sceneName)!
-    .find((item) => item.sourceName === 'RivalHub · CS2 Game Capture')!;
+    .find((item) => item.sourceName === 'Mizar · CS2 Game Capture')!;
   expect(obs.transforms.get(capture.sceneItemId)).toMatchObject({
     boundsType: 'OBS_BOUNDS_STRETCH',
     boundsWidth: 1920,
@@ -154,7 +154,7 @@ it('repairs only RivalHub collection, browser sources and order, then is idempot
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
-  obs.inputs.get('RivalHub · CS2 Game Capture')!.settings.window = 'other.exe';
+  obs.inputs.get('Mizar · CS2 Game Capture')!.settings.window = 'other.exe';
   expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(
     'capture_drift',
   );

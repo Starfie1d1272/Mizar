@@ -1,7 +1,4 @@
-import type {
-  GameEventSourceRole,
-  RoleScopedGameEventObservation,
-} from '@rivalhub-broadcast/core/game-events';
+import type { GameEventSourceRole, RoleScopedGameEventObservation } from '@mizar/core/game-events';
 
 export const SUPPORTED_CSTV_GAME_EVENT_NAMES = [
   'player_death',

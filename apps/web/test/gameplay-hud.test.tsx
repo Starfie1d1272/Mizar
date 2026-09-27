@@ -4,8 +4,8 @@ import { act, useState, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { getBuiltinResolvedPreset } from '@rivalhub-broadcast/hud-config';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import { getBuiltinResolvedPreset } from '@mizar/hud-config';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
 
 import { GameplayHud, themeStyle } from '../src/program/GameplayHud';
 import { HudEditorOverlay } from '../src/program/HudEditorOverlay';

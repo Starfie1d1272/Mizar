@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
 import { buildFocusedPlayerPresentation as build } from '../src/program/widgets/focused-player/presentation';
 

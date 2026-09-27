@@ -14,7 +14,7 @@ function cfgValue(text: string, key: string): string {
 describe('production GSI config contract', () => {
   it('keeps the installed cfg template aligned with the canonical JSON source', () => {
     const template = readFileSync(
-      join(process.cwd(), 'config/gamestate_integration_rivalhub_broadcast.cfg.example'),
+      join(process.cwd(), 'config/gamestate_integration_mizar.cfg.example'),
       'utf8',
     );
 

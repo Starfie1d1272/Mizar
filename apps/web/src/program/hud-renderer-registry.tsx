@@ -8,12 +8,12 @@ import {
   type HudWidgetId,
   type HudWidgetPlacement,
   type HudWidgetSettings,
-} from '@rivalhub-broadcast/hud-config';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import { RoundHistory, SeriesStrip, TopScoreBar } from './widgets/match-header';
 import { FocusedPlayer } from './widgets/focused-player/FocusedPlayer';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
 import type { LocalChannelClient } from '../realtime';
 import { RadarWidget } from './widgets/radar/Radar';
 import { PlayerRail } from './widgets/player-rails';

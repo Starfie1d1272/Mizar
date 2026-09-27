@@ -13,11 +13,11 @@ RivalHub 已拥有 Match、CompetitionEntry、Roster、BP、Schedule、Stage、�
 
 ### 1. 独立仓库
 
-RivalHub Broadcast 作为独立仓库和本地制播 runtime 演进，不作为 RivalHub Web 主仓中的一个页面模块。
+Mizar 作为独立仓库和本地制播 runtime 演进，不作为 RivalHub Web 主仓中的一个页面模块。
 
 ### 2. 产品定位
 
-项目定义为 **RivalHub-native CS2 Broadcast Runtime**，而不是通用 HUD Manager。
+项目定义为 **Mizar：面向 RivalHub 深度集成的 CS2 制播 Runtime**，而不是通用 HUD Manager。
 
 Gameplay HUD 只是完整节目流程中的一个 scene。
 
@@ -27,7 +27,7 @@ Gameplay HUD 只是完整节目流程中的一个 scene。
 RivalHub
   = official tournament context / canonical truth
 
-Broadcast
+Mizar
   = local realtime observation / presentation runtime
 
 DAK
@@ -37,27 +37,27 @@ OCR
   = platform-specific post-match evidence / fallback
 ```
 
-Broadcast 不建立第二套 Team / Player / Match / BP 官方数据库。
+Mizar 不建立第二套 Team / Player / Match / BP 官方数据库。
 
 ### 4. Integration
 
-Broadcast 只通过版本化 contract 与 RivalHub 集成，不直连 Supabase/生产表，也不 import RivalHub 内部页面或数据库实现。
+Mizar 只通过版本化 contract 与 RivalHub 集成，不直连 Supabase/生产表，也不 import RivalHub 内部页面或数据库实现。
 
-RivalHub 主仓未来即使重构 Match Runtime，只要公开 integration contract 保持兼容，Broadcast Core 不应随之重写。
+RivalHub 主仓未来即使重构 Match Runtime，只要公开 integration contract 保持兼容，Mizar Core 不应随之重写。
 
 ### 5. Observation 与 Official Fact 分离
 
 GSI / enhanced telemetry / local accumulator 产生的是 observation 和 provisional facts。
 
-Broadcast 可以发送 live projection、boundary event 和 result candidate；是否自动形成 canonical result，由 RivalHub 自己的 Match Runtime / reconciliation policy 决定。
+Mizar 可以发送 live projection、boundary event 和 result candidate；是否自动形成 canonical result，由 RivalHub 自己的 Match Runtime / reconciliation policy 决定。
 
 ## 后果
 
 正面：
 
 - 同一赛事事实只维护一次；
-- Broadcast 可以离线/本地优先；
-- RivalHub 与 Broadcast 可独立升级技术栈；
+- Mizar 可以离线/本地优先；
+- RivalHub 与 Mizar 可独立升级技术栈；
 - GSI parser、renderer、OBS、桌面壳都能作为边缘适配器替换；
 - Wrong Match 可以在 integration boundary fail closed。
 

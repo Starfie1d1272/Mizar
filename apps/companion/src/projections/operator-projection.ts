@@ -4,7 +4,7 @@ import {
   getProgramSafeRuntimeFreshness,
   selectProgramSafeRuntimeView,
   type ProjectionCursor,
-} from '@rivalhub-broadcast/core/projection';
+} from '@mizar/core/projection';
 import type {
   ActiveLineupResolution,
   IdentityCapabilities,
@@ -12,10 +12,10 @@ import type {
   IdentityResolution,
   IdentitySideMapping,
   UnresolvedObservedPlayer,
-} from '@rivalhub-broadcast/core/identity';
-import type { RuntimeDisposition, RuntimeTransition } from '@rivalhub-broadcast/core/runtime';
-import type { MatchFormat } from '@rivalhub-broadcast/core/match-context';
-import type { SeriesProgress } from '@rivalhub-broadcast/core/series-progress';
+} from '@mizar/core/identity';
+import type { RuntimeDisposition, RuntimeTransition } from '@mizar/core/runtime';
+import type { MatchFormat } from '@mizar/core/match-context';
+import type { SeriesProgress } from '@mizar/core/series-progress';
 
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { CstvSourceHealth, CstvSourceManagers } from '../telemetry/cstv-source-manager.js';

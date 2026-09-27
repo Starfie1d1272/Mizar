@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/protocol",
+  "name": "@mizar/protocol",
   "private": true,
   "type": "module",
   "files": [

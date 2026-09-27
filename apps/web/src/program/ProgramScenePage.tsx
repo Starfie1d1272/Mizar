@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
-import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes';
-import { programScene } from '@rivalhub-broadcast/protocol/program-scenes';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
+import { programScene } from '@mizar/protocol/program-scenes';
 import { useLocalChannelClient } from '../realtime';
 import { ProgramCanvas } from './ProgramCanvas';
 import './program-scenes.css';
@@ -42,9 +42,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
       {safe ? (
         <main className="program-scene__content" aria-label={title}>
-          <p className="program-scene__brand">RIVALHUB BROADCAST</p>
+          <p className="program-scene__brand">MIZAR</p>
           <p className="program-scene__eyebrow">
-            {match?.competition.name ?? 'RivalHub Broadcast'}
+            {match?.competition.name ?? 'Mizar'}
             {match?.stage ? ` · ${match.stage}` : ''}
             {series ? ` · ${series.format.toUpperCase()}` : ''}
           </p>

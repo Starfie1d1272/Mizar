@@ -16,7 +16,7 @@ import { ProgramCueRendererBridge } from './program/ProgramCueRendererBridge';
 import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage';
 import { ProgramPage } from './program/ProgramPage';
 import { ProgramScenePage } from './program/ProgramScenePage';
-import { programSceneForPath } from '@rivalhub-broadcast/protocol/program-scenes';
+import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
 import { OperatorPage } from './operator/OperatorPage';
 import { HudConsolePage } from './operator/HudConsolePage';
@@ -31,7 +31,7 @@ import {
   type LocalChannelConnectionState,
   useLocalChannelClient,
 } from './realtime';
-import type { LocalSnapshotChannel } from '@rivalhub-broadcast/protocol/version';
+import type { LocalSnapshotChannel } from '@mizar/protocol/version';
 
 export const surfaceDefinitions = [
   {
@@ -200,7 +200,7 @@ export function SurfacePage({ surface }: { readonly surface: SurfaceDefinition }
   return (
     <main className="shell" data-surface={surface.id}>
       <header className="shell__header">
-        <p className="shell__eyebrow">RivalHub Broadcast</p>
+        <p className="shell__eyebrow">Mizar</p>
         <h1>{surface.title}</h1>
         <p>{surface.description}</p>
       </header>
@@ -513,7 +513,7 @@ export function DebugPage() {
             <span>运行</span>
           </div>
           <div>
-            <p className="debug-eyebrow">RivalHub Broadcast / 运行诊断</p>
+            <p className="debug-eyebrow">Mizar / 运行诊断</p>
             <h1>运行诊断</h1>
             <p className="debug-intro">检查数据接入与记录状态；排查问题时展开高级技术信息。</p>
           </div>

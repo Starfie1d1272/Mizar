@@ -5,7 +5,7 @@
 
 ## 背景
 
-RivalHub Broadcast 最初以 RivalHub-native CS2 Broadcast Runtime 为定位，主要解决两类现实问题：一是赛事事实已经存在于 RivalHub，不应在本地 HUD/Manager 中重新建立 Team / Player / Match / BP 数据；二是 GSI、HUD、Radar、scene、OBS 等低延迟运行态需要留在本地制播 runtime。
+Mizar 最初定位为面向 RivalHub 深度集成的 local-first CS2 制播 Runtime，主要解决两类现实问题：一是赛事事实已经存在于 RivalHub，不应在本地 HUD/Manager 中重新建立 Team / Player / Match / BP 数据；二是 GSI、HUD、Radar、scene、OBS 等低延迟运行态需要留在本地制播 runtime。
 
 随着 Runtime、Program / Observer Assist 隔离和 Lookahead 设计逐步明确，产品实际已经形成三条彼此不同、但共享同一 Runtime Foundation 的能力线：
 
@@ -24,7 +24,7 @@ RivalHub Broadcast 最初以 RivalHub-native CS2 Broadcast Runtime 为定位，�
 
 ### 1. 冻结三条产品能力线
 
-RivalHub Broadcast 的顶层产品结构固定为：
+Mizar 的顶层产品结构固定为：
 
 ```text
 Shared Runtime Foundation
@@ -64,7 +64,7 @@ ADR-0001 的 `RivalHub-native` 保持成立，其含义明确为：
 - RivalHub 是当前产品的第一方 canonical tournament context；
 - 当前 Major 和 V1 优先服务 RivalHub 的真实赛事工作流；
 - `BroadcastManifest`、#610 ReliableObservation、#615 BroadcastLiveSnapshot 是当前正式跨仓 contract；
-- 不在 Broadcast 内重复建立 RivalHub 已拥有的 Team / Player / Match / BP 官方数据库。
+- 不在 Mizar 内重复建立 RivalHub 已拥有的 Team / Player / Match / BP 官方数据库。
 
 但 `RivalHub-native` **不等于**：
 
@@ -73,7 +73,7 @@ ADR-0001 的 `RivalHub-native` 保持成立，其含义明确为：
 - Observer Assist 必须依赖 RivalHub 才能解析两条 timeline、建立 alignment 或生成 future cue；
 - 每个共享 domain contract 都必须带 RivalHub-specific 字段。
 
-RivalHub-specific 语义通过 `packages/rivalhub` 和 composition root 接入 Broadcast-owned domain contract。
+RivalHub-specific 语义通过 `packages/rivalhub` 和 composition root 接入 Mizar-owned domain contract。
 
 ### 4. 依赖方向固定为 adapter → Core → consumer projection
 
@@ -105,7 +105,7 @@ Lookahead source adapter ───────┘            │
 
 负责把 canonical context 与实时 observation 连接起来。
 
-Broadcast 仍只产生 observation / live projection；RivalHub 决定 official truth。公开网站、第三方 API/WebSocket/SSE 等云端分发由 RivalHub 或未来明确的数据服务 owner 负责，不把 Broadcast Companion 演化成公网数据平台。
+Mizar 仍只产生 observation / live projection；RivalHub 决定 official truth。公开网站、第三方 API/WebSocket/SSE 等云端分发由 RivalHub 或未来明确的数据服务 owner 负责，不把 Mizar Companion 演化成公网数据平台。
 
 #### 正式节目制播
 
@@ -139,7 +139,7 @@ M0–M5 期间继续使用当前 monorepo 和共享 Runtime。现在不因为未
 
 - Core reducer/replay 不需要 RivalHub 网络连接；
 - Program projection 可由与 `BroadcastManifest` 同 shape 的本地 context fixture 驱动；
-- Lookahead alignment/future cue 的核心逻辑只依赖 Broadcast-owned identity/timeline/event contract；
+- Lookahead alignment/future cue 的核心逻辑只依赖 Mizar-owned identity/timeline/event contract；
 - provider-specific discovery/configuration 留在 adapter 层；
 - RivalHub-specific enrichments 缺失时，系统可以降级到较弱 display/identity capability，而不是污染时间轴正确性。
 
@@ -155,13 +155,13 @@ M0–M5 期间继续使用当前 monorepo 和共享 Runtime。现在不因为未
 
 - 文档和实现都能明确区分“赛事数据闭环”“正式节目”“Observer Assist”；
 - RivalHub 优先级不变，同时避免把共享 Core 写死为主站内部模块；
-- Lookahead 可以先作为 RivalHub Broadcast 的能力落地，又保留未来独立发行或接入其他 CSTV/provider 的路径；
+- Lookahead 可以先作为 Mizar 的能力落地，又保留未来独立发行或接入其他 CSTV/provider 的路径；
 - Program/HUD 继续完整服务当前赛事，不需要为了可移植性降低第一方集成深度；
 - Agent 在实现新能力时拥有更明确的 dependency/ownership 判断依据。
 
 代价：
 
-- 需要维护清晰的 Broadcast-owned domain contract 与 RivalHub adapter 边界；
+- 需要维护清晰的 Mizar-owned domain contract 与 RivalHub adapter 边界；
 - 某些第一方字段不能为了开发方便直接泄漏到 Core；
 - standalone capability 仍需要未来真实需求验证，当前不会自动获得独立 packaging/UX。
 

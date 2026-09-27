@@ -1,5 +1,5 @@
-import { resolveCs2ItemByGsiName } from '@rivalhub-broadcast/cs2-assets';
-import type { RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
+import { resolveCs2ItemByGsiName } from '@mizar/cs2-assets';
+import type { RadarSnapshot } from '@mizar/protocol/radar';
 import {
   defaultMapGeometryProvider,
   projectWorldDirection,
@@ -7,7 +7,7 @@ import {
   type MapGeometry,
   type RadarLayer,
   type RadarProjectedPosition,
-} from '@rivalhub-broadcast/radar';
+} from '@mizar/radar';
 
 // Issue #34 freezes the broadcast smoke presentation at 20 s. This is not a
 // server cvar or a claim about the exact volumetric visibility/collision field.

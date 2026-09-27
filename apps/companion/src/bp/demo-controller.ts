@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { bpDemoCommandResultSchema, bpDemoCommandSchema } from '@rivalhub-broadcast/protocol/bp';
+import { bpDemoCommandResultSchema, bpDemoCommandSchema } from '@mizar/protocol/bp';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { BpSession } from './controller.js';
 import type { BpDemoStateController } from './demo-state.js';

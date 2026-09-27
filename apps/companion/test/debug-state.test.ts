@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { TelemetryObservation } from '@rivalhub-broadcast/core/telemetry';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 import {
   DEBUG_RECENT_DIAGNOSTICS_MAX,

@@ -12,11 +12,11 @@ import { performance } from 'node:perf_hooks';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const root = resolve(process.argv[2]);
 const reportPath = resolve(process.argv[3]);
-const exe = join(root, 'RivalHub Broadcast.exe');
+const exe = join(root, 'Mizar.exe');
 const stateRoot = join(root, 'state', 'synthetic-soak');
 const port = 3000;
 const origin = `http://127.0.0.1:${port}`;
-const SUBPROTOCOL = 'rivalhub-broadcast.local.v1';
+const SUBPROTOCOL = 'mizar.local.v1';
 const matches = [
   { id: 'A', map: 'de_ancient' },
   { id: 'B', map: 'de_inferno' },
@@ -315,7 +315,7 @@ try {
     await readFile(join(root, 'resources/metadata/artifact.json'), 'utf8'),
   );
   await mkdir(stateRoot, { recursive: true });
-  const runtimeEnv = { ...process.env, BROADCAST_STATE_ROOT: stateRoot };
+  const runtimeEnv = { ...process.env, MIZAR_STATE_ROOT: stateRoot };
   const version = spawnSync(join(root, 'resources/runtime/node.exe'), ['--version'], {
     encoding: 'utf8',
     timeout: 5000,
@@ -584,7 +584,7 @@ try {
     const stop = command(
       exe,
       ['--stop', '--no-browser'],
-      { ...process.env, BROADCAST_STATE_ROOT: stateRoot },
+      { ...process.env, MIZAR_STATE_ROOT: stateRoot },
       45000,
     );
     const code = await stop.completion.catch(() => -1);

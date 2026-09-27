@@ -3,7 +3,7 @@ import type {
   TelemetryCoverage,
   TelemetryObservation,
   TelemetryReceiveContext,
-} from '@rivalhub-broadcast/core/telemetry';
+} from '@mizar/core/telemetry';
 import { DiagnosticCollector } from './diagnostics/collector.js';
 import type { GsiDiagnosticBatch } from './diagnostics/types.js';
 import { parseAllPlayers } from './blocks/all-players.js';

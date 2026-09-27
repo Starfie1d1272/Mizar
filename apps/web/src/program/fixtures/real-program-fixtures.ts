@@ -1,4 +1,4 @@
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import artifact from './generated/real-program-fixtures.generated.json' with { type: 'json' };
 
 export interface RealProgramProvenance {

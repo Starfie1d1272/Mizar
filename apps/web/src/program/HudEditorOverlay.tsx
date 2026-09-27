@@ -7,7 +7,7 @@ import {
   placementToBox,
   type HudResolvedPreset,
   type HudWidgetId,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 import {
   getHudRendererEntry,

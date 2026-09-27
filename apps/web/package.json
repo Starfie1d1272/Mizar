@@ -1,23 +1,23 @@
 {
-  "name": "@rivalhub-broadcast/web",
+  "name": "@mizar/web",
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter @rivalhub-broadcast/testkit build",
+    "predev": "pnpm --filter @mizar/testkit build",
     "build": "vite build",
     "dev": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
-    "@rivalhub-broadcast/cs2-assets": "workspace:*",
-    "@rivalhub-broadcast/core": "workspace:*",
-    "@rivalhub-broadcast/hud-config": "workspace:*",
-    "@rivalhub-broadcast/protocol": "workspace:*",
-    "@rivalhub-broadcast/replay": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
+    "@mizar/core": "workspace:*",
+    "@mizar/hud-config": "workspace:*",
+    "@mizar/protocol": "workspace:*",
+    "@mizar/replay": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "@rivalhub-broadcast/radar": "workspace:*"
+    "@mizar/radar": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -6,7 +6,7 @@
 
 ## 背景
 
-RivalHub Broadcast 是一套长期运行在赛事制作环境中的 local-first CS2 Broadcast Runtime。它需要同时承担：
+Mizar 是一套长期运行在赛事制作环境中的 local-first CS2 Broadcast Runtime。它需要同时承担：
 
 - 接收并标准化约 10–20 Hz 的 CS2 GSI；
 - 维护低延迟、不可积压的本地状态；
@@ -35,9 +35,9 @@ RivalHub Broadcast 是一套长期运行在赛事制作环境中的 local-first 
 
 ### 原因
 
-截至 2026-09-12，Node 24 为 LTS，Node 26 仍为 Current。Broadcast 的实际负载只有一条本地 GSI 流、少量浏览器 consumer 和低频 cloud uplink；真正风险是长时间 backlog、listener 泄漏、重连和第三方兼容，而不是极限 socket benchmark。
+截至 2026-09-12，Node 24 为 LTS，Node 26 仍为 Current。Mizar 的实际负载只有一条本地 GSI 流、少量浏览器 consumer 和低频 cloud uplink；真正风险是长时间 backlog、listener 泄漏、重连和第三方兼容，而不是极限 socket benchmark。
 
-Node 24 同时与 RivalHub 主仓当前 runtime major 一致，能减少开发与 CI 环境差异，但 Broadcast 不因此与主仓共享源码或编译配置。
+Node 24 同时与 RivalHub 主仓当前 runtime major 一致，能减少开发与 CI 环境差异，但 Mizar 不因此与主仓共享源码或编译配置。
 
 参考：
 
@@ -46,7 +46,7 @@ Node 24 同时与 RivalHub 主仓当前 runtime major 一致，能减少开发�
 
 ### 为什么暂不使用 Bun 作为生产 Runtime
 
-Bun 的 WebSocket 与 standalone executable 能力很有吸引力，也保留为未来可重新评估的方向。但当前没有证据表明 Broadcast 的瓶颈会是 Node + `ws` 的吞吐量；为了单文件 executable 或更高 benchmark 吞吐提前更换 runtime，会扩大兼容性和生产验证面。
+Bun 的 WebSocket 与 standalone executable 能力很有吸引力，也保留为未来可重新评估的方向。但当前没有证据表明 Mizar 的瓶颈会是 Node + `ws` 的吞吐量；为了单文件 executable 或更高 benchmark 吞吐提前更换 runtime，会扩大兼容性和生产验证面。
 
 因此：
 
@@ -153,7 +153,7 @@ TypeScript 官方也指出：如果 library 的 bundler 不同时正确处理 de
 - **Vite 8.2.x stable**；
 - production build 由 Vite/Rolldown 完成。
 
-不使用 Next.js / SSR / React Server Components。Broadcast Web 的主要消费者是 localhost Operator 和 OBS Browser Source，没有 SEO、server rendering 或 edge rendering 需求。
+不使用 Next.js / SSR / React Server Components。Mizar Web 的主要消费者是 localhost Operator 和 OBS Browser Source，没有 SEO、server rendering 或 edge rendering 需求。
 
 React 负责 scene composition、layout 和低频结构状态；Radar marker / utility movement / clock interpolation 等高频路径允许 `requestAnimationFrame` + imperative rendering，禁止把每个 GSI tick 等价成整棵 React tree rerender。
 
@@ -239,7 +239,7 @@ Event    = ordered / deduplicated / replay when meaningful
 
 ## 决策 6：Protocol 使用 runtime validation，不共享 RivalHub 源码类型
 
-`packages/protocol` 是 Broadcast 内部和跨仓库 integration contract 的 owner，而不是 RivalHub domain model 的镜像。
+`packages/protocol` 是 Mizar 内部和跨仓库 integration contract 的 owner，而不是 RivalHub domain model 的镜像。
 
 规则：
 
@@ -248,10 +248,10 @@ Event    = ordered / deduplicated / replay when meaningful
 - schema 必须 versioned，例如 `BroadcastManifestV1`；
 - 关键 schema 提供 JSON fixture；
 - 对需要跨语言/跨仓库消费的 contract，提供 JSON Schema / 等价机器可读 schema 产物；
-- Broadcast 不 import RivalHub 仓库源码；RivalHub 也不 import Broadcast `src/`；
+- Mizar 不 import RivalHub 仓库源码；RivalHub 也不 import Mizar `src/`；
 - 两边通过 wire contract + compatibility fixture 验证兼容。
 
-这样 RivalHub 可以继续使用自己的 TypeScript / Next.js release cadence，Broadcast 也可以独立升级 TypeScript 和 runtime。
+这样 RivalHub 可以继续使用自己的 TypeScript / Next.js release cadence，Mizar 也可以独立升级 TypeScript 和 runtime。
 
 ---
 
@@ -271,7 +271,7 @@ Event    = ordered / deduplicated / replay when meaningful
 ```text
 recorded raw GSI
 → exact production telemetry adapter
-→ Broadcast Core
+→ Mizar Core
 → projection / event
 → renderer
 ```
@@ -362,7 +362,7 @@ Companion local process
 
 首要生产平台是 Windows 11。
 
-当前不把 Electron、Tauri、Node SEA 或 Bun executable 设成架构前提。它们解决的是安装、托盘、自动更新、native integration、单文件分发等 packaging 问题，而不是 Broadcast Core 问题。
+当前不把 Electron、Tauri、Node SEA 或 Bun executable 设成架构前提。它们解决的是安装、托盘、自动更新、native integration、单文件分发等 packaging 问题，而不是 Mizar Core 问题。
 
 在真正需要 desktop shell 前，Web UI 必须能够独立通过 localhost 运行。后续 packaging ADR 可以选择普通 portable bundle、native launcher、Electron、Tauri 或其他方案，而不重写 Core/Web contract。
 
@@ -432,7 +432,7 @@ Patch 版本允许在初始化实施时采用同一 stable minor 中更新的安
 
 出现以下任一事实时，新建 ADR，而不是直接修改本决定：
 
-- Node 26 进入 LTS，并完成 Broadcast soak；
+- Node 26 进入 LTS，并完成 Mizar soak；
 - Node + `ws` 被 profiling 证明是实际性能瓶颈；
 - pnpm 原生任务编排无法满足 CI 性能目标；
 - packaging 明确需要 native shell / auto-update / tray / protocol handler；

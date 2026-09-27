@@ -1,7 +1,7 @@
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
-import type { GsiAdaptResult } from '@rivalhub-broadcast/telemetry-gsi';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import type { MatchContext } from '@mizar/core/match-context';
+import type { GsiAdaptResult } from '@mizar/telemetry-gsi';
 
 import type { MatchContextBinding } from '../match-context/index.js';
 import { createProjectionCoordinator } from '../projections/projection-coordinator.js';

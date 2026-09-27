@@ -1,5 +1,5 @@
-import type { ProgramCue } from '@rivalhub-broadcast/core/game-events';
-import type { ProgramCueWire } from '@rivalhub-broadcast/protocol/program-cue';
+import type { ProgramCue } from '@mizar/core/game-events';
+import type { ProgramCueWire } from '@mizar/protocol/program-cue';
 
 /** Map the Core semantic cue into the protocol-owned DTO without exposing parser types. */
 export function mapProgramCue(cue: ProgramCue): ProgramCueWire {

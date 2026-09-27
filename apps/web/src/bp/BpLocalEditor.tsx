@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { localBpSequence } from '@rivalhub-broadcast/core/projection';
-import type { BpWorkspace, LocalBpDraft } from '@rivalhub-broadcast/protocol/bp';
+import { localBpSequence } from '@mizar/core/projection';
+import type { BpWorkspace, LocalBpDraft } from '@mizar/protocol/bp';
 import { saveLocalBp } from './client';
 
 function emptyDraft(workspace: BpWorkspace): LocalBpDraft {

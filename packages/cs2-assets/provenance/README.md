@@ -1,6 +1,6 @@
 # CS2 official asset provenance
 
-本目录记录 `@rivalhub-broadcast/cs2-assets` 中由 CS2 retail resources 导出的 presentation asset 的工程来源。它不作 Valve asset 的所有权、商标或再许可法律判断。
+本目录记录 `@mizar/cs2-assets` 中由 CS2 retail resources 导出的 presentation asset 的工程来源。它不作 Valve asset 的所有权、商标或再许可法律判断。
 
 正式导入必须由维护者提供自己的 Counter-Strike 2 resource/VPK copy，并通过 `scripts/cs2-assets/import.mjs` 生成 checked-in normalized SVG 与 `generated/manifest.json`。仓库不下载或提交 VPK、raw compiled resource、VRF binary 或机器本地路径。
 

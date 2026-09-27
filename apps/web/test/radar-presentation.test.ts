@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { RADAR_SCHEMA_VERSION } from '@rivalhub-broadcast/protocol/version';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import { RADAR_SCHEMA_VERSION } from '@mizar/protocol/version';
 import {
   grenadeIcon,
   isActiveSmoke,

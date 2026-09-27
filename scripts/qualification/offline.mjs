@@ -44,9 +44,7 @@ async function assertNoSymlinks(directory) {
 
 async function assertBundleSmoke(outputRoot) {
   const entries = await readdir(outputRoot, { withFileTypes: true });
-  const bundle = entries.find(
-    (entry) => entry.isDirectory() && entry.name.startsWith('rivalhub-broadcast-'),
-  );
+  const bundle = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('mizar-'));
   const archive = entries.find((entry) => entry.isFile() && entry.name.endsWith('.zip'));
   if (bundle === undefined || archive === undefined)
     throw new Error('qualification build 未生成一个 bundle 目录和一个 ZIP');
@@ -79,7 +77,7 @@ async function assertBundleSmoke(outputRoot) {
     'scripts/evidence/qualification.mjs',
     'scripts/qualification-supervisor.mjs',
     'scripts/qualification-contract.json',
-    'config/gamestate_integration_rivalhub_broadcast.cfg.template',
+    'config/gamestate_integration_mizar.cfg.template',
     'metadata/artifact.json',
     'metadata/SHA256SUMS',
     'README.txt',
@@ -141,7 +139,7 @@ async function assertBundleSmoke(outputRoot) {
   if (deployedPackage.includes('/Users/') || deployedPackage.includes('\\Users\\'))
     throw new Error('qualification deploy 包含绑定主机的绝对工作区路径');
   const config = await readFile(
-    join(bundleDir, 'resources/config/gamestate_integration_rivalhub_broadcast.cfg.template'),
+    join(bundleDir, 'resources/config/gamestate_integration_mizar.cfg.template'),
     'utf8',
   );
   if (!config.includes('REPLACE_WITH_GSI_TOKEN'))
@@ -151,7 +149,7 @@ async function assertBundleSmoke(outputRoot) {
   const readme = await readFile(join(bundleDir, 'README.txt'), 'utf8');
   if (
     !scripts.includes('runtime\\node.exe') ||
-    !scripts.includes('BROADCAST_COMMIT') ||
+    !scripts.includes('MIZAR_COMMIT') ||
     !scripts.includes('supervisorProcessId') ||
     !installer.includes('libraryfolders.vdf') ||
     !installer.includes('GsiEndpointConflictWarning') ||

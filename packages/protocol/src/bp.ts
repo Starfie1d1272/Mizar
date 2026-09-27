@@ -87,7 +87,7 @@ export const bpProjectionSchema = z
   });
 export const bpSnapshotSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp.v2'),
+    schemaVersion: z.literal('mizar.bp.v2'),
     revision: z.string().min(1),
     projection: bpProjectionSchema.nullable(),
     state: z.enum(['hidden', 'revealing', 'shown', 'hiding']),
@@ -172,7 +172,7 @@ const bpWorkspaceCandidateSchema = z
 
 export const bpWorkspaceSchema = z
   .object({
-    schemaVersion: z.literal('rivalhub.bp-workspace.v4'),
+    schemaVersion: z.literal('mizar.bp-workspace.v4'),
     demo: bpDemoStateSchema,
     source: z.enum(['none', 'online', 'local', 'cache']),
     authoringMode: z.enum(['standalone', 'bound-overlay']),

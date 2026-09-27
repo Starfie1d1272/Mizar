@@ -68,7 +68,7 @@ export async function verifyPayload(root) {
     if (name !== 'resources/metadata/artifact.json') digest.update(`${name}\0${match[1]}\n`);
   }
   for (const name of [
-    'RivalHub Broadcast.exe',
+    'Mizar.exe',
     'resources/runtime/node.exe',
     'resources/app/dist/server.js',
     'resources/web/dist/index.html',
@@ -119,7 +119,7 @@ async function writeJson(path, data) {
 
 export async function stopProduct(
   root,
-  { port = PRODUCT_PORT, stateRoot = writableRoot(root, process.env.BROADCAST_STATE_ROOT) } = {},
+  { port = PRODUCT_PORT, stateRoot = writableRoot(root, process.env.MIZAR_STATE_ROOT) } = {},
 ) {
   const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
   const health = await healthAt(port);
@@ -209,10 +209,10 @@ export async function runProduct({
     LOCAL_WEB_LAN_MODE: '0',
     QUALIFICATION_MODE: '0',
     GSI_TOKEN: gsiToken,
-    BROADCAST_COMMIT: artifact.gitSha,
-    BROADCAST_ARTIFACT_SHA256: artifact.artifactSha256,
-    BROADCAST_PRODUCT_INSTANCE: instanceId,
-    BROADCAST_RUNTIME_TOKEN: controlToken,
+    MIZAR_COMMIT: artifact.gitSha,
+    MIZAR_ARTIFACT_SHA256: artifact.artifactSha256,
+    MIZAR_PRODUCT_INSTANCE: instanceId,
+    MIZAR_RUNTIME_TOKEN: controlToken,
     WEB_ROOT: join(root, 'resources/web/dist'),
     CAPTURE_DIR: join(stateRoot, 'data/capture'),
     HUD_CONFIG_PATH: join(stateRoot, 'data/hud-config.json'),
@@ -277,7 +277,7 @@ async function main() {
   if (process.platform !== 'win32' || process.arch !== 'x64')
     throw new Error('此产品包需要 64 位 Windows');
   const artifact = await verifyPayload(bundleRoot);
-  const stateRoot = writableRoot(bundleRoot, process.env.BROADCAST_STATE_ROOT);
+  const stateRoot = writableRoot(bundleRoot, process.env.MIZAR_STATE_ROOT);
   if (args.has('--stop')) return stopProduct(bundleRoot, { stateRoot });
   await runProduct({
     root: bundleRoot,

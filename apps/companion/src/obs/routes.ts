@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import { ObsAdapter } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';

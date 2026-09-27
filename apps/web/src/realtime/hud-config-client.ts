@@ -6,7 +6,7 @@ import {
   parseHudResolvedPreset,
   type HudConfigDocument,
   type HudResolvedPreset,
-} from '@rivalhub-broadcast/hud-config';
+} from '@mizar/hud-config';
 
 export const HUD_CONFIG_POLL_INTERVAL_MS = 500;
 

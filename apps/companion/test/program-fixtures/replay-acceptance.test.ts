@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { createReplaySession, type ReplaySessionScheduler } from '@rivalhub-broadcast/testkit';
-import type { ReplaySessionEvent, ReplaySessionFrame } from '@rivalhub-broadcast/testkit';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import { createReplaySession, type ReplaySessionScheduler } from '@mizar/testkit';
+import type { ReplaySessionEvent, ReplaySessionFrame } from '@mizar/testkit';
 import { describe, expect, it } from 'vitest';
 
 import { REPOSITORY_ROOT, replayRealProgram } from '../support/real-program-replay.js';

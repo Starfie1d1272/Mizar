@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/hud-config",
+  "name": "@mizar/hud-config",
   "private": true,
   "type": "module",
   "files": [

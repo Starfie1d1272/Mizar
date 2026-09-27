@@ -8,7 +8,7 @@ test('Workspace preview shares the scene registry and sends a revisioned command
   await page.route('**/local/v1/program-scenes', (route) =>
     route.fulfill({
       json: {
-        schemaVersion: 'rivalhub.program-scenes.v1',
+        schemaVersion: 'mizar.program-scenes.v1',
         active: 'waiting',
         revision: 'revision-1',
         available: PROGRAM_SCENES.map((scene) => scene.id),

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import { ProgramCanvas } from '../ProgramCanvas';
 import { GameplayHud } from '../GameplayHud';
 import { getProgramFixture, getProgramFixtureProvenance } from '../fixtures';
 import { ProgramFoundationProbe } from './ProgramFoundationProbe';
-import { getBuiltinResolvedPreset } from '@rivalhub-broadcast/hud-config';
+import { getBuiltinResolvedPreset } from '@mizar/hud-config';
 
 import { radarVisualFixture } from '../fixtures/radar-fixtures';
 import { getDefaultHudCompositeFixture } from '../fixtures/default-hud-composite-fixtures';

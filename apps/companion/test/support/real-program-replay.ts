@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-import { programSnapshotSchema, type ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema, type RadarSnapshot } from '@rivalhub-broadcast/protocol/radar';
-import { toMatchContext, type BroadcastManifestV1 } from '@rivalhub-broadcast/rivalhub';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
 import {
   iterateCaptureFrames,
   replayCapture,
@@ -13,7 +13,7 @@ import {
   type ReplayEvent,
   type ReplayFaultPlanV1,
   type VerifiedCapture,
-} from '@rivalhub-broadcast/testkit';
+} from '@mizar/testkit';
 
 import {
   createProductionReplayComposition,

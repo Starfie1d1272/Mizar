@@ -2,8 +2,8 @@
 /** Icon/progress composition adapted from Lexogrine BombTimer.tsx / PlantDefuse.tsx,
  * cs2-react-hud@7874750c97fcecd8f72eb3fad382917e035ec651 (MIT).
  * User reference choreography consumes semantic progress; no browser countdown owner. */
-import { getCs2Asset, getCs2Item } from '@rivalhub-broadcast/cs2-assets';
-import type { ProjectionCursor } from '@rivalhub-broadcast/protocol/shared';
+import { getCs2Asset, getCs2Item } from '@mizar/cs2-assets';
+import type { ProjectionCursor } from '@mizar/protocol/shared';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { consecutivePresentationSamples } from '../../presentation-sample';

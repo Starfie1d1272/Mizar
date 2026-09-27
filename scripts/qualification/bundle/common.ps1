@@ -4,9 +4,9 @@ $ErrorActionPreference = 'Stop'
 $script:BundleRoot = Split-Path -Parent $PSScriptRoot
 $script:ProductRoot = Split-Path -Parent $script:BundleRoot
 $script:StateRoot = Join-Path $script:ProductRoot 'state'
-if ($env:BROADCAST_STATE_ROOT) {
-    if (-not [System.IO.Path]::IsPathRooted($env:BROADCAST_STATE_ROOT)) { throw '运行数据目录必须是绝对路径' }
-    $script:StateRoot = [System.IO.Path]::GetFullPath($env:BROADCAST_STATE_ROOT)
+if ($env:MIZAR_STATE_ROOT) {
+    if (-not [System.IO.Path]::IsPathRooted($env:MIZAR_STATE_ROOT)) { throw '运行数据目录必须是绝对路径' }
+    $script:StateRoot = [System.IO.Path]::GetFullPath($env:MIZAR_STATE_ROOT)
 }
 $resourcePath = [System.IO.Path]::GetFullPath($script:BundleRoot).TrimEnd('\')
 $statePath = [System.IO.Path]::GetFullPath($script:StateRoot).TrimEnd('\')

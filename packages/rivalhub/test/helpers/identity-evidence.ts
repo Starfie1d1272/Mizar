@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { MatchContext } from '@rivalhub-broadcast/core/match-context';
-import { iterateCaptureFrames, verifyCapture } from '@rivalhub-broadcast/testkit';
+import type { MatchContext } from '@mizar/core/match-context';
+import { iterateCaptureFrames, verifyCapture } from '@mizar/testkit';
 
 import { toMatchContext, type BroadcastManifestV1 } from '../../src/index.js';
 

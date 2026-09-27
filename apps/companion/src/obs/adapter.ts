@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { OBSWebSocket } from 'obs-websocket-js';
-import type { ProgramSceneId } from '@rivalhub-broadcast/protocol/program-scenes';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ObsConfigStore, discoverObsExecutable } from './config.js';
 import {
   checkObsConfiguration,

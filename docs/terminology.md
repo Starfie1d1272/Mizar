@@ -23,7 +23,7 @@
 | Program | `Program` / 播出画面 | 播出画面 |
 | Operator | `Operator` / 制作控制 | 制作控制 |
 | Observer Assist | `Observer Assist` / 观察辅助 | 观察辅助 |
-| Broadcast Workspace | 制播工作区（Broadcast Workspace） | 制播工作区 |
+| Mizar Workspace | 制播工作区（Mizar Workspace） | 制播工作区 |
 | Runtime / RuntimeState | `Runtime` / `RuntimeState`，必要时中文解释 | 运行状态 / 本地制播服务状态 |
 | Projection | `Projection`；类型名保留 `*Projection` | 不直接暴露 |
 | Renderer | `Renderer` / 渲染层 | 不直接暴露 |

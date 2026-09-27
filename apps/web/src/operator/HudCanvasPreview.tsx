@@ -6,8 +6,8 @@ import {
   HUD_CANVAS_WIDTH,
   type HudResolvedPreset,
   type HudWidgetId,
-} from '@rivalhub-broadcast/hud-config';
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import type { RadarProps } from '../program/widgets/radar/Radar';
 import { HudEditorOverlay } from '../program/HudEditorOverlay';

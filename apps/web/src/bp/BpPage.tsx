@@ -3,7 +3,7 @@ import { OperatorShell } from '../operator/OperatorShell';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
 import { BpPresentation } from './BpPresentation';
-import type { BpDemoCommand, BpDemoFormat } from '@rivalhub-broadcast/protocol/bp';
+import type { BpDemoCommand, BpDemoFormat } from '@mizar/protocol/bp';
 import { sendBpDemoCommand, switchToRivalhubBp, useBpSession, useBpWorkspace } from './client';
 import './bp.css';
 

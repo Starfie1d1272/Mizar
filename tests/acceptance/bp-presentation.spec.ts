@@ -453,7 +453,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await page.goto('/operator/bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
     expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
-      schemaVersion: 'rivalhub.bp-workspace.v4',
+      schemaVersion: 'mizar.bp-workspace.v4',
       authoringMode: 'standalone',
     });
     await page.getByRole('button', { name: '本地填写 BP', exact: true }).click();

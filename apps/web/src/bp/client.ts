@@ -8,7 +8,7 @@ import {
   type BpSnapshot,
   type BpWorkspace,
   type LocalBpDraft,
-} from '@rivalhub-broadcast/protocol/bp';
+} from '@mizar/protocol/bp';
 
 export function useBpSession() {
   const [value, setValue] = useState<{ snapshot: BpSnapshot | null; animate: boolean }>({

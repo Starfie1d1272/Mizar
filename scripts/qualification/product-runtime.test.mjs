@@ -22,7 +22,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'broadcast portable '));
   roots.push(root);
   const files = [
-    'RivalHub Broadcast.exe',
+    'Mizar.exe',
     'resources/runtime/node.exe',
     'resources/app/dist/server.js',
     'resources/web/dist/index.html',
@@ -139,7 +139,7 @@ describe('portable process lifecycle', () => {
     const stateRoot = join(root, 'state');
     await writeFile(
       join(root, 'resources/app/dist/server.js'),
-      `const http=require('node:http'); const env=process.env; const server=http.createServer((req,res)=>{if(req.url==='/health'){res.end(JSON.stringify({product:{repository:'${PRODUCT_REPOSITORY}',artifactSha256:env.BROADCAST_ARTIFACT_SHA256,instanceId:env.BROADCAST_PRODUCT_INSTANCE,mode:'product'}}));}else if(req.headers['x-runtime-token']===env.BROADCAST_RUNTIME_TOKEN){res.end('{}'); server.close();}else {res.statusCode=403;res.end();}});server.listen(Number(env.PORT),'127.0.0.1');`,
+      `const http=require('node:http'); const env=process.env; const server=http.createServer((req,res)=>{if(req.url==='/health'){res.end(JSON.stringify({product:{repository:'${PRODUCT_REPOSITORY}',artifactSha256:env.MIZAR_ARTIFACT_SHA256,instanceId:env.MIZAR_PRODUCT_INSTANCE,mode:'product'}}));}else if(req.headers['x-runtime-token']===env.MIZAR_RUNTIME_TOKEN){res.end('{}'); server.close();}else {res.statusCode=403;res.end();}});server.listen(Number(env.PORT),'127.0.0.1');`,
     );
     let previousToken;
     let previousInstance;

@@ -1,7 +1,4 @@
-import type {
-  SnapshotResetSignals,
-  SnapshotEnvelopeLike,
-} from '@rivalhub-broadcast/protocol/acceptance';
+import type { SnapshotResetSignals, SnapshotEnvelopeLike } from '@mizar/protocol/acceptance';
 
 export type LocalChannelConnectionState =
   | 'idle'

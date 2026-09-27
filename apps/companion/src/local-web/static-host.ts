@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { PROGRAM_SCENES } from '@rivalhub-broadcast/protocol/program-scenes';
+import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 const SURFACE_ROUTES = [
   ...new Set([

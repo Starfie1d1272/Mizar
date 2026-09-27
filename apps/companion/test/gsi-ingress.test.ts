@@ -261,7 +261,7 @@ describe('Companion GSI ingress', () => {
 
   it('keeps the shipped production cfg aligned with the frozen metadata profile', async () => {
     const config = await readFile(
-      resolve(process.cwd(), 'config/gamestate_integration_rivalhub_broadcast.cfg.example'),
+      resolve(process.cwd(), 'config/gamestate_integration_mizar.cfg.example'),
       'utf8',
     );
     const expectedRootLines: Array<[string, string]> = [

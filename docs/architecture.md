@@ -4,7 +4,7 @@
 
 ## 1. 总体模型
 
-RivalHub Broadcast 是一套本地优先、snapshot-driven 并带显式边沿转换的 CS2 制播 Runtime。
+Mizar 是一套本地优先、snapshot-driven 并带显式边沿转换的 CS2 制播 Runtime。
 
 ```text
 赛事上下文                    实时数据
@@ -45,11 +45,11 @@ HUD / Radar   Debug         Lookahead cues
 
 RivalHub 连接模式下，RivalHub 拥有官方比赛、队伍、名单、BP、赛程和赛果等赛事事实。独立模式可以提供同形的本地比赛上下文，但不会改变 Runtime ownership。两种模式的长期产品边界见 ADR-0006。
 
-Broadcast 不直接读取或写入 RivalHub 数据库，也不导入 RivalHub 页面或内部 domain 类型。
+Mizar 不直接读取或写入 RivalHub 数据库，也不导入 RivalHub 页面或内部 domain 类型。
 
-### 2.2 Broadcast
+### 2.2 Mizar
 
-Broadcast 拥有：
+Mizar 拥有：
 
 - 实时数据 ingress 与 normalization；
 - source continuity；
@@ -66,7 +66,7 @@ DAK、OCR 或其它赛后来源属于 evidence / reconciliation 链，不进入�
 
 核心原则：
 
-> Broadcast 可以产生 observation；official fact 由对应赛事 authority 决定。
+> Mizar 可以产生 observation；official fact 由对应赛事 authority 决定。
 
 ## 3. Package ownership
 
@@ -103,7 +103,7 @@ apps/web/src/program
   控制台 Current Live preview 共用同一个 stable presentation boundary identity。
 
 packages/protocol
-  Broadcast 自有的 Local Protocol、schema 和 acceptance rules。
+  Mizar 自有的 Local Protocol、schema 和 acceptance rules。
   拥有 snapshot、Program Scene registry 与 `program-cue` transient wire contract；不拥有 RuntimeState 或业务状态机。
 
 packages/telemetry-gsi
@@ -138,7 +138,7 @@ packages/testkit
 依赖方向必须保持：
 
 ```text
-adapter → Broadcast-owned domain → consumer Projection → Renderer / transport
+adapter → Mizar-owned domain → consumer Projection → Renderer / transport
 ```
 
 禁止通过 deep import、TypeScript `paths` 或共享数据库绕过 ownership。
@@ -251,7 +251,7 @@ droppable / supersedable
 
 ```text
 liveSessionId
-  一场比赛与 Broadcast producer session 的绑定
+  一场比赛与 Mizar producer session 的绑定
 
 producerInstanceId
   一次 Companion 运行实例
@@ -337,7 +337,7 @@ Lookahead 数据源
 - autozoom / crop 的 presentation state 与动画；
 - OBS / browser Host 的 rendering adaptation。
 
-地图几何作为 provider 输入 Radar domain。第三方地图包可以作为 reference 或 adapter source，但不能成为 Broadcast Radar contract 的 shape owner。
+地图几何作为 provider 输入 Radar domain。第三方地图包可以作为 reference 或 adapter source，但不能成为 Mizar Radar contract 的 shape owner。
 
 ## 9. Local Protocol 与 delivery
 

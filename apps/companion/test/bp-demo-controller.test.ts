@@ -3,13 +3,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import type { BpProjection } from '@rivalhub-broadcast/core/projection';
-import {
-  getBpDemoManifest,
-  toMatchContext,
-  validateBroadcastManifest,
-} from '@rivalhub-broadcast/rivalhub';
-import { bpSnapshotSchema, bpWorkspaceSchema } from '@rivalhub-broadcast/protocol/bp';
+import type { BpProjection } from '@mizar/core/projection';
+import { getBpDemoManifest, toMatchContext, validateBroadcastManifest } from '@mizar/rivalhub';
+import { bpSnapshotSchema, bpWorkspaceSchema } from '@mizar/protocol/bp';
 import { buildApp } from '../src/app.js';
 import { registerBpRoutes } from '../src/bp/controller.js';
 import { registerBpDemoRoute } from '../src/bp/demo-controller.js';

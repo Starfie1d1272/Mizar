@@ -1,9 +1,9 @@
-import { LOCAL_PROTOCOL_VERSION, PROGRAM_SCHEMA_VERSION } from '@rivalhub-broadcast/protocol';
+import { LOCAL_PROTOCOL_VERSION, PROGRAM_SCHEMA_VERSION } from '@mizar/protocol';
 import {
   programSnapshotSchema,
   type ProgramPayload,
   type ProgramSnapshot,
-} from '@rivalhub-broadcast/protocol/program';
+} from '@mizar/protocol/program';
 
 import { realProgramFixtures, type RealProgramFixtureId } from './real-program-fixtures.js';
 import {

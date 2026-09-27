@@ -32,7 +32,7 @@ const captureDir = process.env.CAPTURE_DIR || join(process.cwd(), 'recordings', 
 const hudConfigPath = process.env.HUD_CONFIG_PATH ?? join(captureDir, '..', 'hud-config.json');
 const seriesProgressCheckpointPath =
   process.env.SERIES_PROGRESS_CHECKPOINT_PATH ?? join(captureDir, '..', 'series-progress.json');
-const broadcastCommit = process.env.BROADCAST_COMMIT ?? 'unknown';
+const mizarCommit = process.env.MIZAR_COMMIT ?? 'unknown';
 const qualificationMode = /^(?:1|true)$/i.test(process.env.QUALIFICATION_MODE ?? '');
 const qualificationProfile: QualificationProfile =
   process.env.QUALIFICATION_PROFILE === 'release'
@@ -108,7 +108,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   const createRecorder = () =>
     createCaptureRecorder({
       captureDir,
-      broadcastCommit,
+      broadcastCommit: mizarCommit,
       gsiConfig: PRODUCTION_GSI_CONFIG,
       ...(qualificationMode
         ? {
@@ -143,9 +143,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     seriesProgressCheckpointStore,
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
-  const productInstance = process.env.BROADCAST_PRODUCT_INSTANCE;
-  const productArtifact = process.env.BROADCAST_ARTIFACT_SHA256;
-  const productToken = process.env.BROADCAST_RUNTIME_TOKEN;
+  const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
+  const productArtifact = process.env.MIZAR_ARTIFACT_SHA256;
+  const productToken = process.env.MIZAR_RUNTIME_TOKEN;
   if (productInstance !== undefined && (qualificationMode || !productArtifact || !productToken)) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }

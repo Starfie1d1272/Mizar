@@ -1,4 +1,4 @@
-import type { HudLayout, HudPreset, HudTheme } from '@rivalhub-broadcast/hud-config';
+import type { HudLayout, HudPreset, HudTheme } from '@mizar/hud-config';
 
 export type HudWorkspace = 'preset' | 'layout' | 'theme';
 export type HudResource = HudPreset | HudLayout | HudTheme;

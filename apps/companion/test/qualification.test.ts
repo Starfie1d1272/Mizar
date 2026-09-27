@@ -480,7 +480,7 @@ describe('qualification-only Companion surface', () => {
     const page = qualificationPageHtml(CONTROL_TOKEN);
     expect(page).not.toContain('stopdemo');
     expect(page).not.toContain('Qualification workflow');
-    expect(page).toContain('<title>现场验收 · RivalHub Broadcast</title>');
+    expect(page).toContain('<title>现场验收 · Mizar</title>');
     expect(page).toContain('<link rel="stylesheet" href="/product-shell.css" />');
     expect(page).toContain('<header class="product-topbar" aria-label="制作导航">');
     expect(page).toContain('href="/qualification" aria-current="page">现场验收</a>');

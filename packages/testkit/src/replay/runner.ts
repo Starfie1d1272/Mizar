@@ -1,4 +1,4 @@
-import { adaptGsiPayload } from '@rivalhub-broadcast/telemetry-gsi';
+import { adaptGsiPayload } from '@mizar/telemetry-gsi';
 
 import { CaptureFormatError } from '../capture/errors.js';
 import { iterateCaptureFrames } from '../capture/reader.js';

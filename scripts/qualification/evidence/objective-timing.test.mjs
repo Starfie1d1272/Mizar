@@ -13,7 +13,7 @@ import {
 } from './objective-timing.mjs';
 
 const CREATED_AT = '2026-09-21T00:00:00.000Z';
-const BROADCAST_COMMIT = 'a'.repeat(40);
+const MIZAR_COMMIT = 'a'.repeat(40);
 
 function frame(sequence, elapsedMs, payload) {
   return {
@@ -46,7 +46,7 @@ async function createCapture(frames, options = {}) {
       captureId: 'capture-1',
       createdAt: CREATED_AT,
       platform: 'win32-x64',
-      broadcastCommit: BROADCAST_COMMIT,
+      broadcastCommit: MIZAR_COMMIT,
       scenario: 'objective-timing-test',
       gsiConfig: {
         parameters: {
@@ -797,7 +797,7 @@ describe('objective timing capture analyzer', () => {
           kind: 'production-recorder',
           recorderVersion: 1,
           captureId: 'capture-1',
-          artifactGitSha: BROADCAST_COMMIT,
+          artifactGitSha: MIZAR_COMMIT,
           artifactSha256: 'd'.repeat(64),
           qualificationRunId: 'qualification-run',
         },
@@ -821,7 +821,7 @@ describe('objective timing capture analyzer', () => {
     try {
       const context = {
         runId: 'qualification-run',
-        artifactGitSha: BROADCAST_COMMIT,
+        artifactGitSha: MIZAR_COMMIT,
         artifactSha256: 'd'.repeat(64),
         windowsVersion: 'Windows 11 test',
         cs2Version: 'CS2 test',

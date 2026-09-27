@@ -1,4 +1,4 @@
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { RIVALS_BP_RECORDS } from './rivals-bp-records.generated.js';
 
 type ProgramSeries = NonNullable<ProgramPayload['series']>;

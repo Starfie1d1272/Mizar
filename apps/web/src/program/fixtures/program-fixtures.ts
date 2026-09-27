@@ -1,4 +1,4 @@
-import type { ProgramSnapshot } from '@rivalhub-broadcast/protocol/program';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { realProgramFixtures, type RealProgramProvenance } from './real-program-fixtures.js';
 import {
   HUD_EDITOR_REAL_BP_FIXTURES,

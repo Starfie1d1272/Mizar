@@ -1,4 +1,4 @@
-import type { GsiAdaptResult } from '@rivalhub-broadcast/telemetry-gsi';
+import type { GsiAdaptResult } from '@mizar/telemetry-gsi';
 
 import type { CaptureFrameV1, VerifiedCapture } from '../capture/types.js';
 

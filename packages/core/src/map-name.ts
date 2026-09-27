@@ -1,5 +1,5 @@
 /**
- * Broadcast-owned CS2 map name normalization.
+ * Mizar-owned CS2 map name normalization.
  *
  * This deliberately contains only explicit display aliases. It is shared by
  * Core series binding and the Radar provider so the two consumers cannot

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <radialGradient id="mizar-star" cx="112" cy="114" r="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0F2FF" />
+      <stop offset="0.42" stop-color="#7DD3FF" />
+      <stop offset="1" stop-color="#60A5FA" />
+    </radialGradient>
+    <radialGradient id="alcor-star" cx="174" cy="81" r="22" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD27A" />
+      <stop offset="1" stop-color="#F59E0B" />
+    </radialGradient>
+    <linearGradient id="orbit" x1="44" y1="202" x2="220" y2="95" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9" />
+      <stop offset="0.53" stop-color="#3B82F6" />
+      <stop offset="1" stop-color="#1E40AF" />
+    </linearGradient>
+    <filter id="blue-glow" x="24" y="14" width="177" height="174" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="10" />
+    </filter>
+    <filter id="gold-glow" x="135" y="38" width="79" height="84" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="7" />
+    </filter>
+    <filter id="orbit-glow" x="10" y="68" width="251" height="177" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="4" />
+    </filter>
+    <path id="main-star" d="M112 59C114 88 120 102 165 114C120 126 114 140 112 171C110 140 104 126 59 114C104 102 110 88 112 59Z" />
+    <path id="alcor" d="M174 59C176 73 179 78 193 81C179 84 176 89 174 103C172 89 169 84 155 81C169 78 172 73 174 59Z" />
+    <path id="orbit-line" d="M88 145C76 149 62 151 53 158C44 166 38 176 36 185C33 196 42 203 60 207C103 216 161 191 198 162C222 143 230 115 218 94" />
+  </defs>
+  <use href="#orbit-line" stroke="#3B82F6" stroke-width="15" stroke-linecap="round" opacity="0.28" filter="url(#orbit-glow)" />
+  <use href="#main-star" fill="#60A5FA" opacity="0.68" filter="url(#blue-glow)" />
+  <use href="#alcor" fill="#F59E0B" opacity="0.72" filter="url(#gold-glow)" />
+  <use href="#orbit-line" stroke="url(#orbit)" stroke-width="7" stroke-linecap="round" />
+  <use href="#main-star" fill="url(#mizar-star)" />
+  <use href="#alcor" fill="url(#alcor-star)" />
+</svg>

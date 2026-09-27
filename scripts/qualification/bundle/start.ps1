@@ -67,10 +67,10 @@ $env:LOCAL_WEB_LAN_MODE = '0'
 $env:WEB_ROOT = Join-Path $script:BundleRoot 'web\dist'
 $env:HUD_CONFIG_PATH = Join-Path $script:StateRoot 'data\hud-config.json'
 $env:SERIES_PROGRESS_CHECKPOINT_PATH = Join-Path $script:StateRoot 'data\series-progress.json'
-Remove-Item Env:BROADCAST_PRODUCT_INSTANCE -ErrorAction SilentlyContinue
-Remove-Item Env:BROADCAST_RUNTIME_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:MIZAR_PRODUCT_INSTANCE -ErrorAction SilentlyContinue
+Remove-Item Env:MIZAR_RUNTIME_TOKEN -ErrorAction SilentlyContinue
 Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
-$env:BROADCAST_COMMIT = [string]$artifact.gitSha
+$env:MIZAR_COMMIT = [string]$artifact.gitSha
 $env:GSI_TOKEN = [string]$install.gsiToken
 $env:CAPTURE_DIR = (Join-Path $runDir 'recorder')
 $env:QUALIFICATION_MODE = 'true'

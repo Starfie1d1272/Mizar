@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 
-import { assistSnapshotSchema } from '@rivalhub-broadcast/protocol/assist';
-import { operatorSnapshotSchema } from '@rivalhub-broadcast/protocol/operator';
-import { programSnapshotSchema } from '@rivalhub-broadcast/protocol/program';
-import { radarSnapshotSchema } from '@rivalhub-broadcast/protocol/radar';
+import { assistSnapshotSchema } from '@mizar/protocol/assist';
+import { operatorSnapshotSchema } from '@mizar/protocol/operator';
+import { programSnapshotSchema } from '@mizar/protocol/program';
+import { radarSnapshotSchema } from '@mizar/protocol/radar';
 import {
   canonicalJsonLine,
   verifyCapture,
   type ReplayFaultPlanV1,
   type VerifiedCapture,
-} from '@rivalhub-broadcast/testkit';
+} from '@mizar/testkit';
 import { describe, expect, it } from 'vitest';
 
 import type { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';

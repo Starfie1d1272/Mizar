@@ -1,5 +1,5 @@
 {
-  "name": "@rivalhub-broadcast/companion",
+  "name": "@mizar/companion",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,18 +11,18 @@
   "dependencies": {
     "@fastify/static": "catalog:",
     "@fastify/websocket": "catalog:",
-    "@rivalhub-broadcast/core": "workspace:*",
-    "@rivalhub-broadcast/hud-config": "workspace:*",
-    "@rivalhub-broadcast/protocol": "workspace:*",
-    "@rivalhub-broadcast/radar": "workspace:*",
-    "@rivalhub-broadcast/rivalhub": "workspace:*",
-    "@rivalhub-broadcast/telemetry-cstv": "workspace:*",
-    "@rivalhub-broadcast/telemetry-gsi": "workspace:*",
+    "@mizar/core": "workspace:*",
+    "@mizar/hud-config": "workspace:*",
+    "@mizar/protocol": "workspace:*",
+    "@mizar/radar": "workspace:*",
+    "@mizar/rivalhub": "workspace:*",
+    "@mizar/telemetry-cstv": "workspace:*",
+    "@mizar/telemetry-gsi": "workspace:*",
     "fastify": "catalog:",
     "obs-websocket-js": "5.0.8"
   },
   "devDependencies": {
-    "@rivalhub-broadcast/testkit": "workspace:*",
+    "@mizar/testkit": "workspace:*",
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "@typescript/native": "catalog:",

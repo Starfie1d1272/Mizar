@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
-import type { OperatorPayload } from '@rivalhub-broadcast/protocol/operator';
-import type { BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
-import type { ProgramPayload } from '@rivalhub-broadcast/protocol/program';
+import type { OperatorPayload } from '@mizar/protocol/operator';
+import type { BpSnapshot } from '@mizar/protocol/bp';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 
 const operator = {

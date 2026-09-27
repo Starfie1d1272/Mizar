@@ -1,5 +1,5 @@
-import type { RadarPayload } from '@rivalhub-broadcast/protocol/radar';
-import type { RadarFrame } from '@rivalhub-broadcast/radar';
+import type { RadarPayload } from '@mizar/protocol/radar';
+import type { RadarFrame } from '@mizar/radar';
 
 export function mapRadarFrame(frame: RadarFrame): RadarPayload {
   return {

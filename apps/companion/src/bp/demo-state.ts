@@ -1,5 +1,5 @@
-import type { BpProjection } from '@rivalhub-broadcast/core/projection';
-import type { BpDemoCommand, BpDemoFormat, BpSnapshot } from '@rivalhub-broadcast/protocol/bp';
+import type { BpProjection } from '@mizar/core/projection';
+import type { BpDemoCommand, BpDemoFormat, BpSnapshot } from '@mizar/protocol/bp';
 
 export type { BpDemoFormat };
 export type BpDemoState = BpDemoFormat | null;
