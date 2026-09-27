@@ -223,14 +223,7 @@ jobs:
 
       - name: Test Desktop Host geometry and window policy
         shell: pwsh
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-
-      - name: Preserve resolved Rust dependencies
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: desktop-cargo-lock-${{ github.event.pull_request.head.sha || github.sha }}
-          path: apps/desktop/src-tauri/Cargo.lock
-          if-no-files-found: error
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Extract and smoke-test the portable bundle without CS2
         shell: pwsh

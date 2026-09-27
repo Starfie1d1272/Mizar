@@ -405,6 +405,7 @@ async function main() {
       await runCommand('cargo', [
         'build',
         '--release',
+        '--locked',
         '--manifest-path',
         join(desktopDir, 'Cargo.toml'),
       ]);
