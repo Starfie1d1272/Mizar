@@ -30,27 +30,23 @@ interface ReliableMapResult {
   readonly scoreB: number;
 }
 
-function entrantRelativeMapResult(
-  bundle: ProjectionBundle,
-  binding: MatchContextBinding,
-  cursor: ProjectionBundle['program']['cursor'],
-): ReliableMapResult | null {
-  const progressMap = bundle.operator.seriesProgress?.maps.find(
-    (map) => map.executionMapEpoch === cursor.mapEpoch,
-  );
+function entrantRelativeMapResult(bundle: ProjectionBundle): ReliableMapResult | null {
+  const series = bundle.program.series;
+  const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
+  const resultMap =
+    mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
   if (
-    progressMap === undefined ||
-    progressMap.status !== 'completed' ||
-    progressMap.finalScore === null
+    resultMap === undefined ||
+    resultMap.status !== 'completed' ||
+    resultMap.finalScore === null ||
+    resultMap.mapName !== bundle.program.map.name
   )
     return null;
-  const contextMap = binding.context.maps.find((map) => map.mapOrder === progressMap.mapOrder);
-  if (contextMap === undefined) return null;
   return {
-    mapId: contextMap.mapId,
-    mapName: progressMap.mapName,
-    scoreA: progressMap.finalScore.a,
-    scoreB: progressMap.finalScore.b,
+    mapId: resultMap.mapId,
+    mapName: resultMap.mapName,
+    scoreA: resultMap.finalScore.a,
+    scoreB: resultMap.finalScore.b,
   };
 }
 
@@ -225,7 +221,7 @@ export function buildReliableEventV1(input: {
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
   const mapResult =
-    input.kind === 'map_ended' ? entrantRelativeMapResult(bundle, binding, cursor) : null;
+    input.kind === 'map_ended' ? entrantRelativeMapResult(bundle) : null;
   if (
     input.kind === 'map_ended' &&
     (mapResult === null || bundle.program.map.score.ct === null || bundle.program.map.score.t === null)
