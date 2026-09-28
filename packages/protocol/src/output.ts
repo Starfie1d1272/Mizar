@@ -141,50 +141,65 @@ const roundHistory = z.strictObject({
     .max(256),
 });
 
-export const liveSnapshotV1Schema = z.strictObject({
-  schemaVersion: z.literal(LIVE_SNAPSHOT_SCHEMA_VERSION),
-  cursor,
-  producedAt: utc.max(64),
-  matchId: id,
-  competitionId: id,
-  format: z.enum(['bo1', 'bo3', 'bo5']),
-  series: z.strictObject({ scoreA: count, scoreB: count, currentMapOrder: count }),
-  roundHistory: roundHistory.nullable(),
-  map: z.strictObject({
-    mapId: nullableId,
-    name: z.string().max(128).nullable(),
-    phase: z.string().max(128).nullable(),
-    roundNumber: count,
-    scoreCT: count,
-    scoreT: count,
-  }),
-  roundPhase: z.string().max(128).nullable(),
-  clock: z
-    .strictObject({ phase: z.string().max(128).nullable(), remainingSeconds: number })
-    .nullable(),
-  teams: z.strictObject({
-    ct: z.strictObject({ entryId: nullableId, name: z.string().max(256) }),
-    t: z.strictObject({ entryId: nullableId, name: z.string().max(256) }),
-  }),
-  players: z.array(player).max(64),
-  observedPlayerSourceId: nullableId,
-  bomb: z
-    .strictObject({
-      state: z.string().max(128).nullable(),
-      carrierSourceId: nullableId,
-      action: z
-        .strictObject({
-          kind: z.enum(['plant', 'defuse']),
-          sourcePlayerId: nullableId,
-          remainingSeconds: number,
-          durationSeconds: number,
-        })
-        .nullable(),
-    })
-    .nullable(),
-  radar: publicRadarV1Schema.nullable(),
-  capability,
-});
+export const liveSnapshotV1Schema = z
+  .strictObject({
+    schemaVersion: z.literal(LIVE_SNAPSHOT_SCHEMA_VERSION),
+    cursor,
+    producedAt: utc.max(64),
+    matchId: id,
+    competitionId: id,
+    format: z.enum(['bo1', 'bo3', 'bo5']),
+    series: z.strictObject({ scoreA: count, scoreB: count, currentMapOrder: count }),
+    roundHistory: roundHistory.nullable(),
+    map: z.strictObject({
+      mapId: nullableId,
+      name: z.string().max(128).nullable(),
+      phase: z.string().max(128).nullable(),
+      roundNumber: count,
+      scoreCT: count,
+      scoreT: count,
+    }),
+    roundPhase: z.string().max(128).nullable(),
+    clock: z
+      .strictObject({ phase: z.string().max(128).nullable(), remainingSeconds: number })
+      .nullable(),
+    teams: z.strictObject({
+      ct: z.strictObject({ entryId: nullableId, name: z.string().max(256) }),
+      t: z.strictObject({ entryId: nullableId, name: z.string().max(256) }),
+    }),
+    players: z.array(player).max(64),
+    observedPlayerSourceId: nullableId,
+    bomb: z
+      .strictObject({
+        state: z.string().max(128).nullable(),
+        carrierSourceId: nullableId,
+        action: z
+          .strictObject({
+            kind: z.enum(['plant', 'defuse']),
+            sourcePlayerId: nullableId,
+            remainingSeconds: number,
+            durationSeconds: number,
+          })
+          .nullable(),
+      })
+      .nullable(),
+    radar: publicRadarV1Schema.nullable(),
+    capability,
+  })
+  .superRefine((value, ctx) => {
+    if (value.radar !== null) {
+      if (!value.capability.radarCurrent)
+        ctx.addIssue({ code: 'custom', message: 'radar_payload_not_current' });
+      if (value.map.name === null || value.radar.mapName !== value.map.name)
+        ctx.addIssue({ code: 'custom', message: 'radar_map_mismatch' });
+    }
+    if (
+      value.roundHistory !== null &&
+      value.series.currentMapOrder !== null &&
+      value.roundHistory.mapOrder !== value.series.currentMapOrder
+    )
+      ctx.addIssue({ code: 'custom', message: 'round_history_map_mismatch' });
+  });
 
 export const reliableEventKindV1Schema = z.enum([
   'match_started',
