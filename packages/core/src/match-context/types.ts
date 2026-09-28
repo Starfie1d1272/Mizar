@@ -69,6 +69,7 @@ export interface MatchContext {
   readonly status: MatchStatus;
   readonly format: MatchFormat;
   readonly stage: string;
+  readonly stageLabel?: string;
   readonly round: number | null;
   readonly entryRound: string | null;
   readonly scheduledAt: string | null;

@@ -45,6 +45,8 @@ it('creates and restores a standalone local match before BP, with a persistent l
     });
     const bp = await app.inject({ method: 'GET', url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');
+    expect(firstView.matches[0]?.stage).toBe('local');
+    expect(bp.json<{ match: { stage: string } }>().match.stage).toBe('本地比赛');
     const image =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lV8AAAAASUVORK5CYII=';
     const uploaded = await app.inject({

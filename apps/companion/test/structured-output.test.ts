@@ -75,7 +75,7 @@ it('projects bounded public-safe live data and transition-time reliable event', 
   ) as BroadcastManifestV1;
   const binding: MatchContextBinding = {
     manifest,
-    context: toMatchContext(manifest),
+    context: { ...toMatchContext(manifest), stage: 'swiss', stageLabel: '瑞士赛' },
     origin: 'fixture',
     freshness: 'fresh',
     diagnostics: [],
@@ -92,6 +92,7 @@ it('projects bounded public-safe live data and transition-time reliable event', 
     coordinator.afterRuntimeMutation(runtime.acceptObservation(observation(manifest, 1, 'live')));
     const bundle = coordinator.getCurrent();
     const base = projectLiveSnapshotV1({ bundle, binding, producedAt: '2026-09-28T00:00:01.000Z' });
+    expect(bundle.program.match?.stage).toBe('瑞士赛');
     expect(base?.players).toHaveLength(10);
     expect(base?.players[0]).toMatchObject({ money: 16000, equipmentValue: 5700 });
     expect(base?.radar).toBeNull();

@@ -50,7 +50,7 @@ export function registerBpWorkspaceRoutes(
         ? null
         : {
             competition: binding.context.competition.name,
-            stage: binding.context.stage,
+            stage: binding.context.stageLabel ?? binding.context.stage,
             format: binding.context.format,
             entrants: {
               a: {
@@ -85,7 +85,7 @@ export function registerBpWorkspaceRoutes(
           : {
               revision: pending.revision,
               competition: pending.binding.context.competition.name,
-              stage: pending.binding.context.stage,
+              stage: pending.binding.context.stageLabel ?? pending.binding.context.stage,
               format: pending.binding.context.format,
               entrants: {
                 a: { name: pending.binding.context.entrants.a.name },
