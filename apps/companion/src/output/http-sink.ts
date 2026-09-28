@@ -34,7 +34,7 @@ function transport(config: HttpOutputConfig) {
     try {
       const response = await (config.fetch ?? fetch)(url, {
         method: 'POST',
-        redirect: 'error',
+        redirect: 'manual',
         signal: controller.signal,
         headers: {
           authorization: `Bearer ${config.token}`,
