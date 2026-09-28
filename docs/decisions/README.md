@@ -45,3 +45,4 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 
 - [`0009-bp-presentation-host.md`](0009-bp-presentation-host.md)：BP 全屏 Host、本地 authoring、有限投影、播放会话与来源恢复边界。
 - [`0010-broadcast-workspace-desktop-host.md`](0010-broadcast-workspace-desktop-host.md)：#84 Tauri Desktop Host、固定工作区几何、单一 Program Scene registry、Companion OBS ownership 与便携入口迁移。
+- [`0011-owned-input-and-structured-output.md`](0011-owned-input-and-structured-output.md)：#95 Mizar-owned 比赛输入与 #89 结构化实时输出的 authority、安全和恢复边界。

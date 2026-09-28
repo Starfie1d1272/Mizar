@@ -1,5 +1,7 @@
 import {
   DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
+  createMapPlayerStatsAccumulator,
+  createObjectiveTimingState,
   createInitialRuntimeState,
   getProgramSourceFreshness,
   reduceRuntime,
@@ -74,6 +76,7 @@ export class ProgramRuntime {
   private seriesSideProof: SeriesSideProof | null = null;
   private readonly pendingSeriesEvents: SeriesProgressEvent[] = [];
   private restorePending = false;
+  private deliveryRestoreAwaitingTelemetry = false;
 
   constructor(options: ProgramRuntimeOptions | string) {
     const normalizedOptions: ProgramRuntimeOptions =
@@ -86,6 +89,28 @@ export class ProgramRuntime {
       normalizedOptions.producerInstanceId,
       normalizedOptions.liveSession,
     );
+  }
+
+  /** Restore identities only before the first observation; never restore telemetry or clocks. */
+  restoreDeliveryContinuity(input: {
+    readonly liveSessionId: string | null;
+    readonly programSourceGeneration: number;
+    readonly mapEpoch: number;
+    readonly mapName: string | null;
+  }): void {
+    if (this.state.runtimeSeq !== 0) throw new Error('runtime_already_started');
+    this.deliveryRestoreAwaitingTelemetry = true;
+    this.state = {
+      ...this.state,
+      liveSession:
+        input.liveSessionId === null
+          ? { kind: 'unbound' }
+          : { kind: 'bound', liveSessionId: input.liveSessionId },
+      programSource: { kind: 'cs2-gsi', generation: input.programSourceGeneration },
+      map: { epoch: input.mapEpoch, ...(input.mapName === null ? {} : { name: input.mapName }) },
+      playerStats: createMapPlayerStatsAccumulator(input.mapEpoch),
+      objectiveTiming: createObjectiveTimingState(input.programSourceGeneration, input.mapEpoch),
+    };
   }
 
   acceptObservation(observation: TelemetryObservation): RuntimeReduceResult {
@@ -291,6 +316,8 @@ export class ProgramRuntime {
   private apply(input: Parameters<typeof reduceRuntime>[1]): RuntimeReduceResult {
     const result = reduceRuntime(this.state, input, this.continuityPolicy);
     this.state = result.state;
+    if (input.kind === 'program-telemetry' && result.disposition.kind === 'accepted')
+      this.deliveryRestoreAwaitingTelemetry = false;
     this.lastDisposition = result.disposition;
     this.queueSeriesEvents(result.transitions);
     if (result.transitions.length > 0) {
@@ -355,7 +382,9 @@ export class ProgramRuntime {
     return {
       sourceGeneration: this.state.programSource.generation,
       mapEpoch: this.state.map.epoch,
-      mapName: map?.name ?? this.state.map.name ?? null,
+      mapName: this.deliveryRestoreAwaitingTelemetry
+        ? null
+        : (map?.name ?? this.state.map.name ?? null),
       mapEnded: map?.phase === 'gameover',
       roundNumber: map?.roundNumber ?? null,
       score: {

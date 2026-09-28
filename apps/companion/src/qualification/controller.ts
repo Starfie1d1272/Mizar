@@ -2,7 +2,11 @@ import { timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { MapExecutionResetReason, RuntimeTime } from '@mizar/core/runtime';
+import type {
+  MapExecutionResetReason,
+  RuntimeReduceResult,
+  RuntimeTime,
+} from '@mizar/core/runtime';
 
 import type {
   LocalWebHostDiagnostics,
@@ -54,7 +58,7 @@ export interface QualificationControllerOptions {
     readonly captureId: string;
   }>;
   readonly getHostDiagnostics?: () => LocalWebHostDiagnostics;
-  readonly onAcceptedMapReset?: () => void;
+  readonly onAcceptedMapReset?: (result: RuntimeReduceResult) => void;
   readonly onRestart?: () => void | Promise<void>;
   readonly onFinish?: (input: QualificationFinishInput) => void | Promise<void>;
 }
@@ -798,7 +802,7 @@ export function registerQualificationRoutes(
       phase: 'before',
     });
     const result = options.programRuntime.resetMapExecution(RESET_REASON, at);
-    if (result.disposition.kind === 'accepted') options.onAcceptedMapReset?.();
+    if (result.disposition.kind === 'accepted') options.onAcceptedMapReset?.(result);
     const after = options.programRuntime.getSnapshot();
     const reset: QualificationResetEvidence = {
       disposition: result.disposition.kind,

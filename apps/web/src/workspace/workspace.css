@@ -148,6 +148,60 @@
   color: #e8edf5;
   width: 100%;
 }
+.workspace-local-match {
+  border-top: 1px solid #2a4657;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+.workspace-local-match label {
+  color: #aebfcc;
+  display: block;
+  font-size: 12px;
+}
+.workspace-local-match select {
+  background: #091923;
+  border: 1px solid #426071;
+  color: #e8edf5;
+  width: 100%;
+}
+.workspace-local-editor {
+  border-top: 1px solid #2a4657;
+  padding-top: 8px;
+}
+.workspace-local-editor summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.workspace-local-editor form,
+.workspace-local-editor fieldset,
+.workspace-local-schedule {
+  margin-top: 10px;
+}
+.workspace-local-editor fieldset {
+  border: 1px solid #426071;
+  min-width: 0;
+}
+.workspace-local-editor fieldset label {
+  margin: 5px 0;
+}
+.workspace-local-editor img {
+  max-height: 48px;
+  max-width: 96px;
+  object-fit: contain;
+}
+.workspace-roster-row,
+.workspace-local-schedule > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 5px 0;
+}
+.workspace-roster-row input {
+  min-width: 88px;
+  width: 35%;
+}
 .workspace-candidate {
   display: flex;
   flex-direction: column;

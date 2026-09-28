@@ -205,3 +205,9 @@ describe('BP canonical projection', () => {
     expect(projectBp(undefined)).toBeNull();
   });
 });
+
+it('projects the display label while keeping the stage identity unchanged', () => {
+  const context = { ...contextFor('bo3'), stage: 'swiss', stageLabel: '瑞士赛' };
+  expect(projectBp(context)?.stage).toBe('瑞士赛');
+  expect(context.stage).toBe('swiss');
+});

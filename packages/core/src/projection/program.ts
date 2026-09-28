@@ -632,9 +632,12 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         ? null
         : {
             matchId: input.context.matchId,
-            competition: { ...input.context.competition },
+            competition: {
+              ...input.context.competition,
+              slug: input.context.competition.slug ?? input.context.competition.competitionId,
+            },
             format: input.context.format,
-            stage: input.context.stage,
+            stage: input.context.stageLabel ?? input.context.stage,
           },
     teams: canonicalTeams(input.context, input.seriesProgress, input.identity, identityIsCurrent),
     series: projectSeries(input.context, input.seriesProgress),

@@ -195,7 +195,7 @@ export function inspectBp(context: MatchContext | undefined): BpProjectionResult
     projection: {
       matchId: context.matchId,
       competition: context.competition.name,
-      stage: context.stage,
+      stage: context.stageLabel ?? context.stage,
       format: context.format,
       entrants: { a: team('a'), b: team('b') },
       cards,

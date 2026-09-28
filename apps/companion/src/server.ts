@@ -4,6 +4,7 @@ import { version as osVersion } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { buildApp } from './app.js';
+import { configuredHttpOutputs } from './output/http-sink.js';
 import { createProgramRuntime } from './runtime/program-runtime.js';
 import { JsonSeriesProgressCheckpointStore } from './series-progress/checkpoint-store.js';
 import {
@@ -57,6 +58,14 @@ const qualificationFinalRuntimePath =
 const COMPANION_SHUTDOWN_WATCHDOG_TIMEOUT_MS = 30_000;
 const producerInstanceId = randomUUID();
 
+let httpOutputs: ReturnType<typeof configuredHttpOutputs> = {};
+let httpOutputConfigError: string | undefined;
+try {
+  httpOutputs = configuredHttpOutputs(process.env);
+} catch {
+  httpOutputConfigError = 'HTTP 输出配置不完整或不安全';
+}
+
 let cstvSourceConfig: CstvSourceManagers | undefined;
 let programCstvUrl: string | undefined;
 let cstvSourceConfigError: string | undefined;
@@ -100,6 +109,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
 } else if (qualificationMode && host !== '127.0.0.1') {
   console.error('Companion 启动失败：现场验收模式必须监听本机回环地址 127.0.0.1');
   process.exitCode = 1;
+} else if (httpOutputConfigError !== undefined) {
+  console.error(`Companion 启动失败：${httpOutputConfigError}`);
+  process.exitCode = 1;
 } else if (cstvSourceConfigError !== undefined) {
   console.error(`Companion 启动失败：${cstvSourceConfigError}`);
   process.exitCode = 1;
@@ -140,6 +152,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   });
   await hudConfigStore.load();
   const programRuntime = createProgramRuntime(producerInstanceId, {
+    liveSession: { kind: 'bound', liveSessionId: randomUUID() },
     seriesProgressCheckpointStore,
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
@@ -150,6 +163,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
   const app = buildApp({
+    ...httpOutputs,
     ...(productInstance === undefined
       ? {}
       : {
@@ -178,6 +192,8 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     qualificationMode,
     ...(qualificationControlToken === undefined ? {} : { qualificationControlToken }),
     matchManifestPath: join(captureDir, '..', 'match-context.json'),
+    localTournamentPath: join(captureDir, '..', 'local-tournament.json'),
+    reliableOutboxPath: join(captureDir, '..', 'reliable-outbox.json'),
     ...(process.env.RIVALHUB_MANIFEST_URL_TEMPLATE && process.env.RIVALHUB_BROADCAST_READ_TOKEN
       ? {
           onlineManifestConfig: {

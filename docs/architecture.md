@@ -47,6 +47,8 @@ RivalHub 连接模式下，RivalHub 拥有官方比赛、队伍、名单、BP、
 
 Mizar 不直接读取或写入 RivalHub 数据库，也不导入 RivalHub 页面或内部 domain 类型。
 
+`MatchDocumentV1` 与 `ScheduleWindowV1` 是 Mizar 自有输入契约；来源、revision、新鲜度和诊断放在独立 acquisition envelope。独立模式的赛事、队伍、比赛和赛程顺序由 Companion 本机持久化，RivalHub 公开 DTO 只经 `packages/rivalhub` 转换。旧 BP Manifest 仅在本地迁移和现有 BP consumer 的兼容边界使用，不成为新的本地持久化格式。
+
 ### 2.2 Mizar
 
 Mizar 拥有：
@@ -59,6 +61,7 @@ Mizar 拥有：
 - Lookahead alignment 与 Observer Assist；
 - 本地 diagnostics、capture 与 replay；
 - Local Protocol 与 delivery semantics。
+- `LiveSnapshotV1` 的有界最新值分发与 `ReliableEventV1` 的持久 outbox、幂等键和失效判断；外部 sink 只消费 Mizar-owned 公开契约；Companion 提供 authenticated HTTPS reference adapter、请求 Abort 与进程重启投递连续性恢复，不恢复旧 telemetry/clock。
 
 ### 2.3 赛后证据
 
@@ -434,4 +437,4 @@ capture 写盘失败不能阻塞 GSI request hot path。`packages/testkit` 消�
 
 Core `projectBp` 从 canonical MatchContext 的 maps/veto 派生最多 7 张地图卡和 14 个 reveal step；选图与选边分别表达，决胜图不归 entrant。`sideChoice` 保留真正执行 SIDE_PICK 的队伍；只有 `teamAStartSide` 不足以生成选边行，BO5 决胜图不显示选边。`ProjectionCoordinator` 在身份 mismatch 或 BP 数据冲突时 fail closed。Companion 内存 `BpSession` 仅拥有播放状态，使用 monotonic clock 推进；Web 共用 `BpPresentation`，由 `/program/bp` 全屏不透明场景和 `/operator/bp` 预览承载。制作首页提供播放/收起。
 
-RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本机 LKG store，并更新同一个 ProjectionCoordinator/SeriesProgress。本地 authoring 是结构化 command input：Companion 校验后编译成 BroadcastManifest，再保存到同一个 LKG；不建立第二份 BP truth。`standalone | bound-overlay` provenance 作为 MatchContextBinding acquisition metadata 与 LKG metadata 保存，不进入 MatchContext domain。生产启动把 Manifest 缓存放在 capture 根目录旁的 `match-context.json`。服务重启可恢复比赛上下文与 authoring mode 为 cache 来源，但 BP 播放会话从 hidden 开始。活动 binding selection 与在线 candidate acquisition 分开管理 generation；候选失败刷新保留已验证候选，本地保存也不会清除它，只有新的有效候选才替换它。当前 RivalHub `main` 尚无正式 BroadcastManifest HTTP endpoint，因此本轮不声称实现了联网获取；任何恢复的 online candidate 仍通过同一 controller 等待制作人员显式切换。
+RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本机 LKG store，并更新同一个 ProjectionCoordinator/SeriesProgress。独立模式的比赛和 BP 保存在 Mizar 本机赛事库；现有 BP consumer 读取临时 BroadcastManifest 兼容视图，不建立第二份 BP truth。在线比赛的本地 BP 补录仍使用既有 bound-overlay LKG，不能修改 canonical metadata。`standalone | bound-overlay` provenance 属于 MatchContextBinding acquisition metadata，不进入 MatchContext domain。服务重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源，BP 播放会话从 hidden 开始。活动 binding selection 与在线 candidate acquisition 分开管理 generation；候选失败刷新保留已验证候选，只有新的有效候选才替换它。

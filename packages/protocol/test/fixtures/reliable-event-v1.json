@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "mizar.reliable-event.v1",
+  "idempotencyKey": "fixture-event-1",
+  "kind": "map_ended",
+  "cursor": {
+    "producerInstanceId": "fixture-producer",
+    "liveSessionId": null,
+    "runtimeSeq": 2,
+    "programSourceGeneration": 0,
+    "programReceiveSequence": 2,
+    "mapEpoch": 1
+  },
+  "observedAt": "2026-09-28T00:00:02.000Z",
+  "matchId": "local-match-1",
+  "competitionId": "local-event-1",
+  "contextRevision": "fixture-revision-1",
+  "mapId": null,
+  "mapName": "de_ancient",
+  "entryAId": "team-a",
+  "entryBId": "team-b",
+  "evidence": {
+    "identity": "matched",
+    "telemetryFresh": true,
+    "contextFresh": true,
+    "source": "runtime-transition"
+  },
+  "payload": {
+    "scoreCT": 13,
+    "scoreT": 11
+  }
+}

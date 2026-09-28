@@ -1,4 +1,5 @@
-import type { ScheduleWindow } from '@mizar/core/match-context';
+import type { ScheduleWindow, ScheduleWindowV1 } from '@mizar/core/match-context';
+import { parseScheduleWindowV1 } from '@mizar/protocol/context';
 
 import { validateBroadcastScheduleWindow } from './validate.js';
 import type { BroadcastScheduleCompetitionV1, BroadcastScheduleWindowV1 } from './types.js';
@@ -14,7 +15,8 @@ export class BroadcastScheduleWindowConversionError extends Error {
 }
 
 function competition(value: BroadcastScheduleCompetitionV1) {
-  return { ...value } as const;
+  const { logoUrl, ...base } = value;
+  return logoUrl === undefined ? base : { ...base, logoUrl };
 }
 
 export function toScheduleWindow(input: unknown): ScheduleWindow {
@@ -43,4 +45,31 @@ export function toScheduleWindow(input: unknown): ScheduleWindow {
       },
     })),
   };
+}
+
+export function toScheduleWindowV1(input: unknown): ScheduleWindowV1 {
+  const validated = validateBroadcastScheduleWindow(input);
+  if (!validated.ok) throw new BroadcastScheduleWindowConversionError(validated.diagnostics);
+  const window = toScheduleWindow(input);
+
+  return parseScheduleWindowV1({
+    ...window,
+    schemaVersion: 'mizar.schedule-window.v1',
+    competition: {
+      competitionId: window.competition.competitionId,
+      name: window.competition.name,
+      themeColor: window.competition.themeColor,
+      logoUrl: window.competition.logoUrl ?? null,
+    },
+    matches: window.matches.map((match) => ({
+      ...match,
+      stageLabel:
+        validated.value.matches.find((item) => item.matchId === match.matchId)?.stageLabel ??
+        match.stage,
+      roundLabel:
+        validated.value.matches.find((item) => item.matchId === match.matchId)?.roundLabel ?? null,
+      matchLabel:
+        validated.value.matches.find((item) => item.matchId === match.matchId)?.matchLabel ?? null,
+    })),
+  });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
@@ -8,6 +8,7 @@ import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
+import { LocalTournamentEditor, type LocalTournamentView } from './LocalTournamentEditor';
 import './workspace.css';
 
 const PHASE_LABEL = {
@@ -19,6 +20,164 @@ const PHASE_LABEL = {
 } as const;
 
 const ONLINE_MATCH_REFRESH_TIMEOUT_MS = 12_000;
+
+function useLocalTournament() {
+  const [view, setView] = useState<LocalTournamentView | null>(null);
+  const refresh = useCallback(async () => {
+    const response = await fetch('/local/v1/tournament', { cache: 'no-store' });
+    if (response.ok) setView((await response.json()) as LocalTournamentView);
+  }, []);
+  useEffect(() => {
+    queueMicrotask(() => void refresh());
+    const timer = setInterval(() => void refresh(), 3000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+  return { view, refresh };
+}
+
+function LocalMatchControls({
+  action,
+}: {
+  readonly action: (run: () => Promise<unknown>) => Promise<void>;
+}) {
+  const { view, refresh } = useLocalTournament();
+  const [teamA, setTeamA] = useState('');
+  const [teamB, setTeamB] = useState('');
+  const [teamAId, setTeamAId] = useState('');
+  const [teamBId, setTeamBId] = useState('');
+  const [format, setFormat] = useState<'bo1' | 'bo3' | 'bo5'>('bo3');
+  const [eventId, setEventId] = useState('');
+  const selected = view?.matches.find((match) => match.matchId === view.activeLocalMatchId);
+  return (
+    <div className="workspace-local-match">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void action(async () => {
+            const response = await fetch('/operator/local-match/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                teamA: teamA.trim(),
+                teamB: teamB.trim(),
+                ...(teamAId ? { teamAId } : {}),
+                ...(teamBId ? { teamBId } : {}),
+                format,
+                ...(eventId ? { eventId } : {}),
+              }),
+            });
+            if (!response.ok) throw new Error('本地比赛创建失败，请检查队名和赛制。');
+            setTeamA('');
+            setTeamB('');
+            setTeamAId('');
+            setTeamBId('');
+            await refresh();
+          });
+        }}
+      >
+        <label>
+          队伍 A
+          <select value={teamAId} onChange={(event) => setTeamAId(event.target.value)}>
+            <option value="">新队伍</option>
+            {view?.teams.map((team) => (
+              <option key={team.teamId} value={team.teamId}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+          <input
+            value={
+              teamAId ? (view?.teams.find((team) => team.teamId === teamAId)?.name ?? '') : teamA
+            }
+            disabled={!!teamAId}
+            onChange={(event) => setTeamA(event.target.value)}
+          />
+        </label>
+        <label>
+          队伍 B
+          <select value={teamBId} onChange={(event) => setTeamBId(event.target.value)}>
+            <option value="">新队伍</option>
+            {view?.teams.map((team) => (
+              <option key={team.teamId} value={team.teamId}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+          <input
+            value={
+              teamBId ? (view?.teams.find((team) => team.teamId === teamBId)?.name ?? '') : teamB
+            }
+            disabled={!!teamBId}
+            onChange={(event) => setTeamB(event.target.value)}
+          />
+        </label>
+        <label>
+          赛制{' '}
+          <select
+            value={format}
+            onChange={(event) => setFormat(event.target.value as typeof format)}
+          >
+            <option value="bo1">BO1</option>
+            <option value="bo3">BO3</option>
+            <option value="bo5">BO5</option>
+          </select>
+        </label>
+        <label>
+          赛事{' '}
+          <select value={eventId} onChange={(event) => setEventId(event.target.value)}>
+            <option value="">新建本地赛事</option>
+            {view?.events.map((item) => (
+              <option key={item.eventId} value={item.eventId}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          disabled={
+            (!teamAId && !teamA.trim()) ||
+            (!teamBId && !teamB.trim()) ||
+            (!!teamAId && teamAId === teamBId)
+          }
+        >
+          创建本地比赛
+        </button>
+      </form>
+      {view?.matches.length ? (
+        <label>
+          本地比赛{' '}
+          <select
+            value={selected?.matchId ?? ''}
+            onChange={(event) => {
+              void action(async () => {
+                const response = await fetch('/operator/local-match/select', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ matchId: event.target.value }),
+                });
+                if (!response.ok) throw new Error('切换本地比赛失败。');
+                await refresh();
+              });
+            }}
+          >
+            <option value="">选择比赛</option>
+            {view.matches.map((match) => (
+              <option key={match.matchId} value={match.matchId}>
+                {match.entrants.a.name} vs {match.entrants.b.name} · {match.format.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      <LocalTournamentEditor
+        key={`${view?.selectedMatchId ?? ''}:${view?.contextRevision ?? ''}`}
+        view={view}
+        refresh={refresh}
+        action={action}
+      />
+    </div>
+  );
+}
 
 function StateLine({ label, value }: { readonly label: string; readonly value: string }) {
   return (
@@ -68,6 +227,7 @@ function ContextPanel({
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
   const cs2 = useCs2HostStatus();
+  const { view: tournament } = useLocalTournament();
   const phase = workspacePhase(operator, bp);
   const match = operator?.matchContext.summary;
   const series = operator?.seriesProgress;
@@ -89,6 +249,27 @@ function ContextPanel({
             : '等待比赛信息'}
         </p>
       </header>
+      {tournament && match && tournament.selectedMatchId === match.matchId ? (
+        <section aria-label="前后比赛">
+          {tournament.neighborhood.previous ? (
+            <p>
+              上一场 · {tournament.neighborhood.previous.entrants.a.name}{' '}
+              {tournament.neighborhood.previous.scoreA ?? '–'} :{' '}
+              {tournament.neighborhood.previous.scoreB ?? '–'}{' '}
+              {tournament.neighborhood.previous.entrants.b.name}
+            </p>
+          ) : null}
+          {tournament.neighborhood.next ? (
+            <p>
+              下一场 · {tournament.neighborhood.next.entrants.a.name} vs{' '}
+              {tournament.neighborhood.next.entrants.b.name} ·{' '}
+              {tournament.neighborhood.next.scheduledAt === null
+                ? '时间待定'
+                : new Date(tournament.neighborhood.next.scheduledAt).toLocaleString('zh-CN')}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       <section>
         <small>当前阶段</small>
         <h2>{PHASE_LABEL[phase]}</h2>
@@ -296,6 +477,7 @@ export function WorkspaceDock() {
             : '未绑定比赛'}
         </span>
         <a href="/operator/bp">BP 制作</a>
+        <LocalMatchControls action={action} />
         <form
           onSubmit={(event) => {
             event.preventDefault();

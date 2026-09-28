@@ -18,5 +18,6 @@ export const broadcastCompetitionSchema = z.object({
   competitionId: z.string(),
   slug: z.string(),
   name: z.string(),
+  logoUrl: nullableStringSchema.optional(),
   themeColor: nullableStringSchema,
 });

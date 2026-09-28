@@ -16,4 +16,8 @@ export {
   type BroadcastVetoStepV1,
 } from './types.js';
 export { validateBroadcastManifest } from './validate.js';
-export { BroadcastManifestConversionError, toMatchContext } from './to-match-context.js';
+export {
+  BroadcastManifestConversionError,
+  toMatchContext,
+  toMatchDocumentV1,
+} from './to-match-context.js';
