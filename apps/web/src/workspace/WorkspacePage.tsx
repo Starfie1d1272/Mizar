@@ -9,6 +9,7 @@ import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
 import { LocalTournamentEditor, type LocalTournamentView } from './LocalTournamentEditor';
+import { RivalHubConnectionPanel } from './RivalHubConnectionPanel';
 import './workspace.css';
 
 const PHASE_LABEL = {
@@ -18,8 +19,6 @@ const PHASE_LABEL = {
   map_end: '地图结束 / 图间',
   match_end: '比赛结束',
 } as const;
-
-const ONLINE_MATCH_REFRESH_TIMEOUT_MS = 12_000;
 
 function useLocalTournament() {
   const [view, setView] = useState<LocalTournamentView | null>(null);
@@ -426,7 +425,6 @@ export function WorkspaceDock() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [overlayEnabled, setOverlayEnabled] = useState(true);
-  const [onlineMatchId, setOnlineMatchId] = useState('');
   const [obsPassword, setObsPassword] = useState('');
   const [obsPort, setObsPort] = useState(4455);
   async function action(run: () => Promise<unknown>, restoreFocus = false) {
@@ -478,33 +476,7 @@ export function WorkspaceDock() {
         </span>
         <a href="/operator/bp">BP 制作</a>
         <LocalMatchControls action={action} />
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void action(async () => {
-              const response = await fetch('/operator/match-context/refresh', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ matchId: onlineMatchId.trim() }),
-                signal: AbortSignal.timeout(ONLINE_MATCH_REFRESH_TIMEOUT_MS),
-              });
-              if (!response.ok) {
-                const data = (await response.json()) as { message?: string };
-                throw new Error(data.message ?? '在线比赛刷新失败。');
-              }
-              setMessage('比赛候选已取得，请核对后确认绑定。');
-            });
-          }}
-        >
-          <label>
-            RivalHub 比赛标识{' '}
-            <input
-              value={onlineMatchId}
-              onChange={(event) => setOnlineMatchId(event.target.value)}
-            />
-          </label>
-          <button disabled={busy || !onlineMatchId.trim()}>刷新比赛</button>
-        </form>
+        <RivalHubConnectionPanel action={action} onMessage={setMessage} />
         {bpWorkspace?.pendingRivalhub ? (
           <div className="workspace-candidate">
             <span>{bpWorkspace.pendingRivalhub.competition}</span>

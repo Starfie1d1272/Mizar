@@ -210,6 +210,40 @@
 .workspace-candidate strong {
   font-size: 12px;
 }
+.workspace-rivalhub {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-right: 0 !important;
+  gap: var(--mizar-layout-compact) !important;
+  min-height: auto !important;
+  overflow: visible !important;
+  padding: 10px 0 0 !important;
+}
+.workspace-rivalhub strong {
+  font-size: var(--mizar-type-size-body);
+}
+.workspace-rivalhub label {
+  color: var(--mizar-fg-muted);
+  display: block;
+  font-size: var(--mizar-type-size-small);
+}
+.workspace-rivalhub input,
+.workspace-rivalhub select {
+  background: var(--mizar-bg-surface);
+  border: var(--mizar-line-border) solid var(--mizar-border-strong);
+  color: var(--mizar-fg-primary);
+  min-height: 34px;
+  width: 100%;
+}
+.workspace-rivalhub-source {
+  border-left: 3px solid var(--mizar-accent-primary);
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+}
+.workspace-rivalhub-source p {
+  margin: 0;
+  font-size: var(--mizar-type-size-small);
+}
 @media (max-width: 1200px) {
   .workspace-preview {
     display: block;

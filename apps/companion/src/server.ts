@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { buildApp } from './app.js';
 import { configuredHttpOutputs } from './output/http-sink.js';
+import { RivalHubConnection } from './match-context/rivalhub-connection.js';
 import { createProgramRuntime } from './runtime/program-runtime.js';
 import { JsonSeriesProgressCheckpointStore } from './series-progress/checkpoint-store.js';
 import {
@@ -146,6 +147,10 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     filePath: seriesProgressCheckpointPath,
     onDiagnostic: (code) => console.warn(`系列进度检查点诊断：${code}`),
   });
+  const rivalhubConnection = new RivalHubConnection(
+    join(captureDir, '..', 'rivalhub-connection.json'),
+  );
+  await rivalhubConnection.load();
   const hudConfigStore = new HudConfigStore({
     filePath: hudConfigPath,
     onDiagnostic: (code) => console.warn(`HUD 配置诊断：${code}`),
@@ -164,6 +169,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   }
   const app = buildApp({
     ...httpOutputs,
+    rivalhubConnection,
     ...(productInstance === undefined
       ? {}
       : {

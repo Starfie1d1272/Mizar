@@ -9,6 +9,8 @@ import { OutputService, type OutputServiceOptions } from './output/service.js';
 import { ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
+import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
+import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
 import { registerBpRoutes } from './bp/controller.js';
 import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
@@ -95,6 +97,7 @@ export interface CompanionAppOptions {
   readonly reliableSink?: OutputServiceOptions['sink'];
   readonly liveSink?: OutputServiceOptions['liveSink'];
   readonly onlineManifestConfig?: OnlineManifestConfig;
+  readonly rivalhubConnection?: RivalHubConnection;
   readonly projectionNowMonotonicMs?: () => number;
   readonly bpNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
@@ -163,14 +166,42 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const debugClock = options.debugClock ?? { nowMonotonicMs: () => performance.now() };
   const deliveryConsumers = options.deliveryConsumers ?? [];
   let outputBinding = options.matchContextBinding;
-  const outputService = new OutputService({
+  const outputService: OutputService = new OutputService({
     ...(options.reliableOutboxPath === undefined
       ? {}
       : {
           outbox: new ReliableOutbox(options.reliableOutboxPath),
         }),
-    ...(options.reliableSink === undefined ? {} : { sink: options.reliableSink }),
-    ...(options.liveSink === undefined ? {} : { liveSink: options.liveSink }),
+    ...(options.rivalhubConnection !== undefined
+      ? {
+          sink: {
+            send: (event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0]) =>
+              options.rivalhubConnection!.view().paired &&
+              outputBinding?.origin === 'online' &&
+              outputBinding.context.matchId === event.matchId
+                ? options.rivalhubConnection!.sendReliable(event, outputService.current(true))
+                : (options.reliableSink?.send(event) ?? Promise.resolve('rejected' as const)),
+          },
+        }
+      : options.reliableSink === undefined
+        ? {}
+        : { sink: options.reliableSink }),
+    ...(options.rivalhubConnection !== undefined
+      ? {
+          liveSink: {
+            send: (
+              snapshot: Parameters<NonNullable<OutputServiceOptions['liveSink']>['send']>[0],
+            ) =>
+              options.rivalhubConnection!.view().paired &&
+              outputBinding?.origin === 'online' &&
+              outputBinding.context.matchId === snapshot.matchId
+                ? options.rivalhubConnection!.sendLive(snapshot)
+                : (options.liveSink?.send(snapshot) ?? Promise.resolve()),
+          },
+        }
+      : options.liveSink === undefined
+        ? {}
+        : { liveSink: options.liveSink }),
     restoreContinuity: (checkpoint) => {
       if (
         outputBinding?.context.matchId !== checkpoint.matchId ||
@@ -419,6 +450,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     controller: matchContextController,
     ...(options.onlineManifestConfig === undefined ? {} : { config: options.onlineManifestConfig }),
   });
+  if (options.rivalhubConnection)
+    registerRivalHubConnectionRoutes(app, {
+      connection: options.rivalhubConnection,
+      controller: matchContextController,
+      currentSnapshot: () => outputService.current(true),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {
       await localTournamentStore?.load();

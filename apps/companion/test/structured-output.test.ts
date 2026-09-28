@@ -323,6 +323,15 @@ it.each(['bo3', 'bo5'] as const)(
       await service.start();
       service.setCurrent(coordinator.getCurrent(), binding);
       apply(1, 'live', 'de_ancient');
+      await outbox.flushPending();
+      const firstBoundaryKinds = outbox
+        .getRecords()
+        .filter((record) => record.event.cursor.runtimeSeq === 1)
+        .map((record) => record.event.kind);
+      expect(firstBoundaryKinds.indexOf('match_started')).toBeGreaterThanOrEqual(0);
+      expect(firstBoundaryKinds.indexOf('map_started')).toBeGreaterThan(
+        firstBoundaryKinds.indexOf('match_started'),
+      );
       apply(2, 'gameover', 'de_ancient');
       apply(3, 'live', 'de_mirage');
       apply(4, 'gameover', 'de_mirage');
@@ -547,6 +556,8 @@ it('coalesces outbound snapshots and drops pending data after context becomes st
   try {
     service.setCurrent(bundle, binding);
     await service.start();
+    await new Promise<void>((resolveTick) => setTimeout(resolveTick, 550));
+    expect(delivered).toEqual([1]);
     for (let seq = 2; seq <= 100; seq++)
       service.setCurrent(
         {
@@ -555,6 +566,7 @@ it('coalesces outbound snapshots and drops pending data after context becomes st
         },
         binding,
       );
+    await new Promise<void>((resolveTick) => setTimeout(resolveTick, 550));
     expect(delivered).toEqual([1]);
     finish!();
     await new Promise<void>((resolveTick) => setImmediate(resolveTick));
