@@ -15,7 +15,8 @@
 | [`development-validation.md`](development-validation.md) | 开发、CI、视觉回归和真实环境验收如何分责 |
 | [`roadmap.md`](roadmap.md) | 能力之间的依赖顺序和阶段边界 |
 | [`references.md`](references.md) | 参考项目能借鉴什么、哪些实现和许可证不能直接继承 |
-| [`terminology.md`](terminology.md) | 中文优先与 canonical engineering term 的使用边界 |
+| [`design/README.md`](design/README.md) | 唯一设计系统入口、品牌、界面类别、设计变量、用户文案与贡献规则 |
+| [`terminology.md`](terminology.md) | 中文优先与开发者术语的使用边界 |
 
 ## 决策与研究
 

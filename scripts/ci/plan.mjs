@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 export const CI_JOB_IDS = Object.freeze([
   'quality',
+  'design',
   'acceptance',
   'platform',
   'qualification_offline',
@@ -54,6 +55,21 @@ function isForcedFullPath(path) {
   );
 }
 
+export function isDesignPath(path) {
+  return (
+    [
+      'packages/design-tokens/',
+      'docs/design/',
+      'apps/web/src/ui/',
+      'apps/web/src/patterns/',
+      'apps/web/.storybook/',
+      'apps/web/test/design/',
+      'scripts/design/',
+      'scripts/architecture/',
+    ].some((prefix) => path.startsWith(prefix)) || /\.stories\.[^.]+$/.test(path)
+  );
+}
+
 function isDocsOnlyPath(path) {
   return DOCS_ONLY_PATTERN.test(path);
 }
@@ -90,6 +106,7 @@ function isUnsafeChangeStatus(status) {
 function fullPlan(reason, includeOfflineQualification = false) {
   return {
     runQuality: true,
+    runDesign: true,
     runAcceptance: true,
     runPlatform: true,
     runQualification: true,
@@ -102,12 +119,14 @@ function fullPlan(reason, includeOfflineQualification = false) {
 }
 
 function selectivePlan(changedFiles, eventName) {
+  const runDesign = changedFiles.some(({ path }) => isDesignPath(path));
   const runQuality = changedFiles.some(({ path }) => isKnownQualityPath(path));
   const runAcceptance = changedFiles.some(({ path }) => isAcceptancePath(path));
   const runPlatform = changedFiles.some(({ path }) => isPlatformPath(path));
   const runQualification = changedFiles.some(({ path }) => isQualificationPath(path));
   const requiredJobs = CI_JOB_IDS.filter((job) => {
     if (job === 'quality') return runQuality;
+    if (job === 'design') return runDesign;
     if (job === 'acceptance') return runAcceptance;
     if (job === 'platform') return runPlatform;
     if (job === 'qualification_offline') return false;
@@ -116,6 +135,7 @@ function selectivePlan(changedFiles, eventName) {
 
   return {
     runQuality,
+    runDesign,
     runAcceptance,
     runPlatform,
     runQualification,
@@ -178,9 +198,10 @@ export function createCiPlan(options = {}) {
       includeOfflineQualification,
     );
   }
-  if (changedFiles.every(({ path }) => isDocsOnlyPath(path))) {
+  if (changedFiles.every(({ path }) => isDocsOnlyPath(path) && !isDesignPath(path))) {
     return {
       runQuality: false,
+      runDesign: false,
       runAcceptance: false,
       runPlatform: false,
       runQualification: false,
@@ -227,6 +248,7 @@ export function evaluateCiGate(input) {
 function outputPlan(plan) {
   return {
     run_quality: String(plan.runQuality),
+    run_design: String(plan.runDesign),
     run_acceptance: String(plan.runAcceptance),
     run_platform: String(plan.runPlatform),
     run_qualification: String(plan.runQualification),
@@ -261,6 +283,7 @@ function runGate() {
     requiredJobs,
     jobResults: {
       quality: process.env.QUALITY_RESULT,
+      design: process.env.DESIGN_RESULT,
       acceptance: process.env.ACCEPTANCE_RESULT,
       platform: process.env.PLATFORM_RESULT,
       qualification_offline: process.env.QUALIFICATION_OFFLINE_RESULT,

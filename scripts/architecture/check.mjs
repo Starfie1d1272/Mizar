@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { checkDesign } from './design.mjs';
 
 import {
   ARCHITECTURE_SOURCE_EXTENSIONS,
@@ -63,6 +64,7 @@ export function checkArchitecture(options = {}) {
   checkCstvParserImportOwnership(records, report);
   checkProgramProjectionImportOwnership(records, repository, report);
   checkWorkspaceCycles(workspaces, report);
+  checkDesign(repository, records, report);
 
   return violations.sort((left, right) => {
     const leftKey = `${left.file}|${left.ruleId}|${left.target ?? ''}`;
@@ -108,7 +110,22 @@ function collectContractFiles(rootDir, files) {
     }
   }
 
+  collectAppStyles(rootDir, join(rootDir, 'apps'), files);
+  const generatedTokens = join(rootDir, 'packages/design-tokens/generated/tokens.css');
+  if (existsSync(generatedTokens))
+    files.set('packages/design-tokens/generated/tokens.css', readFileSync(generatedTokens, 'utf8'));
   collectTsConfigFiles(rootDir, rootDir, files);
+}
+
+function collectAppStyles(rootDir, directory, files) {
+  if (!existsSync(directory)) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (SKIPPED_DIRECTORY_NAMES.has(entry.name) || entry.name === '.agent-tmp') continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) collectAppStyles(rootDir, path, files);
+    else if (entry.isFile() && entry.name.endsWith('.css'))
+      files.set(normalizeRelativePath(relative(rootDir, path)), readFileSync(path, 'utf8'));
+  }
 }
 
 function collectWorkspaceFiles(rootDir, workspaceDirectory, files) {
@@ -138,7 +155,10 @@ function collectSourceFiles(rootDir, directory, files) {
 
     if (!entry.isFile()) continue;
     const relativePath = normalizeRelativePath(relative(rootDir, absolutePath));
-    if (isSourcePath(relativePath) && !relativePath.endsWith('.d.ts')) {
+    if (
+      (isSourcePath(relativePath) || /\.(?:css|json)$/.test(relativePath)) &&
+      !relativePath.endsWith('.d.ts')
+    ) {
       files.set(relativePath, readFileSync(absolutePath, 'utf8'));
     }
   }
@@ -222,6 +242,7 @@ function checkPackageExports(workspaces, report) {
     if (!info.dir.startsWith('packages/')) continue;
 
     const manifest = info.manifest;
+    const isTokens = info.name === '@mizar/design-tokens';
     const files = manifest.files;
     if (
       !Array.isArray(files) ||
@@ -264,7 +285,20 @@ function checkPackageExports(workspaces, report) {
         ? manifest.exports['.']
         : manifest.exports,
     );
-    if (!rootExportTargets.some((target) => target.endsWith('.js'))) {
+    if (
+      isTokens &&
+      (rootExportTargets.length !== 1 ||
+        rootExportTargets[0] !== './dist/tokens.css' ||
+        exportTargets.some((target) => target !== './dist/tokens.css') ||
+        RUNTIME_DEPENDENCY_FIELDS.some((field) => Object.keys(manifest[field] ?? {}).length > 0))
+    ) {
+      report({
+        ruleId: 'ARCH_DESIGN_PACKAGE',
+        file: info.manifestPath,
+        message: 'Design tokens is a dependency-free static CSS package.',
+      });
+    }
+    if (!isTokens && !rootExportTargets.some((target) => target.endsWith('.js'))) {
       report({
         ruleId: 'ARCH_PACKAGE_EXPORTS',
         file: info.manifestPath,
@@ -272,7 +306,7 @@ function checkPackageExports(workspaces, report) {
         message: 'Shared package root exports must expose an ESM JavaScript dist artifact.',
       });
     }
-    if (!rootExportTargets.some((target) => target.endsWith('.d.ts'))) {
+    if (!isTokens && !rootExportTargets.some((target) => target.endsWith('.d.ts'))) {
       report({
         ruleId: 'ARCH_PACKAGE_EXPORTS',
         file: info.manifestPath,

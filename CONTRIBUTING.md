@@ -157,3 +157,7 @@ pnpm architecture:check
 - closing gate 所需真实环境 evidence 已完成；
 - 受影响长期文档同步；
 - PR 记录实际验证和剩余风险。
+
+## 设计系统
+
+界面变更先读取 [`docs/design/README.md`](docs/design/README.md)，回答其中的 PR 检查项。品牌、三类界面、设计变量、共享组件、动态颜色与用户文案以该入口为准。复用 `packages/design-tokens` → `apps/web/src/ui/` → `apps/web/src/patterns/`；页面只负责布局与组合，不新增局部主题或旧命名空间。新增共享组件需提供组件样例，并检查键盘操作、可见焦点、减少动效、状态和无障碍。运行 `pnpm design:check`；页面重构时同步删除旧 CSS 和迁移清单项，不增加旧样式额度。

@@ -98,6 +98,7 @@ apps/
 
 packages/
   cs2-assets/           CS2 official presentation assets、semantic catalog 与 provenance
+  design-tokens/        统一的 DTCG 设计变量与生成 CSS
   core/                 RuntimeState、连续性、身份、transition、Projection
   hud-config/           HUD preset、layout、theme、组件 registry 与逻辑几何
   protocol/             Mizar 自有的 Local Protocol
@@ -115,6 +116,7 @@ scripts/                架构检查、CI、现场验收和维护工具
 
 ## 文档
 
+- [`docs/design/README.md`](docs/design/README.md)：唯一设计系统入口、三类界面、设计变量、共享组件与文案。
 - [`docs/product.md`](docs/product.md)：产品定义与需求。
 - [`docs/architecture.md`](docs/architecture.md)：当前架构与 ownership。
 - [`docs/protocol.md`](docs/protocol.md)：RivalHub 只读契约与 Local Protocol。
@@ -122,7 +124,7 @@ scripts/                架构检查、CI、现场验收和维护工具
 - [`docs/development-validation.md`](docs/development-validation.md)：开发、CI 与真实环境验收模型。
 - [`docs/roadmap.md`](docs/roadmap.md)：能力依赖与演进顺序。
 - [`docs/references.md`](docs/references.md)：参考项目与复用边界。
-- [`docs/terminology.md`](docs/terminology.md)：中文术语与用户可见文案规则。
+- [`docs/terminology.md`](docs/terminology.md)：机器格式与开发者术语；用户文案见设计系统。
 - [`docs/decisions/`](docs/decisions/)：架构决策记录。
 - [`docs/rfcs/`](docs/rfcs/)：尚未完全冻结的专项设计。
 

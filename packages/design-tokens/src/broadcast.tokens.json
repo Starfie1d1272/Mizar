@@ -1,0 +1,25 @@
+{
+  "broadcast": {
+    "bg": {
+      "$type": "color",
+      "canvas": {
+        "$value": "{bg.canvas}"
+      },
+      "surface": {
+        "$value": "{bg.surface}"
+      }
+    },
+    "fg": {
+      "$type": "color",
+      "primary": {
+        "$value": "{fg.primary}"
+      }
+    },
+    "density": {
+      "$type": "dimension",
+      "gap": {
+        "$value": "{layout.gap}"
+      }
+    }
+  }
+}

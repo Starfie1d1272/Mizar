@@ -1,0 +1,36 @@
+.mizar-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+  align-items: start;
+  gap: var(--mizar-product-density-gap);
+}
+.mizar-surface[data-surface='technical'] .mizar-workbench {
+  gap: var(--mizar-technical-density-gap);
+}
+.mizar-preview {
+  min-width: 0;
+}
+.mizar-preview h2,
+.mizar-inspector h2 {
+  font-size: var(--mizar-type-size-body);
+  font-weight: var(--mizar-type-weight-strong);
+  margin-top: 0;
+}
+.mizar-preview-frame {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--mizar-bg-canvas);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-preview);
+}
+.mizar-inspector {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+@media (max-width: 48rem) {
+  .mizar-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

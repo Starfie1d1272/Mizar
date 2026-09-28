@@ -100,7 +100,7 @@ PR 和普通 `main` push 使用 changed-surface planner，只运行与改动面�
 
 ### 仅文档改动
 
-只修改 `docs/**` 或 Markdown / MDX：
+只修改普通 `docs/**` 或 Markdown / MDX（`docs/design/**` 进入设计系统检查）：
 
 ```text
 planner + ci-gate
@@ -137,6 +137,28 @@ CS2 asset import 是维护者本地资源工作流：CI 不安装 CS2、不下�
 
 `ci-gate` 是稳定 required context；条件 job 本身不需要全部设成 branch required check。
 
+### 设计系统定向验证
+
+`packages/design-tokens/**`、`docs/design/**`、`apps/web/src/ui/**`、`apps/web/src/patterns/**`、组件样例、Storybook 配置及设计系统和架构检查工具的改动，会运行独立的 `design` 检查：设计变量校验 → 架构与单元测试 → 组件目录构建 → Chromium 交互与 axe 无障碍检查。普通运行时 PR 不构建组件目录。普通设计变量、设计文档或共享界面改动不触发 Windows 验收打包；工具链、工作流、检查计划器与高风险改动仍运行完整 CI，其中包含设计系统检查。
+
+## 界面验证层级
+
+```text
+设计变量规则
+  ↓ 架构约束
+  ↓ 基础组件与组合组件渲染
+  ↓ 交互与 axe 无障碍检查
+  ↓ Playwright 关键任务语义验收
+  ↓ 小型标准视觉回归（视觉定稿或 RC 后）
+  ↓ Windows + CS2 + OBS 真实环境验收
+```
+
+视觉定稿前使用设计变量校验、组件交互/无障碍、浏览器语义与人工视觉审查，不建立全站截图/像素门禁。定稿或 RC 阶段只保护共享组件的参考状态、产品工作台、一种诊断界面、标准播出场景和稳定 Gameplay 渲染参考，不为每个页面和状态建立基线。
+
+自动无障碍检查是第一道检查，不替代焦点、键盘与对比度的人工可用性审查。真实测试资料、回放和人工视觉审查继续有效；HUD 拖动保留 X/Y、键盘与直接控制等替代操作。
+
+Storybook 只加载共享基础组件与组合组件的样例。Vitest 浏览器测试会直接运行同一批样例并检查交互；axe 会检查适用的 WCAG 2.2 A/AA 规则。组件浏览器测试沿用仓库已有的 Vitest 版本，并与 Node 单元测试分开运行。`pnpm design:tokens:verify` 只读校验设计变量，不启动浏览器或 Windows 验收打包；`pnpm design:check` 是本地完整检查入口。
+
 ## 4. 自动化主入口
 
 常规仓库验证：
@@ -150,6 +172,8 @@ pnpm fixtures:replay:verify
 pnpm test
 pnpm build
 pnpm architecture:check
+pnpm design:tokens:verify
+pnpm design:check
 pnpm acceptance:test
 pnpm local-web:production-smoke
 ```
