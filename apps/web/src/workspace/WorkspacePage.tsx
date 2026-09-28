@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
-import { switchToRivalhubBp, useBpSession, useBpWorkspace } from '../bp/client';
+import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
 import { LocalTournamentEditor, type LocalTournamentView } from './LocalTournamentEditor';
+import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import './workspace.css';
 
 const PHASE_LABEL = {
@@ -18,8 +19,6 @@ const PHASE_LABEL = {
   map_end: '地图结束 / 图间',
   match_end: '比赛结束',
 } as const;
-
-const ONLINE_MATCH_REFRESH_TIMEOUT_MS = 12_000;
 
 function useLocalTournament() {
   const [view, setView] = useState<LocalTournamentView | null>(null);
@@ -422,11 +421,9 @@ export function WorkspaceDock() {
   );
   const sceneState = useProgramScenes();
   const obs = useObsStatus();
-  const { workspace: bpWorkspace } = useBpWorkspace();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [overlayEnabled, setOverlayEnabled] = useState(true);
-  const [onlineMatchId, setOnlineMatchId] = useState('');
   const [obsPassword, setObsPassword] = useState('');
   const [obsPort, setObsPort] = useState(4455);
   async function action(run: () => Promise<unknown>, restoreFocus = false) {
@@ -478,54 +475,15 @@ export function WorkspaceDock() {
         </span>
         <a href="/operator/bp">BP 制作</a>
         <LocalMatchControls action={action} />
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void action(async () => {
-              const response = await fetch('/operator/match-context/refresh', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ matchId: onlineMatchId.trim() }),
-                signal: AbortSignal.timeout(ONLINE_MATCH_REFRESH_TIMEOUT_MS),
-              });
-              if (!response.ok) {
-                const data = (await response.json()) as { message?: string };
-                throw new Error(data.message ?? '在线比赛刷新失败。');
-              }
-              setMessage('比赛候选已取得，请核对后确认绑定。');
-            });
-          }}
-        >
-          <label>
-            RivalHub 比赛标识{' '}
-            <input
-              value={onlineMatchId}
-              onChange={(event) => setOnlineMatchId(event.target.value)}
-            />
-          </label>
-          <button disabled={busy || !onlineMatchId.trim()}>刷新比赛</button>
-        </form>
-        {bpWorkspace?.pendingRivalhub ? (
-          <div className="workspace-candidate">
-            <span>{bpWorkspace.pendingRivalhub.competition}</span>
-            <strong>
-              {bpWorkspace.pendingRivalhub.entrants.a.name} vs{' '}
-              {bpWorkspace.pendingRivalhub.entrants.b.name}
-            </strong>
-            <button
-              onClick={() =>
-                void action(() =>
-                  switchToRivalhubBp(
-                    bpWorkspace.contextRevision,
-                    bpWorkspace.pendingRivalhub!.revision,
-                  ),
-                )
-              }
-            >
-              确认绑定
-            </button>
-          </div>
-        ) : null}
+        <RivalHubLiveSourcePanel
+          action={action}
+          onMessage={setMessage}
+          currentMatchTitle={
+            payload?.matchContext.summary
+              ? `${payload.matchContext.summary.entryAName} vs ${payload.matchContext.summary.entryBName}`
+              : null
+          }
+        />
       </section>
       <section>
         <small>本机</small>

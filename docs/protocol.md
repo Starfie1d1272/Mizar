@@ -18,7 +18,7 @@
 
 `packages/protocol/src/context.ts` 定义 `mizar.match-document.v1` 和 `mizar.schedule-window.v1`。比赛文档包含稳定比赛/参赛 ID、赛事、状态、BO、阶段、可选轮次与语义标签、计划/实际时间、名单、地图池、地图结果、veto 和解说。BP、名单、图片和计划时间可渐进填写；未知值使用 `null` 或空数组。赛程窗口包含有序比赛摘要，Local 未设置时间时 `from/to` 为 `null`，不以占位时间冒充赛程。来源、revision、freshness 和 diagnostics 属于 acquisition envelope，不进入文档事实。
 
-RivalHub 赛事 Logo 和正式 Match/Schedule read API 的上游交付由 [RivalHub #764](https://github.com/Starfie1d1272/RivalHub/issues/764) 跟踪；当前 adapter 对缺失 Logo 映射为 `null`、缺失完整地图池映射为 `[]`，不从 maps/veto 反推赛事地图池，并接受以后增补的公开字段。Mizar V1 competition 不含 provider slug；`stage` 是唯一阶段标识，`stageLabel` 是显示名称。旧 RivalHub stage 无独立 key 时沿用其值，不能从中文标签推断规则。旧 Program channel 与 BP Manifest 所需 slug 仅在兼容视图填充。
+RivalHub 通过版本化 Match/Schedule read API 提供赛事 Logo、地图池、阶段 key 与正式比赛资料；adapter 对缺失 Logo 映射为 `null`、缺失完整地图池映射为 `[]`，不从 maps/veto 反推赛事地图池，并接受以后增补的公开字段。Mizar V1 competition 不含 provider slug；`stage` 是唯一阶段标识，`stageLabel` 是显示名称。旧 RivalHub stage 无独立 key 时沿用其值，不能从中文标签推断规则。旧 Program channel 与 BP Manifest 所需 slug 仅在兼容视图填充。
 
 当前来源的统一比赛文档通过 `GET /local/v1/match-document` 返回 acquisition envelope。独立模式通过 `GET /local/v1/tournament` 读取赛事、队伍、比赛、当前选择和赛程邻域；`POST /operator/local-match/create|select|save`、`POST /operator/local-event/save`、`POST /operator/local-schedule/reorder` 修改本机状态。创建比赛只要求队名与 BO；复用队伍通过稳定 teamId 显式选择，不根据同名猜测身份。图片上传到 `/operator/local-asset`，只接受限大小的 PNG/JPEG/WebP，本机 URL 可从 `/local/v1/local-assets/:filename` 读取。LocalTeam 是可复用创建模板：保存比赛中的队伍/名单会更新模板用于以后创建，已有其他比赛的快照保持稳定。整个持久文件使用 strict schema、大小/数量限制和 event/match/team 引用校验。所有写入受本机 origin policy 约束，比赛保存还必须带当前 context revision。RivalHub DTO 在公开 adapter 边界转成相同文档，旧 standalone BP 缓存在首次恢复时迁移；重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源。
 
@@ -56,7 +56,7 @@ ReliableEvent 的 payload 按 kind 严格区分：开始事件为空对象；`ma
 
 生产启动可配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN`。两个 URL 独立可选，启用任一个必须同时提供 token。只接受无内嵌凭据的 HTTPS，禁止重定向；Bearer token 仅由 Companion adapter 使用，不进入浏览器或 Core。每次 POST 的 body 是对应 Mizar V1 payload；`MIZAR_LIVE_OUTPUT_URL` 默认发送包含合法当前 Radar 的完整 LiveSnapshot（本机 GET 仍可用 `?radar=1` 选择 Radar）。可靠事件携带 `Idempotency-Key`。
 
-2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。本实现不定义 RivalHub 的 ingest DTO、pairing 或上传 cadence。
+2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。RivalHub 连接由 Companion 保存赛事级凭据，制作准备中心负责配对、赛程浏览、比赛选择与上下文核对加载，现场工作区按规则自动认领或由制作人员显式接管活跃数据源；可靠事件携带当前 authority revision 与首发观察证据。云端 Snapshot 以最多每秒两帧发送最新值，数据持续更新时每秒至少提供一个新观众基线；离线或缺少有效证据时不上传。
 
 ## 1. RivalHub 只读赛事上下文
 

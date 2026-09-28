@@ -44,6 +44,8 @@ export class OutputService {
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private retryPending = false;
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
+  private outboundTimer: ReturnType<typeof setInterval> | undefined;
+  private lastBundleAt = 0;
 
   constructor(private readonly options: OutputServiceOptions = {}) {
     this.outbox = options.outbox;
@@ -66,8 +68,23 @@ export class OutputService {
         this.startedMapEpoch = restored.program.cursor.mapEpoch;
       }
     }
-    if (this.options.liveSink !== undefined)
-      this.outboundUnsubscribe = this.subscribe(this.options.liveSink, true);
+    if (this.options.liveSink !== undefined) {
+      const lane = createLatestWinsConsumer<LiveSnapshotV1>({
+        id: 'cloud-live',
+        send: (snapshot) => this.options.liveSink!.send(snapshot),
+        onDiagnostic: ({ code }) => this.onDiagnostic?.(`snapshot_${code}`),
+      });
+      // Cloud cadence is capped at 2 Hz; projecting the latest bundle every 500 ms
+      // also gives reconnecting viewers a fresh baseline at least once per second.
+      this.outboundTimer = setInterval(() => {
+        if (this.closed || this.now().getTime() - this.lastBundleAt > 1_500) return;
+        const snapshot = this.current(true);
+        if (snapshot?.capability.telemetryFresh && snapshot.capability.contextFresh)
+          lane.offer(snapshot);
+      }, 500);
+      this.outboundTimer.unref();
+      this.outboundUnsubscribe = () => lane.close();
+    }
     if (this.outbox !== undefined) {
       this.timer = setInterval(() => {
         void this.retry();
@@ -80,6 +97,7 @@ export class OutputService {
   setCurrent(bundle: ProjectionBundle, binding: MatchContextBinding | undefined): void {
     if (this.closed) return;
     this.bundle = bundle;
+    this.lastBundleAt = this.now().getTime();
     this.binding = binding;
     const producedAt = this.now().toISOString();
     for (const [consumer, includeRadar] of this.consumers) {
@@ -204,6 +222,12 @@ export class OutputService {
         Math.max(0, bundle.program.cursor.programSourceGeneration - 1),
       );
     if (
+      previous?.program.series?.status !== 'live' &&
+      bundle.program.series?.status === 'live' &&
+      bundle.program.status.identity === 'matched'
+    )
+      add('match_started', 'series-progress');
+    if (
       result.state.programTelemetry !== undefined &&
       bundle.program.cursor.mapEpoch > 0 &&
       this.startedMapEpoch !== bundle.program.cursor.mapEpoch &&
@@ -216,12 +240,6 @@ export class OutputService {
       add('map_started', 'runtime-transition');
       this.startedMapEpoch = bundle.program.cursor.mapEpoch;
     }
-    if (
-      previous?.program.series?.status !== 'live' &&
-      bundle.program.series?.status === 'live' &&
-      bundle.program.status.identity === 'matched'
-    )
-      add('match_started', 'series-progress');
     if (
       previous?.program.series?.status !== 'completed' &&
       bundle.program.series?.status === 'completed'
@@ -333,6 +351,7 @@ export class OutputService {
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
+    if (this.outboundTimer !== undefined) clearInterval(this.outboundTimer);
     await this.outboundUnsubscribe?.();
     await Promise.all([...this.consumers.keys()].map((consumer) => consumer.close()));
     this.consumers.clear();
