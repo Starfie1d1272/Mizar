@@ -220,11 +220,12 @@ export function buildReliableEventV1(input: {
   const currentMap = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
-  const mapResult =
-    input.kind === 'map_ended' ? entrantRelativeMapResult(bundle) : null;
+  const mapResult = input.kind === 'map_ended' ? entrantRelativeMapResult(bundle) : null;
   if (
     input.kind === 'map_ended' &&
-    (mapResult === null || bundle.program.map.score.ct === null || bundle.program.map.score.t === null)
+    (mapResult === null ||
+      bundle.program.map.score.ct === null ||
+      bundle.program.map.score.t === null)
   )
     return null;
   const payload = (() => {
