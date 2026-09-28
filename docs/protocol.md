@@ -56,7 +56,7 @@ ReliableEvent 的 payload 按 kind 严格区分：开始事件为空对象；`ma
 
 生产启动可配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN`。两个 URL 独立可选，启用任一个必须同时提供 token。只接受无内嵌凭据的 HTTPS，禁止重定向；Bearer token 仅由 Companion adapter 使用，不进入浏览器或 Core。每次 POST 的 body 是对应 Mizar V1 payload；`MIZAR_LIVE_OUTPUT_URL` 默认发送包含合法当前 Radar 的完整 LiveSnapshot（本机 GET 仍可用 `?radar=1` 选择 Radar）。可靠事件携带 `Idempotency-Key`。
 
-2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。RivalHub 连接由 Companion 保存赛事级凭据，工作区通过赛程选比赛并显式认领/接管活跃数据源；可靠事件携带当前 authority revision 与首发观察证据。云端 Snapshot 以最多每秒两帧发送最新值，数据持续更新时每秒至少提供一个新观众基线；离线或缺少有效证据时不上传。
+2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。RivalHub 连接由 Companion 保存赛事级凭据，制作准备中心负责配对、赛程浏览、比赛选择与上下文核对加载，现场工作区按规则自动认领或由制作人员显式接管活跃数据源；可靠事件携带当前 authority revision 与首发观察证据。云端 Snapshot 以最多每秒两帧发送最新值，数据持续更新时每秒至少提供一个新观众基线；离线或缺少有效证据时不上传。
 
 ## 1. RivalHub 只读赛事上下文
 

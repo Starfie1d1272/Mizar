@@ -885,3 +885,60 @@
     animation: none;
   }
 }
+
+.operator-rivalhub-panel {
+  margin-top: 20px;
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.operator-rivalhub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+}
+.operator-rivalhub-header h2 {
+  margin: 0;
+  font-size: var(--mizar-type-size-body);
+  font-weight: var(--mizar-type-weight-strong);
+  color: var(--mizar-fg-primary);
+}
+.operator-rivalhub-header p {
+  margin: var(--mizar-layout-compact) 0 0;
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-muted);
+}
+.operator-rivalhub-form {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.operator-rivalhub-empty {
+  margin: 0;
+  color: var(--mizar-fg-muted);
+  font-size: var(--mizar-type-size-small);
+}
+.operator-rivalhub-candidate {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  padding-top: var(--mizar-layout-gap);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+}
+.operator-rivalhub-candidate-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mizar-layout-compact);
+}
+.operator-rivalhub-candidate-info small {
+  color: var(--mizar-fg-muted);
+  font-size: var(--mizar-type-size-small);
+}
+.operator-rivalhub-candidate-info strong {
+  color: var(--mizar-fg-primary);
+  font-size: var(--mizar-type-size-body);
+}
+.operator-rivalhub-candidate-info span {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}

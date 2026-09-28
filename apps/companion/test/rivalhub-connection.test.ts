@@ -74,3 +74,120 @@ it('does not discard reliable events while an online match is waiting for a sour
   const result = await connection.sendReliable({ matchId: 'match' } as ReliableEventV1, null);
   expect(result).toBe('retry');
 });
+it('rejects invalid pairing parameters fail-closed', async () => {
+  const connection = new RivalHubConnection(join(tmpdir(), 'unused-pair.json'));
+  await expect(connection.pair('not-a-url', 'b'.repeat(22), '主舞台')).rejects.toThrow();
+  await expect(connection.pair('https://rivalhub.example', 'short-code', '主舞台')).rejects.toThrow(
+    '连接码或设备名称无效',
+  );
+  await expect(connection.pair('https://rivalhub.example', 'b'.repeat(22), '   ')).rejects.toThrow(
+    '连接码或设备名称无效',
+  );
+});
+
+it('handles discovery of existing active device and explicit takeover', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-takeover-'));
+  temporary.push(directory);
+  const requests: { url: string; init: RequestInit }[] = [];
+  let claimCall = 0;
+  const fetchImpl = vi.fn((url: string | URL | Request, init: RequestInit = {}) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    requests.push({ url: requestUrl, init });
+    if (requestUrl.endsWith('/pair'))
+      return Promise.resolve(
+        Response.json({
+          credential: 'a'.repeat(43),
+          installationId: 'inst-1',
+          competitionId: 'comp-1',
+        }),
+      );
+    if (requestUrl.endsWith('/claim')) {
+      claimCall++;
+      if (claimCall === 1) {
+        // Discovery: another device is active
+        return Promise.resolve(
+          Response.json({ claimed: false, authorityRevision: 1, activeDeviceName: '备用设备 B' }),
+        );
+      }
+      // Takeover: this device becomes active
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 2 }));
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const path = join(directory, 'connection.json');
+  const connection = new RivalHubConnection(path, fetchImpl);
+  await connection.pair('https://rivalhub.example', 'b'.repeat(22), '主设备 A');
+
+  const snapshot = {
+    matchId: 'match-1',
+    competitionId: 'comp-1',
+    cursor: {
+      producerInstanceId: 'prod-1',
+      liveSessionId: 'sess-1',
+      programSourceGeneration: 1,
+      mapEpoch: 1,
+    },
+    players: [],
+  } as unknown as LiveSnapshotV1;
+
+  // First claim attempt: discovered another active source
+  const view1 = await connection.claim(snapshot, 'rev-1', false);
+  expect(view1.activeSourceMatchId).toBeNull();
+  expect(view1.activeDeviceName).toBe('备用设备 B');
+
+  // Explicit takeover: becomes active source with incremented authority revision
+  const view2 = await connection.claim(snapshot, 'rev-1', true);
+  expect(view2.activeSourceMatchId).toBe('match-1');
+  expect(view2.activeDeviceName).toBeNull();
+  const claims = requests.filter((r) => r.url.endsWith('/claim'));
+  expect(claims.length).toBe(2);
+  const takeoverClaim = claims[1]!;
+  expect(JSON.parse(takeoverClaim.init.body as string)).toMatchObject({
+    takeover: true,
+  });
+});
+
+it('fails closed when remote server returns 403 indicating authority loss', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-403-'));
+  temporary.push(directory);
+  const fetchImpl = vi.fn((url: string | URL | Request) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (requestUrl.endsWith('/pair'))
+      return Promise.resolve(
+        Response.json({
+          credential: 'a'.repeat(43),
+          installationId: 'inst-1',
+          competitionId: 'comp-1',
+        }),
+      );
+    if (requestUrl.endsWith('/claim'))
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+    if (requestUrl.endsWith('/live')) return Promise.resolve(new Response(null, { status: 403 }));
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const path = join(directory, 'connection.json');
+  const connection = new RivalHubConnection(path, fetchImpl);
+  await connection.pair('https://rivalhub.example', 'b'.repeat(22), '主设备');
+
+  const snapshot = {
+    matchId: 'match-1',
+    competitionId: 'comp-1',
+    cursor: {
+      producerInstanceId: 'p',
+      liveSessionId: 's',
+      programSourceGeneration: 1,
+      mapEpoch: 1,
+    },
+    players: [],
+  } as unknown as LiveSnapshotV1;
+
+  await connection.claim(snapshot, 'rev-1', false);
+  expect(connection.view().activeSourceMatchId).toBe('match-1');
+
+  // When remote returns 403, upload fails and resets local source
+  await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+  expect(connection.view().activeSourceMatchId).toBeNull();
+  expect(connection.view().activeDeviceName).toBe('另一台制播设备');
+});

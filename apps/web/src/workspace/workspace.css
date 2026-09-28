@@ -107,7 +107,7 @@
   color: #aebfcc;
   font-size: 13px;
 }
-.workspace-dock button {
+.workspace-dock button:not(.mizar-button) {
   background: #1a3343;
   border: 1px solid #426071;
   border-radius: 6px;
@@ -115,11 +115,11 @@
   cursor: pointer;
   min-height: 30px;
 }
-.workspace-dock button[aria-pressed='true'] {
+.workspace-dock button:not(.mizar-button)[aria-pressed='true'] {
   background: #176a72;
   border-color: #71d7de;
 }
-.workspace-dock button:disabled {
+.workspace-dock button:not(.mizar-button):disabled {
   cursor: not-allowed;
   opacity: 0.42;
 }
@@ -142,7 +142,7 @@
   flex-direction: column;
   gap: 6px;
 }
-.workspace-dock input {
+.workspace-dock input:not(.mizar-field input) {
   background: #091923;
   border: 1px solid #426071;
   color: #e8edf5;
@@ -202,46 +202,24 @@
   min-width: 88px;
   width: 35%;
 }
-.workspace-candidate {
+.workspace-rivalhub-source {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  padding-top: var(--mizar-layout-compact);
+}
+.workspace-rivalhub-source-status {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--mizar-layout-compact);
 }
-.workspace-candidate strong {
-  font-size: 12px;
-}
-.workspace-rivalhub {
-  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
-  border-right: 0 !important;
-  gap: var(--mizar-layout-compact) !important;
-  min-height: auto !important;
-  overflow: visible !important;
-  padding: 10px 0 0 !important;
-}
-.workspace-rivalhub strong {
-  font-size: var(--mizar-type-size-body);
-}
-.workspace-rivalhub label {
+.workspace-rivalhub-source-status small {
   color: var(--mizar-fg-muted);
-  display: block;
   font-size: var(--mizar-type-size-small);
-}
-.workspace-rivalhub input,
-.workspace-rivalhub select {
-  background: var(--mizar-bg-surface);
-  border: var(--mizar-line-border) solid var(--mizar-border-strong);
-  color: var(--mizar-fg-primary);
-  min-height: 34px;
-  width: 100%;
-}
-.workspace-rivalhub-source {
-  border-left: 3px solid var(--mizar-accent-primary);
-  display: grid;
-  gap: 6px;
-  padding-left: 10px;
 }
 .workspace-rivalhub-source p {
   margin: 0;
+  color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }
 @media (max-width: 1200px) {

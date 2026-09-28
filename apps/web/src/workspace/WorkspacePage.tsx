@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
-import { switchToRivalhubBp, useBpSession, useBpWorkspace } from '../bp/client';
+import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
 import { LocalTournamentEditor, type LocalTournamentView } from './LocalTournamentEditor';
-import { RivalHubConnectionPanel } from './RivalHubConnectionPanel';
+import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import './workspace.css';
 
 const PHASE_LABEL = {
@@ -421,7 +421,6 @@ export function WorkspaceDock() {
   );
   const sceneState = useProgramScenes();
   const obs = useObsStatus();
-  const { workspace: bpWorkspace } = useBpWorkspace();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [overlayEnabled, setOverlayEnabled] = useState(true);
@@ -476,28 +475,15 @@ export function WorkspaceDock() {
         </span>
         <a href="/operator/bp">BP 制作</a>
         <LocalMatchControls action={action} />
-        <RivalHubConnectionPanel action={action} onMessage={setMessage} />
-        {bpWorkspace?.pendingRivalhub ? (
-          <div className="workspace-candidate">
-            <span>{bpWorkspace.pendingRivalhub.competition}</span>
-            <strong>
-              {bpWorkspace.pendingRivalhub.entrants.a.name} vs{' '}
-              {bpWorkspace.pendingRivalhub.entrants.b.name}
-            </strong>
-            <button
-              onClick={() =>
-                void action(() =>
-                  switchToRivalhubBp(
-                    bpWorkspace.contextRevision,
-                    bpWorkspace.pendingRivalhub!.revision,
-                  ),
-                )
-              }
-            >
-              确认绑定
-            </button>
-          </div>
-        ) : null}
+        <RivalHubLiveSourcePanel
+          action={action}
+          onMessage={setMessage}
+          currentMatchTitle={
+            payload?.matchContext.summary
+              ? `${payload.matchContext.summary.entryAName} vs ${payload.matchContext.summary.entryBName}`
+              : null
+          }
+        />
       </section>
       <section>
         <small>本机</small>
