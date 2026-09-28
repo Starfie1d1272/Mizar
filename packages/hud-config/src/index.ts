@@ -380,7 +380,9 @@ export function defineHudWidgetDescriptor(
     labelVariants.length !== supportedVariants.size ||
     labelVariants.some((variant) => !supportedVariants.has(variant))
   ) {
-    throw new Error(`组件 ${definition.id} 的 variant labels 与 variants 不一致`);
+    throw new Error(
+      `组件 ${definition.id} 的 variant labels 与 variants 不一致`,
+    );
   }
   for (const variant of definition.supportedVariants) {
     if (!definition.variantLabels[variant]?.trim()) throw new Error('Variant 缺少名称');
