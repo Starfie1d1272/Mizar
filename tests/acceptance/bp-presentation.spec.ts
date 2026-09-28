@@ -65,12 +65,28 @@ async function routeCompanionApi(
         request.method(),
         payload === null ? null : JSON.parse(payload),
       );
-      const response = await getApp().inject({
-        method: request.method() as 'GET' | 'POST',
-        url: pathname,
-        headers: request.headers(),
-        ...(payload ? { payload } : {}),
-      });
+      let response;
+      try {
+        response = await getApp().inject({
+          method: request.method() as 'GET' | 'POST',
+          url: pathname,
+          headers: request.headers(),
+          ...(payload ? { payload } : {}),
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === 'Fastify has already been closed and cannot be reopened'
+        ) {
+          await route.fulfill({
+            status: 503,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'companion_offline' }),
+          });
+          return;
+        }
+        throw error;
+      }
       const responseBody =
         pathname === '/local/v1/bp-workspace' && options.transformWorkspace
           ? JSON.stringify(
