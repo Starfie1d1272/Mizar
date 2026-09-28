@@ -33,6 +33,30 @@ it('parses the complete public fixture and preserves complete, partial, unavaila
   expect(parseLiveSnapshotV1({ ...base, roundHistory: null }).roundHistory).toBeNull();
 });
 
+it('rejects cross-field contradictions in the public live contract', async () => {
+  const base = await fixture();
+  const radar = base.radar!;
+  expect(() =>
+    parseLiveSnapshotV1({
+      ...base,
+      radar: { ...radar, mapName: base.map.name === 'de_nuke' ? 'de_ancient' : 'de_nuke' },
+    }),
+  ).toThrow();
+  expect(() =>
+    parseLiveSnapshotV1({
+      ...base,
+      capability: { ...base.capability, radarCurrent: false },
+    }),
+  ).toThrow();
+  expect(() =>
+    parseLiveSnapshotV1({
+      ...base,
+      series: { ...base.series, currentMapOrder: 2 },
+      roundHistory: { ...base.roundHistory!, mapOrder: 1 },
+    }),
+  ).toThrow();
+});
+
 it('rejects private and unknown fields at every new boundary', async () => {
   const base = await fixture();
   const radar = base.radar!;
