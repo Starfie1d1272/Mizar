@@ -35,6 +35,8 @@ function event(key: string, observedAt = '2026-09-28T00:00:00.000Z'): ReliableEv
       source: 'runtime-transition',
     },
     payload: {
+      scoreA: 13,
+      scoreB: 11,
       scoreCT: 13,
       scoreT: 11,
     },
