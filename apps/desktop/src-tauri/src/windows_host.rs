@@ -152,7 +152,6 @@ pub struct GameTracker {
     last_client: Option<Rect>,
     last_work_area: Option<Rect>,
     last_dpi: u32,
-    last_game_monitor: Monitor,
 }
 
 impl GameTracker {
@@ -163,11 +162,20 @@ impl GameTracker {
         self.managed = false;
         self.last_client = None;
         self.last_dpi = 0;
-        self.last_game_monitor = 0;
         true
     }
+    fn observe_target(&mut self, found: Option<Cs2Window>, monitor: Monitor) -> bool {
+        let changed = self.observe(found);
+        let moved = self.monitor != monitor;
+        self.monitor = monitor;
+        changed || moved
+    }
+    fn refresh_target(&mut self) -> bool {
+        let found = find_cs2();
+        self.observe_target(found, choose_monitor(found))
+    }
     pub fn restore_layout(&mut self) -> Option<Layout> {
-        self.monitor = choose_monitor(self.window);
+        self.refresh_target();
         self.apply_locked_layout()
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
@@ -177,12 +185,10 @@ impl GameTracker {
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
         self.last_dpi = self.window.map_or(0, |window| unsafe { GetDpiForWindow(window.hwnd) });
-        self.last_game_monitor = self.window.map_or(0, |window| unsafe { MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY) });
         Some(layout)
     }
     pub fn tick(&mut self) -> Option<Layout> {
-        let found = find_cs2();
-        let changed = self.observe(found);
+        let changed = self.refresh_target();
         let work = monitor_work_area(self.monitor);
         if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
@@ -192,11 +198,9 @@ impl GameTracker {
         let Some(window) = self.window else { return None; };
         let client = client_rect(window.hwnd);
         let dpi = unsafe { GetDpiForWindow(window.hwnd) };
-        let game_monitor = unsafe { MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY) };
-        if client != self.last_client || dpi != self.last_dpi || game_monitor != self.last_game_monitor {
+        if client != self.last_client || dpi != self.last_dpi {
             self.last_client = client;
             self.last_dpi = dpi;
-            self.last_game_monitor = game_monitor;
             if self.managed {
                 let target = workspace_layout(work?).game;
                 self.managed = align_cs2(window, target);
@@ -235,5 +239,28 @@ mod tests {
         tracker.monitor = 42;
         assert!(tracker.observe(Some(Cs2Window { pid: 43, hwnd: 8 })));
         assert_eq!(tracker.monitor, 42);
+    }
+    #[test]
+    fn discovers_secondary_monitor_before_layout_and_reselects_on_move() {
+        let game = Cs2Window { pid: 42, hwnd: 7 };
+        let mut tracker = GameTracker::default();
+        assert!(tracker.observe_target(Some(game), 2));
+        assert_eq!(tracker.window, Some(game));
+        assert_eq!(tracker.monitor, 2);
+        assert!(!tracker.observe_target(Some(game), 2));
+        assert!(tracker.observe_target(Some(game), 3));
+        assert_eq!(tracker.monitor, 3);
+        assert_eq!(tracker.generation, 1);
+        let replacement = Cs2Window { pid: 43, hwnd: 8 };
+        assert!(tracker.observe_target(Some(replacement), 4));
+        assert_eq!(tracker.monitor, 4);
+        assert_eq!(tracker.generation, 2);
+    }
+    #[test]
+    fn late_game_discovery_replaces_primary_monitor_fallback() {
+        let mut tracker = GameTracker::default();
+        assert!(tracker.observe_target(None, 1));
+        assert!(tracker.observe_target(Some(Cs2Window { pid: 42, hwnd: 7 }), 2));
+        assert_eq!(tracker.monitor, 2);
     }
 }
