@@ -61,7 +61,7 @@ Mizar 拥有：
 - Lookahead alignment 与 Observer Assist；
 - 本地 diagnostics、capture 与 replay；
 - Local Protocol 与 delivery semantics。
-- `LiveSnapshotV1` 的有界最新值分发与 `ReliableEventV1` 的持久 outbox、幂等键和失效判断；外部 sink 只消费 Mizar-owned 公开契约。
+- `LiveSnapshotV1` 的有界最新值分发与 `ReliableEventV1` 的持久 outbox、幂等键和失效判断；外部 sink 只消费 Mizar-owned 公开契约；Companion 提供 authenticated HTTPS reference adapter、请求 Abort 与进程重启投递连续性恢复，不恢复旧 telemetry/clock。
 
 ### 2.3 赛后证据
 

@@ -159,3 +159,7 @@ Mizar 使用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**�
 ## BP 播放
 
 在 `/workspace` 可先只填双方队名与 BO 创建本地比赛，再逐步补齐赛事、赛程、名单、图片与地图池；BP 不是创建前置条件。在 `/operator/bp` 工作台确认来源与 BP 后，可播放/收起并在同一页面预览。RivalHub 比赛复用已绑定的比赛上下文；独立模式的比赛资料保存到 Mizar 本机赛事库，BP 继续由现有 consumer 读取兼容视图，不会反写 RivalHub。系统每 1.6 秒逐项揭示，最终完整 BP 保持显示。OBS 添加 `http://127.0.0.1:3000/program/bp`，宽 1920、高 1080，作为独立不透明的全屏赛前场景装载；它与 `/program` Gameplay 分开。服务重启后恢复当前比赛上下文，播放会话保持收起。
+
+### 结构化输出的 HTTP reference adapter
+
+可通过 `MIZAR_LIVE_OUTPUT_URL` / `MIZAR_RELIABLE_OUTPUT_URL` 配置独立 HTTPS POST 目标，并用 `MIZAR_OUTPUT_TOKEN` 提供 scoped Bearer credential。Snapshot 采用 latest-wins；可靠事件采用持久 outbox 与幂等键。响应、超时及恢复语义见 [协议文档](docs/protocol.md#http-outbound-reference)。

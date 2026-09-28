@@ -93,6 +93,7 @@ export interface CompanionAppOptions {
   readonly localTournamentPath?: string;
   readonly reliableOutboxPath?: string;
   readonly reliableSink?: OutputServiceOptions['sink'];
+  readonly liveSink?: OutputServiceOptions['liveSink'];
   readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly projectionNowMonotonicMs?: () => number;
   readonly bpNowMonotonicMs?: () => number;
@@ -148,6 +149,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const programRuntime =
     options.programRuntime ??
     createProgramRuntime(options.producerInstanceId ?? randomUUID(), {
+      liveSession: { kind: 'bound', liveSessionId: randomUUID() },
       ...(options.seriesProgressCheckpointStore === undefined
         ? {}
         : { seriesProgressCheckpointStore: options.seriesProgressCheckpointStore }),
@@ -168,6 +170,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           outbox: new ReliableOutbox(options.reliableOutboxPath),
         }),
     ...(options.reliableSink === undefined ? {} : { sink: options.reliableSink }),
+    ...(options.liveSink === undefined ? {} : { liveSink: options.liveSink }),
+    restoreContinuity: (checkpoint) => {
+      if (
+        outputBinding?.context.matchId !== checkpoint.matchId ||
+        outputBinding.manifest.revision !== checkpoint.contextRevision ||
+        programRuntime.getCurrentState().runtimeSeq !== 0
+      )
+        return undefined;
+      programRuntime.restoreDeliveryContinuity({
+        ...checkpoint.cursor,
+        mapName: checkpoint.mapName,
+      });
+      return projectionCoordinator.refresh();
+    },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
   });
   const cstvSources = options.cstvSources ?? createCstvSourceManagers({});

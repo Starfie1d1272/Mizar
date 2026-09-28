@@ -4,7 +4,11 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
-import { ReliableOutbox, type ReliableEventSink } from './reliable-outbox.js';
+import {
+  ReliableOutbox,
+  type DeliveryContinuity,
+  type ReliableEventSink,
+} from './reliable-outbox.js';
 import {
   buildReliableEventV1,
   projectLiveSnapshotV1,
@@ -18,6 +22,8 @@ export interface LiveSnapshotConsumer {
 export interface OutputServiceOptions {
   readonly outbox?: ReliableOutbox;
   readonly sink?: ReliableEventSink;
+  readonly restoreContinuity?: (continuity: DeliveryContinuity) => ProjectionBundle | undefined;
+  readonly liveSink?: LiveSnapshotConsumer;
   readonly now?: () => Date;
   readonly onDiagnostic?: (code: string) => void;
 }
@@ -34,8 +40,12 @@ export class OutputService {
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+  private startedMapEpoch: number | undefined;
+  private recoveredCursor: ReliableEventV1['cursor'] | undefined;
+  private retryPending = false;
+  private outboundUnsubscribe: (() => Promise<void>) | undefined;
 
-  constructor(options: OutputServiceOptions = {}) {
+  constructor(private readonly options: OutputServiceOptions = {}) {
     this.outbox = options.outbox;
     this.sink = options.sink;
     this.now = options.now ?? (() => new Date());
@@ -44,6 +54,20 @@ export class OutputService {
 
   async start(): Promise<void> {
     await this.outbox?.load();
+    const continuity = this.outbox?.getContinuity();
+    if (
+      continuity !== undefined &&
+      this.now().getTime() - Date.parse(continuity.savedAt) < 24 * 60 * 60 * 1000
+    ) {
+      const restored = this.options.restoreContinuity?.(continuity);
+      if (restored !== undefined) {
+        this.recoveredCursor = continuity.cursor;
+        this.setCurrent(restored, this.binding);
+        this.startedMapEpoch = restored.program.cursor.mapEpoch;
+      }
+    }
+    if (this.options.liveSink !== undefined)
+      this.outboundUnsubscribe = this.subscribe(this.options.liveSink);
     if (this.outbox !== undefined) {
       this.timer = setInterval(() => {
         void this.retry();
@@ -91,7 +115,19 @@ export class OutputService {
     if (this.closed) throw new Error('output_service_closed');
     const lane = createLatestWinsConsumer<LiveSnapshotV1>({
       id: `output-${this.consumers.size + 1}`,
-      send: (snapshot) => consumer.send(snapshot),
+      send: (snapshot) => {
+        const current = this.current(includeRadar);
+        if (
+          current === null ||
+          current.matchId !== snapshot.matchId ||
+          current.cursor.producerInstanceId !== snapshot.cursor.producerInstanceId ||
+          current.cursor.liveSessionId !== snapshot.cursor.liveSessionId ||
+          current.cursor.programSourceGeneration !== snapshot.cursor.programSourceGeneration ||
+          current.cursor.mapEpoch !== snapshot.cursor.mapEpoch
+        )
+          return Promise.resolve();
+        return consumer.send(current);
+      },
       onDiagnostic: ({ code }) => this.onDiagnostic?.(`snapshot_${code}`),
     });
     this.consumers.set(lane, includeRadar);
@@ -113,6 +149,20 @@ export class OutputService {
     this.priorForMutation = undefined;
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
+    const continuity: DeliveryContinuity | undefined =
+      binding === undefined
+        ? undefined
+        : {
+            matchId: binding.context.matchId,
+            contextRevision: binding.manifest.revision,
+            cursor: bundle.program.cursor,
+            mapName: result.state.map.name ?? null,
+            savedAt: now,
+          };
+    if (continuity !== undefined)
+      void this.outbox
+        ?.updateContinuity(continuity)
+        .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
     let candidates: ReliableEventV1[];
     try {
       candidates = [...transitionReliableEventsV1({ result, bundle, binding })];
@@ -132,7 +182,10 @@ export class OutputService {
           kind,
           bundle,
           binding,
-          observedAt: now,
+          observedAt:
+            result.state.programTelemetry?.receive.receivedAt ??
+            result.transitions[0]?.at.utc ??
+            now,
           source,
           ...(reason === undefined ? {} : { reason }),
           ...(previousSourceGeneration === undefined ? {} : { previousSourceGeneration }),
@@ -151,12 +204,18 @@ export class OutputService {
         Math.max(0, bundle.program.cursor.programSourceGeneration - 1),
       );
     if (
-      previous !== undefined &&
+      result.state.programTelemetry !== undefined &&
       bundle.program.cursor.mapEpoch > 0 &&
-      previous.program.cursor.mapEpoch === 0 &&
-      bundle.program.map.name !== null
-    )
-      add('map_started', 'series-progress');
+      this.startedMapEpoch !== bundle.program.cursor.mapEpoch &&
+      bundle.program.map.name !== null &&
+      bundle.program.map.phase === 'live' &&
+      binding?.freshness === 'fresh' &&
+      bundle.program.status.telemetry === 'fresh' &&
+      bundle.program.status.identity === 'matched'
+    ) {
+      add('map_started', 'runtime-transition');
+      this.startedMapEpoch = bundle.program.cursor.mapEpoch;
+    }
     if (
       previous?.program.series?.status !== 'live' &&
       bundle.program.series?.status === 'live' &&
@@ -180,13 +239,14 @@ export class OutputService {
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
     for (const event of candidates) {
       void this.outbox
-        ?.enqueue(event, this.now())
+        ?.enqueue(event, this.now(), continuity)
         .catch(() => this.onDiagnostic?.('outbox_enqueue_failed'));
     }
   }
 
   async retry(): Promise<void> {
-    if (this.closed || this.outbox === undefined) return;
+    if (this.closed || this.outbox === undefined || this.retryPending) return;
+    this.retryPending = true;
     try {
       if (this.sink === undefined)
         await this.outbox.sweep((event) => this.isCurrentForRetry(event), this.now());
@@ -199,6 +259,8 @@ export class OutputService {
         });
     } catch {
       this.onDiagnostic?.('outbox_retry_failed');
+    } finally {
+      this.retryPending = false;
     }
   }
 
@@ -209,13 +271,20 @@ export class OutputService {
   private isCurrentForRetry(event: ReliableEventV1): boolean {
     const bundle = this.bundle;
     const binding = this.binding;
+    if (bundle === undefined || binding === undefined) return true;
+    const recovered = this.recoveredCursor;
+    const recoveredEvent =
+      recovered !== undefined &&
+      recovered.liveSessionId === event.cursor.liveSessionId &&
+      recovered.mapEpoch === event.cursor.mapEpoch &&
+      recovered.programSourceGeneration === event.cursor.programSourceGeneration &&
+      (recovered.producerInstanceId === event.cursor.producerInstanceId ||
+        recovered.liveSessionId !== null);
     if (
-      bundle === undefined ||
-      binding === undefined ||
-      binding.freshness !== 'fresh' ||
+      (bundle.program.cursor.producerInstanceId !== event.cursor.producerInstanceId &&
+        !recoveredEvent) ||
       binding.context.matchId !== event.matchId ||
       binding.manifest.revision !== event.contextRevision ||
-      bundle.program.cursor.producerInstanceId !== event.cursor.producerInstanceId ||
       bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId ||
       bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch ||
       bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration
@@ -226,7 +295,20 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1): boolean {
     const bundle = this.bundle;
-    if (bundle === undefined || !this.isCurrentForRetry(event)) return false;
+    if (
+      bundle === undefined ||
+      this.binding?.freshness !== 'fresh' ||
+      !this.isCurrentForRetry(event)
+    )
+      return false;
+    if (
+      event.kind === 'map_ended' &&
+      (bundle.program.map.phase !== 'gameover' ||
+        bundle.program.map.name !== event.mapName ||
+        bundle.program.map.score.ct !== event.payload.scoreCT ||
+        bundle.program.map.score.t !== event.payload.scoreT)
+    )
+      return false;
     if (event.kind === 'identity_mismatch' || event.kind === 'lineup_mismatch')
       return (
         bundle.program.status.identity === 'mismatch' ||
@@ -240,6 +322,7 @@ export class OutputService {
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
+    await this.outboundUnsubscribe?.();
     await Promise.all([...this.consumers.keys()].map((consumer) => consumer.close()));
     this.consumers.clear();
     await this.outbox?.flushPending();

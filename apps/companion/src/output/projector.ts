@@ -193,15 +193,27 @@ export function buildReliableEventV1(input: {
   const map = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
-  const payload = {
-    previousMapEpoch: input.previousMapEpoch ?? null,
-    previousSourceGeneration: input.previousSourceGeneration ?? null,
-    scoreCT: bundle.program.map.score.ct,
-    scoreT: bundle.program.map.score.t,
-    scoreA: bundle.program.series?.score.a ?? null,
-    scoreB: bundle.program.series?.score.b ?? null,
-    reason: input.reason ?? null,
-  };
+  const payload = (() => {
+    switch (input.kind) {
+      case 'match_started':
+      case 'map_started':
+        return {};
+      case 'map_ended':
+        return { scoreCT: bundle.program.map.score.ct, scoreT: bundle.program.map.score.t };
+      case 'series_ended':
+        return {
+          scoreA: bundle.program.series?.score.a ?? null,
+          scoreB: bundle.program.series?.score.b ?? null,
+        };
+      case 'source_generation_changed':
+        return { previousSourceGeneration: input.previousSourceGeneration ?? null };
+      case 'map_epoch_changed':
+        return { previousMapEpoch: input.previousMapEpoch ?? null, reason: input.reason ?? null };
+      case 'identity_mismatch':
+      case 'lineup_mismatch':
+        return { reason: input.reason ?? null };
+    }
+  })();
   const identity = {
     kind: input.kind,
     producerInstanceId: cursor.producerInstanceId,

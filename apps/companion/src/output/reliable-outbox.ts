@@ -26,9 +26,18 @@ export interface ReliableOutboxRecord {
   readonly updatedAt: string;
 }
 
+export interface DeliveryContinuity {
+  readonly matchId: string;
+  readonly contextRevision: string;
+  readonly cursor: ReliableEventV1['cursor'];
+  readonly mapName: string | null;
+  readonly savedAt: string;
+}
+
 interface OutboxFile {
   readonly version: typeof RELIABLE_OUTBOX_VERSION;
   readonly records: readonly ReliableOutboxRecord[];
+  readonly continuity?: DeliveryContinuity;
 }
 
 function parseRecord(input: unknown): ReliableOutboxRecord {
@@ -58,6 +67,8 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
   private readonly queue = new SerialCommitQueue();
+  private continuity: DeliveryContinuity | undefined;
+  private requestedScope: string | undefined;
 
   constructor(private readonly filePath: string) {}
 
@@ -76,6 +87,29 @@ export class ReliableOutbox {
       )
         throw new Error('outbox_invalid');
       this.records = value.records.map(parseRecord);
+      if (value.continuity !== undefined) {
+        const checkpoint = value.continuity as DeliveryContinuity;
+        if (
+          checkpoint === null ||
+          typeof checkpoint !== 'object' ||
+          Object.keys(checkpoint).sort().join(',') !==
+            'contextRevision,cursor,mapName,matchId,savedAt'
+        )
+          throw new Error('outbox_continuity_invalid');
+        // Validate the cursor and identity through the same strict event contract.
+        const reference = this.records.at(-1)?.event;
+        if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
+          throw new Error('outbox_continuity_invalid');
+        parseReliableEventV1({
+          ...reference,
+          matchId: checkpoint.matchId,
+          contextRevision: checkpoint.contextRevision,
+          cursor: checkpoint.cursor,
+          mapName: checkpoint.mapName,
+          observedAt: checkpoint.savedAt,
+        });
+        this.continuity = checkpoint;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
@@ -86,7 +120,31 @@ export class ReliableOutbox {
     return this.records;
   }
 
-  async enqueue(event: ReliableEventV1, now = new Date()): Promise<boolean> {
+  getContinuity(): DeliveryContinuity | undefined {
+    return this.continuity;
+  }
+
+  updateContinuity(checkpoint: DeliveryContinuity): Promise<void> {
+    const { cursor } = checkpoint;
+    const scope = JSON.stringify([
+      checkpoint.matchId,
+      checkpoint.contextRevision,
+      cursor.liveSessionId,
+      cursor.programSourceGeneration,
+      cursor.mapEpoch,
+    ]);
+    if (scope === this.requestedScope) return Promise.resolve();
+    this.requestedScope = scope;
+    return this.queue.run(async () => {
+      if (this.records.length > 0) await this.commit(this.records, checkpoint);
+    });
+  }
+
+  async enqueue(
+    event: ReliableEventV1,
+    now = new Date(),
+    continuity?: DeliveryContinuity,
+  ): Promise<boolean> {
     return this.queue.run(async () => {
       const valid = parseReliableEventV1(event);
       if (this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey))
@@ -104,7 +162,16 @@ export class ReliableOutbox {
         nextAttemptAt: at,
         updatedAt: at,
       };
-      await this.commit(this.trim([...this.records, next]));
+      await this.commit(
+        this.trim([...this.records, next]),
+        continuity ?? {
+          matchId: valid.matchId,
+          contextRevision: valid.contextRevision,
+          cursor: valid.cursor,
+          mapName: valid.mapName,
+          savedAt: at,
+        },
+      );
       return true;
     });
   }
@@ -201,9 +268,17 @@ export class ReliableOutbox {
     return [...terminal, ...pending].slice(-RELIABLE_OUTBOX_MAX_RECORDS);
   }
 
-  private async commit(records: readonly ReliableOutboxRecord[]): Promise<void> {
-    const file: OutboxFile = { version: RELIABLE_OUTBOX_VERSION, records };
+  private async commit(
+    records: readonly ReliableOutboxRecord[],
+    continuity = this.continuity,
+  ): Promise<void> {
+    const file: OutboxFile = {
+      version: RELIABLE_OUTBOX_VERSION,
+      records,
+      ...(continuity === undefined ? {} : { continuity }),
+    };
     await replaceDurableJson(this.filePath, file);
     this.records = records;
+    this.continuity = continuity;
   }
 }

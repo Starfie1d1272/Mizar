@@ -25,12 +25,7 @@
     "source": "runtime-transition"
   },
   "payload": {
-    "previousMapEpoch": null,
-    "previousSourceGeneration": null,
     "scoreCT": 13,
-    "scoreT": 11,
-    "scoreA": 1,
-    "scoreB": 0,
-    "reason": null
+    "scoreT": 11
   }
 }

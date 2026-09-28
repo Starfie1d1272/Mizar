@@ -7,7 +7,9 @@ const id = z.string().min(1).max(128);
 const nullableId = id.nullable();
 const utc = z.iso.datetime({ offset: true });
 const number = z.number().finite().nullable();
-const count = z.number().int().min(0).max(999).nullable();
+const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+const health = z.number().int().min(0).max(100).nullable();
+const economy = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
 const vector = z
   .strictObject({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() })
   .nullable();
@@ -36,12 +38,12 @@ const player = z.strictObject({
   displayName: z.string().max(256).nullable(),
   side: z.enum(['CT', 'T', 'unknown']),
   lifeState: z.enum(['alive', 'dead', 'unknown']),
-  health: count,
-  armor: count,
+  health: health,
+  armor: health,
   hasHelmet: z.boolean().nullable(),
   hasDefuser: z.boolean().nullable(),
-  money: count,
-  equipmentValue: count,
+  money: economy,
+  equipmentValue: economy,
   activeWeapon: z
     .strictObject({ name: z.string().max(128).nullable(), ammoClip: count, ammoReserve: count })
     .nullable(),
@@ -131,10 +133,9 @@ export const reliableEventKindV1Schema = z.enum([
   'identity_mismatch',
   'lineup_mismatch',
 ]);
-export const reliableEventV1Schema = z.strictObject({
+const reliableEventBase = z.strictObject({
   schemaVersion: z.literal(RELIABLE_EVENT_SCHEMA_VERSION),
   idempotencyKey: id,
-  kind: reliableEventKindV1Schema,
   cursor,
   observedAt: utc,
   matchId: id,
@@ -150,16 +151,37 @@ export const reliableEventV1Schema = z.strictObject({
     contextFresh: z.boolean(),
     source: z.enum(['runtime-transition', 'runtime-continuity', 'series-progress', 'identity']),
   }),
-  payload: z.strictObject({
-    previousMapEpoch: count,
-    previousSourceGeneration: count,
-    scoreCT: count,
-    scoreT: count,
-    scoreA: count,
-    scoreB: count,
-    reason: z.string().max(128).nullable(),
-  }),
 });
+const emptyPayload = z.strictObject({});
+const reason = z.string().max(128).nullable();
+export const reliableEventV1Schema = z.discriminatedUnion('kind', [
+  reliableEventBase.extend({ kind: z.literal('match_started'), payload: emptyPayload }),
+  reliableEventBase.extend({ kind: z.literal('map_started'), payload: emptyPayload }),
+  reliableEventBase.extend({
+    kind: z.literal('map_ended'),
+    payload: z.strictObject({ scoreCT: count, scoreT: count }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('series_ended'),
+    payload: z.strictObject({ scoreA: count, scoreB: count }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('source_generation_changed'),
+    payload: z.strictObject({ previousSourceGeneration: count }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('map_epoch_changed'),
+    payload: z.strictObject({ previousMapEpoch: count, reason }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('identity_mismatch'),
+    payload: z.strictObject({ reason }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('lineup_mismatch'),
+    payload: z.strictObject({ reason }),
+  }),
+]);
 
 export type LiveSnapshotV1 = z.infer<typeof liveSnapshotV1Schema>;
 export type ReliableEventV1 = z.infer<typeof reliableEventV1Schema>;

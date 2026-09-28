@@ -18,15 +18,23 @@
 
 `packages/protocol/src/context.ts` 定义 `mizar.match-document.v1` 和 `mizar.schedule-window.v1`。比赛文档包含稳定比赛/参赛 ID、赛事、状态、BO、阶段、可选轮次与语义标签、计划/实际时间、名单、地图池、地图结果、veto 和解说。BP、名单、图片和计划时间可渐进填写；未知值使用 `null` 或空数组。赛程窗口包含有序比赛摘要，Local 未设置时间时 `from/to` 为 `null`，不以占位时间冒充赛程。来源、revision、freshness 和 diagnostics 属于 acquisition envelope，不进入文档事实。
 
-RivalHub 赛事 Logo 和正式 Match/Schedule read API 的上游交付由 [RivalHub #764](https://github.com/Starfie1d1272/RivalHub/issues/764) 跟踪；当前 adapter 对缺失 Logo 映射为 `null`，并接受以后增补的公开字段。
+RivalHub 赛事 Logo 和正式 Match/Schedule read API 的上游交付由 [RivalHub #764](https://github.com/Starfie1d1272/RivalHub/issues/764) 跟踪；当前 adapter 对缺失 Logo 映射为 `null`、缺失完整地图池映射为 `[]`，不从 maps/veto 反推赛事地图池，并接受以后增补的公开字段。Mizar V1 competition 不含 provider slug；`stage` 是唯一阶段标识，`stageLabel` 是显示名称。旧 RivalHub stage 无独立 key 时沿用其值，不能从中文标签推断规则。旧 Program channel 与 BP Manifest 所需 slug 仅在兼容视图填充。
 
-当前来源的统一比赛文档通过 `GET /local/v1/match-document` 返回 acquisition envelope。独立模式通过 `GET /local/v1/tournament` 读取赛事、队伍、比赛、当前选择和赛程邻域；`POST /operator/local-match/create|select|save`、`POST /operator/local-event/save`、`POST /operator/local-schedule/reorder` 修改本机状态。创建比赛只要求队名与 BO；复用队伍通过稳定 teamId 显式选择，不根据同名猜测身份。图片上传到 `/operator/local-asset`，只接受限大小的 PNG/JPEG/WebP，本机 URL 可从 `/local/v1/local-assets/:filename` 读取。所有写入受本机 origin policy 约束，比赛保存还必须带当前 context revision。RivalHub DTO 在公开 adapter 边界转成相同文档，旧 standalone BP 缓存在首次恢复时迁移；重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源。
+当前来源的统一比赛文档通过 `GET /local/v1/match-document` 返回 acquisition envelope。独立模式通过 `GET /local/v1/tournament` 读取赛事、队伍、比赛、当前选择和赛程邻域；`POST /operator/local-match/create|select|save`、`POST /operator/local-event/save`、`POST /operator/local-schedule/reorder` 修改本机状态。创建比赛只要求队名与 BO；复用队伍通过稳定 teamId 显式选择，不根据同名猜测身份。图片上传到 `/operator/local-asset`，只接受限大小的 PNG/JPEG/WebP，本机 URL 可从 `/local/v1/local-assets/:filename` 读取。LocalTeam 是可复用创建模板：保存比赛中的队伍/名单会更新模板用于以后创建，已有其他比赛的快照保持稳定。整个持久文件使用 strict schema、大小/数量限制和 event/match/team 引用校验。所有写入受本机 origin policy 约束，比赛保存还必须带当前 context revision。RivalHub DTO 在公开 adapter 边界转成相同文档，旧 standalone BP 缓存在首次恢复时迁移；重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源。
 
 `packages/protocol/src/output.ts` 定义 `mizar.live-snapshot.v1` 与 `mizar.reliable-event.v1`。`GET /local/v1/live-snapshot` 返回当前公开状态，可用 `?radar=1` 请求同代际雷达切片；无新鲜匹配上下文时返回 503。进程内 consumer 使用 latest-wins 有界 lane，重连只取得当前值。快照只复制 Program 与同代际 Radar 允许字段，不承载 Raw GSI、Assist 或整个 RuntimeState。
 
 四个 Mizar-owned V1 payload 都使用严格 schema 和大小上限；未知字段或不支持的 `schemaVersion` 拒绝。发布者不能在同一版本加入接收方未声明的字段；将来可选 enrichment 必须先进入明确的新版本契约和 fixture，破坏字段语义或移除字段同样升级版本。输入文档、赛程、快照和事件分别演进，不联动 Local Protocol channel version。
 
-可靠事件包含 kind、幂等键、transition-time UTC、producer/session/source generation/map epoch cursor、比赛和参赛身份、context revision、证据与有限比分。事件种类为 `match_started`、`map_started`、`map_ended`、`series_ended`、`source_generation_changed`、`map_epoch_changed`、`identity_mismatch`、`lineup_mismatch`。Companion 将事件放入有界持久 outbox；注入的外部 sink 回报 `accepted/rejected/retry`，重试有退避和 24 小时过期。比赛、context revision、producer、session、source generation 或 map epoch 改变即终止旧事件重试；高影响事件要求当前新鲜且 identity matched。`GET /local/v1/reliable-output-status` 只展示本机投递状态，不暴露完整事件。外部消费者必须按幂等键去重，不能把 Mizar observation 当成官方赛果。
+可靠事件包含 kind、幂等键、transition-time UTC、producer/session/source generation/map epoch cursor、比赛和参赛身份、context revision、证据与有限比分。事件种类为 `match_started`、`map_started`、`map_ended`、`series_ended`、`source_generation_changed`、`map_epoch_changed`、`identity_mismatch`、`lineup_mismatch`。Companion 将事件放入有界持久 outbox；注入的外部 sink 回报 `accepted/rejected/retry`，重试有退避和 24 小时过期。比赛、context revision、session、source generation 或 map epoch 改变即终止旧事件重试；高影响事件要求当前新鲜且 identity matched。outbox 原子保存投递连续性检查点，生产进程使用独立随机 session。相同比赛/revision 在 24 小时内重启时只恢复 session/source generation/map epoch/map name，不恢复 telemetry、receive sequence、Runtime sequence、统计或 monotonic clock。新进程 producer 始终不同，旧事件 producer 和幂等键保持不变；发送等待新遥测，终图事件还需 gameover/map name/最终 CT/T 比分一致。无兼容检查点时不跨进程重试。缺失新鲜上下文只暂停，明确不兼容身份才 supersede。`GET /local/v1/reliable-output-status` 只展示本机投递状态，不暴露完整事件。外部消费者必须按幂等键去重，不能把 Mizar observation 当成官方赛果。
+
+ReliableEvent 的 payload 按 kind 严格区分：开始事件为空对象；`map_ended` 只有 CT/T 比分，`series_ended` 只有 A/B 比分；source/map continuity 分别包含 previousSourceGeneration 或 previousMapEpoch/reason；identity/lineup warning 只有 reason。每个有新鲜匹配遥测证据的 map execution 产生一次 map_started，显式 reset 后等待新的遥测。
+
+### HTTP outbound reference
+
+生产启动可配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN`。两个 URL 独立可选，启用任一个必须同时提供 token。只接受无内嵌凭据的 HTTPS，禁止重定向；Bearer token 仅由 Companion adapter 使用，不进入浏览器或 Core。每次 POST 的 body 是对应 Mizar V1 payload，可靠事件携带 `Idempotency-Key`。
+
+2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。本实现不定义 RivalHub 的 ingest DTO、pairing 或上传 cadence。
 
 ## 1. RivalHub 只读赛事上下文
 
