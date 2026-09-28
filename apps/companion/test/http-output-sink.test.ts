@@ -19,6 +19,7 @@ async function fixture(name: string): Promise<unknown> {
 
 it.each([
   [204, 'accepted'],
+  [302, 'rejected'],
   [400, 'rejected'],
   [401, 'rejected'],
   [409, 'rejected'],
@@ -40,7 +41,7 @@ it.each([
       new URL('https://sink.example/events'),
       expect.objectContaining({
         method: 'POST',
-        redirect: 'error',
+        redirect: 'manual',
         body: JSON.stringify(event),
         headers: {
           authorization: 'Bearer scoped-token',
