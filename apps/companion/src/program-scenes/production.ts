@@ -39,9 +39,9 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        await options.release();
         const result = await options.scenes.select('waiting', options.scenes.get().revision);
         if (!result.ok) return reply.code(409).send({ message: result.message });
+        await options.release();
         mode = 'preparation';
       }
       revision = randomUUID();

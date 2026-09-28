@@ -1,7 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import type { ProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import type { BpSession } from '../src/bp/controller.js';
+import { ProgramSceneController } from '../src/program-scenes/controller.js';
+import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import type { ContextEnvelope, MatchDocumentV1 } from '@mizar/core/match-context';
 import { buildApp } from '../src/app.js';
 
@@ -110,3 +116,74 @@ it('persists desktop visibility separately and cannot alter on-air HUD state', a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it.each(['live', 'hidden'] as const)(
+  'keeps %s retryable when waiting or release fails, switching to safety before releasing',
+  async (mode) => {
+    const calls: string[] = [];
+    const switchObs = vi.fn((id: string) => {
+      calls.push(id);
+      return Promise.resolve();
+    });
+    const projections = {
+      getCurrent: () => ({
+        operator: {
+          runtime: { telemetryFreshness: 'fresh' },
+          matchContext: { freshness: 'fresh' },
+          identity: { state: 'matched' },
+        },
+        program: {
+          series: { bindingState: 'bound', status: 'live', maps: [] },
+          map: { phase: 'live' },
+        },
+      }),
+      getBpAssessment: () => ({ readiness: 'missing' }),
+    } as unknown as ProjectionCoordinator;
+    const bp = { get: () => ({ projection: null, state: 'hidden' }) } as unknown as BpSession;
+    const scenes = new ProgramSceneController(projections, bp, switchObs);
+    await scenes.select('gameplay', scenes.get().revision);
+    const release = vi.fn(() => {
+      calls.push('release');
+      return Promise.resolve();
+    });
+    const app = Fastify();
+    const lifecycle = registerProductionRoutes(app, {
+      originPolicy: createLocalWebOriginPolicy(),
+      hasContext: () => true,
+      scenes,
+      release,
+    });
+    const send = (action: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/production',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { action, expectedRevision: lifecycle.get().revision },
+      });
+    try {
+      await send('enter');
+      if (mode === 'hidden') await send('hide');
+      const before = lifecycle.get();
+      calls.length = 0;
+      switchObs.mockRejectedValueOnce(new Error('OBS down'));
+      expect((await send('finish')).statusCode).toBe(409);
+      expect(release).not.toHaveBeenCalled();
+      expect(lifecycle.get()).toEqual(before);
+      expect(scenes.get().active).toBe('gameplay');
+      release.mockImplementationOnce(() => {
+        calls.push('release');
+        return Promise.reject(new Error('RivalHub unavailable'));
+      });
+      calls.length = 0;
+      expect((await send('finish')).statusCode).toBe(409);
+      expect(calls).toEqual(['waiting', 'release']);
+      expect(scenes.get().active).toBe('waiting');
+      expect(lifecycle.get()).toEqual(before);
+      expect((await send('finish')).statusCode).toBe(200);
+      expect(lifecycle.get().mode).toBe('preparation');
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      await app.close();
+    }
+  },
+);
