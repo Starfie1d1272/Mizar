@@ -24,7 +24,7 @@ function eligible(bundle: ProjectionBundle, binding: MatchContextBinding | undef
 }
 
 interface ReliableMapResult {
-  readonly mapId: string;
+  readonly mapId: string | null;
   readonly mapName: string;
   readonly scoreA: number;
   readonly scoreB: number;
