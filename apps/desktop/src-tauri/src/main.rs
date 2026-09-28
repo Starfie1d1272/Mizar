@@ -36,6 +36,18 @@ extern "system" {
     fn CloseHandle(handle: isize) -> i32;
 }
 
+#[link(name = "shell32")]
+extern "system" {
+    fn ShellExecuteW(
+        hwnd: isize,
+        operation: *const u16,
+        file: *const u16,
+        parameters: *const u16,
+        directory: *const u16,
+        show: i32,
+    ) -> isize;
+}
+
 struct HostState {
     tracker: Mutex<GameTracker>,
     visible: AtomicBool,
@@ -253,6 +265,25 @@ fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_rivalhub_authorization(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|_| "授权页面地址无效。")?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("match.starfie1d.top")
+        || parsed.port().is_some()
+        || parsed.path() != "/integrations/mizar/connect"
+        || parsed.query_pairs().find(|(key, _)| key == "pairingId").is_none()
+    {
+        return Err("授权页面地址无效。".into());
+    }
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = format!("{url}\0").encode_utf16().collect();
+    let result = unsafe {
+        ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
+    };
+    if result <= 32 { Err("浏览器未能打开，请重试。".into()) } else { Ok(()) }
+}
+
 fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
     let bundle = bundle_root()?;
     let mut command = Command::new("powershell.exe");
@@ -369,6 +400,7 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
             open_main,
             present_production,
             open_tool,
+            open_rivalhub_authorization,
             gsi_status,
             configure_gsi
         ])

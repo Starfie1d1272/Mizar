@@ -14,6 +14,12 @@ type Installation = {
   competitionId: string;
   displayName: string;
 };
+type PendingPairing = {
+  pairingId: string;
+  pollToken: string;
+  expiresAt: string;
+};
+export const OFFICIAL_RIVALHUB_URL = 'https://match.starfie1d.top';
 type Source = {
   matchId: string;
   authorityRevision: number;
@@ -39,12 +45,14 @@ function normalizeBaseUrl(value: string): string {
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {
   private installation: Installation | null = null;
+  private pendingPairing: PendingPairing | null = null;
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
 
   constructor(
     private readonly path: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly baseUrl = OFFICIAL_RIVALHUB_URL,
   ) {}
 
   async load(): Promise<void> {
@@ -68,6 +76,7 @@ export class RivalHubConnection {
       displayName: this.installation?.displayName ?? null,
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
+      pairing: this.pendingPairing === null ? 'idle' : 'pending',
     };
   }
 
@@ -98,39 +107,99 @@ export class RivalHubConnection {
     });
   }
 
-  async pair(baseUrlInput: string, code: string, displayName: string): Promise<void> {
-    const baseUrl = normalizeBaseUrl(baseUrlInput);
-    if (!/^[A-Za-z0-9_-]{22}$/.test(code) || !displayName.trim() || displayName.length > 80)
-      throw new Error('连接码或设备名称无效。');
-    const response = await this.fetchImpl(`${baseUrl}/api/mizar/pair`, {
+  async startPairing(): Promise<{ authorizeUrl: string; expiresAt: string }> {
+    const baseUrl = normalizeBaseUrl(this.baseUrl);
+    const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/start`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
+    const value = (await response.json()) as {
+      pairingId?: unknown;
+      pollToken?: unknown;
+      authorizeUrl?: unknown;
+      expiresAt?: unknown;
+    };
+    if (
+      typeof value.pairingId !== 'string' ||
+      !/^[a-f0-9-]{36}$/i.test(value.pairingId) ||
+      typeof value.pollToken !== 'string' ||
+      !/^[a-f0-9]{64}$/i.test(value.pollToken) ||
+      typeof value.authorizeUrl !== 'string' ||
+      typeof value.expiresAt !== 'string' ||
+      !Number.isFinite(Date.parse(value.expiresAt)) ||
+      Date.parse(value.expiresAt) <= Date.now()
+    )
+      throw new Error('授权请求格式无效。');
+    const authorizeUrl = new URL(value.authorizeUrl);
+    if (
+      authorizeUrl.origin !== baseUrl ||
+      authorizeUrl.username ||
+      authorizeUrl.password ||
+      authorizeUrl.hash ||
+      !authorizeUrl.pathname.startsWith('/integrations/mizar/connect') ||
+      authorizeUrl.searchParams.get('pairingId') !== value.pairingId
+    )
+      throw new Error('授权页面地址无效。');
+    this.pendingPairing = {
+      pairingId: value.pairingId,
+      pollToken: value.pollToken,
+      expiresAt: value.expiresAt,
+    };
+    return { authorizeUrl: authorizeUrl.toString(), expiresAt: value.expiresAt };
+  }
+
+  async pollPairing(): Promise<'idle' | 'pending' | 'expired' | 'authorized'> {
+    const pending = this.pendingPairing;
+    if (pending === null) return 'idle';
+    if (Date.parse(pending.expiresAt) <= Date.now()) {
+      this.pendingPairing = null;
+      return 'expired';
+    }
+    const baseUrl = normalizeBaseUrl(this.baseUrl);
+    const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/poll`, {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, displayName: displayName.trim() }),
+      body: JSON.stringify({ pairingId: pending.pairingId, pollToken: pending.pollToken }),
       signal: AbortSignal.timeout(4000),
     });
-    if (!response.ok) throw new Error('连接码无效或已过期。');
+    if (!response.ok) throw new Error('授权状态暂时无法获取。');
     const value = (await response.json()) as {
-      credential: string;
-      installationId: string;
-      competitionId: string;
+      status?: unknown;
+      credential?: unknown;
+      installationId?: unknown;
+      competitionId?: unknown;
+      displayName?: unknown;
     };
+    if (value.status === 'pending') return 'pending';
+    if (value.status === 'expired') {
+      this.pendingPairing = null;
+      return 'expired';
+    }
     if (
+      value.status !== 'authorized' ||
+      typeof value.credential !== 'string' ||
       !/^[A-Za-z0-9_-]{43}$/.test(value.credential) ||
-      !value.installationId ||
-      !value.competitionId
+      typeof value.installationId !== 'string' ||
+      typeof value.competitionId !== 'string' ||
+      typeof value.displayName !== 'string' ||
+      !value.displayName.trim()
     )
-      throw new Error('连接响应无效。');
+      throw new Error('授权结果格式无效。');
     await this.release();
     this.installation = {
       baseUrl,
       credential: value.credential,
       installationId: value.installationId,
       competitionId: value.competitionId,
-      displayName: displayName.trim(),
+      displayName: value.displayName.trim(),
     };
     this.source = null;
     await this.persist();
+    this.pendingPairing = null;
+    return 'authorized';
   }
 
   async schedule(from: string, to: string) {

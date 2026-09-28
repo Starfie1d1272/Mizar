@@ -14,6 +14,10 @@ import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
 import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
+import {
+  RivalsRehearsal,
+  registerRivalsRehearsalRoutes,
+} from './match-context/rivals-rehearsal.js';
 import { registerBpRoutes } from './bp/controller.js';
 import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
@@ -102,6 +106,7 @@ export interface CompanionAppOptions {
   readonly liveSink?: OutputServiceOptions['liveSink'];
   readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly rivalhubConnection?: RivalHubConnection;
+  readonly rehearsalFixturePath?: string;
   readonly projectionNowMonotonicMs?: () => number;
   readonly bpNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
@@ -431,6 +436,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  const rehearsal =
+    options.rehearsalFixturePath && matchContextController
+      ? new RivalsRehearsal(options.rehearsalFixturePath, matchContextController, sceneController)
+      : undefined;
+  if (rehearsal)
+    registerRivalsRehearsalRoutes(app, {
+      rehearsal,
+      originPolicy: localWebTransport.getOriginPolicy(),
+      beforeLoad: async () => {
+        await options.rivalhubConnection?.release();
+      },
+    });
   const localTournamentStore =
     options.localTournamentPath === undefined
       ? null
@@ -487,6 +504,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),
+      ...(rehearsal === undefined ? {} : { rehearsal }),
     });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {

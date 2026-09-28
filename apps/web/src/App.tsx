@@ -20,6 +20,7 @@ import { useBrowserHostDiagnostics } from './debug/host-diagnostics';
 import { ProgramCueRendererBridge } from './program/ProgramCueRendererBridge';
 import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage';
 import { ProgramPage } from './program/ProgramPage';
+import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fixtures/index.js';
 import { ProgramScenePage } from './program/ProgramScenePage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
@@ -203,13 +204,30 @@ function ProgramRoute() {
         },
       }
     : hudConfig.current;
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('preview') === '1';
+  const defaultSnapshot = isPreview ? getHudEditorFixture(HUD_EDITOR_DEFAULT_FIXTURE_ID) : null;
+  const candidate = programConnection.current;
+  const isAccepted =
+    candidate !== null &&
+    candidate !== undefined &&
+    candidate.payload.status.telemetry === 'fresh' &&
+    (programConnection.state === undefined || programConnection.state === 'live');
+  const activeSnapshot =
+    isAccepted || candidate?.payload?.status?.context === 'fresh'
+      ? candidate
+      : isPreview
+        ? defaultSnapshot
+        : candidate;
+
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
         radarClient={radarClient}
         connectionState={programConnection.state}
         resolvedPreset={resolved}
-        snapshot={programConnection.current}
+        snapshot={activeSnapshot}
       />
     </ProgramCueRendererBridge>
   );

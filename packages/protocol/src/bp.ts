@@ -174,7 +174,7 @@ export const bpWorkspaceSchema = z
   .object({
     schemaVersion: z.literal('mizar.bp-workspace.v4'),
     demo: bpDemoStateSchema,
-    source: z.enum(['none', 'online', 'local', 'cache']),
+    source: z.enum(['none', 'online', 'local', 'cache', 'fixture']),
     authoringMode: z.enum(['standalone', 'bound-overlay']),
     contextRevision: z.string().min(1),
     freshness: z.enum(['none', 'fresh', 'stale']),

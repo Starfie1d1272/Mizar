@@ -13,14 +13,16 @@ const DEMO_MATCHES: Record<BpDemoFormat, { readonly teams: string; readonly titl
   bo5: { teams: 'Team Plasma vs 車一进一宝贝队', title: '五图 BP' },
 };
 
-function sourceLabel(source: 'none' | 'online' | 'local' | 'cache') {
+function sourceLabel(source: 'none' | 'online' | 'local' | 'cache' | 'fixture') {
   return source === 'online'
     ? 'RivalHub'
-    : source === 'local'
-      ? '本地'
-      : source === 'cache'
-        ? '本地缓存'
-        : '未连接';
+    : source === 'fixture'
+      ? '示例比赛'
+      : source === 'local'
+        ? '本地'
+        : source === 'cache'
+          ? '本地缓存'
+          : '未连接';
 }
 
 function readinessLabel(

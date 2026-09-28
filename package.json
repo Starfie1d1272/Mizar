@@ -12,6 +12,8 @@
     "fixtures:program:verify": "pnpm fixtures:rivals-bp:verify && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --check",
     "fixtures:rivals-bp:sync": "pnpm --filter @mizar/rivalhub build && node scripts/fixtures/sync-rivals-bp-program-records.mjs",
     "fixtures:rivals-bp:verify": "pnpm --filter @mizar/rivalhub build && node scripts/fixtures/sync-rivals-bp-program-records.mjs --check",
+    "fixtures:rivals-rehearsal:sync": "pnpm --filter @mizar/protocol build && pnpm --filter @mizar/rivalhub build && node scripts/fixtures/sync-rivals-rehearsal.mjs",
+    "fixtures:rivals-rehearsal:verify": "pnpm --filter @mizar/protocol build && pnpm --filter @mizar/rivalhub build && node scripts/fixtures/sync-rivals-rehearsal.mjs --check",
     "fixtures:replay:generate": "pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-acceptance-replay.ts --write",
     "fixtures:replay:verify": "pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-acceptance-replay.ts --check",
     "fixtures:steam:enrich": "node --env-file=.env.local scripts/fixtures/enrich-steam-identities.mjs",

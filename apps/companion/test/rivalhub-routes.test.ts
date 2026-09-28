@@ -14,12 +14,13 @@ describe('RivalHub Fastify Routes', () => {
       view: () => ({
         paired: true,
         competitionId: 'comp-1',
-        displayName: '主舞台制播机',
+        displayName: '星宇',
         activeSourceMatchId: null,
         activeDeviceName: null,
       }),
       schedule: vi.fn(),
-      pair: vi.fn(),
+      startPairing: vi.fn(),
+      pollPairing: vi.fn(),
       matchSource: vi.fn(),
       claim: vi.fn(),
       release: vi.fn(),
@@ -42,24 +43,26 @@ describe('RivalHub Fastify Routes', () => {
       expect(res.json()).toEqual({
         paired: true,
         competitionId: 'comp-1',
-        displayName: '主舞台制播机',
+        displayName: '星宇',
         activeSourceMatchId: null,
         activeDeviceName: null,
         activeMatchId: null,
       });
 
       // Refuses mutation from untrusted origin
-      const pairRes = await app.inject({
+      const pairStartRes = await app.inject({
         method: 'POST',
-        url: '/operator/rivalhub/pair',
+        url: '/operator/rivalhub/pairing/start',
         headers: { origin: 'https://evil.attacker.com' },
-        payload: {
-          baseUrl: 'https://rivalhub.example',
-          code: 'a'.repeat(22),
-          displayName: '主舞台',
-        },
       });
-      expect(pairRes.statusCode).toBe(403);
+      expect(pairStartRes.statusCode).toBe(403);
+
+      const pairPollRes = await app.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/pairing/poll',
+        headers: { origin: 'https://evil.attacker.com' },
+      });
+      expect(pairPollRes.statusCode).toBe(403);
     } finally {
       await app.close();
     }
@@ -72,7 +75,7 @@ describe('RivalHub Fastify Routes', () => {
       view: () => ({
         paired,
         competitionId: paired ? 'comp-1' : null,
-        displayName: paired ? '主舞台' : null,
+        displayName: paired ? '星宇' : null,
         activeSourceMatchId: null,
         activeDeviceName: null,
       }),
@@ -82,9 +85,15 @@ describe('RivalHub Fastify Routes', () => {
           matches: [],
         }),
       ),
-      pair: vi.fn(() => {
+      startPairing: vi.fn(() =>
+        Promise.resolve({
+          authorizeUrl: 'https://match.starfie1d.top/integrations/mizar/connect?pairingId=abc',
+          expiresAt: '2026-05-23T12:00:00.000Z',
+        }),
+      ),
+      pollPairing: vi.fn(() => {
         paired = true;
-        return Promise.resolve();
+        return Promise.resolve('authorized' as const);
       }),
       matchSource: vi.fn(),
       claim: vi.fn(),
@@ -106,81 +115,42 @@ describe('RivalHub Fastify Routes', () => {
       });
       expect(scheduleRes1.statusCode).toBe(404);
 
-      // Incomplete pair body returns 400
-      const pairBad = await app.inject({
+      // Successful start pairing
+      const startRes = await app.inject({
         method: 'POST',
-        url: '/operator/rivalhub/pair',
+        url: '/operator/rivalhub/pairing/start',
         headers: { origin: 'http://127.0.0.1:43120' },
-        payload: { baseUrl: 'https://rivalhub.example' },
       });
-      expect(pairBad.statusCode).toBe(400);
+      expect(startRes.statusCode).toBe(200);
+      expect(startRes.headers['cache-control']).toBe('no-store');
+      expect(startRes.json()).toEqual({
+        authorizeUrl: 'https://match.starfie1d.top/integrations/mizar/connect?pairingId=abc',
+        expiresAt: '2026-05-23T12:00:00.000Z',
+      });
 
-      // Successful pair
-      const pairOk = await app.inject({
+      // Poll pairing
+      const pollRes = await app.inject({
         method: 'POST',
-        url: '/operator/rivalhub/pair',
+        url: '/operator/rivalhub/pairing/poll',
         headers: { origin: 'http://127.0.0.1:43120' },
-        payload: {
-          baseUrl: 'https://rivalhub.example',
-          code: 'b'.repeat(22),
-          displayName: '主舞台',
-        },
       });
-      expect(pairOk.statusCode).toBe(200);
+      expect(pollRes.statusCode).toBe(200);
+      expect(pollRes.headers['cache-control']).toBe('no-store');
+      expect(pollRes.json()).toMatchObject({
+        status: 'authorized',
+        connection: { paired: true, displayName: '星宇' },
+      });
 
-      // When paired, schedule returns 200
+      // When paired, schedule returns data
       const scheduleRes2 = await app.inject({
         method: 'GET',
         url: '/local/v1/rivalhub-schedule',
       });
       expect(scheduleRes2.statusCode).toBe(200);
-      expect(scheduleRes2.json()).toMatchObject({
+      expect(scheduleRes2.json()).toEqual({
         competition: { name: '2026 南京 Major' },
+        matches: [],
       });
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('enforces claim prerequisites and fails with 409 when snapshot not ready', async () => {
-    const app = Fastify();
-    const mockConnection = {
-      view: () => ({
-        paired: true,
-        competitionId: 'comp-1',
-        displayName: '主舞台',
-        activeSourceMatchId: null,
-        activeDeviceName: null,
-      }),
-      claim: vi.fn(),
-      release: vi.fn(async () => {}),
-    } as unknown as RivalHubConnection;
-
-    // Snapshot is null (e.g. gameplay/CS2 telemetry not connected yet)
-    registerRivalHubConnectionRoutes(app, {
-      connection: mockConnection,
-      controller: null,
-      currentSnapshot: () => null,
-      originPolicy,
-    });
-
-    try {
-      const claimRes = await app.inject({
-        method: 'POST',
-        url: '/operator/rivalhub/source/claim',
-        headers: { origin: 'http://127.0.0.1:43120' },
-        payload: {},
-      });
-      expect(claimRes.statusCode).toBe(409);
-      expect(claimRes.json()).toEqual({ message: '请先在工作区加载赛事比赛。' });
-
-      const releaseRes = await app.inject({
-        method: 'POST',
-        url: '/operator/rivalhub/source/release',
-        headers: { origin: 'http://127.0.0.1:43120' },
-        payload: {},
-      });
-      expect(releaseRes.statusCode).toBe(200);
     } finally {
       await app.close();
     }

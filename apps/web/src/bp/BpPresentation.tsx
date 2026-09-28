@@ -11,8 +11,16 @@ export function BpPresentation({
   readonly snapshot: BpSnapshot | null;
   readonly animate?: boolean;
 }) {
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('preview') === '1';
   const projection = snapshot?.projection;
-  const visible = snapshot !== null && snapshot.state !== 'hidden';
+  const visible =
+    (snapshot !== null && snapshot.state !== 'hidden') || (isPreview && projection != null);
+  const effectiveRevealedCount =
+    isPreview && snapshot?.state === 'hidden' && projection
+      ? projection.steps.length
+      : (snapshot?.revealedCount ?? 0);
   return (
     <ProgramCanvas className="bp-canvas">
       {projection && visible ? (
@@ -56,7 +64,7 @@ export function BpPresentation({
           </div>
           <div className="bp-cards">
             {projection.cards.map((card, index) => {
-              const steps = projection.steps.slice(0, snapshot.revealedCount);
+              const steps = projection.steps.slice(0, effectiveRevealedCount);
               const shown = steps.some((s) => s.cardIndex === index && s.kind === 'card');
               const sideShown = steps.some(
                 (s) => s.cardIndex === index && s.kind === 'side-choice',

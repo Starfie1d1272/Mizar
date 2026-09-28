@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { version as osVersion } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
 import { configuredHttpOutputs } from './output/http-sink.js';
@@ -162,6 +163,18 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
   const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
+  const rehearsalCandidates = [
+    resolve(process.cwd(), 'fixtures/rivals-rehearsal/rivals-rehearsal.generated.json'),
+    resolve(process.cwd(), '../../fixtures/rivals-rehearsal/rivals-rehearsal.generated.json'),
+  ];
+  const detectedRehearsalPath = rehearsalCandidates.find((candidate) => existsSync(candidate));
+  const rehearsalFixturePath =
+    productInstance === undefined &&
+    (process.argv.includes('--rehearsal') ||
+      (qualificationMode && process.env.MIZAR_REHEARSAL === '1') ||
+      detectedRehearsalPath !== undefined)
+      ? detectedRehearsalPath
+      : undefined;
   const productArtifact = process.env.MIZAR_ARTIFACT_SHA256;
   const productToken = process.env.MIZAR_RUNTIME_TOKEN;
   if (productInstance !== undefined && (qualificationMode || !productArtifact || !productToken)) {
@@ -170,6 +183,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   const app = buildApp({
     ...httpOutputs,
     rivalhubConnection,
+    ...(rehearsalFixturePath === undefined ? {} : { rehearsalFixturePath }),
     ...(productInstance === undefined
       ? {}
       : {

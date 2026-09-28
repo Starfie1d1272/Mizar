@@ -1,0 +1,1316 @@
+{
+  "schemaVersion": "mizar.rivals-rehearsal.v1",
+  "focusMatchId": "d9987c41-180a-4113-8003-c6d18d1ba1e6",
+  "provenance": {
+    "competitionSource": "RivalHub production public 2026 NJU Rivals snapshot",
+    "capturedAt": "2026-09-29",
+    "gameplaySource": "fixtures/gsi/acceptance/ancient-round-03",
+    "gameplayRelationship": "Independent real CS2 GSI capture; not the focus match recording",
+    "missingLogoEntryId": "e67eb4c5-e842-4781-b35c-276563ac8e70"
+  },
+  "schedule": {
+    "schemaVersion": "rivalhub.broadcast-schedule-window.v1",
+    "revision": "rivals-rehearsal-2026-09-29",
+    "competition": {
+      "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+      "slug": "2026-nju-rivals",
+      "name": "2026 NJU Rivals",
+      "logoUrl": null,
+      "themeColor": "#f97316"
+    },
+    "from": "2026-05-22T00:00:00.000Z",
+    "to": "2026-05-27T00:00:00.000Z",
+    "matches": [
+      {
+        "matchId": "d1f6d908-246a-4d17-9a28-ab517af62b94",
+        "scheduledAt": "2026-05-22T14:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-22T15:25:00.000Z",
+        "status": "finished",
+        "format": "bo1",
+        "stage": "qualifier",
+        "stageLabel": "排位赛",
+        "round": null,
+        "roundLabel": null,
+        "matchLabel": null,
+        "isForfeit": false,
+        "scoreA": 0,
+        "scoreB": 1,
+        "entrantA": {
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "name": "Team D'avenir",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg"
+        },
+        "entrantB": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+        }
+      },
+      {
+        "matchId": "3ed23d38-3507-44db-9a02-e0e2390080e6",
+        "scheduledAt": "2026-05-23T11:00:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-23T13:00:00.000Z",
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "matchLabel": null,
+        "isForfeit": false,
+        "scoreA": 0,
+        "scoreB": 2,
+        "entrantA": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+        },
+        "entrantB": {
+          "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "name": "Team Plasma",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/fbdf2889-db44-4006-a9f6-08ee88628676/1778943880190.png"
+        }
+      },
+      {
+        "matchId": "d9987c41-180a-4113-8003-c6d18d1ba1e6",
+        "scheduledAt": "2026-05-24T02:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-24T06:47:21.636Z",
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "matchLabel": null,
+        "isForfeit": false,
+        "scoreA": 2,
+        "scoreB": 1,
+        "entrantA": {
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "name": "Team D'avenir",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg"
+        },
+        "entrantB": {
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "name": "暴躁南梁",
+          "logoUrl": null
+        }
+      },
+      {
+        "matchId": "e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd",
+        "scheduledAt": "2026-05-24T11:00:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-24T12:50:00.000Z",
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "matchLabel": null,
+        "isForfeit": false,
+        "scoreA": 2,
+        "scoreB": 0,
+        "entrantA": {
+          "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "name": "車一进一宝贝队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/bd8e019b-be34-46c9-af92-12cfef45cccb/1778943079776.jpg"
+        },
+        "entrantB": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+        }
+      },
+      {
+        "matchId": "d1a67dd4-3268-4612-acab-8c08b74e08e4",
+        "scheduledAt": "2026-05-25T12:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-25T14:23:33.671Z",
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "matchLabel": null,
+        "isForfeit": false,
+        "scoreA": 0,
+        "scoreB": 2,
+        "entrantA": {
+          "entryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "name": "NJU美少女组合",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/37fff114-0b00-45bf-bd07-e999792c2c7a/1778919138813.png"
+        },
+        "entrantB": {
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "name": "暴躁南梁",
+          "logoUrl": null
+        }
+      }
+    ]
+  },
+  "manifests": {
+    "d1f6d908-246a-4d17-9a28-ab517af62b94": {
+      "schemaVersion": "rivalhub.broadcast-manifest.v1",
+      "revision": "rivals-rehearsal-2026-09-29-d1f6d908-246a-4d17-9a28-ab517af62b94",
+      "match": {
+        "matchId": "d1f6d908-246a-4d17-9a28-ab517af62b94",
+        "competition": {
+          "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+          "slug": "2026-nju-rivals",
+          "name": "2026 NJU Rivals",
+          "logoUrl": null,
+          "themeColor": "#f97316"
+        },
+        "status": "finished",
+        "format": "bo1",
+        "stage": "qualifier",
+        "stageKey": "qualifier",
+        "stageLabel": "排位赛",
+        "round": null,
+        "roundLabel": null,
+        "entryRound": null,
+        "matchLabel": null,
+        "stakesLabel": null,
+        "mapPool": [
+          "de_mirage",
+          "de_inferno",
+          "de_nuke",
+          "de_ancient",
+          "de_dust2",
+          "de_anubis",
+          "de_overpass"
+        ],
+        "scheduledAt": "2026-05-22T14:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-22T15:25:00.000Z",
+        "scoreA": 0,
+        "scoreB": 1,
+        "isForfeit": false
+      },
+      "entrants": {
+        "a": {
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "name": "Team D'avenir",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg",
+          "roster": {
+            "rosterId": "a225157c-c0d8-4076-90af-e7eb9e130907",
+            "players": [
+              {
+                "playerId": "9ed2a9b2-0680-4d1b-b80d-fc76af4466b0",
+                "steam64": "76561198173950363",
+                "displayName": "香菜圆子",
+                "avatarUrl": "https://avatars.steamstatic.com/f103a85eb4d48a772219df9cabdacbafdc8e0ead_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "87dabeef-8ad6-4c9a-9f3e-62d53093c133",
+                "steam64": "76561198334983434",
+                "displayName": "Serendip1ty",
+                "avatarUrl": "https://avatars.steamstatic.com/87cfecfc2398d0f0e58dc8dcbf8278111d41b01f_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "c1282ba6-f3f2-455d-91be-e789e4e46d1d",
+                "steam64": "76561198863205144",
+                "displayName": "BonneNuiTzt",
+                "avatarUrl": "https://avatars.steamstatic.com/b01e4e0a69a22ec67970268ec16023dde5f12e44_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "86665598-0a43-4434-9949-b5f3b6981d3c",
+                "steam64": "76561198317967127",
+                "displayName": "lbtD",
+                "avatarUrl": "https://avatars.steamstatic.com/f6e4b183e0c7e81f3ea91d4ae2ce08b895249f16_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "c49859c4-faf1-463e-a6d0-57f3d969f330",
+                "steam64": "76561199211495906",
+                "displayName": "wA1T",
+                "avatarUrl": "https://avatars.steamstatic.com/030992ae58a96e1c5923b88a96d9845ca0b21e4f_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "a79b7720-8769-4964-aae7-2f5518d9c9ec",
+                "steam64": "76561198211920208",
+                "displayName": "阿牛",
+                "avatarUrl": "https://avatars.steamstatic.com/084af891daa18ba206ff6cf6bf399b4233377b2b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "f252b4a8-0cd0-48a1-9e34-a30dbac18673",
+                "steam64": "76561199206282431",
+                "displayName": "Bu",
+                "avatarUrl": "https://avatars.steamstatic.com/95355f91d0beb570f150d667e813ba94a73a5189_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        },
+        "b": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png",
+          "roster": {
+            "rosterId": "d62c3fa5-6b45-42fe-925f-21afd8575737",
+            "players": [
+              {
+                "playerId": "55c21d35-9473-4555-9b6a-7204463155c0",
+                "steam64": "76561198408992583",
+                "displayName": "小豆泥",
+                "avatarUrl": "https://avatars.steamstatic.com/8ecf7dbda64061330461f0c081aaf1b7b27b2ab8_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "5959f5cf-6f73-4527-bd58-611c51f78b07",
+                "steam64": "76561198985185500",
+                "displayName": "Tomato:Debu",
+                "avatarUrl": "https://avatars.steamstatic.com/99d195ead4cb96c8ec410d4454d6dee874408f73_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "6a3f413b-d5cb-48da-8d10-7096c7f8035c",
+                "steam64": "76561199086895887",
+                "displayName": "同时取悦三个女人",
+                "avatarUrl": "https://avatars.steamstatic.com/16f1d605cd678ecc28577ad3c5a95a79abf4b678_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "88218f6e-1fb8-4adb-bae0-969adcf4af59",
+                "steam64": "76561198804455016",
+                "displayName": "Asking",
+                "avatarUrl": "https://avatars.steamstatic.com/7c8762347ad93a9b00b3e90f72ff91c09b5be60b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "914de6bf-9554-4516-baef-07c30e95c381",
+                "steam64": "76561199079259274",
+                "displayName": "Tropk1ngX",
+                "avatarUrl": "https://avatars.steamstatic.com/63c072a02eaf03a85b6794d328807fc0bceb6478_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "001066f8-e186-4cdd-8e21-5828abf0e63f",
+                "steam64": "76561199246734739",
+                "displayName": "浪里个浪",
+                "avatarUrl": "https://avatars.steamstatic.com/31ef70c8d8755e256b13bf187bdd0afd0581f49b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "d040b027-2e4c-4a9e-949d-a9196522d0cd",
+                "steam64": "76561199447519397",
+                "displayName": "施浩严",
+                "avatarUrl": "https://avatars.steamstatic.com/084af891daa18ba206ff6cf6bf399b4233377b2b_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        }
+      },
+      "maps": [
+        {
+          "mapId": "465f6e10-02cc-4de5-a745-b4a3943b3fcf",
+          "mapOrder": 1,
+          "mapName": "de_dust2",
+          "pickedByEntryId": null,
+          "teamAStartSide": "ct",
+          "scoreA": 9,
+          "scoreB": 13,
+          "completedAt": "2026-05-22T15:25:00.000Z"
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "ban",
+          "mapName": "de_ancient",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 2,
+          "actionType": "ban",
+          "mapName": "de_mirage",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 3,
+          "actionType": "ban",
+          "mapName": "de_inferno",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": null
+        },
+        {
+          "stepOrder": 4,
+          "actionType": "ban",
+          "mapName": "de_nuke",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": null
+        },
+        {
+          "stepOrder": 5,
+          "actionType": "ban",
+          "mapName": "de_overpass",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": null
+        },
+        {
+          "stepOrder": 6,
+          "actionType": "ban",
+          "mapName": "de_anubis",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 7,
+          "actionType": "decider",
+          "mapName": "de_dust2",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": "ct"
+        }
+      ],
+      "commentators": []
+    },
+    "3ed23d38-3507-44db-9a02-e0e2390080e6": {
+      "schemaVersion": "rivalhub.broadcast-manifest.v1",
+      "revision": "rivals-rehearsal-2026-09-29-3ed23d38-3507-44db-9a02-e0e2390080e6",
+      "match": {
+        "matchId": "3ed23d38-3507-44db-9a02-e0e2390080e6",
+        "competition": {
+          "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+          "slug": "2026-nju-rivals",
+          "name": "2026 NJU Rivals",
+          "logoUrl": null,
+          "themeColor": "#f97316"
+        },
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageKey": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "entryRound": null,
+        "matchLabel": null,
+        "stakesLabel": null,
+        "mapPool": [
+          "de_mirage",
+          "de_inferno",
+          "de_nuke",
+          "de_ancient",
+          "de_dust2",
+          "de_anubis",
+          "de_overpass"
+        ],
+        "scheduledAt": "2026-05-23T11:00:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-23T13:00:00.000Z",
+        "scoreA": 0,
+        "scoreB": 2,
+        "isForfeit": false
+      },
+      "entrants": {
+        "a": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png",
+          "roster": {
+            "rosterId": "dd19d9b2-25a0-44ca-b7a9-6abcfc83d7be",
+            "players": [
+              {
+                "playerId": "55c21d35-9473-4555-9b6a-7204463155c0",
+                "steam64": "76561198408992583",
+                "displayName": "小豆泥",
+                "avatarUrl": "https://avatars.steamstatic.com/8ecf7dbda64061330461f0c081aaf1b7b27b2ab8_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "5959f5cf-6f73-4527-bd58-611c51f78b07",
+                "steam64": "76561198985185500",
+                "displayName": "Tomato:Debu",
+                "avatarUrl": "https://avatars.steamstatic.com/99d195ead4cb96c8ec410d4454d6dee874408f73_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "6a3f413b-d5cb-48da-8d10-7096c7f8035c",
+                "steam64": "76561199086895887",
+                "displayName": "同时取悦三个女人",
+                "avatarUrl": "https://avatars.steamstatic.com/16f1d605cd678ecc28577ad3c5a95a79abf4b678_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "88218f6e-1fb8-4adb-bae0-969adcf4af59",
+                "steam64": "76561198804455016",
+                "displayName": "Asking",
+                "avatarUrl": "https://avatars.steamstatic.com/7c8762347ad93a9b00b3e90f72ff91c09b5be60b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "914de6bf-9554-4516-baef-07c30e95c381",
+                "steam64": "76561199079259274",
+                "displayName": "Tropk1ngX",
+                "avatarUrl": "https://avatars.steamstatic.com/63c072a02eaf03a85b6794d328807fc0bceb6478_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "001066f8-e186-4cdd-8e21-5828abf0e63f",
+                "steam64": "76561199246734739",
+                "displayName": "浪里个浪",
+                "avatarUrl": "https://avatars.steamstatic.com/31ef70c8d8755e256b13bf187bdd0afd0581f49b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "d040b027-2e4c-4a9e-949d-a9196522d0cd",
+                "steam64": "76561199447519397",
+                "displayName": "施浩严",
+                "avatarUrl": "https://avatars.steamstatic.com/084af891daa18ba206ff6cf6bf399b4233377b2b_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        },
+        "b": {
+          "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "name": "Team Plasma",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/fbdf2889-db44-4006-a9f6-08ee88628676/1778943880190.png",
+          "roster": {
+            "rosterId": "4bcbf320-50e5-44f9-8ad7-04de8f6360ed",
+            "players": [
+              {
+                "playerId": "69e6ffa7-86db-4ccf-ac60-4a622a2d1e40",
+                "steam64": "76561199441475566",
+                "displayName": "Starfie1d",
+                "avatarUrl": "https://avatars.steamstatic.com/40bf29a0a7d3e4a36e64456677985317e46ff3de_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "3d12c4b2-0c23-4bb1-93d7-440504442e97",
+                "steam64": "76561198930760177",
+                "displayName": "伊苏",
+                "avatarUrl": "https://avatars.steamstatic.com/2947fb094a20a2d4a23b651a0f781fa65d75caa3_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "416aef29-b66d-4d88-8461-51716e316eb6",
+                "steam64": "76561199239002732",
+                "displayName": "SoulRoamer",
+                "avatarUrl": "https://avatars.steamstatic.com/0e96fd1da4c91017a7c1de980d6361b139e6831d_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "0b5a3bd1-3e11-4f55-a045-edbc737faa3a",
+                "steam64": "76561197979412211",
+                "displayName": "克里斯甜",
+                "avatarUrl": "https://avatars.steamstatic.com/eb6f90c33c3655c68b0a4108baf83153bbd1574e_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "24c80878-160c-4597-9127-42acf6212b42",
+                "steam64": "76561199524511466",
+                "displayName": "Albert",
+                "avatarUrl": "https://avatars.steamstatic.com/e9f593899b73f5ea0c6fcaaeca09d05a2e730592_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "fca71b7a-eece-4899-b142-d36790214374",
+                "steam64": "76561199155009374",
+                "displayName": "N1ghTmare_X",
+                "avatarUrl": "https://avatars.steamstatic.com/7f55e0c1e286329d4b5b4af351b7610d55a2f881_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "4e8dc3bb-38dd-4601-9b35-a6f8e9d7cb38",
+                "steam64": "76561199207655878",
+                "displayName": "流萤",
+                "avatarUrl": "https://avatars.steamstatic.com/30f9badc8852c0c3a88c8ba0dcd18542e10a2bf1_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        }
+      },
+      "maps": [
+        {
+          "mapId": "7e8700c7-73f5-4743-9cd4-6d03965ede38",
+          "mapOrder": 1,
+          "mapName": "de_dust2",
+          "pickedByEntryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "teamAStartSide": "t",
+          "scoreA": 11,
+          "scoreB": 13,
+          "completedAt": "2026-05-23T15:21:30.178Z"
+        },
+        {
+          "mapId": "63259cf6-f503-4dc9-bbff-d661dd0d66b5",
+          "mapOrder": 2,
+          "mapName": "de_mirage",
+          "pickedByEntryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "teamAStartSide": "ct",
+          "scoreA": 1,
+          "scoreB": 13,
+          "completedAt": "2026-05-23T15:21:55.203Z"
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "ban",
+          "mapName": "de_ancient",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 2,
+          "actionType": "ban",
+          "mapName": "de_overpass",
+          "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "side": null
+        },
+        {
+          "stepOrder": 3,
+          "actionType": "pick",
+          "mapName": "de_dust2",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": "ct"
+        },
+        {
+          "stepOrder": 4,
+          "actionType": "pick",
+          "mapName": "de_mirage",
+          "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "side": "ct"
+        },
+        {
+          "stepOrder": 5,
+          "actionType": "ban",
+          "mapName": "de_anubis",
+          "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+          "side": null
+        },
+        {
+          "stepOrder": 6,
+          "actionType": "ban",
+          "mapName": "de_nuke",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 7,
+          "actionType": "decider",
+          "mapName": "de_inferno",
+          "entryId": null,
+          "side": "ct"
+        }
+      ],
+      "commentators": []
+    },
+    "d9987c41-180a-4113-8003-c6d18d1ba1e6": {
+      "schemaVersion": "rivalhub.broadcast-manifest.v1",
+      "revision": "rivals-rehearsal-2026-09-29-d9987c41-180a-4113-8003-c6d18d1ba1e6",
+      "match": {
+        "matchId": "d9987c41-180a-4113-8003-c6d18d1ba1e6",
+        "competition": {
+          "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+          "slug": "2026-nju-rivals",
+          "name": "2026 NJU Rivals",
+          "logoUrl": null,
+          "themeColor": "#f97316"
+        },
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageKey": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "entryRound": null,
+        "matchLabel": null,
+        "stakesLabel": null,
+        "mapPool": [
+          "de_mirage",
+          "de_inferno",
+          "de_nuke",
+          "de_ancient",
+          "de_dust2",
+          "de_anubis",
+          "de_overpass"
+        ],
+        "scheduledAt": "2026-05-24T02:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-24T06:47:21.636Z",
+        "scoreA": 2,
+        "scoreB": 1,
+        "isForfeit": false
+      },
+      "entrants": {
+        "a": {
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "name": "Team D'avenir",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg",
+          "roster": {
+            "rosterId": "bacf7a56-37a5-4816-9362-346077f7d247",
+            "players": [
+              {
+                "playerId": "9ed2a9b2-0680-4d1b-b80d-fc76af4466b0",
+                "steam64": "76561198173950363",
+                "displayName": "香菜圆子",
+                "avatarUrl": "https://avatars.steamstatic.com/f103a85eb4d48a772219df9cabdacbafdc8e0ead_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "87dabeef-8ad6-4c9a-9f3e-62d53093c133",
+                "steam64": "76561198334983434",
+                "displayName": "Serendip1ty",
+                "avatarUrl": "https://avatars.steamstatic.com/87cfecfc2398d0f0e58dc8dcbf8278111d41b01f_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "c1282ba6-f3f2-455d-91be-e789e4e46d1d",
+                "steam64": "76561198863205144",
+                "displayName": "BonneNuiTzt",
+                "avatarUrl": "https://avatars.steamstatic.com/b01e4e0a69a22ec67970268ec16023dde5f12e44_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "86665598-0a43-4434-9949-b5f3b6981d3c",
+                "steam64": "76561198317967127",
+                "displayName": "lbtD",
+                "avatarUrl": "https://avatars.steamstatic.com/f6e4b183e0c7e81f3ea91d4ae2ce08b895249f16_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "c49859c4-faf1-463e-a6d0-57f3d969f330",
+                "steam64": "76561199211495906",
+                "displayName": "wA1T",
+                "avatarUrl": "https://avatars.steamstatic.com/030992ae58a96e1c5923b88a96d9845ca0b21e4f_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "a79b7720-8769-4964-aae7-2f5518d9c9ec",
+                "steam64": "76561198211920208",
+                "displayName": "阿牛",
+                "avatarUrl": "https://avatars.steamstatic.com/084af891daa18ba206ff6cf6bf399b4233377b2b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "f252b4a8-0cd0-48a1-9e34-a30dbac18673",
+                "steam64": "76561199206282431",
+                "displayName": "Bu",
+                "avatarUrl": "https://avatars.steamstatic.com/95355f91d0beb570f150d667e813ba94a73a5189_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        },
+        "b": {
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "name": "暴躁南梁",
+          "logoUrl": null,
+          "roster": {
+            "rosterId": "13df283e-2ecd-4041-85df-55a5a912e811",
+            "players": [
+              {
+                "playerId": "001b61eb-bb3d-4a07-89bc-3345036d9224",
+                "steam64": "76561199523601295",
+                "displayName": "J0kerzzz",
+                "avatarUrl": "https://avatars.steamstatic.com/acacec54c2cb39d998efbca9d09aa8295300b935_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "b484633f-b60b-4521-be7b-46c76d07912a",
+                "steam64": "76561198148342864",
+                "displayName": "SUMOR^ ^",
+                "avatarUrl": "https://avatars.steamstatic.com/9b1cfb04b0086cb967819750f2f2bc0ff2636ad4_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "30710a30-361e-46f4-9b94-5b33c538ac53",
+                "steam64": "76561199515266848",
+                "displayName": "GhostBlade",
+                "avatarUrl": "https://avatars.steamstatic.com/35f2380550d93f10cbad5290808e38752c3046ea_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "f38af6dd-3ea2-4820-be71-1fae67fc0e90",
+                "steam64": "76561198841590554",
+                "displayName": "xiaoxianzii",
+                "avatarUrl": "https://avatars.steamstatic.com/708570ce8fa16e41f9bb160fef33838cae849a73_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "109a9621-d911-46f4-b3a2-2fb2e4004804",
+                "steam64": "76561199274998712",
+                "displayName": "秋水三尺",
+                "avatarUrl": "https://avatars.steamstatic.com/0b049dae0bd68549f2f4eaea33efaaf96cbb5449_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "3eea6a33-a0f2-4a95-9a64-ed90e0f4c952",
+                "steam64": "76561199021038452",
+                "displayName": "尼尼孩孩没这冠军",
+                "avatarUrl": "https://avatars.steamstatic.com/e692b33c4f7e2ffc1d8484d58afc8bc316b9a734_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "8928e5de-44c5-4ac1-bd9d-5879b3ab1713",
+                "steam64": "76561199654243712",
+                "displayName": "浅间静水",
+                "avatarUrl": "https://avatars.steamstatic.com/3f5e9daea59216d7fe13df4e031d3537580e5e21_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        }
+      },
+      "maps": [
+        {
+          "mapId": "e7d6053f-a1de-4cd0-a6f9-b8f20a0d88d6",
+          "mapOrder": 1,
+          "mapName": "de_dust2",
+          "pickedByEntryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "teamAStartSide": "ct",
+          "scoreA": 8,
+          "scoreB": 13,
+          "completedAt": "2026-05-24T06:46:24.289Z"
+        },
+        {
+          "mapId": "c55a3a85-61b6-43bb-9a94-2abc52e0556f",
+          "mapOrder": 2,
+          "mapName": "de_mirage",
+          "pickedByEntryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "teamAStartSide": "ct",
+          "scoreA": 13,
+          "scoreB": 10,
+          "completedAt": "2026-05-24T06:46:51.584Z"
+        },
+        {
+          "mapId": "9195d671-831f-4461-8c87-feefcceae0fa",
+          "mapOrder": 3,
+          "mapName": "de_ancient",
+          "pickedByEntryId": null,
+          "teamAStartSide": "ct",
+          "scoreA": 13,
+          "scoreB": 11,
+          "completedAt": "2026-05-24T06:47:21.633Z"
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "ban",
+          "mapName": "de_inferno",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": null
+        },
+        {
+          "stepOrder": 2,
+          "actionType": "ban",
+          "mapName": "de_overpass",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": null
+        },
+        {
+          "stepOrder": 3,
+          "actionType": "pick",
+          "mapName": "de_dust2",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": "t"
+        },
+        {
+          "stepOrder": 4,
+          "actionType": "pick",
+          "mapName": "de_mirage",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": "ct"
+        },
+        {
+          "stepOrder": 5,
+          "actionType": "ban",
+          "mapName": "de_nuke",
+          "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+          "side": null
+        },
+        {
+          "stepOrder": 6,
+          "actionType": "ban",
+          "mapName": "de_anubis",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": null
+        },
+        {
+          "stepOrder": 7,
+          "actionType": "decider",
+          "mapName": "de_ancient",
+          "entryId": null,
+          "side": null
+        }
+      ],
+      "commentators": []
+    },
+    "e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd": {
+      "schemaVersion": "rivalhub.broadcast-manifest.v1",
+      "revision": "rivals-rehearsal-2026-09-29-e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd",
+      "match": {
+        "matchId": "e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd",
+        "competition": {
+          "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+          "slug": "2026-nju-rivals",
+          "name": "2026 NJU Rivals",
+          "logoUrl": null,
+          "themeColor": "#f97316"
+        },
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageKey": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "entryRound": null,
+        "matchLabel": null,
+        "stakesLabel": null,
+        "mapPool": [
+          "de_mirage",
+          "de_inferno",
+          "de_nuke",
+          "de_ancient",
+          "de_dust2",
+          "de_anubis",
+          "de_overpass"
+        ],
+        "scheduledAt": "2026-05-24T11:00:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-24T12:50:00.000Z",
+        "scoreA": 2,
+        "scoreB": 0,
+        "isForfeit": false
+      },
+      "entrants": {
+        "a": {
+          "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "name": "車一进一宝贝队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/bd8e019b-be34-46c9-af92-12cfef45cccb/1778943079776.jpg",
+          "roster": {
+            "rosterId": "4c3cd8b3-b6e5-4d74-849c-05777e0362a6",
+            "players": [
+              {
+                "playerId": "af8380f3-ad7d-459d-880a-2d0d06383d70",
+                "steam64": "76561199190512662",
+                "displayName": "ALKAID",
+                "avatarUrl": "https://avatars.steamstatic.com/88ca271e657a0882145b8764db8c4fdb7ea4c128_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "2ae60ea6-9d61-4b24-ad14-dc3f3822e56a",
+                "steam64": "76561198099976471",
+                "displayName": "車一进一/Scream SAIYAJIN",
+                "avatarUrl": "https://avatars.steamstatic.com/c45f917b6abfd5fd923c4184f8800e43fdedac69_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "4789dcd6-9245-4cd0-97a8-58e7726a22f7",
+                "steam64": "76561199132525473",
+                "displayName": "w1nDK1NG",
+                "avatarUrl": "https://avatars.steamstatic.com/c4de13f79668bf0dbcefc318419d499be3c8c66c_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "bd43989a-0321-4085-8592-5e31daba6471",
+                "steam64": "76561199066210656",
+                "displayName": "小火锅",
+                "avatarUrl": "https://avatars.steamstatic.com/6c8f5744526985e9139cf9f61b1dff93544964af_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "966b1c03-12d6-421c-a110-f4feb9ea3083",
+                "steam64": "76561199515668506",
+                "displayName": "Badwoman",
+                "avatarUrl": "https://avatars.steamstatic.com/0c90863373696df921a167d4d0c32d070d8987b0_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "6fccdf46-ff92-494e-a4bc-4596d6e06d37",
+                "steam64": "76561198819083001",
+                "displayName": "Lv.Zy",
+                "avatarUrl": "https://avatars.steamstatic.com/68f2492942ac90bd0c0da1473db32d6c20769e28_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "29cbc2c4-c2e2-45d5-83a6-477c1bb1f363",
+                "steam64": "76561199387165736",
+                "displayName": "濑名紫阳花",
+                "avatarUrl": "https://avatars.steamstatic.com/91e6b3dbd206734685955c4dede293236a6e97fe_full.jpg",
+                "isStarter": true
+              }
+            ]
+          }
+        },
+        "b": {
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "name": "她还爱我对不 队",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png",
+          "roster": {
+            "rosterId": "fa61cf1a-5c78-426c-8abb-9a2171d8dd87",
+            "players": [
+              {
+                "playerId": "55c21d35-9473-4555-9b6a-7204463155c0",
+                "steam64": "76561198408992583",
+                "displayName": "小豆泥",
+                "avatarUrl": "https://avatars.steamstatic.com/8ecf7dbda64061330461f0c081aaf1b7b27b2ab8_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "5959f5cf-6f73-4527-bd58-611c51f78b07",
+                "steam64": "76561198985185500",
+                "displayName": "Tomato:Debu",
+                "avatarUrl": "https://avatars.steamstatic.com/99d195ead4cb96c8ec410d4454d6dee874408f73_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "6a3f413b-d5cb-48da-8d10-7096c7f8035c",
+                "steam64": "76561199086895887",
+                "displayName": "同时取悦三个女人",
+                "avatarUrl": "https://avatars.steamstatic.com/16f1d605cd678ecc28577ad3c5a95a79abf4b678_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "88218f6e-1fb8-4adb-bae0-969adcf4af59",
+                "steam64": "76561198804455016",
+                "displayName": "Asking",
+                "avatarUrl": "https://avatars.steamstatic.com/7c8762347ad93a9b00b3e90f72ff91c09b5be60b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "914de6bf-9554-4516-baef-07c30e95c381",
+                "steam64": "76561199079259274",
+                "displayName": "Tropk1ngX",
+                "avatarUrl": "https://avatars.steamstatic.com/63c072a02eaf03a85b6794d328807fc0bceb6478_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "001066f8-e186-4cdd-8e21-5828abf0e63f",
+                "steam64": "76561199246734739",
+                "displayName": "浪里个浪",
+                "avatarUrl": "https://avatars.steamstatic.com/31ef70c8d8755e256b13bf187bdd0afd0581f49b_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "d040b027-2e4c-4a9e-949d-a9196522d0cd",
+                "steam64": "76561199447519397",
+                "displayName": "施浩严",
+                "avatarUrl": "https://avatars.steamstatic.com/084af891daa18ba206ff6cf6bf399b4233377b2b_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        }
+      },
+      "maps": [
+        {
+          "mapId": "0690d26c-e4d8-40ed-84b0-ad0a8d30e6ab",
+          "mapOrder": 1,
+          "mapName": "de_dust2",
+          "pickedByEntryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "teamAStartSide": "t",
+          "scoreA": 13,
+          "scoreB": 11,
+          "completedAt": "2026-05-24T14:50:11.052Z"
+        },
+        {
+          "mapId": "477985e0-f993-4bb8-a18c-7e31304d6ca1",
+          "mapOrder": 2,
+          "mapName": "de_ancient",
+          "pickedByEntryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "teamAStartSide": "t",
+          "scoreA": 13,
+          "scoreB": 3,
+          "completedAt": "2026-05-24T14:51:11.504Z"
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "ban",
+          "mapName": "de_inferno",
+          "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "side": null
+        },
+        {
+          "stepOrder": 2,
+          "actionType": "ban",
+          "mapName": "de_mirage",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 3,
+          "actionType": "pick",
+          "mapName": "de_dust2",
+          "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "side": "t"
+        },
+        {
+          "stepOrder": 4,
+          "actionType": "pick",
+          "mapName": "de_ancient",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": "ct"
+        },
+        {
+          "stepOrder": 5,
+          "actionType": "ban",
+          "mapName": "de_overpass",
+          "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+          "side": null
+        },
+        {
+          "stepOrder": 6,
+          "actionType": "ban",
+          "mapName": "de_anubis",
+          "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+          "side": null
+        },
+        {
+          "stepOrder": 7,
+          "actionType": "decider",
+          "mapName": "de_nuke",
+          "entryId": null,
+          "side": "t"
+        }
+      ],
+      "commentators": []
+    },
+    "d1a67dd4-3268-4612-acab-8c08b74e08e4": {
+      "schemaVersion": "rivalhub.broadcast-manifest.v1",
+      "revision": "rivals-rehearsal-2026-09-29-d1a67dd4-3268-4612-acab-8c08b74e08e4",
+      "match": {
+        "matchId": "d1a67dd4-3268-4612-acab-8c08b74e08e4",
+        "competition": {
+          "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+          "slug": "2026-nju-rivals",
+          "name": "2026 NJU Rivals",
+          "logoUrl": null,
+          "themeColor": "#f97316"
+        },
+        "status": "finished",
+        "format": "bo3",
+        "stage": "playoff",
+        "stageKey": "playoff",
+        "stageLabel": "正赛",
+        "round": null,
+        "roundLabel": null,
+        "entryRound": null,
+        "matchLabel": null,
+        "stakesLabel": null,
+        "mapPool": [
+          "de_mirage",
+          "de_inferno",
+          "de_nuke",
+          "de_ancient",
+          "de_dust2",
+          "de_anubis",
+          "de_overpass"
+        ],
+        "scheduledAt": "2026-05-25T12:30:00.000Z",
+        "startedAt": null,
+        "completedAt": "2026-05-25T14:23:33.671Z",
+        "scoreA": 0,
+        "scoreB": 2,
+        "isForfeit": false
+      },
+      "entrants": {
+        "a": {
+          "entryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "name": "NJU美少女组合",
+          "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/37fff114-0b00-45bf-bd07-e999792c2c7a/1778919138813.png",
+          "roster": {
+            "rosterId": "33d82293-6ef0-4a6e-a990-7daf44e3cd1c",
+            "players": [
+              {
+                "playerId": "5834e637-25aa-4bb9-9771-eecbf187fa22",
+                "steam64": "76561198974106099",
+                "displayName": "Shiroha",
+                "avatarUrl": "https://avatars.steamstatic.com/9ab854c23ad39c58c4a0dcb78a9104a2cd9691d4_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "5ee1bad8-d017-47f9-96f9-5de1a51f5b28",
+                "steam64": "76561198846485399",
+                "displayName": "Take On Me",
+                "avatarUrl": "https://avatars.steamstatic.com/134a88121d9de22c5cbb31b4a4e02f398f6fb85a_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "b73dd44e-769c-465e-bb2d-5c493deabcd1",
+                "steam64": "76561199182933692",
+                "displayName": "不争",
+                "avatarUrl": "https://avatars.steamstatic.com/4c3e8b6973ffccacae96940969d53ac78909d0fa_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "dc1283a7-6550-481b-b28b-a615d1552a4a",
+                "steam64": "76561199070916290",
+                "displayName": "XXXTECH",
+                "avatarUrl": "https://avatars.steamstatic.com/c2c51159307ac0e5c3960f0df31732a07cd85cd0_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "d18e8d4c-2f03-4869-ac1c-8441b41355a0",
+                "steam64": "76561199384856948",
+                "displayName": "who1s2sq",
+                "avatarUrl": "https://avatars.steamstatic.com/3fb63796947f04aa615712163e8f6e67fc15b7df_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "af3545c2-b122-457d-a58e-bafe32b56669",
+                "steam64": "76561198849479923",
+                "displayName": "鹿衔草",
+                "avatarUrl": "https://avatars.steamstatic.com/13c96393ec749bf7b698eae56a550526c6f77fa6_full.jpg",
+                "isStarter": true
+              }
+            ]
+          }
+        },
+        "b": {
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "name": "暴躁南梁",
+          "logoUrl": null,
+          "roster": {
+            "rosterId": "3b3ce913-ad22-463a-926a-85e70a9e9f88",
+            "players": [
+              {
+                "playerId": "001b61eb-bb3d-4a07-89bc-3345036d9224",
+                "steam64": "76561199523601295",
+                "displayName": "J0kerzzz",
+                "avatarUrl": "https://avatars.steamstatic.com/acacec54c2cb39d998efbca9d09aa8295300b935_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "b484633f-b60b-4521-be7b-46c76d07912a",
+                "steam64": "76561198148342864",
+                "displayName": "SUMOR^ ^",
+                "avatarUrl": "https://avatars.steamstatic.com/9b1cfb04b0086cb967819750f2f2bc0ff2636ad4_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "30710a30-361e-46f4-9b94-5b33c538ac53",
+                "steam64": "76561199515266848",
+                "displayName": "GhostBlade",
+                "avatarUrl": "https://avatars.steamstatic.com/35f2380550d93f10cbad5290808e38752c3046ea_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "f38af6dd-3ea2-4820-be71-1fae67fc0e90",
+                "steam64": "76561198841590554",
+                "displayName": "xiaoxianzii",
+                "avatarUrl": "https://avatars.steamstatic.com/708570ce8fa16e41f9bb160fef33838cae849a73_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "109a9621-d911-46f4-b3a2-2fb2e4004804",
+                "steam64": "76561199274998712",
+                "displayName": "秋水三尺",
+                "avatarUrl": "https://avatars.steamstatic.com/0b049dae0bd68549f2f4eaea33efaaf96cbb5449_full.jpg",
+                "isStarter": false
+              },
+              {
+                "playerId": "3eea6a33-a0f2-4a95-9a64-ed90e0f4c952",
+                "steam64": "76561199021038452",
+                "displayName": "尼尼孩孩没这冠军",
+                "avatarUrl": "https://avatars.steamstatic.com/e692b33c4f7e2ffc1d8484d58afc8bc316b9a734_full.jpg",
+                "isStarter": true
+              },
+              {
+                "playerId": "8928e5de-44c5-4ac1-bd9d-5879b3ab1713",
+                "steam64": "76561199654243712",
+                "displayName": "浅间静水",
+                "avatarUrl": "https://avatars.steamstatic.com/3f5e9daea59216d7fe13df4e031d3537580e5e21_full.jpg",
+                "isStarter": false
+              }
+            ]
+          }
+        }
+      },
+      "maps": [
+        {
+          "mapId": "8f7af925-98e8-4137-80a3-7b1b7e0779a0",
+          "mapOrder": 1,
+          "mapName": "de_overpass",
+          "pickedByEntryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "teamAStartSide": "t",
+          "scoreA": 9,
+          "scoreB": 13,
+          "completedAt": "2026-05-25T14:23:25.853Z"
+        },
+        {
+          "mapId": "399c416b-0d61-4802-9154-09d0f615c3af",
+          "mapOrder": 2,
+          "mapName": "de_dust2",
+          "pickedByEntryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "teamAStartSide": "ct",
+          "scoreA": 10,
+          "scoreB": 13,
+          "completedAt": "2026-05-25T14:23:33.662Z"
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "ban",
+          "mapName": "de_anubis",
+          "entryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "side": null
+        },
+        {
+          "stepOrder": 2,
+          "actionType": "ban",
+          "mapName": "de_nuke",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": null
+        },
+        {
+          "stepOrder": 3,
+          "actionType": "pick",
+          "mapName": "de_overpass",
+          "entryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "side": "t"
+        },
+        {
+          "stepOrder": 4,
+          "actionType": "pick",
+          "mapName": "de_dust2",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": "t"
+        },
+        {
+          "stepOrder": 5,
+          "actionType": "ban",
+          "mapName": "de_inferno",
+          "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+          "side": null
+        },
+        {
+          "stepOrder": 6,
+          "actionType": "ban",
+          "mapName": "de_ancient",
+          "entryId": "37fff114-0b00-45bf-bd07-e999792c2c7a",
+          "side": null
+        },
+        {
+          "stepOrder": 7,
+          "actionType": "decider",
+          "mapName": "de_mirage",
+          "entryId": null,
+          "side": "ct"
+        }
+      ],
+      "commentators": []
+    }
+  }
+}

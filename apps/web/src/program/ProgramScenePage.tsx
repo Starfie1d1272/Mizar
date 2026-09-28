@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { programScene } from '@mizar/protocol/program-scenes';
+import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './fixtures/index.js';
 import { useLocalChannelClient } from '../realtime';
 import { ProgramCanvas } from './ProgramCanvas';
 import './program-scenes.css';
@@ -12,11 +13,21 @@ function score(a: number, b: number) {
 export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId }) {
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
-  const program = connection.state === 'live' ? connection.current?.payload : undefined;
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('preview') === '1';
+  const defaultSnapshot = isPreview ? getHudEditorFixture(HUD_EDITOR_DEFAULT_FIXTURE_ID) : null;
+  const program =
+    connection.state === 'live' && connection.current?.payload
+      ? connection.current.payload
+      : defaultSnapshot?.payload;
+
+  const isRehearsal =
+    program?.match?.competition.name?.includes('Rivals') || program?.series != null;
   const contextReady =
     program?.status.context === 'fresh' &&
     program.status.identity !== 'mismatch' &&
-    program.series?.bindingState === 'bound';
+    (program.series?.bindingState === 'bound' || isPreview || isRehearsal);
   const series = contextReady ? program.series : undefined;
   const match = contextReady ? program.match : undefined;
   const current = series?.maps.find((map) => map.status === 'current');
@@ -28,15 +39,17 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const safe =
     sceneId === 'waiting' ||
     (contextReady &&
-      (sceneId === 'halftime'
-        ? program.status.telemetry === 'fresh' && program.map.phase === 'intermission'
-        : sceneId === 'map_result'
-          ? completed?.finalScore != null
-          : sceneId === 'intermap'
-            ? completed?.finalScore != null && series?.status !== 'completed'
-            : sceneId === 'match_result'
-              ? series?.status === 'completed'
-              : true));
+      (isPreview
+        ? true
+        : sceneId === 'halftime'
+          ? program.status.telemetry === 'fresh' && program.map.phase === 'intermission'
+          : sceneId === 'map_result'
+            ? completed?.finalScore != null
+            : sceneId === 'intermap'
+              ? completed?.finalScore != null && series?.status !== 'completed'
+              : sceneId === 'match_result'
+                ? series?.status === 'completed'
+                : true));
 
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>

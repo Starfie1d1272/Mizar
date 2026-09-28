@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
 import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
-import { Button, Field, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
+import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
+import { openRivalHubAuthorization } from '../preparation/client';
 
 type Connection = {
   paired: boolean;
@@ -26,10 +26,9 @@ type Schedule = {
 export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches' | 'settings' }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
-  const [baseUrl, setBaseUrl] = useState('');
-  const [code, setCode] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [pairing, setPairing] = useState(false);
+  const [pairingStarting, setPairingStarting] = useState(false);
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [rePairing, setRePairing] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -84,33 +83,58 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
     };
   }, []);
 
-  async function handlePair(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPairing(true);
+  useEffect(() => {
+    if (!pairing) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await fetch('/operator/rivalhub/pairing/poll', { method: 'POST' });
+        if (!response.ok) return;
+        const result = (await response.json()) as { status: string };
+        if (!active) return;
+        if (result.status === 'authorized') {
+          setPairing(false);
+          setRePairing(false);
+          setAuthorizeUrl(null);
+          setMessage('RivalHub 已连接。');
+          await refresh();
+        } else if (result.status === 'expired' || result.status === 'idle') {
+          setPairing(false);
+          setAuthorizeUrl(null);
+          setError('授权已过期，请重新连接。');
+        }
+      } catch {
+        // A brief network interruption does not cancel an open authorization.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 1000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [pairing, refresh]);
+
+  async function handlePair() {
+    const popup = window.__TAURI_INTERNALS__ ? null : window.open('', 'mizar-rivalhub');
+    setPairingStarting(true);
     setError(null);
     setMessage(null);
     try {
-      const response = await fetch('/operator/rivalhub/pair', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: baseUrl.trim(),
-          code: code.trim(),
-          displayName: displayName.trim(),
-        }),
-      });
+      const response = await fetch('/operator/rivalhub/pairing/start', { method: 'POST' });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { message?: string } | null;
-        throw new Error(data?.message ?? '连接失败。');
+        throw new Error(data?.message ?? '无法打开授权页面，请重试。');
       }
-      setCode('');
-      setRePairing(false);
-      setMessage('赛事连接已建立。');
-      await refresh();
+      const result = (await response.json()) as { authorizeUrl: string };
+      await openRivalHubAuthorization(result.authorizeUrl, popup);
+      setAuthorizeUrl(result.authorizeUrl);
+      setPairing(true);
     } catch (err) {
+      popup?.close();
       setError(err instanceof Error ? err.message : '连接未完成。');
     } finally {
-      setPairing(false);
+      setPairingStarting(false);
     }
   }
 
@@ -157,55 +181,44 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
     <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
       {!connection?.paired || (mode === 'settings' && rePairing) ? (
         mode === 'matches' ? (
-          <a href="/settings?tab=rivalhub">前往设置连接 RivalHub</a>
+          <Button
+            onClick={() => {
+              window.location.href = '/settings?tab=rivalhub';
+            }}
+          >
+            连接 RivalHub
+          </Button>
         ) : (
           <>
             <div className="operator-rivalhub-header">
               <div>
                 <h2>连接 RivalHub 赛事</h2>
-                <p>输入赛事网站地址、设备名称与管理员提供的一次性连接码以连接赛事。</p>
+                <p>在 RivalHub 登录并确认授权，完成后会自动连接。</p>
               </div>
             </div>
-            <form onSubmit={(e) => void handlePair(e)} className="operator-rivalhub-form">
-              <Field
-                label="赛事网站地址"
-                type="url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://赛事网站"
-                required
-              />
-              <Field
-                label="设备名称"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="例如：主舞台制播机"
-                required
-              />
-              <Field
-                label="一次性连接码"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                maxLength={22}
-                placeholder="22 位一次性连接码"
-                required
-              />
+            <div className="operator-rivalhub-form">
               <div>
                 <Button
-                  type="submit"
                   variant="primary"
-                  loading={pairing}
-                  disabled={pairing || !baseUrl.trim() || !displayName.trim() || !code.trim()}
+                  loading={pairingStarting}
+                  disabled={pairing || pairingStarting}
+                  onClick={() => void handlePair()}
                 >
                   连接 RivalHub
                 </Button>
+                {pairing && authorizeUrl ? (
+                  <Button onClick={() => void openRivalHubAuthorization(authorizeUrl)}>
+                    重新打开授权页面
+                  </Button>
+                ) : null}
                 {connection?.paired ? (
-                  <Button disabled={pairing} onClick={() => setRePairing(false)}>
+                  <Button disabled={pairingStarting} onClick={() => setRePairing(false)}>
                     取消
                   </Button>
                 ) : null}
               </div>
-            </form>
+              {pairing ? <p role="status">正在等待 RivalHub 授权…</p> : null}
+            </div>
           </>
         )
       ) : (
@@ -213,7 +226,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           <div className="operator-rivalhub-header">
             <div>
               <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
-              <p>已配对设备：{connection.displayName}</p>
+              <p>
+                {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
+              </p>
             </div>
             <StatusPill tone="success">已连接</StatusPill>
           </div>

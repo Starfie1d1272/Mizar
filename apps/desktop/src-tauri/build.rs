@@ -10,6 +10,7 @@ fn main() {
                 "open_main",
                 "present_production",
                 "open_tool",
+                "open_rivalhub_authorization",
                 "gsi_status",
                 "configure_gsi",
             ]),

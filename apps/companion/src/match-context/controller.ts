@@ -201,6 +201,23 @@ export class MatchContextController {
     return binding;
   }
 
+  /** Development rehearsal uses the production conversion path without persisting a fake authority. */
+  activateFixture(input: unknown): MatchContextBinding {
+    const validated = validateBroadcastManifest(input);
+    if (!validated.ok) throw new Error('Rivals 示例比赛资料无效。');
+    const context = toMatchDocumentV1(validated.value);
+    this.activeSelectionGeneration += 1;
+    const binding: MatchContextBinding = {
+      manifest: validated.value,
+      context,
+      origin: 'fixture',
+      freshness: 'fresh',
+      diagnostics: validated.diagnostics,
+    };
+    this.setActive(binding);
+    return binding;
+  }
+
   getPendingOnlineCandidate(): PendingOnlineMatchCandidate | undefined {
     const candidate = this.pendingOnlineCandidate;
     return candidate === undefined
