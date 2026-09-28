@@ -302,24 +302,21 @@ export class OutputService {
     )
       return false;
     if (event.kind === 'map_ended') {
-      const progressMap = bundle.operator.seriesProgress?.maps.find(
-        (map) => map.executionMapEpoch === event.cursor.mapEpoch,
-      );
-      const contextMap =
-        progressMap === undefined
-          ? undefined
-          : this.binding.context.maps.find((map) => map.mapOrder === progressMap.mapOrder);
+      const series = bundle.program.series;
+      const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
+      const resultMap =
+        mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
       if (
         bundle.program.map.phase !== 'gameover' ||
         bundle.program.map.name !== event.mapName ||
         bundle.program.map.score.ct !== event.payload.scoreCT ||
         bundle.program.map.score.t !== event.payload.scoreT ||
-        progressMap?.status !== 'completed' ||
-        progressMap.finalScore === null ||
-        progressMap.mapName !== event.mapName ||
-        progressMap.finalScore.a !== event.payload.scoreA ||
-        progressMap.finalScore.b !== event.payload.scoreB ||
-        contextMap?.mapId !== event.mapId
+        resultMap?.status !== 'completed' ||
+        resultMap.finalScore === null ||
+        resultMap.mapId !== event.mapId ||
+        resultMap.mapName !== event.mapName ||
+        resultMap.finalScore.a !== event.payload.scoreA ||
+        resultMap.finalScore.b !== event.payload.scoreB
       )
         return false;
     }
