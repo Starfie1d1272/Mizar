@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
-test('Workspace creates and edits a local match before BP', async ({ page, context }) => {
+test('Preparation flow creates and edits a local match before BP', async ({ page, context }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-local-ui-'));
   const app = buildApp({
     matchManifestPath: join(directory, 'match.json'),
@@ -30,7 +30,7 @@ test('Workspace creates and edits a local match before BP', async ({ page, conte
         });
       },
     );
-    await page.goto('/workspace');
+    await page.goto('/matches');
     const form = page.locator('.workspace-local-match form').first();
     await form.locator('input').nth(0).fill('甲队');
     await form.locator('input').nth(1).fill('乙队');
@@ -38,8 +38,7 @@ test('Workspace creates and edits a local match before BP', async ({ page, conte
     await expect(page.locator('.workspace-local-match select').last()).toContainText(
       '甲队 vs 乙队',
     );
-    await page.locator('.workspace-local-editor summary').click();
-    await expect(page.locator('.workspace-local-editor')).toContainText('完善当前比赛');
+    await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');
   } finally {

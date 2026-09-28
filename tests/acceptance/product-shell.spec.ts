@@ -1,17 +1,17 @@
 import { expect, test } from './companion-isolation.js';
 
-test('qualification help uses the shared product shell and development host diagnostics', async ({
+test('qualification help uses the preparation shell and development host diagnostics', async ({
   page,
 }) => {
   await page.goto('/qualification');
 
   const topbar = page.locator('.product-topbar');
   await expect(page.getByRole('heading', { name: '现场验收', exact: true })).toBeVisible();
-  await expect(topbar.getByRole('link', { name: '现场验收' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
   await expect(topbar).toBeVisible();
+  const nav = topbar.getByRole('navigation', { name: '制作导航' });
+  await expect(nav.getByRole('link', { name: '总览' })).toHaveAttribute('href', '/');
+  await expect(nav.getByRole('link', { name: '比赛' })).toHaveAttribute('href', '/matches');
+  await expect(page.getByRole('link', { name: '返回准备中心' })).toHaveAttribute('href', '/');
 
   const response = await page.request.get('/debug/hosts');
   expect(response.ok()).toBe(true);

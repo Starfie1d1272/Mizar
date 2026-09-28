@@ -595,7 +595,7 @@ export function App() {
               环境。
             </p>
             <p>普通制作模式不会自动开启验收记录。</p>
-            <a href="/operator">返回制作控制</a>
+            <a href="/">返回准备中心</a>
           </section>
         </main>
       </OperatorShell>
@@ -634,10 +634,10 @@ export function App() {
         <main className="operator-shell">
           <header className="product-heading">
             <h1>页面不存在</h1>
-            <p>404 · 请检查地址，或返回制作控制继续操作。</p>
+            <p>404 · 请检查地址，或返回准备中心继续操作。</p>
           </header>
           <div className="dashboard-links">
-            <a href="/operator">返回制作控制</a>
+            <a href="/">返回准备中心</a>
           </div>
         </main>
       </OperatorShell>

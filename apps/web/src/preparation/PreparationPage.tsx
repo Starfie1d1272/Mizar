@@ -248,7 +248,7 @@ export function PreparationPage() {
               <h2>RivalHub</h2>
               <RivalHubPreparationPanel mode="matches" />
             </details>
-            {local && selected ? (
+            {selected ? (
               <>
                 {tab === 'roster' ? (
                   <RosterCapture
