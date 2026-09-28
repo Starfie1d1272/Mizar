@@ -142,7 +142,7 @@ export function RivalHubPreparationPanel() {
     setMessage(null);
     try {
       await switchToRivalhubBp(bpWorkspace.contextRevision, bpWorkspace.pendingRivalhub.revision);
-      setMessage('在线比赛已加载。进入现场工作区后将自动作为实时数据源。');
+      setMessage('在线比赛已加载。进入现场工作区后会检查实时数据源；无人占用时自动认领。');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认在线比赛失败。');
