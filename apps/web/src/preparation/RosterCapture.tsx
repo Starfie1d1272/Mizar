@@ -9,6 +9,7 @@ export interface RosterCandidate {
   ctName: string | null;
   tName: string | null;
   ctEntrant: 'a' | 'b' | null;
+  teamOptions: { ct: { teamId: string; name: string }[]; t: { teamId: string; name: string }[] };
   ct: { steam64: string; displayName: string | null }[];
   t: { steam64: string; displayName: string | null }[];
 }
@@ -33,9 +34,13 @@ export function RosterCapture({
   const [a, setA] = useState('');
   const [b, setB] = useState('');
   const [format, setFormat] = useState('bo3');
+  const [teamAId, setTeamAId] = useState('');
+  const [teamBId, setTeamBId] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const autoCandidate = autoOpen && !autoDismissed ? result?.candidate : null;
+  // Freeze the automatic preview: later polls must expire it, not reuse old Team choices.
+  if (autoCandidate && selectedCandidate === null) setSelectedCandidate(autoCandidate);
   const candidate = selectedCandidate ?? autoCandidate ?? null;
   const isShown = shown || Boolean(autoCandidate);
   if (create && !candidate && !shown) return null;
@@ -46,6 +51,8 @@ export function RosterCapture({
         onClick={() => {
           setSelectedCandidate(result?.candidate ?? null);
           setCtEntrant('');
+          setTeamAId('');
+          setTeamBId('');
           setShown(true);
           setMessage('');
         }}
@@ -74,6 +81,34 @@ export function RosterCapture({
           </div>
           {create ? (
             <>
+              {(['ct', 't'] as const).map((side) => {
+                const options = candidate.teamOptions?.[side] ?? [];
+                return options.length ? (
+                  <div key={side}>
+                    <p>
+                      检测到已保存队伍：{options.map((team) => team.name).join('、')}
+                      。请选择复用队标与名单，或作为新队伍。
+                    </p>
+                    <Select
+                      label={`${side.toUpperCase()} 队伍资料`}
+                      value={side === 'ct' ? teamAId : teamBId}
+                      onChange={(e) => (side === 'ct' ? setTeamAId : setTeamBId)(e.target.value)}
+                    >
+                      <option value="">请选择</option>
+                      <option value="new">作为新队伍</option>
+                      {options.map((team) => (
+                        <option
+                          key={team.teamId}
+                          value={team.teamId}
+                          disabled={team.teamId === (side === 'ct' ? teamBId : teamAId)}
+                        >
+                          复用已保存队伍 {team.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                ) : null;
+              })}
               {!candidate.ctName ? (
                 <Field label="CT 队伍名称" value={a} onChange={(e) => setA(e.target.value)} />
               ) : null}
@@ -110,7 +145,12 @@ export function RosterCapture({
             disabled={
               candidate.revision !== result?.candidate?.revision ||
               (!create && !candidate.ctEntrant && !ctEntrant) ||
-              (create && ((!candidate.ctName && !a.trim()) || (!candidate.tName && !b.trim())))
+              (create &&
+                ((!candidate.ctName && !a.trim() && (!teamAId || teamAId === 'new')) ||
+                  (!candidate.tName && !b.trim() && (!teamBId || teamBId === 'new')))) ||
+              (create &&
+                ((candidate.teamOptions?.ct.length > 0 && !teamAId) ||
+                  (candidate.teamOptions?.t.length > 0 && !teamBId)))
             }
             onClick={() => {
               setBusy(true);
@@ -123,6 +163,8 @@ export function RosterCapture({
                 teamA: a,
                 teamB: b,
                 format,
+                ...(teamAId && teamAId !== 'new' ? { teamAId } : {}),
+                ...(teamBId && teamBId !== 'new' ? { teamBId } : {}),
               })
                 .then(() => {
                   setShown(false);

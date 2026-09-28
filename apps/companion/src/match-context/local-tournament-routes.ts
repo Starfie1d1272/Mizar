@@ -59,6 +59,7 @@ export function registerLocalTournamentRoutes(
       options.projections?.getRosterEvidence() ?? null,
       document,
       controller.getActiveRevision(),
+      store.getSnapshot().teams,
     );
   };
   app.get('/local/v1/roster-candidate', (_request, reply) =>
@@ -80,23 +81,47 @@ export function registerLocalTournamentRoutes(
         body.candidateRevision !== current.revision
       )
         return reply.code(409).send({ message: '服务器名单已变化，请重新识别。' });
+      const continuityRevision = () =>
+        rosterCandidate(
+          options.projections?.getRosterEvidence() ?? null,
+          null,
+          controller.getActiveRevision(),
+        )?.revision;
+      const expectedContinuity = continuityRevision();
       const canCommit = () => candidate()?.revision === current.revision;
+      // The commit itself updates Team templates; post-commit activation checks observation only.
+      const canActivate = () => continuityRevision() === expectedContinuity;
       try {
         if (operation === 'create-from-server') {
           if (controller.getActiveBinding() || !['bo1', 'bo3', 'bo5'].includes(String(body.format)))
             return reply.code(409).send({ message: '请先核对当前比赛与赛制。' });
+          const teamId = (value: unknown) => {
+            if (value === undefined) return undefined;
+            if (
+              typeof value !== 'string' ||
+              !store.getSnapshot().teams.some((team) => team.teamId === value)
+            )
+              throw new Error('local_team_not_found');
+            return value;
+          };
+          const teamAId = teamId(body.teamAId);
+          const teamBId = teamId(body.teamBId);
+          const existingPlayers = (id: string | undefined) =>
+            store.getSnapshot().teams.find((team) => team.teamId === id)?.players ?? [];
           const document = await store.createMatch(
             {
               teamA: current.ctName ?? (typeof body.teamA === 'string' ? body.teamA : ''),
               teamB: current.tName ?? (typeof body.teamB === 'string' ? body.teamB : ''),
+              ...(teamAId === undefined ? {} : { teamAId }),
+              ...(teamBId === undefined ? {} : { teamBId }),
               format: body.format as 'bo1' | 'bo3' | 'bo5',
               mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
-              playersA: mergeObservedStarters([], current.ct),
-              playersB: mergeObservedStarters([], current.t),
+              playersA: mergeObservedStarters(existingPlayers(teamAId), current.ct),
+              playersB: mergeObservedStarters(existingPlayers(teamBId), current.t),
             },
             canCommit,
           );
-          if (canCommit()) controller.activateLocalDocument(document);
+          if (canActivate()) controller.activateLocalDocument(document);
         } else {
           const active = controller.getActiveBinding();
           if (active?.origin !== 'local' || active.localAuthoringMode !== 'standalone')
@@ -129,7 +154,7 @@ export function registerLocalTournamentRoutes(
             },
             canCommit,
           );
-          if (canCommit()) controller.activateLocalDocument(updated);
+          if (canActivate()) controller.activateLocalDocument(updated);
         }
         return { ok: true };
       } catch {

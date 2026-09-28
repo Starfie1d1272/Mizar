@@ -160,15 +160,17 @@ export class LocalTournamentStore {
             } satisfies LocalEventV1)
           : this.state.events.find((item) => item.eventId === input.eventId);
       if (event === undefined) throw new Error('local_event_not_found');
-      const a =
+      const savedA =
         input.teamAId === undefined
           ? { teamId: randomUUID(), name: teamA, logoUrl: null, players: input.playersA ?? [] }
           : this.state.teams.find((team) => team.teamId === input.teamAId);
-      const b =
+      const savedB =
         input.teamBId === undefined
           ? { teamId: randomUUID(), name: teamB, logoUrl: null, players: input.playersB ?? [] }
           : this.state.teams.find((team) => team.teamId === input.teamBId);
-      if (a === undefined || b === undefined) throw new Error('local_team_not_found');
+      if (savedA === undefined || savedB === undefined) throw new Error('local_team_not_found');
+      const a = { ...savedA, players: input.playersA ?? savedA.players };
+      const b = { ...savedB, players: input.playersB ?? savedB.players };
       if (a.teamId === b.teamId) throw new Error('local_match_entrants_equal');
       const document = parseMatchDocumentV1({
         schemaVersion: 'mizar.match-document.v1',
@@ -226,7 +228,9 @@ export class LocalTournamentStore {
                   : item,
               ),
         teams: [
-          ...this.state.teams,
+          ...this.state.teams.map((team) =>
+            team.teamId === a.teamId ? a : team.teamId === b.teamId ? b : team,
+          ),
           ...[a, b].filter((team) => !this.state.teams.some((old) => old.teamId === team.teamId)),
         ],
         matches: [...this.state.matches, document],
