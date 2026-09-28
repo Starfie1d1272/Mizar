@@ -121,6 +121,7 @@ export function RivalHubLiveSourcePanel({
 
   const handleClaim = () =>
     action(async () => {
+      const targetMatchId = connection?.activeMatchId ?? null;
       const response = await fetch('/operator/rivalhub/source/claim', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -133,7 +134,14 @@ export function RivalHubLiveSourcePanel({
       const next = (await response.json()) as Connection;
       setConnection(next);
       autoClaimRef.current.settled = true;
-      onMessage('本机已成为本场实时数据源。');
+      if (targetMatchId !== null && next.activeSourceMatchId === targetMatchId) {
+        userReleasedRef.current = null;
+        onMessage('本机已成为本场实时数据源。');
+      } else if (next.activeDeviceName) {
+        onMessage(`当前由 ${next.activeDeviceName} 提供实时数据。`);
+      } else {
+        onMessage('本场实时数据源状态已更新。');
+      }
     });
 
   const handleTakeover = () =>
@@ -150,6 +158,7 @@ export function RivalHubLiveSourcePanel({
       const next = (await response.json()) as Connection;
       setConnection(next);
       autoClaimRef.current.settled = true;
+      userReleasedRef.current = null;
       onMessage('已接管为本场数据源。');
     });
 
