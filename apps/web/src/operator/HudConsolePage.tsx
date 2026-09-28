@@ -1,4 +1,4 @@
-import { OperatorShell } from './OperatorShell';
+import { ToolShell } from '../patterns';
 import {
   Fragment,
   useCallback,
@@ -803,7 +803,7 @@ export function HudConsolePage() {
   };
 
   return (
-    <OperatorShell active="/operator/hud">
+    <ToolShell title="HUD 编辑器">
       <main className="hud-console" data-surface="hud-console">
         <header className="hud-console__header">
           <div>
@@ -1099,6 +1099,6 @@ export function HudConsolePage() {
           </div>
         ) : null}
       </main>
-    </OperatorShell>
+    </ToolShell>
   );
 }

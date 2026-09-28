@@ -1,5 +1,7 @@
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/PreparationPage';
+import { ToolShell } from './patterns';
+import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
@@ -535,7 +537,7 @@ export function DebugPage() {
   const hosts = useBrowserHostDiagnostics();
 
   return (
-    <OperatorShell active="/debug">
+    <ToolShell title="运行诊断">
       <main className="debug-shell" data-surface="debug">
         <header className="debug-header">
           <div className="debug-header__signal" aria-hidden="true">
@@ -572,7 +574,7 @@ export function DebugPage() {
 
         {state.kind === 'ready' ? <DebugContent data={state.data} hosts={hosts} /> : null}
       </main>
-    </OperatorShell>
+    </ToolShell>
   );
 }
 
@@ -619,6 +621,7 @@ export function App() {
     );
   }
 
+  if (pathname === '/preview') return <ProgramPreviewTool />;
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/workspace') return <WorkspacePreview />;
   if (pathname === '/workspace/left') return <WorkspaceLeft />;

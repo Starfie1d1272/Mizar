@@ -73,17 +73,19 @@ function localInputTime(value: string | null): string {
 }
 
 export function LocalTournamentEditor({
+  document,
   view,
   refresh,
   action,
   section = 'details',
 }: {
+  readonly document: MatchDocumentV1;
   readonly section?: 'details' | 'roster' | 'maps';
   readonly view: LocalTournamentView | null;
   readonly refresh: () => Promise<void>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
-  const selected = view?.matches.find((match) => match.matchId === view.selectedMatchId);
+  const selected = document;
   const event = view?.events.find((item) => item.eventId === selected?.competition.competitionId);
   const [draft, setDraft] = useState<MatchDocumentV1 | null>(selected ?? null);
   const [eventName, setEventName] = useState(event?.name ?? '');

@@ -234,10 +234,12 @@ fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-bp", "BP 工作台", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
-        "preview" => ("tool-preview", "节目预览", "/picture?tab=program"),
+        "preview" => ("tool-preview", "节目预览", "/preview"),
         _ => return Err("工具无法识别。".into()),
     };
     if let Some(window) = app.get_webview_window(label) {
+        window.navigate(format!("{BASE}{path}").parse().map_err(|_| "工具地址无法识别。")?)
+            .map_err(|_| "工具窗口未能恢复。")?;
         let _ = window.show();
         let _ = window.set_focus();
         return Ok(());

@@ -14,7 +14,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
   try {
     await app.ready();
     await context.route(
-      /\/(?:local\/v1\/tournament|operator\/local-match\/(?:create|save))$/,
+      /\/(?:local\/v1\/(?:tournament|match-document)|operator\/local-match\/(?:create|save))$/,
       async (route) => {
         const request = route.request();
         const response = await app.inject({

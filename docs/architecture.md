@@ -440,7 +440,9 @@ capture 写盘失败不能阻塞 GSI request hot path。`packages/testkit` 消�
 
 Companion 是本地制作控制面的唯一运行事实 owner。它提供当前能力摘要、制作生命周期 revision、ActiveLineup 派生的名单候选、OBS 当前 Program 低频缩略图和独立桌面显隐策略。高频状态仍走现有 Local Protocol projection；新增 HTTP view 只组合 owner 已有事实，不增加第二份 `RuntimeState`。
 
-`preparation | live | hidden` 仅描述当前桌面展示生命周期，不是比赛、Runtime 或 OBS 状态。对 enter/hide/finish 的写入使用 revision CAS 和本地 Origin policy；进入需要当前比赛上下文。结束释放 RivalHub 当前 source、请求等待场景并保留本地赛事数据。Tauri 只拥有窗口可见性、布局、焦点和工具窗口，不推导比赛资格或名单身份。
+`preparation | live | hidden` 仅描述当前桌面展示生命周期，不是比赛、Runtime 或 OBS 状态。对 enter/hide/finish 的写入使用 revision CAS 和本地 Origin policy；进入需要当前比赛上下文。结束先请求等待场景，再释放 RivalHub 当前 source；失败保留 live/hidden 供重试，全部成功才进入 preparation。本地赛事数据始终保留。Tauri 只拥有窗口可见性、布局、焦点和工具窗口，不推导比赛资格或名单身份。
+
+Preparation 当前比赛统一消费 `/local/v1/match-document` envelope；`/local/v1/tournament` 承接本地资产库、赛程邻域和 mutation 所需元数据。工具界面使用无 Main 导航的 ToolShell；独立 Preview 只渲染 Program scene。Host 在布置前重新发现 CS2，窗口或显示器变化后重选 work area。OBS readiness 由 Companion 组合 adapter 的连接、findings 与当前 scene 对齐事实。
 
 名单候选由 Companion 从当前 fresh Program-safe observation 与 ActiveLineup 构造，不接受浏览器提交的玩家身份。候选 revision 覆盖 context revision、source generation、map epoch 和观测成员；LocalTournamentStore 在原子文件替换前执行同步 continuity guard。服务器队名或现存规范 roster 可证明 CT/T 映射时自动映射，否则由操作者一次确认。保存合并既有玩家记录并保留替补。
 

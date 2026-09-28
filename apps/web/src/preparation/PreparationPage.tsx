@@ -1,12 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
+import type { ContextEnvelope } from '@mizar/core/match-context';
+import type { MatchDocumentV1 } from '@mizar/protocol/context';
+import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
+import { useEffect, useState } from 'react';
 import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
-import { useLocalChannelClient } from '../realtime';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import { useProgramScenes } from '../workspace/client';
-import { useObsStatus } from '../workspace/obs-client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
@@ -14,6 +14,7 @@ import { useLocalTournament } from './tournament';
 import { command, openTool, productionAction, useLocalRead, type Production } from './client';
 import { RosterCapture, type RosterCandidate } from './RosterCapture';
 import { Settings } from './Settings';
+import { ProgramPreview } from './ProgramPreview';
 import './preparation.css';
 
 const tabs = {
@@ -50,22 +51,15 @@ export function PreparationPage() {
     options?.find(([key]) => key === requestedTab)?.[0] ??
     options?.[0][0] ??
     '';
-  const client = useLocalChannelClient('operator');
-  const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
-  const operator = state.state === 'live' ? state.current?.payload : undefined;
-  const match = operator?.matchContext.summary;
+  const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
+  const match = envelope?.document;
   const { view, refresh } = useLocalTournament();
-  const selected = view?.matches.find((item) => item.matchId === view.activeLocalMatchId);
-  const local =
-    !!match &&
-    (view?.activeLocalMatchId === match.matchId || operator?.matchContext.origin === 'local');
+  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const scenes = useProgramScenes();
-  const obs = useObsStatus();
   const hud = useHudConfigClient();
   const production = useLocalRead<Production>('/local/v1/production');
   const policy = useLocalRead<OverlayPolicy>('/local/v1/desktop-overlay');
   const rivalhub = useLocalRead<{ paired: boolean }>('/local/v1/rivalhub-connection');
-  const [preview, setPreview] = useState<ProgramSceneId>('waiting');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   async function action(run: () => Promise<unknown>) {
@@ -107,24 +101,16 @@ export function PreparationPage() {
     </div>
   );
   const capabilities =
-    useLocalRead<{ label: string; ready: boolean; reason: string; href: string }[]>(
-      '/local/v1/readiness',
-    );
+    useLocalRead<
+      { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
+    >('/local/v1/readiness');
   const readiness = [
     ...(capabilities ?? []).map(
       (item) => [item.label, item.ready, item.reason, item.href] as const,
     ),
-    [
-      'OBS',
-      obs?.connection === 'connected',
-      obs?.connection === 'password_required' ? '需要密码' : '等待连接',
-      '/settings?tab=obs',
-    ],
     ['RivalHub', rivalhub?.paired === true, '独立模式', '/settings?tab=rivalhub'],
   ] as const;
-  const attention = readiness
-    .filter(([label, ready]) => !ready && label !== 'RivalHub')
-    .filter((item, index, items) => items.findIndex((other) => other[3] === item[3]) === index);
+  const attention = (capabilities ?? []).filter((item) => item.action);
   return (
     <OperatorShell active={path}>
       <main className="preparation">
@@ -167,24 +153,25 @@ export function PreparationPage() {
           <Panel className="preparation-match">
             <div className="preparation-match__meta">
               <span>
-                {match.competitionName} · {match.format.toUpperCase()}
+                {match.competition.name} · {match.format.toUpperCase()}
               </span>
-              <StatusPill tone="info">{local ? '本地比赛' : 'RivalHub'}</StatusPill>
+              <StatusPill tone="info">
+                {envelope?.source === 'local' ? '本地比赛' : 'RivalHub'}
+                {envelope?.freshness === 'stale' ? ' · 缓存资料' : ''}
+              </StatusPill>
             </div>
             <h2>
-              {match.entryAName}
+              {match.entrants.a.name}
               <span>vs</span>
-              {match.entryBName}
+              {match.entrants.b.name}
             </h2>
-            {selected ? (
+            {match ? (
               <p>
                 {[
-                  selected.stageLabel,
-                  selected.roundLabel,
-                  selected.matchLabel,
-                  selected.scheduledAt
-                    ? new Date(selected.scheduledAt).toLocaleString('zh-CN')
-                    : null,
+                  match.stageLabel,
+                  match.roundLabel,
+                  match.matchLabel,
+                  match.scheduledAt ? new Date(match.scheduledAt).toLocaleString('zh-CN') : null,
                 ]
                   .filter(Boolean)
                   .join(' · ')}
@@ -222,10 +209,14 @@ export function PreparationPage() {
               <div>
                 <Panel>
                   <h2>需要关注</h2>
-                  {attention.slice(0, 4).map(([label, , reason, href]) => (
+                  {capabilities === null ? (
+                    <p>正在读取制作状态。</p>
+                  ) : attention.length === 0 ? (
+                    <p>暂无需要处理的问题。</p>
+                  ) : null}
+                  {attention.map(({ label, action, href }) => (
                     <a className="preparation-attention" key={label} href={href}>
-                      <strong>{label}</strong>
-                      <span>{reason} →</span>
+                      <strong>{action} →</strong>
                     </a>
                   ))}
                 </Panel>
@@ -248,16 +239,17 @@ export function PreparationPage() {
               <h2>RivalHub</h2>
               <RivalHubPreparationPanel mode="matches" />
             </details>
-            {selected ? (
+            {match && local ? (
               <>
                 {tab === 'roster' ? (
                   <RosterCapture
-                    names={{ a: selected.entrants.a.name, b: selected.entrants.b.name }}
+                    names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
                     onSaved={() => void refresh()}
                   />
                 ) : null}
                 <LocalTournamentEditor
-                  key={`${selected.matchId}:${view?.contextRevision}:${tab}`}
+                  key={`${match.matchId}:${envelope?.revision}:${view?.contextRevision}:${tab}`}
+                  document={match}
                   view={view}
                   refresh={refresh}
                   action={action}
@@ -265,67 +257,36 @@ export function PreparationPage() {
                 />
               </>
             ) : match ? (
-              <Panel>
-                <h2>赛事资料由 RivalHub 管理</h2>
-                <p>请通过赛事数据刷新与赛务流程核对资料。</p>
-                <p>
-                  {match.entryAName} vs {match.entryBName} · {match.format.toUpperCase()}
-                </p>
-              </Panel>
+              <>
+                <StatusBanner tone="info">
+                  {envelope?.source === 'local'
+                    ? '正在读取本地编辑状态。'
+                    : '赛事资料由 RivalHub 管理，请通过赛务流程更新。'}
+                </StatusBanner>
+                {tab !== 'maps' ? (
+                  <MatchDocumentView document={match} section={tab as MatchSection} />
+                ) : null}
+              </>
             ) : null}
-            {tab === 'maps' ? (
-              <Panel>
-                <h2>地图与 BP</h2>
-                <p>
-                  {scenes?.available.includes('bp')
-                    ? 'BP 已就绪'
-                    : (scenes?.blocked.bp ?? '等待 BP 数据')}
-                </p>
-                {operator?.seriesProgress?.maps.map((map) => (
-                  <p key={map.mapOrder}>
-                    {map.mapName} ·{' '}
-                    {map.status === 'completed'
-                      ? '已完成'
-                      : map.status === 'current'
-                        ? '当前地图'
-                        : '待进行'}
+            {tab === 'maps' && match ? (
+              <>
+                <MatchDocumentView document={match} section="maps" />
+                <Panel>
+                  <h2>BP 制作</h2>
+                  <p>
+                    {scenes?.available.includes('bp')
+                      ? 'BP 已就绪'
+                      : (scenes?.blocked.bp ?? '等待 BP 数据')}
                   </p>
-                ))}
-                <Button onClick={() => void action(() => openTool('bp'))}>打开 BP 工作台</Button>
-              </Panel>
+                  <Button onClick={() => void action(() => openTool('bp'))}>打开 BP 工作台</Button>
+                </Panel>
+              </>
             ) : null}
           </>
         ) : path === '/picture' ? (
           tab === 'program' ? (
             <>
-              <Panel>
-                <h2>节目预览</h2>
-                <p>选择场景检查画面；正式切换在现场进行。</p>
-                <div className="preparation-scenes">
-                  {PROGRAM_SCENES.map((scene) => (
-                    <Button
-                      key={scene.id}
-                      aria-pressed={preview === scene.id}
-                      onClick={() => setPreview(scene.id)}
-                    >
-                      {scene.title} · {scenes?.available.includes(scene.id) ? '就绪' : '不可用'}
-                    </Button>
-                  ))}
-                </div>
-                <p>
-                  {scenes?.blocked[preview] ??
-                    `当前播出：${PROGRAM_SCENES.find((item) => item.id === scenes?.active)?.title ?? '等待连接'}`}
-                </p>
-                <div className="preparation-program-preview">
-                  <iframe
-                    title="节目预览"
-                    src={PROGRAM_SCENES.find((scene) => scene.id === preview)!.path + '?preview=1'}
-                  />
-                </div>
-                <Button onClick={() => void action(() => openTool('preview'))}>
-                  打开独立节目预览
-                </Button>
-              </Panel>
+              <ProgramPreview />
             </>
           ) : tab === 'hud' ? (
             <Panel>

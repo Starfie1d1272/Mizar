@@ -399,11 +399,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           if (status.connection === 'connected') await obsAdapter.switchScene(id);
         },
   );
-  app.get('/local/v1/readiness', (_request, reply) =>
-    reply
+  app.get('/local/v1/readiness', async (_request, reply) => {
+    const obs = await obsAdapter?.status();
+    return reply
       .header('cache-control', 'no-store')
-      .send(productionReadiness(projectionCoordinator.getCurrent(), sceneController.get())),
-  );
+      .send(productionReadiness(projectionCoordinator.getCurrent(), sceneController.get(), obs));
+  });
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: sceneController,

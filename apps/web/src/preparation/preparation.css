@@ -88,6 +88,37 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--mizar-layout-padding);
 }
+.preparation-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
+}
+.preparation-facts dt {
+  color: var(--mizar-fg-secondary);
+}
+.preparation-facts dd {
+  margin: var(--mizar-layout-compact) 0 0;
+}
+.preparation-logo {
+  max-width: 96px;
+  max-height: 64px;
+  object-fit: contain;
+}
+.preparation-team-heading,
+.preparation-roster li {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-roster {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-team-heading {
+  min-height: 64px;
+}
 .preparation-program-preview {
   width: 100%;
   aspect-ratio: 16 / 9;

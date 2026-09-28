@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { OperatorShell } from '../operator/OperatorShell';
+import { ToolShell } from '../patterns';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
 import { BpPresentation } from './BpPresentation';
@@ -117,7 +117,7 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
         : '服务断开';
 
   return (
-    <OperatorShell active="/operator/bp">
+    <ToolShell title="BP 工作台">
       <main className="bp-workbench" data-surface="bp-operator">
         <header className="bp-workspace-header">
           <div>
@@ -342,6 +342,6 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
           <span>Veto Scene · 独立全屏场景</span>
         </footer>
       </main>
-    </OperatorShell>
+    </ToolShell>
   );
 }

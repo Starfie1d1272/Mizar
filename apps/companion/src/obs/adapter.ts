@@ -25,7 +25,9 @@ const TIMEOUT_MS = 4000;
 
 export class ObsAdapter {
   private queue: Promise<unknown> = Promise.resolve();
-  private findings: ObsFinding[] = [];
+  private findings: ObsFinding[] = [
+    { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
+  ];
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
@@ -74,12 +76,16 @@ export class ObsAdapter {
     const config = await this.configStore.read();
     try {
       return await this.withObs(async (obs) => {
-        const [scene, stream, record, video] = await Promise.all([
+        const [scene, stream, record, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           obs.call('GetStreamStatus'),
           obs.call('GetRecordStatus'),
           obs.call('GetVideoSettings'),
+          checkObsConfiguration(obs, this.browserBaseUrl).catch(() => [
+            { code: 'configuration_check_failed', message: 'OBS 配置检查未完成，请重新检查。' },
+          ]),
         ]);
+        this.findings = findings;
         return {
           connection: 'connected',
           currentScene:
@@ -95,7 +101,7 @@ export class ObsAdapter {
             output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
             fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
           },
-          findings: this.findings,
+          findings,
         } satisfies ObsStatus;
       });
     } catch (error: unknown) {

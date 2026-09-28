@@ -1,0 +1,28 @@
+.mizar-tool-shell {
+  min-height: 100dvh;
+  background: var(--mizar-bg-canvas);
+  color: var(--mizar-fg-primary);
+}
+.mizar-tool-heading,
+.mizar-tool-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+}
+.mizar-tool-heading {
+  padding: var(--mizar-layout-gap) var(--mizar-layout-padding);
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+  color: var(--mizar-fg-secondary);
+}
+.mizar-tool-skip {
+  position: absolute;
+  transform: translateY(-200%);
+}
+.mizar-tool-skip:focus {
+  transform: none;
+  padding: var(--mizar-layout-gap);
+  background: var(--mizar-bg-raised);
+  color: var(--mizar-fg-primary);
+  outline: var(--mizar-line-focus) solid var(--mizar-focus-ring);
+  z-index: 100;
+}

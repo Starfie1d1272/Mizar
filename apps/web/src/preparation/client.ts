@@ -46,7 +46,7 @@ const toolPaths = {
   hud: '/operator/hud',
   bp: '/operator/bp',
   diagnostics: '/debug',
-  preview: '/picture?tab=program',
+  preview: '/preview',
 };
 export async function openTool(tool: Tool) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool });

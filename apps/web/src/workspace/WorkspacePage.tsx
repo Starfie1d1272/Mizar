@@ -172,15 +172,15 @@ function ObsConfidence() {
     2000,
   );
   return (
-    <section className="workspace-confidence" aria-label="OBS 当前节目">
-      <small>OBS 当前节目</small>
+    <section className="workspace-confidence" aria-label="OBS 画面确认">
+      <small>OBS 画面确认</small>
       {result?.preview ? (
         <>
-          <img src={result.preview.image} alt={`OBS 当前节目：${result.preview.scene}`} />
+          <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
           <span>{result.preview.scene}</span>
         </>
       ) : (
-        <p>OBS 节目预览暂不可用</p>
+        <p>OBS 画面确认暂不可用</p>
       )}
     </section>
   );
@@ -318,7 +318,7 @@ export function WorkspaceDock() {
             }, true)
           }
         >
-          本机覆盖 {policy?.enabled ? '关' : '开'}
+          {policy?.enabled ? '关闭本机覆盖' : '开启本机覆盖'}
         </Button>
         <Button onClick={() => void action(() => desktopInvoke('restore_layout'), true)}>
           恢复布局
