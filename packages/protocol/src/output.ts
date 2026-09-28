@@ -11,9 +11,6 @@ const nonNegativeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const count = nonNegativeInteger.nullable();
 const health = z.number().int().min(0).max(100).nullable();
 const economy = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
-const vector = z
-  .strictObject({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite() })
-  .nullable();
 const cursor = z.strictObject({
   producerInstanceId: id,
   liveSessionId: nullableId,
@@ -56,38 +53,103 @@ const player = z.strictObject({
     completedAdr: number,
   }),
 });
-const radar = z.strictObject({
-  players: z
+// Public overview coordinates are calibrated by Mizar; never world coordinates.
+const layer = z.enum(['single', 'upper', 'lower']);
+const position = z.strictObject({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+  layer,
+});
+export const LIVE_SNAPSHOT_MAX_BYTES = 262_144;
+export const LIVE_RADAR_MAX_PLAYERS = 64;
+export const LIVE_RADAR_MAX_UTILITY = 128;
+export const LIVE_RADAR_MAX_FLAMES = 512;
+export const publicRadarV1Schema = z
+  .strictObject({
+    mapName: id,
+    calibrationRevision: id,
+    layers: z.array(layer).min(1).max(2),
+    activeLayer: layer.nullable(),
+    players: z
+      .array(
+        z.strictObject({
+          sourcePlayerId: id,
+          canonicalPlayerId: nullableId,
+          side: z.enum(['CT', 'T', 'unknown']),
+          lifeState: z.enum(['alive', 'dead', 'unknown']),
+          position: position.nullable(),
+          facing: z
+            .strictObject({
+              x: z.number().finite().min(-1).max(1),
+              y: z.number().finite().min(-1).max(1),
+            })
+            .nullable(),
+        }),
+      )
+      .max(LIVE_RADAR_MAX_PLAYERS),
+    bomb: z.strictObject({ position: position.nullable() }).nullable(),
+    utility: z
+      .array(
+        z.strictObject({
+          sourceEntityId: id,
+          kind: z.string().max(128).nullable(),
+          ownerSourceId: nullableId,
+          position: position.nullable(),
+          lifetimeSeconds: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+          effectTimeSeconds: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+          flames: z.array(z.strictObject({ sourceFlameId: id, position })).max(64),
+        }),
+      )
+      .max(LIVE_RADAR_MAX_UTILITY),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.utility.reduce((sum, utility) => sum + utility.flames.length, 0) > LIVE_RADAR_MAX_FLAMES
+    )
+      ctx.addIssue({ code: 'custom', message: 'radar_total_flames_exceeded' });
+    const positions = [
+      ...value.players.map((player) => player.position),
+      value.bomb?.position,
+      ...value.utility.flatMap((utility) => [
+        utility.position,
+        ...utility.flames.map((flame) => flame.position),
+      ]),
+    ];
+    if (
+      (value.activeLayer !== null && !value.layers.includes(value.activeLayer)) ||
+      positions.some((point) => point != null && !value.layers.includes(point.layer))
+    )
+      ctx.addIssue({ code: 'custom', message: 'radar_layer_unavailable' });
+    if (
+      new Set(value.layers).size !== value.layers.length ||
+      (value.layers.includes('single') ? value.layers.length !== 1 : value.layers.length !== 2)
+    )
+      ctx.addIssue({ code: 'custom', message: 'radar_layers_invalid' });
+  });
+const roundHistory = z.strictObject({
+  mapOrder: z.number().int().min(1).max(5),
+  completeness: z.enum(['complete', 'partial', 'unavailable']),
+  rounds: z
     .array(
       z.strictObject({
-        sourcePlayerId: id,
-        position: vector,
-        forward: vector,
+        roundNumber: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+        winnerSide: z.enum(['CT', 'T', 'unknown']),
+        winnerEntryId: nullableId,
+        winCondition: z.enum(['elimination', 'bomb', 'defuse', 'time', 'unknown']),
       }),
     )
-    .max(64),
-  bombPosition: vector,
-  utility: z
-    .array(
-      z.strictObject({
-        sourceEntityId: id,
-        kind: z.string().max(128).nullable(),
-        ownerSourceId: nullableId,
-        position: vector,
-        flames: z.array(z.strictObject({ sourceFlameId: id, position: vector })).max(64),
-      }),
-    )
-    .max(128),
+    .max(256),
 });
 
 export const liveSnapshotV1Schema = z.strictObject({
   schemaVersion: z.literal(LIVE_SNAPSHOT_SCHEMA_VERSION),
   cursor,
-  producedAt: utc,
+  producedAt: utc.max(64),
   matchId: id,
   competitionId: id,
   format: z.enum(['bo1', 'bo3', 'bo5']),
   series: z.strictObject({ scoreA: count, scoreB: count, currentMapOrder: count }),
+  roundHistory: roundHistory.nullable(),
   map: z.strictObject({
     mapId: nullableId,
     name: z.string().max(128).nullable(),
@@ -120,7 +182,7 @@ export const liveSnapshotV1Schema = z.strictObject({
         .nullable(),
     })
     .nullable(),
-  radar: radar.nullable(),
+  radar: publicRadarV1Schema.nullable(),
   capability,
 });
 
@@ -200,6 +262,6 @@ function boundedParse<T>(schema: z.ZodType<T>, input: unknown, maxBytes: number)
   return schema.parse(input);
 }
 export const parseLiveSnapshotV1 = (input: unknown): LiveSnapshotV1 =>
-  boundedParse(liveSnapshotV1Schema, input, 262_144);
+  boundedParse(liveSnapshotV1Schema, input, LIVE_SNAPSHOT_MAX_BYTES);
 export const parseReliableEventV1 = (input: unknown): ReliableEventV1 =>
   boundedParse(reliableEventV1Schema, input, 16_384);

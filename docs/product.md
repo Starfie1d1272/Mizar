@@ -38,6 +38,8 @@ RivalHub 是第一方、信息最完整的赛事上下文提供方，但不是�
 
 面向本机与后续外部消费者的实时输出分成两类：`LiveSnapshot V1` 只保留最新公开状态，`ReliableEvent V1` 记录有明确证据的比赛、地图、身份及 source continuity 边沿。两者只从 Program/Radar 安全投影与 RuntimeTransition 产生，不含 Observer Assist 或 Raw GSI。高影响事件在身份、比赛或代际证据不足时暂停投递，过期或上下文变化后停止重试。
 
+LiveSnapshot V1 已覆盖 RivalHub 第一版 public LIVE 所需的 Program-safe realtime surface；后续破坏性字段变化必须升级 schema version。它直接包含 Program 当前 Round History 和 Mizar 完成 geometry/calibration 后的公共 Radar，HTTP outbound 默认包含合法当前 Radar。外部页面只负责最终渲染与平滑，不复制 world calibration；不支持、过期或代际不一致时 Radar 明确不可用。回合历史是当前有界 context，不意味着保存 snapshot 历史。
+
 ## 3. 产品体验核心：制播工作区
 
 传统 HUD 工作流通常把游戏、网页控制、雷达、诊断和辅助信息分散在多个窗口。Mizar 的长期产品形态是一套**私有制播工作区（Mizar Workspace）**：

@@ -328,7 +328,8 @@ Lookahead 数据源
 - `MapGeometryProvider`；
 - floor selection；
 - marker / utility semantics；
-- 与时间无关、可确定性验证的几何和 domain 计算。
+- 与时间无关、可确定性验证的几何和 domain 计算；
+- 供 LiveSnapshot 使用的无状态公共归一化 overview projection 与楼层选择，复用同一 geometry/calibration；外部 renderer 无需 world calibration。
 
 `apps/web` 的 Radar Renderer 拥有：
 
@@ -339,6 +340,8 @@ Lookahead 数据源
 - teleport / discontinuity reset；
 - autozoom / crop 的 presentation state 与动画；
 - OBS / browser Host 的 rendering adaptation。
+
+LiveSnapshot 的 Round History 直接来自 Program/SeriesProgress 当前有界 context；公共 Radar 只消费与 Program 同代际、同 mapEpoch 与当前 receive sequence 的 RadarFrame，invalid/stale 时明确 unavailable。HTTP live sink 默认包含合法当前 Radar。Snapshot 不持久化历史、不含 Lookahead，consumer 只拥有最终渲染与 interpolation。
 
 地图几何作为 provider 输入 Radar domain。第三方地图包可以作为 reference 或 adapter source，但不能成为 Mizar Radar contract 的 shape owner。
 
