@@ -23,6 +23,37 @@ function eligible(bundle: ProjectionBundle, binding: MatchContextBinding | undef
   );
 }
 
+interface ReliableMapResult {
+  readonly mapId: string;
+  readonly mapName: string;
+  readonly scoreA: number;
+  readonly scoreB: number;
+}
+
+function entrantRelativeMapResult(
+  bundle: ProjectionBundle,
+  binding: MatchContextBinding,
+  cursor: ProjectionBundle['program']['cursor'],
+): ReliableMapResult | null {
+  const progressMap = bundle.operator.seriesProgress?.maps.find(
+    (map) => map.executionMapEpoch === cursor.mapEpoch,
+  );
+  if (
+    progressMap === undefined ||
+    progressMap.status !== 'completed' ||
+    progressMap.finalScore === null
+  )
+    return null;
+  const contextMap = binding.context.maps.find((map) => map.mapOrder === progressMap.mapOrder);
+  if (contextMap === undefined) return null;
+  return {
+    mapId: contextMap.mapId,
+    mapName: progressMap.mapName,
+    scoreA: progressMap.finalScore.a,
+    scoreB: progressMap.finalScore.b,
+  };
+}
+
 export function projectLiveSnapshotV1(input: {
   readonly bundle: ProjectionBundle;
   readonly binding: MatchContextBinding | undefined;
@@ -190,16 +221,28 @@ export function buildReliableEventV1(input: {
   )
     return null;
   const cursor = input.cursor ?? bundle.program.cursor;
-  const map = bundle.program.series?.maps.find(
+  const currentMap = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
+  const mapResult =
+    input.kind === 'map_ended' ? entrantRelativeMapResult(bundle, binding, cursor) : null;
+  if (
+    input.kind === 'map_ended' &&
+    (mapResult === null || bundle.program.map.score.ct === null || bundle.program.map.score.t === null)
+  )
+    return null;
   const payload = (() => {
     switch (input.kind) {
       case 'match_started':
       case 'map_started':
         return {};
       case 'map_ended':
-        return { scoreCT: bundle.program.map.score.ct, scoreT: bundle.program.map.score.t };
+        return {
+          scoreA: mapResult!.scoreA,
+          scoreB: mapResult!.scoreB,
+          scoreCT: bundle.program.map.score.ct!,
+          scoreT: bundle.program.map.score.t!,
+        };
       case 'series_ended':
         return {
           scoreA: bundle.program.series?.score.a ?? null,
@@ -235,8 +278,8 @@ export function buildReliableEventV1(input: {
     matchId: binding.context.matchId,
     competitionId: binding.context.competition.competitionId,
     contextRevision: binding.manifest.revision,
-    mapId: map?.mapId ?? null,
-    mapName: bundle.program.map.name,
+    mapId: mapResult?.mapId ?? currentMap?.mapId ?? null,
+    mapName: mapResult?.mapName ?? bundle.program.map.name,
     entryAId: binding.context.entrants.a.entryId,
     entryBId: binding.context.entrants.b.entryId,
     evidence: {
