@@ -2,7 +2,6 @@
   "schemaVersion": "mizar.schedule-window.v1",
   "competition": {
     "competitionId": "local-event-1",
-    "slug": "local-event-1",
     "name": "校园赛",
     "logoUrl": null,
     "themeColor": null
@@ -26,8 +25,16 @@
       "scoreA": null,
       "scoreB": null,
       "entrants": {
-        "a": { "entryId": "team-a", "name": "甲队", "logoUrl": null },
-        "b": { "entryId": "team-b", "name": "乙队", "logoUrl": null }
+        "a": {
+          "entryId": "team-a",
+          "name": "甲队",
+          "logoUrl": null
+        },
+        "b": {
+          "entryId": "team-b",
+          "name": "乙队",
+          "logoUrl": null
+        }
       }
     }
   ]

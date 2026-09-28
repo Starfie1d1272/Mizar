@@ -51,10 +51,16 @@ export function toScheduleWindowV1(input: unknown): ScheduleWindowV1 {
   const validated = validateBroadcastScheduleWindow(input);
   if (!validated.ok) throw new BroadcastScheduleWindowConversionError(validated.diagnostics);
   const window = toScheduleWindow(input);
+
   return parseScheduleWindowV1({
     ...window,
     schemaVersion: 'mizar.schedule-window.v1',
-    competition: { ...window.competition, logoUrl: window.competition.logoUrl ?? null },
+    competition: {
+      competitionId: window.competition.competitionId,
+      name: window.competition.name,
+      themeColor: window.competition.themeColor,
+      logoUrl: window.competition.logoUrl ?? null,
+    },
     matches: window.matches.map((match) => ({
       ...match,
       stageLabel:

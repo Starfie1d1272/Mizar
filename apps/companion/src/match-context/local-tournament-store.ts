@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import type { MatchDocumentV1, ScheduleWindowV1 } from '@mizar/core/match-context';
 import {
-  matchPlayerV1Schema,
+  localTournamentStateV1Schema,
   parseMatchDocumentV1,
   parseScheduleWindowV1,
 } from '@mizar/protocol/context';
@@ -48,66 +48,10 @@ const emptyState = (): LocalTournamentState => ({
 });
 
 function readState(input: unknown): LocalTournamentState {
-  if (typeof input !== 'object' || input === null || Array.isArray(input))
-    throw new Error('local_store_invalid');
-  const value = input as Record<string, unknown>;
-  if (
-    value.version !== LOCAL_TOURNAMENT_STORE_VERSION ||
-    !Array.isArray(value.events) ||
-    !Array.isArray(value.teams) ||
-    !Array.isArray(value.matches) ||
-    !(value.selectedMatchId === null || typeof value.selectedMatchId === 'string') ||
-    !(
-      value.selectedAt === null ||
-      (typeof value.selectedAt === 'string' && Number.isFinite(Date.parse(value.selectedAt)))
-    )
-  )
-    throw new Error('local_store_invalid');
-  const matches = value.matches.map(parseMatchDocumentV1);
-  if (matches.length > 256 || value.events.length > 32 || value.teams.length > 128)
+  if (Buffer.byteLength(JSON.stringify(input)) > 2_000_000)
     throw new Error('local_store_too_large');
-  const events = value.events.map((event): LocalEventV1 => {
-    if (typeof event !== 'object' || event === null) throw new Error('local_event_invalid');
-    const item = event as Record<string, unknown>;
-    if (
-      typeof item.eventId !== 'string' ||
-      typeof item.name !== 'string' ||
-      !Array.isArray(item.matchIds) ||
-      !item.matchIds.every((id) => typeof id === 'string') ||
-      !Array.isArray(item.mapPool) ||
-      !item.mapPool.every((name) => typeof name === 'string') ||
-      !(item.logoUrl === null || typeof item.logoUrl === 'string') ||
-      !(item.themeColor === null || typeof item.themeColor === 'string')
-    )
-      throw new Error('local_event_invalid');
-    return {
-      eventId: item.eventId,
-      name: item.name,
-      logoUrl: item.logoUrl,
-      themeColor: item.themeColor,
-      mapPool: item.mapPool,
-      matchIds: item.matchIds,
-    };
-  });
-  const teams = value.teams.map((team): LocalTeamV1 => {
-    if (typeof team !== 'object' || team === null) throw new Error('local_team_invalid');
-    const item = team as Record<string, unknown>;
-    if (
-      typeof item.teamId !== 'string' ||
-      typeof item.name !== 'string' ||
-      !(item.logoUrl === null || typeof item.logoUrl === 'string') ||
-      !Array.isArray(item.players)
-    )
-      throw new Error('local_team_invalid');
-    return {
-      teamId: item.teamId,
-      name: item.name,
-      logoUrl: item.logoUrl,
-      players: item.players.map((player) => matchPlayerV1Schema.parse(player)),
-    };
-  });
-  const selectedMatchId = value.selectedMatchId;
-  const selectedAt = value.selectedAt;
+  const { events, teams, matches, selectedMatchId, selectedAt } =
+    localTournamentStateV1Schema.parse(input);
   if (selectedMatchId !== null && !matches.some((match) => match.matchId === selectedMatchId))
     throw new Error('local_selection_invalid');
   if ((selectedMatchId === null) !== (selectedAt === null))
@@ -116,9 +60,16 @@ function readState(input: unknown): LocalTournamentState {
   if (
     new Set(events.map((event) => event.eventId)).size !== events.length ||
     new Set(teams.map((team) => team.teamId)).size !== teams.length ||
+    teams.some(
+      (team) =>
+        new Set(team.players.map((player) => player.playerId)).size !== team.players.length ||
+        new Set(team.players.flatMap((player) => (player.steam64 === null ? [] : [player.steam64])))
+          .size !== team.players.filter((player) => player.steam64 !== null).length,
+    ) ||
     new Set(matches.map((match) => match.matchId)).size !== matches.length ||
     events.some(
       (event) =>
+        new Set(event.mapPool).size !== event.mapPool.length ||
         new Set(event.matchIds).size !== event.matchIds.length ||
         event.matchIds.some(
           (id) =>
@@ -129,10 +80,15 @@ function readState(input: unknown): LocalTournamentState {
     ) ||
     matches.some(
       (match) =>
+        !teams.some((team) => team.teamId === match.entrants.a.entryId) ||
+        !teams.some((team) => team.teamId === match.entrants.b.entryId) ||
         !events.some(
           (event) =>
             event.eventId === match.competition.competitionId &&
-            event.matchIds.includes(match.matchId),
+            event.matchIds.includes(match.matchId) &&
+            event.name === match.competition.name &&
+            event.logoUrl === match.competition.logoUrl &&
+            event.themeColor === match.competition.themeColor,
         ),
     )
   )
@@ -214,15 +170,13 @@ export class LocalTournamentStore {
         matchId: randomUUID(),
         competition: {
           competitionId: event.eventId,
-          slug: event.eventId,
           name: event.name,
           logoUrl: event.logoUrl,
           themeColor: event.themeColor,
         },
         status: 'scheduled',
         format: input.format,
-        stage: '本地比赛',
-        stageKey: null,
+        stage: 'local',
         stageLabel: '本地比赛',
         round: null,
         roundLabel: null,
@@ -462,7 +416,6 @@ export class LocalTournamentStore {
       schemaVersion: 'mizar.schedule-window.v1',
       competition: {
         competitionId: event.eventId,
-        slug: event.eventId,
         name: event.name,
         logoUrl: event.logoUrl,
         themeColor: event.themeColor,

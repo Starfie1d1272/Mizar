@@ -10,7 +10,7 @@ export type MatchVetoActionType = 'ban' | 'pick' | 'side_pick' | 'decider';
 
 export interface MatchCompetitionContext {
   readonly competitionId: string;
-  readonly slug: string;
+  readonly slug?: string;
   readonly name: string;
   readonly logoUrl?: string | null;
   readonly themeColor: string | null;
@@ -89,7 +89,6 @@ export interface MatchContext {
 /** Mizar-owned input document. Optional enrichment is explicit and never inferred by a renderer. */
 export interface MatchDocumentV1 extends MatchContext {
   readonly schemaVersion: 'mizar.match-document.v1';
-  readonly stageKey: string | null;
   readonly stageLabel: string;
   readonly roundLabel: string | null;
   readonly matchLabel: string | null;

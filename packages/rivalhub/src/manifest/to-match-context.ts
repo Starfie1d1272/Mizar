@@ -95,13 +95,18 @@ export function toMatchDocumentV1(input: unknown): MatchDocumentV1 {
   if (!validation.ok) throw new BroadcastManifestConversionError(validation.diagnostics);
   const manifest = validation.value;
   const context = toMatchContext(input);
-  const mapNames =
-    manifest.match.mapPool ?? [...context.maps, ...context.veto].map((item) => item.mapName);
+  const mapNames = manifest.match.mapPool ?? [];
+
   return parseMatchDocumentV1({
     ...context,
     schemaVersion: 'mizar.match-document.v1',
-    competition: { ...context.competition, logoUrl: context.competition.logoUrl ?? null },
-    stageKey: manifest.match.stageKey ?? null,
+    competition: {
+      competitionId: context.competition.competitionId,
+      name: context.competition.name,
+      themeColor: context.competition.themeColor,
+      logoUrl: context.competition.logoUrl ?? null,
+    },
+    stage: manifest.match.stageKey ?? context.stage,
     stageLabel: manifest.match.stageLabel ?? context.stage,
     roundLabel: manifest.match.roundLabel ?? null,
     matchLabel: manifest.match.matchLabel ?? null,

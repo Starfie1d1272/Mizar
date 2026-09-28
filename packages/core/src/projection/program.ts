@@ -632,7 +632,10 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         ? null
         : {
             matchId: input.context.matchId,
-            competition: { ...input.context.competition },
+            competition: {
+              ...input.context.competition,
+              slug: input.context.competition.slug ?? input.context.competition.competitionId,
+            },
             format: input.context.format,
             stage: input.context.stage,
           },

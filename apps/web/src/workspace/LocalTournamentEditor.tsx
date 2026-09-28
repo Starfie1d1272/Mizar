@@ -120,9 +120,7 @@ export function LocalTournamentEditor({
           阶段名称{' '}
           <input
             value={draft.stageLabel}
-            onChange={(change) =>
-              setDraft({ ...draft, stage: change.target.value, stageLabel: change.target.value })
-            }
+            onChange={(change) => setDraft({ ...draft, stageLabel: change.target.value })}
           />
         </label>
         <label>

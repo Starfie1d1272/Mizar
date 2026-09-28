@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,13 +101,18 @@ describe('Mizar local tournament input', () => {
     expect(document.entrants.a.players).toHaveLength(6);
     expect(document.maps).toHaveLength(3);
     expect(document.veto.length).toBeGreaterThan(0);
-    expect(document.mapPool.length).toBeGreaterThan(0);
+    expect(document.mapPool).toEqual([]);
+    expect(document.competition).not.toHaveProperty('slug');
+    expect(document).not.toHaveProperty('stageKey');
     const validated = validateBroadcastManifest(manifest);
     if (!validated.ok) throw new Error('RivalHub fixture invalid');
     const enriched = toMatchDocumentV1({
       ...validated.value,
       match: {
         ...validated.value.match,
+        mapPool: ['de_ancient', 'de_mirage'],
+        stageKey: 'swiss',
+        stageLabel: '瑞士赛',
         startedAt: '2026-09-28T10:00:00.000Z',
         competition: {
           ...validated.value.match.competition,
@@ -115,6 +120,9 @@ describe('Mizar local tournament input', () => {
         },
       },
     });
+    expect(enriched.mapPool).toEqual(['de_ancient', 'de_mirage']);
+    expect(enriched.stage).toBe('swiss');
+    expect(enriched.stageLabel).toBe('瑞士赛');
     expect(enriched.startedAt).toBe('2026-09-28T10:00:00.000Z');
     expect(enriched.competition.logoUrl).toBe('https://example.invalid/event.png');
     const scheduleFile = join(
@@ -140,4 +148,72 @@ describe('Mizar local tournament input', () => {
       }),
     ).toThrow();
   });
+});
+
+it('validates every durable Local asset and preserves existing match team snapshots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-local-strict-'));
+  try {
+    const file = join(directory, 'store.json');
+    const store = new LocalTournamentStore(file);
+    const a = await store.createMatch({ teamA: 'A', teamB: 'B', format: 'bo3', mapPool: [] });
+    const b = await store.createMatch({
+      eventId: a.competition.competitionId,
+      teamA: '',
+      teamAId: a.entrants.a.entryId,
+      teamB: 'C',
+      format: 'bo1',
+      mapPool: [],
+    });
+    await store.saveMatch({
+      ...a,
+      entrants: { ...a.entrants, a: { ...a.entrants.a, name: 'A updated' } },
+    });
+    expect(
+      store.getSnapshot().matches.find((match) => match.matchId === b.matchId)?.entrants.a.name,
+    ).toBe('A');
+    const c = await store.createMatch({
+      eventId: a.competition.competitionId,
+      teamA: '',
+      teamAId: a.entrants.a.entryId,
+      teamB: 'D',
+      format: 'bo1',
+      mapPool: [],
+    });
+    expect(c.entrants.a.name).toBe('A updated');
+    const valid = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown> & {
+      events: Record<string, unknown>[];
+      teams: Record<string, unknown>[];
+    };
+    const mutations = [
+      (state: typeof valid) => {
+        state.extra = true;
+      },
+      (state: typeof valid) => {
+        state.events[0]!.extra = true;
+      },
+      (state: typeof valid) => {
+        state.events[0]!.mapPool = ['a', 'a'];
+      },
+      (state: typeof valid) => {
+        state.teams[0]!.logoUrl = 'javascript:bad';
+      },
+      (state: typeof valid) => {
+        state.teams[0]!.players = Array(33).fill({});
+      },
+      (state: typeof valid) => {
+        state.teams = [];
+      },
+      (state: typeof valid) => {
+        state.events[0]!.matchIds = ['unknown'];
+      },
+    ];
+    for (const mutate of mutations) {
+      const corrupted = structuredClone(valid);
+      mutate(corrupted);
+      await writeFile(file, JSON.stringify(corrupted));
+      await expect(new LocalTournamentStore(file).load()).rejects.toThrow();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

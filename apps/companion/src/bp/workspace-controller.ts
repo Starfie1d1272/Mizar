@@ -134,7 +134,6 @@ export function registerBpWorkspaceRoutes(
         const document = {
           ...toMatchDocumentV1(compiled.manifest),
           mapPool: parsed.data.mapPool,
-          stageKey: prior?.stageKey ?? null,
           roundLabel: prior?.roundLabel ?? null,
           matchLabel: prior?.matchLabel ?? null,
           stakesLabel: prior?.stakesLabel ?? null,

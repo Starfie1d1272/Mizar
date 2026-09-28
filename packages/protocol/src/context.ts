@@ -33,7 +33,6 @@ const side = z.enum(['CT', 'T']).nullable();
 
 const competition = z.strictObject({
   competitionId: id,
-  slug: label.min(1),
   name: label.min(1),
   logoUrl: asset,
   themeColor: label.nullable(),
@@ -79,7 +78,6 @@ export const matchDocumentV1Schema = z
     status,
     format,
     stage: label.min(1),
-    stageKey: optionalLabel,
     stageLabel: label.min(1),
     round: z.number().int().min(0).max(99).nullable(),
     roundLabel: optionalLabel,
@@ -172,3 +170,33 @@ export const parseMatchDocumentV1 = (input: unknown): MatchDocumentV1 =>
   boundedParse(matchDocumentV1Schema, input, 131_072);
 export const parseScheduleWindowV1 = (input: unknown): ScheduleWindowV1 =>
   boundedParse(scheduleWindowV1Schema, input, 262_144);
+
+/** Companion durable Local asset shape; referential invariants are enforced by its store. */
+export const localTournamentStateV1Schema = z.strictObject({
+  version: z.literal('mizar.local-tournament-store.v1'),
+  events: z
+    .array(
+      z.strictObject({
+        eventId: id,
+        name: label.min(1),
+        logoUrl: asset,
+        themeColor: optionalLabel,
+        mapPool: z.array(label.min(1)).max(16),
+        matchIds: z.array(id).max(256),
+      }),
+    )
+    .max(32),
+  teams: z
+    .array(
+      z.strictObject({
+        teamId: id,
+        name: label.min(1),
+        logoUrl: asset,
+        players: z.array(matchPlayerV1Schema).max(32),
+      }),
+    )
+    .max(128),
+  matches: z.array(matchDocumentV1Schema).max(256),
+  selectedMatchId: id.nullable(),
+  selectedAt: instant,
+});
