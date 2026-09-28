@@ -12,6 +12,7 @@ import {
   type HudWidgetPlacement,
 } from '@mizar/hud-config';
 
+import { HudWidgetInspector } from './HudWidgetInspector';
 import { activePresetId, resourceFor, resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
 
@@ -249,24 +250,38 @@ export function HudConsoleWorkspaces({
           </label>
         </div>
         <label className="hud-console__field">
-          雷达视野
+          配置组件
           <select
-            disabled={!editorReady}
-            value={presetDraft.widgets.radar.settings.zoomMode === 'auto' ? 'auto' : 'full-map'}
-            onChange={(event) =>
-              onPresetDraftChange({
-                ...presetDraft,
-                widgets: {
-                  ...presetDraft.widgets,
-                  radar: { variant: 'default', settings: { zoomMode: event.target.value } },
-                },
-              })
-            }
+            disabled={!editorReady || busy}
+            value={selectedWidgetId ?? ''}
+            onChange={(event) => onSelectWidget(event.target.value as HudWidgetId)}
           >
-            <option value="full-map">完整地图</option>
-            <option value="auto">自动聚焦存活选手</option>
+            <option value="" disabled>
+              选择组件
+            </option>
+            {HUD_WIDGET_REGISTRY.filter(
+              (widget) => widget.rendererAvailability === 'implemented',
+            ).map((widget) => (
+              <option key={widget.id} value={widget.id}>
+                {widget.label}
+              </option>
+            ))}
           </select>
         </label>
+        {selectedWidgetId === null ? null : (
+          <HudWidgetInspector
+            key={selectedWidgetId}
+            widgetId={selectedWidgetId}
+            value={presetDraft.widgets[selectedWidgetId]}
+            disabled={!editorReady || busy}
+            onChange={(value) =>
+              onPresetDraftChange({
+                ...presetDraft,
+                widgets: { ...presetDraft.widgets, [selectedWidgetId]: value },
+              })
+            }
+          />
+        )}
         {renderResourceActions('preset', presetDirty, selectedPresetId)}
         <button
           className="hud-console__primary-action"

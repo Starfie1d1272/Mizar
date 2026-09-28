@@ -121,12 +121,12 @@ export function Radar({
       const style = getComputedStyle(element);
       const sideColor = (side: RadarSide) =>
         side === 'CT'
-          ? style.getPropertyValue('--rh-hud-side-ct').trim() || '#6aa8ff'
+          ? style.getPropertyValue('--mizar-side-ct').trim() || '#6aa8ff'
           : side === 'T'
-            ? style.getPropertyValue('--rh-hud-side-t').trim() || '#f2bd4f'
+            ? style.getPropertyValue('--mizar-side-t').trim() || '#f2bd4f'
             : '#aab4c0';
       const bombCarrierColor =
-        style.getPropertyValue('--rh-hud-objective-bomb').trim() || '#f06f6f';
+        style.getPropertyValue('--mizar-hud-objective-bomb').trim() || '#f06f6f';
       const circle = (
         x: number,
         y: number,

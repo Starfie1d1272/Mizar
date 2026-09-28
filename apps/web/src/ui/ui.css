@@ -172,3 +172,20 @@
     scroll-behavior: auto !important;
   }
 }
+
+.mizar-checkbox {
+  align-items: center;
+  display: flex;
+  gap: var(--mizar-layout-compact);
+  min-height: var(--mizar-layout-target);
+  cursor: pointer;
+}
+.mizar-checkbox input[type='checkbox'] {
+  accent-color: var(--mizar-accent-primary);
+  color-scheme: dark;
+  flex: 0 0 calc(var(--mizar-layout-target) / 2);
+  height: calc(var(--mizar-layout-target) / 2);
+  min-height: calc(var(--mizar-layout-target) / 2);
+  width: calc(var(--mizar-layout-target) / 2);
+  padding: 0;
+}

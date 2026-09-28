@@ -100,7 +100,7 @@ export function assertHudRendererRegistryConsistency(): void {
       throw new Error(`HUD renderer entry 状态不一致：${descriptor.id}`);
     }
     if (entry.renderer !== null) {
-      const expectedSource = descriptor.id === 'radar' ? 'radar' : 'program';
+      const expectedSource = descriptor.sourceOwner;
       if (entry.source !== expectedSource) {
         throw new Error(`HUD renderer source owner 不一致：${descriptor.id}`);
       }

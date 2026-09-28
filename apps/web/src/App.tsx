@@ -150,7 +150,10 @@ function ProgramRoute() {
     programClient.getSnapshot,
     programClient.getSnapshot,
   );
-  const hudConfig = useHudConfigClient(import.meta.env.VITE_VISUAL_FIXTURES !== '1');
+  const hudConfig = useHudConfigClient(
+    import.meta.env.VITE_VISUAL_FIXTURES !== '1' ||
+      new URLSearchParams(window.location.search).get('hud-config') === 'companion',
+  );
   const cueClient = useMemo(
     () =>
       createProgramCueClient({

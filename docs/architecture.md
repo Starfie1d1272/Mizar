@@ -98,7 +98,7 @@ packages/hud-config
   逻辑坐标几何约束和纯 Theme resolver。
   不依赖 React、ProgramSnapshot、GSI、RuntimeState、浏览器 API 或 Node 文件系统；Companion 负责持久化，
   Web 负责编辑器与 renderer host。组件 settings 的通用 envelope 不锁死未来 variant；每个 descriptor
-  自己验证完整 settings。resolved activation snapshot 由独立版本化兼容边界校验，不依赖当前 recipe 重算。
+  自己声明 strict settings schema、default、source owner 和 framework-neutral editorControls；通用 Inspector 仅消费声明并验证 draft。四层 ownership 与 variant policy 见 ADR-0013。resolved activation snapshot 由独立版本化兼容边界校验，不依赖当前 recipe 重算。
 
 apps/web/src/program
   Web-owned HUD renderer registry。它把 framework-neutral descriptor 的 availability 与 React renderer
@@ -367,9 +367,9 @@ HUD 配置属于独立的 presentation control-plane，不是 Local Protocol cha
 `/operator/hud-config` 作为保存文档的 editor read model。两者各自拥有覆盖完整 HTTP representation 的
 ETag/revision；保存资源不会改变正式节目的 ETag，只有启用 preset 才会冻结新的 resolved snapshot。Web
 编辑器通过仅限 loopback 且要求 valid local Origin 的本地 HTTP mutation 保存资源或启用 preset；LAN
-mode 下该 endpoint 只读，任何 mutation 都会拒绝。custom snapshot 在重启和 recipe 升级后仍保持最后
+mode 下该 endpoint 只读，任何 mutation 都会拒绝。当前版本 custom snapshot 在重启和 recipe 升级后仍保持最后
 一次上屏内容，直到重新启用，built-in reference 则解析当前代码版本。配置读取/解析失败保留
-last-known-valid runtime，不让 HUD 配置故障伪造或中断 Gameplay telemetry。
+last-known-valid runtime，不让 HUD 配置故障伪造或中断 Gameplay telemetry。1.0 前不保留旧版本兼容；resolved v2 必须完整，拒绝旧版本与缺失设置，不加载时套用当前默认值。
 
 连接建立后立即发送当前 baseline；断线重连重新取得 current baseline，不补发历史 snapshot。
 

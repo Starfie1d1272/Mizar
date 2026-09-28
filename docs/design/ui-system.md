@@ -46,11 +46,11 @@
 
 参赛方 A 不等于 CT，参赛方 B 不等于 T。赛事强调色不表示成功或警告，Mizar Blue 不表示比赛进行中或错误状态。
 
-动态颜色由既有的赛事来源、配置或呈现模块提供并校验，只设置在消费它的局部元素树上，不从颜色反推业务状态。页面不得新增动态颜色通道。旧 BP/HUD 变量列入精确迁移清单，迁移后删除。
+动态颜色由既有的赛事来源、配置或呈现模块提供并校验，只设置在消费它的局部元素树上，不从颜色反推业务状态。页面不得新增动态颜色通道。旧 BP 变量列入精确迁移清单，迁移后删除。Gameplay 的旧 `rh-hud` 语义变量已迁移。
 
 ## 共享组件与页面
 
-`apps/web/src/ui/` 负责基础控件的样式和交互，使用用途或组件变量，不导入比赛、运行时、RivalHub、HTTP/实时客户端或页面逻辑。当前基础组件是 `Button`、`IconButton`、`Field`、`Select`、`Panel`、`Divider`、`StatusPill`、`StatusBanner`、`EmptyState`、`Dialog`。
+`apps/web/src/ui/` 负责基础控件的样式和交互，使用用途或组件变量，不导入比赛、运行时、RivalHub、HTTP/实时客户端或页面逻辑。当前基础组件是 `Button`、`IconButton`、`Field`、`Checkbox`、`Select`、`Panel`、`Divider`、`StatusPill`、`StatusBanner`、`EmptyState`、`Dialog`。
 
 对话框使用原生模态能力，保留键盘焦点、Escape、背景禁用与关闭后焦点恢复；边界 Tab 操作保证焦点留在对话框内。输入框关联字段名称、说明与错误状态；加载按钮禁用并提供 `aria-busy`；图标按钮必须提供名称。状态用文字与辅助阅读语义表达，颜色只作补充。
 
@@ -71,3 +71,7 @@ WCAG 2.2 基线包括：可见键盘焦点、不被浮层遮挡、键盘操作�
 对话框和浮层保留可见关闭入口与焦点恢复。加载或禁用时不执行命令；错误提供事实与恢复办法；状态播报不反复朗读高频比赛数据。HUD 编辑器保留 X/Y、键盘和直接控制等拖动替代操作。
 
 每个共享组件覆盖默认状态，以及适用的悬停、可见焦点、禁用、加载、错误/警告/成功、键盘与减少动效状态。Storybook 组件样例在真实 Chromium 中运行，axe 检查名称、角色、对比度和点击区域等；交互断言补充焦点、对话框键盘与减少动效检查。真实产品的可用性仍需人工审查。
+
+### Gameplay resolved Theme 变量
+
+ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消费冻结值：`--mizar-hud-text-primary/muted`、`--mizar-hud-state-danger/warning/success/unknown`、`--mizar-hud-objective-bomb/defuse`、`--mizar-hud-surface-primary/strong/opacity`、`--mizar-hud-border-opacity`、`--mizar-hud-radius-sm/md/lg`、`--mizar-hud-font-family`。它们由 strict schema 验证并仅在 `GameplayHud` 根设置，不进入全局 token JSON，不开放给 Widget Settings。赛事色与 CT/T 继续使用已有通道。共同字体回退、动效时长使用 canonical `type.family.body`、`transition.fast/normal`；组件几何和剩余一次性画面美术留在 renderer。当前不开放外观工作区，圆角等未全面消费的字段仍不能宣称为用户可用 capability。

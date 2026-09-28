@@ -139,7 +139,10 @@ function useProgramConnection(): {
 }
 
 export function HudConsolePage() {
-  const visualFixtureMode = import.meta.env.VITE_VISUAL_FIXTURES === '1';
+  // The development fixture host can exercise the actual Companion authoring lifecycle.
+  const visualFixtureMode =
+    import.meta.env.VITE_VISUAL_FIXTURES === '1' &&
+    new URLSearchParams(window.location.search).get('hud-config') !== 'companion';
   const hudEditor = useHudConfigEditorClient(!visualFixtureMode);
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');

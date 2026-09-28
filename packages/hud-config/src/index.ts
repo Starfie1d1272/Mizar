@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canonicalJson } from './canonical-json.js';
 
 import { resolveHudThemeRecipe } from './theme-recipe.js';
 import { DEFAULT_PLACEMENTS, validatePlacementWithinCanvas } from './geometry.js';
@@ -23,9 +24,9 @@ export const HUD_CONFIG_SCHEMA_VERSION = 1 as const;
 /**
  * Resolved snapshots are an on-air compatibility boundary.  A future recipe
  * change must not reinterpret an already activated snapshot; incompatible
- * snapshot versions need an explicit migration here.
+ * snapshot versions are rejected before 1.0; there is no legacy migration.
  */
-export const HUD_RESOLVED_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const HUD_RESOLVED_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export const HUD_CANVAS_WIDTH = 1920 as const;
 export const HUD_CANVAS_HEIGHT = 1080 as const;
 export const HUD_GRID_SIZE = 10 as const;
@@ -303,14 +304,34 @@ export type HudConfigDocument = Omit<
 };
 export type HudActivePresetReference = HudConfigDocument['activePreset'];
 
+export type HudEditorControl = {
+  readonly path: string;
+  readonly label: string;
+  readonly help?: string;
+  readonly variants: readonly string[];
+} & (
+  | { readonly type: 'boolean' }
+  | {
+      readonly type: 'select';
+      readonly options: readonly { readonly value: string; readonly label: string }[];
+    }
+);
+
 export interface HudWidgetDescriptor {
   readonly id: HudWidgetId;
   readonly label: string;
   readonly rendererAvailability: 'implemented' | 'unimplemented';
   readonly supportedVariants: readonly [string, ...string[]];
   readonly defaultVariant: string;
+  readonly variantLabels: Readonly<Record<string, string>>;
   readonly resizePolicy: HudResizePolicy;
   readonly defaultPlacement: HudWidgetPlacement;
+  readonly sourceOwner: 'program' | 'radar' | null;
+  readonly settingsSchemaByVariant: Readonly<
+    Record<string, (value: unknown) => Record<string, unknown>>
+  >;
+  readonly defaultSettingsByVariant: Readonly<Record<string, Record<string, unknown>>>;
+  readonly editorControls: readonly HudEditorControl[];
   /** Registry-owned parser for the complete persisted widget settings envelope. */
   readonly validateSettings: (value: unknown) => HudWidgetSettings;
 }
@@ -346,6 +367,47 @@ export function defineHudWidgetDescriptor(
     parserVariants.some((variant) => !supportedVariants.has(variant))
   ) {
     throw new Error(`组件 ${definition.id} 必须为每个 supported variant 提供独立 settings schema`);
+  }
+  const defaultVariants = Object.keys(definition.defaultSettingsByVariant);
+  if (
+    defaultVariants.length !== supportedVariants.size ||
+    defaultVariants.some((variant) => !supportedVariants.has(variant))
+  ) {
+    throw new Error(`组件 ${definition.id} 的 defaults 与 variants 不一致`);
+  }
+  for (const variant of definition.supportedVariants) {
+    if (!definition.variantLabels[variant]?.trim()) throw new Error('Variant 缺少名称');
+    const parser = definition.settingsSchemaByVariant[variant]!;
+    const defaults = definition.defaultSettingsByVariant[variant]!;
+    if (canonicalJson(parser(defaults)) !== canonicalJson(defaults))
+      throw new Error('组件 defaults 必须完整');
+    const paths = new Set<string>();
+    for (const control of definition.editorControls) {
+      if (
+        control.variants.length === 0 ||
+        control.variants.some((item) => !supportedVariants.has(item))
+      )
+        throw new Error('Control variant 无效');
+      if (!control.variants.includes(variant)) continue;
+      if (paths.has(control.path)) throw new Error('Control path 重复');
+      paths.add(control.path);
+      const defaultValue = defaults[control.path];
+      if (
+        control.type === 'boolean'
+          ? typeof defaultValue !== 'boolean'
+          : typeof defaultValue !== 'string'
+      )
+        throw new Error('Control 与 setting 类型不一致');
+      const values: readonly (string | boolean)[] =
+        control.type === 'boolean' ? [false, true] : control.options.map((option) => option.value);
+      if (
+        values.length === 0 ||
+        new Set(values).size !== values.length ||
+        !values.includes(defaultValue as string | boolean)
+      )
+        throw new Error('Control 缺少合法默认值');
+      for (const value of values) parser({ ...defaults, [control.path]: value });
+    }
   }
   return {
     ...definition,
@@ -448,16 +510,8 @@ export function parseHudPreset(value: unknown): HudPreset {
 }
 
 export function parseHudResolvedPreset(value: unknown): HudResolvedPreset {
-  // Compatibility boundary: add an explicit migration before this switch when
-  // a future resolved snapshot schema is introduced. Never re-resolve through
-  // the current Theme recipe here, because the snapshot is the last on-air value.
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    (value as Record<string, unknown>).schemaVersion !== HUD_RESOLVED_SNAPSHOT_SCHEMA_VERSION
-  ) {
-    throw new Error('不支持的 HUD resolved snapshot schema version');
-  }
+  // Current-version frozen boundary. Reject old versions and incomplete settings;
+  // never re-resolve through the current Theme recipe.
   const parsed = hudResolvedPresetSchema.parse(value);
   if (!hasExactWidgetKeys(parsed.widgets)) {
     throw new Error('HudResolvedPreset 必须完整包含第一版组件 Registry');
@@ -472,7 +526,11 @@ export function parseHudResolvedPreset(value: unknown): HudResolvedPreset {
   const widgets = completeWidgetRecord((id) => {
     const settings = parsed.widgets[id];
     if (settings === undefined) throw new Error(`HudResolvedPreset 缺少组件设置：${id}`);
-    return getHudWidgetDescriptor(id).validateSettings(settings);
+    const validated = getHudWidgetDescriptor(id).validateSettings(settings);
+    if (canonicalJson(validated.settings) !== canonicalJson(settings.settings)) {
+      throw new Error('Resolved settings 必须完整，不能按当前 defaults 归一化');
+    }
+    return validated;
   });
   return { ...parsed, layout, widgets };
 }
@@ -511,17 +569,20 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
     if (!themes.has(preset.themeId))
       throw new Error(`HudPreset 引用不存在的外观：${preset.themeId}`);
   }
+  let activePreset = parsed.activePreset;
   if (parsed.activePreset.kind === 'custom') {
     if (!presetIds.has(parsed.activePreset.sourceId)) {
       throw new Error(`activePreset 引用不存在的预设：${parsed.activePreset.sourceId}`);
     }
     const snapshot = parseHudResolvedPreset(parsed.activePreset.snapshot);
+    activePreset = { ...parsed.activePreset, snapshot };
     if (parsed.activePreset.sourceId !== snapshot.preset.id) {
       throw new Error('activePreset.sourceId 与 resolved snapshot 的 preset.id 不一致');
     }
   }
   return {
     ...parsed,
+    activePreset,
     customPresets: presets,
     customLayouts: [...layouts.values()].filter((item) => item.id !== BUILTIN_LAYOUT_ID),
     customThemes: [...themes.values()].filter((item) => item.id !== BUILTIN_THEME_ID),
@@ -531,6 +592,136 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
 export const radarWidgetSettingsSchema = z.strictObject({
   zoomMode: z.enum(['full-map', 'auto']).default('full-map'),
 });
+
+export const playerRailSettingsSchema = z.strictObject({
+  showTeamName: z.boolean().default(true),
+  showAvatar: z.boolean().default(true),
+  showMoney: z.boolean().default(true),
+  showLoadout: z.boolean().default(true),
+  showUtility: z.boolean().default(true),
+  showTeamSummary: z.boolean().default(true),
+  deadInformation: z.enum(['stats', 'minimal']).default('stats'),
+});
+export type PlayerRailSettings = z.infer<typeof playerRailSettingsSchema>;
+export const focusedPlayerSettingsSchema = z.strictObject({
+  showMedia: z.boolean().default(true),
+  showMetrics: z.boolean().default(true),
+  showReserveAmmo: z.boolean().default(true),
+});
+export type FocusedPlayerSettings = z.infer<typeof focusedPlayerSettingsSchema>;
+export const minimalFocusedPlayerSettingsSchema = z.strictObject({
+  showReserveAmmo: z.boolean().default(false),
+});
+
+/** Variant fixes the information structure; settings only tune fields supported by that structure. */
+export function focusedPlayerPresentationSettings(
+  envelope: HudWidgetSettings,
+): FocusedPlayerSettings {
+  const validated = getHudWidgetDescriptor('focused-player').validateSettings(envelope);
+  return validated.variant === 'minimal'
+    ? {
+        showMedia: false,
+        showMetrics: false,
+        ...minimalFocusedPlayerSettingsSchema.parse(validated.settings),
+      }
+    : focusedPlayerSettingsSchema.parse(validated.settings);
+}
+export const topScoreBarSettingsSchema = z.strictObject({
+  showTeamLogo: z.boolean().default(true),
+  showSeriesWins: z.boolean().default(true),
+  showAliveMatchup: z.boolean().default(true),
+  showTimeout: z.boolean().default(true),
+  showObjectiveAuxiliary: z.boolean().default(true),
+});
+export type TopScoreBarSettings = z.infer<typeof topScoreBarSettingsSchema>;
+
+function widgetContract(id: HudWidgetId) {
+  const schema =
+    id === 'radar'
+      ? radarWidgetSettingsSchema
+      : id === 'team-ct-rail' || id === 'team-t-rail'
+        ? playerRailSettingsSchema
+        : id === 'focused-player'
+          ? focusedPlayerSettingsSchema
+          : id === 'top-score-bar'
+            ? topScoreBarSettingsSchema
+            : emptyWidgetSettingsSchema;
+  const labels: Record<string, string> = {
+    showTeamName: '显示队名',
+    showAvatar: '显示头像',
+    showMoney: '显示经济',
+    showLoadout: '显示武器与装备',
+    showUtility: '显示道具',
+    showTeamSummary: '显示队伍汇总',
+    showMedia: '显示头像与观察位',
+    showMetrics: '显示 K/A/D/ADR',
+    showReserveAmmo: '显示备用弹药',
+    showTeamLogo: '显示队标',
+    showSeriesWins: '显示系列赛胜图',
+    showAliveMatchup: '显示存活对比',
+    showTimeout: '显示暂停附加信息',
+    showObjectiveAuxiliary: '显示目标附加进度',
+  };
+  const variants = id === 'focused-player' ? ['default', 'minimal'] : ['default'];
+  const defaults = schema.parse({});
+  const editorControls: HudEditorControl[] = Object.keys(defaults).map((path) =>
+    path === 'zoomMode'
+      ? {
+          path,
+          label: '雷达视野',
+          type: 'select',
+          variants,
+          options: [
+            { value: 'full-map', label: '完整地图' },
+            { value: 'auto', label: '自动聚焦存活选手' },
+          ],
+        }
+      : path === 'deadInformation'
+        ? {
+            path,
+            label: '死亡态信息',
+            type: 'select',
+            variants,
+            options: [
+              { value: 'stats', label: '统计信息' },
+              { value: 'minimal', label: '仅身份与死亡状态' },
+            ],
+          }
+        : {
+            path,
+            label: labels[path]!,
+            type: 'boolean',
+            variants:
+              id === 'focused-player' && path !== 'showReserveAmmo' ? ['default'] : variants,
+          },
+  );
+  const settingsSchemaByVariant: Record<string, (value: unknown) => Record<string, unknown>> = {
+    default: (value) => schema.parse(value),
+  };
+  const defaultSettingsByVariant: Record<string, Record<string, unknown>> = { default: defaults };
+  if (id === 'focused-player') {
+    settingsSchemaByVariant.minimal = (value) => minimalFocusedPlayerSettingsSchema.parse(value);
+    defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
+  }
+  return {
+    supportedVariants: variants as [string, ...string[]],
+    variantLabels: { default: '标准信息', minimal: '精简信息' },
+    settingsSchemaByVariant,
+    defaultSettingsByVariant,
+    editorControls,
+  };
+}
+
+/** Variant switching starts from the declared defaults; incompatible fields never carry over. */
+export function switchHudWidgetVariant(
+  descriptor: HudWidgetDescriptor,
+  variant: string,
+): HudWidgetSettings {
+  return descriptor.validateSettings({
+    variant,
+    settings: cloneJson(descriptor.defaultSettingsByVariant[variant]),
+  });
+}
 
 export const HUD_WIDGET_REGISTRY: readonly HudWidgetDescriptor[] = deepFreeze(
   HUD_WIDGET_IDS.map((id) => ({
@@ -547,16 +738,12 @@ export const HUD_WIDGET_REGISTRY: readonly HudWidgetDescriptor[] = deepFreeze(
         id === 'round-history'
           ? 'implemented'
           : 'unimplemented',
-      supportedVariants: ['default'] as const,
       defaultVariant: 'default' as const,
       resizePolicy: id === 'radar' ? ('square' as const) : ('none' as const),
       defaultPlacement: cloneJson(DEFAULT_PLACEMENTS[id]),
-      settingsSchemaByVariant: {
-        default: (value: unknown) =>
-          id === 'radar'
-            ? radarWidgetSettingsSchema.parse(value)
-            : emptyWidgetSettingsSchema.parse(value),
-      },
+      sourceOwner:
+        id === 'radar' ? 'radar' : id === 'objective' || id === 'round-result' ? null : 'program',
+      ...widgetContract(id),
     }),
   })),
 );
@@ -606,8 +793,8 @@ const BUILTIN_PRESET: HudPreset = deepFreeze({
   layoutId: BUILTIN_LAYOUT_ID,
   themeId: BUILTIN_THEME_ID,
   widgets: completeWidgetRecord((id) => ({
-    variant: 'default',
-    settings: id === 'radar' ? { zoomMode: 'full-map' } : {},
+    variant: getHudWidgetDescriptor(id).defaultVariant,
+    settings: cloneJson(getHudWidgetDescriptor(id).defaultSettingsByVariant.default!),
   })),
 });
 

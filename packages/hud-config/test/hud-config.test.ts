@@ -8,6 +8,9 @@ import {
   HUD_CANVAS_WIDTH,
   HUD_GRID_SIZE,
   HUD_WIDGET_IDS,
+  HUD_WIDGET_REGISTRY,
+  switchHudWidgetVariant,
+  focusedPlayerPresentationSettings,
   canonicalJson,
   changePlacementAnchor,
   createDefaultHudConfigDocument,
@@ -258,6 +261,19 @@ describe('hud-config schema and framework contract', () => {
     const futureDescriptor = defineHudWidgetDescriptor({
       id: 'radar',
       label: '雷达',
+      sourceOwner: 'radar',
+      variantLabels: { default: '默认', compact: '紧凑' },
+      defaultSettingsByVariant: { default: { showLabel: true }, compact: { density: 'tight' } },
+      editorControls: [
+        { path: 'showLabel', label: '显示标签', type: 'boolean', variants: ['default'] },
+        {
+          path: 'density',
+          label: '密度',
+          type: 'select',
+          variants: ['compact'],
+          options: [{ value: 'tight', label: '紧凑' }],
+        },
+      ],
       rendererAvailability: 'implemented',
       supportedVariants: ['default', 'compact'] as const,
       defaultVariant: 'compact',
@@ -299,6 +315,7 @@ describe('hud-config schema and framework contract', () => {
     ).toThrow();
     expect(() =>
       defineHudWidgetDescriptor({
+        ...futureDescriptor,
         id: futureDescriptor.id,
         label: futureDescriptor.label,
         rendererAvailability: futureDescriptor.rendererAvailability,
@@ -391,5 +408,129 @@ describe('hud-config logical geometry', () => {
     expect(box.top).toBe(0);
     expect(box.left + box.width).toBeLessThanOrEqual(HUD_CANVAS_WIDTH);
     expect(box.top + box.height).toBeLessThanOrEqual(HUD_CANVAS_HEIGHT);
+  });
+});
+
+describe('widget customization contract', () => {
+  it('validates every declared default and control value, rejecting undeclared fields', () => {
+    for (const descriptor of HUD_WIDGET_REGISTRY) {
+      expect(Object.keys(descriptor.settingsSchemaByVariant).sort()).toEqual(
+        [...descriptor.supportedVariants].sort(),
+      );
+      expect(Object.keys(descriptor.defaultSettingsByVariant).sort()).toEqual(
+        [...descriptor.supportedVariants].sort(),
+      );
+      for (const variant of descriptor.supportedVariants) {
+        const envelope = switchHudWidgetVariant(descriptor, variant);
+        expect(envelope.settings).toEqual(descriptor.defaultSettingsByVariant[variant]);
+        expect(() =>
+          descriptor.validateSettings({
+            ...envelope,
+            settings: { ...envelope.settings, arbitraryCss: 'invalid' },
+          }),
+        ).toThrow();
+        for (const control of descriptor.editorControls.filter((control) =>
+          control.variants.includes(variant),
+        )) {
+          const values =
+            control.type === 'boolean'
+              ? [false, true]
+              : control.options.map((option) => option.value);
+          for (const value of values)
+            expect(
+              descriptor.validateSettings({
+                ...envelope,
+                settings: { ...envelope.settings, [control.path]: value },
+              }).settings[control.path],
+            ).toBe(value);
+          expect(() =>
+            descriptor.validateSettings({
+              ...envelope,
+              settings: { ...envelope.settings, [control.path]: null },
+            }),
+          ).toThrow();
+        }
+      }
+    }
+  });
+
+  it('rejects inconsistent defaults and control metadata at declaration time', () => {
+    const descriptor = getHudWidgetDescriptor('radar');
+    expect(() =>
+      defineHudWidgetDescriptor({ ...descriptor, defaultSettingsByVariant: {} }),
+    ).toThrow();
+    expect(() =>
+      defineHudWidgetDescriptor({
+        ...descriptor,
+        defaultSettingsByVariant: { default: { zoomMode: 'invalid' } },
+      }),
+    ).toThrow();
+    expect(() =>
+      defineHudWidgetDescriptor({
+        ...descriptor,
+        editorControls: [
+          { path: 'missing', label: '缺失', type: 'boolean', variants: ['default'] },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      defineHudWidgetDescriptor({
+        ...descriptor,
+        editorControls: [{ ...descriptor.editorControls[0]!, variants: ['missing'] }],
+      }),
+    ).toThrow();
+  });
+
+  it('fills declared authoring defaults but never fills incomplete resolved settings', () => {
+    const preset = getBuiltinPreset();
+    const descriptor = getHudWidgetDescriptor('focused-player');
+    preset.widgets['focused-player'] = { variant: 'minimal', settings: {} };
+    const parsed = parseHudPreset(preset);
+    expect(parsed.widgets['focused-player'].settings).toEqual(
+      descriptor.defaultSettingsByVariant.minimal,
+    );
+    const resolved = resolveHudPreset(parsed, getBuiltinLayout(), getBuiltinTheme());
+    expect(parseHudResolvedPreset(JSON.parse(JSON.stringify(resolved)))).toEqual(resolved);
+    expect(() =>
+      parseHudResolvedPreset({
+        ...resolved,
+        widgets: { ...resolved.widgets, 'focused-player': { variant: 'minimal', settings: {} } },
+      }),
+    ).toThrow();
+    expect(() => parseHudResolvedPreset({ ...resolved, schemaVersion: 1 })).toThrow();
+    expect(() => switchHudWidgetVariant(descriptor, 'missing')).toThrow();
+    expect(() =>
+      descriptor.validateSettings({ variant: 'minimal', settings: { showMetrics: true } }),
+    ).toThrow();
+    expect(focusedPlayerPresentationSettings(parsed.widgets['focused-player'])).toEqual({
+      showMedia: false,
+      showMetrics: false,
+      showReserveAmmo: false,
+    });
+  });
+
+  it('preserves a frozen variant and settings when authoring changes', () => {
+    const preset = { ...getBuiltinPreset(), id: 'custom-settings' };
+    preset.widgets['focused-player'] = switchHudWidgetVariant(
+      getHudWidgetDescriptor('focused-player'),
+      'minimal',
+    );
+    const snapshot = resolveHudPreset(preset, getBuiltinLayout(), getBuiltinTheme());
+    const changed = {
+      ...preset,
+      widgets: {
+        ...preset.widgets,
+        'focused-player': getBuiltinPreset().widgets['focused-player'],
+      },
+    };
+    const document = parseHudConfigDocument({
+      ...createDefaultHudConfigDocument(),
+      customPresets: [changed],
+      activePreset: { kind: 'custom', sourceId: preset.id, snapshot },
+    });
+    expect(resolveActiveHudPreset(document).widgets['focused-player']).toEqual(
+      snapshot.widgets['focused-player'],
+    );
+    expect(document.customPresets[0]!.widgets['focused-player'].variant).toBe('default');
   });
 });
