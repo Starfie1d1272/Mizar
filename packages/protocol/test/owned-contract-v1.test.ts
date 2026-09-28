@@ -36,7 +36,7 @@ it('enforces kind-specific reliable payloads before V1 freeze', async () => {
   const cases = [
     ['match_started', {}],
     ['map_started', {}],
-    ['map_ended', { scoreCT: 13, scoreT: 11 }],
+    ['map_ended', { scoreA: 13, scoreB: 11, scoreCT: 13, scoreT: 11 }],
     ['series_ended', { scoreA: 2, scoreB: 1 }],
     ['source_generation_changed', { previousSourceGeneration: 1000 }],
     ['map_epoch_changed', { previousMapEpoch: 1000, reason: 'explicit-reset' }],
@@ -50,4 +50,11 @@ it('enforces kind-specific reliable payloads before V1 freeze', async () => {
     ).toThrow();
   }
   expect(() => parseReliableEventV1({ ...event, kind: 'identity_mismatch' })).toThrow();
+  expect(() =>
+    parseReliableEventV1({
+      ...event,
+      kind: 'map_ended',
+      payload: { scoreCT: 13, scoreT: 11 },
+    }),
+  ).toThrow();
 });

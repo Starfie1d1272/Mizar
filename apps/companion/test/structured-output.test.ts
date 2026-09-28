@@ -20,7 +20,17 @@ function observation(
   sequence: number,
   phase: 'live' | 'gameover',
   mapName = 'de_ancient',
+  options: {
+    readonly entryASide?: 'CT' | 'T';
+    readonly scoreA?: number;
+    readonly scoreB?: number;
+    readonly roundNumber?: number;
+  } = {},
 ): TelemetryObservation {
+  const entryASide = options.entryASide ?? 'CT';
+  const entryBSide = entryASide === 'CT' ? 'T' : 'CT';
+  const scoreA = options.scoreA ?? 13;
+  const scoreB = options.scoreB ?? 11;
   const players = (side: 'a' | 'b', team: 'CT' | 'T') =>
     manifest.entrants[side].roster.players.slice(0, 5).map((player, index) => ({
       sourcePlayerId: player.steam64!,
@@ -31,7 +41,9 @@ function observation(
       position: { x: index * 100, y: 200, z: 0 },
       forward: { x: 1, y: 0, z: 0 },
     }));
-  const allPlayers = [...players('a', 'CT'), ...players('b', 'T')];
+  const allPlayers = [...players('a', entryASide), ...players('b', entryBSide)];
+  const ctEntry = entryASide === 'CT' ? 'a' : 'b';
+  const tEntry = entryASide === 'T' ? 'a' : 'b';
   return {
     receive: {
       sequence,
@@ -53,10 +65,16 @@ function observation(
       map: {
         name: mapName,
         phase,
-        roundNumber: 24,
+        roundNumber: options.roundNumber ?? 24,
         sides: {
-          ct: { name: manifest.entrants.a.name, score: 13 },
-          t: { name: manifest.entrants.b.name, score: 11 },
+          ct: {
+            name: manifest.entrants[ctEntry].name,
+            score: entryASide === 'CT' ? scoreA : scoreB,
+          },
+          t: {
+            name: manifest.entrants[tEntry].name,
+            score: entryASide === 'T' ? scoreA : scoreB,
+          },
         },
       },
       round: { phase: phase === 'live' ? 'live' : 'over' },
@@ -73,9 +91,20 @@ it('projects bounded public-safe live data and transition-time reliable event', 
       'utf8',
     ),
   ) as BroadcastManifestV1;
+  const sourceContext = toMatchContext(manifest);
   const binding: MatchContextBinding = {
     manifest,
-    context: { ...toMatchContext(manifest), stage: 'swiss', stageLabel: '瑞士赛' },
+    context: {
+      ...sourceContext,
+      stage: 'swiss',
+      stageLabel: '瑞士赛',
+      maps: sourceContext.maps.map((map) => ({
+        ...map,
+        scoreA: null,
+        scoreB: null,
+        completedAt: null,
+      })),
+    },
     origin: 'fixture',
     freshness: 'fresh',
     diagnostics: [],
@@ -130,8 +159,12 @@ it('projects bounded public-safe live data and transition-time reliable event', 
     const result = runtime.acceptObservation(observation(manifest, 2, 'gameover'));
     const ended = coordinator.afterRuntimeMutation(result);
     const events = transitionReliableEventsV1({ result, bundle: ended, binding });
-    expect(events.map((event) => event.kind)).toContain('map_ended');
-    expect(events[0]?.observedAt).toBe('2026-09-28T00:00:02.000Z');
+    const mapEnded = events.find((event) => event.kind === 'map_ended');
+    expect(mapEnded).toMatchObject({
+      observedAt: '2026-09-28T00:00:02.000Z',
+      mapId: binding.context.maps[0]?.mapId,
+      payload: { scoreA: 13, scoreB: 11, scoreCT: 13, scoreT: 11 },
+    });
     expect(transitionReliableEventsV1({ result, bundle: ended, binding })[0]?.idempotencyKey).toBe(
       events[0]?.idempotencyKey,
     );
@@ -176,14 +209,86 @@ async function bindingFixture(): Promise<MatchContextBinding> {
       'utf8',
     ),
   ) as BroadcastManifestV1;
+  const context = toMatchContext(manifest);
   return {
     manifest,
-    context: toMatchContext(manifest),
+    context: {
+      ...context,
+      maps: context.maps.map((map) => ({
+        ...map,
+        scoreA: null,
+        scoreB: null,
+        completedAt: null,
+      })),
+    },
     origin: 'fixture',
     freshness: 'fresh',
     diagnostics: [],
   };
 }
+
+it.each([
+  { format: 'bo1' as const, scoreA: 13, scoreB: 9, label: 'regulation' },
+  { format: 'bo3' as const, scoreA: 13, scoreB: 11, label: 'side switch' },
+  { format: 'bo5' as const, scoreA: 16, scoreB: 14, label: 'overtime' },
+])(
+  'projects entrant-relative map_ended result for $format after $label',
+  async ({ format, scoreA, scoreB }) => {
+    const original = await bindingFixture();
+    const binding: MatchContextBinding = {
+      ...original,
+      manifest: { ...original.manifest, match: { ...original.manifest.match, format } },
+      context: { ...original.context, format },
+    };
+    const runtime = createProgramRuntime(`map-result-${format}`);
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      matchContextBinding: binding,
+      nowMonotonicMs: () => 2000,
+    });
+    try {
+      coordinator.afterRuntimeMutation(
+        runtime.acceptObservation(
+          observation(binding.manifest, 1, 'live', 'de_ancient', {
+            entryASide: 'CT',
+            scoreA: 6,
+            scoreB: 5,
+            roundNumber: 11,
+          }),
+        ),
+      );
+      const result = runtime.acceptObservation(
+        observation(binding.manifest, 2, 'gameover', 'de_ancient', {
+          entryASide: 'T',
+          scoreA,
+          scoreB,
+          roundNumber: scoreA + scoreB,
+        }),
+      );
+      const ended = coordinator.afterRuntimeMutation(result);
+      const event = transitionReliableEventsV1({ result, bundle: ended, binding }).find(
+        (candidate) => candidate.kind === 'map_ended',
+      );
+      expect(ended.program.series?.maps[0]).toMatchObject({
+        status: 'completed',
+        finalScore: { a: scoreA, b: scoreB },
+      });
+      expect(event).toMatchObject({
+        mapId: binding.context.maps[0]?.mapId,
+        mapName: 'de_ancient',
+        payload: {
+          scoreA,
+          scoreB,
+          scoreCT: scoreB,
+          scoreT: scoreA,
+        },
+      });
+    } finally {
+      await coordinator.close();
+    }
+  },
+);
 
 it.each(['bo3', 'bo5'] as const)(
   'emits each evidenced map start in %s, including a reset only after fresh telemetry',

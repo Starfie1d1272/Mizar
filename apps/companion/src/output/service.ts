@@ -301,14 +301,25 @@ export class OutputService {
       !this.isCurrentForRetry(event)
     )
       return false;
-    if (
-      event.kind === 'map_ended' &&
-      (bundle.program.map.phase !== 'gameover' ||
+    if (event.kind === 'map_ended') {
+      const series = bundle.program.series;
+      const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
+      const resultMap =
+        mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
+      if (
+        bundle.program.map.phase !== 'gameover' ||
         bundle.program.map.name !== event.mapName ||
         bundle.program.map.score.ct !== event.payload.scoreCT ||
-        bundle.program.map.score.t !== event.payload.scoreT)
-    )
-      return false;
+        bundle.program.map.score.t !== event.payload.scoreT ||
+        resultMap?.status !== 'completed' ||
+        resultMap.finalScore === null ||
+        resultMap.mapId !== event.mapId ||
+        resultMap.mapName !== event.mapName ||
+        resultMap.finalScore.a !== event.payload.scoreA ||
+        resultMap.finalScore.b !== event.payload.scoreB
+      )
+        return false;
+    }
     if (event.kind === 'identity_mismatch' || event.kind === 'lineup_mismatch')
       return (
         bundle.program.status.identity === 'mismatch' ||

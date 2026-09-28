@@ -25,6 +25,8 @@
     "source": "runtime-transition"
   },
   "payload": {
+    "scoreA": 13,
+    "scoreB": 11,
     "scoreCT": 13,
     "scoreT": 11
   }
