@@ -240,7 +240,7 @@ describe('Preparation: RivalHubPreparationPanel', () => {
 
     expect(mockSwitchToRivalhubBp).toHaveBeenCalledWith('rev-ctx-1', 'cand-rev-1');
     expect(container.textContent).toContain(
-      '在线比赛已加载。进入现场工作区后将自动作为实时数据源。',
+      '在线比赛已加载。进入现场工作区后会检查实时数据源；无人占用时自动认领。',
     );
   });
 });
@@ -419,6 +419,68 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(container.textContent).toContain('本机正在提供实时数据');
 
     vi.useRealTimers();
+  });
+
+  it('does not report manual claim success when another device wins the race', async () => {
+    let claimAttempt = 0;
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      const u = toUrlString(url);
+      if (u.includes('/local/v1/rivalhub-connection')) {
+        return Promise.resolve(
+          Response.json({
+            paired: true,
+            displayName: '主舞台制播机',
+            activeMatchId: 'match-101',
+            activeSourceMatchId: null,
+            activeDeviceName: null,
+          }),
+        );
+      }
+      if (u.includes('/operator/rivalhub/source/claim')) {
+        claimAttempt++;
+        if (claimAttempt === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ message: '当前暂未准备好认领。' }), {
+              status: 409,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(
+          Response.json({
+            paired: true,
+            displayName: '主舞台制播机',
+            activeMatchId: 'match-101',
+            activeSourceMatchId: null,
+            activeDeviceName: '备用副机 B',
+          }),
+        );
+      }
+      return Promise.resolve(Response.json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onMessage = vi.fn();
+    await act(async () => {
+      root!.render(
+        <RivalHubLiveSourcePanel action={async (fn) => void (await fn())} onMessage={onMessage} />,
+      );
+      await Promise.resolve();
+    });
+
+    const claimBtn = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('成为本场数据源'),
+    );
+    expect(claimBtn).not.toBeUndefined();
+
+    await act(async () => {
+      claimBtn!.click();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('当前由 备用副机 B 提供实时数据');
+    expect(onMessage).toHaveBeenLastCalledWith('当前由 备用副机 B 提供实时数据。');
+    expect(onMessage).not.toHaveBeenCalledWith('本机已成为本场实时数据源。');
   });
 
   it('discovers other active source, does not auto-takeover, and only takes over on explicit user action', async () => {
