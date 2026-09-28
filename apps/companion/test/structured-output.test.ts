@@ -270,7 +270,7 @@ it.each([
       const event = transitionReliableEventsV1({ result, bundle: ended, binding }).find(
         (candidate) => candidate.kind === 'map_ended',
       );
-      expect(ended.operator.seriesProgress?.maps[0]).toMatchObject({
+      expect(ended.program.series?.maps[0]).toMatchObject({
         status: 'completed',
         finalScore: { a: scoreA, b: scoreB },
       });
