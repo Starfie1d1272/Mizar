@@ -7,7 +7,8 @@ const id = z.string().min(1).max(128);
 const nullableId = id.nullable();
 const utc = z.iso.datetime({ offset: true });
 const number = z.number().finite().nullable();
-const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+const nonNegativeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const count = nonNegativeInteger.nullable();
 const health = z.number().int().min(0).max(100).nullable();
 const economy = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
 const vector = z
@@ -159,7 +160,12 @@ export const reliableEventV1Schema = z.discriminatedUnion('kind', [
   reliableEventBase.extend({ kind: z.literal('map_started'), payload: emptyPayload }),
   reliableEventBase.extend({
     kind: z.literal('map_ended'),
-    payload: z.strictObject({ scoreCT: count, scoreT: count }),
+    payload: z.strictObject({
+      scoreA: nonNegativeInteger,
+      scoreB: nonNegativeInteger,
+      scoreCT: nonNegativeInteger,
+      scoreT: nonNegativeInteger,
+    }),
   }),
   reliableEventBase.extend({
     kind: z.literal('series_ended'),
