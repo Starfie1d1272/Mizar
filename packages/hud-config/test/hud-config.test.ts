@@ -420,6 +420,12 @@ describe('widget customization contract', () => {
       expect(Object.keys(descriptor.defaultSettingsByVariant).sort()).toEqual(
         [...descriptor.supportedVariants].sort(),
       );
+      expect(Object.keys(descriptor.variantLabels).sort()).toEqual(
+        [...descriptor.supportedVariants].sort(),
+      );
+      expect(getBuiltinPreset().widgets[descriptor.id]).toEqual(
+        switchHudWidgetVariant(descriptor, descriptor.defaultVariant),
+      );
       for (const variant of descriptor.supportedVariants) {
         const envelope = switchHudWidgetVariant(descriptor, variant);
         expect(envelope.settings).toEqual(descriptor.defaultSettingsByVariant[variant]);
@@ -477,6 +483,12 @@ describe('widget customization contract', () => {
       defineHudWidgetDescriptor({
         ...descriptor,
         editorControls: [{ ...descriptor.editorControls[0]!, variants: ['missing'] }],
+      }),
+    ).toThrow();
+    expect(() =>
+      defineHudWidgetDescriptor({
+        ...descriptor,
+        variantLabels: { default: '默认', extra: '多余' },
       }),
     ).toThrow();
   });
