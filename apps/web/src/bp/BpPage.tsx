@@ -284,31 +284,33 @@ export function BpPage({ operator = false }: { readonly operator?: boolean }) {
           </aside>
         </section>
 
-        <section className="bp-scene-testing" aria-labelledby="bp-scene-testing-title">
-          <div className="bp-demo-heading">
-            <h2 id="bp-scene-testing-title">场景测试</h2>
-            <p>使用内置赛事数据检查 BP 画面、动画与 OBS 输出，不修改当前比赛。</p>
-          </div>
-          <div className="bp-demo-options">
-            {(['bo1', 'bo3', 'bo5'] as const).map((format) => (
-              <article className="bp-demo-option" key={format}>
-                <div>
-                  <strong>{format.toUpperCase()}</strong>
-                  <span>{DEMO_MATCHES[format].title}</span>
-                </div>
-                <button
-                  type="button"
-                  className="bp-button"
-                  disabled={demoBusy || !connected}
-                  onClick={() => void changeDemo({ kind: 'start', format })}
-                >
-                  开始演示
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
-
+        {import.meta.env.DEV ||
+        new URLSearchParams(window.location.search).get('qualification') === '1' ? (
+          <section className="bp-scene-testing" aria-labelledby="bp-scene-testing-title">
+            <div className="bp-demo-heading">
+              <h2 id="bp-scene-testing-title">场景测试</h2>
+              <p>使用内置赛事数据检查 BP 画面、动画与 OBS 输出，不修改当前比赛。</p>
+            </div>
+            <div className="bp-demo-options">
+              {(['bo1', 'bo3', 'bo5'] as const).map((format) => (
+                <article className="bp-demo-option" key={format}>
+                  <div>
+                    <strong>{format.toUpperCase()}</strong>
+                    <span>{DEMO_MATCHES[format].title}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="bp-button"
+                    disabled={demoBusy || !connected}
+                    onClick={() => void changeDemo({ kind: 'start', format })}
+                  >
+                    开始演示
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {demoActive === null && localEditorOpen && workspace ? (
           <BpLocalEditor
             key={workspace.contextRevision}

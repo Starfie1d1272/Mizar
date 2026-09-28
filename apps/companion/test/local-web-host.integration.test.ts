@@ -192,6 +192,10 @@ describe('production local web host', () => {
         '/workspace',
         '/workspace/left',
         '/workspace/dock',
+        '/',
+        '/matches',
+        '/picture',
+        '/settings',
         '/operator',
         '/operator/hud',
         '/debug',
@@ -204,8 +208,8 @@ describe('production local web host', () => {
       }
 
       const entry = await app.inject({ method: 'GET', url: '/' });
-      expect(entry.statusCode).toBe(302);
-      expect(entry.headers.location).toBe('/operator');
+      expect(entry.statusCode).toBe(200);
+      expect(entry.headers['cache-control']).toBe('no-store');
       const missing = await app.inject({
         method: 'GET',
         url: '/missing-page',

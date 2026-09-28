@@ -50,3 +50,4 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 - [`0012-design-system-governance.md`](0012-design-system-governance.md)：设计系统文档、设计变量与组件职责、三类界面与分层验证。
 
 - [`0013-hud-widget-customization.md`](0013-hud-widget-customization.md)：受控组件配置、通用 Inspector、四层 ownership 与 1.0 前的版本边界。
+- [`0014-desktop-preparation-center.md`](0014-desktop-preparation-center.md)：#94 默认准备中心、ActiveLineup 首发捕获、桌面生命周期与本机 host policy。

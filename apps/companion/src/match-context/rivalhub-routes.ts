@@ -8,6 +8,7 @@ export function registerRivalHubConnectionRoutes(
   app: FastifyInstance,
   options: {
     connection: RivalHubConnection;
+    canClaim?: () => boolean;
     controller: MatchContextController | null;
     currentSnapshot: () => LiveSnapshotV1 | null;
     originPolicy: LocalWebOriginPolicy;
@@ -37,6 +38,16 @@ export function registerRivalHubConnectionRoutes(
         .send(await options.connection.schedule(from, to));
     } catch {
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
+    }
+  });
+  app.post('/operator/rivalhub/disconnect', async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    try {
+      await options.connection.disconnect();
+      return options.connection.view();
+    } catch {
+      return reply.code(409).send({ message: '断开未完成，请重试。' });
     }
   });
   app.post('/operator/rivalhub/pair', { bodyLimit: 1024 }, async (request, reply) => {
@@ -77,6 +88,8 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/claim', { bodyLimit: 128 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.canClaim && !options.canClaim())
+      return reply.code(409).send({ message: '请先进入现场。' });
     const binding = options.controller?.getActiveBinding();
     const snapshot = options.currentSnapshot();
     if (

@@ -304,6 +304,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/operator/local-': 'http://127.0.0.1:3000',
+      '/operator/rivalhub/': 'http://127.0.0.1:3000',
+      '/operator/obs/': 'http://127.0.0.1:3000',
+      '/operator/program-scene': 'http://127.0.0.1:3000',
+      '/operator/production': 'http://127.0.0.1:3000',
+      '/operator/desktop-overlay': 'http://127.0.0.1:3000',
       '/operator/hud-config': 'http://127.0.0.1:3000',
       '/operator/bp-local-save': 'http://127.0.0.1:3000',
       '/operator/bp-rivalhub': 'http://127.0.0.1:3000',

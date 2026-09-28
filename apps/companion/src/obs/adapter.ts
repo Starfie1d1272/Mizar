@@ -13,6 +13,7 @@ import {
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
+  readonly port: number;
   readonly streaming: boolean;
   readonly recording: boolean;
   readonly passwordConfigured: boolean;
@@ -85,6 +86,7 @@ export class ObsAdapter {
             typeof scene.currentProgramSceneName === 'string'
               ? scene.currentProgramSceneName
               : null,
+          port: config.port,
           streaming: stream.outputActive === true,
           recording: record.outputActive === true,
           passwordConfigured: Boolean(config.password),
@@ -106,6 +108,7 @@ export class ObsAdapter {
               : 'password_required'
             : 'unavailable',
         currentScene: null,
+        port: config.port,
         streaming: false,
         recording: false,
         passwordConfigured: Boolean(config.password),
@@ -113,6 +116,36 @@ export class ObsAdapter {
         findings: this.findings,
       };
     }
+  }
+
+  private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
+  confidencePreview(): Promise<{ scene: string; image: string } | null> {
+    if (this.previewPending) return this.previewPending;
+    this.previewPending = this.withObs(async (obs) => {
+      const current = await obs.call('GetCurrentProgramScene');
+      const scene = current.currentProgramSceneName;
+      if (typeof scene !== 'string') return null;
+      const screenshot = await obs.call('GetSourceScreenshot', {
+        sourceName: scene,
+        imageFormat: 'jpeg',
+        imageWidth: 640,
+        imageHeight: 360,
+        imageCompressionQuality: 70,
+      });
+      const after = await obs.call('GetCurrentProgramScene');
+      const image = screenshot.imageData;
+      return after.currentProgramSceneName === scene &&
+        typeof image === 'string' &&
+        image.startsWith('data:image/jpeg;base64,') &&
+        image.length < 1_000_000
+        ? { scene, image }
+        : null;
+    })
+      .catch(() => null)
+      .finally(() => {
+        this.previewPending = null;
+      });
+    return this.previewPending;
   }
 
   check(): Promise<readonly ObsFinding[]> {

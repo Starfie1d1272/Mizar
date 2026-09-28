@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../ui';
 import { LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 
@@ -75,7 +76,9 @@ export function LocalTournamentEditor({
   view,
   refresh,
   action,
+  section = 'details',
 }: {
+  readonly section?: 'details' | 'roster' | 'maps';
   readonly view: LocalTournamentView | null;
   readonly refresh: () => Promise<void>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
@@ -102,219 +105,274 @@ export function LocalTournamentEditor({
           },
     );
   return (
-    <details className="workspace-local-editor">
-      <summary>完善当前比赛</summary>
-      <form
-        onSubmit={(submit) => {
-          submit.preventDefault();
-          void action(async () => {
-            await command('/operator/local-match/save', {
-              expectedContextRevision: view.contextRevision,
-              document: draft,
+    <div className="preparation-editor">
+      {section !== 'maps' ? (
+        <form
+          onSubmit={(submit) => {
+            submit.preventDefault();
+            void action(async () => {
+              await command('/operator/local-match/save', {
+                expectedContextRevision: view.contextRevision,
+                document: draft,
+              });
+              await refresh();
             });
-            await refresh();
-          });
-        }}
-      >
-        <label>
-          阶段名称{' '}
-          <input
-            value={draft.stageLabel}
-            onChange={(change) => setDraft({ ...draft, stageLabel: change.target.value })}
-          />
-        </label>
-        <label>
-          轮次说明{' '}
-          <input
-            value={draft.roundLabel ?? ''}
-            onChange={(change) => setDraft({ ...draft, roundLabel: change.target.value || null })}
-          />
-        </label>
-        <label>
-          比赛说明{' '}
-          <input
-            value={draft.matchLabel ?? ''}
-            onChange={(change) => setDraft({ ...draft, matchLabel: change.target.value || null })}
-          />
-        </label>
-        <label>
-          赛果意义{' '}
-          <input
-            value={draft.stakesLabel ?? ''}
-            onChange={(change) => setDraft({ ...draft, stakesLabel: change.target.value || null })}
-          />
-        </label>
-        <label>
-          计划开始{' '}
-          <input
-            type="datetime-local"
-            value={localInputTime(draft.scheduledAt)}
-            onChange={(change) =>
-              setDraft({
-                ...draft,
-                scheduledAt: change.target.value
-                  ? new Date(change.target.value).toISOString()
-                  : null,
-              })
-            }
-          />
-        </label>
-        {(['a', 'b'] as const).map((side) => (
-          <fieldset key={side}>
-            <legend>队伍 {side.toUpperCase()}</legend>
-            <label>
-              队名{' '}
-              <input
-                value={draft.entrants[side].name}
-                onChange={(change) => updateEntrant(side, { name: change.target.value })}
-              />
-            </label>
-            <label>
-              队标图片{' '}
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(change) => {
-                  const file = change.target.files?.[0];
-                  if (!file) return;
-                  void action(async () =>
-                    updateEntrant(side, { logoUrl: await uploadImage(file) }),
-                  );
-                }}
-              />
-            </label>
-            {draft.entrants[side].logoUrl ? (
-              <img src={draft.entrants[side].logoUrl} alt={`${draft.entrants[side].name} 队标`} />
-            ) : null}
-            {draft.entrants[side].players.map((player, index) => (
-              <div key={player.playerId} className="workspace-roster-row">
-                <input
-                  aria-label="选手名称"
-                  placeholder="选手名称"
-                  value={player.displayName ?? ''}
+          }}
+        >
+          {section === 'details' ? (
+            <>
+              <label>
+                赛制{' '}
+                <select
+                  value={draft.format}
                   onChange={(change) =>
-                    updateEntrant(side, {
-                      players: draft.entrants[side].players.map((item, i) =>
-                        i === index ? { ...item, displayName: change.target.value || null } : item,
-                      ),
-                    })
-                  }
-                />
-                <input
-                  aria-label="Steam64"
-                  placeholder="Steam64"
-                  value={player.steam64 ?? ''}
-                  onChange={(change) =>
-                    updateEntrant(side, {
-                      players: draft.entrants[side].players.map((item, i) =>
-                        i === index ? { ...item, steam64: change.target.value || null } : item,
-                      ),
-                    })
-                  }
-                />
-                <label>
-                  首发{' '}
-                  <input
-                    type="checkbox"
-                    checked={player.isStarter}
-                    onChange={(change) =>
-                      updateEntrant(side, {
-                        players: draft.entrants[side].players.map((item, i) =>
-                          i === index ? { ...item, isStarter: change.target.checked } : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    updateEntrant(side, {
-                      players: draft.entrants[side].players.filter((_, i) => i !== index),
-                    })
+                    setDraft({ ...draft, format: change.target.value as typeof draft.format })
                   }
                 >
-                  移除
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() =>
-                updateEntrant(side, {
-                  players: [
-                    ...draft.entrants[side].players,
-                    {
-                      playerId: crypto.randomUUID(),
-                      steam64: null,
-                      displayName: null,
-                      avatarUrl: null,
-                      isStarter: draft.entrants[side].players.length < 5,
-                    },
-                  ],
-                })
-              }
-            >
-              添加选手
-            </button>
-          </fieldset>
-        ))}
-        <button>保存比赛资料</button>
-      </form>
-      <form
-        onSubmit={(submit) => {
-          submit.preventDefault();
-          void action(async () => {
-            await command('/operator/local-event/save', {
-              eventId: event.eventId,
-              name: eventName,
-              logoUrl: eventLogo,
-              themeColor: event.themeColor,
-              mapPool: eventPool,
+                  {['bo1', 'bo3', 'bo5'].map((bo) => (
+                    <option value={bo} key={bo}>
+                      {bo.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                阶段名称{' '}
+                <input
+                  value={draft.stageLabel}
+                  onChange={(change) => setDraft({ ...draft, stageLabel: change.target.value })}
+                />
+              </label>
+              <label>
+                轮次说明{' '}
+                <input
+                  value={draft.roundLabel ?? ''}
+                  onChange={(change) =>
+                    setDraft({ ...draft, roundLabel: change.target.value || null })
+                  }
+                />
+              </label>
+              <label>
+                比赛说明{' '}
+                <input
+                  value={draft.matchLabel ?? ''}
+                  onChange={(change) =>
+                    setDraft({ ...draft, matchLabel: change.target.value || null })
+                  }
+                />
+              </label>
+              <label>
+                赛果意义{' '}
+                <input
+                  value={draft.stakesLabel ?? ''}
+                  onChange={(change) =>
+                    setDraft({ ...draft, stakesLabel: change.target.value || null })
+                  }
+                />
+              </label>
+              <label>
+                计划开始{' '}
+                <input
+                  type="datetime-local"
+                  value={localInputTime(draft.scheduledAt)}
+                  onChange={(change) =>
+                    setDraft({
+                      ...draft,
+                      scheduledAt: change.target.value
+                        ? new Date(change.target.value).toISOString()
+                        : null,
+                    })
+                  }
+                />
+              </label>
+            </>
+          ) : null}
+          {section === 'roster'
+            ? (['a', 'b'] as const).map((side) => (
+                <fieldset key={side}>
+                  <legend>队伍 {side.toUpperCase()}</legend>
+                  <label>
+                    队名{' '}
+                    <input
+                      value={draft.entrants[side].name}
+                      onChange={(change) => updateEntrant(side, { name: change.target.value })}
+                    />
+                  </label>
+                  <label>
+                    队标图片{' '}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(change) => {
+                        const file = change.target.files?.[0];
+                        if (!file) return;
+                        void action(async () =>
+                          updateEntrant(side, { logoUrl: await uploadImage(file) }),
+                        );
+                      }}
+                    />
+                  </label>
+                  {draft.entrants[side].logoUrl ? (
+                    <img
+                      src={draft.entrants[side].logoUrl}
+                      alt={`${draft.entrants[side].name} 队标`}
+                    />
+                  ) : null}
+                  <ul>
+                    {draft.entrants[side].players.map((player) => (
+                      <li key={player.playerId}>
+                        {player.displayName ?? '未命名选手'} · {player.isStarter ? '首发' : '替补'}
+                      </li>
+                    ))}
+                  </ul>
+                  <details>
+                    <summary>手动编辑名单</summary>
+                    {draft.entrants[side].players.map((player, index) => (
+                      <div key={player.playerId} className="workspace-roster-row">
+                        <input
+                          aria-label="选手名称"
+                          placeholder="选手名称"
+                          value={player.displayName ?? ''}
+                          onChange={(change) =>
+                            updateEntrant(side, {
+                              players: draft.entrants[side].players.map((item, i) =>
+                                i === index
+                                  ? { ...item, displayName: change.target.value || null }
+                                  : item,
+                              ),
+                            })
+                          }
+                        />
+                        <input
+                          aria-label="Steam64"
+                          placeholder="Steam64"
+                          value={player.steam64 ?? ''}
+                          onChange={(change) =>
+                            updateEntrant(side, {
+                              players: draft.entrants[side].players.map((item, i) =>
+                                i === index
+                                  ? { ...item, steam64: change.target.value || null }
+                                  : item,
+                              ),
+                            })
+                          }
+                        />
+                        <label>
+                          首发{' '}
+                          <input
+                            type="checkbox"
+                            checked={player.isStarter}
+                            onChange={(change) =>
+                              updateEntrant(side, {
+                                players: draft.entrants[side].players.map((item, i) =>
+                                  i === index
+                                    ? { ...item, isStarter: change.target.checked }
+                                    : item,
+                                ),
+                              })
+                            }
+                          />
+                        </label>
+                        <Button
+                          type="button"
+                          onClick={() =>
+                            updateEntrant(side, {
+                              players: draft.entrants[side].players.filter((_, i) => i !== index),
+                            })
+                          }
+                        >
+                          移除
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      onClick={() =>
+                        updateEntrant(side, {
+                          players: [
+                            ...draft.entrants[side].players,
+                            {
+                              playerId: crypto.randomUUID(),
+                              steam64: null,
+                              displayName: null,
+                              avatarUrl: null,
+                              isStarter: draft.entrants[side].players.length < 5,
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      添加选手
+                    </Button>
+                  </details>
+                </fieldset>
+              ))
+            : null}
+          <Button type="submit">保存比赛资料</Button>
+        </form>
+      ) : null}
+      {section !== 'roster' ? (
+        <form
+          onSubmit={(submit) => {
+            submit.preventDefault();
+            void action(async () => {
+              await command('/operator/local-event/save', {
+                eventId: event.eventId,
+                name: eventName,
+                logoUrl: eventLogo,
+                themeColor: event.themeColor,
+                mapPool: eventPool,
+              });
+              await refresh();
             });
-            await refresh();
-          });
-        }}
-      >
-        <label>
-          赛事名称{' '}
-          <input value={eventName} onChange={(change) => setEventName(change.target.value)} />
-        </label>
-        <label>
-          赛事 Logo{' '}
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={(change) => {
-              const file = change.target.files?.[0];
-              if (!file) return;
-              void action(async () => setEventLogo(await uploadImage(file)));
-            }}
-          />
-        </label>
-        {eventLogo ? <img src={eventLogo} alt={`${eventName} Logo`} /> : null}
-        <fieldset>
-          <legend>赛事地图池</legend>
-          {LOCAL_BP_MAP_CATALOG.map(({ mapName }) => (
-            <label key={mapName}>
-              <input
-                type="checkbox"
-                checked={eventPool.includes(mapName)}
-                onChange={(change) =>
-                  setEventPool(
-                    change.target.checked
-                      ? [...eventPool, mapName]
-                      : eventPool.filter((name) => name !== mapName),
-                  )
-                }
-              />
-              {mapName}
-            </label>
-          ))}
-        </fieldset>
-        <button>保存赛事资料</button>
-      </form>
-      {event.matchIds.length > 1 ? (
+          }}
+        >
+          {section === 'details' ? (
+            <>
+              <label>
+                赛事名称{' '}
+                <input value={eventName} onChange={(change) => setEventName(change.target.value)} />
+              </label>
+              <label>
+                赛事 Logo{' '}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(change) => {
+                    const file = change.target.files?.[0];
+                    if (!file) return;
+                    void action(async () => setEventLogo(await uploadImage(file)));
+                  }}
+                />
+              </label>
+              {eventLogo ? <img src={eventLogo} alt={`${eventName} Logo`} /> : null}
+            </>
+          ) : null}
+          {section === 'maps' ? (
+            <fieldset>
+              <legend>赛事地图池</legend>
+              {LOCAL_BP_MAP_CATALOG.map(({ mapName }) => (
+                <label key={mapName}>
+                  <input
+                    type="checkbox"
+                    checked={eventPool.includes(mapName)}
+                    onChange={(change) =>
+                      setEventPool(
+                        change.target.checked
+                          ? [...eventPool, mapName]
+                          : eventPool.filter((name) => name !== mapName),
+                      )
+                    }
+                  />
+                  {mapName}
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          <Button type="submit">保存赛事资料</Button>
+        </form>
+      ) : null}
+      {section === 'details' && event.matchIds.length > 1 ? (
         <div className="workspace-local-schedule">
           <strong>比赛顺序</strong>
           {event.matchIds.map((id, index) => {
@@ -324,7 +382,7 @@ export function LocalTournamentEditor({
                 <span>
                   {match?.entrants.a.name} vs {match?.entrants.b.name}
                 </span>
-                <button
+                <Button
                   type="button"
                   disabled={index === 0}
                   onClick={() =>
@@ -340,8 +398,8 @@ export function LocalTournamentEditor({
                   }
                 >
                   上移
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   disabled={index === event.matchIds.length - 1}
                   onClick={() =>
@@ -357,12 +415,12 @@ export function LocalTournamentEditor({
                   }
                 >
                   下移
-                </button>
+                </Button>
               </div>
             );
           })}
         </div>
       ) : null}
-    </details>
+    </div>
   );
 }

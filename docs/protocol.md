@@ -8,6 +8,12 @@
 
 协议字段与精确字符串以代码 schema 为最终机器来源；本文负责解释语义、ownership 和兼容规则。
 
+## Desktop Preparation 控制面（#94）
+
+Companion 提供：`GET /local/v1/readiness` 汇总现有 projection 与 SceneController 能力；`GET /local/v1/production` 返回桌面表现模式与 CAS revision，`POST /operator/production` 接受 `enter | hide | finish`。`GET /local/v1/roster-candidate` 返回当前安全名单候选；`POST /operator/local-match/capture` 与 `/operator/local-match/create-from-server` 只接受候选 revision、context revision、source generation、map epoch 及必要的赛制/侧别确认。服务端忽略客户端玩家列表，并在 store 原子替换前重新核验候选。
+
+`GET /local/v1/desktop-overlay` 与 `POST /operator/desktop-overlay` 保存本机 host policy，widget id 限定在 `HUD_WIDGET_REGISTRY`，策略与 preset/layout/theme 分离。`GET /local/v1/obs/confidence` 为当前 OBS Program Scene 返回限尺寸 JPEG 缩略图；同一请求期间画面切场即返回空结果。以上修改路由均受 loopback + 有效本机 Origin policy 保护，RivalHub credential、GSI token 和安装记录不进入浏览器响应。Companion 不可用时，Desktop UI 显示未连接，不在浏览器另存比赛真相。
+
 ## Program Scene 与 Workspace 控制面
 
 `packages/protocol/src/program-scenes.ts` 是场景 ID、顺序、中文名称、路径和 composition mode 的唯一 registry。Companion 的 `GET /local/v1/program-scenes` 返回当前 scene、revision、可用 scene 和阻断原因；`POST /operator/program-scene` 使用预期 revision 切换。Workspace 只提交意图，Companion 基于当前 Program/Operator/BP projection 校验并协调 OBS，OBS Browser Source 使用相同 registry 中的路径。Tauri 仅控制本机窗口，不拥有场景真值。

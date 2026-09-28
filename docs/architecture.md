@@ -436,6 +436,16 @@ capture 写盘失败不能阻塞 GSI request hot path。`packages/testkit` 消�
 
 只有出现第二个真实 consumer、真实 provider 或独立发行需求，并且现有边界造成明确摩擦时，才增加新的 public abstraction 或物理拆分。
 
+## Desktop Preparation 与窗口生命周期（#94）
+
+Companion 是本地制作控制面的唯一运行事实 owner。它提供当前能力摘要、制作生命周期 revision、ActiveLineup 派生的名单候选、OBS 当前 Program 低频缩略图和独立桌面显隐策略。高频状态仍走现有 Local Protocol projection；新增 HTTP view 只组合 owner 已有事实，不增加第二份 `RuntimeState`。
+
+`preparation | live | hidden` 仅描述当前桌面展示生命周期，不是比赛、Runtime 或 OBS 状态。对 enter/hide/finish 的写入使用 revision CAS 和本地 Origin policy；进入需要当前比赛上下文。结束释放 RivalHub 当前 source、请求等待场景并保留本地赛事数据。Tauri 只拥有窗口可见性、布局、焦点和工具窗口，不推导比赛资格或名单身份。
+
+名单候选由 Companion 从当前 fresh Program-safe observation 与 ActiveLineup 构造，不接受浏览器提交的玩家身份。候选 revision 覆盖 context revision、source generation、map epoch 和观测成员；LocalTournamentStore 在原子文件替换前执行同步 continuity guard。服务器队名或现存规范 roster 可证明 CT/T 映射时自动映射，否则由操作者一次确认。保存合并既有玩家记录并保留替补。
+
+本机 HUD policy 是单独的 host display preference，只接受 HUD registry 中已有 widget id；不复制 preset/layout/theme，也不改 OBS Program composition。Tauri Overlay 仅在显式 `host=desktop` 时读取此策略并覆盖本机 renderer 可见性，初始化前保持隐藏。OBS confidence 使用 Companion 已配置连接，以限尺寸 JPEG 读取当前 Program Scene 并复核场景未切换；它是低频信心视图，不承担实时监看。
+
 ## BP presentation
 
 Core `projectBp` 从 canonical MatchContext 的 maps/veto 派生最多 7 张地图卡和 14 个 reveal step；选图与选边分别表达，决胜图不归 entrant。`sideChoice` 保留真正执行 SIDE_PICK 的队伍；只有 `teamAStartSide` 不足以生成选边行，BO5 决胜图不显示选边。`ProjectionCoordinator` 在身份 mismatch 或 BP 数据冲突时 fail closed。Companion 内存 `BpSession` 仅拥有播放状态，使用 monotonic clock 推进；Web 共用 `BpPresentation`，由 `/program/bp` 全屏不透明场景和 `/operator/bp` 预览承载。制作首页提供播放/收起。

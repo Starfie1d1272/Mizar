@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
@@ -71,6 +71,15 @@ export class RivalHubConnection {
     };
   }
 
+  async disconnect(): Promise<void> {
+    await this.release();
+    await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    this.installation = null;
+    this.activeDeviceName = null;
+  }
+
   private async persist(): Promise<void> {
     if (!this.installation) return;
     await mkdir(dirname(this.path), { recursive: true });
@@ -112,6 +121,7 @@ export class RivalHubConnection {
       !value.competitionId
     )
       throw new Error('连接响应无效。');
+    await this.release();
     this.installation = {
       baseUrl,
       credential: value.credential,

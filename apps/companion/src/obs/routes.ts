@@ -17,6 +17,11 @@ export function registerObsRoutes(
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
+  app.get('/local/v1/obs/confidence', async (_request, reply) =>
+    reply
+      .header('cache-control', 'no-store')
+      .send({ preview: await options.adapter.confidencePreview() }),
+  );
   app.get('/local/v1/obs', async (_request, reply) => {
     const status = await options.adapter.status();
     return reply.header('cache-control', 'no-store').send({

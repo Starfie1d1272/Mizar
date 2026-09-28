@@ -176,6 +176,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
           productRuntime: {
             instanceId: productInstance,
             artifactSha256: productArtifact!,
+            gitSha: mizarCommit,
             controlToken: productToken!,
             stop: () => shutdown('product-stop'),
           },

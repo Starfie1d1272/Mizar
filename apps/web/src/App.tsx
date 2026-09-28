@@ -1,3 +1,6 @@
+import { useLocalRead } from './preparation/client';
+import type { OverlayPolicy } from './preparation/PreparationPage';
+import { PreparationPage } from './preparation/PreparationPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -173,12 +176,37 @@ function ProgramRoute() {
     };
   }, [cueClient, programClient]);
 
+  const desktop =
+    window.__TAURI_INTERNALS__ !== undefined &&
+    new URLSearchParams(window.location.search).get('host') === 'desktop';
+  const policy = useLocalRead<OverlayPolicy>(
+    desktop ? '/local/v1/desktop-overlay' : null,
+    desktop ? 1000 : 60000,
+  );
+  const resolved = desktop
+    ? {
+        ...hudConfig.current,
+        layout: {
+          ...hudConfig.current.layout,
+          widgets: Object.fromEntries(
+            Object.entries(hudConfig.current.layout.widgets).map(([id, placement]) => [
+              id,
+              {
+                ...placement,
+                visible:
+                  policy !== null && policy.enabled && (policy.visibility[id] ?? placement.visible),
+              },
+            ]),
+          ) as typeof hudConfig.current.layout.widgets,
+        },
+      }
+    : hudConfig.current;
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
         radarClient={radarClient}
         connectionState={programConnection.state}
-        resolvedPreset={hudConfig.current}
+        resolvedPreset={resolved}
         snapshot={programConnection.current}
       />
     </ProgramCueRendererBridge>
@@ -550,6 +578,8 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
+  if (['/', '/operator', '/matches', '/picture', '/settings'].includes(pathname))
+    return <PreparationPage />;
   if (pathname === '/qualification')
     return (
       <OperatorShell active="/qualification">
