@@ -2,6 +2,7 @@ export {
   Button,
   IconButton,
   Field,
+  Checkbox,
   Select,
   Panel,
   Divider,

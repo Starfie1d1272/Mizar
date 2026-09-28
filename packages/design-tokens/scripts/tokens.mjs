@@ -9,6 +9,23 @@ export const RUNTIME_COLORS = new Set([
   '--mizar-entrant-b',
   '--mizar-side-ct',
   '--mizar-side-t',
+  // Strict HudResolvedPreset semantic values; local Gameplay subtree only.
+  '--mizar-hud-text-primary',
+  '--mizar-hud-text-muted',
+  '--mizar-hud-state-danger',
+  '--mizar-hud-state-warning',
+  '--mizar-hud-state-success',
+  '--mizar-hud-state-unknown',
+  '--mizar-hud-objective-bomb',
+  '--mizar-hud-objective-defuse',
+  '--mizar-hud-surface-primary',
+  '--mizar-hud-surface-strong',
+  '--mizar-hud-surface-opacity',
+  '--mizar-hud-border-opacity',
+  '--mizar-hud-radius-sm',
+  '--mizar-hud-radius-md',
+  '--mizar-hud-radius-lg',
+  '--mizar-hud-font-family',
 ]);
 
 export const TOKEN_FILES = ['base', 'semantic', 'product', 'broadcast', 'technical'];

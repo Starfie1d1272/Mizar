@@ -85,20 +85,51 @@ export function Field({
   );
 }
 
+export function Checkbox({
+  label,
+  message,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & { label: string; message?: string }) {
+  const id = useId();
+  return (
+    <div className="mizar-field">
+      <label className="mizar-checkbox">
+        <input
+          {...props}
+          type="checkbox"
+          aria-describedby={message ? `${id}-help` : props['aria-describedby']}
+        />
+        <span>{label}</span>
+      </label>
+      {message ? <span id={`${id}-help`}>{message}</span> : null}
+    </div>
+  );
+}
+
 export function Select({
   label,
+  message,
   id: suppliedId,
   children,
   ...props
-}: SelectHTMLAttributes<HTMLSelectElement> & { label: string }) {
+}: SelectHTMLAttributes<HTMLSelectElement> & { label: string; message?: string }) {
   const generatedId = useId();
   const id = suppliedId ?? generatedId;
   return (
     <div className="mizar-field">
       <label htmlFor={id}>{label}</label>
-      <select {...props} id={id}>
+      <select
+        {...props}
+        id={id}
+        aria-describedby={
+          [props['aria-describedby'], message ? `${id}-message` : undefined]
+            .filter(Boolean)
+            .join(' ') || undefined
+        }
+      >
         {children}
       </select>
+      {message ? <span id={`${id}-message`}>{message}</span> : null}
     </div>
   );
 }

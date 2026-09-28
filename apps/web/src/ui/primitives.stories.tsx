@@ -4,6 +4,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, within } from 'storybook/test';
 import {
   Button,
+  Checkbox,
   Dialog,
   Divider,
   EmptyState,
@@ -197,5 +198,44 @@ export const Modal: Story = {
     await userEvent.click(trigger);
     await userEvent.click(canvas.getByRole('button', { name: '关闭' }));
     await expect(dialog).not.toBeVisible();
+  },
+};
+
+function CheckboxExample() {
+  const [checked, setChecked] = useState(true);
+  return (
+    <Panel>
+      <Checkbox
+        label="显示附加信息"
+        checked={checked}
+        onChange={(event) => setChecked(event.target.checked)}
+        message="保留核心比赛信息。"
+      />
+      <Checkbox
+        label="不可编辑"
+        disabled
+        checked
+        onChange={() => {
+          throw new Error('Disabled checkbox changed');
+        }}
+      />
+    </Panel>
+  );
+}
+export const Checkboxes: Story = {
+  name: '复选框',
+  render: () => <CheckboxExample />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const checkbox = canvas.getByRole('checkbox', { name: '显示附加信息' });
+    await expect(checkbox).toBeChecked();
+    await userEvent.tab();
+    await expect(checkbox).toHaveFocus();
+    await expect(getComputedStyle(checkbox).outlineStyle).toBe('solid');
+    await userEvent.keyboard(' ');
+    await expect(checkbox).not.toBeChecked();
+    await userEvent.click(canvas.getByText('显示附加信息'));
+    await expect(checkbox).toBeChecked();
+    await expect(canvas.getByRole('checkbox', { name: '不可编辑' })).toBeDisabled();
   },
 };

@@ -1,3 +1,4 @@
+import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-config';
 /** Match composition adapted from Lexogrine cs2-react-hud@7874750c97fcecd8f72eb3fad382917e035ec651
  * (MIT). Angular shell, series pips and objective choreography follow the user-provided reference.
  * Team binding and all gameplay progress remain owned by the existing presentation join/Core. */
@@ -67,7 +68,13 @@ function TeamLogo({ team }: { readonly team: MatchHeaderTeamPresentation }) {
   );
 }
 
-function Team({ team }: { readonly team: MatchHeaderTeamPresentation }) {
+function Team({
+  team,
+  options,
+}: {
+  readonly team: MatchHeaderTeamPresentation;
+  readonly options: TopScoreBarSettings;
+}) {
   return (
     <>
       <div
@@ -76,7 +83,9 @@ function Team({ team }: { readonly team: MatchHeaderTeamPresentation }) {
         data-team-logo-slot={team.key}
         data-side={team.side ?? 'unknown'}
       >
-        <TeamLogo key={`${team.key}:${team.logoUrl ?? ''}`} team={team} />
+        {options.showTeamLogo ? (
+          <TeamLogo key={`${team.key}:${team.logoUrl ?? ''}`} team={team} />
+        ) : null}
       </div>
       <div
         aria-label={`${team.name} score`}
@@ -87,14 +96,16 @@ function Team({ team }: { readonly team: MatchHeaderTeamPresentation }) {
         <strong className="match-header__map-score" data-score={team.key}>
           {formatMatchHeaderScore(team.mapScore)}
         </strong>
-        <div
-          className="match-header__win-slots"
-          aria-label={`Series maps won ${team.seriesScore ?? 'unknown'}`}
-        >
-          {team.winSlots.map((won, index) => (
-            <span key={index} data-series-win-slot={won ? 'won' : 'pending'} />
-          ))}
-        </div>
+        {options.showSeriesWins ? (
+          <div
+            className="match-header__win-slots"
+            aria-label={`Series maps won ${team.seriesScore ?? 'unknown'}`}
+          >
+            {team.winSlots.map((won, index) => (
+              <span key={index} data-series-win-slot={won ? 'won' : 'pending'} />
+            ))}
+          </div>
+        ) : null}
       </div>
       <span
         aria-hidden="true"
@@ -104,7 +115,12 @@ function Team({ team }: { readonly team: MatchHeaderTeamPresentation }) {
     </>
   );
 }
-export function TopScoreBar({ snapshot, presentationRevision = 0 }: HudWidgetRendererProps) {
+export function TopScoreBar({
+  snapshot,
+  settings,
+  presentationRevision = 0,
+}: HudWidgetRendererProps) {
+  const options = topScoreBarSettingsSchema.parse(settings.settings);
   const p = buildMatchHeaderPresentation(snapshot.payload);
   const timeout = p.timeoutPanel;
   const objective =
@@ -120,7 +136,7 @@ export function TopScoreBar({ snapshot, presentationRevision = 0 }: HudWidgetRen
       data-side-mapping={p.currentSideMapping}
     >
       <div className="match-header__score-shell">
-        <Team team={p.teamA} />
+        <Team team={p.teamA} options={options} />
         <div
           className={`match-header__center match-header__center--${p.clockTone}`}
           data-clock-tone={p.clockTone}
@@ -154,9 +170,10 @@ export function TopScoreBar({ snapshot, presentationRevision = 0 }: HudWidgetRen
             </>
           )}
         </div>
-        <Team team={p.teamB} />
+        <Team team={p.teamB} options={options} />
       </div>
-      {objective &&
+      {options.showObjectiveAuxiliary &&
+      objective &&
       (p.objective.mode === 'planted' || p.objective.mode === 'defusing') &&
       !p.objective.stateOnly ? (
         <ObjectiveFuse
@@ -166,11 +183,11 @@ export function TopScoreBar({ snapshot, presentationRevision = 0 }: HudWidgetRen
         />
       ) : null}
       <MatchHeaderPanels
-        key={`panels:${presentationRevision}`}
-        aliveCount={p.objective.aliveCount}
+        key={`panels:${presentationRevision}:${options.showAliveMatchup}:${options.showTimeout}`}
+        aliveCount={options.showAliveMatchup ? p.objective.aliveCount : null}
         teamASide={p.teamA.side}
         teamBSide={p.teamB.side}
-        timeout={timeout}
+        timeout={options.showTimeout ? timeout : null}
       />
     </section>
   );

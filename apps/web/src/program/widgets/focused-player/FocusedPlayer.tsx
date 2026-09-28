@@ -1,4 +1,9 @@
 import {
+  focusedPlayerSettingsSchema,
+  focusedPlayerPresentationSettings,
+  type FocusedPlayerSettings,
+} from '@mizar/hud-config';
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -143,6 +148,7 @@ function ActiveItemSlot({
 
 function FocusedPlayerFace({
   player: p,
+  options,
   cursor,
   presentationRevision,
   avatarIdentityKey,
@@ -154,6 +160,7 @@ function FocusedPlayerFace({
   combatFeedback = null,
 }: {
   readonly player: FocusedPlayerPresentation;
+  readonly options: FocusedPlayerSettings;
   readonly cursor: ProjectionCursor | null;
   readonly presentationRevision: number;
   readonly avatarIdentityKey: string;
@@ -168,7 +175,7 @@ function FocusedPlayerFace({
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   useLayoutEffect(() => {
     const avatarUrl = p.avatarUrl;
-    if (avatarUrl === null) return;
+    if (!options.showMedia || avatarUrl === null) return;
     if (displayAvatarUrl === avatarUrl || failedAvatarUrl === avatarUrl) return;
     let active = true;
     const image = new Image();
@@ -195,9 +202,13 @@ function FocusedPlayerFace({
     onAvatarReady,
     onAvatarUnavailable,
     p.avatarUrl,
+    options.showMedia,
   ]);
   const showAvatar =
-    p.avatarUrl !== null && displayAvatarUrl === p.avatarUrl && failedAvatarUrl !== p.avatarUrl;
+    options.showMedia &&
+    p.avatarUrl !== null &&
+    displayAvatarUrl === p.avatarUrl &&
+    failedAvatarUrl !== p.avatarUrl;
   const hotkeyLabel = observerHotkeyLabel(p.observerSlot);
   return (
     <div
@@ -211,24 +222,26 @@ function FocusedPlayerFace({
         <strong className="focused-player__name" title={p.displayName}>
           {p.displayName}
         </strong>
-        <div className="focused-player__metrics" aria-label="K A D ADR">
-          <span>
-            <small>K</small>
-            <b>{p.stats.kills ?? '—'}</b>
-          </span>
-          <span>
-            <small>A</small>
-            <b>{p.stats.assists ?? '—'}</b>
-          </span>
-          <span>
-            <small>D</small>
-            <b>{p.stats.deaths ?? '—'}</b>
-          </span>
-          <span>
-            <small>ADR</small>
-            <b>{p.completedAdr === null ? '—' : Number(p.completedAdr.toFixed(1))}</b>
-          </span>
-        </div>
+        {options.showMetrics ? (
+          <div className="focused-player__metrics" aria-label="K A D ADR">
+            <span>
+              <small>K</small>
+              <b>{p.stats.kills ?? '—'}</b>
+            </span>
+            <span>
+              <small>A</small>
+              <b>{p.stats.assists ?? '—'}</b>
+            </span>
+            <span>
+              <small>D</small>
+              <b>{p.stats.deaths ?? '—'}</b>
+            </span>
+            <span>
+              <small>ADR</small>
+              <b>{p.completedAdr === null ? '—' : Number(p.completedAdr.toFixed(1))}</b>
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <div className="focused-player__action" data-focused-action="true">
@@ -241,9 +254,10 @@ function FocusedPlayerFace({
           className={`focused-player__media${showAvatar ? ' has-avatar' : ' is-observer-tile'}`}
           data-avatar-slot="true"
           data-side={p.side}
-          role="img"
+          role={options.showMedia ? 'img' : undefined}
+          aria-hidden={!options.showMedia || undefined}
         >
-          {p.avatarUrl !== null && failedAvatarUrl !== p.avatarUrl ? (
+          {options.showMedia && p.avatarUrl !== null && failedAvatarUrl !== p.avatarUrl ? (
             <img
               src={p.avatarUrl}
               alt={`${p.displayName} avatar`}
@@ -260,11 +274,13 @@ function FocusedPlayerFace({
               }}
             />
           ) : null}
-          {showAvatar ? (
-            <span className="focused-player__slot-badge">{hotkeyLabel}</span>
-          ) : (
-            <strong className="focused-player__observer-tile-number">{hotkeyLabel}</strong>
-          )}
+          {options.showMedia ? (
+            showAvatar ? (
+              <span className="focused-player__slot-badge">{hotkeyLabel}</span>
+            ) : (
+              <strong className="focused-player__observer-tile-number">{hotkeyLabel}</strong>
+            )
+          ) : null}
         </div>
         <span
           aria-hidden="true"
@@ -287,7 +303,7 @@ function FocusedPlayerFace({
             />
             <div className="focused-player__ammo">
               {p.clip === null ? null : <strong>{p.clip}</strong>}
-              {p.reserveMagazine === null ? null : (
+              {!options.showReserveAmmo || p.reserveMagazine === null ? null : (
                 <span
                   aria-label={`Magazines in reserve: ${p.reserveMagazine.count}`}
                   className="focused-player__reserve-magazines"
@@ -306,7 +322,7 @@ function FocusedPlayerFace({
                   <span>{p.reserveMagazine.count}</span>
                 </span>
               )}
-              {p.reserveText === null ? null : (
+              {!options.showReserveAmmo || p.reserveText === null ? null : (
                 <span
                   data-ammo-presentation={
                     p.reserveText.startsWith('SHELL ') ? 'shells' : 'reserve-rounds'
@@ -352,8 +368,10 @@ export function FocusedPlayerCard({
   player,
   cursor = null,
   presentationRevision = 0,
+  options = focusedPlayerSettingsSchema.parse({}),
 }: {
   readonly player: FocusedPlayerPresentation;
+  readonly options?: FocusedPlayerSettings;
   readonly cursor?: ProjectionCursor | null;
   readonly presentationRevision?: number;
 }) {
@@ -370,6 +388,7 @@ export function FocusedPlayerCard({
     null,
   );
   const currentAvatarReady =
+    !options.showMedia ||
     player.avatarUrl === null ||
     loadedAvatarIdentityKey === currentAvatarIdentityKey ||
     unavailableAvatarIdentityKey === currentAvatarIdentityKey;
@@ -436,6 +455,7 @@ export function FocusedPlayerCard({
     cursor?.runtimeSeq,
     presentationRevision,
     currentAvatarReady,
+    options.showMedia,
     currentAvatarIdentityKey,
     handoff,
   ]);
@@ -452,20 +472,23 @@ export function FocusedPlayerCard({
       if (timer.current === timeout) timer.current = null;
     };
   }, [handoff]);
-  const crossfadeActive = handoff?.phase === 'crossfading';
+  const crossfadeActive = options.showMedia && handoff?.phase === 'crossfading';
   return (
     <article
       aria-label="Focused player"
       className="focused-player"
       data-focused-player={player.sourcePlayerId}
-      data-avatar={loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined}
+      data-avatar={
+        options.showMedia && loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined
+      }
       data-side={player.side}
       data-dead={player.dead}
       data-observer-transition={crossfadeActive}
     >
-      {handoff === null ? null : (
+      {!options.showMedia || handoff === null ? null : (
         <FocusedPlayerFace
           key={`outgoing:${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
+          options={options}
           avatarIdentityKey={`${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
           cursor={null}
           onAvatarReady={onAvatarReady}
@@ -477,13 +500,14 @@ export function FocusedPlayerCard({
       )}
       <FocusedPlayerFace
         key={`current:${player.sourcePlayerId}:${player.avatarUrl ?? ''}`}
+        options={options}
         avatarIdentityKey={currentAvatarIdentityKey}
         combatFeedback={combatFeedback}
         cursor={cursor}
         incoming={crossfadeActive}
         onAvatarReady={onAvatarReady}
         onAvatarUnavailable={onAvatarUnavailable}
-        pending={handoff?.phase === 'waiting'}
+        pending={options.showMedia && handoff?.phase === 'waiting'}
         player={player}
         presentationRevision={presentationRevision}
       />
@@ -493,10 +517,16 @@ export function FocusedPlayerCard({
   );
 }
 
-export function FocusedPlayer({ snapshot, presentationRevision = 0 }: HudWidgetRendererProps) {
+export function FocusedPlayer({
+  snapshot,
+  settings,
+  presentationRevision = 0,
+}: HudWidgetRendererProps) {
+  const options = focusedPlayerPresentationSettings(settings);
   const player = buildFocusedPlayerPresentation(snapshot.payload);
   return player === null ? null : (
     <FocusedPlayerCard
+      options={options}
       cursor={snapshot.cursor}
       player={player}
       presentationRevision={presentationRevision}

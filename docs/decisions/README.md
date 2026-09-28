@@ -48,3 +48,5 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 - [`0011-owned-input-and-structured-output.md`](0011-owned-input-and-structured-output.md)：#95 Mizar-owned 比赛输入与 #89 结构化实时输出的 authority、安全和恢复边界。
 
 - [`0012-design-system-governance.md`](0012-design-system-governance.md)：设计系统文档、设计变量与组件职责、三类界面与分层验证。
+
+- [`0013-hud-widget-customization.md`](0013-hud-widget-customization.md)：受控组件配置、通用 Inspector、四层 ownership 与 1.0 前的版本边界。

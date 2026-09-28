@@ -1,3 +1,4 @@
+import { playerRailSettingsSchema } from '@mizar/hud-config';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 
 import { PlayerCard } from './PlayerCard';
@@ -6,9 +7,11 @@ import { TeamSummary } from './TeamSummary';
 
 export function PlayerRail({
   snapshot,
+  settings,
   widgetId,
   presentationRevision = 0,
 }: HudWidgetRendererProps) {
+  const options = playerRailSettingsSchema.parse(settings.settings);
   const presentation = buildPlayerRailsPresentation(snapshot.payload);
   const physicalSide = widgetId === 'team-t-rail' ? 'right' : 'left';
   const rail = physicalSide === 'left' ? presentation.left : presentation.right;
@@ -22,9 +25,13 @@ export function PlayerRail({
       data-physical-side={physicalSide}
       data-player-rail-phase={presentation.phase}
     >
-      <TeamSummary phase={presentation.phase} side={side} summary={rail.summary} />
+      <div className="player-rail__summary-slot" data-team-summary-slot="true">
+        {options.showTeamSummary ? (
+          <TeamSummary phase={presentation.phase} side={side} summary={rail.summary} />
+        ) : null}
+      </div>
       <div className="player-rail__header" data-rail-header="true">
-        <strong>{rail.entrantName ?? 'TEAM'}</strong>
+        {options.showTeamName ? <strong>{rail.entrantName ?? 'TEAM'}</strong> : null}
       </div>
       <div className="player-rail__players">
         {rail.players.slice(0, 5).map((player) => (
@@ -33,6 +40,7 @@ export function PlayerRail({
             cursor={snapshot.cursor}
             physicalSide={physicalSide}
             player={player}
+            options={options}
             presentationRevision={presentationRevision}
           />
         ))}

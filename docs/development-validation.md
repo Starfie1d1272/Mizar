@@ -296,3 +296,7 @@ INCONCLUSIVE
 只有 installer、Windows packaging、topmost/click-through window 等平台本身就是功能语义的工作，才适合把实现 ownership 整体交给 Windows-specific contributor。
 
 BP 浏览器验收从已提交 NJU Rivals BO3/BO5 记录构造 MatchContext 测试封装，经过生产 validator、MatchContextController、Core projection、Companion session 和共享 Web renderer。只补 fixture-local transport map ID，缺失名单保持空，不伪造 gameplay evidence。Connected 路径覆盖同一 Preview/Program 累积 reveal、BO3 决胜图只显示 SIDE_PICK actor、BO5 刀局不显示选边、reload/断连恢复 baseline、收起与重播。Local authoring 覆盖固定 BO sequence、7-map pool、选边必填、decider 自动取剩余地图、标准 Manifest validation、standalone 与 bound-overlay 权限、缓存恢复后的字段锁定、LKG provenance 保存、失败刷新与本地保存期间 pending candidate 保留、有效 candidate 原子替换、partial BP 的 explicit/legacy SIDE 恢复、保存失败保持旧 binding，以及服务重启后 cache 恢复但 session hidden。浏览器还检查 320/390px 横向溢出、键盘焦点和 reduced-motion；1.0.0 前不维护截图/pixel baseline。OBS 真实场景装载仍属于真实环境验收。
+
+HUD customization 自动化还覆盖 descriptor schema/default/control 一致性、未知字段拒绝、variant 切换、当前格式 defaults 与完整 resolved snapshot、设置即时预览、真实 Companion 保存/磁盘重载/启用，以及 Program 读取同一 resolved config。1.0 前不运行旧版本兼容或迁移测试。
+
+开发 fixture host 默认使用只读的样例配置起点；浏览器配置生命周期验收通过 `/operator/hud?hud-config=companion` 与 `/program?hud-config=companion` 显式接入真实 Companion authoring read model，等待权威文档就绪后才允许编辑。该参数只在 `VITE_VISUAL_FIXTURES=1` 的开发 host 有效，正式运行始终读取 Companion，不产生第二份配置 owner。

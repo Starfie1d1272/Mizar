@@ -1,3 +1,4 @@
+import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
@@ -303,11 +304,13 @@ function PlayerBody({
   dead,
   presentationRevision,
   damageGhost,
+  options,
 }: {
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
   readonly presentationRevision: number;
   readonly damageGhost: DamageGhostState | null;
+  readonly options: PlayerRailSettings;
 }) {
   const healthStyle = { '--player-rail-health': `${player.healthPercent ?? 0}%` } as CSSProperties;
   const secondaryVisible = player.secondaryWeapon !== null;
@@ -350,54 +353,75 @@ function PlayerBody({
         data-phase={player.mode}
         data-secondary={secondaryVisible}
       >
-        <Kd player={player} />
+        {!dead || options.deadInformation === 'stats' ? <Kd player={player} /> : null}
         <div className="player-rail__context" data-player-rail-row-part="context">
           {dead ? (
             <div className="player-rail__dead-stats" data-dead-stats="true">
-              {player.liveAdr === null ? null : (
-                <span className="player-rail__adr">
-                  <small>ADR</small>
-                  <b>{displayNumber(player.liveAdr)}</b>
-                </span>
-              )}
-              {player.currentRoundDamage === null ? null : (
-                <span className="player-rail__damage">
-                  <small>DMG</small>
-                  <b>{displayNumber(player.currentRoundDamage)}</b>
-                </span>
-              )}
+              {options.deadInformation === 'stats' ? (
+                <>
+                  {player.liveAdr === null ? null : (
+                    <span className="player-rail__adr">
+                      <small>ADR</small>
+                      <b>{displayNumber(player.liveAdr)}</b>
+                    </span>
+                  )}
+                  {player.currentRoundDamage === null ? null : (
+                    <span className="player-rail__damage">
+                      <small>DMG</small>
+                      <b>{displayNumber(player.currentRoundDamage)}</b>
+                    </span>
+                  )}
+                </>
+              ) : null}
             </div>
           ) : (
             <div className="player-rail__loadout">
-              <div className="player-rail__weapons">
-                <div className="player-rail__weapon-icons">
-                  <WeaponIcon pairedWithFirearm={pairedWithFirearm} weapon={player.primaryWeapon} />
-                  {secondaryVisible ? (
-                    <WeaponIcon
-                      pairedWithFirearm={pairedWithFirearm}
-                      weapon={player.secondaryWeapon}
-                    />
-                  ) : null}
-                </div>
-              </div>
-              <Equipment player={player} presentationRevision={presentationRevision} />
-              <UtilityIcons player={player} presentationRevision={presentationRevision} />
+              {options.showLoadout ? (
+                <>
+                  <div className="player-rail__weapons">
+                    <div className="player-rail__weapon-icons">
+                      <WeaponIcon
+                        pairedWithFirearm={pairedWithFirearm}
+                        weapon={player.primaryWeapon}
+                      />
+                      {secondaryVisible ? (
+                        <WeaponIcon
+                          pairedWithFirearm={pairedWithFirearm}
+                          weapon={player.secondaryWeapon}
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+                  <Equipment player={player} presentationRevision={presentationRevision} />
+                </>
+              ) : null}
+              {options.showUtility ? (
+                <UtilityIcons player={player} presentationRevision={presentationRevision} />
+              ) : null}
             </div>
           )}
         </div>
       </div>
 
       <div className="player-rail__bottom">
-        <span className="player-rail__money">{displayMoney(player.money)}</span>
-        {player.mode === 'freezetime' && !dead ? (
+        {options.showMoney && (!dead || options.deadInformation === 'stats') ? (
+          <span className="player-rail__money">{displayMoney(player.money)}</span>
+        ) : null}
+        {options.showMoney && player.mode === 'freezetime' && !dead ? (
           <span className="player-rail__spent">{displaySpent(player.roundMoneySpent)}</span>
         ) : null}
         <span
-          aria-hidden={player.roundKills === null || player.roundKills <= 0}
+          aria-hidden={
+            (dead && options.deadInformation === 'minimal') ||
+            player.roundKills === null ||
+            player.roundKills <= 0
+          }
           className="player-rail__round-kill-slot"
           data-round-kill-slot="true"
         >
-          {player.roundKills !== null && player.roundKills > 0 ? (
+          {(!dead || options.deadInformation === 'stats') &&
+          player.roundKills !== null &&
+          player.roundKills > 0 ? (
             <RoundKillBadge key={player.roundKills} kills={player.roundKills} />
           ) : null}
         </span>
@@ -411,10 +435,12 @@ export function PlayerCard({
   cursor = null,
   physicalSide = 'left',
   presentationRevision = 0,
+  options = playerRailSettingsSchema.parse({}),
 }: {
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
+  readonly options?: PlayerRailSettings;
   readonly presentationRevision?: number;
 }) {
   const dead = player.mode === 'dead';
@@ -425,10 +451,15 @@ export function PlayerCard({
     cursor,
     presentationRevision,
   });
-  const hasAvatar = player.avatarUrl !== null;
-  const avatar = <Avatar dead={dead} player={player} />;
+  const hasAvatar = options.showAvatar && player.avatarUrl !== null;
+  const avatar = options.showAvatar ? (
+    <Avatar dead={dead} player={player} />
+  ) : (
+    <div className="player-rail__avatar" data-card-part="avatar" />
+  );
   const body = (
     <PlayerBody
+      options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}
       player={player}

@@ -125,13 +125,17 @@ HUD 编辑器的 Replay mode 通过 #76 的确定性 controller 浏览固定的�
 
 Gameplay HUD 的普通用户界面提供“HUD 预设”和“HUD 布局”两个工作区。只展示真实 renderer 已实现的组件、显隐、锚点与偏移、Radar 正方形尺寸及完整地图 / 自动聚焦视野；网格、中心线、安全区与吸附属于编辑辅助。standalone objective / round-result 不进入组件列表或画布交互。
 
-外观 schema、内置 theme 和已保存配置继续兼容；品牌色、面板风格与圆角尚未被全部生产组件一致消费，暂不开放外观工作区或预设外观选择。重新开放须有共享 renderer 与每项公开选项的视觉验收证据。
+预设工作区按组件 descriptor 生成受控内容设置：Radar 视野；左右选手栏的队名、头像、经济、装备、道具、汇总与死亡态信息；当前观察选手的头像/观察位、K/A/D/ADR 与备用弹药；比分条的队标、系列胜图、存活对比、暂停附加信息与目标附加进度。比分、时钟、生命与当前物品等核心信息保持稳定。当前观察选手支持标准与精简信息方案，切换采用该方案默认值，组件外框不变。设置立即进入共享预览，保存后仍需显式启用。
+
+Layout、Widget Settings、Theme / Design Tokens、Program / Radar Truth 四层 ownership 见 ADR-0013。设置不提供通用视觉参数或任意 CSS，系列图条与回合历史本轮不增加缺乏明确价值的字段。
+
+外观 schema 与内置 theme 保留；品牌色、面板风格与圆角尚未被全部生产组件一致消费，暂不开放外观工作区或预设外观选择。重新开放须有共享 renderer 与每项公开选项的视觉验收证据。
 
 保存、另存与启用相互独立；保存不会改变播出画面，只有启用预设才更新 on-air snapshot。布局按 1920×1080 logical pixels 保存，缩放不改变坐标。预览保留真实样例、确定性重放与实时比赛；实时来源失效时安全隐藏，不回退到样例。编辑器与播出画面共享 Gameplay HUD renderer。
 
 编辑器在收到 Companion 的第一份有效权威文档前只提供只读预览，不创建伪造的可保存草稿；读取失败时保留最近一次有效文档。每次保存或启用都以编辑器 revision 做 compare-and-swap，多个页面同时编辑时，干净草稿自动跟随外部更新，脏草稿在同一资源被外部改动时明确进入 conflict，并保留本地修改，不能静默覆盖。
 
-HUD 配置由本地 Companion 持久化，不以浏览器 `localStorage` 作为权威来源。custom 预设的 activation snapshot 是带独立版本边界的最后一次上屏内容；加载时严格校验其自身的布局、外观语义值和组件设置，不用当前版本 Theme recipe 重新计算后比较 bytes。Theme recipe 升级不会改变尚未重新启用的 custom on-air snapshot；重新启用才生成当前版本的新快照。built-in active reference 每次启动解析当前代码拥有的 built-in。配置损坏或暂时不可读时保留最后有效的启用快照，没有快照则使用内置默认；播出画面不会因为配置控制面短暂失败而切换到另一份比赛事实。
+HUD 配置由本地 Companion 持久化，不以浏览器 `localStorage` 作为权威来源。1.0 发布前不保留旧版本配置兼容；当前 resolved 格式为 v2，旧版本拒绝，不提供迁移。custom 预设的 activation snapshot 是带独立版本边界的最后一次上屏内容；加载时严格校验其自身的布局、外观语义值和组件设置，不用当前版本 Theme recipe 重新计算后比较 bytes。Theme recipe 升级不会改变尚未重新启用的 custom on-air snapshot；重新启用才生成当前版本的新快照。built-in active reference 每次启动解析当前代码拥有的 built-in。配置损坏或暂时不可读时保留最后有效的启用快照，没有快照则使用内置默认；播出画面不会因为配置控制面短暂失败而切换到另一份比赛事实。
 
 ### 5.2 雷达
 

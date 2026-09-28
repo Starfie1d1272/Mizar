@@ -283,12 +283,11 @@ revision 不变时不得改变。
 必须拒绝 mutation。GSI ingress 继续使用独立的 `GSI_TOKEN`，qualification-only control plane
 继续使用独立的 `QUALIFICATION_CONTROL_TOKEN`。mutation response 必须返回本次 command 的明确
 `resourceId` / `sourceId`，客户端不得从前后资源 ID 集合差推断本次创建的资源。内置 `builtin:*` 资源只读；
-配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v1
+配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v2
 compatibility boundary：严格校验 schema version、exact widget keys、嵌入布局、preset/layout/theme
 引用一致性、descriptor-owned settings，以及颜色、透明度、圆角和字体等 semantic value 的安全域；
 加载时不得通过当前 Theme recipe 重算并要求 canonical bytes 相同。recipe 变化不会改写旧 custom
-snapshot，重新 Activate 才产生当前 recipe 的新 snapshot；真正不兼容的版本必须在该 boundary 增加显式
-migration。该 control-plane 的版本与 Local Protocol / channel schema 版本独立。
+snapshot，重新 Activate 才产生当前 recipe 的新 snapshot。1.0 发布前不保留旧版本兼容，旧 resolved 版本直接拒绝，不提供 migration；当前 resolved settings 必须完整，不读取时补默认值。该 control-plane 的版本与 Local Protocol / channel schema 版本独立。
 
 ### 4.3 快照 envelope
 
