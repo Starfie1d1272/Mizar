@@ -146,6 +146,45 @@ describe('Preparation: RivalHubPreparationPanel', () => {
     expect(container.textContent).toContain('RivalHub 已连接。');
     expect(container.textContent).toContain('星宇');
   });
+
+  it('resumes polling when page is refreshed with pending pairing', async () => {
+    let pollInvoked = false;
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      const u = toUrlString(url);
+      if (u.includes('/local/v1/rivalhub-connection')) {
+        return Promise.resolve(
+          Response.json({
+            paired: false,
+            competitionId: null,
+            displayName: null,
+            activeMatchId: null,
+            activeSourceMatchId: null,
+            activeDeviceName: null,
+            pairing: 'pending',
+          }),
+        );
+      }
+      if (u.includes('/operator/rivalhub/pairing/poll')) {
+        pollInvoked = true;
+        return Promise.resolve(Response.json({ status: 'pending' }));
+      }
+      return Promise.resolve(Response.json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      root!.render(<RivalHubPreparationPanel mode="settings" />);
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/operator/rivalhub/pairing/poll',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(pollInvoked).toBe(true);
+    expect(container.textContent).toContain('正在等待 RivalHub 授权…');
+  });
+
   it('displays schedule, allows match selection, and confirms candidate to load match', async () => {
     const fetchMock = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const u = toUrlString(url);

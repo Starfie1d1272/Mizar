@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import {
   validateBroadcastManifest,
@@ -6,6 +7,8 @@ import {
   type BroadcastManifestV1,
   type BroadcastScheduleWindowV1,
 } from '@mizar/rivalhub';
+import { adaptGsiPayload } from '@mizar/telemetry-gsi';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
@@ -49,11 +52,14 @@ export class RivalsRehearsal {
   } | null = null;
   private selectedMatchId: string | null = null;
   private stageIndex = 0;
+  private cachedGameplayObservation: TelemetryObservation | null = null;
+  private cachedHalftimeObservation: TelemetryObservation | null = null;
 
   constructor(
     private readonly path: string,
     private readonly controller: MatchContextController,
     private readonly sceneController?: ProgramSceneController,
+    private readonly onObservation?: (observation: TelemetryObservation) => void,
   ) {}
 
   private async readFixture() {
@@ -109,13 +115,64 @@ export class RivalsRehearsal {
   async select(matchId: string) {
     const fixture = await this.readFixture();
     const manifest = fixture.manifests.get(matchId);
-    if (!manifest || this.selectedMatchId === null) throw new Error('示例中没有这场比赛。');
+    if (!manifest) throw new Error('示例中没有这场比赛。');
     this.selectedMatchId = matchId;
     this.stageIndex = 0;
     this.controller.activateFixture(
       matchId === fixture.focusMatchId ? this.stageManifest(manifest, 0) : manifest,
     );
+    this.sceneController?.forceScene('waiting');
     return this.view();
+  }
+
+  private async getGameplayObservation(): Promise<TelemetryObservation | null> {
+    if (this.cachedGameplayObservation) return this.cachedGameplayObservation;
+    try {
+      const fixturesDir = dirname(dirname(this.path));
+      const file = join(fixturesDir, 'gsi/acceptance/ancient-round-03/frames.jsonl');
+      const text = await readFile(file, 'utf8');
+      const lines = text.trim().split('\n');
+      const raw = lines[200] ?? lines[0];
+      if (!raw) return null;
+      const frame = JSON.parse(raw) as { sequence: number; payload: unknown };
+      const adapted = adaptGsiPayload(frame.payload as Parameters<typeof adaptGsiPayload>[0], {
+        receivedAt: new Date().toISOString(),
+        receivedMonotonicMs: performance.now(),
+        sequence: frame.sequence,
+      });
+      if (adapted.ok) {
+        this.cachedGameplayObservation = adapted.observation;
+        return adapted.observation;
+      }
+    } catch {
+      // Fallback quiet
+    }
+    return null;
+  }
+
+  private async getHalftimeObservation(): Promise<TelemetryObservation | null> {
+    if (this.cachedHalftimeObservation) return this.cachedHalftimeObservation;
+    try {
+      const fixturesDir = dirname(dirname(this.path));
+      const file = join(fixturesDir, 'gsi/semantic/match/regulation-to-overtime/frames.jsonl');
+      const text = await readFile(file, 'utf8');
+      const lines = text.trim().split('\n');
+      const raw = lines[29] ?? lines[0];
+      if (!raw) return null;
+      const frame = JSON.parse(raw) as { sequence: number; payload: unknown };
+      const adapted = adaptGsiPayload(frame.payload as Parameters<typeof adaptGsiPayload>[0], {
+        receivedAt: new Date().toISOString(),
+        receivedMonotonicMs: performance.now(),
+        sequence: frame.sequence,
+      });
+      if (adapted.ok) {
+        this.cachedHalftimeObservation = adapted.observation;
+        return adapted.observation;
+      }
+    } catch {
+      // Fallback quiet
+    }
+    return null;
   }
 
   async stage(index: number) {
@@ -126,11 +183,24 @@ export class RivalsRehearsal {
       index < 0 ||
       index >= STAGES.length
     )
-      throw new Error('请先加载焦点比赛，再选择演练阶段。');
+      throw new Error('请先加载焦点比赛，再选择示例阶段。');
     const manifest = fixture.manifests.get(fixture.focusMatchId)!;
     this.controller.activateFixture(this.stageManifest(manifest, index));
     this.stageIndex = index;
     const stage = STAGES[index]!;
+
+    if (stage.scene === 'gameplay') {
+      const obs = await this.getGameplayObservation();
+      if (obs && this.onObservation) {
+        this.onObservation(obs);
+      }
+    } else if (stage.scene === 'halftime') {
+      const obs = await this.getHalftimeObservation();
+      if (obs && this.onObservation) {
+        this.onObservation(obs);
+      }
+    }
+
     this.sceneController?.forceScene(stage.scene);
     return this.view();
   }
@@ -191,6 +261,15 @@ export function registerRivalsRehearsalRoutes(
   app.get('/local/v1/rivals-rehearsal', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(options.rehearsal.view()),
   );
+  app.get('/local/v1/rivals-rehearsal/schedule', async (_request, reply) => {
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.rehearsal.schedule());
+    } catch {
+      return reply.code(404).send({ message: '示例赛程暂时无法获取。' });
+    }
+  });
   app.post('/operator/rivals-rehearsal/load', async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -201,6 +280,20 @@ export function registerRivalsRehearsalRoutes(
       return reply.code(409).send({ message: 'Rivals 示例暂时无法加载。' });
     }
   });
+  app.post('/operator/rivals-rehearsal/select', { bodyLimit: 256 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const body = request.body as { matchId?: unknown };
+    if (typeof body?.matchId !== 'string')
+      return reply.code(400).send({ message: '请选择一场比赛。' });
+    try {
+      return await options.rehearsal.select(body.matchId);
+    } catch (error) {
+      return reply.code(400).send({
+        message: error instanceof Error ? error.message : '选择比赛失败。',
+      });
+    }
+  });
   app.post('/operator/rivals-rehearsal/stage', async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -209,7 +302,7 @@ export function registerRivalsRehearsalRoutes(
         (request.body as { index?: number } | null)?.index ?? -1,
       );
     } catch {
-      return reply.code(400).send({ message: '演练阶段无法切换。' });
+      return reply.code(400).send({ message: '示例阶段无法切换。' });
     }
   });
   app.post('/operator/rivals-rehearsal/stop', async (request, reply) => {

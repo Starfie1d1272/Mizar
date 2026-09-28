@@ -36,6 +36,7 @@ import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-stat
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   createProjectionCoordinator,
   type ProjectionCoordinator,
@@ -436,9 +437,40 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  const dispatchObservation = (observation: TelemetryObservation): void => {
+    const source = programRuntime.getCurrentState().programSource;
+    const lastAccepted = source.lastAccepted;
+    if (
+      lastAccepted !== undefined &&
+      observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
+        programRuntime.getSnapshot().continuityPolicy.staleAfterMs
+    ) {
+      outputService.beforeRuntimeMutation();
+      const changed = programRuntime.advanceProgramSourceGeneration({
+        monotonicMs: observation.receive.receivedMonotonicMs,
+        utc: observation.receive.receivedAt,
+      });
+      const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
+      outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
+      programCueCoordinator.afterRuntimeMutation(changed);
+    }
+    outputService.beforeRuntimeMutation();
+    const result = programRuntime.acceptObservation(observation);
+    const bundle = projectionCoordinator.afterRuntimeMutation(result);
+    outputService.afterRuntimeMutation(result, bundle, outputBinding);
+    programCueCoordinator.afterRuntimeMutation(result);
+    debugEvidenceStore.recordNormalizedObservation(observation);
+    debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+  };
+
   const rehearsal =
     options.rehearsalFixturePath && matchContextController
-      ? new RivalsRehearsal(options.rehearsalFixturePath, matchContextController, sceneController)
+      ? new RivalsRehearsal(
+          options.rehearsalFixturePath,
+          matchContextController,
+          sceneController,
+          dispatchObservation,
+        )
       : undefined;
   if (rehearsal)
     registerRivalsRehearsalRoutes(app, {
@@ -637,29 +669,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       },
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       onObservation: (observation) => {
-        const source = programRuntime.getCurrentState().programSource;
-        const lastAccepted = source.lastAccepted;
-        if (
-          lastAccepted !== undefined &&
-          observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
-            programRuntime.getSnapshot().continuityPolicy.staleAfterMs
-        ) {
-          outputService.beforeRuntimeMutation();
-          const changed = programRuntime.advanceProgramSourceGeneration({
-            monotonicMs: observation.receive.receivedMonotonicMs,
-            utc: observation.receive.receivedAt,
-          });
-          const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-          outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-          programCueCoordinator.afterRuntimeMutation(changed);
-        }
-        outputService.beforeRuntimeMutation();
-        const result = programRuntime.acceptObservation(observation);
-        const bundle = projectionCoordinator.afterRuntimeMutation(result);
-        outputService.afterRuntimeMutation(result, bundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(result);
-        debugEvidenceStore.recordNormalizedObservation(observation);
-        debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+        dispatchObservation(observation);
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {

@@ -39,7 +39,7 @@ it('pairs via browser authorization, persists only in Companion, and claims with
       return Promise.resolve(
         Response.json({
           status: 'authorized',
-          credential: 'a'.repeat(43),
+          credential: `rh_mizar_${validPairingId}_${'a'.repeat(64)}`,
           installationId: 'installation',
           competitionId: 'competition',
           displayName: '星宇',
@@ -153,7 +153,7 @@ it('handles discovery of existing active device and explicit takeover', async ()
       return Promise.resolve(
         Response.json({
           status: 'authorized',
-          credential: 'a'.repeat(43),
+          credential: `rh_mizar_${validPairingId}_${'a'.repeat(64)}`,
           installationId: 'inst-1',
           competitionId: 'comp-1',
           displayName: '操作者 A',
@@ -223,7 +223,7 @@ it('fails closed when remote server returns 403 indicating authority loss', asyn
       return Promise.resolve(
         Response.json({
           status: 'authorized',
-          credential: 'a'.repeat(43),
+          credential: `rh_mizar_${validPairingId}_${'a'.repeat(64)}`,
           installationId: 'inst-1',
           competitionId: 'comp-1',
           displayName: '操作者',
@@ -259,4 +259,119 @@ it('fails closed when remote server returns 403 indicating authority loss', asyn
   await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
   expect(connection.view().activeSourceMatchId).toBeNull();
   expect(connection.view().activeDeviceName).toBe('另一台制播设备');
+});
+
+it('handles authentic PR-766 pairing response and falls back to default operator display name when absent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-766-'));
+  temporary.push(directory);
+  const scopedCredential = `rh_mizar_${validPairingId}_${'f'.repeat(64)}`;
+  const fetch766 = vi.fn((url: string | URL | Request) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (requestUrl.endsWith('/pairing/start')) {
+      return Promise.resolve(
+        Response.json({
+          pairingId: validPairingId,
+          pollToken: validPollToken,
+          authorizeUrl: validAuthorizeUrl,
+          expiresAt: validExpiresAt,
+        }),
+      );
+    }
+    if (requestUrl.endsWith('/pairing/poll')) {
+      // #766 HEAD MizarPairingPoll response: no displayName returned by installation.ts
+      return Promise.resolve(
+        Response.json({
+          status: 'authorized',
+          expiresAt: validExpiresAt,
+          installationId: '40000000-0000-4000-8000-000000000001',
+          competitionId: '30000000-0000-4000-8000-000000000001',
+          credential: scopedCredential,
+        }),
+      );
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const path = join(directory, 'connection.json');
+  const connection = new RivalHubConnection(path, fetch766);
+  await connection.startPairing();
+  const status = await connection.pollPairing();
+  expect(status).toBe('authorized');
+
+  const fileContent = JSON.parse(await readFile(path, 'utf8'));
+  expect(fileContent.credential).toBe(scopedCredential);
+  expect(fileContent.displayName).toBe('赛事管理员');
+  expect(connection.view().displayName).toBe('赛事管理员');
+});
+
+it('persists new installation when re-pairing even if old source release fails (re-pair cleanup failure)', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-repair-'));
+  temporary.push(directory);
+  let releaseCalls = 0;
+  const initialCredential = `rh_mizar_${validPairingId}_${'1'.repeat(64)}`;
+  const newPairingId = '20000000-0000-4000-8000-000000000002';
+  const newCredential = `rh_mizar_${newPairingId}_${'2'.repeat(64)}`;
+
+  const fetchImpl = vi.fn((url: string | URL | Request) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (requestUrl.endsWith('/pairing/start')) {
+      return Promise.resolve(
+        Response.json({
+          pairingId: newPairingId,
+          pollToken: validPollToken,
+          authorizeUrl: `${OFFICIAL_RIVALHUB_URL}/integrations/mizar/connect?pairingId=${newPairingId}`,
+          expiresAt: validExpiresAt,
+        }),
+      );
+    }
+    if (requestUrl.endsWith('/pairing/poll')) {
+      return Promise.resolve(
+        Response.json({
+          status: 'authorized',
+          expiresAt: validExpiresAt,
+          installationId: 'inst-new',
+          competitionId: 'comp-new',
+          credential: newCredential,
+          displayName: '新操作员',
+        }),
+      );
+    }
+    if (requestUrl.endsWith('/release')) {
+      releaseCalls++;
+      // Simulate remote failure when releasing prior source
+      return Promise.resolve(new Response(JSON.stringify({ error: 'internal_error' }), { status: 500 }));
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const path = join(directory, 'connection.json');
+  // Pre-seed an existing connection with an active source
+  const connection = new RivalHubConnection(path, fetchImpl);
+  // @ts-expect-error test setup
+  connection.installation = {
+    baseUrl: OFFICIAL_RIVALHUB_URL,
+    credential: initialCredential,
+    installationId: 'inst-old',
+    competitionId: 'comp-old',
+    displayName: '旧操作员',
+  };
+  // @ts-expect-error test setup
+  connection.source = {
+    matchId: 'match-old',
+    authorityRevision: 1,
+    producerInstanceId: 'prod',
+    liveSessionId: 'sess',
+  };
+
+  await connection.startPairing();
+  const pollResult = await connection.pollPairing();
+
+  expect(releaseCalls).toBe(1);
+  expect(pollResult).toBe('authorized');
+  // New installation was safely persisted despite release failure
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  expect(saved.credential).toBe(newCredential);
+  expect(saved.installationId).toBe('inst-new');
+  expect(saved.displayName).toBe('新操作员');
+  expect(connection.view().activeSourceMatchId).toBeNull();
 });

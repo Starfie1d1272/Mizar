@@ -9,6 +9,7 @@ type Connection = {
   activeMatchId: string | null;
   activeSourceMatchId: string | null;
   activeDeviceName: string | null;
+  pairing?: 'idle' | 'pending';
 };
 
 type Schedule = {
@@ -43,6 +44,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
       if (!response.ok) return;
       const next = (await response.json()) as Connection;
       setConnection(next);
+      if (next.pairing === 'pending') {
+        setPairing(true);
+      }
       if (next.paired) {
         const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', { cache: 'no-store' });
         if (scheduleResponse.ok) {
@@ -63,6 +67,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         const next = (await response.json()) as Connection;
         if (cancelled) return;
         setConnection(next);
+        if (next.pairing === 'pending') {
+          setPairing(true);
+        }
         if (next.paired) {
           const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', {
             cache: 'no-store',

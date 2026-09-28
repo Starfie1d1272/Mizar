@@ -214,8 +214,13 @@ function ProgramRoute() {
     candidate !== undefined &&
     candidate.payload.status.telemetry === 'fresh' &&
     (programConnection.state === undefined || programConnection.state === 'live');
+  const isBoundMatch =
+    candidate !== null &&
+    candidate !== undefined &&
+    candidate.payload.series?.bindingState === 'bound' &&
+    candidate.payload.status.context === 'fresh';
   const activeSnapshot =
-    isAccepted || candidate?.payload?.status?.context === 'fresh'
+    isAccepted || isBoundMatch
       ? candidate
       : isPreview
         ? defaultSnapshot

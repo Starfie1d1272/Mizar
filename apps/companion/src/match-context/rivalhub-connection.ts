@@ -181,22 +181,28 @@ export class RivalHubConnection {
     if (
       value.status !== 'authorized' ||
       typeof value.credential !== 'string' ||
-      !/^[A-Za-z0-9_-]{43}$/.test(value.credential) ||
+      !/^rh_mizar_[0-9a-f-]{36}_[0-9a-f]{64}$/i.test(value.credential) ||
       typeof value.installationId !== 'string' ||
-      typeof value.competitionId !== 'string' ||
-      typeof value.displayName !== 'string' ||
-      !value.displayName.trim()
+      typeof value.competitionId !== 'string'
     )
       throw new Error('授权结果格式无效。');
-    await this.release();
+
+    const rawDisplayName = typeof value.displayName === 'string' ? value.displayName.trim() : '';
+    const displayName = rawDisplayName.length > 0 ? rawDisplayName : '赛事管理员';
+
+    try {
+      await this.release();
+    } catch {
+      // Safe cleanup by correct owner: new installation persistence must not be blocked by release failure
+    }
+    this.source = null;
     this.installation = {
       baseUrl,
       credential: value.credential,
       installationId: value.installationId,
       competitionId: value.competitionId,
-      displayName: value.displayName.trim(),
+      displayName,
     };
-    this.source = null;
     await this.persist();
     this.pendingPairing = null;
     return 'authorized';
