@@ -81,6 +81,15 @@
 .mizar-field input[aria-invalid='true'] {
   border-color: var(--mizar-status-danger);
 }
+.mizar-field[data-tone='success'] input {
+  border-color: var(--mizar-status-success);
+}
+.mizar-field[data-tone='warning'] input {
+  border-color: var(--mizar-status-warning);
+}
+.mizar-field[data-tone='danger'] input {
+  border-color: var(--mizar-status-danger);
+}
 .mizar-field > span {
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);

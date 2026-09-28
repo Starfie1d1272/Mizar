@@ -97,6 +97,17 @@ export const Fields: Story = {
     await expect(field).toHaveFocus();
     await userEvent.type(field, '2026 NJU Rivals');
     await expect(field).toHaveValue('2026 NJU Rivals');
+    const warning = canvas.getByRole('textbox', { name: '阶段' });
+    const success = canvas.getByRole('textbox', { name: '队伍 A' });
+    await expect(getComputedStyle(warning).borderTopColor).not.toBe(
+      getComputedStyle(field).borderTopColor,
+    );
+    await expect(getComputedStyle(success).borderTopColor).not.toBe(
+      getComputedStyle(field).borderTopColor,
+    );
+    await expect(getComputedStyle(success).borderTopColor).not.toBe(
+      getComputedStyle(warning).borderTopColor,
+    );
     await expect(canvas.getByRole('textbox', { name: '队伍名称' })).toHaveAccessibleDescription(
       '请填写队伍名称。',
     );
