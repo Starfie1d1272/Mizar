@@ -299,4 +299,6 @@ BP 浏览器验收从已提交 NJU Rivals BO3/BO5 记录构造 MatchContext 测�
 
 HUD customization 自动化还覆盖 descriptor schema/default/control 一致性、未知字段拒绝、variant 切换、当前格式 defaults 与完整 resolved snapshot、设置即时预览、真实 Companion 保存/磁盘重载/启用，以及 Program 读取同一 resolved config。1.0 前不运行旧版本兼容或迁移测试。
 
+桌面准备流程的自动化验证覆盖统一 MatchDocument 的本地编辑与 RivalHub/cache 完整只读展示、ToolShell 角色隔离、工具重开恢复、Preview 不触发 Take、OBS 连接/配置/场景对齐、名单双向歧义、显式队伍复用和模板保留，以及 finish 的等待切场/release 失败与重试。Windows Rust 测试覆盖首次发现、晚出现与跨屏切换的 monitor 选择；真实 DPI/多显示器窗口布局和 CS2/OBS 画面仍需 exact-artifact 实机验收。诊断截图只供人工审查，不作为像素基线或通过条件。
+
 开发 fixture host 默认使用只读的样例配置起点；浏览器配置生命周期验收通过 `/operator/hud?hud-config=companion` 与 `/program?hud-config=companion` 显式接入真实 Companion authoring read model，等待权威文档就绪后才允许编辑。该参数只在 `VITE_VISUAL_FIXTURES=1` 的开发 host 有效，正式运行始终读取 Companion，不产生第二份配置 owner。

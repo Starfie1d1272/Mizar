@@ -77,6 +77,14 @@
 
 首次需要与历史 Issue、外部材料或代码检索对应时，可以写“独立模式（standalone）”；后续直接使用“独立模式”。
 
+## #94 桌面制作术语
+
+- **准备中心**：默认桌面入口，承载总览、比赛、画面和设置。
+- **进入现场 / 隐藏现场 / 恢复现场 / 结束制作**：桌面展示生命周期操作；隐藏保留当前制作上下文，结束释放现场 source，但不删除比赛资料。
+- **本机覆盖**：CS2 上方的 Mizar HUD overlay；其 widget visibility 是 host preference，不表示 OBS 节目画面也隐藏。
+- **OBS 画面确认**：对当前 Program Scene 的低频缩略图，不称“实时预览”或“监看”。
+- **从当前服务器识别首发**：仅指 current, fresh, stable Steam64 5v5 ActiveLineup observation；不是昵称匹配，也不把 observation 变成官方赛事名单。
+
 ## 用户可见文本
 
 用户界面的字段、提示、状态、错误和操作文案规范见 [design/product-language.md](design/product-language.md)。本文只维护术语与状态证据边界；以下说明各类工具的读者边界。

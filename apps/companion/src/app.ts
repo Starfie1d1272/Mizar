@@ -1,3 +1,6 @@
+import { productionReadiness } from './program-scenes/readiness.js';
+import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
+import { registerProductionRoutes } from './program-scenes/production.js';
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
@@ -76,6 +79,7 @@ import {
 export interface CompanionAppOptions {
   readonly productRuntime?: {
     readonly artifactSha256: string;
+    readonly gitSha: string;
     readonly instanceId: string;
     readonly controlToken: string;
     readonly stop: () => void;
@@ -355,6 +359,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
   });
+  void app.register(async (scope) => {
+    await registerDesktopOverlayRoutes(
+      scope,
+      options.localTournamentPath
+        ? join(dirname(options.localTournamentPath), 'desktop-overlay.json')
+        : undefined,
+      localWebTransport.getOriginPolicy(),
+    );
+  });
   const bpDemoState = new BpDemoStateController();
   const bpSession = registerBpRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -386,6 +399,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           if (status.connection === 'connected') await obsAdapter.switchScene(id);
         },
   );
+  app.get('/local/v1/readiness', async (_request, reply) => {
+    const obs = await obsAdapter?.status();
+    return reply
+      .header('cache-control', 'no-store')
+      .send(productionReadiness(projectionCoordinator.getCurrent(), sceneController.get(), obs));
+  });
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: sceneController,
@@ -430,6 +449,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (localTournamentStore !== null && matchContextController !== null) {
     registerLocalTournamentRoutes(app, {
       store: localTournamentStore,
+      projections: projectionCoordinator,
       controller: matchContextController,
       originPolicy: localWebTransport.getOriginPolicy(),
     });
@@ -438,6 +458,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   }
+  const production = registerProductionRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    hasContext: () =>
+      matchContextController?.getActiveBinding() !== undefined &&
+      matchContextController?.getActiveBinding() != null,
+    scenes: sceneController,
+    release: async () => {
+      await options.rivalhubConnection?.release();
+    },
+  });
   registerBpWorkspaceRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
@@ -453,6 +483,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.rivalhubConnection)
     registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
+      canClaim: () => production.get().mode === 'live',
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),
@@ -533,6 +564,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             product: {
               repository: 'Starfie1d1272/Mizar',
               artifactSha256: options.productRuntime.artifactSha256,
+              gitSha: options.productRuntime.gitSha,
               instanceId: options.productRuntime.instanceId,
               mode: 'product',
             },

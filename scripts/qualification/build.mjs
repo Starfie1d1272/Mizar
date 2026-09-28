@@ -351,6 +351,8 @@ async function main() {
       'start-product.ps1',
       'stop-product.ps1',
       'common.ps1',
+      'gsi-discovery.ps1',
+      'gsi-status.ps1',
       'install-gsi.ps1',
       'restore-gsi.ps1',
       'start.ps1',

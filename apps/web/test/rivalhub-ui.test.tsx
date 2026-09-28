@@ -111,7 +111,7 @@ describe('Preparation: RivalHubPreparationPanel', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await act(async () => {
-      root!.render(<RivalHubPreparationPanel />);
+      root!.render(<RivalHubPreparationPanel mode="settings" />);
       await Promise.resolve();
     });
 

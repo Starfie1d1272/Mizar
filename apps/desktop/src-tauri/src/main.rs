@@ -8,9 +8,13 @@ use std::{
     fs,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{atomic::{AtomicBool, Ordering}, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -23,6 +27,7 @@ use windows_host::GameTracker;
 use tauri_plugin_dialog::DialogExt;
 
 const BASE: &str = "http://127.0.0.1:3000";
+static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -179,23 +184,210 @@ fn hide_workspace(app: &tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    let path = path.unwrap_or_else(|| "/".into());
+    if !["/", "/matches", "/matches?tab=roster", "/picture", "/settings"]
+        .contains(&path.as_str())
+    {
+        return Err("页面无法识别。".into());
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .navigate(
+                format!("{BASE}{path}")
+                    .parse()
+                    .map_err(|_| "页面无法识别。")?,
+            )
+            .map_err(|_| "无法打开 Mizar。")?;
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn present_production(app: tauri::AppHandle, live: bool) {
+    if live {
+        let state = app.state::<HostState>();
+        if let Some(layout) = state
+            .tracker
+            .lock()
+            .ok()
+            .and_then(|mut tracker| tracker.restore_layout())
+        {
+            apply_layout(&app, layout);
+        }
+        show_workspace(&app);
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.hide();
+        }
+    } else {
+        hide_workspace(&app);
+        let _ = open_main(app, None);
+    }
+}
+
+#[tauri::command]
+fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
+    let (label, title, path) = match tool.as_str() {
+        "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
+        "bp" => ("tool-bp", "BP 工作台", "/operator/bp"),
+        "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
+        "preview" => ("tool-preview", "节目预览", "/preview"),
+        _ => return Err("工具无法识别。".into()),
+    };
+    if let Some(window) = app.get_webview_window(label) {
+        window.navigate(format!("{BASE}{path}").parse().map_err(|_| "工具地址无法识别。")?)
+            .map_err(|_| "工具窗口未能恢复。")?;
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, label, local_url(path))
+        .title(format!("Mizar · {title}"))
+        .inner_size(1280.0, 800.0)
+        .on_navigation(trusted_navigation)
+        .build()
+        .map_err(|_| "工具窗口未能打开。")?;
+    Ok(())
+}
+
+fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
+    let bundle = bundle_root()?;
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(bundle.join("resources/scripts").join(name)).current_dir(&bundle);
+    if name != "gsi-status.ps1" {
+        command.arg("-Product");
+    }
+    if let Some(path) = root {
+        command.arg("-Cs2Root").arg(path);
+    }
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .creation_flags(0x08000000);
+    let mut child = command.spawn().map_err(|_| "GSI 配置工具未能启动。")?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().map_err(|_| "GSI 配置读取失败。")?.is_some() { break; }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("GSI 操作超时；请重新检测状态后再试。".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let output = child.wait_with_output().map_err(|_| "GSI 配置读取失败。")?;
+    if !output.status.success() {
+        return Err("GSI 配置未完成；请核对安装目录与配置冲突后重试。".into());
+    }
+    String::from_utf8(output.stdout).map_err(|_| "GSI 状态读取失败。".into())
+}
+
+#[tauri::command]
+async fn gsi_status() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let _guard = GSI_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "GSI 操作状态不可用。")?;
+        let result: serde_json::Value = serde_json::from_str(&gsi_script(
+            "gsi-status.ps1",
+            None,
+            Duration::from_secs(20),
+        )?)
+        .map_err(|_| "GSI 状态无法识别。")?;
+        // Explicit allowlist: installation records contain secrets and never cross IPC.
+        Ok(serde_json::json!({
+            "detected": result["detected"] == true,
+            "installed": result["installed"] == true,
+            "conflict": result["conflict"] == true,
+            "fileConflict": result["fileConflict"] == true,
+            "endpointConflict": result["endpointConflict"] == true,
+            "cfgPath": result["cfgPath"].as_str()
+        }))
+    })
+    .await
+    .map_err(|_| "GSI 状态读取失败。".to_string())?
+}
+
+#[tauri::command]
+async fn configure_gsi(app: tauri::AppHandle, restore: bool, choose: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = GSI_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "GSI 操作状态不可用。")?;
+        let root = if choose {
+            let Some(file) = app.dialog().file().blocking_pick_folder() else {
+                return Ok(());
+            };
+            Some(file.into_path().map_err(|_| "安装目录无效。")?)
+        } else {
+            None
+        };
+        gsi_script(
+            if restore {
+                "restore-gsi.ps1"
+            } else {
+                "install-gsi.ps1"
+            },
+            root.as_deref(),
+            Duration::from_secs(45),
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "GSI 配置工具未能启动。".to_string())?
+}
+
 fn run_desktop(root: PathBuf) -> Result<(), String> {
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
-    let state = HostState { tracker: Mutex::new(tracker), visible: AtomicBool::new(true), running: AtomicBool::new(true) };
+    let state = HostState {
+        tracker: Mutex::new(tracker),
+        visible: AtomicBool::new(false),
+        running: AtomicBool::new(true),
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![restore_layout, restore_cs2_focus, set_program_overlay_enabled, cs2_host_status, select_obs_executable])
+        .invoke_handler(tauri::generate_handler![
+            restore_layout,
+            restore_cs2_focus,
+            set_program_overlay_enabled,
+            cs2_host_status,
+            select_obs_executable,
+            open_main,
+            present_production,
+            open_tool,
+            gsi_status,
+            configure_gsi
+        ])
         .setup(move |app| {
             let handle = app.handle();
+            WebviewWindowBuilder::new(handle, "main", local_url("/"))
+                .title("Mizar")
+                .inner_size(1280.0, 860.0)
+                .min_inner_size(720.0, 560.0)
+                .visible(true)
+                .on_navigation(trusted_navigation)
+                .build()?;
             let left = WebviewWindowBuilder::new(handle, "workspace-left", local_url("/workspace/left"))
                 .title("Mizar · 工作区")
-                .decorations(false).resizable(false).on_navigation(trusted_navigation).build()?;
+                .decorations(false).resizable(false).visible(false).focused(false).on_navigation(trusted_navigation).build()?;
             let dock = WebviewWindowBuilder::new(handle, "workspace-dock", local_url("/workspace/dock"))
                 .title("Mizar · 现场控制")
-                .decorations(false).resizable(false).on_navigation(trusted_navigation).build()?;
-            let overlay = WebviewWindowBuilder::new(handle, "program-overlay", local_url("/program"))
+                .decorations(false).resizable(false).visible(false).focused(false).on_navigation(trusted_navigation).build()?;
+            let overlay = WebviewWindowBuilder::new(handle, "program-overlay", local_url("/program?host=desktop"))
                 .title("Mizar · Program HUD")
                 .decorations(false).resizable(false).transparent(true).always_on_top(true)
                 .focusable(false).focused(false).skip_taskbar(true).visible(false)
@@ -204,14 +396,28 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
             overlay.set_content_protected(true)?;
             left.set_content_protected(true)?;
             dock.set_content_protected(true)?;
-            let open = MenuItem::with_id(handle, "open_workspace", "打开工作区", true, None::<&str>)?;
-            let control = MenuItem::with_id(handle, "open_operator", "打开制作控制", true, None::<&str>)?;
+            let open = MenuItem::with_id(handle, "open_workspace", "打开 / 恢复制播工作区", true, None::<&str>)?;
+            let control = MenuItem::with_id(handle, "open_operator", "打开 Mizar", true, None::<&str>)?;
             let exit = MenuItem::with_id(handle, "exit", "退出 Mizar", true, None::<&str>)?;
-            let menu = Menu::with_items(handle, &[&open, &control, &exit])?;
+            let hide = MenuItem::with_id(handle, "hide_workspace", "隐藏制播工作区", true, None::<&str>)?;
+            let menu = Menu::with_items(handle, &[&control, &open, &hide, &exit])?;
             TrayIconBuilder::new().icon(tauri::include_image!("./icons/tray-icon.png")).menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "open_workspace" => show_workspace(app),
-                    "open_operator" => { let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", &format!("{BASE}/operator")]).spawn(); },
+                    "open_workspace" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.eval("window.dispatchEvent(new Event('mizar-enter'))");
+                        }
+                    }
+                    "hide_workspace" => {
+                        hide_workspace(app);
+                        if let Some(window) = app.get_webview_window("workspace-dock") {
+                            let _ = window.eval("window.dispatchEvent(new Event('mizar-hide'))");
+                        }
+                    }
+                    "open_operator" => {
+                        let _ = open_main(app.clone(), None);
+                    }
                     "exit" => {
                         let state = app.state::<HostState>();
                         state.running.store(false, Ordering::Relaxed);
@@ -221,12 +427,10 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
                     _ => (),
                 }).build(handle)?;
             let host = handle.clone();
-            let state = host.state::<HostState>();
-            if let Some(layout) = state.tracker.lock().ok().and_then(|mut tracker| tracker.restore_layout()) {
-                apply_layout(&host, layout);
-            }
+
             thread::spawn(move || {
                 while host.state::<HostState>().running.load(Ordering::Relaxed) {
+                    if !host.state::<HostState>().visible.load(Ordering::Relaxed) { thread::sleep(Duration::from_millis(250)); continue; }
                     let layout = host.state::<HostState>().tracker.lock().ok().and_then(|mut tracker| tracker.tick());
                     if let Some(layout) = layout { apply_layout(&host, layout); }
                     update_overlay(&host, &host.state::<HostState>());
@@ -238,7 +442,17 @@ fn run_desktop(root: PathBuf) -> Result<(), String> {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                hide_workspace(&window.app_handle());
+                match window.label() {
+                    "workspace-left" | "workspace-dock" => {
+                        hide_workspace(window.app_handle());
+                        if let Some(dock) = window.app_handle().get_webview_window("workspace-dock") {
+                            let _ = dock.eval("window.dispatchEvent(new Event('mizar-hide'))");
+                        }
+                    }
+                    _ => {
+                        let _ = window.hide();
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())

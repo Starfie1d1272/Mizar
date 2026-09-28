@@ -4,8 +4,13 @@ import { composeStories } from '@storybook/react-vite';
 import axe from 'axe-core';
 import * as primitives from '../../src/ui/primitives.stories.js';
 import * as patterns from '../../src/patterns/workbench.stories.js';
+import * as tools from '../../src/patterns/tool-shell.stories.js';
 
-const stories = { ...composeStories(primitives), ...composeStories(patterns) };
+const stories = {
+  ...composeStories(primitives),
+  ...composeStories(patterns),
+  ...composeStories(tools),
+};
 for (const [name, story] of Object.entries(stories)) {
   test(`${name}: render, interaction and WCAG 2.2 a11y`, async () => {
     await story.run();

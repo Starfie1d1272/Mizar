@@ -1,3 +1,8 @@
+import { useLocalRead } from './preparation/client';
+import type { OverlayPolicy } from './preparation/PreparationPage';
+import { ToolShell } from './patterns';
+import { ProgramPreviewTool } from './preparation/ProgramPreview';
+import { PreparationPage } from './preparation/PreparationPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -173,12 +178,37 @@ function ProgramRoute() {
     };
   }, [cueClient, programClient]);
 
+  const desktop =
+    window.__TAURI_INTERNALS__ !== undefined &&
+    new URLSearchParams(window.location.search).get('host') === 'desktop';
+  const policy = useLocalRead<OverlayPolicy>(
+    desktop ? '/local/v1/desktop-overlay' : null,
+    desktop ? 1000 : 60000,
+  );
+  const resolved = desktop
+    ? {
+        ...hudConfig.current,
+        layout: {
+          ...hudConfig.current.layout,
+          widgets: Object.fromEntries(
+            Object.entries(hudConfig.current.layout.widgets).map(([id, placement]) => [
+              id,
+              {
+                ...placement,
+                visible:
+                  policy !== null && policy.enabled && (policy.visibility[id] ?? placement.visible),
+              },
+            ]),
+          ) as typeof hudConfig.current.layout.widgets,
+        },
+      }
+    : hudConfig.current;
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
         radarClient={radarClient}
         connectionState={programConnection.state}
-        resolvedPreset={hudConfig.current}
+        resolvedPreset={resolved}
         snapshot={programConnection.current}
       />
     </ProgramCueRendererBridge>
@@ -507,7 +537,7 @@ export function DebugPage() {
   const hosts = useBrowserHostDiagnostics();
 
   return (
-    <OperatorShell active="/debug">
+    <ToolShell title="运行诊断">
       <main className="debug-shell" data-surface="debug">
         <header className="debug-header">
           <div className="debug-header__signal" aria-hidden="true">
@@ -544,12 +574,14 @@ export function DebugPage() {
 
         {state.kind === 'ready' ? <DebugContent data={state.data} hosts={hosts} /> : null}
       </main>
-    </OperatorShell>
+    </ToolShell>
   );
 }
 
 export function App() {
   const pathname = window.location.pathname;
+  if (['/', '/operator', '/matches', '/picture', '/settings'].includes(pathname))
+    return <PreparationPage />;
   if (pathname === '/qualification')
     return (
       <OperatorShell active="/qualification">
@@ -565,7 +597,7 @@ export function App() {
               环境。
             </p>
             <p>普通制作模式不会自动开启验收记录。</p>
-            <a href="/operator">返回制作控制</a>
+            <a href="/">返回准备中心</a>
           </section>
         </main>
       </OperatorShell>
@@ -589,6 +621,7 @@ export function App() {
     );
   }
 
+  if (pathname === '/preview') return <ProgramPreviewTool />;
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/workspace') return <WorkspacePreview />;
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
@@ -604,10 +637,10 @@ export function App() {
         <main className="operator-shell">
           <header className="product-heading">
             <h1>页面不存在</h1>
-            <p>404 · 请检查地址，或返回制作控制继续操作。</p>
+            <p>404 · 请检查地址，或返回准备中心继续操作。</p>
           </header>
           <div className="dashboard-links">
-            <a href="/operator">返回制作控制</a>
+            <a href="/">返回准备中心</a>
           </div>
         </main>
       </OperatorShell>

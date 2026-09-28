@@ -124,15 +124,20 @@ export class LocalTournamentStore {
     return this.state;
   }
 
-  async createMatch(input: {
-    readonly eventId?: string;
-    readonly teamA: string;
-    readonly teamB: string;
-    readonly teamAId?: string;
-    readonly teamBId?: string;
-    readonly format: 'bo1' | 'bo3' | 'bo5';
-    readonly mapPool: readonly string[];
-  }): Promise<MatchDocumentV1> {
+  async createMatch(
+    input: {
+      readonly eventId?: string;
+      readonly teamA: string;
+      readonly teamB: string;
+      readonly teamAId?: string;
+      readonly teamBId?: string;
+      readonly format: 'bo1' | 'bo3' | 'bo5';
+      readonly mapPool: readonly string[];
+      readonly playersA?: LocalTeamV1['players'];
+      readonly playersB?: LocalTeamV1['players'];
+    },
+    canCommit?: () => boolean,
+  ): Promise<MatchDocumentV1> {
     return this.queue.run(async () => {
       const teamA = input.teamA.trim();
       const teamB = input.teamB.trim();
@@ -155,15 +160,17 @@ export class LocalTournamentStore {
             } satisfies LocalEventV1)
           : this.state.events.find((item) => item.eventId === input.eventId);
       if (event === undefined) throw new Error('local_event_not_found');
-      const a =
+      const savedA =
         input.teamAId === undefined
-          ? { teamId: randomUUID(), name: teamA, logoUrl: null, players: [] }
+          ? { teamId: randomUUID(), name: teamA, logoUrl: null, players: input.playersA ?? [] }
           : this.state.teams.find((team) => team.teamId === input.teamAId);
-      const b =
+      const savedB =
         input.teamBId === undefined
-          ? { teamId: randomUUID(), name: teamB, logoUrl: null, players: [] }
+          ? { teamId: randomUUID(), name: teamB, logoUrl: null, players: input.playersB ?? [] }
           : this.state.teams.find((team) => team.teamId === input.teamBId);
-      if (a === undefined || b === undefined) throw new Error('local_team_not_found');
+      if (savedA === undefined || savedB === undefined) throw new Error('local_team_not_found');
+      const a = { ...savedA, players: input.playersA ?? savedA.players };
+      const b = { ...savedB, players: input.playersB ?? savedB.players };
       if (a.teamId === b.teamId) throw new Error('local_match_entrants_equal');
       const document = parseMatchDocumentV1({
         schemaVersion: 'mizar.match-document.v1',
@@ -221,14 +228,16 @@ export class LocalTournamentStore {
                   : item,
               ),
         teams: [
-          ...this.state.teams,
+          ...this.state.teams.map((team) =>
+            team.teamId === a.teamId ? a : team.teamId === b.teamId ? b : team,
+          ),
           ...[a, b].filter((team) => !this.state.teams.some((old) => old.teamId === team.teamId)),
         ],
         matches: [...this.state.matches, document],
         selectedMatchId: document.matchId,
         selectedAt: new Date().toISOString(),
       };
-      await this.commit(next);
+      await this.commit(next, canCommit);
       return document;
     });
   }
@@ -246,7 +255,7 @@ export class LocalTournamentStore {
     });
   }
 
-  async saveMatch(input: unknown): Promise<MatchDocumentV1> {
+  async saveMatch(input: unknown, canCommit?: () => boolean): Promise<MatchDocumentV1> {
     const document = parseMatchDocumentV1(input);
     return this.queue.run(async () => {
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
@@ -272,20 +281,23 @@ export class LocalTournamentStore {
         )
       )
         throw new Error('local_match_identity_conflict');
-      await this.commit({
-        ...this.state,
-        matches: this.state.matches.map((match) =>
-          match.matchId === document.matchId ? document : match,
-        ),
-        teams: this.state.teams.map((team) => {
-          const entry = [document.entrants.a, document.entrants.b].find(
-            (item) => item.entryId === team.teamId,
-          );
-          return entry === undefined
-            ? team
-            : { ...team, name: entry.name, logoUrl: entry.logoUrl, players: entry.players };
-        }),
-      });
+      await this.commit(
+        {
+          ...this.state,
+          matches: this.state.matches.map((match) =>
+            match.matchId === document.matchId ? document : match,
+          ),
+          teams: this.state.teams.map((team) => {
+            const entry = [document.entrants.a, document.entrants.b].find(
+              (item) => item.entryId === team.teamId,
+            );
+            return entry === undefined
+              ? team
+              : { ...team, name: entry.name, logoUrl: entry.logoUrl, players: entry.players };
+          }),
+        },
+        canCommit,
+      );
       return document;
     });
   }
@@ -453,9 +465,10 @@ export class LocalTournamentStore {
     });
   }
 
-  private async commit(next: LocalTournamentState): Promise<void> {
+  private async commit(next: LocalTournamentState, canCommit?: () => boolean): Promise<void> {
     const validated = readState(next);
-    await replaceDurableJson(this.filePath, validated);
+    if (!(await replaceDurableJson(this.filePath, validated, canCommit ? { canCommit } : {})))
+      throw new Error('local_evidence_changed');
     this.state = validated;
   }
 }

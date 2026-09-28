@@ -317,6 +317,37 @@ export class ProjectionCoordinator {
     return inspectBp(this.contextBinding?.context);
   }
 
+  getRosterEvidence() {
+    const { current: runtime } = this.programRuntime.getSnapshot();
+    const lineup = this.activeLineup;
+    const observation = selectProgramSafeRuntimeView(runtime).telemetry;
+    if (
+      this.current.operator.runtime.telemetryFreshness !== 'fresh' ||
+      observation?.coverage.allPlayers !== 'present' ||
+      lineup.state !== 'complete' ||
+      lineup.sourceGeneration !== runtime.programSource.generation ||
+      lineup.mapEpoch !== runtime.map.epoch ||
+      [...lineup.ct, ...lineup.t].some(
+        (player) => player.lineupEvidence !== 'current' || !player.observed,
+      )
+    )
+      return null;
+    return {
+      sourceGeneration: lineup.sourceGeneration,
+      mapEpoch: lineup.mapEpoch,
+      ctName: observation?.telemetry.map?.sides?.ct?.name?.trim() || null,
+      tName: observation?.telemetry.map?.sides?.t?.name?.trim() || null,
+      ct: lineup.ct.map((player) => ({
+        steam64: player.sourcePlayerId,
+        displayName: player.observed?.displayName ?? null,
+      })),
+      t: lineup.t.map((player) => ({
+        steam64: player.sourcePlayerId,
+        displayName: player.observed?.displayName ?? null,
+      })),
+    };
+  }
+
   getCurrent(): ProjectionBundle {
     return this.current;
   }

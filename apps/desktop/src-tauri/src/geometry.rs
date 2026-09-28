@@ -27,8 +27,8 @@ pub fn workspace_layout(work: Rect) -> Layout {
     let game = Rect { x: work.right() - width, y: work.y, width, height };
     Layout {
         game,
-        left: Rect { x: work.x, y: work.y, width: game.x - work.x, height },
-        dock: Rect { x: work.x, y: game.bottom(), width: work.width, height: work.bottom() - game.bottom() },
+        left: Rect { x: work.x, y: work.y, width: game.x - work.x, height: work.height },
+        dock: Rect { x: game.x, y: game.bottom(), width: game.width, height: work.bottom() - game.bottom() },
     }
 }
 
@@ -55,6 +55,9 @@ mod tests {
             let layout = workspace_layout(Rect { x: 100, y: 50, width, height });
             assert_eq!(layout.game, Rect { x: 100 + left_width, y: 50, width: game_width, height: game_height });
             assert_eq!(layout.left.width, left_width);
+            assert_eq!(layout.left.height, height);
+            assert_eq!(layout.dock.x, layout.game.x);
+            assert_eq!(layout.dock.width, game_width);
             assert_eq!(layout.dock.height, dock_height);
         }
     }

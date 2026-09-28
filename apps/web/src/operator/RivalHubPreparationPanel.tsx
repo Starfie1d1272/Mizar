@@ -23,13 +23,14 @@ type Schedule = {
   }[];
 };
 
-export function RivalHubPreparationPanel() {
+export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches' | 'settings' }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [code, setCode] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [pairing, setPairing] = useState(false);
+  const [rePairing, setRePairing] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export function RivalHubPreparationPanel() {
         throw new Error(data?.message ?? '连接失败。');
       }
       setCode('');
+      setRePairing(false);
       setMessage('赛事连接已建立。');
       await refresh();
     } catch (err) {
@@ -153,50 +155,59 @@ export function RivalHubPreparationPanel() {
 
   return (
     <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
-      {!connection?.paired ? (
-        <>
-          <div className="operator-rivalhub-header">
-            <div>
-              <h2>连接 RivalHub 赛事</h2>
-              <p>输入赛事网站地址、设备名称与管理员提供的一次性连接码以连接赛事。</p>
+      {!connection?.paired || (mode === 'settings' && rePairing) ? (
+        mode === 'matches' ? (
+          <a href="/settings?tab=rivalhub">前往设置连接 RivalHub</a>
+        ) : (
+          <>
+            <div className="operator-rivalhub-header">
+              <div>
+                <h2>连接 RivalHub 赛事</h2>
+                <p>输入赛事网站地址、设备名称与管理员提供的一次性连接码以连接赛事。</p>
+              </div>
             </div>
-          </div>
-          <form onSubmit={(e) => void handlePair(e)} className="operator-rivalhub-form">
-            <Field
-              label="赛事网站地址"
-              type="url"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://赛事网站"
-              required
-            />
-            <Field
-              label="设备名称"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="例如：主舞台制播机"
-              required
-            />
-            <Field
-              label="一次性连接码"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              maxLength={22}
-              placeholder="22 位一次性连接码"
-              required
-            />
-            <div>
-              <Button
-                type="submit"
-                variant="primary"
-                loading={pairing}
-                disabled={pairing || !baseUrl.trim() || !displayName.trim() || !code.trim()}
-              >
-                连接 RivalHub
-              </Button>
-            </div>
-          </form>
-        </>
+            <form onSubmit={(e) => void handlePair(e)} className="operator-rivalhub-form">
+              <Field
+                label="赛事网站地址"
+                type="url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://赛事网站"
+                required
+              />
+              <Field
+                label="设备名称"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="例如：主舞台制播机"
+                required
+              />
+              <Field
+                label="一次性连接码"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                maxLength={22}
+                placeholder="22 位一次性连接码"
+                required
+              />
+              <div>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={pairing}
+                  disabled={pairing || !baseUrl.trim() || !displayName.trim() || !code.trim()}
+                >
+                  连接 RivalHub
+                </Button>
+                {connection?.paired ? (
+                  <Button disabled={pairing} onClick={() => setRePairing(false)}>
+                    取消
+                  </Button>
+                ) : null}
+              </div>
+            </form>
+          </>
+        )
       ) : (
         <>
           <div className="operator-rivalhub-header">
@@ -207,49 +218,75 @@ export function RivalHubPreparationPanel() {
             <StatusPill tone="success">已连接</StatusPill>
           </div>
 
-          {schedule?.matches && schedule.matches.length > 0 ? (
-            <Select
-              label="选择比赛"
-              defaultValue=""
-              onChange={(e) => void handleSelectMatch(e.target.value)}
-              disabled={selecting}
-            >
-              <option value="">查看近期赛程（请选择比赛）</option>
-              {schedule.matches.map((match) => (
-                <option key={match.matchId} value={match.matchId}>
-                  {match.scheduledAt
-                    ? new Date(match.scheduledAt).toLocaleString('zh-CN')
-                    : '待排期'}{' '}
-                  · {match.entrantA.name} vs {match.entrantB.name} · {match.format.toUpperCase()}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <p className="operator-rivalhub-empty">近期暂无比赛</p>
-          )}
-
-          {bpWorkspace?.pendingRivalhub ? (
-            <div className="operator-rivalhub-candidate">
-              <div className="operator-rivalhub-candidate-info">
-                <small>待确认比赛候选</small>
-                <strong>
-                  {bpWorkspace.pendingRivalhub.entrants.a.name} vs{' '}
-                  {bpWorkspace.pendingRivalhub.entrants.b.name}
-                </strong>
-                <span>
-                  {bpWorkspace.pendingRivalhub.competition} ·{' '}
-                  {bpWorkspace.pendingRivalhub.format.toUpperCase()}
-                </span>
-              </div>
+          {mode === 'settings' ? (
+            <>
+              <Button onClick={() => setRePairing(true)}>重新连接 / 更换赛事</Button>
               <Button
-                variant="primary"
-                loading={confirming}
-                disabled={confirming}
-                onClick={() => void handleConfirmCandidate()}
+                onClick={() => {
+                  void fetch('/operator/rivalhub/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}',
+                  })
+                    .then((response) => {
+                      if (!response.ok) throw new Error('断开未完成，请重试。');
+                      return refresh();
+                    })
+                    .catch((error: Error) => setError(error.message));
+                }}
               >
-                确认加载比赛
+                断开 RivalHub
               </Button>
-            </div>
+            </>
+          ) : null}
+          {mode === 'matches' ? (
+            <>
+              {schedule?.matches && schedule.matches.length > 0 ? (
+                <Select
+                  label="选择比赛"
+                  defaultValue=""
+                  onChange={(e) => void handleSelectMatch(e.target.value)}
+                  disabled={selecting}
+                >
+                  <option value="">查看近期赛程（请选择比赛）</option>
+                  {schedule.matches.map((match) => (
+                    <option key={match.matchId} value={match.matchId}>
+                      {match.scheduledAt
+                        ? new Date(match.scheduledAt).toLocaleString('zh-CN')
+                        : '待排期'}{' '}
+                      · {match.entrantA.name} vs {match.entrantB.name} ·{' '}
+                      {match.format.toUpperCase()}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <p className="operator-rivalhub-empty">近期暂无比赛</p>
+              )}
+
+              {bpWorkspace?.pendingRivalhub ? (
+                <div className="operator-rivalhub-candidate">
+                  <div className="operator-rivalhub-candidate-info">
+                    <small>待确认比赛候选</small>
+                    <strong>
+                      {bpWorkspace.pendingRivalhub.entrants.a.name} vs{' '}
+                      {bpWorkspace.pendingRivalhub.entrants.b.name}
+                    </strong>
+                    <span>
+                      {bpWorkspace.pendingRivalhub.competition} ·{' '}
+                      {bpWorkspace.pendingRivalhub.format.toUpperCase()}
+                    </span>
+                  </div>
+                  <Button
+                    variant="primary"
+                    loading={confirming}
+                    disabled={confirming}
+                    onClick={() => void handleConfirmCandidate()}
+                  >
+                    确认加载比赛
+                  </Button>
+                </div>
+              ) : null}
+            </>
           ) : null}
         </>
       )}

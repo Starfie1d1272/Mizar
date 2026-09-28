@@ -13,6 +13,7 @@ import {
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
+  readonly port: number;
   readonly streaming: boolean;
   readonly recording: boolean;
   readonly passwordConfigured: boolean;
@@ -24,7 +25,9 @@ const TIMEOUT_MS = 4000;
 
 export class ObsAdapter {
   private queue: Promise<unknown> = Promise.resolve();
-  private findings: ObsFinding[] = [];
+  private findings: ObsFinding[] = [
+    { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
+  ];
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
@@ -73,18 +76,23 @@ export class ObsAdapter {
     const config = await this.configStore.read();
     try {
       return await this.withObs(async (obs) => {
-        const [scene, stream, record, video] = await Promise.all([
+        const [scene, stream, record, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           obs.call('GetStreamStatus'),
           obs.call('GetRecordStatus'),
           obs.call('GetVideoSettings'),
+          checkObsConfiguration(obs, this.browserBaseUrl).catch(() => [
+            { code: 'configuration_check_failed', message: 'OBS 配置检查未完成，请重新检查。' },
+          ]),
         ]);
+        this.findings = findings;
         return {
           connection: 'connected',
           currentScene:
             typeof scene.currentProgramSceneName === 'string'
               ? scene.currentProgramSceneName
               : null,
+          port: config.port,
           streaming: stream.outputActive === true,
           recording: record.outputActive === true,
           passwordConfigured: Boolean(config.password),
@@ -93,7 +101,7 @@ export class ObsAdapter {
             output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
             fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
           },
-          findings: this.findings,
+          findings,
         } satisfies ObsStatus;
       });
     } catch (error: unknown) {
@@ -106,6 +114,7 @@ export class ObsAdapter {
               : 'password_required'
             : 'unavailable',
         currentScene: null,
+        port: config.port,
         streaming: false,
         recording: false,
         passwordConfigured: Boolean(config.password),
@@ -113,6 +122,36 @@ export class ObsAdapter {
         findings: this.findings,
       };
     }
+  }
+
+  private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
+  confidencePreview(): Promise<{ scene: string; image: string } | null> {
+    if (this.previewPending) return this.previewPending;
+    this.previewPending = this.withObs(async (obs) => {
+      const current = await obs.call('GetCurrentProgramScene');
+      const scene = current.currentProgramSceneName;
+      if (typeof scene !== 'string') return null;
+      const screenshot = await obs.call('GetSourceScreenshot', {
+        sourceName: scene,
+        imageFormat: 'jpeg',
+        imageWidth: 640,
+        imageHeight: 360,
+        imageCompressionQuality: 70,
+      });
+      const after = await obs.call('GetCurrentProgramScene');
+      const image = screenshot.imageData;
+      return after.currentProgramSceneName === scene &&
+        typeof image === 'string' &&
+        image.startsWith('data:image/jpeg;base64,') &&
+        image.length < 1_000_000
+        ? { scene, image }
+        : null;
+    })
+      .catch(() => null)
+      .finally(() => {
+        this.previewPending = null;
+      });
+    return this.previewPending;
   }
 
   check(): Promise<readonly ObsFinding[]> {

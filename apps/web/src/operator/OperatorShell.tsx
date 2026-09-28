@@ -9,35 +9,27 @@ export function OperatorShell({
   readonly children: ReactNode;
 }) {
   return (
-    <div className="product-shell">
+    <div className="product-shell mizar-surface">
       <a className="product-skip" href="#product-content">
         跳到主要内容
       </a>
       <header className="product-topbar">
-        <a className="product-brand" href="/operator">
+        <a className="product-brand" href="/">
           <img className="product-brand__mark" src="/brand/mizar-mark.svg" alt="" />
           <span>Mizar</span>
         </a>
         <nav aria-label="制作导航">
           {[
-            ['/operator', '制作控制'],
-            ['/operator/bp', 'BP 制作'],
-            ['/operator/hud', 'HUD 编辑器'],
-            ['/debug', '运行诊断'],
+            ['/', '总览'],
+            ['/matches', '比赛'],
+            ['/picture', '画面'],
+            ['/settings', '设置'],
           ].map(([path, label]) => (
             <a key={path} href={path} aria-current={active === path ? 'page' : undefined}>
               {label}
             </a>
           ))}
         </nav>
-        <div className="product-topbar__actions">
-          <a href="/qualification" aria-current={active === '/qualification' ? 'page' : undefined}>
-            现场验收
-          </a>
-          <a className="product-output-link" href="/program" target="_blank" rel="noreferrer">
-            打开播出画面 <span aria-hidden="true">↗</span>
-          </a>
-        </div>
       </header>
       <div className="product-content" id="product-content">
         {children}

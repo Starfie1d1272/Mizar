@@ -9,6 +9,10 @@ import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 const SURFACE_ROUTES = [
   ...new Set([
     ...PROGRAM_SCENES.map((scene) => scene.path),
+    '/',
+    '/matches',
+    '/picture',
+    '/settings',
     '/operator',
     '/operator/bp',
     '/operator/hud',
@@ -92,7 +96,6 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
     },
   });
 
-  app.get('/', async (_request, reply) => reply.redirect('/operator'));
   if (!options.qualificationMode) {
     app.get('/qualification', async (_request, reply) =>
       sendStaticFile(reply, 'index.html', 'no-store'),

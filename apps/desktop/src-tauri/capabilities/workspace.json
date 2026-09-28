@@ -1,13 +1,29 @@
 {
   "identifier": "workspace",
-  "description": "Only the packaged local Companion pages in the three desktop windows may use native window controls.",
-  "windows": ["workspace-left", "workspace-dock", "program-overlay"],
-  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
+  "description": "Packaged loopback product windows may use narrowly scoped desktop commands.",
+  "windows": [
+    "workspace-left",
+    "workspace-dock",
+    "program-overlay",
+    "main",
+    "tool-hud",
+    "tool-bp",
+    "tool-diagnostics",
+    "tool-preview"
+  ],
+  "remote": {
+    "urls": ["http://127.0.0.1:3000/*"]
+  },
   "permissions": [
     "allow-restore-layout",
     "allow-restore-cs2-focus",
     "allow-set-program-overlay-enabled",
     "allow-cs2-host-status",
-    "allow-select-obs-executable"
+    "allow-select-obs-executable",
+    "allow-open-main",
+    "allow-present-production",
+    "allow-open-tool",
+    "allow-gsi-status",
+    "allow-configure-gsi"
   ]
 }

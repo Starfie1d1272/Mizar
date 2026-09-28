@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
@@ -8,7 +8,16 @@ import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
-import { LocalTournamentEditor, type LocalTournamentView } from './LocalTournamentEditor';
+import { useLocalTournament } from '../preparation/tournament';
+import {
+  useLocalRead,
+  openTool,
+  productionAction,
+  type Production,
+  command,
+} from '../preparation/client';
+import type { OverlayPolicy } from '../preparation/PreparationPage';
+import { Button } from '../ui';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import './workspace.css';
 
@@ -19,173 +28,6 @@ const PHASE_LABEL = {
   map_end: '地图结束 / 图间',
   match_end: '比赛结束',
 } as const;
-
-function useLocalTournament() {
-  const [view, setView] = useState<LocalTournamentView | null>(null);
-  const refresh = useCallback(async () => {
-    const response = await fetch('/local/v1/tournament', { cache: 'no-store' });
-    if (response.ok) setView((await response.json()) as LocalTournamentView);
-  }, []);
-  useEffect(() => {
-    queueMicrotask(() => void refresh());
-    const timer = setInterval(() => void refresh(), 3000);
-    return () => clearInterval(timer);
-  }, [refresh]);
-  return { view, refresh };
-}
-
-function LocalMatchControls({
-  action,
-}: {
-  readonly action: (run: () => Promise<unknown>) => Promise<void>;
-}) {
-  const { view, refresh } = useLocalTournament();
-  const [teamA, setTeamA] = useState('');
-  const [teamB, setTeamB] = useState('');
-  const [teamAId, setTeamAId] = useState('');
-  const [teamBId, setTeamBId] = useState('');
-  const [format, setFormat] = useState<'bo1' | 'bo3' | 'bo5'>('bo3');
-  const [eventId, setEventId] = useState('');
-  const selected = view?.matches.find((match) => match.matchId === view.activeLocalMatchId);
-  return (
-    <div className="workspace-local-match">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void action(async () => {
-            const response = await fetch('/operator/local-match/create', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                teamA: teamA.trim(),
-                teamB: teamB.trim(),
-                ...(teamAId ? { teamAId } : {}),
-                ...(teamBId ? { teamBId } : {}),
-                format,
-                ...(eventId ? { eventId } : {}),
-              }),
-            });
-            if (!response.ok) throw new Error('本地比赛创建失败，请检查队名和赛制。');
-            setTeamA('');
-            setTeamB('');
-            setTeamAId('');
-            setTeamBId('');
-            await refresh();
-          });
-        }}
-      >
-        <label>
-          队伍 A
-          <select value={teamAId} onChange={(event) => setTeamAId(event.target.value)}>
-            <option value="">新队伍</option>
-            {view?.teams.map((team) => (
-              <option key={team.teamId} value={team.teamId}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-          <input
-            value={
-              teamAId ? (view?.teams.find((team) => team.teamId === teamAId)?.name ?? '') : teamA
-            }
-            disabled={!!teamAId}
-            onChange={(event) => setTeamA(event.target.value)}
-          />
-        </label>
-        <label>
-          队伍 B
-          <select value={teamBId} onChange={(event) => setTeamBId(event.target.value)}>
-            <option value="">新队伍</option>
-            {view?.teams.map((team) => (
-              <option key={team.teamId} value={team.teamId}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-          <input
-            value={
-              teamBId ? (view?.teams.find((team) => team.teamId === teamBId)?.name ?? '') : teamB
-            }
-            disabled={!!teamBId}
-            onChange={(event) => setTeamB(event.target.value)}
-          />
-        </label>
-        <label>
-          赛制{' '}
-          <select
-            value={format}
-            onChange={(event) => setFormat(event.target.value as typeof format)}
-          >
-            <option value="bo1">BO1</option>
-            <option value="bo3">BO3</option>
-            <option value="bo5">BO5</option>
-          </select>
-        </label>
-        <label>
-          赛事{' '}
-          <select value={eventId} onChange={(event) => setEventId(event.target.value)}>
-            <option value="">新建本地赛事</option>
-            {view?.events.map((item) => (
-              <option key={item.eventId} value={item.eventId}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          disabled={
-            (!teamAId && !teamA.trim()) ||
-            (!teamBId && !teamB.trim()) ||
-            (!!teamAId && teamAId === teamBId)
-          }
-        >
-          创建本地比赛
-        </button>
-      </form>
-      {view?.matches.length ? (
-        <label>
-          本地比赛{' '}
-          <select
-            value={selected?.matchId ?? ''}
-            onChange={(event) => {
-              void action(async () => {
-                const response = await fetch('/operator/local-match/select', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ matchId: event.target.value }),
-                });
-                if (!response.ok) throw new Error('切换本地比赛失败。');
-                await refresh();
-              });
-            }}
-          >
-            <option value="">选择比赛</option>
-            {view.matches.map((match) => (
-              <option key={match.matchId} value={match.matchId}>
-                {match.entrants.a.name} vs {match.entrants.b.name} · {match.format.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      <LocalTournamentEditor
-        key={`${view?.selectedMatchId ?? ''}:${view?.contextRevision ?? ''}`}
-        view={view}
-        refresh={refresh}
-        action={action}
-      />
-    </div>
-  );
-}
-
-function StateLine({ label, value }: { readonly label: string; readonly value: string }) {
-  return (
-    <div className="workspace-state">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
 
 function useCs2HostStatus() {
   const [value, setValue] = useState<{
@@ -290,74 +132,9 @@ function ContextPanel({
             系列赛 {series?.score.a} : {series?.score.b}
           </p>
         ) : null}
-        {phase === 'pre_match' || phase === 'bp' ? <a href="/operator/bp">打开 BP 制作</a> : null}
-      </section>
-      <section aria-label="制作状态">
-        <small>制作状态</small>
-        <StateLine
-          label="比赛数据"
-          value={
-            operator?.runtime.telemetryFreshness === 'fresh'
-              ? '正常'
-              : operator?.runtime.telemetryFreshness === 'stale'
-                ? '已中断'
-                : '等待输入'
-          }
-        />
-        <StateLine
-          label="比赛绑定"
-          value={
-            operator?.matchContext.freshness === 'fresh'
-              ? '已绑定'
-              : operator?.matchContext.freshness === 'stale'
-                ? '使用缓存'
-                : '未绑定'
-          }
-        />
-        <StateLine
-          label="选手识别"
-          value={
-            operator?.identity.state === 'matched'
-              ? '已匹配'
-              : operator?.identity.state === 'mismatch'
-                ? '不一致'
-                : '待核对'
-          }
-        />
-        <StateLine
-          label="播出画面"
-          value={
-            program?.status.telemetry === 'fresh' && program.status.identity !== 'mismatch'
-              ? '正常'
-              : program?.status.telemetry === 'stale'
-                ? '已中断'
-                : '等待数据'
-          }
-        />
-        <StateLine
-          label="OBS"
-          value={
-            obs?.connection === 'connected'
-              ? obs.sceneAligned === false
-                ? '场景待核对'
-                : obs.findings.length
-                  ? '配置需检查'
-                  : '已连接'
-              : '未连接'
-          }
-        />
-        <StateLine
-          label="事件增强"
-          value={
-            operator?.sources.cstvProgram.state === 'live' &&
-            operator.sources.cstvProgram.lastEventTick !== null
-              ? '可用'
-              : operator?.sources.cstvProgram.state === 'disabled'
-                ? '未启用'
-                : '等待事件'
-          }
-        />
-        <StateLine label="观察辅助" value="未启用" />
+        {phase === 'pre_match' || phase === 'bp' ? (
+          <Button onClick={() => void openTool('bp')}>打开 BP 工作台</Button>
+        ) : null}
       </section>
       {issues.length ? (
         <section className="workspace-issues" aria-label="需要处理">
@@ -366,7 +143,18 @@ function ContextPanel({
             <p key={issue}>{issue}</p>
           ))}
           {issues.length > 3 ? <p>另有 {issues.length - 3} 项问题</p> : null}
-          <a href="/debug">打开运行诊断</a>
+          <Button onClick={() => void openTool('diagnostics')}>打开运行诊断</Button>
+          {operator?.identity.state === 'mismatch' ? (
+            <Button
+              onClick={() => {
+                if (window.__TAURI_INTERNALS__)
+                  void desktopInvoke('open_main', { path: '/matches?tab=roster' });
+                else window.location.assign('/matches?tab=roster');
+              }}
+            >
+              核对名单
+            </Button>
+          ) : null}
         </section>
       ) : null}
       {cs2?.found && !cs2.managed ? (
@@ -374,6 +162,26 @@ function ContextPanel({
           <p>CS2 窗口需要调整。请使用窗口化或无边框模式，再点击“恢复布局”。</p>
         </section>
       ) : null}
+    </section>
+  );
+}
+
+function ObsConfidence() {
+  const result = useLocalRead<{ preview: { scene: string; image: string } | null }>(
+    '/local/v1/obs/confidence',
+    2000,
+  );
+  return (
+    <section className="workspace-confidence" aria-label="OBS 画面确认">
+      <small>OBS 画面确认</small>
+      {result?.preview ? (
+        <>
+          <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
+          <span>{result.preview.scene}</span>
+        </>
+      ) : (
+        <p>OBS 画面确认暂不可用</p>
+      )}
     </section>
   );
 }
@@ -393,7 +201,7 @@ export function WorkspaceLeft() {
     program.getSnapshot,
   );
   return (
-    <main className="workspace-left">
+    <main className="workspace-left mizar-surface">
       <div className="workspace-radar">
         <Radar client={radar} zoomMode="auto" />
       </div>
@@ -401,6 +209,7 @@ export function WorkspaceLeft() {
         operator={state.state === 'live' ? (state.current?.payload ?? null) : null}
         program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
       />
+      <ObsConfidence />
     </main>
   );
 }
@@ -423,9 +232,21 @@ export function WorkspaceDock() {
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [overlayEnabled, setOverlayEnabled] = useState(true);
-  const [obsPassword, setObsPassword] = useState('');
-  const [obsPort, setObsPort] = useState(4455);
+
+  const production = useLocalRead<Production>('/local/v1/production');
+  const policy = useLocalRead<OverlayPolicy>('/local/v1/desktop-overlay');
+  useEffect(() => {
+    const hide = () => {
+      void fetch('/local/v1/production', { cache: 'no-store' })
+        .then((response) => response.json() as Promise<Production>)
+        .then((current) =>
+          command('/operator/production', { action: 'hide', expectedRevision: current.revision }),
+        )
+        .catch(() => setMessage('工作区已隐藏，制作状态暂未同步。'));
+    };
+    window.addEventListener('mizar-hide', hide);
+    return () => window.removeEventListener('mizar-hide', hide);
+  }, []);
   async function action(run: () => Promise<unknown>, restoreFocus = false) {
     if (busy) return;
     setBusy(true);
@@ -443,12 +264,12 @@ export function WorkspaceDock() {
     }
   }
   return (
-    <main className="workspace-dock" aria-label="现场控制底栏">
+    <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
       <section>
         <small>场景</small>
         <div className="workspace-scene-buttons">
           {PROGRAM_SCENES.map((scene) => (
-            <button
+            <Button
               key={scene.id}
               disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
               aria-pressed={sceneState?.active === scene.id}
@@ -461,7 +282,7 @@ export function WorkspaceDock() {
               }
             >
               {scene.title}
-            </button>
+            </Button>
           ))}
         </div>
       </section>
@@ -473,34 +294,35 @@ export function WorkspaceDock() {
             ? `${payload.seriesProgress.score.a} : ${payload.seriesProgress.score.b}`
             : '未绑定比赛'}
         </span>
-        <a href="/operator/bp">BP 制作</a>
-        <LocalMatchControls action={action} />
-        <RivalHubLiveSourcePanel
-          action={action}
-          onMessage={setMessage}
-          currentMatchTitle={
-            payload?.matchContext.summary
-              ? `${payload.matchContext.summary.entryAName} vs ${payload.matchContext.summary.entryBName}`
-              : null
-          }
-        />
+        <Button onClick={() => void action(() => openTool('bp'))}>BP 工作台</Button>
+
+        {production?.mode === 'live' ? (
+          <RivalHubLiveSourcePanel
+            action={action}
+            onMessage={setMessage}
+            currentMatchTitle={
+              payload?.matchContext.summary
+                ? `${payload.matchContext.summary.entryAName} vs ${payload.matchContext.summary.entryBName}`
+                : null
+            }
+          />
+        ) : null}
       </section>
       <section>
         <small>本机</small>
-        <button
+        <Button
           onClick={() =>
             void action(async () => {
-              const enabled = !overlayEnabled;
-              await desktopInvoke('set_program_overlay_enabled', { enabled });
-              setOverlayEnabled(enabled);
+              if (policy)
+                await command('/operator/desktop-overlay', { ...policy, enabled: !policy.enabled });
             }, true)
           }
         >
-          Program HUD {overlayEnabled ? '关' : '开'}
-        </button>
-        <button onClick={() => void action(() => desktopInvoke('restore_layout'), true)}>
+          {policy?.enabled ? '关闭本机覆盖' : '开启本机覆盖'}
+        </Button>
+        <Button onClick={() => void action(() => desktopInvoke('restore_layout'), true)}>
           恢复布局
-        </button>
+        </Button>
       </section>
       <section>
         <small>OBS</small>
@@ -522,20 +344,8 @@ export function WorkspaceDock() {
             {obs.video.canvas} / {obs.video.output} · {obs.video.fps.toFixed(0)}fps
           </span>
         ) : null}
-        <button onClick={() => void action(() => obsCommand('open'))}>打开 OBS</button>
-        {window.__TAURI_INTERNALS__ ? (
-          <button
-            onClick={() =>
-              void action(async () => {
-                const path = await desktopInvoke<string | null>('select_obs_executable');
-                if (path) await obsCommand('configure', { executablePath: path });
-              })
-            }
-          >
-            选择 OBS 程序
-          </button>
-        ) : null}
-        <button
+        <Button onClick={() => void action(() => obsCommand('open'))}>打开 OBS</Button>
+        <Button
           onClick={() =>
             void action(async () => {
               const result = (await obsCommand('check')) as {
@@ -553,8 +363,8 @@ export function WorkspaceDock() {
           }
         >
           检查配置
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() =>
             void action(async () => {
               const result = (await obsCommand('repair')) as {
@@ -572,37 +382,7 @@ export function WorkspaceDock() {
           }
         >
           一键修复
-        </button>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void action(async () => {
-              await obsCommand('configure', { password: obsPassword, port: obsPort });
-              setObsPassword('');
-            });
-          }}
-        >
-          <label>
-            WebSocket 端口{' '}
-            <input
-              type="number"
-              min="1"
-              max="65535"
-              value={obsPort}
-              onChange={(event) => setObsPort(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            WebSocket 密码{' '}
-            <input
-              type="password"
-              autoComplete="off"
-              value={obsPassword}
-              onChange={(event) => setObsPassword(event.target.value)}
-            />
-          </label>
-          <button>保存连接设置</button>
-        </form>
+        </Button>
       </section>
       <section>
         <small>状态</small>
@@ -625,7 +405,23 @@ export function WorkspaceDock() {
                 : '等待数据'}
         </span>
         <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
-        <a href="/debug">运行诊断</a>
+        <Button onClick={() => void action(() => openTool('diagnostics'))}>运行诊断</Button>
+      </section>
+      <section>
+        <small>制作</small>
+        <Button
+          disabled={!production || busy}
+          onClick={() => production && void action(() => productionAction('hide', production))}
+        >
+          隐藏工作区
+        </Button>
+        <Button
+          disabled={!production || busy}
+          onClick={() => production && void action(() => productionAction('finish', production))}
+        >
+          结束制作
+        </Button>
+        <Button onClick={() => void action(() => openTool('hud'))}>HUD 编辑器</Button>
       </section>
       {message ? (
         <p className="workspace-message" role="status">

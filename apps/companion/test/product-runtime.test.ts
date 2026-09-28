@@ -11,6 +11,7 @@ describe('portable runtime management', () => {
     app = buildApp({
       productRuntime: {
         artifactSha256: 'a'.repeat(64),
+        gitSha: 'b'.repeat(40),
         instanceId: 'instance',
         controlToken: 'secret',
         stop,
@@ -20,6 +21,7 @@ describe('portable runtime management', () => {
     expect(health.json<{ product: unknown }>().product).toEqual({
       repository: 'Starfie1d1272/Mizar',
       artifactSha256: 'a'.repeat(64),
+      gitSha: 'b'.repeat(40),
       instanceId: 'instance',
       mode: 'product',
     });
