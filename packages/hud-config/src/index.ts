@@ -380,9 +380,7 @@ export function defineHudWidgetDescriptor(
     labelVariants.length !== supportedVariants.size ||
     labelVariants.some((variant) => !supportedVariants.has(variant))
   ) {
-    throw new Error(
-      `组件 ${definition.id} 的 variant labels 与 variants 不一致`,
-    );
+    throw new Error(`组件 ${definition.id} 的 variant labels 与 variants 不一致`);
   }
   for (const variant of definition.supportedVariants) {
     if (!definition.variantLabels[variant]?.trim()) throw new Error('Variant 缺少名称');
@@ -712,12 +710,13 @@ function widgetContract(id: HudWidgetId) {
     settingsSchemaByVariant.minimal = (value) => minimalFocusedPlayerSettingsSchema.parse(value);
     defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
   }
+  const variantLabels =
+    id === 'focused-player'
+      ? { default: '标准信息', minimal: '精简信息' }
+      : { default: '默认' };
   return {
     supportedVariants: variants as [string, ...string[]],
-    variantLabels:
-      id === 'focused-player'
-        ? { default: '标准信息', minimal: '精简信息' }
-        : { default: '默认' },
+    variantLabels,
     settingsSchemaByVariant,
     defaultSettingsByVariant,
     editorControls,
