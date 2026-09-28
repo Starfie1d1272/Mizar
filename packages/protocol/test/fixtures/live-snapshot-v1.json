@@ -12,7 +12,11 @@
   "matchId": "local-match-1",
   "competitionId": "local-event-1",
   "format": "bo3",
-  "series": { "scoreA": 0, "scoreB": 0, "currentMapOrder": null },
+  "series": {
+    "scoreA": 0,
+    "scoreB": 0,
+    "currentMapOrder": null
+  },
   "map": {
     "mapId": null,
     "name": "de_ancient",
@@ -24,8 +28,14 @@
   "roundPhase": "live",
   "clock": null,
   "teams": {
-    "ct": { "entryId": "team-a", "name": "甲队" },
-    "t": { "entryId": "team-b", "name": "乙队" }
+    "ct": {
+      "entryId": "team-a",
+      "name": "甲队"
+    },
+    "t": {
+      "entryId": "team-b",
+      "name": "乙队"
+    }
   },
   "players": [],
   "observedPlayerSourceId": null,
@@ -38,5 +48,17 @@
     "lineupComplete": false,
     "radarCurrent": false,
     "canonicalTeams": true
+  },
+  "roundHistory": {
+    "mapOrder": 1,
+    "completeness": "partial",
+    "rounds": [
+      {
+        "roundNumber": 1,
+        "winnerSide": "CT",
+        "winnerEntryId": "team-a",
+        "winCondition": "elimination"
+      }
+    ]
   }
 }

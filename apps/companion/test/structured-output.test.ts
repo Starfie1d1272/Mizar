@@ -10,6 +10,7 @@ import { buildApp } from '../src/app.js';
 import type { MatchContextBinding } from '../src/match-context/index.js';
 import { projectLiveSnapshotV1, transitionReliableEventsV1 } from '../src/output/projector.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { configuredHttpOutputs } from '../src/output/http-sink.js';
 import { OutputService } from '../src/output/service.js';
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
@@ -47,7 +48,7 @@ function observation(
   return {
     receive: {
       sequence,
-      receivedAt: `2026-09-28T00:00:0${sequence}.000Z`,
+      receivedAt: new Date(Date.parse('2026-09-28T00:00:00.000Z') + sequence * 1000).toISOString(),
       receivedMonotonicMs: sequence * 1000,
     },
     source: { kind: 'cs2-gsi' },
@@ -649,6 +650,302 @@ it('wires restart recovery through production app composition and GSI ingress', 
     await vi.waitFor(() => expect(send).toHaveBeenCalledWith(event), { timeout: 2500 });
   } finally {
     await appB.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function liveFixture() {
+  const binding = await bindingFixture();
+  const runtime = createProgramRuntime('public-live');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => 1000,
+  });
+  const bundle = coordinator.afterRuntimeMutation(
+    runtime.acceptObservation(observation(binding.manifest, 1, 'live')),
+  );
+  const project = (input = bundle) =>
+    projectLiveSnapshotV1({
+      bundle: input,
+      binding,
+      producedAt: '2026-09-28T00:00:01.000Z',
+      includeRadar: true,
+    });
+  return { binding, runtime, coordinator, bundle, project };
+}
+
+it.each([
+  'stale',
+  'generation',
+  'epoch',
+  'sequence',
+  'producer',
+  'session',
+  'map',
+  'unsupported',
+] as const)(
+  'keeps the rest of LiveSnapshot available when Radar is invalid: %s',
+  async (changed) => {
+    const { coordinator, bundle, project } = await liveFixture();
+    try {
+      const radar = {
+        ...bundle.radar,
+        telemetryFreshness:
+          changed === 'stale' ? ('stale' as const) : bundle.radar.telemetryFreshness,
+        mapName:
+          changed === 'map'
+            ? 'de_nuke'
+            : changed === 'unsupported'
+              ? 'unsupported'
+              : bundle.radar.mapName,
+        cursor: {
+          ...bundle.radar.cursor,
+          programSourceGeneration:
+            bundle.radar.cursor.programSourceGeneration + (changed === 'generation' ? 1 : 0),
+          mapEpoch: bundle.radar.cursor.mapEpoch + (changed === 'epoch' ? 1 : 0),
+          programReceiveSequence:
+            changed === 'sequence' ? 99 : bundle.radar.cursor.programReceiveSequence,
+          producerInstanceId:
+            changed === 'producer' ? 'old' : bundle.radar.cursor.producerInstanceId,
+          liveSessionId: changed === 'session' ? 'old' : bundle.radar.cursor.liveSessionId,
+        },
+      };
+      const candidate = {
+        ...bundle,
+        radar,
+        program:
+          changed === 'unsupported'
+            ? { ...bundle.program, map: { ...bundle.program.map, name: 'unsupported' } }
+            : bundle.program,
+      };
+      expect(project(candidate)).toMatchObject({
+        radar: null,
+        capability: { radarCurrent: false },
+      });
+      expect(project(candidate)?.players).toHaveLength(10);
+    } finally {
+      await coordinator.close();
+    }
+  },
+);
+
+it('uses only Program-safe inputs, stable Program identity, and no Assist/Lookahead fields', async () => {
+  const { coordinator, bundle, project } = await liveFixture();
+  try {
+    const trapped = new Proxy(bundle, {
+      get(target, key, receiver): unknown {
+        if (key === 'assist' || key === 'identity') throw new Error('private_timeline_access');
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+    });
+    const result = project(trapped)!;
+    expect(result.radar?.players[0]?.canonicalPlayerId).toBe(
+      bundle.program.players[0]?.canonicalPlayerId,
+    );
+    expect(JSON.stringify(result)).not.toMatch(
+      /"(?:assist|lookahead|future|rawGsi|forward|velocity|trail|world)"\s*:/,
+    );
+    const noProof = {
+      ...bundle,
+      program: {
+        ...bundle.program,
+        players: bundle.program.players.map((p) => ({
+          ...p,
+          identityEvidence: 'observed' as const,
+          canonicalPlayerId: null,
+        })),
+      },
+    };
+    expect(project(noProof)?.radar?.players.every((p) => p.canonicalPlayerId === null)).toBe(true);
+  } finally {
+    await coordinator.close();
+  }
+});
+
+it('copies complete/partial/unavailable/null Round History without score inference', async () => {
+  const { coordinator, bundle, project } = await liveFixture();
+  try {
+    for (const completeness of ['complete', 'partial', 'unavailable'] as const) {
+      const roundHistory = {
+        mapOrder: 1,
+        completeness,
+        rounds:
+          completeness === 'unavailable'
+            ? []
+            : [
+                {
+                  roundNumber: 1,
+                  winnerSide: 'CT' as const,
+                  winnerEntryId: 'entry-a',
+                  winCondition: 'bomb' as const,
+                },
+                {
+                  roundNumber: 26,
+                  winnerSide: 'T' as const,
+                  winnerEntryId: 'entry-a',
+                  winCondition: 'unknown' as const,
+                },
+              ],
+      };
+      const result = project({
+        ...bundle,
+        program: { ...bundle.program, series: { ...bundle.program.series!, roundHistory } },
+      });
+      expect(result?.roundHistory).toEqual(roundHistory);
+    }
+    expect(
+      project({ ...bundle, program: { ...bundle.program, series: null } })?.roundHistory,
+    ).toBeNull();
+  } finally {
+    await coordinator.close();
+  }
+});
+
+it.each([24, 30])(
+  'projects production SeriesProgress history through regulation/overtime (%s rounds) and map transition',
+  async (rounds) => {
+    const binding = await bindingFixture();
+    const runtime = createProgramRuntime('live-round-history');
+    let now = 0;
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      matchContextBinding: binding,
+      nowMonotonicMs: () => now,
+    });
+    let sequence = 0;
+    const winnerA = (round: number) => round % 2 === 1 || round === rounds;
+    const accept = (
+      roundNumber: number,
+      phase: 'live' | 'over',
+      side: 'CT' | 'T',
+      mapName = 'de_ancient',
+      mapPhase: 'live' | 'gameover' = 'live',
+    ) => {
+      const completed = mapName === 'de_ancient' ? roundNumber - (phase === 'live' ? 1 : 0) : 0;
+      const scoreA = Array.from({ length: completed }, (_, i) => i + 1).filter(winnerA).length;
+      const frame = observation(binding.manifest, ++sequence, mapPhase, mapName, {
+        entryASide: side,
+        scoreA,
+        scoreB: completed - scoreA,
+        roundNumber,
+      });
+      now = frame.receive.receivedMonotonicMs;
+      const winnerSide = winnerA(roundNumber) ? side : side === 'CT' ? 'T' : 'CT';
+      return coordinator.afterRuntimeMutation(
+        runtime.acceptObservation({
+          ...frame,
+          telemetry: {
+            ...frame.telemetry,
+            round: { phase, ...(phase === 'over' ? { winnerSide } : {}) },
+          },
+        }),
+      );
+    };
+    try {
+      let bundle = accept(1, 'live', 'CT');
+      for (let round = 1; round <= rounds; round++) {
+        const side = round <= 12 || round >= 28 ? 'CT' : 'T';
+        if (round > 1) accept(round, 'live', side);
+        bundle = accept(round, 'over', side);
+      }
+      const snapshot = projectLiveSnapshotV1({
+        bundle,
+        binding,
+        producedAt: '2026-09-28T00:00:01.000Z',
+      })!;
+      expect(snapshot.roundHistory).toEqual(bundle.program.series?.roundHistory);
+      expect(snapshot.roundHistory?.rounds).toHaveLength(rounds);
+      expect(snapshot.roundHistory?.rounds[0]?.winnerSide).toBe('CT');
+      expect(snapshot.roundHistory?.rounds[12]).toMatchObject({
+        winnerSide: 'T',
+        winnerEntryId: binding.context.entrants.a.entryId,
+      });
+      expect(snapshot.roundHistory?.completeness).toBe('complete');
+      accept(rounds, 'over', rounds >= 28 ? 'CT' : 'T', 'de_ancient', 'gameover');
+      const nextMap = binding.context.maps[1]!.mapName;
+      const changed = accept(1, 'live', 'CT', nextMap);
+      const next = projectLiveSnapshotV1({
+        bundle: changed,
+        binding,
+        producedAt: '2026-09-28T00:00:02.000Z',
+      })!;
+      expect(next.roundHistory).toEqual(changed.program.series?.roundHistory);
+      expect(next.roundHistory?.rounds).toEqual([]);
+      expect(next.roundHistory?.mapOrder).toBe(2);
+    } finally {
+      await coordinator.close();
+    }
+  },
+);
+
+it('production HTTP liveSink includes Radar by default, drops failed delivery, and reconnects to current baseline', async () => {
+  const { coordinator, binding, bundle } = await liveFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-live-http-'));
+  const outbox = new ReliableOutbox(join(directory, 'outbox.json'));
+  const bodies: unknown[] = [];
+  const fetchMock = vi.fn<typeof fetch>((_url, init) => {
+    bodies.push(JSON.parse(init!.body as string));
+    return Promise.resolve(new Response(null, { status: bodies.length === 1 ? 503 : 204 }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const outputs = configuredHttpOutputs({
+    MIZAR_LIVE_OUTPUT_URL: 'https://sink.example/live',
+    MIZAR_OUTPUT_TOKEN: 'test-token',
+  });
+  const service = new OutputService({ ...outputs, outbox });
+  try {
+    service.setCurrent(bundle, binding);
+    await service.start();
+    await vi.waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({
+      radar: { mapName: 'de_ancient' },
+      capability: { radarCurrent: true },
+    });
+    await outbox.flushPending();
+    expect(outbox.getRecords()).toEqual([]);
+    service.setCurrent(
+      {
+        ...bundle,
+        program: {
+          ...bundle.program,
+          players: bundle.program.players.map((player) => ({
+            ...player,
+            displayName: 'x'.repeat(300_000),
+          })),
+        },
+      },
+      binding,
+    );
+    expect(service.current(true)).toBeNull();
+    expect(bodies).toHaveLength(1);
+    expect(outbox.getRecords()).toEqual([]);
+    const current = {
+      ...bundle,
+      program: { ...bundle.program, cursor: { ...bundle.program.cursor, runtimeSeq: 100 } },
+    };
+    service.setCurrent(current, binding);
+    await vi.waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toMatchObject({ cursor: { runtimeSeq: 100 } });
+    const received: number[] = [];
+    const stop = service.subscribe(
+      {
+        send: (snapshot) => {
+          received.push(snapshot.cursor.runtimeSeq);
+          return Promise.resolve();
+        },
+      },
+      true,
+    );
+    await vi.waitFor(() => expect(received).toEqual([100]));
+    await stop();
+  } finally {
+    await service.close();
+    await coordinator.close();
+    vi.unstubAllGlobals();
     await rm(directory, { recursive: true, force: true });
   }
 });

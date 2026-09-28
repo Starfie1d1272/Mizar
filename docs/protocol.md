@@ -24,6 +24,28 @@ RivalHub 赛事 Logo 和正式 Match/Schedule read API 的上游交付由 [Rival
 
 `packages/protocol/src/output.ts` 定义 `mizar.live-snapshot.v1` 与 `mizar.reliable-event.v1`。`GET /local/v1/live-snapshot` 返回当前公开状态，可用 `?radar=1` 请求同代际雷达切片；无新鲜匹配上下文时返回 503。进程内 consumer 使用 latest-wins 有界 lane，重连只取得当前值。快照只复制 Program 与同代际 Radar 允许字段，不承载 Raw GSI、Assist 或整个 RuntimeState。
 
+### LiveSnapshot V1 public realtime surface
+
+LiveSnapshot V1 已覆盖 RivalHub 第一版 public LIVE 所需的 Program-safe realtime surface；后续破坏性字段变化必须升级 schema version。本次补齐发生在 Mizar 1.0 对外 contract freeze 前，继续使用 `mizar.live-snapshot.v1`。严格 schema、TypeScript type、parser 和 checked-in fixture 一同维护。
+
+`roundHistory: null | { mapOrder, completeness, rounds[] }` 直接复制 `ProgramProjection.series.roundHistory`，每项保留 `roundNumber / winnerSide / winnerEntryId / winCondition`。`complete / partial / unavailable` 原样表达；SeriesProgress 负责换边、加时、map/source/session continuity 与有限历史恢复，输出端和 consumer 不根据比分补猜历史。这是当前 Program projection 的 bounded context，不是 snapshot history；LiveSnapshot 不持久化、不建立 queue/history，不含 Lookahead。
+
+公共 `radar` 使用 `@mizar/radar` 的无状态 `projectPublicRadarFrame`，只接受与 Program 同一 producer、session、source generation、mapEpoch、receive sequence 和地图的新鲜 RadarFrame。`capability.radarCurrent` 表示当前 Radar 已通过 geometry 与公开 schema 校验；即使本机读取省略 Radar，也保留此能力状态。Radar stale、错场、代际不一致、地图不支持或 Radar contract 超限时，`radar = null`、`radarCurrent = false`，其它 LiveSnapshot 字段继续工作。
+
+公共 Radar 包含：
+
+- `mapName`：geometry provider 的 canonical map key；`calibrationRevision`：Mizar calibration revision。
+- `layers`：`[single]` 或 `[upper, lower]`；`activeLayer`：当前观察选手所在层，否则沿用现有存活选手多数层规则，无法确定时为 `null`。
+- `players[]`：`sourcePlayerId / canonicalPlayerId / side / lifeState / position / facing`。canonical identity 只从同帧 Program 中稳定的 canonical mapping 关联，无法证明时为 `null`。
+- `bomb: null | { position }`：当前 C4 位置，状态与 carrier 仍读取 snapshot 顶层 `bomb`。
+- `utility[]`：`sourceEntityId / kind / ownerSourceId / position / lifetimeSeconds / effectTimeSeconds / flames[]`；flame 保留 `sourceFlameId / position`。时间值是当前 telemetry 已归一化的生命周期证据，缺失为 `null`，不从速度或 renderer history 猜测 phase、剩余寿命或烟雾持续时间。inferno 没有 entity 位置时仍可通过 flames 表达燃烧区域。
+
+`position: null | { x, y, layer }` 的 x/y 是完成 world → overview calibration 后的归一化坐标，x 从左到右、y 从上到下，范围 `[0,1]`。单层及 upper/lower 共用相同 overview transform；consumer 按自己的显示尺寸缩放，不需要 world calibration。out-of-bounds、位置缺失或 unknown layer 为 `position = null`；无效 flame 省略，不 clamp 或使用上一帧位置。`facing: null | { x, y }` 是 overview image axes 的单位方向向量（向右为 +x、向下为 +y），只有当前 alive 且 forward 可证明时提供。dead/unknown 不补朝向。
+
+Mizar owns world → radar projection/calibration；external consumer owns final visual rendering/interpolation。公共 Radar 不携带 world x/y/z、速度、轨迹、smoothing、烟雾历史 anchor 或 renderer 动画状态。输入来自 Delayed Program feed → ProgramProjection / Radar；Lookahead / Observer Assist / future event 永不进入公共字段。
+
+Payload 由 `parseLiveSnapshotV1` 施加 **256 KiB UTF-8 JSON hard bound**（包含字符串转义后的真实 bytes）。集合同时有严格上限：Round History 256、顶层/雷达选手各 64、utility 128、单 utility flames 64、整帧 flames 512；ID/地图/校准/kind 字符串至多 128，显示名 256，producedAt 64。坐标和 facing 有限且有范围；utility 时间值限制在非负 safe integer 数值范围，计数限制为非负 safe integer，其它 clock 数值必须有限；未知 nested 字段拒绝。数量/字符串上限不取代 hard byte guard，合法形状累计超出 bytes 上限同样拒绝，producer drop 当前 snapshot，不进入可靠 outbox。
+
 四个 Mizar-owned V1 payload 都使用严格 schema 和大小上限；未知字段或不支持的 `schemaVersion` 拒绝。发布者不能在同一版本加入接收方未声明的字段；将来可选 enrichment 必须先进入明确的新版本契约和 fixture，破坏字段语义或移除字段同样升级版本。输入文档、赛程、快照和事件分别演进，不联动 Local Protocol channel version。
 
 可靠事件包含 kind、幂等键、transition-time UTC、producer/session/source generation/map epoch cursor、比赛和参赛身份、context revision、证据与有限比分。事件种类为 `match_started`、`map_started`、`map_ended`、`series_ended`、`source_generation_changed`、`map_epoch_changed`、`identity_mismatch`、`lineup_mismatch`。Companion 将事件放入有界持久 outbox；注入的外部 sink 回报 `accepted/rejected/retry`，重试有退避和 24 小时过期。比赛、context revision、session、source generation 或 map epoch 改变即终止旧事件重试；高影响事件要求当前新鲜且 identity matched。outbox 原子保存投递连续性检查点，生产进程使用独立随机 session。相同比赛/revision 在 24 小时内重启时只恢复 session/source generation/map epoch/map name，不恢复 telemetry、receive sequence、Runtime sequence、统计或 monotonic clock。新进程 producer 始终不同，旧事件 producer 和幂等键保持不变；发送等待新遥测，终图事件还需 gameover/map identity、最终 CT/T source score 与同一 mapEpoch 的 SeriesProgress entrant-relative A/B final score 一致。无兼容检查点时不跨进程重试。缺失新鲜上下文只暂停，明确不兼容身份才 supersede。`GET /local/v1/reliable-output-status` 只展示本机投递状态，不暴露完整事件。外部消费者必须按幂等键去重，不能把 Mizar observation 当成官方赛果。
@@ -32,7 +54,7 @@ ReliableEvent 的 payload 按 kind 严格区分：开始事件为空对象；`ma
 
 ### HTTP outbound reference
 
-生产启动可配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN`。两个 URL 独立可选，启用任一个必须同时提供 token。只接受无内嵌凭据的 HTTPS，禁止重定向；Bearer token 仅由 Companion adapter 使用，不进入浏览器或 Core。每次 POST 的 body 是对应 Mizar V1 payload，可靠事件携带 `Idempotency-Key`。
+生产启动可配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN`。两个 URL 独立可选，启用任一个必须同时提供 token。只接受无内嵌凭据的 HTTPS，禁止重定向；Bearer token 仅由 Companion adapter 使用，不进入浏览器或 Core。每次 POST 的 body 是对应 Mizar V1 payload；`MIZAR_LIVE_OUTPUT_URL` 默认发送包含合法当前 Radar 的完整 LiveSnapshot（本机 GET 仍可用 `?radar=1` 选择 Radar）。可靠事件携带 `Idempotency-Key`。
 
 2xx 表示 accepted；408/429/5xx、网络失败和超时表示 retry；其他状态表示 rejected。请求在 4 秒后 Abort，可靠 outbox 另有 5 秒保护。Snapshot 失败只记录诊断并丢弃；lane 保留一个 in-flight 和一个最新待发值，实际发送前重新检查当前 scope 和 freshness，使用当前值。未配置 endpoint 时维持本地读取和投递状态。本实现不定义 RivalHub 的 ingest DTO、pairing 或上传 cadence。
 

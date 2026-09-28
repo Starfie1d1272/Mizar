@@ -67,7 +67,7 @@ export class OutputService {
       }
     }
     if (this.options.liveSink !== undefined)
-      this.outboundUnsubscribe = this.subscribe(this.options.liveSink);
+      this.outboundUnsubscribe = this.subscribe(this.options.liveSink, true);
     if (this.outbox !== undefined) {
       this.timer = setInterval(() => {
         void this.retry();

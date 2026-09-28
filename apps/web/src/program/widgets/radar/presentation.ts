@@ -4,6 +4,7 @@ import {
   defaultMapGeometryProvider,
   projectWorldDirection,
   projectWorldPosition,
+  selectActiveRadarLayer,
   type MapGeometry,
   type RadarLayer,
   type RadarProjectedPosition,
@@ -114,22 +115,7 @@ export function radarBoundary(snapshot: RadarSnapshot): string {
   ]);
 }
 export function selectLayer(snapshot: RadarSnapshot, geometry: MapGeometry): RadarLayer {
-  if (geometry.layerRule.kind === 'single') return 'single';
-  const players = snapshot.payload.players;
-  const focused = players.find((p) => p.sourcePlayerId === snapshot.payload.observedPlayerSourceId);
-  const focusPosition = focused && projectWorldPosition(focused.position, geometry);
-  if (focusPosition && !focusPosition.outOfBounds && focusPosition.layer !== 'unknown')
-    return focusPosition.layer;
-  let upper = 0;
-  let lower = 0;
-  for (const player of players) {
-    if (player.lifeState !== 'alive') continue;
-    const point = projectWorldPosition(player.position, geometry);
-    if (!point || point.outOfBounds) continue;
-    if (point.layer === 'upper') upper++;
-    if (point.layer === 'lower') lower++;
-  }
-  return upper === lower ? 'unknown' : upper > lower ? 'upper' : 'lower';
+  return selectActiveRadarLayer(snapshot.payload, geometry);
 }
 export function onLayer(point: RadarProjectedPosition, layer: RadarLayer): boolean {
   if (point.outOfBounds) return false;

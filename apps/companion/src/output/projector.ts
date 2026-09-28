@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 
+import { projectPublicRadarFrame } from '@mizar/radar';
+
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import {
   parseLiveSnapshotV1,
+  publicRadarV1Schema,
   parseReliableEventV1,
   type LiveSnapshotV1,
   type ReliableEventKindV1,
@@ -12,7 +15,9 @@ import {
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 
-function eligible(bundle: ProjectionBundle, binding: MatchContextBinding | undefined): boolean {
+type LiveProjectionInput = Pick<ProjectionBundle, 'program' | 'radar' | 'operator'>;
+
+function eligible(bundle: LiveProjectionInput, binding: MatchContextBinding | undefined): boolean {
   return (
     binding !== undefined &&
     binding.freshness === 'fresh' &&
@@ -51,7 +56,7 @@ function entrantRelativeMapResult(bundle: ProjectionBundle): ReliableMapResult |
 }
 
 export function projectLiveSnapshotV1(input: {
-  readonly bundle: ProjectionBundle;
+  readonly bundle: LiveProjectionInput;
   readonly binding: MatchContextBinding | undefined;
   readonly producedAt: string;
   readonly includeRadar?: boolean;
@@ -62,13 +67,32 @@ export function projectLiveSnapshotV1(input: {
   const currentMap = program.series?.maps.find(
     (map) => map.mapOrder === program.series?.currentMapOrder,
   );
-  const radarCurrent =
+  const radarAligned =
+    radar.cursor.producerInstanceId === program.cursor.producerInstanceId &&
+    radar.cursor.liveSessionId === program.cursor.liveSessionId &&
+    radar.mapName === program.map.name &&
     radar.telemetryFreshness === 'fresh' &&
     radar.identityState !== 'mismatch' &&
     radar.cursor.programSourceGeneration === program.cursor.programSourceGeneration &&
     radar.cursor.mapEpoch === program.cursor.mapEpoch &&
     radar.cursor.programReceiveSequence === program.cursor.programReceiveSequence;
-  const includeRadar = input.includeRadar === true && radarCurrent;
+  const projectedRadar = radarAligned
+    ? projectPublicRadarFrame({
+        ...radar,
+        players: radar.players.map((player) => ({
+          ...player,
+          canonicalPlayerId:
+            program.players.find(
+              (candidate) =>
+                candidate.sourcePlayerId === player.sourcePlayerId &&
+                candidate.identityEvidence === 'canonical',
+            )?.canonicalPlayerId ?? null,
+        })),
+      })
+    : null;
+  const parsedRadar = publicRadarV1Schema.safeParse(projectedRadar);
+  const publicRadar = parsedRadar.success ? parsedRadar.data : null;
+  const radarCurrent = publicRadar !== null;
   const team = (value: typeof program.teams.ct) => ({
     entryId: value.entryId,
     name: value.name,
@@ -85,6 +109,7 @@ export function projectLiveSnapshotV1(input: {
       scoreB: program.series?.score.b ?? null,
       currentMapOrder: program.series?.currentMapOrder ?? null,
     },
+    roundHistory: program.series?.roundHistory ?? null,
     map: {
       mapId: currentMap?.mapId ?? null,
       name: program.map.name,
@@ -155,26 +180,7 @@ export function projectLiveSnapshotV1(input: {
                     durationSeconds: program.bomb.action.durationSeconds,
                   },
           },
-    radar: !includeRadar
-      ? null
-      : {
-          players: radar.players.map((player) => ({
-            sourcePlayerId: player.sourcePlayerId,
-            position: player.position,
-            forward: player.forward,
-          })),
-          bombPosition: radar.bomb?.position ?? null,
-          utility: radar.grenades.map((grenade) => ({
-            sourceEntityId: grenade.sourceEntityId,
-            kind: grenade.kind,
-            ownerSourceId: grenade.ownerSourceId,
-            position: grenade.position,
-            flames: grenade.flames.map((flame) => ({
-              sourceFlameId: flame.sourceFlameId,
-              position: flame.position,
-            })),
-          })),
-        },
+    radar: input.includeRadar === true ? publicRadar : null,
     capability: {
       telemetryFresh: true,
       contextFresh: true,

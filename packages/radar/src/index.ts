@@ -23,3 +23,5 @@ export {
   SUPPORTED_RADAR_MAP_KEYS,
 } from './cs2-overview-calibrations.js';
 export type { SupportedRadarMapKey } from './cs2-overview-calibrations.js';
+
+export { projectPublicRadarFrame, selectActiveRadarLayer } from './public-projection.js';
