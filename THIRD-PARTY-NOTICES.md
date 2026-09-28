@@ -32,6 +32,18 @@
 | `vitest` | 5.0.0 | 单元与集成测试 | MIT |
 | `zod` | 4.6.2 | Runtime schema validation | MIT |
 
+## 设计系统开发依赖
+
+| 依赖 | 当前版本 | 用途 | 许可证 |
+| --- | ---: | --- | --- |
+| `storybook` / `@storybook/react-vite` / `@storybook/addon-a11y` | 10.6.0 | 独立组件目录、可复用样例与无障碍审查 | MIT |
+| `@vitest/browser-playwright` | 5.0.0 | Chromium 组件交互测试 | MIT |
+| `axe-core` | 4.12.1 | WCAG 2.2 自动无障碍验证 | MPL-2.0 |
+| `jsonc-parser` | 3.3.1 | DTCG JSON 结构与重复键校验 | MIT |
+| `postcss` | 8.5.8 | 限定范围的 CSS 声明架构检查 | MIT |
+
+这些依赖仅用于开发和验证；Storybook、axe、浏览器测试工具不进入正式产品。
+
 ## Development-time asset tooling
 
 | 工具/来源                               |                              当前版本或来源 | 用途                                                            | 许可证/说明                                                                              |

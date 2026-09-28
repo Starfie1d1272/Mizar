@@ -53,3 +53,6 @@ temp/
 # Linux / Chromium is the only committed visual baseline.
 tests/visual/__screenshots__/darwin/
 tests/visual/__screenshots__/win32/
+
+# Component browser failure evidence
+.vitest/

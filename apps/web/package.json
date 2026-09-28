@@ -3,28 +3,37 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter @mizar/testkit build",
+    "predev": "pnpm --filter @mizar/testkit build && pnpm --filter @mizar/design-tokens build",
     "build": "vite build",
     "dev": "vite --host 127.0.0.1 --port 4173",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "storybook": "storybook dev --host 127.0.0.1 --port 6006 --no-open --disable-telemetry",
+    "storybook:build": "storybook build --output-dir ../../.agent-tmp/storybook --disable-telemetry",
+    "storybook:test": "vitest run --config vitest.design.config.ts"
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
-    "@mizar/cs2-assets": "workspace:*",
     "@mizar/core": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
+    "@mizar/design-tokens": "workspace:*",
     "@mizar/hud-config": "workspace:*",
     "@mizar/protocol": "workspace:*",
+    "@mizar/radar": "workspace:*",
     "@mizar/replay": "workspace:*",
     "react": "catalog:",
-    "react-dom": "catalog:",
-    "@mizar/radar": "workspace:*"
+    "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@storybook/addon-a11y": "10.6.0",
+    "@storybook/react-vite": "10.6.0",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@typescript/native": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "5.0.0",
+    "axe-core": "4.12.1",
+    "storybook": "10.6.0",
     "vite": "catalog:",
     "vitest": "catalog:"
   }

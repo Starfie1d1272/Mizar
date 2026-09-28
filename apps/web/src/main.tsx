@@ -1,3 +1,4 @@
+import '@mizar/design-tokens/tokens.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 

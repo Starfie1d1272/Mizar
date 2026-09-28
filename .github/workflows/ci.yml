@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run_quality: ${{ steps.plan.outputs.run_quality }}
+      run_design: ${{ steps.plan.outputs.run_design }}
       run_acceptance: ${{ steps.plan.outputs.run_acceptance }}
       run_platform: ${{ steps.plan.outputs.run_platform }}
       run_qualification: ${{ steps.plan.outputs.run_qualification }}
@@ -112,6 +113,43 @@ jobs:
       - name: Production Web host smoke
         timeout-minutes: 2
         run: pnpm local-web:production-smoke
+
+  design:
+    name: design
+    if: ${{ needs.plan.outputs.run_design == 'true' }}
+    needs: [plan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 24 and pnpm 12
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          version: 12.3.4
+          runtime: node@24
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          require-lockfile: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tokens and architecture contracts
+        run: |
+          pnpm design:tokens:verify
+          pnpm architecture:check
+          pnpm design:contracts:test
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build canonical component catalog
+        run: pnpm design:catalog:build
+
+      - name: Validate component interaction and accessibility
+        run: pnpm design:components:test
 
   acceptance:
     name: acceptance
@@ -359,7 +397,8 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [plan, quality, acceptance, platform, qualification_offline, qualification_windows]
+    needs:
+      [plan, quality, design, acceptance, platform, qualification_offline, qualification_windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -370,6 +409,7 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           REQUIRED_JOBS: ${{ needs.plan.outputs.required_jobs }}
           QUALITY_RESULT: ${{ needs.quality.result }}
+          DESIGN_RESULT: ${{ needs.design.result }}
           ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
           PLATFORM_RESULT: ${{ needs.platform.result }}
           QUALIFICATION_OFFLINE_RESULT: ${{ needs.qualification_offline.result }}

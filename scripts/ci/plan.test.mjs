@@ -264,3 +264,36 @@ describe('CI gate selection', () => {
     ).toEqual({ ok: false, failures: ['required_job=unexpected'] });
   });
 });
+
+describe('Design targeted lane', () => {
+  it.each([
+    'packages/design-tokens/src/base.tokens.json',
+    'docs/design/brand.md',
+    'apps/web/src/ui/ui.css',
+    'apps/web/src/patterns/workbench.stories.tsx',
+    'apps/web/.storybook/main.ts',
+  ])('selects design without Windows qualification for %s', (path) => {
+    const plan = createCiPlan({ changedFiles: [path] });
+    expect(plan.runDesign).toBe(true);
+    expect(plan.requiredJobs).toContain('design');
+    expect(plan.runQualification).toBe(false);
+    expect(plan.runPlatform).toBe(false);
+  });
+  it('does not run catalog for an ordinary Runtime change', () => {
+    expect(createCiPlan({ changedFiles: ['packages/core/src/runtime.ts'] }).runDesign).toBe(false);
+  });
+  it('includes design when planner/workflow forces full CI', () => {
+    expect(createCiPlan({ changedFiles: ['scripts/ci/plan.mjs'] }).requiredJobs).toContain(
+      'design',
+    );
+  });
+  it('fails ci-gate if selected design is skipped or fails', () => {
+    expect(
+      evaluateCiGate({
+        planResult: 'success',
+        requiredJobs: ['design'],
+        jobResults: { design: 'skipped' },
+      }).ok,
+    ).toBe(false);
+  });
+});

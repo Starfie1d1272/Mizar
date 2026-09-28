@@ -1,0 +1,16 @@
+{
+  "name": "@mizar/design-tokens",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./dist/tokens.css",
+    "./tokens.css": "./dist/tokens.css"
+  },
+  "scripts": {
+    "build": "node scripts/tokens.mjs --build",
+    "typecheck": "node scripts/tokens.mjs --check"
+  }
+}
