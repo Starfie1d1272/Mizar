@@ -710,10 +710,11 @@ function widgetContract(id: HudWidgetId) {
     settingsSchemaByVariant.minimal = (value) => minimalFocusedPlayerSettingsSchema.parse(value);
     defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
   }
-  const variantLabels =
-    id === 'focused-player'
-      ? { default: '标准信息', minimal: '精简信息' }
-      : { default: '默认' };
+  const variantLabels: Record<string, string> = { default: '默认' };
+  if (id === 'focused-player') {
+    variantLabels.default = '标准信息';
+    variantLabels.minimal = '精简信息';
+  }
   return {
     supportedVariants: variants as [string, ...string[]],
     variantLabels,
