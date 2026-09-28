@@ -375,6 +375,13 @@ export function defineHudWidgetDescriptor(
   ) {
     throw new Error(`组件 ${definition.id} 的 defaults 与 variants 不一致`);
   }
+  const labelVariants = Object.keys(definition.variantLabels);
+  if (
+    labelVariants.length !== supportedVariants.size ||
+    labelVariants.some((variant) => !supportedVariants.has(variant))
+  ) {
+    throw new Error(`组件 ${definition.id} 的 variant labels 与 variants 不一致`);
+  }
   for (const variant of definition.supportedVariants) {
     if (!definition.variantLabels[variant]?.trim()) throw new Error('Variant 缺少名称');
     const parser = definition.settingsSchemaByVariant[variant]!;
@@ -705,7 +712,10 @@ function widgetContract(id: HudWidgetId) {
   }
   return {
     supportedVariants: variants as [string, ...string[]],
-    variantLabels: { default: '标准信息', minimal: '精简信息' },
+    variantLabels:
+      id === 'focused-player'
+        ? { default: '标准信息', minimal: '精简信息' }
+        : { default: '默认' },
     settingsSchemaByVariant,
     defaultSettingsByVariant,
     editorControls,
@@ -792,10 +802,10 @@ const BUILTIN_PRESET: HudPreset = deepFreeze({
   name: 'RivalHub 默认预设',
   layoutId: BUILTIN_LAYOUT_ID,
   themeId: BUILTIN_THEME_ID,
-  widgets: completeWidgetRecord((id) => ({
-    variant: getHudWidgetDescriptor(id).defaultVariant,
-    settings: cloneJson(getHudWidgetDescriptor(id).defaultSettingsByVariant.default!),
-  })),
+  widgets: completeWidgetRecord((id) => {
+    const descriptor = getHudWidgetDescriptor(id);
+    return switchHudWidgetVariant(descriptor, descriptor.defaultVariant);
+  }),
 });
 
 export function createDefaultHudConfigDocument(): HudConfigDocument {
