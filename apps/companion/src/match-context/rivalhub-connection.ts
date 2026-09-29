@@ -153,7 +153,7 @@ export class RivalHubConnection {
       authorizeUrl.username ||
       authorizeUrl.password ||
       authorizeUrl.hash ||
-      !authorizeUrl.pathname.startsWith('/integrations/mizar/connect') ||
+      authorizeUrl.pathname !== '/integrations/mizar/connect' ||
       authorizeUrl.searchParams.get('pairingId') !== value.pairingId
     )
       throw new Error('授权页面地址无效。');
