@@ -298,7 +298,7 @@ it('handles authentic PR-766 pairing response and falls back to default operator
   const status = await connection.pollPairing();
   expect(status).toBe('authorized');
 
-  const fileContent = JSON.parse(await readFile(path, 'utf8'));
+  const fileContent = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
   expect(fileContent.credential).toBe(scopedCredential);
   expect(fileContent.displayName).toBe('赛事管理员');
   expect(connection.view().displayName).toBe('赛事管理员');
@@ -339,7 +339,9 @@ it('persists new installation when re-pairing even if old source release fails (
     if (requestUrl.endsWith('/release')) {
       releaseCalls++;
       // Simulate remote failure when releasing prior source
-      return Promise.resolve(new Response(JSON.stringify({ error: 'internal_error' }), { status: 500 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: 'internal_error' }), { status: 500 }),
+      );
     }
     return Promise.resolve(new Response(null, { status: 204 }));
   }) as typeof fetch;
@@ -369,7 +371,7 @@ it('persists new installation when re-pairing even if old source release fails (
   expect(releaseCalls).toBe(1);
   expect(pollResult).toBe('authorized');
   // New installation was safely persisted despite release failure
-  const saved = JSON.parse(await readFile(path, 'utf8'));
+  const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
   expect(saved.credential).toBe(newCredential);
   expect(saved.installationId).toBe('inst-new');
   expect(saved.displayName).toBe('新操作员');

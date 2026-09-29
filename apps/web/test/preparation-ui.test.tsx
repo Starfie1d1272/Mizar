@@ -9,8 +9,14 @@ const mockReads: Record<string, unknown> = {};
 const mockCommand = vi.fn().mockResolvedValue({});
 
 vi.mock('../src/preparation/client', () => ({
-  useLocalRead: (endpoint: string | null) => (endpoint ? mockReads[endpoint] ?? null : null),
-  command: (path: string, body?: unknown) => mockCommand(path, body),
+  useLocalRead: <T,>(endpoint: string | null): T | null => {
+    if (!endpoint) return null;
+    return (mockReads[endpoint] as T) ?? null;
+  },
+  command: async (path: string, body?: unknown): Promise<unknown> => {
+    await mockCommand(path, body);
+    return {};
+  },
   openTool: vi.fn(),
   productionAction: vi.fn(),
 }));
@@ -62,7 +68,7 @@ const sampleMatch = {
   entrants: {
     a: {
       entryId: 'e-1',
-      name: 'Team D\'avenir',
+      name: "Team D'avenir",
       logoUrl: null,
       rosterId: null,
       players: [
@@ -93,8 +99,26 @@ const sampleMatch = {
     { stepOrder: 2, actionType: 'ban', mapName: 'de_mirage', entryId: 'e-2', side: null },
   ],
   maps: [
-    { mapId: 'm1', mapOrder: 1, mapName: 'de_ancient', pickedByEntryId: 'e-1', teamAStartSide: null, scoreA: null, scoreB: null, completedAt: null },
-    { mapId: 'm2', mapOrder: 2, mapName: 'de_nuke', pickedByEntryId: 'e-2', teamAStartSide: null, scoreA: null, scoreB: null, completedAt: null },
+    {
+      mapId: 'm1',
+      mapOrder: 1,
+      mapName: 'de_ancient',
+      pickedByEntryId: 'e-1',
+      teamAStartSide: null,
+      scoreA: null,
+      scoreB: null,
+      completedAt: null,
+    },
+    {
+      mapId: 'm2',
+      mapOrder: 2,
+      mapName: 'de_nuke',
+      pickedByEntryId: 'e-2',
+      teamAStartSide: null,
+      scoreA: null,
+      scoreB: null,
+      completedAt: null,
+    },
   ],
 };
 
@@ -125,7 +149,7 @@ describe('PreparationPage: readiness and sample workflow', () => {
         {
           matchId: 'match-1',
           scheduledAt: '2026-09-28T12:00:00.000Z',
-          entrantA: { name: 'Team D\'avenir' },
+          entrantA: { name: "Team D'avenir" },
           entrantB: { name: '暴躁南梁' },
           format: 'bo3',
           stageLabel: '总决赛',
@@ -143,6 +167,7 @@ describe('PreparationPage: readiness and sample workflow', () => {
 
     await act(async () => {
       root!.render(<PreparationPage />);
+      await Promise.resolve();
     });
 
     const summary = container.querySelector('.preparation-match__summary');
@@ -170,6 +195,7 @@ describe('PreparationPage: readiness and sample workflow', () => {
     await act(async () => {
       select.value = 'match-0';
       select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
     });
     expect(mockCommand).toHaveBeenCalledWith('/operator/rivals-rehearsal/select', {
       matchId: 'match-0',

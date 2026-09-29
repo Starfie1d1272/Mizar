@@ -437,7 +437,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
-  const dispatchObservation = (observation: TelemetryObservation): void => {
+  const dispatchObservation = (
+    observation: TelemetryObservation,
+    sampleStageBinding?: { mapOrder: number },
+  ): void => {
     const source = programRuntime.getCurrentState().programSource;
     const lastAccepted = source.lastAccepted;
     if (
@@ -456,6 +459,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }
     outputService.beforeRuntimeMutation();
     const result = programRuntime.acceptObservation(observation);
+    if (sampleStageBinding) {
+      programRuntime.executeOperatorCommand({
+        kind: 'bind-current-map-execution-to-series-map',
+        mapOrder: sampleStageBinding.mapOrder,
+        reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
+      });
+    }
     const bundle = projectionCoordinator.afterRuntimeMutation(result);
     outputService.afterRuntimeMutation(result, bundle, outputBinding);
     programCueCoordinator.afterRuntimeMutation(result);

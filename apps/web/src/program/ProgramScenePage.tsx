@@ -105,9 +105,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
                     : '13 : 8'}
                 </p>
               ) : null}
-              {next || isPreview ? (
-                <p>下一图 {next?.mapName ?? 'de_mirage'}</p>
-              ) : null}
+              {next || isPreview ? <p>下一图 {next?.mapName ?? 'de_mirage'}</p> : null}
             </div>
           ) : null}
           {sceneId === 'match_result' ? (

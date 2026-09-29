@@ -19,7 +19,12 @@ export const DEFAULT_PREVIEW_BP_PROJECTION: NonNullable<BpSnapshot['projection']
     { mapName: 'de_mirage', kind: 'pick', entrant: 'b', sideChoice: { entrant: 'a', side: 'T' } },
     { mapName: 'de_anubis', kind: 'ban', entrant: 'a', sideChoice: null },
     { mapName: 'de_vertigo', kind: 'ban', entrant: 'b', sideChoice: null },
-    { mapName: 'de_nuke', kind: 'decider', entrant: null, sideChoice: { entrant: 'b', side: 'CT' } },
+    {
+      mapName: 'de_nuke',
+      kind: 'decider',
+      entrant: null,
+      sideChoice: { entrant: 'b', side: 'CT' },
+    },
   ],
   steps: [
     { cardIndex: 0, kind: 'card' },

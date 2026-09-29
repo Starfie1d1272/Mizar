@@ -93,7 +93,11 @@ export function PreparationPage() {
       format: string;
       stageLabel?: string | null;
     }[];
-  }>(envelope?.source === 'fixture' && rehearsal?.loaded ? '/local/v1/rivals-rehearsal/schedule' : null);
+  }>(
+    envelope?.source === 'fixture' && rehearsal?.loaded
+      ? '/local/v1/rivals-rehearsal/schedule'
+      : null,
+  );
 
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -280,9 +284,7 @@ export function PreparationPage() {
                     .join(' · ')}
                 </p>
                 <div className="preparation-match__summary">
-                  <span>
-                    BP · {match.veto.length > 0 ? `${match.veto.length} 步` : '暂无记录'}
-                  </span>
+                  <span>BP · {match.veto.length > 0 ? `${match.veto.length} 步` : '暂无记录'}</span>
                   <span>
                     名单 · 首发 {match.entrants.a.players.filter((p) => p.isStarter).length} /{' '}
                     {match.entrants.b.players.filter((p) => p.isStarter).length} 人
@@ -292,7 +294,9 @@ export function PreparationPage() {
                     {match.maps.map((m) => m.mapName.replace(/^de_/, '')).join(' · ')}）
                   </span>
                 </div>
-                {envelope?.source === 'fixture' && rehearsal?.loaded && rehearsalSchedule?.matches ? (
+                {envelope?.source === 'fixture' &&
+                rehearsal?.loaded &&
+                rehearsalSchedule?.matches ? (
                   <div className="preparation-schedule-selector">
                     <label htmlFor="rehearsal-match-select">切换示例比赛：</label>
                     <select

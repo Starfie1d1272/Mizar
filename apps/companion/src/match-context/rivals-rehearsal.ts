@@ -13,22 +13,22 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 import type { MatchContextController } from './controller.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 
-const STAGES = [
-  { label: '赛前等待', scene: 'waiting', completedMaps: 0 },
-  { label: '对阵', scene: 'matchup', completedMaps: 0 },
-  { label: 'BP', scene: 'bp', completedMaps: 0 },
-  { label: '第一图 · 比赛中', scene: 'gameplay', completedMaps: 0 },
-  { label: '第一图 · 半场', scene: 'halftime', completedMaps: 0 },
-  { label: '第一图 · 结果', scene: 'map_result', completedMaps: 1 },
-  { label: '图间 · 第二图', scene: 'intermap', completedMaps: 1 },
-  { label: '第二图 · 比赛中', scene: 'gameplay', completedMaps: 1 },
-  { label: '第二图 · 半场', scene: 'halftime', completedMaps: 1 },
-  { label: '第二图 · 结果', scene: 'map_result', completedMaps: 2 },
-  { label: '图间 · 决胜图', scene: 'intermap', completedMaps: 2 },
-  { label: '决胜图 · 比赛中', scene: 'gameplay', completedMaps: 2 },
-  { label: '决胜图 · 半场', scene: 'halftime', completedMaps: 2 },
-  { label: '决胜图 · 结果', scene: 'map_result', completedMaps: 3 },
-  { label: '整场结果', scene: 'match_result', completedMaps: 3 },
+export const STAGES = [
+  { label: '赛前等待', scene: 'waiting', completedMaps: 0, targetMapOrder: null },
+  { label: '对阵', scene: 'matchup', completedMaps: 0, targetMapOrder: null },
+  { label: 'BP', scene: 'bp', completedMaps: 0, targetMapOrder: null },
+  { label: '第一图 · 比赛中', scene: 'gameplay', completedMaps: 0, targetMapOrder: 1 },
+  { label: '第一图 · 半场', scene: 'halftime', completedMaps: 0, targetMapOrder: 1 },
+  { label: '第一图 · 结果', scene: 'map_result', completedMaps: 1, targetMapOrder: null },
+  { label: '图间 · 第二图', scene: 'intermap', completedMaps: 1, targetMapOrder: null },
+  { label: '第二图 · 比赛中', scene: 'gameplay', completedMaps: 1, targetMapOrder: 2 },
+  { label: '第二图 · 半场', scene: 'halftime', completedMaps: 1, targetMapOrder: 2 },
+  { label: '第二图 · 结果', scene: 'map_result', completedMaps: 2, targetMapOrder: null },
+  { label: '图间 · 决胜图', scene: 'intermap', completedMaps: 2, targetMapOrder: null },
+  { label: '决胜图 · 比赛中', scene: 'gameplay', completedMaps: 2, targetMapOrder: 3 },
+  { label: '决胜图 · 半场', scene: 'halftime', completedMaps: 2, targetMapOrder: 3 },
+  { label: '决胜图 · 结果', scene: 'map_result', completedMaps: 3, targetMapOrder: null },
+  { label: '整场结果', scene: 'match_result', completedMaps: 3, targetMapOrder: null },
 ] as const;
 
 type RehearsalFile = {
@@ -52,14 +52,18 @@ export class RivalsRehearsal {
   } | null = null;
   private selectedMatchId: string | null = null;
   private stageIndex = 0;
-  private cachedGameplayObservation: TelemetryObservation | null = null;
-  private cachedHalftimeObservation: TelemetryObservation | null = null;
+  private cachedGameplayPayload: Record<string, unknown> | null = null;
+  private cachedHalftimePayload: Record<string, unknown> | null = null;
+  private streamSequence = 1;
 
   constructor(
     private readonly path: string,
     private readonly controller: MatchContextController,
     private readonly sceneController?: ProgramSceneController,
-    private readonly onObservation?: (observation: TelemetryObservation) => void,
+    private readonly onObservation?: (
+      observation: TelemetryObservation,
+      sampleStageBinding?: { mapOrder: number },
+    ) => void,
   ) {}
 
   private async readFixture() {
@@ -126,22 +130,23 @@ export class RivalsRehearsal {
   }
 
   private async getGameplayObservation(): Promise<TelemetryObservation | null> {
-    if (this.cachedGameplayObservation) return this.cachedGameplayObservation;
     try {
-      const fixturesDir = dirname(dirname(this.path));
-      const file = join(fixturesDir, 'gsi/acceptance/ancient-round-03/frames.jsonl');
-      const text = await readFile(file, 'utf8');
-      const lines = text.trim().split('\n');
-      const raw = lines[200] ?? lines[0];
-      if (!raw) return null;
-      const frame = JSON.parse(raw) as { sequence: number; payload: unknown };
-      const adapted = adaptGsiPayload(frame.payload as Parameters<typeof adaptGsiPayload>[0], {
+      if (!this.cachedGameplayPayload) {
+        const fixturesDir = dirname(dirname(this.path));
+        const file = join(fixturesDir, 'gsi/acceptance/ancient-round-03/frames.jsonl');
+        const text = await readFile(file, 'utf8');
+        const lines = text.trim().split('\n');
+        const raw = lines[200] ?? lines[0];
+        if (!raw) return null;
+        const frame = JSON.parse(raw) as { sequence: number; payload: Record<string, unknown> };
+        this.cachedGameplayPayload = frame.payload;
+      }
+      const adapted = adaptGsiPayload(this.cachedGameplayPayload, {
         receivedAt: new Date().toISOString(),
         receivedMonotonicMs: performance.now(),
-        sequence: frame.sequence,
+        sequence: this.streamSequence++,
       });
       if (adapted.ok) {
-        this.cachedGameplayObservation = adapted.observation;
         return adapted.observation;
       }
     } catch {
@@ -151,22 +156,23 @@ export class RivalsRehearsal {
   }
 
   private async getHalftimeObservation(): Promise<TelemetryObservation | null> {
-    if (this.cachedHalftimeObservation) return this.cachedHalftimeObservation;
     try {
-      const fixturesDir = dirname(dirname(this.path));
-      const file = join(fixturesDir, 'gsi/semantic/match/regulation-to-overtime/frames.jsonl');
-      const text = await readFile(file, 'utf8');
-      const lines = text.trim().split('\n');
-      const raw = lines[29] ?? lines[0];
-      if (!raw) return null;
-      const frame = JSON.parse(raw) as { sequence: number; payload: unknown };
-      const adapted = adaptGsiPayload(frame.payload as Parameters<typeof adaptGsiPayload>[0], {
+      if (!this.cachedHalftimePayload) {
+        const fixturesDir = dirname(dirname(this.path));
+        const file = join(fixturesDir, 'gsi/semantic/match/regulation-to-overtime/frames.jsonl');
+        const text = await readFile(file, 'utf8');
+        const lines = text.trim().split('\n');
+        const raw = lines[29] ?? lines[0];
+        if (!raw) return null;
+        const frame = JSON.parse(raw) as { sequence: number; payload: Record<string, unknown> };
+        this.cachedHalftimePayload = frame.payload;
+      }
+      const adapted = adaptGsiPayload(this.cachedHalftimePayload, {
         receivedAt: new Date().toISOString(),
         receivedMonotonicMs: performance.now(),
-        sequence: frame.sequence,
+        sequence: this.streamSequence++,
       });
       if (adapted.ok) {
-        this.cachedHalftimeObservation = adapted.observation;
         return adapted.observation;
       }
     } catch {
@@ -192,12 +198,18 @@ export class RivalsRehearsal {
     if (stage.scene === 'gameplay') {
       const obs = await this.getGameplayObservation();
       if (obs && this.onObservation) {
-        this.onObservation(obs);
+        this.onObservation(
+          obs,
+          stage.targetMapOrder !== null ? { mapOrder: stage.targetMapOrder } : undefined,
+        );
       }
     } else if (stage.scene === 'halftime') {
       const obs = await this.getHalftimeObservation();
       if (obs && this.onObservation) {
-        this.onObservation(obs);
+        this.onObservation(
+          obs,
+          stage.targetMapOrder !== null ? { mapOrder: stage.targetMapOrder } : undefined,
+        );
       }
     }
 
@@ -263,9 +275,7 @@ export function registerRivalsRehearsalRoutes(
   );
   app.get('/local/v1/rivals-rehearsal/schedule', async (_request, reply) => {
     try {
-      return reply
-        .header('cache-control', 'no-store')
-        .send(await options.rehearsal.schedule());
+      return reply.header('cache-control', 'no-store').send(await options.rehearsal.schedule());
     } catch {
       return reply.code(404).send({ message: '示例赛程暂时无法获取。' });
     }

@@ -11,7 +11,7 @@ let container: HTMLDivElement;
 
 const mockChannelState: {
   state: 'live' | 'closed' | 'error';
-  current: { payload: any } | null;
+  current: { payload: Record<string, unknown> } | null;
 } = {
   state: 'closed',
   current: null,
@@ -19,7 +19,7 @@ const mockChannelState: {
 
 vi.mock('../src/realtime', () => ({
   useLocalChannelClient: () => ({
-    subscribe: (cb: () => void) => () => {},
+    subscribe: () => () => {},
     getSnapshot: () => mockChannelState,
   }),
 }));
@@ -55,6 +55,7 @@ describe('Program scenes preview and safety boundaries', () => {
     for (const sceneId of scenes) {
       await act(async () => {
         root!.render(<ProgramScenePage sceneId={sceneId} />);
+        await Promise.resolve();
       });
 
       // Header, brand, or main content is visible
@@ -67,6 +68,7 @@ describe('Program scenes preview and safety boundaries', () => {
     window.history.replaceState({}, '', '/program/bp?preview=1');
     await act(async () => {
       root!.render(<BpPresentation snapshot={null} />);
+      await Promise.resolve();
     });
     const bpScene = container.querySelector('.bp-scene');
     expect(bpScene).not.toBeNull();
@@ -89,6 +91,7 @@ describe('Program scenes preview and safety boundaries', () => {
 
     await act(async () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
+      await Promise.resolve();
     });
     expect(container.querySelector('.program-scene__content')).toBeNull();
 
@@ -101,6 +104,7 @@ describe('Program scenes preview and safety boundaries', () => {
     };
     await act(async () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
+      await Promise.resolve();
     });
     expect(container.querySelector('.program-scene__content')).toBeNull();
 
@@ -114,6 +118,7 @@ describe('Program scenes preview and safety boundaries', () => {
     };
     await act(async () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
+      await Promise.resolve();
     });
     // Even if competition name includes Rivals, heuristic does NOT bypass gate!
     expect(container.querySelector('.program-scene__content')).toBeNull();

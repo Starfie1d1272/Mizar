@@ -220,11 +220,7 @@ function ProgramRoute() {
     candidate.payload.series?.bindingState === 'bound' &&
     candidate.payload.status.context === 'fresh';
   const activeSnapshot =
-    isAccepted || isBoundMatch
-      ? candidate
-      : isPreview
-        ? defaultSnapshot
-        : candidate;
+    isAccepted || isBoundMatch ? candidate : isPreview ? defaultSnapshot : candidate;
 
   const program = (
     <ProgramCueRendererBridge client={cueClient}>

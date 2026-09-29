@@ -220,7 +220,48 @@ export class ProgramRuntime {
 
     this.seriesContext = context;
     this.seriesSideProof = sideProof;
-    const before = this.seriesProgress;
+    let before = this.seriesProgress;
+
+    if (context !== undefined && before !== undefined) {
+      let mapsUpdated = false;
+      const updatedMaps = before.maps.map((map) => {
+        const contextMap = context.maps.find((m) => m.mapOrder === map.mapOrder);
+        if (
+          contextMap &&
+          contextMap.scoreA !== null &&
+          contextMap.scoreB !== null &&
+          map.status !== 'completed'
+        ) {
+          mapsUpdated = true;
+          const finalScore = { a: contextMap.scoreA, b: contextMap.scoreB };
+          const winnerEntryId =
+            contextMap.scoreA > contextMap.scoreB
+              ? context.entrants.a.entryId
+              : contextMap.scoreB > contextMap.scoreA
+                ? context.entrants.b.entryId
+                : null;
+          return {
+            ...map,
+            status: 'completed' as const,
+            finalScore,
+            winnerEntryId,
+          };
+        }
+        return map;
+      });
+      if (mapsUpdated) {
+        before = {
+          ...before,
+          maps: updatedMaps,
+          currentMapOrder:
+            before.currentMapOrder !== null &&
+            updatedMaps.find((m) => m.mapOrder === before.currentMapOrder)?.status === 'completed'
+              ? null
+              : before.currentMapOrder,
+        };
+        shouldPersist = true;
+      }
+    }
     const events = this.pendingSeriesEvents.splice(0, this.pendingSeriesEvents.length);
     const observation = this.seriesObservation();
     const restoring = this.restorePending && observation.mapName !== null;
