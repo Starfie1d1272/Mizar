@@ -136,10 +136,7 @@ it('rejects invalid pairing parameters fail-closed', async () => {
       Response.json({
         pairingId: validPairingId,
         pollToken: validPollToken,
-        authorizeUrl:
-          OFFICIAL_RIVALHUB_URL +
-          '/integrations/mizar/connect-extra?pairingId=' +
-          validPairingId,
+        authorizeUrl: validAuthorizeUrl.replace('/connect?', '/connect-extra?'),
         expiresAt: validExpiresAt,
       }),
     ),
