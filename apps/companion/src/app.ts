@@ -512,6 +512,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       rehearsal,
       originPolicy: localWebTransport.getOriginPolicy(),
       beforeLoad: async () => {
+        await programRuntime.flushSeriesProgressCheckpoint();
         await options.rivalhubConnection?.release();
       },
     });
