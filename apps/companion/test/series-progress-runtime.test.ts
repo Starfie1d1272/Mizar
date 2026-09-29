@@ -109,8 +109,9 @@ class MemoryCheckpointStore implements SeriesProgressCheckpointStore {
     this.checkpoint = structuredClone(checkpoint);
   }
 
-  async flush(): Promise<void> {
+  flush(): Promise<void> {
     this.flushCount += 1;
+    return Promise.resolve();
   }
 }
 
