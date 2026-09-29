@@ -66,7 +66,12 @@ Browser acceptance uses real-derived Program fixtures whenever committed capture
    - 示例状态切换使用专用的 fixture series driver，在 stage 切换时初始化各阶段的 `SeriesProgress`（Stage 0–4 为 0 图完成，Stage 5–8 为第一图完成 8:13，Stage 9–12 为第二图完成 1:1，Stage 13/14 为三图完成 2:1）；
    - 在进入结果或图间阶段时，Companion 屏蔽前一阶段残留的独立 capture 遥测，直到下一阶段真实 sample observation 注入，防止旧的 Ancient 遥测污染结果与图间阶段的 Series binding；
    - 生产 `synchronizeSeriesProgress` 不获得任何 fixture 特判；停止示例后完全清空示例状态，切回真实 online/local match 时恢复纯净生产语义。
-3. **15 阶段端到端验证方法**：
+3. **Fixture 零持久副作用**：
+   - `origin: fixture` 期间既不读取也不写入生产 `SeriesProgressCheckpointStore`，示例推进到任意阶段都不会改写真实 checkpoint；退出示例后重新选择同一 matchId 的真实上下文时，不恢复任何示例比分（从 0:0 与 pending 地图开始）；
+   - 示例继续驱动本地 Program / Operator / BP / HUD 快照与场景，但不更新 durable delivery continuity，也不向 `ReliableOutbox` 入队 `ReliableEvent`；示例激活期间暂停生产 outbox 的 retry / sweep / supersede，既有 pending 生产事件保持 `pending` 且 continuity 不变，退出示例后恢复正常投递。
+4. **统一示例生命周期**：
+   - 从 Rivals 示例直接切换到 Local、Online RivalHub，或清空 MatchContext 时，composition owner 在应用新 binding 后立即退出 fixture runtime state：清空 fixture series driver、解除 telemetry 屏蔽、复位场景瞬时状态，无需操作者额外点击「停止演练」。
+5. **15 阶段端到端验证方法**：
    - Stage 0–2（赛前等待 / 对阵 / BP）：Series planned，比分 0:0，bindingState 为 unbound 且非 needs_operator；
    - Stage 3–4（第一图比赛中 / 第一图半场）：绑定 Map 1，currentMapOrder = 1，telemetry fresh，identity degraded，非 needs_operator；
    - Stage 5–6（第一图结果 / 图间第二图）：第一图完成（8:13），series 比分 0:1，Map Result / InterMap 场景可正常输出，非 needs_operator；

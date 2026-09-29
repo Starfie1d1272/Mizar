@@ -106,7 +106,7 @@ it('projects bounded public-safe live data and transition-time reliable event', 
         completedAt: null,
       })),
     },
-    origin: 'fixture',
+    origin: 'online',
     freshness: 'fresh',
     diagnostics: [],
   };
@@ -222,7 +222,7 @@ async function bindingFixture(): Promise<MatchContextBinding> {
         completedAt: null,
       })),
     },
-    origin: 'fixture',
+    origin: 'online',
     freshness: 'fresh',
     diagnostics: [],
   };

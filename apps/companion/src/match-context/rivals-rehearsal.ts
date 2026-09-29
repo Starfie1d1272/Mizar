@@ -227,12 +227,18 @@ export class RivalsRehearsal {
     return this.view();
   }
 
-  stop() {
-    if (this.controller.getActiveBinding()?.origin === 'fixture') this.controller.clearActive();
-    this.fixtureSeriesDriver?.clearFixtureSeriesProgress();
+  exitFixtureRuntimeState(): void {
+    this.fixtureSeriesDriver?.clearFixtureSeriesProgress?.();
     this.selectedMatchId = null;
     this.stageIndex = 0;
     this.sceneController?.forceScene('waiting');
+  }
+
+  stop() {
+    if (this.controller.getActiveBinding()?.origin === 'fixture') {
+      this.controller.clearActive();
+    }
+    this.exitFixtureRuntimeState();
     return this.view();
   }
 

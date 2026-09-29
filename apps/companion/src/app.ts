@@ -423,6 +423,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       activeScene: () => sceneController.get().active,
     });
   }
+  let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
+  // The binding listener must retire fixture state on the way out, but it is created
+  // before the rehearsal exists; this slot carries the later-constructed instance.
+  const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
   const matchContextController =
     options.matchManifestPath === undefined
       ? null
@@ -432,8 +436,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ? {}
             : { initialBinding: options.matchContextBinding }),
           onBindingChanged: (binding) => {
+            const previousOrigin = previousBindingOrigin;
+            previousBindingOrigin = binding?.origin;
             outputBinding = binding;
+            outputService.setBinding(binding);
             projectionCoordinator.setMatchContextBinding(binding);
+
+            // Leaving the Rivals sample by any route retires fixture runtime state
+            // without waiting for an explicit "stop rehearsal" action.
+            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
+              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
+            }
+
             programCueCoordinator.afterRuntimeMutation();
           },
         });
@@ -492,6 +506,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           },
         )
       : undefined;
+  fixtureLifecycle.rehearsal = rehearsal;
   if (rehearsal)
     registerRivalsRehearsalRoutes(app, {
       rehearsal,
