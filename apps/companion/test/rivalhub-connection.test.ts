@@ -130,6 +130,22 @@ it('rejects invalid pairing parameters fail-closed', async () => {
   ) as typeof fetch;
   const connectionBadUrl = new RivalHubConnection(join(directory, 'c2.json'), fetchBadUrl);
   await expect(connectionBadUrl.startPairing()).rejects.toThrow('授权页面地址无效。');
+
+  const fetchBadPath = vi.fn(() =>
+    Promise.resolve(
+      Response.json({
+        pairingId: validPairingId,
+        pollToken: validPollToken,
+        authorizeUrl:
+          OFFICIAL_RIVALHUB_URL +
+          '/integrations/mizar/connect-extra?pairingId=' +
+          validPairingId,
+        expiresAt: validExpiresAt,
+      }),
+    ),
+  ) as typeof fetch;
+  const connectionBadPath = new RivalHubConnection(join(directory, 'c3.json'), fetchBadPath);
+  await expect(connectionBadPath.startPairing()).rejects.toThrow('授权页面地址无效。');
 });
 
 it('handles discovery of existing active device and explicit takeover', async () => {
@@ -279,7 +295,6 @@ it('handles authentic PR-766 pairing response and falls back to default operator
       );
     }
     if (requestUrl.endsWith('/pairing/poll')) {
-      // #766 HEAD MizarPairingPoll response: no displayName returned by installation.ts
       return Promise.resolve(
         Response.json({
           status: 'authorized',
