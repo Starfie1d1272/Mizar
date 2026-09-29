@@ -229,6 +229,9 @@ describe('Fixture durable isolation & lifecycle', () => {
       match: {
         ...focusManifest.match,
         competition: { ...focusManifest.match.competition, competitionId: 'prod-competition' },
+        scoreA: null,
+        scoreB: null,
+        completedAt: null,
       },
       maps: focusManifest.maps.map((map) => ({
         ...map,
