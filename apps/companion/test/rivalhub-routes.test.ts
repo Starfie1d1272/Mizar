@@ -155,4 +155,68 @@ describe('RivalHub Fastify Routes', () => {
       await app.close();
     }
   });
+
+  it('handles disconnect endpoint with origin policy and error handling', async () => {
+    const app = Fastify();
+    let paired = true;
+    let disconnectShouldThrow = false;
+    const disconnectMock = vi.fn((): Promise<void> => {
+      if (disconnectShouldThrow) {
+        return Promise.reject(new Error('断开连接失败，请稍后重试。'));
+      }
+      paired = false;
+      return Promise.resolve();
+    });
+    const mockConnection = {
+      view: vi.fn(() => ({
+        paired,
+        competitionId: paired ? 'comp-1' : null,
+        displayName: paired ? '星宇' : null,
+        activeSourceMatchId: null,
+        activeDeviceName: null,
+        pairing: 'idle',
+      })),
+      disconnect: disconnectMock,
+    } as unknown as RivalHubConnection;
+
+    registerRivalHubConnectionRoutes(app, {
+      connection: mockConnection,
+      controller: null,
+      currentSnapshot: () => null,
+      originPolicy,
+    });
+
+    try {
+      // Untrusted origin is rejected
+      const evilRes = await app.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/disconnect',
+        headers: { origin: 'https://evil.example.com' },
+      });
+      expect(evilRes.statusCode).toBe(403);
+      expect(disconnectMock).not.toHaveBeenCalled();
+
+      // Disconnect error returns 409
+      disconnectShouldThrow = true;
+      const failRes = await app.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/disconnect',
+        headers: { origin: 'http://127.0.0.1:43120' },
+      });
+      expect(failRes.statusCode).toBe(409);
+      expect(failRes.json()).toEqual({ message: '断开未完成，请重试。' });
+
+      // Successful disconnect returns updated view
+      disconnectShouldThrow = false;
+      const successRes = await app.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/disconnect',
+        headers: { origin: 'http://127.0.0.1:43120' },
+      });
+      expect(successRes.statusCode).toBe(200);
+      expect(successRes.json()).toMatchObject({ paired: false });
+    } finally {
+      await app.close();
+    }
+  });
 });

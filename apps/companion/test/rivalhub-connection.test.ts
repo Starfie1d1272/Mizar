@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import {
   RivalHubConnection,
@@ -376,4 +377,198 @@ it('persists new installation when re-pairing even if old source release fails (
   expect(saved.installationId).toBe('inst-new');
   expect(saved.displayName).toBe('新操作员');
   expect(connection.view().activeSourceMatchId).toBeNull();
+});
+
+describe('RivalHubConnection.disconnect lifecycle', () => {
+  it('releases active source, calls POST /api/mizar/disconnect with Bearer credential, removes file, and clears state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-disc-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    const credential = `rh_mizar_${validPairingId}_${'d'.repeat(64)}`;
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential,
+        installationId: 'inst-1',
+        competitionId: 'comp-1',
+        displayName: '操作员',
+      }),
+      'utf8',
+    );
+
+    const recorded: { url: string; method: string; headers: Headers }[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init: RequestInit = {}) => {
+      const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      recorded.push({
+        url: requestUrl,
+        method: (init.method ?? 'GET').toUpperCase(),
+        headers: new Headers(init.headers),
+      });
+      if (requestUrl.endsWith('/release')) {
+        return Promise.resolve(Response.json({ released: true }));
+      }
+      if (requestUrl.endsWith('/disconnect')) {
+        return Promise.resolve(Response.json({ revoked: true }));
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }) as typeof fetch;
+
+    const connection = new RivalHubConnection(path, fetchImpl);
+    await connection.load();
+    // @ts-expect-error test setup active source
+    connection.source = {
+      matchId: 'match-1',
+      authorityRevision: 2,
+      producerInstanceId: 'prod',
+      liveSessionId: 'sess',
+    };
+
+    expect(connection.view().paired).toBe(true);
+    expect(connection.view().activeSourceMatchId).toBe('match-1');
+
+    await connection.disconnect();
+
+    const releaseReq = recorded.find((r) => r.url.endsWith('/release'));
+    expect(releaseReq).toBeDefined();
+    expect(releaseReq!.method).toBe('POST');
+    expect(releaseReq!.headers.get('authorization')).toBe(`Bearer ${credential}`);
+
+    const discReq = recorded.find((r) => r.url.endsWith('/disconnect'));
+    expect(discReq).toBeDefined();
+    expect(discReq!.method).toBe('POST');
+    expect(discReq!.headers.get('authorization')).toBe(`Bearer ${credential}`);
+
+    expect(existsSync(path)).toBe(false);
+    expect(connection.view()).toEqual({
+      paired: false,
+      competitionId: null,
+      displayName: null,
+      activeSourceMatchId: null,
+      activeDeviceName: null,
+      pairing: 'idle',
+    });
+  });
+
+  it('proceeds with disconnect best-effort even if active source release fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-disc-best-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    const credential = `rh_mizar_${validPairingId}_${'e'.repeat(64)}`;
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential,
+        installationId: 'inst-1',
+        competitionId: 'comp-1',
+        displayName: '操作员',
+      }),
+      'utf8',
+    );
+
+    let releaseAttempts = 0;
+    const recorded: { url: string; method: string }[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init: RequestInit = {}) => {
+      const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      recorded.push({
+        url: requestUrl,
+        method: (init.method ?? 'GET').toUpperCase(),
+      });
+      if (requestUrl.endsWith('/release')) {
+        releaseAttempts++;
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'server_down' }), { status: 500 }),
+        );
+      }
+      if (requestUrl.endsWith('/disconnect')) {
+        return Promise.resolve(Response.json({ revoked: true }));
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }) as typeof fetch;
+
+    const connection = new RivalHubConnection(path, fetchImpl);
+    await connection.load();
+    // @ts-expect-error test setup active source
+    connection.source = {
+      matchId: 'match-1',
+      authorityRevision: 1,
+      producerInstanceId: 'prod',
+      liveSessionId: 'sess',
+    };
+
+    await connection.disconnect();
+
+    expect(releaseAttempts).toBe(1);
+    const discReq = recorded.find((r) => r.url.endsWith('/disconnect'));
+    expect(discReq).toBeDefined();
+    expect(discReq!.method).toBe('POST');
+    expect(existsSync(path)).toBe(false);
+    expect(connection.view().paired).toBe(false);
+  });
+
+  it('retains local credential and connection state when remote disconnect fails, allowing retry', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-disc-retry-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    const credential = `rh_mizar_${validPairingId}_${'f'.repeat(64)}`;
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential,
+        installationId: 'inst-1',
+        competitionId: 'comp-1',
+        displayName: '操作员',
+      }),
+      'utf8',
+    );
+
+    let shouldFail = true;
+    const fetchImpl = vi.fn((url: string | URL | Request) => {
+      const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (requestUrl.endsWith('/disconnect')) {
+        if (shouldFail) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'gateway_timeout' }), { status: 504 }),
+          );
+        }
+        return Promise.resolve(Response.json({ revoked: true }));
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }) as typeof fetch;
+
+    const connection = new RivalHubConnection(path, fetchImpl);
+    await connection.load();
+
+    // First attempt fails: server returns 504
+    await expect(connection.disconnect()).rejects.toThrow('断开连接失败，请稍后重试。');
+
+    // Local file and state MUST be retained
+    expect(existsSync(path)).toBe(true);
+    expect(connection.view().paired).toBe(true);
+    expect(connection.view().displayName).toBe('操作员');
+
+    // Retry succeeds
+    shouldFail = false;
+    await connection.disconnect();
+
+    expect(existsSync(path)).toBe(false);
+    expect(connection.view().paired).toBe(false);
+  });
+
+  it('is a safe no-op when disconnecting an already unpaired connection', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-disc-noop-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    const fetchImpl = vi.fn() as typeof fetch;
+
+    const connection = new RivalHubConnection(path, fetchImpl);
+    await connection.load();
+    expect(connection.view().paired).toBe(false);
+
+    await expect(connection.disconnect()).resolves.toBeUndefined();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(connection.view().paired).toBe(false);
+  });
 });

@@ -81,12 +81,27 @@ export class RivalHubConnection {
   }
 
   async disconnect(): Promise<void> {
-    await this.release();
+    if (this.installation) {
+      try {
+        await this.release();
+      } catch {
+        // active source release is best-effort
+      }
+      const response = await this.request('disconnect', {
+        method: 'POST',
+      });
+      await response.body?.cancel();
+      if (!response.ok) {
+        throw new Error('断开连接失败，请稍后重试。');
+      }
+    }
     await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
     });
     this.installation = null;
+    this.source = null;
     this.activeDeviceName = null;
+    this.pendingPairing = null;
   }
 
   private async persist(): Promise<void> {
