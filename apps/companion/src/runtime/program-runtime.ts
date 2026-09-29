@@ -275,13 +275,7 @@ export class ProgramRuntime {
   }
 
   async flushSeriesProgressCheckpoint(): Promise<void> {
-    if (
-      this.seriesProgressCheckpointStore === undefined ||
-      this.fixtureSeriesProgressActive ||
-      this.seriesOrigin === 'fixture'
-    ) {
-      return;
-    }
+    if (this.seriesProgressCheckpointStore === undefined) return;
     try {
       await this.seriesProgressCheckpointStore.flush();
     } catch {
@@ -366,9 +360,7 @@ export class ProgramRuntime {
   }
 
   async close(): Promise<void> {
-    if (!this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
-      await this.flushSeriesProgressCheckpoint();
-    }
+    await this.flushSeriesProgressCheckpoint();
   }
 
   getSourceFreshness(nowMonotonicMs: number): ProgramSourceFreshness {
