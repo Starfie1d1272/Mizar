@@ -571,7 +571,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),
-      ...(rehearsal === undefined ? {} : { rehearsal }),
     });
   if (matchContextController !== null) {
     app.addHook('onReady', async () => {
