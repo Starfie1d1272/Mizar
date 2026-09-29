@@ -416,7 +416,12 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
       'utf8',
     );
 
-    const recorded: { url: string; method: string; headers: Headers; body: BodyInit | null | undefined }[] = [];
+    const recorded: {
+      url: string;
+      method: string;
+      headers: Headers;
+      body: RequestInit['body'];
+    }[] = [];
     const fetchImpl = vi.fn((url: string | URL | Request, init: RequestInit = {}) => {
       const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
       recorded.push({
