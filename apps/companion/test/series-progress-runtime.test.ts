@@ -99,6 +99,7 @@ function frame(
 
 class MemoryCheckpointStore implements SeriesProgressCheckpointStore {
   checkpoint: SeriesProgressCheckpoint | undefined;
+  flushCount = 0;
 
   load(): SeriesProgressCheckpoint | undefined {
     return this.checkpoint;
@@ -108,7 +109,9 @@ class MemoryCheckpointStore implements SeriesProgressCheckpointStore {
     this.checkpoint = structuredClone(checkpoint);
   }
 
-  async flush(): Promise<void> {}
+  async flush(): Promise<void> {
+    this.flushCount += 1;
+  }
 }
 
 const sideProof: SeriesSideProof = {
@@ -139,6 +142,22 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     runtime.acceptObservation(frame(5, 'gameover', 'over', { ct: 13, t: 9 }));
     const repeated = runtime.synchronizeSeriesProgress(context, sideProof);
     expect(repeated).toEqual(progress);
+  });
+
+  it('flushes pre-existing production checkpoint work when closing during fixture mode', async () => {
+    const context = contextFixture();
+    const store = new MemoryCheckpointStore();
+    const runtime = createProgramRuntime('series-runtime', {
+      seriesProgressCheckpointStore: store,
+    });
+
+    runtime.synchronizeSeriesProgress(context, null, 'online');
+    expect(store.checkpoint).toBeDefined();
+
+    runtime.activateFixtureSeriesProgress(context);
+    await runtime.close();
+
+    expect(store.flushCount).toBe(1);
   });
 
   it('restores a completed local map from a compatible checkpoint without MatchContext score writeback', () => {
