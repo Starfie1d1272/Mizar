@@ -480,6 +480,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           matchContextController,
           sceneController,
           dispatchObservation,
+          {
+            activateFixtureSeriesProgress: (context) => {
+              programRuntime.activateFixtureSeriesProgress(context);
+              projectionCoordinator.refresh();
+            },
+            clearFixtureSeriesProgress: () => {
+              programRuntime.clearFixtureSeriesProgress();
+              projectionCoordinator.refresh();
+            },
+          },
         )
       : undefined;
   if (rehearsal)

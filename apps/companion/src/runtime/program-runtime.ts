@@ -77,6 +77,7 @@ export class ProgramRuntime {
   private readonly pendingSeriesEvents: SeriesProgressEvent[] = [];
   private restorePending = false;
   private deliveryRestoreAwaitingTelemetry = false;
+  private fixtureTelemetrySuppressed = false;
 
   constructor(options: ProgramRuntimeOptions | string) {
     const normalizedOptions: ProgramRuntimeOptions =
@@ -114,6 +115,7 @@ export class ProgramRuntime {
   }
 
   acceptObservation(observation: TelemetryObservation): RuntimeReduceResult {
+    this.fixtureTelemetrySuppressed = false;
     return this.apply({
       kind: 'program-telemetry',
       sourceGeneration: this.state.programSource.generation,
@@ -220,48 +222,7 @@ export class ProgramRuntime {
 
     this.seriesContext = context;
     this.seriesSideProof = sideProof;
-    let before = this.seriesProgress;
-
-    if (context !== undefined && before !== undefined) {
-      let mapsUpdated = false;
-      const updatedMaps = before.maps.map((map) => {
-        const contextMap = context.maps.find((m) => m.mapOrder === map.mapOrder);
-        if (
-          contextMap &&
-          contextMap.scoreA !== null &&
-          contextMap.scoreB !== null &&
-          map.status !== 'completed'
-        ) {
-          mapsUpdated = true;
-          const finalScore = { a: contextMap.scoreA, b: contextMap.scoreB };
-          const winnerEntryId =
-            contextMap.scoreA > contextMap.scoreB
-              ? context.entrants.a.entryId
-              : contextMap.scoreB > contextMap.scoreA
-                ? context.entrants.b.entryId
-                : null;
-          return {
-            ...map,
-            status: 'completed' as const,
-            finalScore,
-            winnerEntryId,
-          };
-        }
-        return map;
-      });
-      if (mapsUpdated) {
-        before = {
-          ...before,
-          maps: updatedMaps,
-          currentMapOrder:
-            before.currentMapOrder !== null &&
-            updatedMaps.find((m) => m.mapOrder === before.currentMapOrder)?.status === 'completed'
-              ? null
-              : before.currentMapOrder,
-        };
-        shouldPersist = true;
-      }
-    }
+    const before = this.seriesProgress;
     const events = this.pendingSeriesEvents.splice(0, this.pendingSeriesEvents.length);
     const observation = this.seriesObservation();
     const restoring = this.restorePending && observation.mapName !== null;
@@ -332,6 +293,32 @@ export class ProgramRuntime {
       progress: this.seriesProgress,
       code: ok ? 'operator_bind_applied' : 'operator_bind_rejected',
     };
+  }
+
+  /**
+   * Dedicated fixture-only Series driver for development / qualification sample playback (e.g. RivalsRehearsal).
+   * Explicitly sets the SeriesProgress for the current fixture stage from stage MatchContext.
+   * Also enters a "telemetry suppressed" state until the next stage observation is received,
+   * preventing previous stage's sample observation (e.g. Ancient) from polluting result or intermap stages.
+   */
+  activateFixtureSeriesProgress(context: MatchContext): SeriesProgress {
+    this.seriesContext = context;
+    this.seriesProgress = createSeriesProgress(context);
+    this.fixtureTelemetrySuppressed = true;
+    this.pendingSeriesEvents.length = 0;
+    this.persistSeriesProgress();
+    return this.seriesProgress;
+  }
+
+  /**
+   * Resets any fixture-only Series driver state when leaving rehearsal/fixture mode.
+   */
+  clearFixtureSeriesProgress(): void {
+    this.fixtureTelemetrySuppressed = false;
+    this.seriesProgress = undefined;
+    this.seriesContext = undefined;
+    this.seriesSideProof = null;
+    this.pendingSeriesEvents.length = 0;
   }
 
   async close(): Promise<void> {
@@ -419,6 +406,17 @@ export class ProgramRuntime {
   }
 
   private seriesObservation(): SeriesMapObservation {
+    if (this.fixtureTelemetrySuppressed) {
+      return {
+        sourceGeneration: this.state.programSource.generation,
+        mapEpoch: this.state.map.epoch,
+        mapName: null,
+        mapEnded: false,
+        roundNumber: null,
+        score: { ct: null, t: null },
+        roundWins: [],
+      };
+    }
     const map = this.state.programTelemetry?.telemetry.map;
     return {
       sourceGeneration: this.state.programSource.generation,

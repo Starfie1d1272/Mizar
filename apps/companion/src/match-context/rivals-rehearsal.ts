@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import {
+  toMatchContext,
   validateBroadcastManifest,
   validateBroadcastScheduleWindow,
   type BroadcastManifestV1,
@@ -9,6 +10,7 @@ import {
 } from '@mizar/rivalhub';
 import { adaptGsiPayload } from '@mizar/telemetry-gsi';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
+import type { MatchContext } from '@mizar/core/match-context';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
@@ -64,6 +66,10 @@ export class RivalsRehearsal {
       observation: TelemetryObservation,
       sampleStageBinding?: { mapOrder: number },
     ) => void,
+    private readonly fixtureSeriesDriver?: {
+      readonly activateFixtureSeriesProgress: (context: MatchContext) => void;
+      readonly clearFixtureSeriesProgress: () => void;
+    },
   ) {}
 
   private async readFixture() {
@@ -109,9 +115,10 @@ export class RivalsRehearsal {
     const fixture = await this.readFixture();
     this.selectedMatchId = fixture.focusMatchId;
     this.stageIndex = 0;
-    this.controller.activateFixture(
-      this.stageManifest(fixture.manifests.get(fixture.focusMatchId)!, 0),
-    );
+    const focusManifest = fixture.manifests.get(fixture.focusMatchId)!;
+    const initialManifest = this.stageManifest(focusManifest, 0);
+    this.controller.activateFixture(initialManifest);
+    this.fixtureSeriesDriver?.activateFixtureSeriesProgress(toMatchContext(initialManifest));
     this.sceneController?.forceScene('waiting');
     return this.view();
   }
@@ -122,9 +129,10 @@ export class RivalsRehearsal {
     if (!manifest) throw new Error('示例中没有这场比赛。');
     this.selectedMatchId = matchId;
     this.stageIndex = 0;
-    this.controller.activateFixture(
-      matchId === fixture.focusMatchId ? this.stageManifest(manifest, 0) : manifest,
-    );
+    const selectedManifest =
+      matchId === fixture.focusMatchId ? this.stageManifest(manifest, 0) : manifest;
+    this.controller.activateFixture(selectedManifest);
+    this.fixtureSeriesDriver?.activateFixtureSeriesProgress(toMatchContext(selectedManifest));
     this.sceneController?.forceScene('waiting');
     return this.view();
   }
@@ -191,7 +199,9 @@ export class RivalsRehearsal {
     )
       throw new Error('请先加载焦点比赛，再选择示例阶段。');
     const manifest = fixture.manifests.get(fixture.focusMatchId)!;
-    this.controller.activateFixture(this.stageManifest(manifest, index));
+    const stageManifest = this.stageManifest(manifest, index);
+    this.controller.activateFixture(stageManifest);
+    this.fixtureSeriesDriver?.activateFixtureSeriesProgress(toMatchContext(stageManifest));
     this.stageIndex = index;
     const stage = STAGES[index]!;
 
@@ -219,6 +229,7 @@ export class RivalsRehearsal {
 
   stop() {
     if (this.controller.getActiveBinding()?.origin === 'fixture') this.controller.clearActive();
+    this.fixtureSeriesDriver?.clearFixtureSeriesProgress();
     this.selectedMatchId = null;
     this.stageIndex = 0;
     this.sceneController?.forceScene('waiting');

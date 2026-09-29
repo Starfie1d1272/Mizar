@@ -204,6 +204,8 @@ RuntimeTransition + MatchContext + 当前已证明的 side mapping
                     ProgramProjection
 ```
 
+> **SeriesProgress 赛果 Ownership 规则**：`MatchContext` 可以在首次建立某场比赛的 `SeriesProgress` 时提供已完成地图的历史赛果作为初始化事实；但 `SeriesProgress` 已经建立并开始运行后，后续 map completion 只能由 Runtime transition、SeriesProgress reducer 与显式 operator evidence 推进。普通 `MatchContext` refresh（无论来自 stale、fresh、local 或 online）均不能作为第二个 mutable score owner 回写已运行或已冻结的地图结果。
+
 `IdentityResolver`、`ActiveLineupResolution` 和 side-mapping 仍由既有 owner 维护；Series reducer 只接收同一 `sourceGeneration + mapEpoch` 的显式 proof，不复制这些状态。实际地图与计划不一致时保留原始 Program telemetry，Series binding fail closed 为 `needs_operator`，不猜 map slot 或 canonical series score。
 
 连续运行时 `round_ended` 是 Round History 的 primary truth；后续 `map_round_wins` 只能恢复缺失历史、补充未知 `winCondition` 或做保守校验，不能覆盖已经冻结的 `winnerSide`。如果 snapshot 与 transition 冲突，保留 primary fact，并将 history 降级为 `partial`、留下 Operator diagnostic。兼容 checkpoint 加载后还必须把当前 GSI 的 `roundNumber`、CT/T score 和 `round_wins` 与已冻结 history 做一次 execution-state reconciliation；发现回退或矛盾时同样保留 checkpoint history 并降级，不把 schema compatibility 当作 execution compatibility。

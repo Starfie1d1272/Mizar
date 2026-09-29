@@ -54,6 +54,27 @@
 
 Browser acceptance uses real-derived Program fixtures whenever committed capture evidence exists. Synthetic fixtures are reserved for explicit edge/fail-closed or presentation stress and must declare provenance/reason. Browser acceptance checks behavior and semantic state; diagnostic screenshots may be attached, but do not determine pass/fail.
 
+### B.1 Rivals 示例与 15 阶段验证
+
+为了在脱离公网 RivalHub 和未连接现场 CS2 时完整演练与验证全套制作流程，Companion 提供了「加载 Rivals 示例」开发与测试工具：
+
+1. **来源与 Provenance 隔离**：
+   - 赛事上下文（Match / Roster / Steam64 / BP / Schedule / 赛程比分）：来自 production-derived 2026 NJU Rivals 真实赛程与淘汰赛 fixture (`fixtures/rivals-rehearsal/`)；
+   - Gameplay / Halftime 实时遥测：来自独立的真实 CS2 GSI 捕获样本（`ancient-round-03` / `regulation-to-overtime`）；
+   - 两者来源严格独立：不伪造 GSI 地图名（不强改 `de_ancient` 为 `de_dust2` 或 `de_mirage`），不伪造选手 Steam64；而是通过示例 owner 的显式执行绑定（operator-style binding command `bind-current-map-execution-to-series-map`）建立受控执行关联，保留真实的 identity 与 telemetry provenance。
+2. **Fixture-only Series Driver 与 Telemetry 隔离**：
+   - 示例状态切换使用专用的 fixture series driver，在 stage 切换时初始化各阶段的 `SeriesProgress`（Stage 0–4 为 0 图完成，Stage 5–8 为第一图完成 8:13，Stage 9–12 为第二图完成 1:1，Stage 13/14 为三图完成 2:1）；
+   - 在进入结果或图间阶段时，Companion 屏蔽前一阶段残留的独立 capture 遥测，直到下一阶段真实 sample observation 注入，防止旧的 Ancient 遥测污染结果与图间阶段的 Series binding；
+   - 生产 `synchronizeSeriesProgress` 不获得任何 fixture 特判；停止示例后完全清空示例状态，切回真实 online/local match 时恢复纯净生产语义。
+3. **15 阶段端到端验证方法**：
+   - Stage 0–2（赛前等待 / 对阵 / BP）：Series planned，比分 0:0，bindingState 为 unbound 且非 needs_operator；
+   - Stage 3–4（第一图比赛中 / 第一图半场）：绑定 Map 1，currentMapOrder = 1，telemetry fresh，identity degraded，非 needs_operator；
+   - Stage 5–6（第一图结果 / 图间第二图）：第一图完成（8:13），series 比分 0:1，Map Result / InterMap 场景可正常输出，非 needs_operator；
+   - Stage 7–8（第二图比赛中 / 第二图半场）：绑定 Map 2，currentMapOrder = 2，telemetry fresh，非 needs_operator；
+   - Stage 9–10（第二图结果 / 图间决胜图）：第二图完成（13:10），series 比分 1:1，Map Result / InterMap 场景正常，非 needs_operator；
+   - Stage 11–12（决胜图比赛中 / 决胜图半场）：绑定 Map 3，currentMapOrder = 3，telemetry fresh，非 needs_operator；
+   - Stage 13–14（决胜图结果 / 整场结果）：决胜图完成（13:11），series 完成（2:1），Match Result 场景正常渲染，非 needs_operator。
+
 1.0.0 前不维护 screenshot / pixel baseline。HUD 视觉调整通过本地 fixture 页面、真实回放和 Browser acceptance 的语义/结构断言人工验收；诊断截图可以作为临时证据，但不进入仓库，也不决定 CI pass/fail。
 
 真实 Program fixture 经 production adapter、ProgramRuntime 和 ProjectionCoordinator 生成，包含 capture 路径、目标 sequence 和来源 hash。数据更新流程仍为：提交 capture → `pnpm fixtures:program:generate` → 审查 Program snapshot diff。#76 的连续 replay artifact 通过 `pnpm fixtures:replay:generate` 从固定 Ancient 第 3 回合与第 11 回合 capture 生成；Program、Radar、cursor 和 semantic event index 来自同一 production composition。`pnpm fixtures:replay:verify` 使用当前 worktree 的 `replayRealProgram` 重建完整 capture，校验来源与内容 hash、schema，并与 checked-in artifacts 比较。HUD Editor 只消费浏览器端已校验的 Program/Radar projection；acceptance seek 直接返回对应 checked-in frame，验证 UI、seek 与 presentation，不重复重建前缀。普通开发模式仍由 Vite local-only harness 从 capture 起点重建 production composition 前缀，再核对同一 cursor 的 projection pair。Web 与 testkit 共用 `packages/replay` 中 framework-neutral 的离散 cursor/scheduler；capture 读取、Raw GSI adapter 与 replay prefix composition 留在 Companion/testkit 边界，不能进入 Web runtime。HUD Replay browser acceptance 使用固定真实 capture，检查语义事件 seek/play、utility handoff、objective progress 和 observer identity handoff。artifact 重建比对与浏览器语义/截图断言共同覆盖数据正确性和 UI 呈现，没有删减任一层的断言。1.0.0 前不生成、提交或比较截图 baseline。合成展示压力测试使用确定性本地/data-URI 图片；#76 的真实头像仅由本机可选导入步骤 materialize 为本地、带来源与 SHA-256 的 fixture asset。导入脚本只从 `STEAM_WEB_API_KEY` 环境变量读取，Replay、HUD editor、acceptance test 与 CI 不访问 Steam。团队名称来自 capture，team logo 单独通过 fixture-local MatchContext presentation enrichment 绑定；无可验证素材时保持 unavailable。CI 使用 `pnpm fixtures:program:verify` 检测生成产物漂移，验证命令不写入文件。
