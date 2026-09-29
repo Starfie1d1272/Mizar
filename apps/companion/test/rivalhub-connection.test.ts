@@ -99,6 +99,13 @@ it('pairs via browser authorization, persists only in Companion, and claims with
   expect(new Headers(live.init.headers).get('x-rivalhub-authority')).toBe('4');
 
   await restored.release();
+  const release = requests.find((request) => request.url.endsWith('/release'))!;
+  expect(new Headers(release.init.headers).get('x-rivalhub-authority')).toBe('4');
+  expect(JSON.parse(release.init.body as string)).toEqual({
+    matchId: 'match',
+    producerInstanceId: 'producer',
+    liveSessionId: 'session',
+  });
   expect(restored.view().activeSourceMatchId).toBeNull();
 });
 
@@ -409,13 +416,19 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
       'utf8',
     );
 
-    const recorded: { url: string; method: string; headers: Headers }[] = [];
+    const recorded: {
+      url: string;
+      method: string;
+      headers: Headers;
+      body: RequestInit['body'];
+    }[] = [];
     const fetchImpl = vi.fn((url: string | URL | Request, init: RequestInit = {}) => {
       const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
       recorded.push({
         url: requestUrl,
         method: (init.method ?? 'GET').toUpperCase(),
         headers: new Headers(init.headers),
+        body: init.body,
       });
       if (requestUrl.endsWith('/release')) {
         return Promise.resolve(Response.json({ released: true }));
@@ -445,6 +458,12 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     expect(releaseReq).toBeDefined();
     expect(releaseReq!.method).toBe('POST');
     expect(releaseReq!.headers.get('authorization')).toBe(`Bearer ${credential}`);
+    expect(releaseReq!.headers.get('x-rivalhub-authority')).toBe('2');
+    expect(JSON.parse(releaseReq!.body as string)).toEqual({
+      matchId: 'match-1',
+      producerInstanceId: 'prod',
+      liveSessionId: 'sess',
+    });
 
     const discReq = recorded.find((r) => r.url.endsWith('/disconnect'));
     expect(discReq).toBeDefined();

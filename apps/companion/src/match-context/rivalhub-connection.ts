@@ -290,15 +290,24 @@ export class RivalHubConnection {
 
   async release(): Promise<void> {
     if (!this.source) return;
-    const matchId = this.source.matchId;
+    const source = this.source;
     const response = await this.request('release', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ matchId }),
+      headers: {
+        'content-type': 'application/json',
+        'x-rivalhub-authority': String(source.authorityRevision),
+      },
+      body: JSON.stringify({
+        matchId: source.matchId,
+        producerInstanceId: source.producerInstanceId,
+        liveSessionId: source.liveSessionId,
+      }),
     });
     await response.body?.cancel();
     if (!response.ok) throw new Error('当前数据源停止未确认。');
-    this.source = null;
+    // Only clear the binding that was actually released. A concurrent claim may
+    // already have installed a newer local source while this request was in flight.
+    if (this.source === source) this.source = null;
   }
 
   private async upload(
