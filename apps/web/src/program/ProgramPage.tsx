@@ -27,10 +27,15 @@ export function ProgramPage({
   if (snapshot === undefined && connectionState === undefined && resolvedPreset === undefined) {
     return <ProgramCanvas />;
   }
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('preview') === '1';
   const candidateSnapshot = snapshot ?? null;
   const presentationSnapshot = hasAcceptedProgramSnapshot(candidateSnapshot, connectionState)
     ? candidateSnapshot
-    : null;
+    : isPreview
+      ? candidateSnapshot
+      : null;
   return (
     <ProgramCanvas>
       <GameplayHud

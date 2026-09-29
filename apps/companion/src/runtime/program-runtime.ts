@@ -31,6 +31,7 @@ import {
   type SeriesSideProof,
 } from '@mizar/core/series-progress';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
+import type { ContextOrigin } from '../match-context/index.js';
 
 export const PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX = 32;
 export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Object.freeze({
@@ -72,11 +73,14 @@ export class ProgramRuntime {
   private readonly onSeriesProgressDiagnostic:
     ((diagnostic: { readonly code: string }) => void) | undefined;
   private seriesContext: MatchContext | undefined;
+  private seriesOrigin: ContextOrigin | undefined;
+  private fixtureSeriesProgressActive = false;
   private seriesProgress: SeriesProgress | undefined;
   private seriesSideProof: SeriesSideProof | null = null;
   private readonly pendingSeriesEvents: SeriesProgressEvent[] = [];
   private restorePending = false;
   private deliveryRestoreAwaitingTelemetry = false;
+  private fixtureTelemetrySuppressed = false;
 
   constructor(options: ProgramRuntimeOptions | string) {
     const normalizedOptions: ProgramRuntimeOptions =
@@ -114,6 +118,7 @@ export class ProgramRuntime {
   }
 
   acceptObservation(observation: TelemetryObservation): RuntimeReduceResult {
+    this.fixtureTelemetrySuppressed = false;
     return this.apply({
       kind: 'program-telemetry',
       sourceGeneration: this.state.programSource.generation,
@@ -153,8 +158,17 @@ export class ProgramRuntime {
   synchronizeSeriesProgress(
     context: MatchContext | undefined,
     sideProof: SeriesSideProof | null,
+    origin?: ContextOrigin,
   ): SeriesProgress | null {
+    const effectiveOrigin =
+      origin ?? (this.fixtureSeriesProgressActive ? 'fixture' : this.seriesOrigin);
+
     if (context === undefined) {
+      if (this.fixtureSeriesProgressActive || this.seriesOrigin === 'fixture') {
+        this.fixtureTelemetrySuppressed = false;
+      }
+      this.fixtureSeriesProgressActive = false;
+      this.seriesOrigin = undefined;
       this.seriesContext = undefined;
       this.seriesProgress = undefined;
       this.seriesSideProof = null;
@@ -164,17 +178,35 @@ export class ProgramRuntime {
     }
 
     const matchChanged =
-      this.seriesContext !== undefined && this.seriesContext.matchId !== context.matchId;
-    if (matchChanged) this.pendingSeriesEvents.length = 0;
+      this.seriesContext !== undefined &&
+      (this.seriesContext.matchId !== context.matchId || this.seriesOrigin !== effectiveOrigin);
+    if (matchChanged) {
+      this.pendingSeriesEvents.length = 0;
+      if (
+        (this.fixtureSeriesProgressActive || this.seriesOrigin === 'fixture') &&
+        effectiveOrigin !== 'fixture'
+      ) {
+        this.fixtureTelemetrySuppressed = false;
+        this.fixtureSeriesProgressActive = false;
+      }
+    }
+
+    this.seriesContext = context;
+    this.seriesOrigin = effectiveOrigin;
+    if (effectiveOrigin === 'fixture') {
+      this.fixtureSeriesProgressActive = true;
+    }
 
     let shouldPersist = false;
     if (this.seriesProgress === undefined || matchChanged) {
       let initial = createSeriesProgress(context);
       let checkpoint;
-      try {
-        checkpoint = this.seriesProgressCheckpointStore?.load();
-      } catch {
-        this.reportSeriesDiagnostic('checkpoint_read_failed');
+      if (effectiveOrigin !== 'fixture') {
+        try {
+          checkpoint = this.seriesProgressCheckpointStore?.load();
+        } catch {
+          this.reportSeriesDiagnostic('checkpoint_read_failed');
+        }
       }
       if (checkpoint !== undefined) {
         if (isSeriesProgressCheckpointCompatible(checkpoint, context)) {
@@ -193,7 +225,9 @@ export class ProgramRuntime {
           this.restorePending = false;
         }
       } else {
-        shouldPersist = true;
+        if (effectiveOrigin !== 'fixture') {
+          shouldPersist = true;
+        }
         this.restorePending = false;
       }
       this.seriesProgress = initial;
@@ -218,7 +252,6 @@ export class ProgramRuntime {
       }
     }
 
-    this.seriesContext = context;
     this.seriesSideProof = sideProof;
     const before = this.seriesProgress;
     const events = this.pendingSeriesEvents.splice(0, this.pendingSeriesEvents.length);
@@ -232,8 +265,8 @@ export class ProgramRuntime {
     });
     this.seriesProgress = reduced.progress;
     if (restoring) this.restorePending = false;
-    if (reduced.changed) shouldPersist = true;
-    if (shouldPersist) this.persistSeriesProgress();
+    if (reduced.changed && effectiveOrigin !== 'fixture') shouldPersist = true;
+    if (shouldPersist && effectiveOrigin !== 'fixture') this.persistSeriesProgress();
     return this.seriesProgress;
   }
 
@@ -251,7 +284,7 @@ export class ProgramRuntime {
   }
 
   executeOperatorCommand(command: OperatorCommand): SeriesOperatorCommandResult {
-    this.synchronizeSeriesProgress(this.seriesContext, this.seriesSideProof);
+    this.synchronizeSeriesProgress(this.seriesContext, this.seriesSideProof, this.seriesOrigin);
     if (this.seriesContext === undefined || this.seriesProgress === undefined) {
       return { ok: false, progress: null, code: 'series_unbound' };
     }
@@ -278,7 +311,9 @@ export class ProgramRuntime {
       sideProof: this.seriesSideProof,
     });
     this.seriesProgress = reduced.progress;
-    if (reduced.changed) this.persistSeriesProgress();
+    if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
+      this.persistSeriesProgress();
+    }
 
     const target = this.seriesProgress.maps.find((map) => map.mapOrder === command.mapOrder);
     const ok =
@@ -291,6 +326,37 @@ export class ProgramRuntime {
       progress: this.seriesProgress,
       code: ok ? 'operator_bind_applied' : 'operator_bind_rejected',
     };
+  }
+
+  /**
+   * Dedicated fixture-only Series driver for development / qualification sample playback (e.g. RivalsRehearsal).
+   * Explicitly sets the SeriesProgress for the current fixture stage from stage MatchContext.
+   * Also enters a "telemetry suppressed" state until the next stage observation is received,
+   * preventing previous stage's sample observation (e.g. Ancient) from polluting result or intermap stages.
+   *
+   * Fixture-only series progress never reads or writes production checkpoint stores.
+   */
+  activateFixtureSeriesProgress(context: MatchContext): SeriesProgress {
+    this.seriesContext = context;
+    this.seriesOrigin = 'fixture';
+    this.fixtureSeriesProgressActive = true;
+    this.seriesProgress = createSeriesProgress(context);
+    this.fixtureTelemetrySuppressed = true;
+    this.pendingSeriesEvents.length = 0;
+    return this.seriesProgress;
+  }
+
+  /**
+   * Resets any fixture-only Series driver state when leaving rehearsal/fixture mode.
+   */
+  clearFixtureSeriesProgress(): void {
+    this.fixtureSeriesProgressActive = false;
+    this.seriesOrigin = undefined;
+    this.fixtureTelemetrySuppressed = false;
+    this.seriesProgress = undefined;
+    this.seriesContext = undefined;
+    this.seriesSideProof = null;
+    this.pendingSeriesEvents.length = 0;
   }
 
   async close(): Promise<void> {
@@ -378,6 +444,17 @@ export class ProgramRuntime {
   }
 
   private seriesObservation(): SeriesMapObservation {
+    if (this.fixtureTelemetrySuppressed) {
+      return {
+        sourceGeneration: this.state.programSource.generation,
+        mapEpoch: this.state.map.epoch,
+        mapName: null,
+        mapEnded: false,
+        roundNumber: null,
+        score: { ct: null, t: null },
+        roundWins: [],
+      };
+    }
     const map = this.state.programTelemetry?.telemetry.map;
     return {
       sourceGeneration: this.state.programSource.generation,
@@ -396,7 +473,12 @@ export class ProgramRuntime {
   }
 
   private persistSeriesProgress(): void {
-    if (this.seriesProgress === undefined || this.seriesProgressCheckpointStore === undefined) {
+    if (
+      this.seriesProgress === undefined ||
+      this.seriesProgressCheckpointStore === undefined ||
+      this.fixtureSeriesProgressActive ||
+      this.seriesOrigin === 'fixture'
+    ) {
       return;
     }
     try {

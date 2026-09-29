@@ -259,6 +259,7 @@ export class ProjectionCoordinator {
       const seriesProgress = this.programRuntime.synchronizeSeriesProgress(
         context,
         seriesSideProofFor(runtimeSnapshot, identity),
+        this.contextBinding?.origin,
       );
       const nowMonotonicMs = this.nowMonotonicMs();
       const program = projectProgram({

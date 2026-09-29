@@ -50,23 +50,31 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(409).send({ message: '断开未完成，请重试。' });
     }
   });
-  app.post('/operator/rivalhub/pair', { bodyLimit: 1024 }, async (request, reply) => {
+  app.post('/operator/rivalhub/pairing/start', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    const body = request.body as { baseUrl?: unknown; code?: unknown; displayName?: unknown };
-    if (
-      typeof body?.baseUrl !== 'string' ||
-      typeof body.code !== 'string' ||
-      typeof body.displayName !== 'string'
-    )
-      return reply.code(400).send({ message: '请填写赛事地址、连接码和设备名称。' });
     try {
-      await options.connection.pair(body.baseUrl, body.code, body.displayName);
-      return options.connection.view();
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.connection.startPairing());
     } catch (error) {
       return reply
-        .code(400)
+        .code(502)
         .send({ message: error instanceof Error ? error.message : '连接失败。' });
+    }
+  });
+  app.post('/operator/rivalhub/pairing/poll', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    try {
+      const status = await options.connection.pollPairing();
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ status, connection: options.connection.view() });
+    } catch (error) {
+      return reply
+        .code(502)
+        .send({ message: error instanceof Error ? error.message : '授权状态暂时无法获取。' });
     }
   });
   app.post('/operator/rivalhub/select', { bodyLimit: 256 }, async (request, reply) => {

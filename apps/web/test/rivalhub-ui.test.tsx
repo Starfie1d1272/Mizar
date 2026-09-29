@@ -48,14 +48,6 @@ function parseJsonBody<T>(init?: RequestInit): T {
   return {} as T;
 }
 
-function setInputValue(input: HTMLInputElement, value: string) {
-  // eslint-disable-next-line @typescript-eslint/unbound-method
-  const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-  set?.call(input, value);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -76,35 +68,48 @@ afterEach(() => {
 });
 
 describe('Preparation: RivalHubPreparationPanel', () => {
-  it('renders pairing form when not paired, and submits pairing credentials', async () => {
+  it('renders browser pairing trigger when not paired, and polls to completion', async () => {
     let pairedState = false;
-    const fetchMock = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+    let pollCount = 0;
+    const openMock = vi.fn().mockReturnValue({ close: vi.fn(), location: { replace: vi.fn() } });
+    vi.stubGlobal('open', openMock);
+
+    const fetchMock = vi.fn((url: string | URL | Request) => {
       const u = toUrlString(url);
       if (u.includes('/local/v1/rivalhub-connection')) {
         return Promise.resolve(
           Response.json({
             paired: pairedState,
             competitionId: pairedState ? 'comp-1' : null,
-            displayName: pairedState ? '主舞台制播机' : null,
+            displayName: pairedState ? '星宇' : null,
             activeMatchId: null,
             activeSourceMatchId: null,
             activeDeviceName: null,
           }),
         );
       }
-      if (u.includes('/operator/rivalhub/pair')) {
-        pairedState = true;
-        const body = parseJsonBody<{
-          baseUrl: string;
-          code: string;
-          displayName: string;
-        }>(init);
-        expect(body).toEqual({
-          baseUrl: 'https://rivalhub.example',
-          code: 'abcdefghijklmnopqrstuv',
-          displayName: '主舞台制播机',
-        });
-        return Promise.resolve(Response.json({ paired: true }));
+      if (u.includes('/local/v1/rivalhub-schedule')) {
+        return Promise.resolve(
+          Response.json({
+            competition: { name: '2026 NJU Rivals' },
+            matches: [],
+          }),
+        );
+      }
+      if (u.includes('/operator/rivalhub/pairing/start')) {
+        return Promise.resolve(
+          Response.json({
+            authorizeUrl: 'https://match.starfie1d.top/integrations/mizar/connect?pairingId=abc',
+          }),
+        );
+      }
+      if (u.includes('/operator/rivalhub/pairing/poll')) {
+        pollCount++;
+        if (pollCount === 1) {
+          pairedState = true;
+          return Promise.resolve(Response.json({ status: 'authorized' }));
+        }
+        return Promise.resolve(Response.json({ status: 'pending' }));
       }
       return Promise.resolve(Response.json({}));
     });
@@ -116,30 +121,68 @@ describe('Preparation: RivalHubPreparationPanel', () => {
     });
 
     expect(container.textContent).toContain('连接 RivalHub 赛事');
+    expect(container.textContent).toContain('在 RivalHub 登录并确认授权，完成后会自动连接。');
     const inputs = container.querySelectorAll('input');
-    expect(inputs.length).toBe(3);
+    expect(inputs.length).toBe(0);
 
-    const form = container.querySelector('form')!;
-    const urlInput = inputs[0]!;
-    const nameInput = inputs[1]!;
-    const codeInput = inputs[2]!;
-
-    act(() => {
-      setInputValue(urlInput, 'https://rivalhub.example');
-      setInputValue(nameInput, '主舞台制播机');
-      setInputValue(codeInput, 'abcdefghijklmnopqrstuv');
-    });
+    const buttons = container.querySelectorAll('button');
+    const pairBtn = Array.from(buttons).find((b) => b.textContent?.includes('连接 RivalHub'))!;
+    expect(pairBtn).toBeDefined();
 
     await act(async () => {
-      form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      pairBtn.click();
+      await Promise.resolve();
       await Promise.resolve();
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/operator/rivalhub/pair',
+      '/operator/rivalhub/pairing/start',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(container.textContent).toContain('赛事连接已建立');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/operator/rivalhub/pairing/poll',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(container.textContent).toContain('RivalHub 已连接。');
+    expect(container.textContent).toContain('星宇');
+  });
+
+  it('resumes polling when page is refreshed with pending pairing', async () => {
+    let pollInvoked = false;
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      const u = toUrlString(url);
+      if (u.includes('/local/v1/rivalhub-connection')) {
+        return Promise.resolve(
+          Response.json({
+            paired: false,
+            competitionId: null,
+            displayName: null,
+            activeMatchId: null,
+            activeSourceMatchId: null,
+            activeDeviceName: null,
+            pairing: 'pending',
+          }),
+        );
+      }
+      if (u.includes('/operator/rivalhub/pairing/poll')) {
+        pollInvoked = true;
+        return Promise.resolve(Response.json({ status: 'pending' }));
+      }
+      return Promise.resolve(Response.json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      root!.render(<RivalHubPreparationPanel mode="settings" />);
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/operator/rivalhub/pairing/poll',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(pollInvoked).toBe(true);
+    expect(container.textContent).toContain('正在等待 RivalHub 授权…');
   });
 
   it('displays schedule, allows match selection, and confirms candidate to load match', async () => {

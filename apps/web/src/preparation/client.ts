@@ -52,6 +52,11 @@ export async function openTool(tool: Tool) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool });
   else window.open(toolPaths[tool], `mizar-${tool}`);
 }
+export async function openRivalHubAuthorization(url: string, popup?: Window | null) {
+  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_rivalhub_authorization', { url });
+  else if (popup && !popup.closed) popup.location.replace(url);
+  else window.open(url, 'mizar-rivalhub');
+}
 export interface Production {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;

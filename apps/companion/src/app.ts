@@ -14,6 +14,10 @@ import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
 import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
+import {
+  RivalsRehearsal,
+  registerRivalsRehearsalRoutes,
+} from './match-context/rivals-rehearsal.js';
 import { registerBpRoutes } from './bp/controller.js';
 import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
@@ -32,6 +36,7 @@ import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-stat
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   createProjectionCoordinator,
   type ProjectionCoordinator,
@@ -102,6 +107,7 @@ export interface CompanionAppOptions {
   readonly liveSink?: OutputServiceOptions['liveSink'];
   readonly onlineManifestConfig?: OnlineManifestConfig;
   readonly rivalhubConnection?: RivalHubConnection;
+  readonly rehearsalFixturePath?: string;
   readonly projectionNowMonotonicMs?: () => number;
   readonly bpNowMonotonicMs?: () => number;
   readonly debugEvidenceStore?: DebugEvidenceStore;
@@ -417,6 +423,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       activeScene: () => sceneController.get().active,
     });
   }
+  let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
+  // The binding listener must retire fixture state on the way out, but it is created
+  // before the rehearsal exists; this slot carries the later-constructed instance.
+  const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
   const matchContextController =
     options.matchManifestPath === undefined
       ? null
@@ -426,11 +436,86 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ? {}
             : { initialBinding: options.matchContextBinding }),
           onBindingChanged: (binding) => {
+            const previousOrigin = previousBindingOrigin;
+            previousBindingOrigin = binding?.origin;
             outputBinding = binding;
+            outputService.setBinding(binding);
             projectionCoordinator.setMatchContextBinding(binding);
+
+            // Leaving the Rivals sample by any route retires fixture runtime state
+            // without waiting for an explicit "stop rehearsal" action.
+            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
+              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
+            }
+
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  const dispatchObservation = (
+    observation: TelemetryObservation,
+    sampleStageBinding?: { mapOrder: number },
+  ): void => {
+    const source = programRuntime.getCurrentState().programSource;
+    const lastAccepted = source.lastAccepted;
+    if (
+      lastAccepted !== undefined &&
+      observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
+        programRuntime.getSnapshot().continuityPolicy.staleAfterMs
+    ) {
+      outputService.beforeRuntimeMutation();
+      const changed = programRuntime.advanceProgramSourceGeneration({
+        monotonicMs: observation.receive.receivedMonotonicMs,
+        utc: observation.receive.receivedAt,
+      });
+      const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
+      outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
+      programCueCoordinator.afterRuntimeMutation(changed);
+    }
+    outputService.beforeRuntimeMutation();
+    const result = programRuntime.acceptObservation(observation);
+    if (sampleStageBinding) {
+      programRuntime.executeOperatorCommand({
+        kind: 'bind-current-map-execution-to-series-map',
+        mapOrder: sampleStageBinding.mapOrder,
+        reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
+      });
+    }
+    const bundle = projectionCoordinator.afterRuntimeMutation(result);
+    outputService.afterRuntimeMutation(result, bundle, outputBinding);
+    programCueCoordinator.afterRuntimeMutation(result);
+    debugEvidenceStore.recordNormalizedObservation(observation);
+    debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+  };
+
+  const rehearsal =
+    options.rehearsalFixturePath && matchContextController
+      ? new RivalsRehearsal(
+          options.rehearsalFixturePath,
+          matchContextController,
+          sceneController,
+          dispatchObservation,
+          {
+            activateFixtureSeriesProgress: (context) => {
+              programRuntime.activateFixtureSeriesProgress(context);
+              projectionCoordinator.refresh();
+            },
+            clearFixtureSeriesProgress: () => {
+              programRuntime.clearFixtureSeriesProgress();
+              projectionCoordinator.refresh();
+            },
+          },
+        )
+      : undefined;
+  fixtureLifecycle.rehearsal = rehearsal;
+  if (rehearsal)
+    registerRivalsRehearsalRoutes(app, {
+      rehearsal,
+      originPolicy: localWebTransport.getOriginPolicy(),
+      beforeLoad: async () => {
+        await programRuntime.flushSeriesProgressCheckpoint();
+        await options.rivalhubConnection?.release();
+      },
+    });
   const localTournamentStore =
     options.localTournamentPath === undefined
       ? null
@@ -619,29 +704,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       },
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       onObservation: (observation) => {
-        const source = programRuntime.getCurrentState().programSource;
-        const lastAccepted = source.lastAccepted;
-        if (
-          lastAccepted !== undefined &&
-          observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
-            programRuntime.getSnapshot().continuityPolicy.staleAfterMs
-        ) {
-          outputService.beforeRuntimeMutation();
-          const changed = programRuntime.advanceProgramSourceGeneration({
-            monotonicMs: observation.receive.receivedMonotonicMs,
-            utc: observation.receive.receivedAt,
-          });
-          const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-          outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-          programCueCoordinator.afterRuntimeMutation(changed);
-        }
-        outputService.beforeRuntimeMutation();
-        const result = programRuntime.acceptObservation(observation);
-        const bundle = projectionCoordinator.afterRuntimeMutation(result);
-        outputService.afterRuntimeMutation(result, bundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(result);
-        debugEvidenceStore.recordNormalizedObservation(observation);
-        debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+        dispatchObservation(observation);
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {

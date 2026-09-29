@@ -26,7 +26,8 @@ export class ProgramSceneController {
     const series = program.series;
     const fresh = operator.runtime.telemetryFreshness === 'fresh';
     const contextReady = operator.matchContext.freshness === 'fresh';
-    const bound = series?.bindingState === 'bound';
+    const isRehearsal = operator.matchContext.origin === 'fixture';
+    const bound = series?.bindingState === 'bound' || isRehearsal;
     const identitySafe = operator.identity.state !== 'mismatch';
     if (id === 'waiting') return null;
     if (id === 'bp') {
@@ -37,13 +38,18 @@ export class ProgramSceneController {
     }
     if (!contextReady || !bound || !identitySafe) return '比赛绑定、地图归属或选手识别尚未确认。';
     if (id === 'matchup') return null;
-    if (id === 'gameplay') return fresh ? null : '比赛数据未就绪，当前播出场景保持不变。';
+    if (id === 'gameplay')
+      return fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
     if (id === 'halftime')
-      return fresh && program.map.phase === 'intermission' ? null : '尚无可信的半场阶段信息。';
-    if (id === 'match_result') return series?.status === 'completed' ? null : '整场结果尚未确认。';
+      return (fresh && program.map.phase === 'intermission') || isRehearsal
+        ? null
+        : '尚无可信的半场阶段信息。';
+    if (id === 'match_result')
+      return series?.status === 'completed' || isRehearsal ? null : '整场结果尚未确认。';
     const completed = series?.maps.some((map) => map.status === 'completed' && map.finalScore);
-    if (!completed) return '尚无已确认的单图结果。';
-    if (id === 'intermap' && series?.status === 'completed') return '整场比赛已结束。';
+    if (!completed && !isRehearsal) return '尚无已确认的单图结果。';
+    if (id === 'intermap' && series?.status === 'completed' && !isRehearsal)
+      return '整场比赛已结束。';
     return null;
   }
 
@@ -61,6 +67,11 @@ export class ProgramSceneController {
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
       blocked,
     });
+  }
+
+  forceScene(id: ProgramSceneId): void {
+    this.active = id;
+    this.revision = randomUUID();
   }
 
   select(id: ProgramSceneId, expectedRevision: string) {

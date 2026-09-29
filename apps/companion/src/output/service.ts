@@ -94,6 +94,10 @@ export class OutputService {
     }
   }
 
+  setBinding(binding: MatchContextBinding | undefined): void {
+    this.binding = binding;
+  }
+
   setCurrent(bundle: ProjectionBundle, binding: MatchContextBinding | undefined): void {
     if (this.closed) return;
     this.bundle = bundle;
@@ -167,6 +171,11 @@ export class OutputService {
     this.priorForMutation = undefined;
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
+
+    if (binding?.origin === 'fixture') {
+      return;
+    }
+
     const continuity: DeliveryContinuity | undefined =
       binding === undefined
         ? undefined
@@ -263,7 +272,14 @@ export class OutputService {
   }
 
   async retry(): Promise<void> {
-    if (this.closed || this.outbox === undefined || this.retryPending) return;
+    if (
+      this.closed ||
+      this.outbox === undefined ||
+      this.retryPending ||
+      this.binding?.origin === 'fixture'
+    ) {
+      return;
+    }
     this.retryPending = true;
     try {
       if (this.sink === undefined)

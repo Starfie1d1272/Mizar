@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { programScene } from '@mizar/protocol/program-scenes';
+import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './fixtures/index.js';
 import { useLocalChannelClient } from '../realtime';
 import { ProgramCanvas } from './ProgramCanvas';
 import './program-scenes.css';
@@ -12,11 +13,24 @@ function score(a: number, b: number) {
 export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId }) {
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
-  const program = connection.state === 'live' ? connection.current?.payload : undefined;
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('preview') === '1';
+  const defaultSnapshot = isPreview ? getHudEditorFixture(HUD_EDITOR_DEFAULT_FIXTURE_ID) : null;
+  const isBoundMatch =
+    connection.state === 'live' &&
+    connection.current?.payload?.series?.bindingState === 'bound' &&
+    connection.current?.payload?.status?.context === 'fresh';
+  const program = isBoundMatch
+    ? connection.current.payload
+    : isPreview
+      ? defaultSnapshot?.payload
+      : connection.current?.payload;
+
   const contextReady =
     program?.status.context === 'fresh' &&
     program.status.identity !== 'mismatch' &&
-    program.series?.bindingState === 'bound';
+    (program.series?.bindingState === 'bound' || isPreview);
   const series = contextReady ? program.series : undefined;
   const match = contextReady ? program.match : undefined;
   const current = series?.maps.find((map) => map.status === 'current');
@@ -28,15 +42,17 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const safe =
     sceneId === 'waiting' ||
     (contextReady &&
-      (sceneId === 'halftime'
-        ? program.status.telemetry === 'fresh' && program.map.phase === 'intermission'
-        : sceneId === 'map_result'
-          ? completed?.finalScore != null
-          : sceneId === 'intermap'
-            ? completed?.finalScore != null && series?.status !== 'completed'
-            : sceneId === 'match_result'
-              ? series?.status === 'completed'
-              : true));
+      (isPreview
+        ? true
+        : sceneId === 'halftime'
+          ? program.status.telemetry === 'fresh' && program.map.phase === 'intermission'
+          : sceneId === 'map_result'
+            ? completed?.finalScore != null
+            : sceneId === 'intermap'
+              ? completed?.finalScore != null && series?.status !== 'completed'
+              : sceneId === 'match_result'
+                ? series?.status === 'completed'
+                : true));
 
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
@@ -68,34 +84,47 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           ) : sceneId === 'waiting' ? (
             <p className="program-scene__waiting">节目即将开始</p>
           ) : null}
-          {sceneId === 'halftime' && current ? (
-            <p className="program-scene__detail">{current.mapName}</p>
+          {sceneId === 'halftime' && (current || isPreview) ? (
+            <p className="program-scene__detail">{current?.mapName ?? 'de_ancient'}</p>
           ) : null}
-          {sceneId === 'map_result' && completed?.finalScore ? (
+          {sceneId === 'map_result' && (completed?.finalScore || isPreview) ? (
             <p className="program-scene__detail">
-              {completed.mapName} · {score(completed.finalScore.a, completed.finalScore.b)}
+              {(completed ?? current)?.mapName ?? 'de_ancient'} ·{' '}
+              {completed?.finalScore
+                ? score(completed.finalScore.a, completed.finalScore.b)
+                : '13 : 8'}
             </p>
           ) : null}
           {sceneId === 'intermap' ? (
             <div className="program-scene__detail">
-              {completed?.finalScore ? (
+              {completed?.finalScore || isPreview ? (
                 <p>
-                  上一图 {completed.mapName} ·{' '}
-                  {score(completed.finalScore.a, completed.finalScore.b)}
+                  上一图 {(completed ?? current)?.mapName ?? 'de_ancient'} ·{' '}
+                  {completed?.finalScore
+                    ? score(completed.finalScore.a, completed.finalScore.b)
+                    : '13 : 8'}
                 </p>
               ) : null}
-              {next ? <p>下一图 {next.mapName}</p> : null}
+              {next || isPreview ? <p>下一图 {next?.mapName ?? 'de_mirage'}</p> : null}
             </div>
           ) : null}
           {sceneId === 'match_result' ? (
             <div className="program-scene__maps">
-              {series?.maps
-                .filter((map) => map.status === 'completed' && map.finalScore)
-                .map((map) => (
-                  <p key={map.mapOrder}>
-                    {map.mapName} · {score(map.finalScore!.a, map.finalScore!.b)}
-                  </p>
-                ))}
+              {series?.maps.some((map) => map.status === 'completed' && map.finalScore) ? (
+                series.maps
+                  .filter((map) => map.status === 'completed' && map.finalScore)
+                  .map((map) => (
+                    <p key={map.mapOrder}>
+                      {map.mapName} · {score(map.finalScore!.a, map.finalScore!.b)}
+                    </p>
+                  ))
+              ) : isPreview ? (
+                <>
+                  <p>de_ancient · 13 : 8</p>
+                  <p>de_mirage · 10 : 13</p>
+                  <p>de_nuke · 13 : 11</p>
+                </>
+              ) : null}
             </div>
           ) : null}
         </main>

@@ -99,6 +99,7 @@ function frame(
 
 class MemoryCheckpointStore implements SeriesProgressCheckpointStore {
   checkpoint: SeriesProgressCheckpoint | undefined;
+  flushCount = 0;
 
   load(): SeriesProgressCheckpoint | undefined {
     return this.checkpoint;
@@ -108,7 +109,10 @@ class MemoryCheckpointStore implements SeriesProgressCheckpointStore {
     this.checkpoint = structuredClone(checkpoint);
   }
 
-  async flush(): Promise<void> {}
+  flush(): Promise<void> {
+    this.flushCount += 1;
+    return Promise.resolve();
+  }
 }
 
 const sideProof: SeriesSideProof = {
@@ -139,6 +143,22 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     runtime.acceptObservation(frame(5, 'gameover', 'over', { ct: 13, t: 9 }));
     const repeated = runtime.synchronizeSeriesProgress(context, sideProof);
     expect(repeated).toEqual(progress);
+  });
+
+  it('flushes pre-existing production checkpoint work when closing during fixture mode', async () => {
+    const context = contextFixture();
+    const store = new MemoryCheckpointStore();
+    const runtime = createProgramRuntime('series-runtime', {
+      seriesProgressCheckpointStore: store,
+    });
+
+    runtime.synchronizeSeriesProgress(context, null, 'online');
+    expect(store.checkpoint).toBeDefined();
+
+    runtime.activateFixtureSeriesProgress(context);
+    await runtime.close();
+
+    expect(store.flushCount).toBe(1);
   });
 
   it('restores a completed local map from a compatible checkpoint without MatchContext score writeback', () => {
@@ -549,5 +569,70 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     expect(completed?.score).toEqual({ a: 1, b: 0 });
     expect(completed?.maps[0]?.status).toBe('completed');
     expect(completed?.maps[0]?.winnerEntryId).toBe('a');
+  });
+
+  it('B.6 MatchContext refresh does not act as a second mutable score owner or advance/overwrite active SeriesProgress', () => {
+    const context = contextFixture();
+    const runtime = createProgramRuntime('ownership-guard-runtime');
+
+    // 1. Enter Map 1 locally
+    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+    const running = runtime.synchronizeSeriesProgress(context, sideProof);
+    expect(running?.currentMapOrder).toBe(1);
+    expect(running?.maps[0]?.status).toBe('current');
+    expect(running?.score).toEqual({ a: 0, b: 0 });
+
+    // 2. Incoming MatchContext update has map score, but local runtime has not finished the map:
+    // MatchContext must NOT directly mark Map 1 completed or overwrite finalScore!
+    const scoredContext: MatchContext = {
+      ...context,
+      scoreA: 1,
+      scoreB: 0,
+      maps: context.maps.map((m, idx) =>
+        idx === 0 ? { ...m, scoreA: 13, scoreB: 5, completedAt: '2026-09-17T00:00:00.000Z' } : m,
+      ),
+    };
+    const afterScoredContext = runtime.synchronizeSeriesProgress(scoredContext, sideProof);
+    expect(afterScoredContext?.maps[0]?.status).toBe('current');
+    expect(afterScoredContext?.maps[0]?.finalScore).toBeNull();
+    expect(afterScoredContext?.score).toEqual({ a: 0, b: 0 });
+
+    // 3. Stale context (scoreA: 0, scoreB: 0) cannot advance local SeriesProgress
+    const staleContext: MatchContext = {
+      ...context,
+      scoreA: 0,
+      scoreB: 0,
+    };
+    const afterStale = runtime.synchronizeSeriesProgress(staleContext, sideProof);
+    expect(afterStale?.score).toEqual({ a: 0, b: 0 });
+    expect(afterStale?.maps[0]?.status).toBe('current');
+
+    // 4. Local telemetry produces map end -> local freeze completes Map 1 with 13:9
+    runtime.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 9 }));
+    const frozen = runtime.synchronizeSeriesProgress(context, sideProof);
+    expect(frozen?.score).toEqual({ a: 1, b: 0 });
+    expect(frozen?.maps[0]?.status).toBe('completed');
+    expect(frozen?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
+
+    // 5. Subsequent MatchContext refresh with conflicting score (13:5) does NOT overwrite frozen 13:9 score
+    const afterConflictingContext = runtime.synchronizeSeriesProgress(scoredContext, sideProof);
+    expect(afterConflictingContext?.maps[0]?.status).toBe('completed');
+    expect(afterConflictingContext?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
+    expect(afterConflictingContext?.score).toEqual({ a: 1, b: 0 });
+
+    // 6. Conflicting context identity (different entryId) triggers context_result_conflict and preserves local fact
+    const conflictingIdentityContext: MatchContext = {
+      ...context,
+      entrants: {
+        ...context.entrants,
+        a: { ...context.entrants.a, entryId: 'rogue-entry-a' },
+      },
+    };
+    const afterConflict = runtime.synchronizeSeriesProgress(conflictingIdentityContext, sideProof);
+    expect(afterConflict?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'context_result_conflict' })]),
+    );
+    expect(afterConflict?.score).toEqual({ a: 1, b: 0 });
+    expect(afterConflict?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
   });
 });

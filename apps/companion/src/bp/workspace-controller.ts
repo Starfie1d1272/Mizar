@@ -41,9 +41,11 @@ export function registerBpWorkspaceRoutes(
         ? 'online'
         : binding?.origin === 'local'
           ? 'local'
-          : binding?.origin === 'cache'
-            ? 'cache'
-            : 'none';
+          : binding?.origin === 'fixture'
+            ? 'fixture'
+            : binding?.origin === 'cache'
+              ? 'cache'
+              : 'none';
     const assessment = options.projections.getBpAssessment();
     const match =
       binding === undefined
