@@ -321,14 +321,20 @@ describe('Fixture durable isolation & lifecycle', () => {
     expect(outbox.getRecords()[0]?.status).toBe('pending');
     expect(outbox.getContinuity()).toEqual(productionContinuity);
 
-    const { rehearsal, outputService } = await createFixtureHarness({ outbox });
+    let nowMs = Date.parse('2026-09-28T00:00:00.000Z');
+    const { rehearsal, outputService } = await createFixtureHarness({
+      outbox,
+      outputServiceNow: () => new Date(nowMs),
+    });
 
     // Enter rehearsal and progress through stages
     await rehearsal.load();
     await rehearsal.stage(3);
     await rehearsal.stage(5);
 
-    // Invoke retry during fixture activation
+    // Push the clock past the retention window: production retention and delivery
+    // processing must stay frozen for as long as the sample owns the session.
+    nowMs += 25 * 60 * 60 * 1000;
     await outputService.retry();
     await outbox.flushPending();
 
@@ -342,8 +348,10 @@ describe('Fixture durable isolation & lifecycle', () => {
     expect(records[0]?.status).toBe('pending');
     expect(outbox.getContinuity()).toEqual(productionContinuity);
 
-    // Clean exit
+    // Leaving the sample resumes normal retention and delivery processing.
     rehearsal.stop();
+    await outputService.retry();
+    expect(outbox.getRecords()[0]?.status).toBe('expired');
   });
 
   it('3. direct fixture -> local automatically exits fixture state and allows real telemetry to advance', async () => {
