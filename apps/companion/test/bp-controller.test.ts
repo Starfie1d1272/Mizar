@@ -25,6 +25,24 @@ const projection: BpProjection = {
 };
 
 describe('BP presentation session', () => {
+  it('freezes reveal time while paused and can show the final board without replaying steps', () => {
+    let time = 0;
+    const session = new BpSession(
+      () => projection,
+      () => time,
+    );
+    session.command('play', session.get().revision);
+    time = 1600;
+    expect(session.get().revealedCount).toBe(2);
+    session.setPaused(true);
+    time += 60_000;
+    expect(session.get().revealedCount).toBe(2);
+    session.setPaused(false);
+    time += 1600;
+    expect(session.get().revealedCount).toBe(3);
+    session.showFinal();
+    expect(session.get()).toMatchObject({ state: 'shown', revealedCount: 7 });
+  });
   it('uses bounded current state, persists final recap, exits and plays again', () => {
     let time = 0;
     const session = new BpSession(

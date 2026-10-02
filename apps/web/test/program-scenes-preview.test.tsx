@@ -28,6 +28,8 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+  window.matchMedia = vi.fn().mockReturnValue({ matches: true });
   mockChannelState.state = 'closed';
   mockChannelState.current = null;
 });
@@ -59,9 +61,12 @@ describe('Program scenes preview and safety boundaries', () => {
       });
 
       // Header, brand, or main content is visible
-      const main = container.querySelector('.program-scene__content');
+      const main = container.querySelector(
+        '.waiting-layout, .intro-body, .summary-players, .result-sting',
+      );
       expect(main, `scene ${sceneId} should render default content in preview mode`).not.toBeNull();
-      expect(container.textContent).toContain('MIZAR');
+      expect(container.textContent).toContain('画面样例');
+      expect(container.textContent).toContain('FURIA');
     }
 
     // BP scene in preview mode with null snapshot renders default BP projection
@@ -93,7 +98,9 @@ describe('Program scenes preview and safety boundaries', () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-    expect(container.querySelector('.program-scene__content')).toBeNull();
+    expect(
+      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
+    ).toBeNull();
 
     // 2. When identity is mismatch, production broadcast does not render
     mockChannelState.current = {
@@ -106,7 +113,9 @@ describe('Program scenes preview and safety boundaries', () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-    expect(container.querySelector('.program-scene__content')).toBeNull();
+    expect(
+      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
+    ).toBeNull();
 
     // 3. When series is not bound, production broadcast does not render
     mockChannelState.current = {
@@ -121,6 +130,8 @@ describe('Program scenes preview and safety boundaries', () => {
       await Promise.resolve();
     });
     // Even if competition name includes Rivals, heuristic does NOT bypass gate!
-    expect(container.querySelector('.program-scene__content')).toBeNull();
+    expect(
+      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
+    ).toBeNull();
   });
 });

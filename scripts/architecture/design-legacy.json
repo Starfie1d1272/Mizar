@@ -704,9 +704,6 @@
   },
   "apps/web/src/program/GameplayHud.tsx": {},
   "apps/web/src/program/gameplay-hud.css": {},
-  "apps/web/src/program/program-scenes.css": {
-    "ARCH_DESIGN_TOKEN_OWNER | .program-scene | --scene-ink: #f0f4f7": 1
-  },
   "apps/web/src/program/testing/ProgramFoundationProbe.css": {
     "ARCH_DESIGN_TOKEN_OWNER | .program-foundation-probe | --rh-program-font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif": 1,
     "ARCH_DESIGN_TOKEN_OWNER | .program-foundation-probe | --rh-program-text: #f3f6fa": 1,

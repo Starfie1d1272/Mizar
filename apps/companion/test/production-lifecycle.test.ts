@@ -134,7 +134,7 @@ it.each(['live', 'hidden'] as const)(
         },
         program: {
           series: { bindingState: 'bound', status: 'live', maps: [] },
-          map: { phase: 'live' },
+          map: { phase: 'live', score: { ct: 0, t: 0 } },
         },
       }),
       getBpAssessment: () => ({ readiness: 'missing' }),

@@ -24,7 +24,7 @@ export function useProgramScenes(): ProgramSceneState | null {
       } catch {
         if (active) setState(null);
       } finally {
-        if (active) timer = setTimeout(() => void poll(), 1000);
+        if (active) timer = setTimeout(() => void poll(), 250);
       }
     }
     void poll();

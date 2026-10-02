@@ -266,7 +266,40 @@ export function WorkspaceDock() {
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
       <section>
-        <small>场景</small>
+        <small>
+          播出：
+          {PROGRAM_SCENES.find((scene) => scene.id === sceneState?.active)?.title ?? '等待同步'}
+        </small>
+        <span>
+          {sceneState?.director?.mode === 'auto'
+            ? '自动编排'
+            : sceneState?.director?.mode === 'manual'
+              ? '手动保持'
+              : sceneState?.director?.mode === 'blocked'
+                ? '自动暂停'
+                : '准备中'}
+          {sceneState?.director?.next
+            ? ` · 下一场景：${PROGRAM_SCENES.find((scene) => scene.id === sceneState.director?.next)?.title}`
+            : ''}
+        </span>
+        {sceneState?.director?.reason ? (
+          <span role="status">{sceneState.director.reason}</span>
+        ) : null}
+        {sceneState?.director?.mode === 'manual' || sceneState?.director?.mode === 'blocked' ? (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void action(() =>
+                command('/operator/program-director', {
+                  action: 'resume',
+                  expectedRevision: sceneState.revision,
+                }),
+              )
+            }
+          >
+            恢复自动
+          </Button>
+        ) : null}
         <div className="workspace-scene-buttons">
           {PROGRAM_SCENES.map((scene) => (
             <Button

@@ -1,3 +1,5 @@
+import { isRegulationHalftime } from './presentation.js';
+import type { ProgramDirector } from './director.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -11,6 +13,16 @@ import type { BpSession } from '../bp/controller.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 export class ProgramSceneController {
+  private director: ProgramDirector | undefined;
+  attachDirector(director: ProgramDirector): void {
+    this.director = director;
+  }
+  resumeAutomatic(expectedRevision: string): boolean {
+    if (expectedRevision !== this.revision) return false;
+    this.director?.resume();
+    this.revision = randomUUID();
+    return true;
+  }
   private active: ProgramSceneId = 'waiting';
   private revision = randomUUID();
   private queue: Promise<unknown> = Promise.resolve();
@@ -41,7 +53,7 @@ export class ProgramSceneController {
     if (id === 'gameplay')
       return fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
     if (id === 'halftime')
-      return (fresh && program.map.phase === 'intermission') || isRehearsal
+      return (fresh && isRegulationHalftime(program)) || isRehearsal
         ? null
         : '尚无可信的半场阶段信息。';
     if (id === 'match_result')
@@ -64,23 +76,37 @@ export class ProgramSceneController {
       schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       revision: this.revision,
+      ...(this.director ? { director: this.director.get() } : {}),
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
       blocked,
     });
   }
 
   forceScene(id: ProgramSceneId): void {
+    this.director?.hold();
     this.active = id;
     this.revision = randomUUID();
   }
 
   select(id: ProgramSceneId, expectedRevision: string) {
+    if (expectedRevision === this.revision) this.director?.hold();
     const result = this.queue.then(() => this.selectSerial(id, expectedRevision));
     this.queue = result.catch(() => undefined);
     return result;
   }
 
-  private async selectSerial(id: ProgramSceneId, expectedRevision: string) {
+  selectAutomatic(id: ProgramSceneId, expectedRevision: string, valid: () => boolean) {
+    const result = this.queue.then(() => this.selectSerial(id, expectedRevision, valid));
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async selectSerial(
+    id: ProgramSceneId,
+    expectedRevision: string,
+    valid: () => boolean = () => true,
+  ) {
+    if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
     if (expectedRevision !== this.revision)
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
     const reason = this.blockedReason(id);
@@ -92,9 +118,12 @@ export class ProgramSceneController {
         return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
       }
       const stillBlocked = this.blockedReason(id);
-      if (stillBlocked !== null) {
+      if (stillBlocked !== null || !valid()) {
         if (this.switchObs) await this.switchObs(this.active).catch(() => undefined);
-        return { ok: false as const, message: stillBlocked };
+        return {
+          ok: false as const,
+          message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
+        };
       }
       if (id === 'bp') {
         const bp = this.bpSession.get();
@@ -124,6 +153,19 @@ export function registerProgramSceneRoutes(
   app.get('/local/v1/program-scenes', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(options.controller.get()),
   );
+  app.post('/operator/program-director', { bodyLimit: 1024 }, (request, reply) => {
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const body = request.body as Record<string, unknown> | null;
+    if (body?.action !== 'resume' || typeof body.expectedRevision !== 'string')
+      return reply.code(400).send({ error: 'invalid_director_command' });
+    return options.controller.resumeAutomatic(body.expectedRevision)
+      ? options.controller.get()
+      : reply.code(409).send({ message: '播出状态已变化，请核对后重试。' });
+  });
   app.post('/operator/program-scene', { bodyLimit: 2048 }, async (request, reply) => {
     if (
       options.originPolicy.mode !== 'loopback' ||

@@ -143,6 +143,16 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly presentationListeners = new Set<(bundle: ProjectionBundle) => void>();
+
+  subscribePresentation(listener: (bundle: ProjectionBundle) => void): () => void {
+    this.presentationListeners.add(listener);
+    listener(this.current);
+    return () => {
+      this.presentationListeners.delete(listener);
+    };
+  }
+
   private readonly programRuntime: ProgramRuntime;
   private readonly cstvSources: CstvSourceManagers;
   private readonly identityResolver: IdentityResolver;
@@ -290,6 +300,13 @@ export class ProjectionCoordinator {
       });
       const assist = projectObserverAssist(runtimeView);
       this.current = { program, radar, operator, assist, identity };
+      for (const listener of this.presentationListeners) {
+        try {
+          listener(this.current);
+        } catch {
+          report(this.onDiagnostic, 'presentation-projection-failed');
+        }
+      }
       this.publish(program, radar, operator, assist);
       try {
         this.onProjection?.(this.current);

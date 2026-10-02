@@ -1,3 +1,5 @@
+import { ProgramDirector } from './program-scenes/director.js';
+import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
 import { registerProductionRoutes } from './program-scenes/production.js';
@@ -555,6 +557,35 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  const presentation = new ProgramPresentationStore();
+  const presentationUnsubscribe = projectionCoordinator.subscribePresentation((bundle) => {
+    presentation.update(
+      bundle.program,
+      matchContextController?.getActiveBinding()?.manifest.revision ??
+        options.matchContextBinding?.manifest.revision ??
+        'initial',
+    );
+  });
+  app.get('/local/v1/program-presentation', (_request, reply) => {
+    const envelope = matchContextController?.getActiveDocumentEnvelope();
+    const document = envelope?.freshness === 'fresh' ? envelope.document : null;
+    const schedule =
+      envelope?.source === 'local' && document
+        ? localTournamentStore?.scheduleWindow(document.competition.competitionId)
+        : options.rivalhubConnection?.getSchedule();
+    return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
+  });
+  const director = new ProgramDirector(
+    projectionCoordinator,
+    sceneController,
+    bpSession,
+    () => production.get().mode !== 'preparation',
+  );
+  sceneController.attachDirector(director);
+  const directorTimer = setInterval(() => {
+    void director.tick().catch(() => director.hold());
+  }, 100);
+  directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
@@ -832,6 +863,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   app.addHook('onClose', async () => {
+    clearInterval(directorTimer);
+    presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();
     await Promise.all([
       cstvSources.program.stop(),

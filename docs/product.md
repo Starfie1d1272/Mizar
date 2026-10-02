@@ -55,7 +55,7 @@ LiveSnapshot V1 已覆盖 RivalHub 第一版 public LIVE 所需的 Program-safe 
 
 制播工作区是产品体验范式。V1 Windows 正式 Host 采用 Tauri 2 和固定布局：真实 CS2 占所选显示器 work area 右上 75% 盒内的最大 16:9 区域，Big Radar 与 Context Panel 在左，Scene / Match / Local / OBS / Status 控制在下。浏览器 `/workspace` 提供相同组件的审查预览，localhost Web-first 页面仍独立可用。窗口与几何只由 Host 管理；比赛与播出状态继续由 Companion 拥有。
 
-Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；制作人员显式切换，数据不足、上下文过期或身份不一致时保持当前安全场景。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 Mizar 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
+Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；进入现场后默认自动编排，手动切换后保持当前场景，显式恢复自动才交还控制。数据不足、暂停、上下文过期、身份冲突或 OBS 切换失败时暂停推进；已经播出的静态画面保持连续。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 Mizar 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
 
 ## 4. 现场用户
 
@@ -259,7 +259,7 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 以下能力可以作为独立增强，但不构成 Mizar 成立的前提：
 
-- 自动导播或自动 TAKE；
+- AI 驱动的 POV 自动切镜；正常节目场景自动编排属于基础制作流程；
 - AI 叙事理解；
 - 强制服务器安装插件；
 - 通用电竞插件市场；

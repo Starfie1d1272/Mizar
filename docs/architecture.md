@@ -459,3 +459,12 @@ RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本�
 ## 设计系统职责
 
 `packages/design-tokens` 管理静态 CSS，JSON 是视觉值的唯一源文件，包没有运行时依赖。Web `ui/` 使用用途/组件变量，负责控件样式、无障碍和交互；`patterns/` 组合基础组件；功能页面读取既有业务领域模块，负责布局与组合，不把比赛、运行时或 RivalHub 的业务事实引入基础组件和组合组件。架构检查覆盖依赖方向、变量声明来源、生成物漂移和新增页面主题；历史 CSS 使用精确迁移清单。三类界面与播出渲染例外见 [设计系统](design/README.md) 和 ADR-0012。
+
+
+## 自动节目编排与静态画面（#106）
+
+Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal fixture 仍由既有排练控制器推进。它消费 Program/SeriesProgress/BP，通过唯一 `ProgramSceneController` 请求切场；手动 Take 进入持续保持，显式恢复自动后重新核验当前事实。最多一个自动切换在途，无离线队列，切换前后检查 revision、代际、地图、上下文和 deadline；失败保持旧场景。BP 的同一个播放 owner 在暂停/过期时冻结其展示时钟。
+
+`ProgramPresentationStore` 是 `ProjectionCoordinator` 同步更新后的有界消费者，在地图结束的同一帧冻结 SeriesProgress 已确认的 final score 和当帧 Program-safe K/A/D，最多保留五图。摘要不会向 Runtime/Series 回写；缺数据保持 null，跨图保留，换比赛/上下文清除。静态画面进入资格与已播连续性分开。等待页只读当前 MatchDocument 的赛事媒体/时间和既有赛程 owner 的邻近场次，取得不到就收起。HTTP 展示结构独立于实时 Gameplay channel。
+
+默认 renderer 为 `builtin:mizar-default`，复用同一个 Summary Board 和同一套真实回放衍生预览。Intro 对接当前 resolved HUD 的实际队标锚点，减少动效保留相同信息与播出时序。详见 ADR-0017 与 `docs/design/program-direction-v1.md`。
