@@ -90,7 +90,9 @@ function timestamp(value: unknown): string | null {
 }
 
 function parse(line: string): Record<string, unknown> {
-  if (line.length > 16 * 1024) return {};
+  // Desktop's bounded 8 KiB error can grow under JSON escaping; the read budget
+  // already caps the whole input. Retain its stage even when free text is long.
+  if (line.length > SUPPORT_LOG_READ_BYTES) return {};
   try {
     return record(JSON.parse(line));
   } catch {

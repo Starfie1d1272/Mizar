@@ -207,6 +207,33 @@ describe('support export', () => {
     }
   });
 
+  it('keeps a long escaped Desktop failure among later healthy records', async () => {
+    const dir = await directory();
+    const failure = JSON.stringify({
+      startupSessionId: 's',
+      stage: 'main_window',
+      result: 'failure',
+      error: '\\'.repeat(8192),
+    });
+    const healthy = JSON.stringify({
+      startupSessionId: 's',
+      stage: 'main_page_load',
+      result: 'success',
+    });
+    await writeFile(
+      join(dir, 'desktop.ndjson'),
+      [failure, ...Array<string>(40).fill(healthy)].join('\n'),
+    );
+    const logs = await readSupportLogs(dir);
+    expect(logs[0]?.events).toHaveLength(32);
+    expect(logs[0]?.events[0]).toMatchObject({
+      stage: 'main_window',
+      result: 'failure',
+      hasLocalError: true,
+    });
+    expect(logs[0]?.truncated).toBe(true);
+  });
+
   it.skipIf(process.platform === 'win32')('rejects symlink log targets', async () => {
     const dir = await directory();
     await writeFile(

@@ -273,7 +273,7 @@ export class DebugEvidenceStore {
     if (overflow > 0) this.recentRuntimeDiagnostics.splice(0, overflow);
   }
 
-  /** Support export deliberately never visits raw telemetry, identities or current RuntimeState. */
+  /** Support export never serializes raw telemetry, identities or the full RuntimeState. */
   getSupportSummary(nowMonotonicMs: number) {
     return {
       freshness:
