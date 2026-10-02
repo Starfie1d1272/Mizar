@@ -4,6 +4,7 @@ import type {
   MapSummary,
 } from '@mizar/protocol/program-scenes';
 import { getProgramFixture } from './fixtures';
+import waitingSchedule from './fixtures/waiting-schedule.json';
 
 /** Renderer-only samples; never posted to Companion or Runtime. */
 export function presentationPreview(
@@ -18,6 +19,19 @@ export function presentationPreview(
         : 'real-gameover',
   )!;
   const p = structuredClone(snapshot.payload);
+  // Reuse the existing BO3 presentation plan, independently of the real telemetry.
+  // Never infer a production decider from its position in the series.
+  const bpPlan = getProgramFixture('series-bo3-map1')?.payload.series;
+  if (p.series && bpPlan) {
+    p.series.maps = p.series.maps.map((map) => {
+      const planned = bpPlan.maps.find(
+        (item) => item.mapOrder === map.mapOrder && item.mapName === map.mapName,
+      );
+      return map.selection.kind === 'unknown' && planned?.selection.kind === 'decider'
+        ? { ...map, selection: planned.selection }
+        : map;
+    });
+  }
   const map = p.series?.maps.find((item) => item.mapName === p.map.name);
   const rows = (entryId: string | undefined) => {
     const side = p.teams.ct.entryId === entryId ? 'CT' : p.teams.t.entryId === entryId ? 'T' : null;
@@ -63,6 +77,53 @@ export function presentationPreview(
         finalScore: i === 0 ? base.finalScore : null,
         winnerEntryId: i === 0 ? base.winnerEntryId : null,
       }));
+  }
+  if (scene === 'waiting' && p.series && p.match) {
+    const [previous, current, next] = waitingSchedule.matches;
+    if (previous && current && next) {
+      p.match = {
+        ...p.match,
+        matchId: current.matchId,
+        competition: waitingSchedule.competition,
+        stage: current.stageLabel,
+      };
+      p.series.entrants = { a: current.entrantA, b: current.entrantB };
+      if (variant === 'no-media') {
+        p.series.entrants.a = { ...p.series.entrants.a, logoUrl: null };
+        p.series.entrants.b = { ...p.series.entrants.b, logoUrl: null };
+      }
+      if (variant === 'long-names') {
+        p.series.entrants.a = {
+          ...p.series.entrants.a,
+          name: 'North Star International · 长名称战队',
+        };
+        p.series.entrants.b = {
+          ...p.series.entrants.b,
+          name: 'Southern Cross International · 长名称战队',
+        };
+      }
+      const card = (match: typeof current, result: boolean) => ({
+        matchId: match.matchId,
+        a: match.entrantA.name,
+        b: match.entrantB.name,
+        stage: match.stageLabel,
+        format: match.format,
+        scheduledAt: match.scheduledAt,
+        score: result ? `${match.scoreA} : ${match.scoreB}` : null,
+      });
+      return {
+        schemaVersion: 'mizar.program-presentation.v1',
+        packageId: 'builtin:mizar-default',
+        match: p.match,
+        series: p.series,
+        halftime: null,
+        completed: [],
+        eventLogoUrl: waitingSchedule.competition.logoUrl,
+        scheduledAt: current.scheduledAt,
+        previous: variant === 'no-schedule' ? null : card(previous, true),
+        next: variant === 'no-schedule' ? null : card(next, false),
+      };
+    }
   }
   return {
     schemaVersion: 'mizar.program-presentation.v1',

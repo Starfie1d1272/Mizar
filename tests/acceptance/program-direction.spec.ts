@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { programSnapshotSchema } from '../../packages/protocol/src/program.js';
 import { expect, test } from './companion-isolation.js';
 
 test('summary geometry is mirrored and stable across BO formats and absent media', async ({
@@ -60,9 +62,135 @@ test('intro hands off to HUD and reduced motion retains the same content', async
 
 test('waiting and match result use event identity and last-map statistics', async ({ page }) => {
   await page.goto('/program/waiting?preview=1&variant=no-media');
-  await expect(page.locator('.waiting-event')).toContainText('M2 示例赛');
+  await expect(page.locator('.waiting-event')).toContainText('2026 NJU Rivals');
   await expect(page.locator('.waiting-team img')).toHaveCount(0);
   await page.goto('/program/match-result?preview=1');
-  await expect(page.locator('.summary-caption')).toContainText('最后一图');
+  await expect(page.locator('.summary-caption')).toContainText('FINAL MAP STATS');
   await expect(page.locator('.summary-player')).toHaveCount(10);
+});
+
+test('waiting exposes source-derived schedule and summary logos have clear space', async ({
+  page,
+}) => {
+  await page.goto('/program/waiting?preview=1');
+  await expect(page.locator('.waiting-schedule--previous')).toContainText('0 : 2');
+  await expect(page.locator('.waiting-schedule--next')).toContainText('VS');
+  await expect(page.locator('.waiting-time')).toContainText('SCHEDULED');
+  await page.goto('/program/waiting?preview=1&variant=no-schedule');
+  await expect(page.locator('.waiting-schedule article')).toHaveCount(0);
+  await page.goto('/program/halftime?preview=1');
+  const logo = await page.locator('.summary-entrant-logo').first().boundingBox();
+  const maps = await page.locator('.summary-map-cards').boundingBox();
+  expect(maps!.x - logo!.x - logo!.width).toBeGreaterThanOrEqual(24);
+  await expect(page.locator('.summary-map-tab').first()).toHaveText('ANCIENT');
+  await expect(page.locator('.summary-map-pick').last()).toHaveText('DECIDER');
+  await expect(page.locator('.summary-stat-axis > span').first()).toHaveText('K/D');
+  await expect(page.locator('.summary-player-stats').first()).toHaveText('6–6');
+  await expect(page.locator('.summary-player-stats').first().locator('span')).toHaveCount(3);
+  await expect(page.locator('.summary-map-art > strong').first()).toHaveText('7 – 5');
+});
+
+test('live intro mounts after delayed presentation and polls do not repeatedly seek motion', async ({
+  page,
+}) => {
+  const artifact = JSON.parse(
+    readFileSync(
+      new URL(
+        '../../apps/web/src/program/fixtures/generated/real-program-fixtures.generated.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as { fixtures: Record<string, { snapshot: unknown }> };
+  const snapshot = programSnapshotSchema.parse(artifact.fixtures['real-live-rich']!.snapshot);
+  let clockStarted = 0;
+  let mode = 'auto';
+  let elapsed = 0;
+  await page.routeWebSocket('**/local/v1/program', (socket) =>
+    socket.send(JSON.stringify(snapshot)),
+  );
+  await page.route('**/local/v1/program-scenes', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 'mizar.program-scenes.v1',
+        active: 'matchup',
+        revision: 'intro-1',
+        available: ['matchup'],
+        blocked: {},
+        director: {
+          mode,
+          next: 'gameplay',
+          reason: null,
+          introDurationMs: 6000,
+          sceneElapsedMs:
+            mode === 'blocked' ? elapsed : clockStarted ? Date.now() - clockStarted : 0,
+        },
+      },
+    }),
+  );
+  let releasePresentation!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    releasePresentation = resolve;
+  });
+  await page.route('**/local/v1/program-presentation', async (route) => {
+    await ready;
+    await route.fulfill({
+      json: {
+        schemaVersion: 'mizar.program-presentation.v1',
+        packageId: 'builtin:mizar-default',
+        match: snapshot.payload.match,
+        series: snapshot.payload.series,
+        halftime: null,
+        completed: [],
+        eventLogoUrl: null,
+        scheduledAt: null,
+        previous: null,
+        next: null,
+      },
+    });
+  });
+  await page.goto('/program/matchup');
+  // Snapshot is available before presentation; a delayed HTTP response must still start handoff.
+  await expect(page.locator('.intro-body')).toHaveCount(0);
+  clockStarted = Date.now();
+  releasePresentation();
+  await expect(page.locator('.intro-team--a img')).toBeVisible();
+  await expect
+    .poll(() => page.locator('.intro-team--a img').evaluate((el) => el.getAnimations().length))
+    .toBe(1);
+  await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(Animation.prototype, 'currentTime')!;
+    document.documentElement.dataset.seeks = '0';
+    Object.defineProperty(Animation.prototype, 'currentTime', {
+      ...descriptor,
+      set(value) {
+        document.documentElement.dataset.seeks = String(
+          Number(document.documentElement.dataset.seeks) + 1,
+        );
+        descriptor.set!.call(this, value);
+      },
+    });
+  });
+  await expect
+    .poll(() =>
+      page
+        .locator('.intro-team--a img')
+        .evaluate((el) => Number(el.getAnimations()[0]?.currentTime ?? 0)),
+    )
+    .toBeGreaterThan(1600);
+  expect(await page.locator('html').getAttribute('data-seeks')).toBe('0');
+  elapsed = Date.now() - clockStarted;
+  mode = 'blocked';
+  await expect
+    .poll(() =>
+      page.locator('.intro-team--a img').evaluate((el) => el.getAnimations()[0]?.playState),
+    )
+    .toBe('paused');
+  mode = 'auto';
+  clockStarted = Date.now() - elapsed;
+  await expect
+    .poll(() =>
+      page.locator('.intro-team--a img').evaluate((el) => el.getAnimations()[0]?.playState),
+    )
+    .toBe('running');
 });

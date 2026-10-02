@@ -66,20 +66,17 @@ describe('Program scenes preview and safety boundaries', () => {
       );
       expect(main, `scene ${sceneId} should render default content in preview mode`).not.toBeNull();
       expect(container.textContent).toContain('画面样例');
-      expect(container.textContent).toContain('FURIA');
+      expect(container.textContent).toContain(sceneId === 'waiting' ? '2026 NJU Rivals' : 'FURIA');
     }
 
-    // BP scene in preview mode with null snapshot renders default BP projection
+    // A preview query must never fabricate BP data or bypass the session.
     window.history.replaceState({}, '', '/program/bp?preview=1');
     await act(async () => {
       root!.render(<BpPresentation snapshot={null} />);
       await Promise.resolve();
     });
     const bpScene = container.querySelector('.bp-scene');
-    expect(bpScene).not.toBeNull();
-    expect(container.textContent).toContain('FURIA');
-    expect(container.textContent).toContain('G2.Esports');
-    expect(container.textContent).toContain('MAP VETO');
+    expect(bpScene).toBeNull();
   });
 
   it('strictly enforces safety gates for production broadcast (without preview flag)', async () => {

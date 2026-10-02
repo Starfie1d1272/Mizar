@@ -452,7 +452,7 @@ Preparation 当前比赛统一消费 `/local/v1/match-document` envelope；`/loc
 
 ## BP presentation
 
-Core `projectBp` 从 canonical MatchContext 的 maps/veto 派生最多 7 张地图卡和 14 个 reveal step；选图与选边分别表达，决胜图不归 entrant。`sideChoice` 保留真正执行 SIDE_PICK 的队伍；只有 `teamAStartSide` 不足以生成选边行，BO5 决胜图不显示选边。`ProjectionCoordinator` 在身份 mismatch 或 BP 数据冲突时 fail closed。Companion 内存 `BpSession` 仅拥有播放状态，使用 monotonic clock 推进；Web 共用 `BpPresentation`，由 `/program/bp` 全屏不透明场景和 `/operator/bp` 预览承载。制作首页提供播放/收起。
+Core `projectBp` 从 canonical MatchContext 的 maps/veto 派生最多 7 张地图卡和 14 个 reveal step；选图与选边分别表达，决胜图不归 entrant。`sideChoice` 保留真正执行 SIDE_PICK 的队伍；只有 `teamAStartSide` 不足以生成选边行，BO5 决胜图不显示选边。`ProjectionCoordinator` 在身份 mismatch 或 BP 数据冲突时 fail closed。Companion 内存 `BpSession` 仅拥有播放状态，使用 monotonic clock 推进；Web 共用 `BpPresentation`，由 `/program/bp` 全屏不透明场景和 `/preview?scene=bp` 预览承载。制作首页提供播放/收起。
 
 RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本机 LKG store，并更新同一个 ProjectionCoordinator/SeriesProgress。独立模式的比赛和 BP 保存在 Mizar 本机赛事库；现有 BP consumer 读取临时 BroadcastManifest 兼容视图，不建立第二份 BP truth。在线比赛的本地 BP 补录仍使用既有 bound-overlay LKG，不能修改 canonical metadata。`standalone | bound-overlay` provenance 属于 MatchContextBinding acquisition metadata，不进入 MatchContext domain。服务重启按本地显式选择时间与在线 LKG 保存时间恢复最后选中的来源，BP 播放会话从 hidden 开始。活动 binding selection 与在线 candidate acquisition 分开管理 generation；候选失败刷新保留已验证候选，只有新的有效候选才替换它。
 

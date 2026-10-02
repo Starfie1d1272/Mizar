@@ -75,7 +75,7 @@ export function BpDashboardControl() {
     <section className="dashboard-bp" aria-label="BP 播放">
       <h2>地图禁选</h2>
       <BpControls snapshot={snapshot} />
-      <a href="/operator/bp">打开 BP 预览 →</a>
+      <a href="/preview?scene=bp">打开 BP 预览 →</a>
     </section>
   );
 }

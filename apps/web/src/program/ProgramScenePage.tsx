@@ -22,6 +22,32 @@ function Media({ src, className = '' }: { src: string | null | undefined; classN
 }
 const mapName = (value: string) => value.replace(/^de_/, '').toUpperCase();
 const number = (value: number | null | undefined) => value ?? '—';
+const scheduleTime = (value: string) =>
+  new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Shanghai',
+    timeZoneName: 'shortOffset',
+  }).format(new Date(value));
+
+function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
+  return (
+    <footer className="broadcast-identity">
+      <div>
+        <Media src={data.eventLogoUrl} />
+        <strong>{data.match?.competition.name}</strong>
+        <span>{data.match?.stage}</span>
+      </div>
+      <div className="broadcast-signature">
+        <img src="/brand/mizar-mark-mono.svg" alt="" />
+        <span>MIZAR</span>
+      </div>
+    </footer>
+  );
+}
 function usePresentation(preview: boolean) {
   const [value, setValue] = useState<ProgramPresentation | null>(null);
   useEffect(() => {
@@ -71,22 +97,26 @@ function MapStrip({ data }: { data: ProgramPresentation }) {
           const asset = getMapThumbnail(map.mapName);
           return (
             <article key={map.mapOrder} className={`summary-map summary-map--${map.status}`}>
-              <div className="summary-map-tab">
-                MAP {map.mapOrder} ·{' '}
-                {map.status === 'completed'
-                  ? `${map.finalScore?.a ?? '—'} : ${map.finalScore?.b ?? '—'}`
-                  : map.status === 'current'
-                    ? '当前地图'
-                    : map.status === 'not_played'
-                      ? '无需进行'
-                      : '待进行'}
-              </div>
+              <div className="summary-map-tab">{mapName(map.mapName)}</div>
               <div className="summary-map-art">
                 {asset ? <img src={asset.outputPath} alt="" /> : null}
                 <div className="summary-map-pick">
                   {picker ? `${picker} PICK` : map.selection.kind === 'decider' ? 'DECIDER' : '—'}
                 </div>
-                <strong>{mapName(map.mapName)}</strong>
+                <strong>
+                  {map.status === 'completed'
+                    ? `${number(map.finalScore?.a)} – ${number(map.finalScore?.b)}`
+                    : map.status === 'current' && data.halftime?.mapOrder === map.mapOrder
+                      ? `${number(data.halftime.score.a)} – ${number(data.halftime.score.b)}`
+                      : ''}
+                </strong>
+                <span className="summary-map-state">
+                  {map.status === 'current'
+                    ? 'CURRENT'
+                    : map.status === 'not_played'
+                      ? 'NOT PLAYED'
+                      : `MAP ${map.mapOrder}`}
+                </span>
               </div>
             </article>
           );
@@ -103,16 +133,23 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
       <MapStrip data={data} />
       <div className="summary-caption">
         <span>
-          {scene === 'halftime' ? '半场' : scene === 'match_result' ? '全场结束' : '图间休息'}
+          {scene === 'halftime'
+            ? 'HALFTIME'
+            : scene === 'match_result'
+              ? 'MATCH COMPLETE'
+              : 'BETWEEN MAPS'}
         </span>
         <strong>
           {summary
             ? `${mapName(summary.mapName)} · ${number(summary.score.a)} : ${number(summary.score.b)}`
-            : '选手数据暂不可用'}
+            : 'STATS UNAVAILABLE'}
         </strong>
-        <span>
-          {scene === 'match_result' ? '最后一图 K / A / D · 非跨图合计' : '本图 K / A / D'}
-        </span>
+        <span>{scene === 'match_result' ? 'FINAL MAP STATS' : 'MAP STATS'}</span>
+      </div>
+      <div className="summary-stat-axis" aria-hidden="true">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span key={i}>K/D</span>
+        ))}
       </div>
       <div className="summary-players">
         {(['a', 'b'] as const).map((side) => (
@@ -120,19 +157,18 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
             {(summary?.players[side] ?? []).map((player) => (
               <div className="summary-player" key={player.id}>
                 <Media src={player.avatarUrl} />
-                <strong className="summary-player-name">{player.name ?? '未识别选手'}</strong>
-                <div className="summary-player-stats">
-                  {(['kills', 'assists', 'deaths'] as const).map((stat, i) => (
-                    <span key={stat}>
-                      <small>{['K', 'A', 'D'][i]}</small>
-                      {number(player[stat])}
-                    </span>
-                  ))}
+                <strong className="summary-player-name">{player.name ?? 'UNKNOWN PLAYER'}</strong>
+                <div className="summary-player-stats" aria-label="Kills / Deaths">
+                  <span>{number(player.kills)}</span>
+                  <span className="summary-stat-separator" aria-hidden="true">
+                    –
+                  </span>
+                  <span>{number(player.deaths)}</span>
                 </div>
               </div>
             ))}
             {summary && summary.players[side].length === 0 ? (
-              <p className="summary-unavailable">选手统计暂不可用</p>
+              <p className="summary-unavailable">STATS UNAVAILABLE</p>
             ) : null}
           </div>
         ))}
@@ -141,7 +177,7 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
         <footer className="summary-footer">
           <strong>{data.series.entrants.a.name}</strong>
           <span>
-            系列赛 {data.series.score.a} : {data.series.score.b}
+            {data.series.score.a} : {data.series.score.b}
           </span>
           <strong>{data.series.entrants.b.name}</strong>
         </footer>
@@ -160,7 +196,10 @@ function Waiting({ data }: { data: ProgramPresentation }) {
       {series ? (
         <>
           <p className="waiting-label">
-            即将开始 · {data.match?.stage} · {series.format.toUpperCase()}
+            COMING UP{' '}
+            <span>
+              {data.match?.stage} · {series.format.toUpperCase()}
+            </span>
           </p>
           <div className="waiting-hero">
             {(['a', 'b'] as const).map((side) => (
@@ -173,27 +212,25 @@ function Waiting({ data }: { data: ProgramPresentation }) {
           </div>
           {data.scheduledAt ? (
             <p className="waiting-time">
-              计划开赛 · {new Date(data.scheduledAt).toLocaleString('zh-CN', { hour12: false })}
+              SCHEDULED <strong>{scheduleTime(data.scheduledAt)}</strong>
             </p>
           ) : null}
         </>
       ) : (
-        <h1 className="waiting-neutral">节目即将开始</h1>
+        <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
       )}
       <div className="waiting-schedule">
-        {(['next', 'previous'] as const).map((kind) => {
+        {(['previous', 'next'] as const).map((kind) => {
           const card = data[kind];
           return card ? (
             <article className={`waiting-schedule--${kind}`} key={kind}>
-              <small>{kind === 'next' ? '下一场' : '上一场'}</small>
+              <small>{kind === 'next' ? 'UP NEXT' : 'PREVIOUS MATCH'}</small>
               <strong>
                 {card.a} <span>{card.score ?? 'VS'}</span> {card.b}
               </strong>
               <p>
                 {card.stage} · {card.format.toUpperCase()}
-                {card.scheduledAt
-                  ? ` · ${new Date(card.scheduledAt).toLocaleString('zh-CN', { hour12: false })}`
-                  : ''}
+                {card.scheduledAt ? ` · ${scheduleTime(card.scheduledAt)}` : ''}
               </p>
             </article>
           ) : null;
@@ -214,10 +251,7 @@ function MapResult({ data }: { data: ProgramPresentation }) {
         <div className={`result-side result-side--${side}`} key={side}>
           <strong className="result-round-score">{number(summary.score[side])}</strong>
           <Media src={series.entrants[side].logoUrl} className="result-logo" />
-          <span className="result-series-score">
-            {series.score[side]}
-            <small>系列赛</small>
-          </span>
+          <span className="result-series-score">{series.score[side]}</span>
           <strong className="result-team-name">{series.entrants[side].name}</strong>
         </div>
       ))}
@@ -242,6 +276,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     : (scenes?.director?.introDurationMs ?? 6000);
   const revision = preview ? 'preview' : scenes?.revision;
   const hasSnapshot = snapshot != null;
+  const hasPresentation = data != null;
+  const syncedAnimations = useRef(new WeakSet<Animation>());
   useEffect(() => {
     if (
       sceneId !== 'matchup' ||
@@ -294,21 +330,53 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
         );
     }
     return () => animations.forEach((animation) => animation.cancel());
-  }, [sceneId, duration, revision, hasSnapshot]);
+  }, [sceneId, duration, revision, hasSnapshot, hasPresentation]);
   useEffect(() => {
     if (!intro.current?.getAnimations) return;
-    for (const animation of intro.current.parentElement?.getAnimations({ subtree: true }) ?? []) {
-      if (!preview && scenes?.director?.sceneElapsedMs !== undefined)
-        animation.currentTime = scenes.director.sceneElapsedMs;
+    const hudEntrance = intro.current.parentElement?.querySelector('.intro-hud');
+    const animations = [
+      ...intro.current.getAnimations({ subtree: true }),
+      ...(hudEntrance?.getAnimations() ?? []),
+    ];
+    for (const animation of animations) {
+      if (!preview && scenes?.director?.sceneElapsedMs !== undefined) {
+        const elapsed = scenes.director.sceneElapsedMs;
+        const paused = scenes.director.mode === 'blocked';
+        if (
+          !syncedAnimations.current.has(animation) ||
+          paused ||
+          animation.playState === 'paused' ||
+          Math.abs(Number(animation.currentTime ?? 0) - elapsed) > 1000
+        ) {
+          animation.currentTime = elapsed;
+          syncedAnimations.current.add(animation);
+        }
+      }
       if (scenes?.director?.mode === 'blocked') animation.pause();
       else if (animation.playState === 'paused') animation.play();
     }
-  }, [scenes?.director?.mode, scenes?.director?.sceneElapsedMs, preview]);
+  }, [
+    scenes?.director?.mode,
+    scenes?.director?.sceneElapsedMs,
+    preview,
+    hasPresentation,
+    hasSnapshot,
+    revision,
+  ]);
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
+      {preview && sceneId === 'matchup' && params.get('background') !== 'transparent' ? (
+        <div
+          className="intro-preview-backdrop"
+          style={{ backgroundImage: `url(${getMapThumbnail('de_ancient')?.outputPath})` }}
+        />
+      ) : null}
+      {data && sceneId !== 'matchup' ? <BroadcastIdentity data={data} /> : null}
       {preview ? (
         <p className="program-preview-source">
-          画面样例 · 真实回放衍生 · {params.get('variant') ?? '默认版式'}
+          画面样例 · {sceneId === 'waiting' ? 'Rivals 真实赛程衍生' : '真实遥测衍生 · BP 版式示例'}
+          {sceneId === 'matchup' ? ' · 地图静态背景示意，非游戏录像' : ''} ·{' '}
+          {params.get('variant') ?? '默认版式'}
         </p>
       ) : null}
       {data ? (
@@ -363,7 +431,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           <SummaryBoard data={data} scene={sceneId} />
         )
       ) : sceneId === 'waiting' ? (
-        <h1 className="waiting-neutral">节目即将开始</h1>
+        <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
       ) : null}
     </ProgramCanvas>
   );
