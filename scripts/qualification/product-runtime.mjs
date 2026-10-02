@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createReadStream, openSync, closeSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,13 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
+import {
+  awaitDesktopStart,
+  createCompanionLog,
+  createSupervisorLog,
+  safeLogText,
+  startupSessionId,
+} from './product-logs.mjs';
 
 export const PRODUCT_REPOSITORY = 'Starfie1d1272/Mizar';
 export const PRODUCT_PORT = 3000;
@@ -73,6 +80,7 @@ export async function verifyPayload(root) {
     'resources/app/dist/server.js',
     'resources/web/dist/index.html',
     'resources/scripts/product-runtime.mjs',
+    'resources/scripts/product-logs.mjs',
     'resources/metadata/artifact.json',
   ]) {
     if (!paths.has(name)) throw new Error(`程序包缺少必要文件：${name}`);
@@ -148,7 +156,10 @@ export async function runProduct({
   stateRoot,
   reuseOnly = false,
   openBrowser = true,
+  sessionId = startupSessionId(process.env.MIZAR_STARTUP_SESSION_ID),
+  log = createSupervisorLog(stateRoot, sessionId),
 }) {
+  log('supervisor_start', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
   const url = `http://127.0.0.1:${port}/operator`;
   async function open() {
     if (!openBrowser) return;
@@ -166,6 +177,7 @@ export async function runProduct({
     while (performance.now() < deadline) {
       const health = await healthAt(port);
       if (sameRuntime(health, artifact)) {
+        log('runtime_reused');
         await open();
         return { reused: true };
       }
@@ -176,12 +188,14 @@ export async function runProduct({
   }
   const existing = await healthAt(port);
   if (sameRuntime(existing, artifact)) {
+    log('runtime_reused');
     await open();
     return { reused: true };
   }
   try {
     await portAvailable(port);
   } catch {
+    log('port_conflict');
     throw new Error('3000 端口已被其他程序占用，请先停止该程序；制播服务不会切换端口');
   }
   for (const dir of ['data', 'logs', 'evidence'])
@@ -200,8 +214,12 @@ export async function runProduct({
   const instanceId = randomUUID();
   const controlToken = randomBytes(32).toString('hex');
   const statePath = join(stateRoot, 'data/runtime.json');
-  const stdout = openSync(join(stateRoot, 'logs/companion.log'), 'w', 0o600);
-  const stderr = openSync(join(stateRoot, 'logs/companion.stderr.log'), 'w', 0o600);
+  const logOptions = {
+    secrets: [gsiToken, controlToken, process.env.MIZAR_OUTPUT_TOKEN],
+    onFailure: (failure) => log('output_log_failed', failure),
+  };
+  const stdout = createCompanionLog(stateRoot, 'companion.log', sessionId, logOptions);
+  const stderr = createCompanionLog(stateRoot, 'companion.stderr.log', sessionId, logOptions);
   const env = {
     ...process.env,
     HOST: '127.0.0.1',
@@ -213,6 +231,7 @@ export async function runProduct({
     MIZAR_ARTIFACT_SHA256: artifact.artifactSha256,
     MIZAR_PRODUCT_INSTANCE: instanceId,
     MIZAR_RUNTIME_TOKEN: controlToken,
+    MIZAR_STARTUP_SESSION_ID: sessionId,
     WEB_ROOT: join(root, 'resources/web/dist'),
     CAPTURE_DIR: join(stateRoot, 'data/capture'),
     HUD_CONFIG_PATH: join(stateRoot, 'data/hud-config.json'),
@@ -221,22 +240,32 @@ export async function runProduct({
   // The packaged runtime never consumes injected Node flags or module search paths.
   delete env.NODE_OPTIONS;
   delete env.NODE_PATH;
+  log('companion_spawn_begin');
   const child = spawn(nodePath, [join(root, 'resources/app/dist/server.js')], {
     cwd: join(root, 'resources/app'),
     env,
-    stdio: ['ignore', stdout, stderr],
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
-  closeSync(stdout);
-  closeSync(stderr);
+  child.stdout.on('data', (chunk) => stdout.write(chunk));
+  child.stdout.once('end', () => stdout.end());
+  child.stderr.on('data', (chunk) => stderr.write(chunk));
+  child.stderr.once('end', () => stderr.end());
   let exited = false;
   const completion = new Promise((done) => {
     child.once('error', (error) => {
       exited = true;
+      log('companion_spawn_failed', {
+        code: error.code,
+        error: safeLogText(error.message, logOptions.secrets),
+      });
       done({ error });
     });
     child.once('exit', (code, signal) => {
       exited = true;
+      log('companion_exit', { code, signal });
+    });
+    child.once('close', (code, signal) => {
       done({ code, signal });
     });
   });
@@ -247,6 +276,8 @@ export async function runProduct({
       instanceId,
       controlToken,
       pid: child.pid,
+      supervisorPid: process.pid,
+      startupSessionId: sessionId,
       startedAt: new Date().toISOString(),
     });
     const deadline = performance.now() + 30000;
@@ -259,34 +290,63 @@ export async function runProduct({
       await delay(200);
     }
     if (!ready) throw new Error('本地制播服务未能启动，请查看 state/logs/companion.stderr.log');
+    log('runtime_ready', { instanceId });
     await open();
     const result = await completion;
     if (result.error || result.code !== 0)
       throw new Error('本地制播服务意外退出，请查看 state/logs 后重新启动');
     return { reused: false };
+  } catch (error) {
+    log('runtime_error', { error: safeLogText(error.message, logOptions.secrets) });
+    throw error;
   } finally {
-    if (!exited) child.kill();
+    if (!exited) {
+      log('companion_rollback');
+      child.kill();
+    }
     await rm(statePath, { force: true });
+    log('supervisor_complete');
   }
 }
 
 async function main() {
-  const args = new Set(process.argv.slice(2));
-  if ([...args].some((arg) => !['--stop', '--reuse-only', '--no-browser'].includes(arg)))
-    throw new Error('启动参数无法识别');
-  if (process.platform !== 'win32' || process.arch !== 'x64')
-    throw new Error('此产品包需要 64 位 Windows');
-  const artifact = await verifyPayload(bundleRoot);
   const stateRoot = writableRoot(bundleRoot, process.env.MIZAR_STATE_ROOT);
-  if (args.has('--stop')) return stopProduct(bundleRoot, { stateRoot });
-  await runProduct({
-    root: bundleRoot,
-    artifact,
-    stateRoot,
-    nodePath: join(bundleRoot, 'resources/runtime/node.exe'),
-    reuseOnly: args.has('--reuse-only'),
-    openBrowser: !args.has('--no-browser'),
-  });
+  const sessionId = startupSessionId(process.env.MIZAR_STARTUP_SESSION_ID);
+  const log = createSupervisorLog(stateRoot, sessionId);
+  try {
+    log('process_start', { platform: process.platform, arch: process.arch });
+    if (process.env.MIZAR_DESKTOP_SUPERVISED === '1') {
+      await awaitDesktopStart(process.stdin);
+      log('desktop_supervision_ready');
+    }
+    const args = new Set(process.argv.slice(2));
+    if ([...args].some((arg) => !['--stop', '--reuse-only', '--no-browser'].includes(arg)))
+      throw new Error('启动参数无法识别');
+    if (process.platform !== 'win32' || process.arch !== 'x64')
+      throw new Error('此产品包需要 64 位 Windows');
+    log('artifact_verify_begin');
+    const artifact = await verifyPayload(bundleRoot);
+    log('artifact_verified', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
+    if (args.has('--stop')) {
+      log('product_stop_begin');
+      await stopProduct(bundleRoot, { stateRoot });
+      log('product_stopped');
+      return;
+    }
+    await runProduct({
+      root: bundleRoot,
+      artifact,
+      stateRoot,
+      nodePath: join(bundleRoot, 'resources/runtime/node.exe'),
+      reuseOnly: args.has('--reuse-only'),
+      openBrowser: !args.has('--no-browser'),
+      sessionId,
+      log,
+    });
+  } catch (error) {
+    log('supervisor_error', { code: error.code, error: safeLogText(error.message) });
+    throw error;
+  }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main().catch((error) => {

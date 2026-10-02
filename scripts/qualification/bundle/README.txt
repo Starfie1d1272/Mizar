@@ -1,20 +1,27 @@
 Mizar Windows x64 便携版
 
-本产品包绑定 git SHA <SHORT_SHA>，并内置 Node <NODE_VERSION>。解压到可写目录后，双击 Mizar.exe 打开制播工作区。
-不需要安装 Node 或 pnpm。程序只使用 http://127.0.0.1:3000；重复打开会复用同版本服务。关闭工作区窗口后可从托盘重新打开；选择托盘“退出”才停止服务。
+本产品包绑定 git SHA <SHORT_SHA>，并内置 Node <NODE_VERSION>。解压到可写目录后，双击 Mizar.exe 打开准备中心。
+不需要安装 Node 或 pnpm。程序只使用 http://127.0.0.1:3000；重复打开会复用同版本服务。关闭工作区窗口后可从托盘重新打开；选择托盘“退出 Mizar”停止服务。若托盘不可用，主窗口标题会提示关闭主窗口将退出，关闭现场工作区则返回主窗口。
 
 正常制作：
 
-1. 初次接入 CS2 前，在此目录运行：powershell -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 -Product
-   自动查找 Steam 库；存在多个 CS2 时，加 -Cs2Root "CS2 安装目录" 明确选择。安装前先停止服务。
-2. 双击 Mizar.exe；左栏、底栏围绕 CS2 窗口展开。浏览器预览可打开 http://127.0.0.1:3000/workspace。
-3. 在工作区连接 OBS，使用“检查配置”和“一键修复”创建制播场景。OBS Browser Source 由工作区按 Program Scene 清单配置；Gameplay 为 http://127.0.0.1:3000/program。
-4. 停止服务：powershell -ExecutionPolicy Bypass -File .\resources\scripts\stop-product.ps1
-5. 恢复安装前的 GSI 配置：停止服务后运行 powershell -ExecutionPolicy Bypass -File .\resources\scripts\restore-gsi.ps1 -Product
+1. 双击 Mizar.exe，进入“总览 / 比赛 / 画面 / 设置”准备中心。在“比赛”创建或选择本地比赛；连接 RivalHub 时先在“设置”授权，再到“比赛”选择赛程。
+2. 初次接入 CS2 前，在“设置”检测并安装 GSI；自动发现不唯一时明确选择安装目录。安装后重新启动 CS2。
+3. 在“设置”连接 OBS，检查配置并修复制播场景。OBS Browser Source 按 Program Scene 清单配置；Gameplay 为 http://127.0.0.1:3000/program。
+4. 完成准备后进入现场，左栏、底栏和本机覆盖才围绕 CS2 窗口展开。浏览器预览可打开 http://127.0.0.1:3000/workspace；现场窗口打开失败会保留准备中心，可修复后重试。
+5. 如需恢复安装前的 GSI 配置，可在“设置”操作；结束使用时选择托盘“退出 Mizar”。
+
+备用脚本（先停止服务，再安装或恢复 GSI）：
+  停止服务：powershell -ExecutionPolicy Bypass -File .\resources\scripts\stop-product.ps1
+  安装 GSI：powershell -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 -Product
+  多个 CS2 安装目录时，在安装命令后加 -Cs2Root "CS2 安装目录"。
+  恢复 GSI：powershell -ExecutionPolicy Bypass -File .\resources\scripts\restore-gsi.ps1 -Product
 
 resources 是程序资源，不能保存运行数据。设置保存在 state\data，日志在 state\logs，验收记录在 state\evidence。
 可使用 MIZAR_STATE_ROOT 指向其它绝对运行目录；首次启动与后续脚本必须使用同一设置。请保留 state 以保留 HUD 和系列进度。
-端口被其它程序占用时先停止占用程序；不会静默换端口。文件缺损时重新解压完整 ZIP。日志可用于诊断启动失败。
+端口被其它程序占用时先停止占用程序；不会静默换端口。文件缺损时重新解压完整 ZIP。
+桌面启动失败会显示原生错误提示，可打开日志目录；即使准备页面未打开，也能保留失败阶段和原始错误。若提示 WebView2 不可用，请安装或修复 Microsoft Edge WebView2 Evergreen Runtime 后重试。不要仅凭此说明认定其它启动失败也由 WebView2 引起。
+日志保存在 state\logs（设置 MIZAR_STATE_ROOT 后以该目录为准）：desktop.ndjson、supervisor.ndjson、companion.log 与 companion.stderr.log。每类保留当前文件和最多 3 个历史文件；桌面单文件最多 256 KiB，其余各 2 MiB。它们是本机诊断记录，不是自动脱敏的公开支持包；不要直接分享整个 state 目录。
 
 现场验收模式（先停止正常制作服务）：
 

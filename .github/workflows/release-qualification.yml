@@ -65,6 +65,7 @@ jobs:
 
       - name: Extract portable bundle and smoke test
         shell: pwsh
+        timeout-minutes: 5
         run: |
           $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
           if ($null -eq $archive) { throw '未生成 qualification ZIP' }
@@ -78,6 +79,8 @@ jobs:
           try {
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName
             if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
+            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
           } finally {
             Pop-Location
           }
@@ -100,4 +103,8 @@ jobs:
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/**/artifact.json
+            ${{ runner.temp }}/qualification extracted path/**/state/desktop-smoke-*/*/logs/desktop*.ndjson
+            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/supervisor*.ndjson*
+            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/companion*.log*

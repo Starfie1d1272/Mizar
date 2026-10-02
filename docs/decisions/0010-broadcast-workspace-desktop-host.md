@@ -11,7 +11,7 @@
 - Local Program Overlay 加载现有 `/program`，透明、不可获焦、鼠标穿透、置顶并严格对齐 CS2 client area。CS2 无效、最小化、无法管理或前台不属于 CS2/本产品时隐藏。它与 OBS Browser Source 分开开关；窗口几何不进入 `RuntimeState`。
 - 本地 Scene 切换先由 Companion 检查数据充分性与身份一致性；OBS 已连接时，由 Companion 先切换同一 registry 对应的 OBS 场景，成功后提交当前 Scene。OBS 离线时保留本地制作能力并明确显示 OBS 断开。BP 使用既有 `BpSession`，Gameplay 使用既有 Program Renderer。
 - OBS 仅管理 `Mizar` Scene Collection 与其中 `Mizar ·` 来源；Browser Source 使用 registry 的 URL，Game Capture 仅属于 gameplay overlay composition。检查读取实际状态；修复幂等。推流或录制时不切换 Collection，也不自动修改全局视频、推流、音频、Profile 或录制设置。
-- Desktop 继续启动同包 Node 24 与 `product-runtime.mjs`，按 ADR-0008 验证 payload、同 artifact 复用、端口身份、可写 state 与 graceful stop。关闭窗口隐藏至 tray；显式退出才停止 Companion。异常退出不强杀 Companion。
+- Desktop 继续启动同包 Node 24 与 `product-runtime.mjs`，按 ADR-0008 验证 payload、同 artifact 复用、端口身份、可写 state 与 graceful stop。关闭窗口隐藏至 tray；显式退出才停止 Companion。异常退出不强杀 Companion。Clarification：[ADR-0015](0015-desktop-startup-diagnostics-and-recovery.md) 将此处异常退出限定为成功进入稳定运行后的 Host 意外退出；冷启动失败清理本次新建进程，并规定托盘不可用时 Main 的退出语义。
 - Tauri remote IPC 只授权 `http://127.0.0.1:3000` 的三个产品窗口访问限定原生命令；不授予任意 shell 或文件系统命令。OBS 程序选择器只接受 `obs64.exe`。
 
 ## 对 ADR-0008 的关系

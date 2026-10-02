@@ -244,11 +244,25 @@ mizar-<shortSHA>-win-x64/
 
 正式包需要 Windows x64 构建，编译 Tauri 2 桌面 Host 并绑定 bundled Node / supervisor 摘要。`--skip-node-runtime` 只生成结构检查包；`--allow-dirty` 生成的包同样标记 `developmentOnly`，不能作为产品启动或真实验收的 exact-revision artifact。
 
-双击 EXE 默认打开 Mizar Workspace：左侧 `/workspace/left`、底部 `/workspace/dock`，本机 Program Overlay 使用同一套 Program Scene registry。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。GSI 配置使用 `install-gsi.ps1 -Product` 安装、`restore-gsi.ps1 -Product` 恢复；安装和恢复前停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
+双击 EXE 默认打开 Main 准备中心（`/`），先在“总览 / 比赛 / 画面 / 设置”完成制作准备。首次进入现场时才创建左侧 `/workspace/left`、底部 `/workspace/dock` 和本机 Program Overlay；Overlay 使用同一套 Program Scene registry。`resources/scripts/start-product.ps1` / `stop-product.ps1` 是自动化备用入口。准备中心设置页提供 GSI 检测、安装与恢复；脚本备用入口为 `install-gsi.ps1 -Product` 和 `restore-gsi.ps1 -Product`，使用脚本前先停止服务。现场验收仍使用同目录下 `install-gsi.ps1`、`start.ps1` 与 `stop.ps1`，不要混用两种模式。
 
 `MIZAR_STATE_ROOT` 可以指定 resources 之外的绝对目录；正常运行、GSI 脚本和验收必须使用相同值。HUD 配置、系列进度、capture 和日志均进入该目录。现场验收临时状态位于 `state/qualification`，完成后仍由现有 supervisor 恢复 GSI 配置并清理。
 
-Windows CI 从带空格路径解压 ZIP，以 `product-smoke.mjs` 调用真实 EXE，检查冷启动、同 artifact 复用、停止/重启、未知端口占用、资源损坏和 GSI 安装/恢复。该 smoke 没有 CS2/OBS，不能构成生产验收通过。
+Windows CI 从带空格路径解压 ZIP。`product-smoke.mjs` 以 `--no-browser` 调用真实 EXE，检查 Runtime 冷启动、同 artifact 复用、停止/重启、未知端口占用、资源损坏和 GSI 安装/恢复；该路径绕过 Tauri GUI，HTTP health 不能证明桌面就绪。
+
+独立 GUI smoke 使用同一 exact artifact，命令为：
+
+```text
+node scripts/qualification/desktop-smoke.mjs <bundle-root> <report.json>
+```
+
+它启动不带 `--no-browser` 的正常 `Mizar.exe`，要求同 artifact health、归属该 PID 的可见 Main HWND、非零 client area、可信 Main 页面导航完成记录，并确认 Host 持续存活、packaged Node 没有可见 console。显式停止后检查 Desktop 与已跟踪后代全部退出，以及同一启动会话的 `shutdown` begin/success 记录。页面导航完成不等于 React 功能或完整制作流程已通过验收。
+
+失败场景把 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向不存在的目录，使用真实 WebView2 配置失效触发启动失败，检查原始错误、相同 artifact/启动会话、Runtime 回滚和可见原生错误框；关闭错误框后进程以失败状态退出。它不修改 artifact payload，也不证明此前真实 Windows 故障就是 WebView2 缺失。失败报告保留有界 Desktop、supervisor 与 Companion 日志，真实用户机器的首次启动仍需重新验证。
+
+`pnpm qualification:offline` 检查实际打包后的 GSI 安装、状态、恢复脚本及 `common.ps1` / `gsi-discovery.ps1` 依赖，确认入口加载共享发现逻辑，Steam 库发现位于其实际模块。对应 mutation tests 拒绝缺失模块、遗漏导入和丢失发现能力。Desktop capability contract 在单元测试中核对 `build.rs` manifest、Rust invoke handler、Web 实际调用和 capability allowlist，并锁定产品窗口及 loopback scope；已有但没有当前 Web consumer 的原生命令必须显式列明。
+
+启动日志与恢复约束见 [ADR-0015](decisions/0015-desktop-startup-diagnostics-and-recovery.md)。上述检查没有真实 CS2/OBS，GUI smoke、Rust tests 或合成流程均不能代替真实 Windows + CS2 + OBS 验收，也不能单凭自动化关闭首次启动故障的实机验证。
 
 常规 CI 的 Windows qualification 使用专用 `ci` Cargo profile（继承 release 设置并关闭 full LTO），Rust build 与 geometry/window-policy tests 共用该 profile 和 target；Release Qualification 不传该选项，使用默认 `release` profile。两类 artifact 的 `desktopBuildProfile` metadata 明确标出所用 profile，Cargo registry、git 与 target cache 按平台、依赖锁文件和 profile 配置隔离。
 
