@@ -274,7 +274,12 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       ? 2000
       : 6000
     : (scenes?.director?.introDurationMs ?? 6000);
-  const revision = preview ? 'preview' : scenes?.revision;
+  const preparingIntro = !preview && scenes?.preparing?.target === 'matchup';
+  const revision = preview
+    ? 'preview'
+    : preparingIntro
+      ? scenes.preparing!.revision
+      : scenes?.revision;
   const hasSnapshot = snapshot != null;
   const hasPresentation = data != null;
   const syncedAnimations = useRef(new WeakSet<Animation>());
@@ -339,20 +344,20 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       ...(hudEntrance?.getAnimations() ?? []),
     ];
     for (const animation of animations) {
-      if (!preview && scenes?.director?.sceneElapsedMs !== undefined) {
+      if (!preview && !preparingIntro && scenes?.director?.sceneElapsedMs !== undefined) {
         const elapsed = scenes.director.sceneElapsedMs;
         const paused = scenes.director.mode === 'blocked';
         if (
-          !syncedAnimations.current.has(animation) ||
+          (!syncedAnimations.current.has(animation) && elapsed > 1000) ||
           paused ||
           animation.playState === 'paused' ||
           Math.abs(Number(animation.currentTime ?? 0) - elapsed) > 1000
         ) {
           animation.currentTime = elapsed;
-          syncedAnimations.current.add(animation);
         }
+        syncedAnimations.current.add(animation);
       }
-      if (scenes?.director?.mode === 'blocked') animation.pause();
+      if (!preview && !preparingIntro && scenes?.director?.mode === 'blocked') animation.pause();
       else if (animation.playState === 'paused') animation.play();
     }
   }, [
@@ -362,16 +367,21 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     hasPresentation,
     hasSnapshot,
     revision,
+    preparingIntro,
   ]);
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
-      {preview && sceneId === 'matchup' && params.get('background') !== 'transparent' ? (
+      {preview &&
+      (sceneId === 'matchup' || sceneId === 'gameplay') &&
+      params.get('background') !== 'transparent' ? (
         <div
           className="intro-preview-backdrop"
           style={{ backgroundImage: `url(${getMapThumbnail('de_ancient')?.outputPath})` }}
         />
       ) : null}
-      {data && sceneId !== 'matchup' ? <BroadcastIdentity data={data} /> : null}
+      {data && sceneId !== 'matchup' && sceneId !== 'gameplay' ? (
+        <BroadcastIdentity data={data} />
+      ) : null}
       {preview ? (
         <p className="program-preview-source">
           画面样例 · {sceneId === 'waiting' ? 'Rivals 真实赛程衍生' : '真实遥测衍生 · BP 版式示例'}
@@ -384,9 +394,12 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           <Waiting data={data} />
         ) : sceneId === 'map_result' ? (
           <MapResult data={data} />
+        ) : sceneId === 'gameplay' ? (
+          <GameplayHud snapshot={snapshot ?? null} resolvedPreset={hud.current} />
         ) : sceneId === 'matchup' ? (
           <>
             <div
+              key={`hud:${revision}`}
               className="intro-hud"
               style={{ animationDelay: `${Math.max(0, duration - 600)}ms` }}
             >

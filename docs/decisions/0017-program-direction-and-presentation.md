@@ -16,6 +16,16 @@ Program presentation store 在同步 projection 更新时捕获可信地图结�
 
 默认美术属于 builtin:mizar-default。赛事标志/名称优先，Mizar 品牌在全屏节目页底部作为次级制作署名，不替代赛事身份；缺少图片折叠媒体区域。Halftime/InterMap/Match Result 共享 Summary Board，只展示头像、昵称、K/D；Match Result 使用最后完成地图，非跨图合计。Matchup 为 Game Capture 上的短 overlay，Halftime 为全屏。没有可用高清地图背景时使用确定性抽象背景，缩略图只用于地图条。
 
+## 场景转场
+
+普通自动切场使用 300ms 淡化，返回 Gameplay 使用 150ms；Intro → Gameplay 保留 renderer 内部交接并使用 Cut，手动 Take、已经开打或距开打不足 1s 的 Gameplay 切入使用 Cut。共享 scene presentation policy 只描述转场类型与时长，不包含 OBS 名称或 provider 配置。
+
+OBS adapter 按 transitionKind 发现本地化 Cut / Fade，只设置 Mizar 目标场景的 transition override，不修改其它场景或全局转场。淡化等待 OBS 视频转场完成事件并核对目标场景；事件超时、配置缺失或失败不视为切场完成。手动 Take 取消自动转场等待，按 Cut 接管，旧请求仍受 revision / generation / qualification 校验。
+
+BP 跨场景退出由同一次 OBS 淡化承担；确认完成前保留 BP 画面，完成后清理播放状态。单独收起 BP 继续使用既有 360ms renderer 动画。BP 进入前准备真实会话，首回合完整板在进入前就绪，失败时清理本次准备；不复制 BP projection 或另建播放时钟。开场准备提供有界的展示 revision，使 renderer 在转场前准备并在提交后延续同一动画。
+
+统一节目预览复用同一转场规则，单视口最多保留当前和待切入两层，快速操作 latest-wins。连续演示仅展示现有版式样例和当前可见 BP，会缩短静态页停留，不发送生产切场、BP 播放或比赛命令；缺少可见 BP 时跳过 BP 并提示。停止、换样例、立即切入比赛会取消演示；减少动效时直接切换。
+
 ## 验证
 
 确定性测试覆盖时序、手动保持、过期/暂停/OT、OBS 失败、在途切场竞争、快照跨图保留及错场清除；浏览器检查真实 renderer、可选媒体、长文本与减少动效。真实 Windows/CS2/OBS #35 与原机 #112 仍待验收，本实现不宣称生产 PASS。

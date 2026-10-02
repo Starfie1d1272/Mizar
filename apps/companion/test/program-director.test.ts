@@ -44,6 +44,7 @@ function rig() {
     showFinal,
     setPaused: vi.fn(),
     command: vi.fn(() => ({})),
+    finishSceneExit: vi.fn(),
   } as unknown as BpSession;
   const switchObs = vi.fn<() => Promise<void>>().mockResolvedValue();
   const scenes = new ProgramSceneController(projection, bp, switchObs);
@@ -203,7 +204,8 @@ describe('automatic Program choreography', () => {
     await r.pass(10_000);
     expect(r.scenes.get().active).toBe('matchup');
     expect(r.director.get().mode).toBe('blocked');
-    expect(r.switchObs).toHaveBeenCalledTimes(2);
+    // One failed Take plus one Cut restoring the last confirmed scene; no retry loop.
+    expect(r.switchObs).toHaveBeenCalledTimes(3);
   });
   it('invalidates an in-flight automatic take when the operator takes control', async () => {
     const r = rig();

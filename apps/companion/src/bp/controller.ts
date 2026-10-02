@@ -87,6 +87,14 @@ export class BpSession {
     this.count = this.projection.steps.length;
     this.revision++;
   }
+  /** The scene compositor has finished taking BP off air; no second exit animation. */
+  finishSceneExit(): void {
+    this.get();
+    if (this.state === 'hidden') return;
+    this.state = 'hidden';
+    this.count = 0;
+    this.revision++;
+  }
   command(kind: 'play' | 'hide', revision: string): BpSnapshot | null {
     const current = this.get();
     if (current.revision !== revision) return null;

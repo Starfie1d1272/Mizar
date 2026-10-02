@@ -261,6 +261,7 @@ export class ProgramDirector {
               (this.projections.getCurrent().program.clock?.endsInSeconds ?? 0) * 1000 >=
                 this.timings.hudLeadMs + this.timings.shortIntroMs)) &&
           key === this.executionKey(this.projections.getCurrent().program),
+        finalBp,
       );
       if (!result.ok) {
         if (!this.manual) this.failure = result.message;
@@ -270,7 +271,6 @@ export class ProgramDirector {
       this.elapsed = 0;
       if (target === 'bp') {
         if (finalBp) {
-          this.bp.showFinal();
           this.introStarted = true;
         } else {
           this.warmupPlayed = true;

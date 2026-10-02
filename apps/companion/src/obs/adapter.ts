@@ -8,6 +8,7 @@ import {
   switchObsScene,
   type ObsFinding,
   type ObsRpc,
+  type ObsSceneSwitchOptions,
 } from './reconcile.js';
 
 export interface ObsStatus {
@@ -50,6 +51,11 @@ export class ObsAdapter {
       const task = (async () => {
         await client.connect(`ws://${config.host}:${config.port}`, config.password);
         const rpc: ObsRpc = {
+          onTransitionVideoEnded: (listener) => {
+            const onEnded = (event: { transitionName: string }) => listener(event.transitionName);
+            client.on('SceneTransitionVideoEnded', onEnded);
+            return () => client.off('SceneTransitionVideoEnded', onEnded);
+          },
           call: (type, data) =>
             (
               client.call as (
@@ -170,8 +176,8 @@ export class ObsAdapter {
       return this.findings;
     });
   }
-  switchScene(id: ProgramSceneId): Promise<void> {
-    return this.serial(() => this.withObs((obs) => switchObsScene(obs, id)));
+  switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
+    return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
   }
   async open(): Promise<void> {
     const config = await this.configStore.read();

@@ -28,6 +28,21 @@ export const programSceneIdSchema = z.enum(
 export type ProgramSceneId = z.infer<typeof programSceneIdSchema>;
 export type ProgramScene = (typeof PROGRAM_SCENES)[number];
 
+/** Shared presentation policy; provider names and execution stay in their adapters. */
+export type ProgramTransition = {
+  readonly kind: 'cut' | 'fade';
+  readonly durationMs: number;
+};
+export function programTransition(
+  from: ProgramSceneId,
+  to: ProgramSceneId,
+  immediate = false,
+): ProgramTransition {
+  if (immediate || from === to || (from === 'matchup' && to === 'gameplay'))
+    return { kind: 'cut', durationMs: 0 };
+  return { kind: 'fade', durationMs: to === 'gameplay' ? 150 : 300 };
+}
+
 export function programScene(id: ProgramSceneId): ProgramScene {
   return PROGRAM_SCENES.find((scene) => scene.id === id)!;
 }
@@ -40,6 +55,7 @@ export const programSceneStateSchema = z.object({
   schemaVersion: z.literal('mizar.program-scenes.v1'),
   active: programSceneIdSchema,
   revision: z.string().min(1),
+  preparing: z.object({ target: programSceneIdSchema, revision: z.string().min(1) }).optional(),
   available: z.array(programSceneIdSchema),
   director: z
     .object({

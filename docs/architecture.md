@@ -463,7 +463,7 @@ RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本�
 
 ## 自动节目编排与静态画面（#106）
 
-Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal fixture 仍由既有排练控制器推进。它消费 Program/SeriesProgress/BP，通过唯一 `ProgramSceneController` 请求切场；手动 Take 进入持续保持，显式恢复自动后重新核验当前事实。最多一个自动切换在途，无离线队列，切换前后检查 revision、代际、地图、上下文和 deadline；失败保持旧场景。BP 的同一个播放 owner 在暂停/过期时冻结其展示时钟。
+Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal fixture 仍由既有排练控制器推进。它消费 Program/SeriesProgress/BP，通过唯一 `ProgramSceneController` 请求切场；手动 Take 进入持续保持，显式恢复自动后重新核验当前事实。最多一个自动切换在途，无离线队列，切换前后检查 revision、代际、地图、上下文和 deadline；失败保持旧场景。BP 的同一个播放 owner 在暂停/过期时冻结其展示时钟。场景 registry 同处的展示 policy 描述 Cut / Fade 与时长，OBS adapter 按本地 transitionKind 解析并只写目标 Mizar 场景 override；淡化以视频转场完成事件和目标场景读回确认。BP 直到淡化成功仍保留当前画面，成功后清理会话，失败可恢复旧场景。手动 Take 取消自动等待，立即走 Cut。
 
 `ProgramPresentationStore` 是 `ProjectionCoordinator` 同步更新后的有界消费者，在地图结束的同一帧冻结 SeriesProgress 已确认的 final score 和当帧 Program-safe K/A/D，最多保留五图。摘要不会向 Runtime/Series 回写；缺数据保持 null，跨图保留，换比赛/上下文清除。静态画面进入资格与已播连续性分开。等待页只读当前 MatchDocument 的赛事媒体/时间和既有赛程 owner 的邻近场次，取得不到就收起。HTTP 展示结构独立于实时 Gameplay channel。
 

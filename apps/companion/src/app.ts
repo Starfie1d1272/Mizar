@@ -402,12 +402,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
-    obsAdapter === undefined
-      ? undefined
-      : async (id) => {
-          const status = await obsAdapter.status();
-          if (status.connection === 'connected') await obsAdapter.switchScene(id);
-        },
+    obsAdapter === undefined ? undefined : (id, options) => obsAdapter.switchScene(id, options),
   );
   app.get('/local/v1/readiness', async (_request, reply) => {
     const obs = await obsAdapter?.status();

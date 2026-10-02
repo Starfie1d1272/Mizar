@@ -6,10 +6,12 @@ import {
   PROGRAM_SCENES,
   programSceneIdSchema,
   programSceneStateSchema,
+  programTransition,
   type ProgramSceneId,
 } from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { BpSession } from '../bp/controller.js';
+import type { ObsSceneSwitchOptions } from '../obs/reconcile.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 export class ProgramSceneController {
@@ -26,11 +28,16 @@ export class ProgramSceneController {
   private active: ProgramSceneId = 'waiting';
   private revision = randomUUID();
   private queue: Promise<unknown> = Promise.resolve();
+  private automaticSwitch: AbortController | undefined;
+  private preparing: { target: ProgramSceneId; revision: string } | undefined;
 
   constructor(
     private readonly projections: ProjectionCoordinator,
     private readonly bpSession: BpSession,
-    private readonly switchObs?: (id: ProgramSceneId) => Promise<void>,
+    private readonly switchObs?: (
+      id: ProgramSceneId,
+      options: ObsSceneSwitchOptions,
+    ) => Promise<void>,
   ) {}
 
   private blockedReason(id: ProgramSceneId): string | null {
@@ -76,6 +83,7 @@ export class ProgramSceneController {
       schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       revision: this.revision,
+      ...(this.preparing ? { preparing: this.preparing } : {}),
       ...(this.director ? { director: this.director.get() } : {}),
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
       blocked,
@@ -83,20 +91,29 @@ export class ProgramSceneController {
   }
 
   forceScene(id: ProgramSceneId): void {
+    this.automaticSwitch?.abort();
     this.director?.hold();
     this.active = id;
     this.revision = randomUUID();
   }
 
   select(id: ProgramSceneId, expectedRevision: string) {
-    if (expectedRevision === this.revision) this.director?.hold();
+    if (expectedRevision === this.revision) {
+      this.director?.hold();
+      this.automaticSwitch?.abort();
+    }
     const result = this.queue.then(() => this.selectSerial(id, expectedRevision));
     this.queue = result.catch(() => undefined);
     return result;
   }
 
-  selectAutomatic(id: ProgramSceneId, expectedRevision: string, valid: () => boolean) {
-    const result = this.queue.then(() => this.selectSerial(id, expectedRevision, valid));
+  selectAutomatic(
+    id: ProgramSceneId,
+    expectedRevision: string,
+    valid: () => boolean,
+    finalBp = false,
+  ) {
+    const result = this.queue.then(() => this.selectSerial(id, expectedRevision, valid, finalBp));
     this.queue = result.catch(() => undefined);
     return result;
   }
@@ -104,40 +121,74 @@ export class ProgramSceneController {
   private async selectSerial(
     id: ProgramSceneId,
     expectedRevision: string,
-    valid: () => boolean = () => true,
+    automaticValid?: () => boolean,
+    finalBp = false,
   ) {
+    const valid = automaticValid ?? (() => true);
     if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
     if (expectedRevision !== this.revision)
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
     const reason = this.blockedReason(id);
     if (reason !== null) return { ok: false as const, message: reason };
     if (this.active !== id) {
+      const abort = new AbortController();
+      if (automaticValid) this.automaticSwitch = abort;
+      const previous = this.active;
+      const nextRevision = randomUUID();
+      let preparedBpRevision: string | undefined;
+      const rollback = async () => {
+        // A Cut is not delayed by the obsolete automatic transition or its signal.
+        await this.switchObs?.(this.active, {
+          transition: programTransition(id, this.active, true),
+        }).catch(() => undefined);
+        if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
+          this.bpSession.finishSceneExit();
+      };
       try {
-        await this.switchObs?.(id);
-      } catch {
-        return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
-      }
-      const stillBlocked = this.blockedReason(id);
-      if (stillBlocked !== null || !valid()) {
-        if (this.switchObs) await this.switchObs(this.active).catch(() => undefined);
-        return {
-          ok: false as const,
-          message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
-        };
-      }
-      if (id === 'bp') {
-        const bp = this.bpSession.get();
-        if (bp.state === 'hidden' && this.bpSession.command('play', bp.revision) === null) {
-          if (this.switchObs) await this.switchObs(this.active).catch(() => undefined);
-          return { ok: false as const, message: 'BP 播放未能启动，当前场景保持不变。' };
+        if (id === 'bp') {
+          const bp = this.bpSession.get();
+          if (bp.state === 'hidden') {
+            if (this.bpSession.command('play', bp.revision) === null)
+              return { ok: false as const, message: 'BP 播放未能启动，当前场景保持不变。' };
+            if (finalBp) this.bpSession.showFinal();
+            preparedBpRevision = this.bpSession.get().revision;
+          } else if (finalBp) this.bpSession.showFinal();
         }
-      } else if (this.active === 'bp') {
-        const bp = this.bpSession.get();
-        if (bp.state !== 'hidden' && bp.state !== 'hiding')
-          this.bpSession.command('hide', bp.revision);
+        const p = this.projections.getCurrent().program;
+        const urgent =
+          id === 'gameplay' &&
+          (p.round?.phase === 'live' ||
+            (p.clock?.phase === 'freezetime' && (p.clock.endsInSeconds ?? 0) <= 1));
+        this.preparing = { target: id, revision: nextRevision };
+        await this.switchObs?.(id, {
+          transition: programTransition(previous, id, !automaticValid || urgent),
+          signal: abort.signal,
+          valid: () =>
+            valid() && expectedRevision === this.revision && this.blockedReason(id) === null,
+        });
+        const stillBlocked = this.blockedReason(id);
+        if (
+          stillBlocked !== null ||
+          !valid() ||
+          abort.signal.aborted ||
+          expectedRevision !== this.revision
+        ) {
+          await rollback();
+          return {
+            ok: false as const,
+            message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
+          };
+        }
+        if (previous === 'bp') this.bpSession.finishSceneExit();
+        this.active = id;
+        this.revision = nextRevision;
+      } catch {
+        await rollback();
+        return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
+      } finally {
+        this.preparing = undefined;
+        if (this.automaticSwitch === abort) this.automaticSwitch = undefined;
       }
-      this.active = id;
-      this.revision = randomUUID();
     }
     return { ok: true as const, state: this.get() };
   }

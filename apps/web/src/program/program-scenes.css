@@ -4,7 +4,7 @@
   font-family: var(--mizar-type-family-body);
   font-variant-numeric: tabular-nums;
 }
-.program-scene:not(.program-scene--matchup) {
+.program-scene:not(.program-scene--matchup):not(.program-scene--gameplay) {
   background:
     radial-gradient(
       ellipse at 0% 48%,
@@ -13,7 +13,7 @@
     ),
     linear-gradient(120deg, var(--mizar-broadcast-bg-canvas), var(--mizar-bg-surface));
 }
-.program-scene:not(.program-scene--matchup)::before {
+.program-scene:not(.program-scene--matchup):not(.program-scene--gameplay)::before {
   content: '';
   position: absolute;
   inset: 0;

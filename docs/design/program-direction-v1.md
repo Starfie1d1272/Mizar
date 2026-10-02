@@ -42,3 +42,9 @@ Warmup 的 BP 完整揭示一次，最终板停留 2s 后回 Waiting。首回合
 开场以浏览器合成动画连续播放；初始加载、暂停/恢复或超过 1s 的漂移才校准服务端时间，避免每次轮询反复 seek。HALFTIME 退出要求正数 freezetime countdown 或可信 live。真实 Windows / CS2 / OBS 延迟与最终 60fps 捕获仍由平台验收证明。
 
 共享统计板只显示 K–D，中央每行标记 K/D；assists 仍保留在原有快照契约中，renderer 不显示。默认预览的第三图 DECIDER 复用已有 `series-bo3-map1` 展示计划，与真实遥测来源分开标明；生产画面只认 canonical selection。`/preview` 中 BP 与其他场景共享一个预览视口，直接装载 `/program/bp`。播放、收起、BO1/BO3/BO5 演示和本地录入均在 BP 标签内操作，继续使用既有 BpSession；删除静态 BP fallback 和独立工作台布局。浏览器与桌面入口复用节目预览窗口。旧 `/operator/bp` 仅保留重定向。
+
+### 统一转场
+
+普通自动切场为 300ms 淡化，返回 Gameplay 为 150ms；开场到 HUD、手动 Take 及紧急返回比赛为 Cut。BP 跨场景退场由同一次淡化承担，完成后收起会话；单独收起保留 360ms 动画。统一预览支持只读连续演示、停止和立即切入比赛，静态页停留 3 秒，开场保留 6s / 2s，当前 BP 未显示时跳过。预览最多两层，完成后回到单层，快速选择不排队。
+
+界面审查：产品预览控件继续使用 Button / Select 与现有 token；转场是播出 presentation policy，不新增主题、比赛颜色或共享基础控件。新视口只服务节目预览。验证键盘焦点、减少动效直接切换、加载错误、快速操作与停止；浏览器证据不能代替真实 Windows / OBS 转场验收。

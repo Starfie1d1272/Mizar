@@ -648,6 +648,11 @@ export function App() {
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   const programScene = programSceneForPath(pathname);
+  if (
+    programScene?.id === 'gameplay' &&
+    new URLSearchParams(window.location.search).get('preview') === '1'
+  )
+    return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
   if (pathname === '/operator/bp') return <LegacyBpPreviewRedirect />;

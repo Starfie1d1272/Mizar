@@ -91,6 +91,8 @@ BP / Veto 只消费已确认赛事事实：制作人员点击“播放 BP”，�
 
 `/preview?scene=bp` 另提供 BO1、BO3、BO5 场景测试，使用 checked-in NJU Rivals 赛事 Manifest 验证 BP 画面、动画和 OBS 输出。Demo 是 ephemeral BP Presentation source：它与真实 BP 共用同一个 `BpSession`，只在 BP Presentation 内生效；不属于本地比赛或 MatchContext source，不持久化，也不写入 RivalHub、LKG、SeriesProgress、IdentityResolver 或 Gameplay Program。Demo 的 Manifest 仍通过标准校验、MatchContext 转换和 `inspectBp` 投影，普通工作台只读取当前 Demo 格式。切换或退出 Demo 需要先收起 BP，退出后恢复最新真实 BP projection。
 
+自动场景转场统一采用短淡化：普通场景 300ms、返回比赛画面 150ms。开场到 HUD 延续既有队标收拢，不叠加额外淡化；手动切场及临近/已经开打时立即切入。BP 退场和跨场景淡化共用一次退出过程。节目预览支持只读连续转场演示与立即切入比赛预览，演示不发送生产命令。
+
 ### 5.1 Gameplay HUD
 
 HUD 至少能够表达：
