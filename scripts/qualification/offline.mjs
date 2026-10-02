@@ -42,6 +42,52 @@ async function assertNoSymlinks(directory) {
   }
 }
 
+export async function assertGsiScriptContract(scriptsDir) {
+  const names = [
+    'common.ps1',
+    'gsi-discovery.ps1',
+    'install-gsi.ps1',
+    'gsi-status.ps1',
+    'restore-gsi.ps1',
+  ];
+  const sources = new Map();
+  for (const name of names) {
+    const path = join(scriptsDir, name);
+    await assertFile(path, name);
+    sources.set(name, await readFile(path, 'utf8'));
+  }
+  for (const name of ['install-gsi.ps1', 'gsi-status.ps1', 'restore-gsi.ps1']) {
+    const source = sources.get(name);
+    const imports = new Set(
+      Array.from(
+        source.matchAll(/^\s*\.\s*\(\s*Join-Path\s+\$PSScriptRoot\s+['"]([^'"]+\.ps1)['"]\s*\)/gm),
+        (match) => match[1],
+      ),
+    );
+    const required =
+      name === 'restore-gsi.ps1' ? ['common.ps1'] : ['common.ps1', 'gsi-discovery.ps1'];
+    for (const dependency of required) {
+      if (!imports.has(dependency)) throw new Error(`qualification ${name} 未加载 ${dependency}`);
+    }
+    for (const dependency of imports)
+      await assertFile(join(scriptsDir, dependency), `${name} 依赖的 ${dependency}`);
+    if (name !== 'restore-gsi.ps1' && !/\bResolve-CfgDirectory\b/.test(source))
+      throw new Error(`qualification ${name} 未使用共享 GSI 目录发现`);
+  }
+  const discovery = sources.get('gsi-discovery.ps1');
+  if (
+    !/^\s*function\s+Resolve-CfgDirectory\b/m.test(discovery) ||
+    !/^\s*function\s+Get-SteamLibraryRoots\b/m.test(discovery) ||
+    !discovery.includes('libraryfolders.vdf')
+  )
+    throw new Error('qualification gsi-discovery.ps1 缺少 Steam library / CS2 目录发现');
+  if (
+    !/^\s*function\s+Write-GsiEndpointConflictWarning\b/m.test(sources.get('common.ps1')) ||
+    !/\bWrite-GsiEndpointConflictWarning\b/.test(sources.get('install-gsi.ps1'))
+  )
+    throw new Error('qualification GSI 安装缺少 endpoint 冲突检查');
+}
+
 async function assertBundleSmoke(outputRoot) {
   const entries = await readdir(outputRoot, { withFileTypes: true });
   const bundle = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('mizar-'));
@@ -58,7 +104,12 @@ async function assertBundleSmoke(outputRoot) {
     'app/node_modules/@bufbuild/protobuf/package.json',
     'runtime',
     'scripts/common.ps1',
+    'scripts/gsi-discovery.ps1',
+    'scripts/gsi-status.ps1',
     'scripts/install-gsi.ps1',
+    'scripts/restore-gsi.ps1',
+    'scripts/start-product.ps1',
+    'scripts/stop-product.ps1',
     'scripts/start.ps1',
     'scripts/rotate.ps1',
     'scripts/mark.ps1',
@@ -145,14 +196,12 @@ async function assertBundleSmoke(outputRoot) {
   if (!config.includes('REPLACE_WITH_GSI_TOKEN'))
     throw new Error('qualification 配置模板缺少 token 占位符');
   const scripts = await readFile(join(bundleDir, 'resources/scripts/start.ps1'), 'utf8');
-  const installer = await readFile(join(bundleDir, 'resources/scripts/install-gsi.ps1'), 'utf8');
+  await assertGsiScriptContract(join(bundleDir, 'resources/scripts'));
   const readme = await readFile(join(bundleDir, 'README.txt'), 'utf8');
   if (
     !scripts.includes('runtime\\node.exe') ||
     !scripts.includes('MIZAR_COMMIT') ||
     !scripts.includes('supervisorProcessId') ||
-    !installer.includes('libraryfolders.vdf') ||
-    !installer.includes('GsiEndpointConflictWarning') ||
     readme.includes('stopdemo') ||
     readme.includes('This bundle') ||
     !readme.includes('正常制作') ||

@@ -1815,6 +1815,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mizar-desktop"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-macros",
+ "tauri-plugin-dialog",
+ "tauri-runtime",
+ "tauri-runtime-wry",
+ "tauri-utils",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2526,20 +2541,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "mizar-desktop"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-macros",
- "tauri-plugin-dialog",
- "tauri-runtime",
- "tauri-runtime-wry",
- "tauri-utils",
 ]
 
 [[package]]

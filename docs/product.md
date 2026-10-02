@@ -288,6 +288,10 @@ Mizar Desktop 默认进入准备中心，一级导航为“总览 / 比赛 / 画
 
 同一产品包使用 bundled Node 24 和 Companion，根目录 Tauri EXE 默认打开准备中心；进入现场后打开制播工作区。重复打开同版本服务复用当前实例，关闭工作区窗口仅隐藏至 tray，显式退出才停止 Runtime。程序资源与可写数据分离，可写目录默认为 `state`，支持 `MIZAR_STATE_ROOT` 绝对路径覆盖。停止服务和 GSI 安装/恢复保留明确的脚本入口，现场验收继续使用同包内的现有 controller 与 evidence contract。
 
+冷启动先创建 Main 准备中心；三个现场窗口在首次进入现场时一并创建，失败则撤销本次创建并返回可重试错误，保留 Main 和 Companion。窗口创建不接管 Companion 的制作生命周期。托盘创建失败也保留 Main，标题会说明“托盘不可用，关闭主窗口将退出”；此时关闭现场窗口会返回 Main，避免界面隐藏后无法恢复。
+
+启动失败必须在网页尚未可用时仍可见：原生提示说明失败原因、日志目录与恢复动作，可选择打开日志目录或退出。Desktop、supervisor 与 Companion 使用关联的启动会话记录有界日志，保留原始错误与阶段；WebView2 检查用于报告当前运行条件，不据此推断历史故障根因。启动失败先清理本次新建 Runtime，不停止借用的同 artifact 服务；稳定运行后的 Host 意外退出保留 Companion，显式退出才执行受控停止。具体日志限额、进程归属与恢复边界见 [ADR-0015](decisions/0015-desktop-startup-diagnostics-and-recovery.md)。这些本机日志尚不等于可直接公开分享的一键支持包。
+
 该阶段已交付便携启动与目录隔离，并增加有界 Host 连接诊断。Windows CI 在 exact artifact 上运行三段各 24 回合的脚本化合成地图流程并导出资源、投递、重连与慢消费者指标；这不等同于真实比赛回放。真实 Windows + CS2 + OBS 现场证据及连续完整比赛验收仍按 #35 后续验收项推进。
 
 ## 数据边界一期的 Local 入口

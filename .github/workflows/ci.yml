@@ -292,6 +292,7 @@ jobs:
 
       - name: Extract and smoke-test the portable bundle without CS2
         shell: pwsh
+        timeout-minutes: 5
         run: |
           $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
           if ($null -eq $archive) { throw '未生成 qualification ZIP' }
@@ -328,6 +329,8 @@ jobs:
           try {
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName
             if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
+            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
             $installOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 2>&1 | Out-String
             Write-Output $installOutput
             if ($LASTEXITCODE -ne 0) { throw 'install-gsi.ps1 执行失败' }
@@ -336,22 +339,34 @@ jobs:
             Pop-Location
           }
 
-      - name: Show Companion diagnostics on smoke failure
+      - name: Show Desktop and Companion diagnostics on smoke failure
         if: ${{ failure() }}
         shell: pwsh
         run: |
           $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $logs = @(Get-ChildItem -LiteralPath $extractedRoot -Recurse -File -Include 'companion.log', 'companion.stderr.log', 'supervisor.log', 'supervisor.stderr.log' -ErrorAction SilentlyContinue)
+          $logs = @(Get-ChildItem -LiteralPath $extractedRoot -Recurse -File -Include 'desktop*.ndjson', 'supervisor*.ndjson*', 'companion*.log*', 'supervisor.log', 'supervisor.stderr.log' -ErrorAction SilentlyContinue)
           $state = Get-ChildItem -LiteralPath $extractedRoot -Directory -Recurse -Filter state -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($null -ne $state) {
             Write-Output "--- state tree $($state.FullName)"
             Get-ChildItem -LiteralPath $state.FullName -Force -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName,Length
           }
-          if ($logs.Count -eq 0) { Write-Output '未生成 Companion 日志。'; exit 0 }
+          if ($logs.Count -eq 0) { Write-Output '未生成 Desktop / Companion 日志。'; exit 0 }
           foreach ($log in $logs) {
             Write-Output "--- $($log.FullName)"
             Get-Content -LiteralPath $log.FullName
           }
+
+      - name: Upload normal Desktop smoke diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
+          path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
+            ${{ runner.temp }}/qualification extracted path/**/state/desktop-smoke-*/*/logs/desktop*.ndjson
+            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/supervisor*.ndjson*
+            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/companion*.log*
+          if-no-files-found: warn
 
       - name: Upload exact-SHA qualification artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

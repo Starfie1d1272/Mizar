@@ -403,6 +403,10 @@ async function main() {
       join(scriptDir, 'product-runtime.mjs'),
       join(resourcesDir, 'scripts', 'product-runtime.mjs'),
     );
+    await cp(
+      join(scriptDir, 'product-logs.mjs'),
+      join(resourcesDir, 'scripts', 'product-logs.mjs'),
+    );
     const developmentOnly =
       options.allowDirty || options.skipNodeRuntime || process.platform !== 'win32';
     if (process.platform === 'win32' && !options.skipNodeRuntime) {

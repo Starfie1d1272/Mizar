@@ -27,6 +27,7 @@ async function fixture() {
     'resources/app/dist/server.js',
     'resources/web/dist/index.html',
     'resources/scripts/product-runtime.mjs',
+    'resources/scripts/product-logs.mjs',
   ];
   for (const name of files) {
     await mkdir(join(root, name, '..'), { recursive: true });
@@ -151,6 +152,7 @@ describe('portable process lifecycle', () => {
         stateRoot,
         nodePath: process.execPath,
         openBrowser: false,
+        sessionId: `restart-${attempt}`,
       });
       // Attach rejection immediately so a failed start cannot escape the test.
       running.catch(() => {});
@@ -169,6 +171,8 @@ describe('portable process lifecycle', () => {
       }
       expect(ready).toBe(true);
       const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
+      expect(state.startupSessionId).toBe(`restart-${attempt}`);
+      expect(state.supervisorPid).toBe(process.pid);
       const token = await readFile(join(stateRoot, 'data/gsi-token.txt'), 'utf8');
       if (attempt) {
         expect(token).toBe(previousToken);
@@ -180,5 +184,48 @@ describe('portable process lifecycle', () => {
       expect(await running).toEqual({ reused: false });
       await expect(readFile(join(stateRoot, 'data/runtime.json'))).rejects.toThrow();
     }
+    const previousLog = await readFile(join(stateRoot, 'logs/companion.log.1'), 'utf8');
+    expect(previousLog).toContain('restart-0');
+    const stages = (await readFile(join(stateRoot, 'logs/supervisor.ndjson'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(stages.filter((entry) => entry.stage === 'runtime_ready')).toHaveLength(2);
+    expect(stages.filter((entry) => entry.stage === 'companion_exit')).toHaveLength(2);
   }, 15000);
+
+  it('keeps startup stderr and exit evidence when Companion exits before health', async () => {
+    const { root, artifact } = await fixture();
+    await writeFile(
+      join(root, 'resources/app/dist/server.js'),
+      "console.error('fixture startup failure'); process.exitCode = 7;\n",
+    );
+    const stateRoot = join(root, 'state');
+    await expect(
+      runProduct({
+        root,
+        artifact,
+        port: await freePort(),
+        stateRoot,
+        nodePath: process.execPath,
+        openBrowser: false,
+        sessionId: 'failed-start',
+      }),
+    ).rejects.toThrow('未能启动');
+    expect(await readFile(join(stateRoot, 'logs/companion.stderr.log'), 'utf8')).toContain(
+      'fixture startup failure',
+    );
+    const stages = (await readFile(join(stateRoot, 'logs/supervisor.ndjson'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(stages).toContainEqual(
+      expect.objectContaining({
+        stage: 'companion_exit',
+        code: 7,
+        startupSessionId: 'failed-start',
+      }),
+    );
+    await expect(readFile(join(stateRoot, 'data/runtime.json'))).rejects.toThrow();
+  });
 });
