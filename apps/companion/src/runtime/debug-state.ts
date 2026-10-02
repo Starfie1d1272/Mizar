@@ -273,6 +273,52 @@ export class DebugEvidenceStore {
     if (overflow > 0) this.recentRuntimeDiagnostics.splice(0, overflow);
   }
 
+  /** Support export never serializes raw telemetry, identities or the full RuntimeState. */
+  getSupportSummary(nowMonotonicMs: number) {
+    return {
+      freshness:
+        this.currentRuntime === undefined
+          ? 'awaiting'
+          : getProgramSourceFreshness(
+              this.currentRuntime,
+              nowMonotonicMs,
+              this.continuityPolicy ?? { staleAfterMs: 20_000 },
+            ),
+      lastDisposition:
+        this.lastDisposition === undefined
+          ? null
+          : { kind: this.lastDisposition.kind, reason: this.lastDisposition.reason },
+      recentTransitions: this.recentTransitions.map(({ kind }) => ({ kind })),
+      recentRuntimeDiagnosticCount: this.recentRuntimeDiagnostics.length,
+      recentRuntimeDiagnostics: this.recentRuntimeDiagnostics.map(({ code }) => ({
+        code: [
+          'adapter_unexpected_failure',
+          'accepted_raw_sink_failed',
+          'gsi_diagnostics_sink_failed',
+          'observation_sink_failed',
+          'recorder_unexpected_failure',
+          'program-schema-validation-failed',
+          'radar-schema-validation-failed',
+          'operator-schema-validation-failed',
+          'assist-schema-validation-failed',
+          'program-wire-validation-failed',
+          'radar-wire-validation-failed',
+          'operator-wire-validation-failed',
+          'assist-wire-validation-failed',
+        ].includes(code)
+          ? code
+          : 'other_runtime_diagnostic',
+      })),
+      gsiDiagnostics: {
+        count: this.latestGsiDiagnostics?.entries.length ?? 0,
+        suppressedCount: this.latestGsiDiagnostics?.suppressedCount ?? 0,
+        recent: (this.latestGsiDiagnostics?.entries ?? [])
+          .slice(-32)
+          .map(({ code, severity }) => ({ code, severity })),
+      },
+    };
+  }
+
   getResponse(options: DebugRuntimeResponseOptions): DebugRuntimeResponse {
     const cstvSources =
       options.cstvSources ??

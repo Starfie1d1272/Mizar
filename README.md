@@ -117,6 +117,8 @@ scripts/                架构检查、CI、现场验收和维护工具
 
 ## 文档
 
+- [`docs/quick-start.md`](docs/quick-start.md)：Windows 首次使用、GSI/OBS、进入/退出现场、诊断导出与故障恢复。
+
 - [`docs/design/README.md`](docs/design/README.md)：唯一设计系统入口、三类界面、设计变量、共享组件与文案。
 - [`docs/product.md`](docs/product.md)：产品定义与需求。
 - [`docs/architecture.md`](docs/architecture.md)：当前架构与 ownership。

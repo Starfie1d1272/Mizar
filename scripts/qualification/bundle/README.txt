@@ -10,6 +10,7 @@ Mizar Windows x64 便携版
 3. 在“设置”连接 OBS，检查配置并修复制播场景。OBS Browser Source 按 Program Scene 清单配置；Gameplay 为 http://127.0.0.1:3000/program。
 4. 完成准备后进入现场，左栏、底栏和本机覆盖才围绕 CS2 窗口展开。浏览器预览可打开 http://127.0.0.1:3000/workspace；现场窗口打开失败会保留准备中心，可修复后重试。
 5. 如需恢复安装前的 GSI 配置，可在“设置”操作；结束使用时选择托盘“退出 Mizar”。
+6. 反馈问题时，进入“设置 → 高级 → 运行诊断 / 导出诊断包”，点击“导出诊断包”，在原生另存为窗口保存 .json 文件。取消或保存失败可重试。包只含有界安全摘要，原始错误留在本机，不包含原始 GSI、选手资料或凭据。GSI/CS2 探测无响应时仍可导出，对应状态保持不可用。
 
 备用脚本（先停止服务，再安装或恢复 GSI）：
   停止服务：powershell -ExecutionPolicy Bypass -File .\resources\scripts\stop-product.ps1
@@ -22,6 +23,7 @@ resources 是程序资源，不能保存运行数据。设置保存在 state\dat
 端口被其它程序占用时先停止占用程序；不会静默换端口。文件缺损时重新解压完整 ZIP。
 桌面启动失败会显示原生错误提示，可打开日志目录；即使准备页面未打开，也能保留失败阶段和原始错误。若提示 WebView2 不可用，请安装或修复 Microsoft Edge WebView2 Evergreen Runtime 后重试。不要仅凭此说明认定其它启动失败也由 WebView2 引起。
 日志保存在 state\logs（设置 MIZAR_STATE_ROOT 后以该目录为准）：desktop.ndjson、supervisor.ndjson、companion.log 与 companion.stderr.log。每类保留当前文件和最多 3 个历史文件；桌面单文件最多 256 KiB，其余各 2 MiB。它们是本机诊断记录，不是自动脱敏的公开支持包；不要直接分享整个 state 目录。
+若桌面页面未打开但本地服务仍正常，可在浏览器访问 http://127.0.0.1:3000/debug 导出同一安全诊断包，并在浏览器下载列表确认文件。服务未启动时先按原生错误提示恢复；保留本机日志，勿直接公开上传。诊断包最多 256 KiB，记录缺失、不可读与截断情况，不会修改历史日志。
 
 现场验收模式（先停止正常制作服务）：
 

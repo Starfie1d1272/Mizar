@@ -81,7 +81,10 @@ export function Settings({ tab }: { tab: string }) {
           {product?.product?.artifactSha256 ? (
             <p>产品包摘要 · {product.product.artifactSha256.slice(0, 12)}</p>
           ) : null}
-          <Button onClick={() => void action(() => openTool('diagnostics'))}>打开运行诊断</Button>
+          <p>遇到异常时，可导出包含版本、运行状态和最近启动记录的诊断包，提交给维护者。</p>
+          <Button onClick={() => void action(() => openTool('diagnostics'))}>
+            运行诊断 / 导出诊断包
+          </Button>
         </Panel>
       ) : tab === 'obs' ? (
         <Panel>

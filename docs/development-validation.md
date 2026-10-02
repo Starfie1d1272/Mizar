@@ -264,6 +264,8 @@ node scripts/qualification/desktop-smoke.mjs <bundle-root> <report.json>
 
 启动日志与恢复约束见 [ADR-0015](decisions/0015-desktop-startup-diagnostics-and-recovery.md)。上述检查没有真实 CS2/OBS，GUI smoke、Rust tests 或合成流程均不能代替真实 Windows + CS2 + OBS 验收，也不能单凭自动化关闭首次启动故障的实机验证。
 
+支持包从「设置 → 高级 → 运行诊断 / 导出诊断包」导出，使用 [ADR-0016](decisions/0016-bounded-support-export.md) 的独立 allowlist。HTTP 测试检查 Origin/LAN 拒绝、raw/身份/凭据/路径/hostname/URL 不泄漏、三层启动会话关联、前次失败保留、文件读取及输出限额。浏览器验收覆盖真实 Companion 经本地代理产生的 JSON 下载、失败重试、Desktop 保存成功/取消/失败及 Host 探测超时。Rust tests 检查保存前字节/schema/.json 校验和实际文件写入；IPC contract 锁定注册、调用与 ACL。Windows CI 继续构建 exact artifact 并执行 GUI smoke。浏览器 Desktop mock 和 Rust 文件测试不等于真实原生另存为对话框的人工验收，该对话框与现场支持流程仍在 #35 exact artifact 上核对。
+
 常规 CI 的 Windows qualification 使用专用 `ci` Cargo profile（继承 release 设置并关闭 full LTO），Rust build 与 geometry/window-policy tests 共用该 profile 和 target；Release Qualification 不传该选项，使用默认 `release` profile。两类 artifact 的 `desktopBuildProfile` metadata 明确标出所用 profile，Cargo registry、git 与 target cache 按平台、依赖锁文件和 profile 配置隔离。
 
 React 制作界面与 standalone `/qualification` 页面通过打包的 `product-shell.css` 共用颜色、字体、导航和外边距 token；验收页仍由 Companion 独立生成。Windows portable smoke 会确认 exact artifact 提供这份共享样式。

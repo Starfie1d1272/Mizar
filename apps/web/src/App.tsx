@@ -17,6 +17,7 @@ import {
   type DebugRuntimeResponse,
 } from './debug/runtime';
 import { useBrowserHostDiagnostics } from './debug/host-diagnostics';
+import { SupportExport } from './debug/SupportExport';
 import { ProgramCueRendererBridge } from './program/ProgramCueRendererBridge';
 import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage';
 import { ProgramPage } from './program/ProgramPage';
@@ -570,6 +571,7 @@ export function DebugPage() {
             <p className="debug-intro">检查数据接入与记录状态；排查问题时展开高级技术信息。</p>
           </div>
         </header>
+        <SupportExport />
 
         {state.kind === 'loading' ? (
           <section className="debug-state" aria-live="polite">
