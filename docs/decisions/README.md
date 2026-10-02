@@ -52,3 +52,4 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 - [`0013-hud-widget-customization.md`](0013-hud-widget-customization.md)：受控组件配置、通用 Inspector、四层 ownership 与 1.0 前的版本边界。
 - [`0014-desktop-preparation-center.md`](0014-desktop-preparation-center.md)：#94 默认准备中心、ActiveLineup 首发捕获、桌面生命周期与本机 host policy。
 - [`0015-desktop-startup-diagnostics-and-recovery.md`](0015-desktop-startup-diagnostics-and-recovery.md)：桌面冷启动的有界诊断、Main/现场窗口创建边界、进程归属与恢复、正常 GUI 自动化验证。
+- [`0016-bounded-support-export.md`](0016-bounded-support-export.md)：正常产品诊断导出、日志与健康摘要白名单、内容/大小/访问边界。

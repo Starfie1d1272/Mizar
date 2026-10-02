@@ -181,6 +181,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
   const app = buildApp({
+    ...(productInstance === undefined
+      ? {}
+      : { supportLogsDirectory: resolve(captureDir, '../../logs') }),
     ...httpOutputs,
     rivalhubConnection,
     ...(rehearsalFixturePath === undefined ? {} : { rehearsalFixturePath }),

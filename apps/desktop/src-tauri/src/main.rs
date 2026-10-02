@@ -2,6 +2,7 @@
 
 mod geometry;
 mod startup_log;
+mod support_export;
 mod windows_host;
 mod windows_startup;
 
@@ -665,6 +666,31 @@ async fn gsi_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn save_support_bundle(app: tauri::AppHandle, contents: String) -> Result<bool, String> {
+    support_export::validate(&contents)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(file) = app
+            .dialog()
+            .file()
+            .set_title("保存 Mizar 诊断包")
+            .set_file_name(format!(
+                "mizar-support-{}.json",
+                chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            ))
+            .add_filter("Mizar 诊断包", &["json"])
+            .blocking_save_file()
+        else {
+            return Ok(false);
+        };
+        let path = file.into_path().map_err(|_| "保存位置无效，请重新选择。")?;
+        support_export::save(&path, &contents)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|_| "保存窗口未能打开，请重试。".to_string())?
+}
+
+#[tauri::command]
 async fn configure_gsi(app: tauri::AppHandle, restore: bool, choose: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = GSI_OPERATION_LOCK
@@ -728,6 +754,7 @@ fn run_desktop(
             present_production,
             open_tool,
             open_rivalhub_authorization,
+            save_support_bundle,
             gsi_status,
             configure_gsi
         ])

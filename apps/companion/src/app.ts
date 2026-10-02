@@ -33,6 +33,7 @@ import { performance } from 'node:perf_hooks';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
+import { registerSupportRoutes } from './support/routes.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
@@ -82,6 +83,7 @@ import {
 } from './local-web/websocket-transport.js';
 
 export interface CompanionAppOptions {
+  readonly supportLogsDirectory?: string;
   readonly productRuntime?: {
     readonly artifactSha256: string;
     readonly gitSha: string;
@@ -690,6 +692,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   );
 
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
+
+  registerSupportRoutes(app, {
+    originPolicy: localWebTransport.getOriginPolicy(),
+    ...(options.supportLogsDirectory === undefined
+      ? {}
+      : { logsDirectory: options.supportLogsDirectory }),
+    ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
+    runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    recorder: () => currentRecorder().getHealth(),
+    delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
+    hosts: () => localWebTransport.getHostDiagnostics(),
+    obs: async () => obsAdapter?.status(),
+    gsiConfigured: options.gsiToken !== undefined,
+  });
 
   if (options.gsiToken !== undefined) {
     registerGsiIngress(app, {
