@@ -169,7 +169,7 @@ export class ProgramDirector {
       this.view.next = 'gameplay';
       if (
         p.round?.phase === 'live' ||
-        (seconds !== null && remaining <= this.timings.halftimeLeadMs)
+        (seconds !== null && seconds > 0 && remaining <= this.timings.halftimeLeadMs)
       )
         target = 'gameplay';
     } else if (p.map.phase === 'warmup') {

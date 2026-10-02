@@ -175,6 +175,11 @@ describe('automatic Program choreography', () => {
     r.program.map.roundNumber = 12;
     await r.step();
     expect(r.scenes.get().active).toBe('halftime');
+    for (const seconds of [0, -1]) {
+      r.program.clock.endsInSeconds = seconds;
+      await r.step();
+      expect(r.scenes.get().active).toBe('halftime');
+    }
     r.program.clock.endsInSeconds = 5;
     await r.step();
     expect(r.scenes.get().active).toBe('gameplay');
