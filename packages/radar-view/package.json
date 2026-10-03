@@ -1,5 +1,5 @@
 {
-  "name": "@mizar/radar-view",
+  "name": "@mizar-hud/radar-view",
   "version": "0.1.0",
   "description": "Mizar projected radar Canvas renderer for React",
   "type": "module",

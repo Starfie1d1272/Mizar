@@ -7,7 +7,7 @@ import {
   fromPublicRadar,
   type RadarViewFrame,
   type RadarViewSource,
-} from '@mizar/radar-view';
+} from '@mizar-hud/radar-view';
 import { parseLiveSnapshotV1 } from '@mizar/protocol/output';
 import { readFileSync } from 'node:fs';
 // Read the shared wire corpus as data, not a cross-package source module.

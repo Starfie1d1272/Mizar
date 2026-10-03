@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { RadarView, type RadarViewSource } from '@mizar/radar-view';
-import '@mizar/radar-view/radar.css';
+import { RadarView, type RadarViewSource } from '@mizar-hud/radar-view';
+import '@mizar-hud/radar-view/radar.css';
 import type { RadarSnapshot } from '@mizar/protocol/radar';
 import type { LocalChannelClient } from '../../../realtime';
 import type { RadarHudWidgetRendererProps } from '../../hud-renderer-registry';

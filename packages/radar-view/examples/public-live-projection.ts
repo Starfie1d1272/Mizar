@@ -1,4 +1,4 @@
-import type { PublicRadarInput, RadarBomb } from '@mizar/radar-view';
+import type { PublicRadarInput, RadarBomb } from '@mizar-hud/radar-view';
 /** Example-only structural seam; consumer-smoke replaces this with RivalHub's actual type. */
 export interface PublicLiveMatchProjection {
   readonly matchId: string;

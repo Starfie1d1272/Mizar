@@ -6,7 +6,7 @@
 
 ## 决策
 
-`@mizar/radar` 继续唯一拥有 world → overview 坐标、楼层选择、地图支持与 calibration revision。新增 `@mizar/radar-view` 拥有归一化坐标上的 Canvas、插值、缩放、楼层编排、标记、烟雾、火焰和局部效果。它不读取 Raw GSI、Runtime、LocalChannelClient、HUD registry 或 RivalHub 内部状态，不建立联网、身份或比赛事实 owner。
+`@mizar/radar` 继续唯一拥有 world → overview 坐标、楼层选择、地图支持与 calibration revision。新增 `@mizar-hud/radar-view` 拥有归一化坐标上的 Canvas、插值、缩放、楼层编排、标记、烟雾、火焰和局部效果。它不读取 Raw GSI、Runtime、LocalChannelClient、HUD registry 或 RivalHub 内部状态，不建立联网、身份或比赛事实 owner。
 
 Mizar Web 的 adapter 用既有 geometry API 投影本地 RadarSnapshot，再把已知的观察编号、HP、闪光、武器和运动证据作为可选展示信息提供。公共 consumer 直接使用 LiveSnapshot 的 overview 坐标、facing、utility、effectTime 和 flames；缺失本地增强字段不妨碍显示，不反算 world position，也不要求伪造本地 envelope。公共输入不是玩家和 C4 的最低共同子集。
 

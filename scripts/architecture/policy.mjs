@@ -87,7 +87,7 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: ['@mizar/telemetry-gsi', '@mizar/rivalhub'],
   }),
-  '@mizar/radar-view': packageBoundary({
+  '@mizar-hud/radar-view': packageBoundary({
     message:
       'Radar view consumes projected presentation inputs; transport, app state and world calibration stay in host/domain adapters.',
     forbidden: ['fastify', 'ws', '@supabase/', 'drizzle-orm'],

@@ -11,12 +11,12 @@ import {
   shortestAngle,
   smokeRemaining,
   RADAR_PRESENTATION,
-} from '@mizar/radar-view/presentation';
-import { effectCentroid, smokeContour, smokeLobes } from '@mizar/radar-view/effects';
+} from '@mizar-hud/radar-view/presentation';
+import { effectCentroid, smokeContour, smokeLobes } from '@mizar-hud/radar-view/effects';
 import fixtures from '../src/program/fixtures/generated/real-radar-fixtures.generated.json';
 
 import { toRadarViewFrame } from '../src/program/widgets/radar/adapter';
-import type { RadarViewFrame } from '@mizar/radar-view';
+import type { RadarViewFrame } from '@mizar-hud/radar-view';
 class RadarPresentation extends SharedRadarPresentation {
   override accept(snapshot: RadarSnapshot | RadarViewFrame | null, now: number, reconnect = false) {
     super.accept(

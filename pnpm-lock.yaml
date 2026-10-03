@@ -324,7 +324,7 @@ importers:
       '@mizar/radar':
         specifier: workspace:*
         version: link:../../packages/radar
-      '@mizar/radar-view':
+      '@mizar-hud/radar-view':
         specifier: workspace:*
         version: link:../../packages/radar-view
       '@mizar/replay':

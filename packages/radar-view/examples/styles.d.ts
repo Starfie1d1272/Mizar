@@ -1,1 +1,1 @@
-declare module '@mizar/radar-view/radar.css';
+declare module '@mizar-hud/radar-view/radar.css';

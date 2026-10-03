@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { radarCanvasPoint, radarCanvasRadius } from '@mizar/radar-view/geometry';
+import { radarCanvasPoint, radarCanvasRadius } from '@mizar-hud/radar-view/geometry';
 
 describe('Radar shared overview canvas', () => {
   it('maps every floor through the same 1024 overview transform', () => {

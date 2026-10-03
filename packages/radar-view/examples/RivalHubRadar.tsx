@@ -1,7 +1,7 @@
 'use client';
 
-import { fromPublicRadar, RadarView } from '@mizar/radar-view';
-import '@mizar/radar-view/radar.css';
+import { fromPublicRadar, RadarView } from '@mizar-hud/radar-view';
+import '@mizar-hud/radar-view/radar.css';
 import type { PublicLiveMatchProjection } from './public-live-projection.js';
 
 /** The page's existing acceptance/freshness owner supplies only accepted projections. */

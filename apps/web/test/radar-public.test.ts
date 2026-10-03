@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseLiveSnapshotV1 } from '@mizar/protocol/output';
-import { fromPublicRadar, getRadarArtwork, radarAssetUrl } from '@mizar/radar-view';
-import { RadarPresentation, radarUtilityPhase } from '@mizar/radar-view/presentation';
+import { fromPublicRadar, getRadarArtwork, radarAssetUrl } from '@mizar-hud/radar-view';
+import { RadarPresentation, radarUtilityPhase } from '@mizar-hud/radar-view/presentation';
 import { readFileSync } from 'node:fs';
 // Read the shared wire corpus as data, not a cross-package source module.
 const fixture: unknown = JSON.parse(

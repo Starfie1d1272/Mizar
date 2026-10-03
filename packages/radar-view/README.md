@@ -1,4 +1,4 @@
-# @mizar/radar-view
+# @mizar-hud/radar-view
 
 Mizar 与网站共用的 React Canvas 雷达。只接收已投影数据，不连接比赛服务，不计算赛事事实。支持玩家、C4、双层地图、投掷物轨迹、烟雾、效果时间和投影后的火焰；观察编号、闪光、伤害和射击等本地增强信息可选。
 
@@ -8,20 +8,20 @@ Mizar 与网站共用的 React Canvas 雷达。只接收已投影数据，不连
 
 ```sh
 # Mizar 根目录
-pnpm --filter @mizar/radar-view... build
+pnpm --filter @mizar-hud/radar-view... build
 node scripts/radar-view/pack.mjs /tmp/radar-package
 
 # RivalHub / 独立 consumer
-pnpm add --save-exact /tmp/radar-package/mizar-radar-view-0.1.0.tgz
+pnpm add --save-exact /tmp/radar-package/mizar-hud-radar-view-0.1.0.tgz
 ```
 
-包只有 React 19 peer；不需要 `@mizar/core`、protocol、私有 workspace 包或源码 alias。包版本与 wire schema 独立；不兼容展示 API 提升 minor（1.0 前），兼容修复提升 patch。正式发布后用 `@mizar/radar-view@精确版本` 替代 tarball。审查 artifact 应同时记录 git SHA 与 tarball SHA-256，不把同名可变文件当作版本锁定。
+包只有 React 19 peer；不需要 `@mizar/core`、protocol、私有 workspace 包或源码 alias。包版本与 wire schema 独立；不兼容展示 API 提升 minor（1.0 前），兼容修复提升 patch。正式发布后用 `@mizar-hud/radar-view@精确版本` 替代 tarball。审查 artifact 应同时记录 git SHA 与 tarball SHA-256，不把同名可变文件当作版本锁定。
 
 将安装包的 `dist/assets/` 整个目录复制到网站静态目录，例如 `public/vendor/radar/0.1.0/`。保留内部 `assets/cs2/...` 路径。`dist/radar-provenance.json`、`dist/icon-provenance.json` 与 `dist/THIRD-PARTY-NOTICES.md` 记录来源和 hash。资源包由现有 cs2-assets pipeline 产生，不热链第三方。
 
 ```tsx
-import { RadarView, fromPublicRadar } from '@mizar/radar-view';
-import '@mizar/radar-view/radar.css';
+import { RadarView, fromPublicRadar } from '@mizar-hud/radar-view';
+import '@mizar-hud/radar-view/radar.css';
 
 const frame = fromPublicRadar(live.radar, {
   boundary: JSON.stringify([
@@ -58,7 +58,7 @@ const frame = fromPublicRadar(live.radar, {
 ## 可复现验证
 
 ```sh
-pnpm --filter @mizar/radar-view... build
+pnpm --filter @mizar-hud/radar-view... build
 node scripts/radar-view/consumer-smoke.mjs ../RivalHub
 ```
 
@@ -68,14 +68,14 @@ node scripts/radar-view/consumer-smoke.mjs ../RivalHub
 
 统一通过 `scripts/radar-view/pack.mjs` 从已构建产物生成干净 tarball：只保留公开包元数据、React peer、ESM/声明、CSS、资源、README 与许可证，删除构建专用 devDependencies 和生命周期脚本。不要直接对 workspace 目录执行 `pnpm pack` 或 `npm publish`。CI 的独立 consumer 与发布流程使用同一打包入口；发布前验证的 tarball 原样上传，不再次打包。
 
-首次发布需要维护者拥有 npm 包 scope 的权限。仓内名称不证明拥有 npm 的 `@mizar` scope；若无权限，先统一改为实际控制的 scope，再构建和验证。不要在聊天中提供密码、OTP 或 token。
+发布 scope 为 `@mizar-hud`，由 Mizar 的 npm 组织管理；维护者需要该组织的发布权限。不要在聊天中提供密码、OTP 或 token。
 
 首次建包：从当前通过 CI 的 `radar-view-<SHA>` artifact 下载并解压，在自己的终端执行：
 
 ```sh
 sha256sum --check SHA256SUMS # macOS 可用 shasum -a 256 -c SHA256SUMS
 npm login
-npm publish ./mizar-radar-view-0.1.0.tgz --ignore-scripts --access public --tag latest
+npm publish ./mizar-hud-radar-view-0.1.0.tgz --ignore-scripts --access public --tag latest
 ```
 
 首次发布完成后，在 npm 包 Settings → Trusted publishing 添加 GitHub Actions：

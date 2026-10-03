@@ -1,5 +1,5 @@
 import type { RadarSnapshot } from '@mizar/protocol/radar';
-import type { RadarViewFrame } from '@mizar/radar-view';
+import type { RadarViewFrame } from '@mizar-hud/radar-view';
 import {
   defaultMapGeometryProvider,
   projectWorldPosition,

@@ -30,7 +30,7 @@ run(
   ],
   work,
 );
-const installed = join(work, 'node_modules/@mizar/radar-view');
+const installed = join(work, 'node_modules/@mizar-hud/radar-view');
 const manifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8'));
 assert(!manifest.dependencies || Object.keys(manifest.dependencies).length === 0);
 assert.equal(manifest.peerDependencies.react, '^19.0.0');
@@ -78,7 +78,7 @@ if (rivalhub) {
   };
   await writeFile(
     join(work, 'public-live-projection.ts'),
-    `import type { PublicRadarInput, RadarBomb } from '@mizar/radar-view';\nexport interface PublicLiveMatchProjection { matchId: string; delivery: {authorityRevision:number;generation:number;epoch:number;sequence:number}; radar:PublicRadarInput|null; bomb:RadarBomb|null; capability:{radarCurrent:boolean;identity:string} }\n`,
+    `import type { PublicRadarInput, RadarBomb } from '@mizar-hud/radar-view';\nexport interface PublicLiveMatchProjection { matchId: string; delivery: {authorityRevision:number;generation:number;epoch:number;sequence:number}; radar:PublicRadarInput|null; bomb:RadarBomb|null; capability:{radarCurrent:boolean;identity:string} }\n`,
   );
 }
 await cp(
@@ -121,8 +121,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { RadarView, fromPublicRadar, getRadarArtwork } from '@mizar/radar-view';
-import { RadarPresentation } from '@mizar/radar-view/presentation';
+import { RadarView, fromPublicRadar, getRadarArtwork } from '@mizar-hud/radar-view';
+import { RadarPresentation } from '@mizar-hud/radar-view/presentation';
 const live = JSON.parse(await readFile(new URL('./fixture.json', import.meta.url)));
 const frame = fromPublicRadar(live.radar, { boundary: JSON.stringify([live.matchId, live.delivery]), sequence: live.delivery.sequence, current: true, bomb: live.bomb });
 const model = new RadarPresentation(); model.accept(frame, 0);
@@ -131,7 +131,7 @@ assert([...model.grenades.values()].some(g => g.source.flames.length > 0 && g.ph
 assert([...model.grenades.values()].some(g => g.source.effectTimeSeconds !== null));
 assert(renderToString(createElement(RadarView, {snapshot: frame, assetBaseUrl:'/vendor/radar/0.1.0'})).includes('canvas'));
 for (const path of Object.values(getRadarArtwork(frame.mapName).artwork)) {
-  const file = import.meta.resolve('@mizar/radar-view/assets/' + path.replace(/^\\//, ''));
+  const file = import.meta.resolve('@mizar-hud/radar-view/assets/' + path.replace(/^\\//, ''));
   assert((await readFile(new URL(file))).length > 0);
 }
 console.log('Standalone installed ESM, declarations, SSR, players/utility/flames and packaged map assets: passed');
