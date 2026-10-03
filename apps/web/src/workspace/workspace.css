@@ -26,6 +26,8 @@
   aspect-ratio: 1;
   flex: none;
   width: 100%;
+  overflow: hidden;
+  padding: var(--mizar-layout-padding);
 }
 .workspace-radar canvas {
   height: 100%;
@@ -95,7 +97,10 @@
 .workspace-dock {
   background: var(--mizar-bg-surface);
   display: grid;
-  grid-template-columns: minmax(300px, 3fr) repeat(5, minmax(120px, 1fr));
+  grid-template-columns: minmax(360px, 3fr) minmax(160px, 1fr) minmax(200px, 1.2fr) minmax(
+      180px,
+      1fr
+    );
   min-height: 0;
   height: 100%;
   overflow: auto;
@@ -117,7 +122,7 @@
 .workspace-scene-buttons {
   display: grid;
   gap: var(--mizar-layout-compact);
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .workspace-message {
   background: var(--mizar-bg-raised);
@@ -221,4 +226,52 @@
 .workspace-scene-buttons [aria-pressed='true'] {
   background: var(--mizar-bg-selected);
   border-color: var(--mizar-accent-primary);
+}
+
+.workspace-dock,
+.workspace-context {
+  font-size: var(--mizar-type-size-readable);
+}
+.workspace-dock > section {
+  padding: calc(var(--mizar-layout-padding) * 1.25);
+  gap: var(--mizar-layout-gap);
+}
+.workspace-dock > section:first-child {
+  background: var(--mizar-bg-canvas);
+}
+.workspace-maintenance {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.workspace-maintenance summary {
+  color: var(--mizar-fg-secondary);
+  cursor: pointer;
+  padding-block: var(--mizar-layout-compact);
+}
+.workspace-maintenance summary:focus-visible {
+  outline: var(--mizar-line-focus) solid var(--mizar-focus-ring);
+}
+.workspace-maintenance button {
+  width: 100%;
+  margin-block: var(--mizar-layout-compact);
+}
+.workspace-maintenance span {
+  display: block;
+}
+.workspace-context .production-status {
+  border-inline: 0;
+  border-radius: 0;
+  padding-inline: 0;
+}
+@media (max-width: 1100px) {
+  .workspace-scene-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.workspace-left > .production-status {
+  flex: none;
+  border: 0;
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: 0;
 }

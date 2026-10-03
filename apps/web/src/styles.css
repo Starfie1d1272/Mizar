@@ -133,7 +133,9 @@ h1 {
   gap: var(--mizar-layout-padding);
   isolation: isolate;
   margin: 0 auto;
-  max-width: 100rem;
+  max-width: 1600px;
+  width: 100%;
+  align-content: start;
   min-height: calc(100dvh - 56px);
   overflow: hidden;
   padding: var(--mizar-layout-padding);

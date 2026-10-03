@@ -82,6 +82,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
         {PROGRAM_SCENES.map((scene) => (
           <Button
             key={scene.id}
+            variant={preview === scene.id ? 'primary' : 'secondary'}
             aria-pressed={preview === scene.id}
             onClick={() => chooseScene(scene.id)}
           >
@@ -89,66 +90,68 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
           </Button>
         ))}
       </div>
-      <div className="program-preview-playback">
-        <Button onClick={demo ? () => setDemo(null) : startDemo}>
-          {demo ? '停止演示' : '播放演示'}
-        </Button>
-        <Button onClick={() => chooseScene('gameplay', true)}>预览比赛画面</Button>
-        <span role="status">
-          {demo
-            ? `演示 ${demoIndex + 1} / ${demo.length} · ${PROGRAM_SCENES.find((scene) => scene.id === preview)!.title}`
-            : '示例画面'}
-        </span>
-      </div>
-      {demo && (!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding') ? (
-        <p>演示将跳过 BP。</p>
-      ) : null}
-      {preview !== 'bp' ? (
-        <div className="program-preview-options">
-          <Select
-            label="画面样例"
-            value={variant}
-            onChange={(event) => {
-              setDemo(null);
-              setVariant(event.target.value);
-            }}
-          >
-            <option value="default">默认</option>
-            <option value="no-schedule">无赛程</option>
-            <option value="bo1">BO1 版式</option>
-            <option value="bo5">BO5 版式</option>
-            <option value="no-media">无队标 / 头像</option>
-            <option value="long-names">长名称</option>
-          </Select>
-          {preview === 'matchup' ? (
-            <>
-              <Select
-                label="开场背景"
-                value={background}
-                onChange={(event) => {
-                  setDemo(null);
-                  setBackground(event.target.value);
-                }}
-              >
-                <option value="map">地图背景</option>
-                <option value="transparent">透明背景</option>
-              </Select>
-              <Select
-                label="开场时长"
-                value={intro}
-                onChange={(event) => {
-                  setDemo(null);
-                  setIntro(event.target.value);
-                }}
-              >
-                <option value="full">完整 · 6 秒</option>
-                <option value="short">短版 · 2 秒</option>
-              </Select>
-              <Button onClick={() => chooseScene('matchup')}>重播开场</Button>
-            </>
-          ) : null}
+      <div className="program-preview-toolbar">
+        <div className="program-preview-playback">
+          <Button onClick={demo ? () => setDemo(null) : startDemo}>
+            {demo ? '停止演示' : '播放演示'}
+          </Button>
+          <Button onClick={() => chooseScene('gameplay', true)}>预览比赛画面</Button>
+          <span role="status">
+            {demo
+              ? `演示 ${demoIndex + 1} / ${demo.length} · ${PROGRAM_SCENES.find((scene) => scene.id === preview)!.title}`
+              : '示例画面'}
+          </span>
         </div>
-      ) : null}
+        {demo && (!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding') ? (
+          <p>演示将跳过 BP。</p>
+        ) : null}
+        {preview !== 'bp' ? (
+          <div className="program-preview-options">
+            <Select
+              label="画面样例"
+              value={variant}
+              onChange={(event) => {
+                setDemo(null);
+                setVariant(event.target.value);
+              }}
+            >
+              <option value="default">默认</option>
+              <option value="no-schedule">无赛程</option>
+              <option value="bo1">BO1 版式</option>
+              <option value="bo5">BO5 版式</option>
+              <option value="no-media">无队标 / 头像</option>
+              <option value="long-names">长名称</option>
+            </Select>
+            {preview === 'matchup' ? (
+              <>
+                <Select
+                  label="开场背景"
+                  value={background}
+                  onChange={(event) => {
+                    setDemo(null);
+                    setBackground(event.target.value);
+                  }}
+                >
+                  <option value="map">地图背景</option>
+                  <option value="transparent">透明背景</option>
+                </Select>
+                <Select
+                  label="开场时长"
+                  value={intro}
+                  onChange={(event) => {
+                    setDemo(null);
+                    setIntro(event.target.value);
+                  }}
+                >
+                  <option value="full">完整 · 6 秒</option>
+                  <option value="short">短版 · 2 秒</option>
+                </Select>
+                <Button onClick={() => chooseScene('matchup')}>重播开场</Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
       <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
         <ScenePreviewViewport frame={frame} onSettled={onSettled} />
         <div hidden={preview !== 'bp' || demo !== null}>
@@ -166,7 +169,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
 export function ProgramPreviewTool() {
   return (
     <ToolShell title="节目预览">
-      <main className="preparation">
+      <main className="preparation preparation--preview">
         <ProgramPreview standalone />
       </main>
     </ToolShell>

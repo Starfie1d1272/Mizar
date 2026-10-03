@@ -21,7 +21,7 @@ test('Workspace preview shares the scene registry and sends a revisioned command
     await route.fulfill({ json: { ok: true } });
   });
   await page.goto('/workspace');
-  await expect(page.getByText('真实 CS2 窗口预留区域')).toBeVisible();
+  await expect(page.getByText('CS2 游戏画面')).toBeVisible();
   await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).toBeVisible();
   await expect(page.getByRole('main', { name: '现场控制底栏' })).toBeVisible();
   for (const scene of PROGRAM_SCENES)

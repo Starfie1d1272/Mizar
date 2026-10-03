@@ -280,6 +280,10 @@
       "mono": {
         "$type": "fontFamily",
         "$value": ["SFMono-Regular", "Consolas", "monospace"]
+      },
+      "display": {
+        "$type": "fontFamily",
+        "$value": ["Barlow Condensed", "Arial Narrow", "Microsoft YaHei", "sans-serif"]
       }
     },
     "size": {
@@ -308,6 +312,13 @@
         "$type": "dimension",
         "$value": {
           "value": 20,
+          "unit": "px"
+        }
+      },
+      "28": {
+        "$type": "dimension",
+        "$value": {
+          "value": 28,
           "unit": "px"
         }
       }

@@ -115,6 +115,9 @@
       },
       "raw": {
         "$value": "{font.family.mono}"
+      },
+      "display": {
+        "$value": "{font.family.display}"
       }
     },
     "size": {
@@ -127,6 +130,12 @@
       },
       "title": {
         "$value": "{font.size.20}"
+      },
+      "readable": {
+        "$value": "{font.size.16}"
+      },
+      "heading": {
+        "$value": "{font.size.28}"
       }
     },
     "weight": {

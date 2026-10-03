@@ -812,13 +812,13 @@ export function HudConsolePage() {
             <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
           </div>
           <div className="hud-console__header-meta">
-            <span>配置服务</span>
+            <span>连接状态</span>
             <strong>
               {!editorReady
                 ? '正在读取配置'
                 : editorStatus === 'error'
                   ? '连接异常，使用最近保存的配置'
-                  : '配置已连接'}
+                  : '已连接'}
             </strong>
           </div>
         </header>

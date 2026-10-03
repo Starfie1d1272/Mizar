@@ -8,7 +8,7 @@
 
 ## 正式播出标签
 
-默认节目包和 HUD 的固定广播标签使用常规英文，例如 COMING UP、UP NEXT、HALFTIME、CURRENT、MAP STATS、FINAL MAP STATS。赛事名、队名、昵称和赛事提供的阶段名称保留来源文本。制作控制、预览说明与诊断仍使用中文。默认节目包计划开赛时间使用 Asia/Shanghai，展示日期、时间与 UTC+8 时区，不推导倒计时；上一场卡片使用 PREVIOUS MATCH，不将赛程序号当作已完赛证据。
+默认节目包和 HUD 的固定广播标签保留常规英文，例如 COMING UP、SCHEDULED、UP NEXT、HALFTIME、CURRENT、MAP STATS、FINAL MAP STATS、DECIDER。赛事名、队名、昵称和赛事提供的阶段名称保留来源文本。制作控制、预览说明与诊断仍使用简洁中文。默认节目包计划开赛时间使用 Asia/Shanghai，展示日期、时间与 UTC+8 时区，不推导倒计时；上一场卡片使用 PREVIOUS MATCH，不将赛程序号当作已完赛证据。预览场景只标注「示例画面」。
 
 ## 桌面制作中心
 

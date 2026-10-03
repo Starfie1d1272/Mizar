@@ -76,11 +76,10 @@ function ContextPanel({
         <h1>{match ? `${match.competitionName} · ${match.format.toUpperCase()}` : '本地比赛'}</h1>
         <p>
           {match
-            ? `${match.entryAName} ${series?.score.a ?? 0} : ${series?.score.b ?? 0} ${match.entryBName} · ${operator?.runtime.mapName ?? '等待地图'}`
+            ? `${match.entryAName} ${series?.score.a ?? 0} : ${series?.score.b ?? 0} ${match.entryBName} · ${operator?.runtime.mapName?.replace(/^de_/, '').toUpperCase() ?? '等待地图'}`
             : '等待比赛信息'}
         </p>
       </header>
-      <ProductionStatus matchId={match?.matchId ?? null} />
       {tournament && match && tournament.selectedMatchId === match.matchId ? (
         <section aria-label="前后比赛">
           {tournament.neighborhood.previous ? (
@@ -177,8 +176,9 @@ export function WorkspaceLeft() {
   );
   return (
     <main className="workspace-left mizar-surface">
+      <ProductionStatus matchId={state.current?.payload.matchContext.summary?.matchId ?? null} />
       <div className="workspace-radar">
-        <Radar client={radar} zoomMode="auto" />
+        <Radar client={radar} zoomMode="full-map" />
       </div>
       <ContextPanel
         operator={state.state === 'live' ? (state.current?.payload ?? null) : null}
@@ -241,10 +241,10 @@ export function WorkspaceDock() {
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
       <section>
-        <small>
+        <strong>
           当前播出：
           {PROGRAM_SCENES.find((scene) => scene.id === sceneState?.active)?.title ?? '等待同步'}
-        </small>
+        </strong>
         <span>
           {sceneState?.director?.mode === 'auto'
             ? '自动编排'
@@ -302,7 +302,7 @@ export function WorkspaceDock() {
       </section>
       <section>
         <small>比赛</small>
-        <strong>{payload?.runtime.mapName ?? '等待地图'}</strong>
+        <strong>{payload?.runtime.mapName?.replace(/^de_/, '').toUpperCase() ?? '等待地图'}</strong>
         <span>
           {payload?.seriesProgress
             ? `${payload.seriesProgress.score.a} : ${payload.seriesProgress.score.b}`
@@ -323,22 +323,6 @@ export function WorkspaceDock() {
         ) : null}
       </section>
       <section>
-        <small>本机</small>
-        <Button
-          onClick={() =>
-            void action(async () => {
-              if (policy)
-                await command('/operator/desktop-overlay', { ...policy, enabled: !policy.enabled });
-            }, true)
-          }
-        >
-          {policy?.enabled ? '关闭本机覆盖' : '开启本机覆盖'}
-        </Button>
-        <Button onClick={() => void action(() => desktopInvoke('restore_layout'), true)}>
-          恢复布局
-        </Button>
-      </section>
-      <section>
         <small>OBS</small>
         <strong>
           {obs?.connection === 'connected'
@@ -356,66 +340,69 @@ export function WorkspaceDock() {
           {obs?.connection !== 'connected' ? '无法确认' : obs.recording ? '进行中' : '未启动'}
         </span>
         <Button onClick={() => void action(() => obsCommand('open'))}>打开 OBS</Button>
-        <Button
-          onClick={() =>
-            void action(async () => {
-              const result = (await obsCommand('check')) as {
-                findings: readonly { message: string }[];
-              };
-              setMessage(
-                result.findings.length
-                  ? result.findings
-                      .slice(0, 3)
-                      .map((item) => item.message)
-                      .join('；')
-                  : 'OBS 制播配置正常。',
-              );
-            })
-          }
-        >
-          检查配置
-        </Button>
-        <Button
-          onClick={() =>
-            void action(async () => {
-              const result = (await obsCommand('repair')) as {
-                findings: readonly { message: string }[];
-              };
-              setMessage(
-                result.findings.length
-                  ? result.findings
-                      .slice(0, 3)
-                      .map((item) => item.message)
-                      .join('；')
-                  : 'OBS 制播配置已检查并修复。',
-              );
-            })
-          }
-        >
-          一键修复
-        </Button>
-      </section>
-      <section>
-        <small>状态</small>
-        <span>
-          比赛数据{' '}
-          {payload?.runtime.telemetryFreshness === 'fresh'
-            ? '正常'
-            : payload?.runtime.telemetryFreshness === 'stale'
-              ? '已中断'
-              : '等待输入'}
-        </span>
-        <span>
-          Program{' '}
-          {programState.state !== 'live'
-            ? '未连接'
-            : programState.current?.payload.status.telemetry === 'fresh'
+        <details className="workspace-maintenance">
+          <summary>OBS 设置</summary>
+          <Button
+            onClick={() =>
+              void action(async () => {
+                const result = (await obsCommand('check')) as {
+                  findings: readonly { message: string }[];
+                };
+                setMessage(
+                  result.findings.length
+                    ? result.findings
+                        .slice(0, 3)
+                        .map((item) => item.message)
+                        .join('；')
+                    : 'OBS 制播配置正常。',
+                );
+              })
+            }
+          >
+            检查配置
+          </Button>
+          <Button
+            onClick={() =>
+              void action(async () => {
+                const result = (await obsCommand('repair')) as {
+                  findings: readonly { message: string }[];
+                };
+                setMessage(
+                  result.findings.length
+                    ? result.findings
+                        .slice(0, 3)
+                        .map((item) => item.message)
+                        .join('；')
+                    : 'OBS 制播配置已检查并修复。',
+                );
+              })
+            }
+          >
+            修复场景
+          </Button>
+        </details>
+        <details className="workspace-maintenance">
+          <summary>连接详情</summary>
+          <span>
+            比赛数据{' '}
+            {payload?.runtime.telemetryFreshness === 'fresh'
               ? '正常'
-              : programState.current?.payload.status.telemetry === 'stale'
+              : payload?.runtime.telemetryFreshness === 'stale'
                 ? '已中断'
-                : '等待数据'}
-        </span>
-        <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
+                : '等待输入'}
+          </span>
+          <span>
+            播出画面{' '}
+            {programState.state !== 'live'
+              ? '未连接'
+              : programState.current?.payload.status.telemetry === 'fresh'
+                ? '正常'
+                : programState.current?.payload.status.telemetry === 'stale'
+                  ? '已中断'
+                  : '等待数据'}
+          </span>
+          <span>OBS {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
+        </details>
         <Button onClick={() => void action(() => openTool('diagnostics'))}>运行诊断</Button>
       </section>
       <section>
@@ -433,6 +420,25 @@ export function WorkspaceDock() {
           结束制作
         </Button>
         <Button onClick={() => void action(() => openTool('hud'))}>HUD 编辑器</Button>
+        <details className="workspace-maintenance">
+          <summary>本机设置</summary>
+          <Button
+            onClick={() =>
+              void action(async () => {
+                if (policy)
+                  await command('/operator/desktop-overlay', {
+                    ...policy,
+                    enabled: !policy.enabled,
+                  });
+              }, true)
+            }
+          >
+            {policy?.enabled ? '关闭本机覆盖' : '开启本机覆盖'}
+          </Button>
+          <Button onClick={() => void action(() => desktopInvoke('restore_layout'), true)}>
+            恢复布局
+          </Button>
+        </details>
       </section>
       {message ? (
         <p className="workspace-message" role="status">
@@ -447,7 +453,7 @@ export function WorkspacePreview() {
   return (
     <div className="workspace-preview">
       <WorkspaceLeft />
-      <div className="workspace-preview__game">真实 CS2 窗口预留区域</div>
+      <div className="workspace-preview__game">CS2 游戏画面</div>
       <WorkspaceDock />
     </div>
   );

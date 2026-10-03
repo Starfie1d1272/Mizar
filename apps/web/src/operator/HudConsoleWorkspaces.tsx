@@ -292,7 +292,7 @@ export function HudConsoleWorkspaces({
         >
           启用当前预设
         </Button>
-        <p className="hud-console__hint">保存不会改变当前启用项；启用后才会生效。</p>
+        <p className="hud-console__hint">保存预设后，点击“启用当前预设”上屏。</p>
       </section>
     );
   }

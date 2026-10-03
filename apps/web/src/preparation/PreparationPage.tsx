@@ -160,10 +160,18 @@ export function PreparationPage() {
 
   return (
     <OperatorShell active={path}>
-      <main className="preparation">
+      <main className="preparation" data-page={path}>
         <header className="preparation-heading">
           <div>
-            <p>制作准备</p>
+            <p>
+              {path === '/matches'
+                ? '核对比赛、名单与地图'
+                : path === '/picture'
+                  ? '预览播出效果，调整画面'
+                  : path === '/settings'
+                    ? '连接游戏、OBS 与赛事平台'
+                    : '检查准备情况，开始制作'}
+            </p>
             <h1>
               {path === '/matches'
                 ? '比赛'
@@ -358,10 +366,10 @@ export function PreparationPage() {
             )}
 
             {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
-              <Panel className="preparation-rehearsal-stage">
+              <details className="preparation-rehearsal-stage">
+                <summary>演练控制</summary>
                 <div className="preparation-task-header">
                   <div>
-                    <h2>Rivals 示例阶段推进</h2>
                     {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
                       <p>当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}</p>
                     ) : (
@@ -388,17 +396,16 @@ export function PreparationPage() {
                     ))}
                   </div>
                 ) : null}
-              </Panel>
+              </details>
             ) : null}
 
             <ProductionStatus matchId={match?.matchId ?? null} />
             <div className="preparation-overview">
               <Panel>
-                <h2>制作就绪</h2>
-                <p>各项能力独立准备，有比赛即可进入现场。</p>
+                <h2>开播检查</h2>
                 {readiness.map(([label, ready, reason, href]) => (
                   <a className="preparation-readiness" key={label} href={href}>
-                    <span>{label}</span>
+                    <span>{label === '比赛上下文' ? '比赛资料' : label}</span>
                     <span>{ready ? '已就绪' : reason}</span>
                   </a>
                 ))}
@@ -418,7 +425,7 @@ export function PreparationPage() {
                   ))}
                 </Panel>
                 <Panel>
-                  <h2>制作工具</h2>
+                  <h2>常用工具</h2>
                   {tools}
                 </Panel>
               </div>

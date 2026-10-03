@@ -147,3 +147,10 @@ Program series-strip map scenes and CT/T side marks are Valve / Counter-Strike 2
 - Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0
 - OFL-1.1: https://openfontlicense.org/
 - GPL-3.0: https://www.gnu.org/licenses/gpl-3.0.html
+
+## 随附展示字体
+
+- Barlow Condensed Bold — Jeremy Tribby，SIL Open Font License 1.1。
+- 来源：https://github.com/google/fonts/tree/main/ofl/barlowcondensed 。
+- 用途：默认节目包的大比分、地图比分和统计数字；本地随包加载。
+- 原始字体与许可证：`apps/web/public/brand/fonts/barlow-condensed/`，构建后随 `dist/brand/fonts/` 发布。

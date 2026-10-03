@@ -13,12 +13,43 @@ import { ProgramCanvas } from './ProgramCanvas';
 import { GameplayHud } from './GameplayHud';
 import './program-scenes.css';
 
-function Media({ src, className = '' }: { src: string | null | undefined; className?: string }) {
+function Media({
+  src,
+  className = '',
+  fallback = '',
+}: {
+  src: string | null | undefined;
+  className?: string;
+  fallback?: string;
+}) {
   const [failed, setFailed] = useState<string | null>(null);
   return src && failed !== src ? (
-    <img className={className} src={src} alt="" onError={() => setFailed(src)} />
+    <img
+      className={className}
+      src={src}
+      alt=""
+      onLoad={(event) => {
+        const img = event.currentTarget;
+        img.dataset.shape = img.naturalWidth / img.naturalHeight > 1.7 ? 'wide' : 'square';
+      }}
+      onError={() => setFailed(src)}
+    />
+  ) : fallback ? (
+    <span className={`${className} scene-media-fallback`} aria-hidden="true">
+      {fallback}
+    </span>
   ) : null;
 }
+const teamInitials = (name: string) => {
+  const words = name.trim().split(/\s+/);
+  return words.length > 1
+    ? words
+        .slice(0, 2)
+        .map((word) => word[0])
+        .join('')
+        .toUpperCase()
+    : name.slice(0, 2);
+};
 const mapName = (value: string) => value.replace(/^de_/, '').toUpperCase();
 const number = (value: number | null | undefined) => value ?? '—';
 const scheduleTime = (value: string) =>
@@ -29,8 +60,7 @@ const scheduleTime = (value: string) =>
     minute: '2-digit',
     hour12: false,
     timeZone: 'Asia/Shanghai',
-    timeZoneName: 'shortOffset',
-  }).format(new Date(value));
+  }).format(new Date(value)) + ' · UTC+8';
 
 function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
   return (
@@ -155,7 +185,9 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
           <div className={`summary-side summary-side--${side}`} key={side}>
             {(summary?.players[side] ?? []).map((player) => (
               <div className="summary-player" key={player.id}>
-                <Media src={player.avatarUrl} />
+                <div className="summary-avatar">
+                  <Media src={player.avatarUrl} fallback={(player.name ?? '?').slice(0, 1)} />
+                </div>
                 <strong className="summary-player-name">{player.name ?? 'UNKNOWN PLAYER'}</strong>
                 <div className="summary-player-stats" aria-label="Kills / Deaths">
                   <span>{number(player.kills)}</span>
@@ -188,6 +220,13 @@ function Waiting({ data }: { data: ProgramPresentation }) {
   const series = data.series;
   return (
     <main className="waiting-layout">
+      {series?.maps[0] && getMapThumbnail(series.maps[0].mapName) ? (
+        <img
+          className="waiting-backdrop"
+          src={getMapThumbnail(series.maps[0].mapName)!.outputPath}
+          alt=""
+        />
+      ) : null}
       <header className="waiting-event">
         <Media src={data.eventLogoUrl} />
         <span>{data.match?.competition.name ?? ''}</span>
@@ -203,7 +242,12 @@ function Waiting({ data }: { data: ProgramPresentation }) {
           <div className="waiting-hero">
             {(['a', 'b'] as const).map((side) => (
               <div className={`waiting-team waiting-team--${side}`} key={side}>
-                <Media src={series.entrants[side].logoUrl} />
+                <div className="waiting-emblem">
+                  <Media
+                    src={series.entrants[side].logoUrl}
+                    fallback={teamInitials(series.entrants[side].name)}
+                  />
+                </div>
                 <strong>{series.entrants[side].name}</strong>
               </div>
             ))}
@@ -243,13 +287,33 @@ function MapResult({ data }: { data: ProgramPresentation }) {
   const series = data.series;
   return summary && series ? (
     <main className="result-sting">
+      {getMapThumbnail(summary.mapName) ? (
+        <img
+          className="result-backdrop"
+          src={getMapThumbnail(summary.mapName)!.outputPath}
+          alt=""
+        />
+      ) : null}
       <h1>MAP {summary.mapOrder}</h1>
       <p className="result-map-name">{mapName(summary.mapName)}</p>
       <span className="result-vs">VS</span>
       {(['a', 'b'] as const).map((side) => (
-        <div className={`result-side result-side--${side}`} key={side}>
+        <div
+          className={`result-side result-side--${side}`}
+          key={side}
+          data-winner={
+            summary.score[side] !== null &&
+            summary.score[side === 'a' ? 'b' : 'a'] !== null &&
+            summary.score[side] > summary.score[side === 'a' ? 'b' : 'a']!
+          }
+        >
           <strong className="result-round-score">{number(summary.score[side])}</strong>
-          <Media src={series.entrants[side].logoUrl} className="result-logo" />
+          <div className="result-logo">
+            <Media
+              src={series.entrants[side].logoUrl}
+              fallback={teamInitials(series.entrants[side].name)}
+            />
+          </div>
           <span className="result-series-score">{series.score[side]}</span>
           <strong className="result-team-name">{series.entrants[side].name}</strong>
         </div>
@@ -383,13 +447,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       {data && sceneId !== 'matchup' && sceneId !== 'gameplay' ? (
         <BroadcastIdentity data={data} />
       ) : null}
-      {preview ? (
-        <p className="program-preview-source">
-          画面样例 · {sceneId === 'waiting' ? 'Rivals 真实赛程衍生' : '真实遥测衍生 · BP 版式示例'}
-          {sceneId === 'matchup' ? ' · 地图静态背景示意，非游戏录像' : ''} ·{' '}
-          {params.get('variant') ?? '默认版式'}
-        </p>
-      ) : null}
+      {preview ? <p className="program-preview-source">示例画面</p> : null}
       {data ? (
         sceneId === 'waiting' ? (
           <Waiting data={data} />
@@ -429,7 +487,12 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
               </p>
               {(['a', 'b'] as const).map((side) => (
                 <div className={`intro-team intro-team--${side}`} key={side}>
-                  <Media src={data.series?.entrants[side].logoUrl} />
+                  <div className="intro-emblem">
+                    <Media
+                      src={data.series?.entrants[side].logoUrl}
+                      fallback={data.series?.entrants[side].name.slice(0, 2) ?? ''}
+                    />
+                  </div>
                   <strong>{data.series?.entrants[side].name}</strong>
                 </div>
               ))}
