@@ -135,6 +135,37 @@ describe('automatic Program choreography', () => {
     await r.step();
     expect(r.scenes.get().active).toBe('gameplay');
   });
+  it('updates manual Next from current facts without taking or consuming the intro', async () => {
+    const r = rig();
+    r.program.status.telemetry = 'stale';
+    await r.step();
+    await r.scenes.select('waiting', r.scenes.get().revision);
+    r.program.status.telemetry = 'fresh';
+    await r.pass(20_000);
+    expect(r.director.get()).toMatchObject({ mode: 'manual', next: 'bp', sceneElapsedMs: 0 });
+    expect(r.showFinal).not.toHaveBeenCalled();
+    const calls = r.switchObs.mock.calls.length;
+    r.program.round!.phase = 'live';
+    await r.step();
+    expect(r.director.get().next).toBe('gameplay');
+    r.program.map.score = { ct: 7, t: 5 };
+    r.program.map.phase = 'intermission';
+    await r.step();
+    expect(r.director.get().next).toBe('halftime');
+    r.program.status.telemetry = 'stale';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'manual', next: null });
+    expect(r.scenes.get().active).toBe('waiting');
+    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+    r.program.status.telemetry = 'fresh';
+    r.program.map.phase = 'live';
+    r.program.map.score = { ct: 0, t: 0 };
+    r.program.round!.phase = 'freezetime';
+    r.scenes.resumeAutomatic(r.scenes.get().revision);
+    await r.step();
+    expect(r.scenes.get().active).toBe('bp');
+    expect(r.showFinal).toHaveBeenCalledOnce();
+  });
   it.each([
     [14, 'matchup', 2000],
     [10, 'gameplay', 6000],

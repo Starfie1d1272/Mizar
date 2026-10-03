@@ -103,8 +103,7 @@ export class ProgramDirector {
       this.wasProduction = true;
       this.resume();
     }
-    if (this.manual) return;
-    if (this.failure) {
+    if (this.failure && !this.manual) {
       this.view = { ...this.view, mode: 'blocked', reason: this.failure };
       return;
     }
@@ -136,17 +135,28 @@ export class ProgramDirector {
     if (!this.safe(p)) {
       this.view = {
         ...this.view,
-        mode: 'blocked',
+        mode: this.manual ? 'manual' : 'blocked',
+        next: null,
         reason: '比赛数据过期或归属未确认，保持当前画面。',
       };
       return;
     }
     if (paused && !halftime && !this.halftimeSeen) {
-      this.view = { ...this.view, mode: 'blocked', reason: '比赛暂停，保持当前画面。' };
+      this.view = {
+        ...this.view,
+        mode: this.manual ? 'manual' : 'blocked',
+        next: null,
+        reason: '比赛暂停，保持当前画面。',
+      };
       return;
     }
-    this.view = { ...this.view, mode: 'auto', reason: null, next: null };
-    if (!paused) this.elapsed += delta;
+    this.view = {
+      ...this.view,
+      mode: this.manual ? 'manual' : 'auto',
+      reason: this.manual ? '手动保持，恢复自动后继续。' : null,
+      next: null,
+    };
+    if (!paused && !this.manual) this.elapsed += delta;
     const seconds = p.clock?.phase === 'freezetime' ? p.clock.endsInSeconds : null;
     const remaining = seconds === null ? 0 : seconds * 1000;
     let target: ProgramSceneId | null = null;
@@ -176,7 +186,7 @@ export class ProgramDirector {
       if (!this.warmupPlayed && this.projections.getBpAssessment().readiness === 'ready')
         target = 'bp';
       else if (active === 'bp' && this.bp.get().state === 'shown') {
-        this.warmupFinalElapsed += delta;
+        if (!this.manual) this.warmupFinalElapsed += delta;
         this.view.next = 'waiting';
         if (this.warmupFinalElapsed >= this.timings.warmupFinalMs) target = 'waiting';
       }
@@ -187,12 +197,12 @@ export class ProgramDirector {
         seconds !== null &&
         seconds > 0;
       if (!firstFreeze || this.introFinished || remaining <= this.timings.hudLeadMs) {
-        this.introFinished = true;
+        if (!this.manual) this.introFinished = true;
         target = 'gameplay';
       } else if (active === 'matchup' && this.introStarted) {
         this.view.next = 'gameplay';
         if (this.elapsed >= this.view.introDurationMs) {
-          this.introFinished = true;
+          if (!this.manual) this.introFinished = true;
           target = 'gameplay';
         }
       } else if (active === 'bp' && this.introStarted) {
@@ -212,7 +222,7 @@ export class ProgramDirector {
           finalBp = true;
         } else if (budget >= this.timings.shortIntroMs) target = 'matchup';
         else {
-          this.introFinished = true;
+          if (!this.manual) this.introFinished = true;
           target = 'gameplay';
         }
       }
@@ -224,6 +234,8 @@ export class ProgramDirector {
     }
     if (!target) return;
     this.view.next = target === active ? this.view.next : target;
+    // Manual hold keeps the recommendation live without issuing or consuming a Take.
+    if (this.manual) return;
     if (target === active) {
       if (finalBp) {
         this.bp.showFinal();
