@@ -39,7 +39,9 @@ test('every Program Scene route renders without match data', async ({ page }) =>
     await page.goto(scene.path);
     await expect(page.locator(`.program-scene--${scene.id}`)).toBeVisible();
     if (scene.id === 'waiting')
-      await expect(page.getByRole('heading', { name: scene.title, exact: true })).toBeVisible();
-    else await expect(page.locator('.program-scene__content')).toHaveCount(0);
+      await expect(
+        page.getByRole('heading', { name: 'BROADCAST STARTING SOON', exact: true }),
+      ).toBeVisible();
+    else await expect(page.locator(`.program-scene--${scene.id}`)).toBeEmpty();
   }
 });
