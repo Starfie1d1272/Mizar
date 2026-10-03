@@ -104,6 +104,7 @@ packages/
   hud-config/           HUD preset、layout、theme、组件 registry 与逻辑几何
   protocol/             Mizar 自有的 Local Protocol
   radar/                与前端框架无关的 Radar domain
+  radar-view/           可独立安装的共享 React Canvas 雷达、样式和地图资源
   replay/               framework-neutral discrete replay cursor 与 scheduler
   rivalhub/             RivalHub 赛事上下文 adapter
   telemetry-gsi/        Raw GSI 解析与标准化

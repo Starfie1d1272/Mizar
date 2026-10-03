@@ -125,6 +125,9 @@ packages/radar
   framework-neutral Radar domain：RadarFrame、world→radar、MapGeometryProvider、floor、marker / utility semantics。
   不拥有 React/SVG/Canvas/DOM，也不拥有 temporal interpolation、smoothing、autozoom/crop animation state。
 
+packages/radar-view
+  可独立安装的 React Canvas 展示包，只接收已投影的展示数据。资源在构建时复用既有 owner，运行时只依赖 React peer。
+
 packages/cs2-assets
   CS2 official presentation asset 的唯一 owner：semantic catalog、content-hashed generated SVG、manifest、provenance 与 framework-neutral resolver。
   不拥有 RuntimeState、Program protocol、Raw GSI/CSTV、React renderer 或地图 geometry；Source 2 解包只通过 pinned development-time VRF CLI adapter 完成。
@@ -333,7 +336,7 @@ Lookahead 数据源
 - 与时间无关、可确定性验证的几何和 domain 计算；
 - 供 LiveSnapshot 使用的无状态公共归一化 overview projection 与楼层选择，复用同一 geometry/calibration；外部 renderer 无需 world calibration。
 
-`apps/web` 的 Radar Renderer 拥有：
+`packages/radar-view` 的共享 Radar Renderer 拥有：
 
 - React / SVG / Canvas / DOM；
 - CSS 和 theme；
@@ -341,7 +344,9 @@ Lookahead 数据源
 - temporal interpolation / smoothing；
 - teleport / discontinuity reset；
 - autozoom / crop 的 presentation state 与动画；
-- OBS / browser Host 的 rendering adaptation。
+- 可配置资源前缀、打包地图/图标，以及可选本地增强字段。
+
+`apps/web` 只保留 Local Radar channel、HUD 编辑器与 replay 适配；既有 `@mizar/radar` 将本地 world 数据投影到共享输入。RivalHub 直接消费公共 overview 坐标、utility、effectTime 和 flames。连接、freshness、错误提示与页面布局由各 host 管理。标准 ESM/npm 产物与跨仓安装规则见 [ADR-0018](decisions/0018-shared-radar-view.md) 和 [包文档](../packages/radar-view/README.md)。
 
 LiveSnapshot 的 Round History 直接来自 Program/SeriesProgress 当前有界 context；公共 Radar 只消费与 Program 同代际、同 mapEpoch 与当前 receive sequence 的 RadarFrame，invalid/stale 时明确 unavailable。HTTP live sink 默认包含合法当前 Radar。Snapshot 不持久化历史、不含 Lookahead，consumer 只拥有最终渲染与 interpolation。
 

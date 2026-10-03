@@ -66,6 +66,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -109,6 +111,20 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Verify Radar release guards
+        run: pnpm exec vitest run scripts/radar-view/release.test.mjs
+
+      - name: Verify standalone Radar package consumer
+        run: node scripts/radar-view/consumer-smoke.mjs
+
+      - name: Upload verified Radar npm artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: radar-view-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .agent-tmp/radar-package/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Production Web host smoke
         timeout-minutes: 2

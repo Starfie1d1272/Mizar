@@ -3,21 +3,42 @@ import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import { RADAR_SCHEMA_VERSION } from '@mizar/protocol/version';
 import {
   grenadeIcon,
-  isActiveSmoke,
-  RadarPresentation,
+  isActiveSmoke as sharedIsActiveSmoke,
+  RadarPresentation as SharedRadarPresentation,
   radarPlayerMarkerKind,
   radarPlayerMarkerVisualRole,
-  radarUtilityPhase,
+  radarUtilityPhase as sharedRadarUtilityPhase,
   shortestAngle,
   smokeRemaining,
   RADAR_PRESENTATION,
-} from '../src/program/widgets/radar/presentation';
-import {
-  effectCentroid,
-  smokeContour,
-  smokeLobes,
-} from '../src/program/widgets/radar/effect-geometry';
+} from '@mizar-hud/radar-view/presentation';
+import { effectCentroid, smokeContour, smokeLobes } from '@mizar-hud/radar-view/effects';
 import fixtures from '../src/program/fixtures/generated/real-radar-fixtures.generated.json';
+
+import { toRadarViewFrame } from '../src/program/widgets/radar/adapter';
+import type { RadarViewFrame } from '@mizar-hud/radar-view';
+class RadarPresentation extends SharedRadarPresentation {
+  override accept(snapshot: RadarSnapshot | RadarViewFrame | null, now: number, reconnect = false) {
+    super.accept(
+      snapshot && 'channel' in snapshot ? toRadarViewFrame(snapshot) : snapshot,
+      now,
+      reconnect,
+    );
+  }
+}
+function phaseInput(g: RadarSnapshot['payload']['grenades'][number]) {
+  return {
+    ...g,
+    position: g.position ? { ...g.position, layer: 'single' as const } : null,
+    moving:
+      g.velocity === null ? null : Math.hypot(g.velocity.x, g.velocity.y, g.velocity.z) > 0.01,
+    flames: g.flames.map((f) => ({ ...f, position: { ...f.position, layer: 'single' as const } })),
+  };
+}
+const radarUtilityPhase = (g: RadarSnapshot['payload']['grenades'][number]) =>
+  sharedRadarUtilityPhase(phaseInput(g));
+const isActiveSmoke = (g: RadarSnapshot['payload']['grenades'][number]) =>
+  sharedIsActiveSmoke(phaseInput(g));
 
 function real(): RadarSnapshot {
   return radarSnapshotSchema.parse(fixtures.fixtures['dense-utility'].samples[0]!.snapshot);
@@ -204,7 +225,7 @@ describe('Radar renderer local lifecycle', () => {
 
     expect(model.grenades.get('synthetic-projectile')).toBe(smoke);
     expect(model.players.get(source.payload.players[0]!.sourcePlayerId)).toBe(player);
-    expect(model.snapshot).toBe(runtimeOnly);
+    expect(model.snapshot).toEqual(toRadarViewFrame(runtimeOnly));
   });
 
   it('keeps a mature smoke steady when sample continuity resets', () => {
@@ -757,13 +778,13 @@ describe('Radar renderer local lifecycle', () => {
     }
   });
 
-  it('retains unsupported-map diagnostic reason across reset', () => {
+  it('clears unsupported local maps at the adapter boundary', () => {
     const s = single();
     s.payload.mapName = 'de_unsupported_test_map';
     const p = new RadarPresentation();
     p.accept(s, 1000);
-    expect(p.unsupportedMap).toBe('de_unsupported_test_map');
-    expect(p.diagnosticReason).toBe('unsupported-map');
+    expect(toRadarViewFrame(s)).toBeNull();
+    expect(p.snapshot).toBeNull();
     expect(p.players.size).toBe(0);
   });
 });

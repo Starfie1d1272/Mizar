@@ -21,7 +21,8 @@
     "@mizar/radar": "workspace:*",
     "@mizar/replay": "workspace:*",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "@mizar-hud/radar-view": "workspace:*"
   },
   "devDependencies": {
     "@storybook/addon-a11y": "10.6.0",
