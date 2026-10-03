@@ -58,7 +58,6 @@ function ContextPanel({
   readonly operator: OperatorPayload | null;
   readonly program: ProgramPayload | null;
 }) {
-  const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
   const cs2 = useCs2HostStatus();
   const { view: tournament } = useLocalTournament();
@@ -102,14 +101,6 @@ function ContextPanel({
         </section>
       ) : null}
       {currentPov ? <p>当前视角 · {currentPov}</p> : null}
-      {bp && bp.state !== 'hidden' && bp.projection ? (
-        <section>
-          <p>
-            BP · {bp.revealedCount} / {bp.projection.steps.length}
-          </p>
-          <Button onClick={() => void openTool('bp')}>BP 控制</Button>
-        </section>
-      ) : null}
       {issues.length ? (
         <section className="workspace-issues" aria-label="需要处理">
           <small>需要处理</small>
@@ -204,6 +195,14 @@ export function WorkspaceDock() {
     program.getSnapshot,
   );
   const sceneState = useProgramScenes();
+  const { snapshot: bp } = useBpSession();
+  const [showSceneControls, setShowSceneControls] = useState(false);
+  const manualScenes = sceneState?.director?.mode === 'manual';
+  const [controlsMode, setControlsMode] = useState(sceneState?.director?.mode);
+  if (controlsMode !== sceneState?.director?.mode) {
+    setControlsMode(sceneState?.director?.mode);
+    setShowSceneControls(false);
+  }
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -275,30 +274,41 @@ export function WorkspaceDock() {
             恢复自动
           </Button>
         ) : null}
-        <div className="workspace-scene-buttons">
-          {PROGRAM_SCENES.map((scene) => (
-            <div key={scene.id}>
-              <Button
-                disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
-                aria-pressed={sceneState?.active === scene.id}
-                aria-describedby={
-                  sceneState?.blocked?.[scene.id] ? `scene-blocked-${scene.id}` : undefined
-                }
-                onClick={() =>
-                  void action(
-                    () => selectProgramScene(scene.id, sceneState!.revision),
-                    scene.id === 'gameplay' || scene.id === 'bp',
-                  )
-                }
-              >
-                {scene.title}
-              </Button>
-              {sceneState?.blocked?.[scene.id] ? (
-                <small id={`scene-blocked-${scene.id}`}>{sceneState.blocked[scene.id]}</small>
-              ) : null}
-            </div>
-          ))}
-        </div>
+        {!manualScenes ? (
+          <Button
+            aria-expanded={showSceneControls}
+            aria-controls="workspace-scene-controls"
+            onClick={() => setShowSceneControls((value) => !value)}
+          >
+            {showSceneControls ? '收起场景' : '手动切换'}
+          </Button>
+        ) : null}
+        {manualScenes || showSceneControls ? (
+          <div className="workspace-scene-buttons" id="workspace-scene-controls">
+            {PROGRAM_SCENES.map((scene) => (
+              <div key={scene.id}>
+                <Button
+                  disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
+                  aria-pressed={sceneState?.active === scene.id}
+                  aria-describedby={
+                    sceneState?.blocked?.[scene.id] ? `scene-blocked-${scene.id}` : undefined
+                  }
+                  onClick={() =>
+                    void action(
+                      () => selectProgramScene(scene.id, sceneState!.revision),
+                      scene.id === 'gameplay' || scene.id === 'bp',
+                    )
+                  }
+                >
+                  {scene.title}
+                </Button>
+                {sceneState?.blocked?.[scene.id] ? (
+                  <small id={`scene-blocked-${scene.id}`}>{sceneState.blocked[scene.id]}</small>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
       <section>
         <small>比赛</small>
@@ -308,6 +318,11 @@ export function WorkspaceDock() {
             ? `${payload.seriesProgress.score.a} : ${payload.seriesProgress.score.b}`
             : '未绑定比赛'}
         </span>
+        {bp && bp.state !== 'hidden' && bp.projection ? (
+          <span>
+            BP · {bp.revealedCount} / {bp.projection.steps.length}
+          </span>
+        ) : null}
         <Button onClick={() => void action(() => openTool('bp'))}>BP 工作台</Button>
 
         {production?.mode === 'live' ? (

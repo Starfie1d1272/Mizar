@@ -1,13 +1,15 @@
+import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
+import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
 import { useEffect, useState } from 'react';
 import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { useHudConfigClient } from '../realtime/hud-config-client';
-import { useProgramScenes } from '../workspace/client';
+import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
@@ -71,6 +73,12 @@ export function PreparationPage() {
     '';
   const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
   const match = envelope?.document;
+  const matchGuidance = useLocalRead<ProductionGuidance>(
+    path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
+      ? '/local/v1/production-guidance'
+      : null,
+    5000,
+  );
   const { view, refresh } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const scenes = useProgramScenes();
@@ -285,7 +293,7 @@ export function PreparationPage() {
                 <p>
                   {[
                     match.stageLabel,
-                    match.roundLabel,
+                    matchRound(match),
                     match.matchLabel,
                     match.scheduledAt ? new Date(match.scheduledAt).toLocaleString('zh-CN') : null,
                   ]
@@ -489,11 +497,35 @@ export function PreparationPage() {
               </>
             ) : match ? (
               <>
-                <StatusBanner tone="info">
-                  {envelope?.source === 'local'
-                    ? '正在读取本地编辑状态。'
-                    : '赛事资料由 RivalHub 管理，请通过赛务流程更新。'}
-                </StatusBanner>
+                <div className="preparation-match__meta">
+                  <span>
+                    {envelope?.source === 'local'
+                      ? '正在读取本地编辑状态。'
+                      : envelope?.source === 'fixture'
+                        ? 'RivalHub 赛事快照 · 演练中'
+                        : 'RivalHub 比赛资料'}
+                  </span>
+                  {matchGuidance?.matchId === match.matchId &&
+                  matchGuidance.rivalhubUrl &&
+                  envelope?.source !== 'fixture' ? (
+                    <a
+                      href={matchGuidance.rivalhubUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => {
+                        if (!window.__TAURI_INTERNALS__) return;
+                        event.preventDefault();
+                        void action(() =>
+                          desktopInvoke('open_rivalhub_workbench', {
+                            url: matchGuidance.rivalhubUrl,
+                          }),
+                        );
+                      }}
+                    >
+                      在网站管理
+                    </a>
+                  ) : null}
+                </div>
                 {tab !== 'maps' ? (
                   <MatchDocumentView document={match} section={tab as MatchSection} />
                 ) : null}

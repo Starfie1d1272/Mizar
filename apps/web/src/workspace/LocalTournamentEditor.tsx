@@ -146,29 +146,11 @@ export function LocalTournamentEditor({
                 />
               </label>
               <label>
-                轮次说明{' '}
+                轮次（选填）{' '}
                 <input
                   value={draft.roundLabel ?? ''}
                   onChange={(change) =>
                     setDraft({ ...draft, roundLabel: change.target.value || null })
-                  }
-                />
-              </label>
-              <label>
-                比赛说明{' '}
-                <input
-                  value={draft.matchLabel ?? ''}
-                  onChange={(change) =>
-                    setDraft({ ...draft, matchLabel: change.target.value || null })
-                  }
-                />
-              </label>
-              <label>
-                赛果意义{' '}
-                <input
-                  value={draft.stakesLabel ?? ''}
-                  onChange={(change) =>
-                    setDraft({ ...draft, stakesLabel: change.target.value || null })
                   }
                 />
               </label>
