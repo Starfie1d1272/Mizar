@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 import { releaseMetadata, requireSuccessfulCI } from './release.mjs';
 
 test('release tags must exactly identify the package version; prereleases never become latest', () => {
