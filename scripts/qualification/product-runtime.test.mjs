@@ -157,20 +157,26 @@ describe('portable process lifecycle', () => {
       // Attach rejection immediately so a failed start cannot escape the test.
       running.catch(() => {});
       let ready = false;
+      let state;
       for (let i = 0; i < 100; i++) {
         try {
           const response = await globalThis.fetch(`http://127.0.0.1:${port}/health`);
           if (response.ok) {
+            // The child can bind before the supervisor finishes publishing its identity.
+            state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
+            if (state.startupSessionId !== `restart-${attempt}`) {
+              await delay(30);
+              continue;
+            }
             ready = true;
             break;
           }
         } catch {
-          /* Wait for the child to bind its port. */
+          /* Wait for both child health and the complete supervisor state file. */
         }
         await delay(30);
       }
       expect(ready).toBe(true);
-      const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
       expect(state.startupSessionId).toBe(`restart-${attempt}`);
       expect(state.supervisorPid).toBe(process.pid);
       const token = await readFile(join(stateRoot, 'data/gsi-token.txt'), 'utf8');
