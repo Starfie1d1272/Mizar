@@ -30,7 +30,7 @@
 - **颜色**：共享石墨色中性色、文字、边框、交互和状态变量；新视觉值只进入统一源文件。
 - **间距**：以 4px 为基础节奏；产品界面使用紧凑控件与共享间距，诊断界面通过更密间距和信息结构表达技术感。
 - **圆角、边框、层次**：主要为 4/6/8px、细边框，普通面板不使用浓重阴影；浮层通过较浅的石墨色、边框与原生对话框遮罩区分。
-- **字体与数字**：产品界面沿用 Inter 和中文系统字体回退；正文 14px、辅助文字 12px、标题 20px 由用途变量提供。数字使用等宽数字排版；原始值使用 `type.family.raw`。播出展示字体保持开放，必须实际比较。
+- **字体与数字**：产品界面沿用 Inter 和中文系统字体回退；紧凑控件 14px、辅助文字 12px、分区标题 20px；准备中心、工作区与编辑器使用 16px 可读字号和 28px 页面标题，均由用途变量提供。数字使用等宽数字排版；原始值使用 `type.family.raw`。播出展示字体保持开放，必须实际比较。
 - **动效**：短且有明确目的，使用共享时长与曲线；“减少动效”停止旋转和非必要过渡，不隐藏事实或改变运行时节奏。
 - **图标**：尺寸和视觉形式保持一致，提供明确的无障碍名称；CS2 图标只经官方资产管理模块。图标不替代状态文字，装饰符号不参与辅助阅读。
 
@@ -75,3 +75,14 @@ WCAG 2.2 基线包括：可见键盘焦点、不被浮层遮挡、键盘操作�
 ### Gameplay resolved Theme 变量
 
 ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消费冻结值：`--mizar-hud-text-primary/muted`、`--mizar-hud-state-danger/warning/success/unknown`、`--mizar-hud-objective-bomb/defuse`、`--mizar-hud-surface-primary/strong/opacity`、`--mizar-hud-border-opacity`、`--mizar-hud-radius-sm/md/lg`、`--mizar-hud-font-family`。它们由 strict schema 验证并仅在 `GameplayHud` 根设置，不进入全局 token JSON，不开放给 Widget Settings。赛事色与 CT/T 继续使用已有通道。共同字体回退、动效时长使用 canonical `type.family.body`、`transition.fast/normal`；组件几何和剩余一次性画面美术留在 renderer。当前不开放外观工作区，圆角等未全面消费的字段仍不能宣称为用户可用 capability。
+
+### 默认节目包与桌面工作台（Issue #107 视觉复查）
+
+- 单图结果保留大比分为主角。Barlow Condensed Bold 随包加载，消除系统 Impact 字体缺失时的宽体回退差异；数字使用 `type.family.display`，固定 1920×1080 构图。背景只使用已导入的本图地图缩略图，并弱化细节。
+- 队徽使用固定容器；宽标按自然宽高比适当加宽，方标保持相同光学高度。无素材显示队名缩写；不补造队徽。对阵开场继续透明叠加于真实游戏，预览背景仅供演示。
+- 半场、图间和整场数据页保留十人镜像表格。头像使用固定 120px 单元格和 96px 裁切，缺图时保留单元格；中间留出 K/D 轴，数字列保持稳定。高对比选图标签和中性隔行底色提高可读性。
+- 赛前等待以赛事、双队身份、开赛时间、前后场赛程构成四级信息，不根据计划时间生成倒计时。
+- 准备中心按资料密度设置宽度；预览和 HUD 编辑器扩大画布，属性面板保持固定宽度。工作区保留游戏区域，现场播出控制优先，连接详情和维护操作按需展开。工作区雷达默认完整地图，四周保留内边距；HUD 雷达默认也为完整地图，自动聚焦由用户显式选择。
+- 原有 Gameplay HUD 的组件、配色、信息量、布局与 Radar 均不在本轮重绘范围。
+
+本轮字体、媒体单元格与结果底图属于 `ProgramScenePage` 的播出呈现；不新增 runtime 颜色或数据通道。复核见 `tests/acceptance/program-direction.spec.ts` 的长名称、缺失素材、多赛制、比分边界和动效交接检查。产品交互继续复用 Button / Panel / Select 和原生 details，状态来源与命令不变。

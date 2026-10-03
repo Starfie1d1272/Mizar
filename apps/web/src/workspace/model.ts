@@ -1,21 +1,5 @@
-import type { BpSnapshot } from '@mizar/protocol/bp';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
-
-export type WorkspacePhase = 'pre_match' | 'bp' | 'live' | 'map_end' | 'match_end';
-
-export function workspacePhase(
-  operator: OperatorPayload | null,
-  bp: BpSnapshot | null,
-): WorkspacePhase {
-  if (bp && bp.state !== 'hidden' && bp.projection) return 'bp';
-  if (operator?.runtime.telemetryFreshness === 'fresh' && operator.runtime.mapName) return 'live';
-  const series = operator?.seriesProgress;
-  if (series && (series.score.a >= series.requiredWins || series.score.b >= series.requiredWins))
-    return 'match_end';
-  if (series?.maps.some((map) => map.status === 'completed')) return 'map_end';
-  return 'pre_match';
-}
 
 export function workspaceCurrentPov(program: ProgramPayload | null): string | null {
   if (

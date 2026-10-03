@@ -580,7 +580,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await page.getByRole('button', { name: 'BP', exact: true }).click();
     await expect(editor).toBeVisible();
     await expect(editor.locator('.bp-editor-match-fields input').nth(0)).toHaveValue('本地赛事');
-    await page.getByRole('button', { name: '连续演示转场', exact: true }).click();
+    await page.getByRole('button', { name: '播放演示', exact: true }).click();
     await expect(editor).toBeHidden();
     await page.getByRole('button', { name: 'BP', exact: true }).click();
     await expect(editor.locator('.bp-editor-match-fields input').nth(1)).toHaveValue('决赛');

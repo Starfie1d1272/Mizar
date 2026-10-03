@@ -24,6 +24,7 @@
     "allow-present-production",
     "allow-open-tool",
     "allow-open-rivalhub-authorization",
+    "allow-open-rivalhub-workbench",
     "allow-save-support-bundle",
     "allow-gsi-status",
     "allow-configure-gsi"

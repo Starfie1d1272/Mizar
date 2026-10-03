@@ -275,7 +275,7 @@ export function BpWorkspaceControls() {
       ) : demoActive === null && localSource && workspace?.localDraft ? (
         <section className="bp-local-summary" aria-label="本地 BP">
           <div>
-            <span className="bp-workspace-eyebrow">LOCAL MATCH</span>
+            <span className="bp-workspace-eyebrow">本地比赛</span>
             <h2>本地 BP 已保存</h2>
             <p>
               {workspace.localDraft.entrants.a.name} vs {workspace.localDraft.entrants.b.name} ·{' '}
@@ -290,7 +290,7 @@ export function BpWorkspaceControls() {
 
       <footer className="bp-technical-info">
         <strong>OBS Browser Source · /program/bp · 1920 × 1080</strong>
-        <span>Veto Scene · 独立全屏场景</span>
+        <span>BP 画面</span>
       </footer>
     </div>
   );

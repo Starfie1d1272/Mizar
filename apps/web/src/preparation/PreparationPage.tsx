@@ -1,12 +1,15 @@
+import { matchRound } from './match-presentation';
+import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
+import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
 import { useEffect, useState } from 'react';
 import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { useHudConfigClient } from '../realtime/hud-config-client';
-import { useProgramScenes } from '../workspace/client';
+import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
@@ -70,6 +73,12 @@ export function PreparationPage() {
     '';
   const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
   const match = envelope?.document;
+  const matchGuidance = useLocalRead<ProductionGuidance>(
+    path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
+      ? '/local/v1/production-guidance'
+      : null,
+    5000,
+  );
   const { view, refresh } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const scenes = useProgramScenes();
@@ -159,10 +168,18 @@ export function PreparationPage() {
 
   return (
     <OperatorShell active={path}>
-      <main className="preparation">
+      <main className="preparation" data-page={path}>
         <header className="preparation-heading">
           <div>
-            <p>制作准备</p>
+            <p>
+              {path === '/matches'
+                ? '核对比赛、名单与地图'
+                : path === '/picture'
+                  ? '预览播出效果，调整画面'
+                  : path === '/settings'
+                    ? '连接游戏、OBS 与赛事平台'
+                    : '检查准备情况，开始制作'}
+            </p>
             <h1>
               {path === '/matches'
                 ? '比赛'
@@ -276,7 +293,7 @@ export function PreparationPage() {
                 <p>
                   {[
                     match.stageLabel,
-                    match.roundLabel,
+                    matchRound(match),
                     match.matchLabel,
                     match.scheduledAt ? new Date(match.scheduledAt).toLocaleString('zh-CN') : null,
                   ]
@@ -357,10 +374,10 @@ export function PreparationPage() {
             )}
 
             {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
-              <Panel className="preparation-rehearsal-stage">
+              <details className="preparation-rehearsal-stage">
+                <summary>演练控制</summary>
                 <div className="preparation-task-header">
                   <div>
-                    <h2>Rivals 示例阶段推进</h2>
                     {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
                       <p>当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}</p>
                     ) : (
@@ -387,16 +404,16 @@ export function PreparationPage() {
                     ))}
                   </div>
                 ) : null}
-              </Panel>
+              </details>
             ) : null}
 
+            <ProductionStatus matchId={match?.matchId ?? null} />
             <div className="preparation-overview">
               <Panel>
-                <h2>制作就绪</h2>
-                <p>各项能力独立准备，有比赛即可进入现场。</p>
+                <h2>开播检查</h2>
                 {readiness.map(([label, ready, reason, href]) => (
                   <a className="preparation-readiness" key={label} href={href}>
-                    <span>{label}</span>
+                    <span>{label === '比赛上下文' ? '比赛资料' : label}</span>
                     <span>{ready ? '已就绪' : reason}</span>
                   </a>
                 ))}
@@ -416,7 +433,7 @@ export function PreparationPage() {
                   ))}
                 </Panel>
                 <Panel>
-                  <h2>制作工具</h2>
+                  <h2>常用工具</h2>
                   {tools}
                 </Panel>
               </div>
@@ -480,11 +497,35 @@ export function PreparationPage() {
               </>
             ) : match ? (
               <>
-                <StatusBanner tone="info">
-                  {envelope?.source === 'local'
-                    ? '正在读取本地编辑状态。'
-                    : '赛事资料由 RivalHub 管理，请通过赛务流程更新。'}
-                </StatusBanner>
+                <div className="preparation-match__meta">
+                  <span>
+                    {envelope?.source === 'local'
+                      ? '正在读取本地编辑状态。'
+                      : envelope?.source === 'fixture'
+                        ? 'RivalHub 赛事快照 · 演练中'
+                        : 'RivalHub 比赛资料'}
+                  </span>
+                  {matchGuidance?.matchId === match.matchId &&
+                  matchGuidance.rivalhubUrl &&
+                  envelope?.source !== 'fixture' ? (
+                    <a
+                      href={matchGuidance.rivalhubUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => {
+                        if (!window.__TAURI_INTERNALS__) return;
+                        event.preventDefault();
+                        void action(() =>
+                          desktopInvoke('open_rivalhub_workbench', {
+                            url: matchGuidance.rivalhubUrl,
+                          }),
+                        );
+                      }}
+                    >
+                      在网站管理
+                    </a>
+                  ) : null}
+                </div>
                 {tab !== 'maps' ? (
                   <MatchDocumentView document={match} section={tab as MatchSection} />
                 ) : null}

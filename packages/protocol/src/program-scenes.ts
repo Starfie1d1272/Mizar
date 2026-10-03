@@ -115,3 +115,18 @@ export const programPresentationSchema = z
   })
   .strict();
 export type ProgramPresentation = z.infer<typeof programPresentationSchema>;
+
+/** Private, read-only production guidance; no canonical match state. */
+export interface ProductionGuidance {
+  matchId: string | null;
+  phase: 'pre_match' | 'live' | 'map_end' | 'match_end';
+  task: string;
+  nextStep: string;
+  currentMap: string | null;
+  nextMap: string | null;
+  result: string | null;
+  interMapReminder: boolean;
+  rivalhubUrl: string | null;
+  broadcastAssigned: boolean;
+  bilibili: 'live' | 'offline' | 'unknown' | 'unconfigured';
+}

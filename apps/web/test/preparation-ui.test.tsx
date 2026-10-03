@@ -63,6 +63,8 @@ const sampleMatch = {
   format: 'bo3',
   stageLabel: '总决赛',
   roundLabel: null,
+  round: null,
+  entryRound: null,
   matchLabel: '第一场',
   scheduledAt: '2026-09-28T12:00:00.000Z',
   entrants: {
@@ -183,9 +185,11 @@ describe('PreparationPage: readiness and sample workflow', () => {
     // Confirmed maps
     expect(summary?.textContent).toContain('地图 · 已确定 2 图（ancient · nuke）');
 
-    // Wording uses "Rivals 示例阶段推进" (no "演练")
-    expect(container.textContent).toContain('Rivals 示例阶段推进');
-    expect(container.textContent).not.toContain('演练');
+    // Development rehearsal controls are available on demand.
+    const rehearsal = container.querySelector('.preparation-rehearsal-stage');
+    expect(rehearsal?.querySelector('summary')?.textContent).toBe('演练控制');
+    expect(rehearsal?.hasAttribute('open')).toBe(false);
+    expect(container.textContent).not.toContain('undefined');
 
     // Schedule selector allows switching sample matches
     const select = container.querySelector('#rehearsal-match-select') as HTMLSelectElement;

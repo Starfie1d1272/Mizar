@@ -57,3 +57,5 @@ ADR-0003 第 9 节中的 `interpolation math / autozoom math` 是早期 broad wo
 - [`0016-bounded-support-export.md`](0016-bounded-support-export.md)：正常产品诊断导出、日志与健康摘要白名单、内容/大小/访问边界。
 
 - [`0018-shared-radar-view.md`](0018-shared-radar-view.md)：共享雷达展示输入、双端适配与独立 npm/资源产物。
+
+- [`0019-production-guidance-and-platform-status.md`](0019-production-guidance-and-platform-status.md)：本机制作提示、可信图间计时与独立平台状态。

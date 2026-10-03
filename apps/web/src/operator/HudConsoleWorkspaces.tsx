@@ -1,3 +1,4 @@
+import { Button } from '../ui';
 import {
   HUD_ANCHORS,
   HUD_GRID_SIZE,
@@ -150,30 +151,30 @@ export function HudConsoleWorkspaces({
       (kind === 'theme' && (themeNameError !== null || themeDraftInvalid));
     return (
       <div className="hud-console__actions">
-        <button
+        <Button
           disabled={busy || !editorReady || isBuiltin(id) || invalid}
           onClick={() => onSubmitMutation(kind, false)}
           type="button"
         >
           保存
-        </button>
-        <button
+        </Button>
+        <Button
           disabled={busy || !editorReady || invalid}
           onClick={() => onSubmitMutation(kind, true)}
           type="button"
         >
           另存为
-        </button>
-        <button
+        </Button>
+        <Button
           disabled={busy || !editorReady || !dirty}
           onClick={() => onDiscard(kind)}
           type="button"
         >
           放弃
-        </button>
-        <button disabled={busy || !editorReady} onClick={() => onReset(kind)} type="button">
+        </Button>
+        <Button disabled={busy || !editorReady} onClick={() => onReset(kind)} type="button">
           恢复默认
-        </button>
+        </Button>
       </div>
     );
   }
@@ -283,15 +284,15 @@ export function HudConsoleWorkspaces({
           />
         )}
         {renderResourceActions('preset', presetDirty, selectedPresetId)}
-        <button
+        <Button
           className="hud-console__primary-action"
           disabled={busy || !editorReady || hasDirtyDraft || !previewMatchesPresetReferences}
           onClick={onActivate}
           type="button"
         >
           启用当前预设
-        </button>
-        <p className="hud-console__hint">保存不会改变当前启用项；启用后才会生效。</p>
+        </Button>
+        <p className="hud-console__hint">保存预设后，点击“启用当前预设”上屏。</p>
       </section>
     );
   }
@@ -340,7 +341,7 @@ export function HudConsoleWorkspaces({
           {HUD_WIDGET_REGISTRY.filter(
             (widget) => widget.rendererAvailability === 'implemented',
           ).map(({ id }) => (
-            <button
+            <Button
               aria-label={`选择${widgetLabel(id)}`}
               className={selectedWidgetId === id ? 'is-selected' : undefined}
               key={id}
@@ -349,7 +350,7 @@ export function HudConsoleWorkspaces({
             >
               <span>{widgetLabel(id)}</span>
               <small>{layoutDraft.widgets[id].visible ? '显示' : '隐藏'}</small>
-            </button>
+            </Button>
           ))}
         </div>
         {selectedWidgetId === null || selectedPlacement === null || selectedBox === null ? (

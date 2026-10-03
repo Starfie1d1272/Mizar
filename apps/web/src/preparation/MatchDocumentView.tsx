@@ -1,9 +1,13 @@
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
-import { Panel } from '../ui';
+import { Panel, StatusPill } from '../ui';
+import { getMapThumbnail } from '@mizar/cs2-assets';
+import { mapLabel, matchMaps, matchRound, sideChoice } from './match-presentation';
 
 export type MatchSection = 'details' | 'roster' | 'maps';
 const dateLabel = (value: string | null) =>
-  value ? new Date(value).toLocaleString('zh-CN') : '未安排';
+  value
+    ? `${new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))}（北京时间）`
+    : '待安排';
 
 /** All current-match facts come from the same provider-neutral document. */
 export function MatchDocumentView({
@@ -15,42 +19,54 @@ export function MatchDocumentView({
 }) {
   if (section === 'details')
     return (
-      <Panel>
-        <h2>比赛资料</h2>
-        {match.competition.logoUrl ? (
-          <img
-            className="preparation-logo"
-            src={match.competition.logoUrl}
-            alt={`${match.competition.name} 赛事标志`}
-          />
-        ) : null}
-        <dl className="preparation-facts">
-          {[
-            ['赛事', match.competition.name],
-            ['阶段', match.stageLabel],
-            ['轮次', match.roundLabel ?? '未填写'],
-            ['比赛说明', match.matchLabel ?? '未填写'],
-            ['赛果意义', match.stakesLabel ?? '未填写'],
-            ['赛制', match.format.toUpperCase()],
-            ['计划开始', dateLabel(match.scheduledAt)],
-            [
-              '状态',
+      <Panel className="match-document-summary">
+        <div className="preparation-match__meta">
+          <strong>{match.competition.name}</strong>
+          <StatusPill tone="info">
+            {
               {
                 scheduled: '待进行',
                 in_progress: '进行中',
                 finished: '已结束',
                 cancelled: '已取消',
-              }[match.status],
-            ],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
+              }[match.status]
+            }
+          </StatusPill>
+        </div>
+        <h2>
+          {match.entrants.a.name} <span>vs</span> {match.entrants.b.name}
+        </h2>
+        <p>
+          {[match.stageLabel, matchRound(match), match.format.toUpperCase()]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+        <dl className="preparation-facts">
+          <div>
+            <dt>计划开始</dt>
+            <dd>{dateLabel(match.scheduledAt)}</dd>
+          </div>
+          {match.scoreA !== null && match.scoreB !== null ? (
+            <div>
+              <dt>系列比分</dt>
+              <dd>
+                {match.scoreA} : {match.scoreB}
+              </dd>
             </div>
-          ))}
+          ) : null}
+          {match.commentators.length ? (
+            <div>
+              <dt>解说</dt>
+              <dd>{match.commentators.map((person) => person.displayName).join(' · ')}</dd>
+            </div>
+          ) : null}
         </dl>
-        {match.commentators.length ? (
-          <p>解说：{match.commentators.map((person) => person.displayName).join(' · ')}</p>
+        {match.matchLabel || match.stakesLabel ? (
+          <details>
+            <summary>补充资料</summary>
+            {match.matchLabel ? <p>{match.matchLabel}</p> : null}
+            {match.stakesLabel ? <p>{match.stakesLabel}</p> : null}
+          </details>
         ) : null}
       </Panel>
     );
@@ -109,43 +125,110 @@ export function MatchDocumentView({
         })}
       </div>
     );
+  const maps = matchMaps(match);
   return (
-    <Panel>
-      <h2>地图与 BP</h2>
-      <p>地图池：{match.mapPool.length ? match.mapPool.join(' · ') : '未提供'}</p>
-      {match.maps.length ? (
-        <ol>
-          {match.maps.map((map) => (
-            <li key={map.mapId}>
-              {map.mapName}
-              {map.scoreA !== null && map.scoreB !== null ? ` · ${map.scoreA} : ${map.scoreB}` : ''}
-              {map.teamAStartSide
-                ? ` · ${match.entrants.a.name} ${map.teamAStartSide.toUpperCase()} 开局`
-                : ''}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p>尚未提供比赛地图。</p>
-      )}
-      {match.veto.length ? (
-        <ol aria-label="BP 步骤">
-          {match.veto.map((step) => (
-            <li key={step.stepOrder}>
-              {step.entryId === match.entrants.a.entryId
-                ? match.entrants.a.name
-                : step.entryId === match.entrants.b.entryId
-                  ? match.entrants.b.name
-                  : ''}{' '}
-              {{ ban: '禁用', pick: '选择', side_pick: '选边', decider: '决胜图' }[step.actionType]}{' '}
-              · {step.mapName}
-              {step.side ? ` · ${step.side.toUpperCase()}` : ''}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p>尚未提供 BP。</p>
-      )}
-    </Panel>
+    <div className="match-map-workspace">
+      <Panel>
+        <div className="preparation-match__meta">
+          <h2>比赛地图</h2>
+          <span className="match-format">{match.format.toUpperCase()}</span>
+        </div>
+        <p>
+          {match.entrants.a.name} vs {match.entrants.b.name}
+        </p>
+        {maps.length ? (
+          <div className="match-map-grid">
+            {maps.map((map) => {
+              const image = getMapThumbnail(map.name);
+              return (
+                <article
+                  className="match-map-card"
+                  key={map.name}
+                  aria-label={`图 ${map.order} · ${mapLabel(map.name)}`}
+                >
+                  {image ? <img className="match-map-image" src={image.outputPath} alt="" /> : null}
+                  <div className="match-map-body">
+                    <small>
+                      图 {map.order} · {map.selection}
+                    </small>
+                    <h3>{mapLabel(map.name)}</h3>
+                    {map.score ? <strong className="match-map-score">{map.score}</strong> : null}
+                    {map.conflict ? (
+                      <details className="match-side-review">
+                        <summary>选边待核对</summary>
+                        {map.sideNotes.map((note) => (
+                          <p key={note}>{note}</p>
+                        ))}
+                      </details>
+                    ) : map.startA ? (
+                      <dl className="match-map-sides" aria-label="开局阵营">
+                        <div>
+                          <dt>{match.entrants.a.name}</dt>
+                          <dd>{map.startA} 开局</dd>
+                        </div>
+                        <div>
+                          <dt>{match.entrants.b.name}</dt>
+                          <dd>{map.startB} 开局</dd>
+                        </div>
+                      </dl>
+                    ) : (
+                      <p>开局阵营待定</p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p>等待地图确定</p>
+        )}
+      </Panel>
+      <Panel>
+        <h2>禁选过程</h2>
+        {match.veto.length ? (
+          <ol className="match-veto-list" aria-label="BP 步骤">
+            {[...match.veto]
+              .sort((a, b) => a.stepOrder - b.stepOrder)
+              .map((step) => {
+                const team = Object.values(match.entrants).find((t) => t.entryId === step.entryId);
+                const choice = sideChoice(match, step);
+                const image = getMapThumbnail(step.mapName);
+                return (
+                  <li key={step.stepOrder}>
+                    <span className="match-veto-number">{step.stepOrder}</span>
+                    {image ? <img src={image.outputPath} alt="" /> : <span />}
+                    <span className="match-veto-action">
+                      {
+                        { ban: '禁用', pick: '选图', side_pick: '选边', decider: '决胜图' }[
+                          step.actionType
+                        ]
+                      }
+                    </span>
+                    <div className="match-veto-description">
+                      <strong>{mapLabel(step.mapName)}</strong>
+                      <span>
+                        {step.actionType === 'decider' ? '剩余地图' : (team?.name ?? '队伍待确认')}
+                      </span>
+                    </div>
+                    {choice ? (
+                      <span className="match-veto-side">
+                        {choice.name} 选 {choice.side} 开局
+                      </span>
+                    ) : null}
+                  </li>
+                );
+              })}
+          </ol>
+        ) : (
+          <p>等待禁选记录</p>
+        )}
+        {match.mapPool.length ? (
+          <details className="match-map-pool">
+            <summary>赛事地图池 · {match.mapPool.length} 张</summary>
+            <p>{match.mapPool.map(mapLabel).join(' · ')}</p>
+          </details>
+        ) : null}
+      </Panel>
+    </div>
   );
 }

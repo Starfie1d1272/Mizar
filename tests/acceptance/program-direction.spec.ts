@@ -14,7 +14,7 @@ test('summary geometry is mirrored and stable across BO formats and absent media
     await expect(page.locator('.summary-side--b .summary-player')).toHaveCount(5);
     expect((await page.locator('.summary-player').first().boundingBox())?.height).toBe(120);
     if (variant === 'no-media') {
-      await expect(page.locator('.summary-player > img, .summary-entrant-logo')).toHaveCount(0);
+      await expect(page.locator('.summary-avatar img, .summary-entrant-logo')).toHaveCount(0);
       expect(await page.locator('.summary-map-cards').boundingBox()).toEqual({
         x: 120,
         y: 120,
@@ -33,6 +33,10 @@ test('map result uses the fixed score anchors and the real-derived final score',
 }) => {
   await page.goto('/program/map-result?preview=1');
   await expect(page.locator('.result-sting')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.fonts.check('700 520px "Barlow Condensed"'))).toBe(
+    true,
+  );
   expect(await page.locator('.result-side--a .result-round-score').boundingBox()).toEqual({
     x: 60,
     y: 260,
@@ -47,6 +51,10 @@ test('map result uses the fixed score anchors and the real-derived final score',
   });
   await expect(page.locator('.result-side--a .result-round-score')).toHaveText('14');
   await expect(page.locator('.result-side--b .result-round-score')).toHaveText('16');
+  const leftScore = (await page.locator('.result-side--a .result-round-score').boundingBox())!;
+  const leftLogo = (await page.locator('.result-side--a .result-logo').boundingBox())!;
+  expect(leftLogo.x - (leftScore.x + leftScore.width)).toBeGreaterThanOrEqual(40);
+  await expect(page.locator('.result-side--b')).toHaveAttribute('data-winner', 'true');
 });
 
 test('intro hands off to HUD and reduced motion retains the same content', async ({ page }) => {

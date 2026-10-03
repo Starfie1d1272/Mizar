@@ -115,7 +115,7 @@ describe('Program scenes preview and safety boundaries', () => {
         '.waiting-layout, .intro-body, .summary-players, .result-sting',
       );
       expect(main, `scene ${sceneId} should render default content in preview mode`).not.toBeNull();
-      expect(container.textContent).toContain('画面样例');
+      expect(container.textContent).toContain('示例画面');
       expect(container.textContent).toContain(sceneId === 'waiting' ? '2026 NJU Rivals' : 'FURIA');
     }
 

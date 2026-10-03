@@ -543,3 +543,7 @@ reset 都从当前时刻重新开始，不补播旧动画。
 `POST /operator/bp-rivalhub` 接收 `{expectedContextRevision, expectedPendingRevision}`，只确认切换到 MatchContextController 已暂存的 online candidate，不负责获取网络数据。活动 binding 生命周期与 online candidate acquisition generation 独立：开始 refresh 不清除已有有效 candidate；较新的失败请求保留它，较新的有效请求才原子替换它。本地保存成功或失败都不清除 candidate。激活必须同时匹配 `expectedContextRevision` 与 `expectedPendingRevision`；候选获取在激活期间推进时，旧激活不能清除更新候选。当前 RivalHub `main` 没有正式 BroadcastManifest HTTP endpoint；未来接入必须复用 shared controller。online candidate 恢复时不会自动覆盖 local 或 cached-from-local 比赛，只有制作人员显式确认后才切换并更新 LKG。
 
 以上写入口仅允许 loopback 与有效 Origin；LAN 模式拒绝写入。旧 context revision 返回 409，不自动重试或排队。生产 `match-context.json` LKG 在重启后恢复比赛上下文并标记为 `cache`，BP playback session 仍从 hidden 开始。
+
+### 本机制作提示
+
+`GET /local/v1/production-guidance` 为私有、只读、no-store 的本机展示响应，包含当前任务、阶段、地图结果、下一图、图间软提醒和安全的 RivalHub 工作台链接。Bilibili 状态由 Companion 独立 best-effort 查询，仅为本机 UI 使用；失败为 unknown，不进入公开 LiveSnapshot / ReliableEvent 或制作门禁。字段类型见 `ProductionGuidance`，语义见 ADR-0019。

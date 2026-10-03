@@ -40,20 +40,28 @@ for (const source of ['online', 'cache'] as const) {
       );
       const initial = await app.inject('/local/v1/match-document');
       expect(initial.statusCode, initial.body).toBe(200);
-      await context.route(/\/local\/v1\/(?:match-document|tournament)$/, async (route) => {
-        const response = await app.inject(new URL(route.request().url()).pathname);
-        expect(response.statusCode, response.body).toBe(200);
-        await route.fulfill({
-          status: response.statusCode,
-          body: response.body,
-          contentType: 'application/json',
-        });
-      });
+      await context.route(
+        /\/local\/v1\/(?:match-document|tournament|production-guidance)$/,
+        async (route) => {
+          const response = await app.inject(new URL(route.request().url()).pathname);
+          expect(response.statusCode, response.body).toBe(200);
+          await route.fulfill({
+            status: response.statusCode,
+            body: response.body,
+            contentType: 'application/json',
+          });
+        },
+      );
       await page.goto('/matches');
       await expect(page.getByText(match.competition.name, { exact: true })).toBeVisible();
       await expect(page.getByText('计划开始', { exact: true })).toBeVisible();
-      await expect(page.getByText('赛事资料由 RivalHub 管理，请通过赛务流程更新。')).toBeVisible();
+      await expect(page.getByText('RivalHub 比赛资料', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '保存比赛资料' })).toHaveCount(0);
+      if (source === 'online')
+        await expect(page.getByRole('link', { name: '在网站管理' })).toHaveAttribute(
+          'href',
+          new RegExp(`/matches/${match.matchId}$`),
+        );
       await page.getByRole('link', { name: '队伍与名单', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: match.entrants.a.name, exact: true }),
@@ -71,8 +79,10 @@ for (const source of ['online', 'cache'] as const) {
       await expect(page.getByText('76561198000000001', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '从当前服务器识别首发' })).toHaveCount(0);
       await page.getByRole('link', { name: '地图与 BP', exact: true }).click();
-      await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('禁用 · de_dust2');
-      await expect(page.getByText('de_ancient · 16 : 12', { exact: false })).toBeVisible();
+      await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('DUST2');
+      await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('禁用');
+      await expect(page.getByRole('article', { name: /ANCIENT/ })).toContainText('16 : 12');
+      await expect(page.getByText('未填写', { exact: true })).toHaveCount(0);
     } finally {
       await app.close();
       await rm(directory, { recursive: true, force: true });

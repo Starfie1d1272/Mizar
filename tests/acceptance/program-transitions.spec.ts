@@ -71,11 +71,11 @@ test('continuous preview is read-only and immediate gameplay cancels its pending
     if (request.method() === 'POST') commands.push(request.url());
   });
   await page.goto('/preview');
-  await page.getByRole('button', { name: '连续演示转场', exact: true }).click();
+  await page.getByRole('button', { name: '播放演示', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('演示 1 / 8');
   await expect(page.getByRole('status')).toContainText('对阵', { timeout: 7000 });
-  await page.getByRole('button', { name: '立即切入比赛预览', exact: true }).click();
-  await expect(page.getByRole('button', { name: '连续演示转场', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '预览比赛画面', exact: true }).click();
+  await expect(page.getByRole('button', { name: '播放演示', exact: true })).toBeVisible();
   await expect(page.locator('iframe[title="节目预览"]')).toHaveAttribute(
     'src',
     /\/program\?preview=1/,
