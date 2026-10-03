@@ -1,3 +1,4 @@
+import { ProductionStatus } from './ProductionStatus';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
@@ -6,7 +7,7 @@ import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
-import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
+import { workspaceCurrentPov, workspaceIssues } from './model';
 import { obsCommand, useObsStatus } from './obs-client';
 import { useLocalTournament } from '../preparation/tournament';
 import {
@@ -20,14 +21,6 @@ import type { OverlayPolicy } from '../preparation/PreparationPage';
 import { Button } from '../ui';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import './workspace.css';
-
-const PHASE_LABEL = {
-  pre_match: '赛前',
-  bp: 'BP',
-  live: '赛中',
-  map_end: '地图结束 / 图间',
-  match_end: '比赛结束',
-} as const;
 
 function useCs2HostStatus() {
   const [value, setValue] = useState<{
@@ -69,11 +62,8 @@ function ContextPanel({
   const obs = useObsStatus();
   const cs2 = useCs2HostStatus();
   const { view: tournament } = useLocalTournament();
-  const phase = workspacePhase(operator, bp);
   const match = operator?.matchContext.summary;
   const series = operator?.seriesProgress;
-  const completed = [...(series?.maps ?? [])].reverse().find((map) => map.status === 'completed');
-  const next = series?.maps.find((map) => map.status === 'pending');
   const currentPov = workspaceCurrentPov(program);
   const issues = [
     ...workspaceIssues(operator),
@@ -90,6 +80,7 @@ function ContextPanel({
             : '等待比赛信息'}
         </p>
       </header>
+      <ProductionStatus matchId={match?.matchId ?? null} />
       {tournament && match && tournament.selectedMatchId === match.matchId ? (
         <section aria-label="前后比赛">
           {tournament.neighborhood.previous ? (
@@ -111,31 +102,15 @@ function ContextPanel({
           ) : null}
         </section>
       ) : null}
-      <section>
-        <small>当前阶段</small>
-        <h2>{PHASE_LABEL[phase]}</h2>
-        {phase === 'bp' && bp?.projection ? (
+      {currentPov ? <p>当前视角 · {currentPov}</p> : null}
+      {bp && bp.state !== 'hidden' && bp.projection ? (
+        <section>
           <p>
-            已展示 {bp.revealedCount} / {bp.projection.steps.length} 项禁选
+            BP · {bp.revealedCount} / {bp.projection.steps.length}
           </p>
-        ) : null}
-        {phase === 'live' && currentPov ? <p>当前 POV · {currentPov}</p> : null}
-        {phase === 'map_end' ? (
-          <p>
-            {completed?.mapName ?? '上一图'}{' '}
-            {completed?.finalScore ? `· ${completed.finalScore.a} : ${completed.finalScore.b}` : ''}
-            {next ? ` · 下一图 ${next.mapName}` : ''}
-          </p>
-        ) : null}
-        {phase === 'match_end' ? (
-          <p>
-            系列赛 {series?.score.a} : {series?.score.b}
-          </p>
-        ) : null}
-        {phase === 'pre_match' || phase === 'bp' ? (
-          <Button onClick={() => void openTool('bp')}>打开 BP 工作台</Button>
-        ) : null}
-      </section>
+          <Button onClick={() => void openTool('bp')}>BP 控制</Button>
+        </section>
+      ) : null}
       {issues.length ? (
         <section className="workspace-issues" aria-label="需要处理">
           <small>需要处理</small>
@@ -267,7 +242,7 @@ export function WorkspaceDock() {
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
       <section>
         <small>
-          播出：
+          当前播出：
           {PROGRAM_SCENES.find((scene) => scene.id === sceneState?.active)?.title ?? '等待同步'}
         </small>
         <span>
@@ -302,20 +277,26 @@ export function WorkspaceDock() {
         ) : null}
         <div className="workspace-scene-buttons">
           {PROGRAM_SCENES.map((scene) => (
-            <Button
-              key={scene.id}
-              disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
-              aria-pressed={sceneState?.active === scene.id}
-              title={sceneState?.blocked?.[scene.id] ?? scene.title}
-              onClick={() =>
-                void action(
-                  () => selectProgramScene(scene.id, sceneState!.revision),
-                  scene.id === 'gameplay' || scene.id === 'bp',
-                )
-              }
-            >
-              {scene.title}
-            </Button>
+            <div key={scene.id}>
+              <Button
+                disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
+                aria-pressed={sceneState?.active === scene.id}
+                aria-describedby={
+                  sceneState?.blocked?.[scene.id] ? `scene-blocked-${scene.id}` : undefined
+                }
+                onClick={() =>
+                  void action(
+                    () => selectProgramScene(scene.id, sceneState!.revision),
+                    scene.id === 'gameplay' || scene.id === 'bp',
+                  )
+                }
+              >
+                {scene.title}
+              </Button>
+              {sceneState?.blocked?.[scene.id] ? (
+                <small id={`scene-blocked-${scene.id}`}>{sceneState.blocked[scene.id]}</small>
+              ) : null}
+            </div>
           ))}
         </div>
       </section>
@@ -370,13 +351,10 @@ export function WorkspaceDock() {
         </strong>
         <span>{obs?.currentScene ?? '等待场景'}</span>
         <span>
-          推流 {obs?.streaming ? '进行中' : '未启动'} · 录制 {obs?.recording ? '进行中' : '未启动'}
+          推流 {obs?.connection !== 'connected' ? '无法确认' : obs.streaming ? '进行中' : '未启动'}{' '}
+          · 录制{' '}
+          {obs?.connection !== 'connected' ? '无法确认' : obs.recording ? '进行中' : '未启动'}
         </span>
-        {obs?.video ? (
-          <span>
-            {obs.video.canvas} / {obs.video.output} · {obs.video.fps.toFixed(0)}fps
-          </span>
-        ) : null}
         <Button onClick={() => void action(() => obsCommand('open'))}>打开 OBS</Button>
         <Button
           onClick={() =>
@@ -441,7 +419,7 @@ export function WorkspaceDock() {
         <Button onClick={() => void action(() => openTool('diagnostics'))}>运行诊断</Button>
       </section>
       <section>
-        <small>制作</small>
+        <small>{production?.mode === 'preparation' ? '制作准备' : '现场制作'}</small>
         <Button
           disabled={!production || busy}
           onClick={() => production && void action(() => productionAction('hide', production))}

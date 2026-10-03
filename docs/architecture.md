@@ -473,3 +473,7 @@ Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal
 `ProgramPresentationStore` 是 `ProjectionCoordinator` 同步更新后的有界消费者，在地图结束的同一帧冻结 SeriesProgress 已确认的 final score 和当帧 Program-safe K/A/D，最多保留五图。摘要不会向 Runtime/Series 回写；缺数据保持 null，跨图保留，换比赛/上下文清除。静态画面进入资格与已播连续性分开。等待页只读当前 MatchDocument 的赛事媒体/时间和既有赛程 owner 的邻近场次，取得不到就收起。HTTP 展示结构独立于实时 Gameplay channel。
 
 默认 renderer 为 `builtin:mizar-default`，复用同一个 Summary Board 和同一套真实回放衍生预览。Intro 对接当前 resolved HUD 的实际队标锚点，减少动效保留相同信息与播出时序。详见 ADR-0017 与 `docs/design/program-direction-v1.md`。
+
+### 制作提示与平台状态
+
+Companion 的 ProductionGuidanceStore 基于已有投影和比赛资料生成只读提示；BilibiliStatus 拥有固定域名的有界查询与缓存。Preparation / Workspace 共用 `/local/v1/production-guidance`，不新增 canonical owner，也不改变公开上传契约。Desktop 仅通过受限 HTTPS 工作台命令打开系统浏览器。边界见 ADR-0018。

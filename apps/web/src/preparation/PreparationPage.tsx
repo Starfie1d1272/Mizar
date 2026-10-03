@@ -1,3 +1,4 @@
+import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
@@ -390,6 +391,7 @@ export function PreparationPage() {
               </Panel>
             ) : null}
 
+            <ProductionStatus matchId={match?.matchId ?? null} />
             <div className="preparation-overview">
               <Panel>
                 <h2>制作就绪</h2>

@@ -1,3 +1,4 @@
+import { Button } from '../ui';
 import { ToolShell } from '../patterns';
 import {
   Fragment,
@@ -40,7 +41,6 @@ import {
   getHudEditorFixture,
   HUD_EDITOR_DEFAULT_FIXTURE_ID,
   HUD_EDITOR_FIXTURE_GROUPS,
-  HUD_EDITOR_RIVALS_BP_FIXTURE_IDS,
   PROGRAM_FIXTURE_LABELS,
   type ProgramFixtureId,
 } from '../program/fixtures';
@@ -662,7 +662,7 @@ export function HudConsolePage() {
     if (kind === 'preset') setPresetDraft(resetPresetDraft(presetDraft));
     else if (kind === 'layout') setLayoutDraft(resetLayoutDraft(layoutDraft));
     else setThemeDraftValue(resetThemeDraft(themeDraft));
-    setCommandState('已恢复默认值；保存前不会影响当前启用配置。');
+    setCommandState('已恢复默认值，请保存。');
   }
 
   function startMove(widgetId: HudWidgetId, event: PointerEvent<HTMLButtonElement>): void {
@@ -832,8 +832,7 @@ export function HudConsolePage() {
                   {activePreviewSource === 'fixture'
                     ? fixtureLabel(fixtureId)
                     : activePreviewSource === 'replay'
-                      ? (replayFixture?.title ??
-                        (replayLoading ? '正在载入真实回放' : '回放不可用'))
+                      ? (replayFixture?.title ?? (replayLoading ? '正在载入回放' : '回放不可用'))
                       : previewSourceLive
                         ? '实时比赛'
                         : '实时数据不可用'}
@@ -849,7 +848,7 @@ export function HudConsolePage() {
                   }
                 >
                   <option value="fixture">示例比赛</option>
-                  <option value="replay">确定性重放</option>
+                  <option value="replay">比赛回放</option>
                   <option disabled={!previewSourceLive} value="current-live">
                     实时比赛
                   </option>
@@ -891,14 +890,6 @@ export function HudConsolePage() {
                   </select>
                 </label>
               ) : null}
-              {activePreviewSource === 'fixture' &&
-              (fixtureId.startsWith('bp-rivals-') ||
-                HUD_EDITOR_RIVALS_BP_FIXTURE_IDS.some((id) => id === fixtureId)) ? (
-                <p className="hud-console__fixture-note">
-                  BP、系列比分、已赛地图结果、队名与队标取自 2026 NJU
-                  Rivals，按预览样例配对；玩家、当前地图比分与雷达来自独立真实遥测回放。
-                </p>
-              ) : null}
               <span
                 className="hud-console__source-status"
                 data-connection-state={activePreviewSource === 'replay' ? 'replay' : program.state}
@@ -906,9 +897,11 @@ export function HudConsolePage() {
               >
                 {activePreviewSource === 'replay'
                   ? replayLoadError === null
-                    ? '本地真实采集记录 · 重放'
+                    ? '比赛回放'
                     : '重放素材不可用'
-                  : connectionLabel(program.state)}
+                  : activePreviewSource === 'fixture'
+                    ? '示例画面'
+                    : connectionLabel(program.state)}
                 {activePreviewSource === 'current-live' && unsupportedRadarMap !== null
                   ? ` · 雷达不可用：不支持地图 ${unsupportedRadarMap}`
                   : null}
@@ -923,7 +916,7 @@ export function HudConsolePage() {
                 data-replay-event-kind={currentReplayEvent?.kind ?? ''}
               >
                 <div className="hud-console__replay-actions">
-                  <button
+                  <Button
                     disabled={replaySession === null || replayState.isSeeking || replayLoading}
                     onClick={() =>
                       replayState.isPlaying ? replaySession?.pause() : replaySession?.play()
@@ -931,8 +924,8 @@ export function HudConsolePage() {
                     type="button"
                   >
                     {replayState.isPlaying ? '暂停' : '播放'}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     disabled={replaySession === null || replayState.isSeeking || replayLoading}
                     onClick={() => {
                       setPendingReplayIndex(null);
@@ -941,23 +934,23 @@ export function HudConsolePage() {
                     type="button"
                   >
                     重播
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     aria-label="上一个语义事件"
                     disabled={replaySession === null || replayState.isSeeking}
                     onClick={() => stepReplayEvent(-1)}
                     type="button"
                   >
                     上一事件
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     aria-label="下一个语义事件"
                     disabled={replaySession === null || replayState.isSeeking}
                     onClick={() => stepReplayEvent(1)}
                     type="button"
                   >
                     下一事件
-                  </button>
+                  </Button>
                 </div>
                 <label className="hud-console__replay-scrubber">
                   回放进度
@@ -1068,7 +1061,7 @@ export function HudConsolePage() {
           <div className="hud-console__editor-column">
             <div className="hud-console__tabs" aria-label="HUD 编辑区域">
               {WORKSPACES.map((item) => (
-                <button
+                <Button
                   aria-current={workspace === item.id ? 'page' : undefined}
                   className={workspace === item.id ? 'is-active' : undefined}
                   key={item.id}
@@ -1076,7 +1069,7 @@ export function HudConsolePage() {
                   type="button"
                 >
                   {item.label}
-                </button>
+                </Button>
               ))}
             </div>
             <fieldset className="hud-console__editor-fieldset" disabled={!editorReady}>

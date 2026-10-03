@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { BpSnapshot } from '@mizar/protocol/bp';
-import { sendBpCommand, useBpSession } from './client';
+import { sendBpCommand } from './client';
 import './bp.css';
 const labels = {
   hidden: '已收起',
@@ -67,15 +67,5 @@ export function BpControls({
       </div>
       {error ? <p role="alert">{error}</p> : null}
     </div>
-  );
-}
-export function BpDashboardControl() {
-  const { snapshot } = useBpSession();
-  return (
-    <section className="dashboard-bp" aria-label="BP 播放">
-      <h2>地图禁选</h2>
-      <BpControls snapshot={snapshot} />
-      <a href="/preview?scene=bp">打开 BP 预览 →</a>
-    </section>
   );
 }

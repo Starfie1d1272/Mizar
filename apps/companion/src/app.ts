@@ -1,3 +1,5 @@
+import { BilibiliStatus } from './platform/bilibili.js';
+import { ProductionGuidanceStore } from './program-scenes/guidance.js';
 import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
@@ -552,8 +554,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  const guidance = new ProductionGuidanceStore();
+  const bilibili = new BilibiliStatus();
+  app.get('/local/v1/production-guidance', async (_request, reply) => {
+    const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    const view = guidance.get(projectionCoordinator.getCurrent(), binding);
+    const state = await bilibili.read(
+      binding?.origin === 'fixture'
+        ? []
+        : (binding?.context.commentators.map((person) => person.liveStreamUrl) ?? []),
+    );
+    const current = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    return reply.header('cache-control', 'no-store').send({
+      ...(current === binding ? view : guidance.get(projectionCoordinator.getCurrent(), current)),
+      bilibili: current === binding ? state : 'unknown',
+    });
+  });
   const presentation = new ProgramPresentationStore();
   const presentationUnsubscribe = projectionCoordinator.subscribePresentation((bundle) => {
+    guidance.update(
+      bundle,
+      matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    );
     presentation.update(
       bundle.program,
       matchContextController?.getActiveBinding()?.manifest.revision ??

@@ -639,6 +639,52 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
     String::from_utf8(output.stdout).map_err(|_| "GSI 状态读取失败。".into())
 }
 
+fn valid_workbench_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 5
+        && parts[1] == "admin"
+        && parts[3] == "matches"
+        && [parts[2], parts[4]].iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+}
+
+#[tauri::command]
+fn open_rivalhub_workbench(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|_| "比赛工作台地址无效。")?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("match.starfie1d.top")
+        || parsed.port().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !valid_workbench_path(parsed.path())
+    {
+        return Err("比赛工作台地址无效。".into());
+    }
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = format!("{url}\0").encode_utf16().collect();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        Err("浏览器未能打开，请重试。".into())
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 async fn gsi_status() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -754,6 +800,7 @@ fn run_desktop(
             present_production,
             open_tool,
             open_rivalhub_authorization,
+            open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
             configure_gsi
@@ -1139,6 +1186,14 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn workbench_path_is_limited_to_one_match() {
+        assert!(valid_workbench_path("/admin/rivals-2026/matches/match_1"));
+        for path in ["/admin/rivals", "/admin/rivals/matches/", "/admin/rivals/matches/a/extra", "/admin/rivals/matches/%2f", "/integrations/mizar/connect"] {
+            assert!(!valid_workbench_path(path));
+        }
+    }
 
     #[test]
     fn rollback_ownership_requires_this_session_and_supervisor() {

@@ -106,9 +106,7 @@ export function SupportExport() {
   return (
     <Panel>
       <h2>问题反馈</h2>
-      <p>
-        导出版本、运行状态和最近启动记录的安全摘要，帮助定位问题。原始遥测、选手资料与凭据不会进入诊断包。
-      </p>
+      <p>导出运行状态与启动记录，便于排查问题。</p>
       <Button
         loading={busy}
         onClick={() => void exportBundle()}

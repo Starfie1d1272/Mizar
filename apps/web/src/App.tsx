@@ -25,7 +25,6 @@ import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fi
 import { ProgramScenePage } from './program/ProgramScenePage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
-import { OperatorPage } from './operator/OperatorPage';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
 import {
@@ -558,17 +557,11 @@ export function DebugPage() {
 
   return (
     <ToolShell title="运行诊断">
-      <main className="debug-shell" data-surface="debug">
+      <main className="debug-shell mizar-surface" data-surface="technical">
         <header className="debug-header">
-          <div className="debug-header__signal" aria-hidden="true">
-            <span>本地</span>
-            <i />
-            <span>运行</span>
-          </div>
           <div>
-            <p className="debug-eyebrow">Mizar / 运行诊断</p>
             <h1>运行诊断</h1>
-            <p className="debug-intro">检查数据接入与记录状态；排查问题时展开高级技术信息。</p>
+            <p className="debug-intro">查看运行状态与恢复建议。</p>
           </div>
         </header>
         <SupportExport />
@@ -673,7 +666,6 @@ export function App() {
     );
   if (surface.id === 'debug') return <DebugPage />;
   if (surface.id === 'program') return <ProgramRoute />;
-  if (surface.id === 'operator') return <OperatorPage />;
   if (surface.id === 'hud') return <HudConsolePage />;
   return <SurfacePage surface={surface} />;
 }

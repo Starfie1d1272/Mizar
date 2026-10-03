@@ -1,40 +1,24 @@
 import { expect, it } from 'vitest';
 import type { OperatorPayload } from '@mizar/protocol/operator';
-import type { BpSnapshot } from '@mizar/protocol/bp';
 import type { ProgramPayload } from '@mizar/protocol/program';
-import { workspaceCurrentPov, workspaceIssues, workspacePhase } from './model';
+import { workspaceCurrentPov, workspaceIssues } from './model';
 
 const operator = {
   runtime: { telemetryFreshness: 'fresh', mapName: 'de_ancient' },
-  seriesProgress: { score: { a: 1, b: 0 }, requiredWins: 2, maps: [{ status: 'completed' }] },
+  seriesProgress: {
+    score: { a: 1, b: 0 },
+    requiredWins: 2,
+    maps: [{ status: 'completed' }, { status: 'current' }],
+  },
   matchContext: { freshness: 'fresh' },
   identity: { state: 'matched' },
 } as OperatorPayload;
 
-it('gives active BP priority over live telemetry and avoids CSTV health as Program truth', () => {
-  const bp = { state: 'shown', projection: {} } as BpSnapshot;
-  expect(workspacePhase(operator, bp)).toBe('bp');
-  expect(workspacePhase(operator, null)).toBe('live');
+it('reports observed health without treating CSTV availability as Program health', () => {
+  expect(workspaceIssues(operator)).toEqual([]);
   expect(
-    workspaceIssues({
-      ...operator,
-      sources: { cstvProgram: { state: 'disabled' }, cstvLookahead: { state: 'disabled' } },
-    } as OperatorPayload),
-  ).toEqual([]);
-});
-
-it('uses existing series progress for map and match end', () => {
-  const ended = {
-    ...operator,
-    runtime: { telemetryFreshness: 'stale', mapName: null },
-  } as OperatorPayload;
-  expect(workspacePhase(ended, null)).toBe('map_end');
-  expect(
-    workspacePhase(
-      { ...ended, seriesProgress: { ...ended.seriesProgress!, score: { a: 2, b: 0 } } },
-      null,
-    ),
-  ).toBe('match_end');
+    workspaceIssues({ ...operator, runtime: { ...operator.runtime, telemetryFreshness: 'stale' } }),
+  ).toContain('比赛数据已中断，请检查 CS2 与 GSI。');
 });
 
 it('shows the current POV only from fresh, identity-safe current-lineup Program evidence', () => {
