@@ -10,7 +10,7 @@ export function matchRound(
 ): string | null {
   return (
     match.roundLabel?.trim() ||
-    (match.round !== null ? `第 ${match.round} 轮` : match.entryRound?.trim() || null)
+    (typeof match.round === 'number' ? `第 ${match.round} 轮` : match.entryRound?.trim() || null)
   );
 }
 
@@ -77,6 +77,14 @@ export function matchMaps(match: Pick<MatchDocumentV1, 'maps' | 'veto' | 'entran
         startA,
         startB: startA ? opposite(startA) : null,
         conflict,
+        sideNotes: [
+          ...new Set([
+            ...(map?.teamAStartSide
+              ? [`地图记录：${match.entrants.a.name} ${map.teamAStartSide} 开局`]
+              : []),
+            ...choices.map((choice) => `BP 记录：${match.entrants.a.name} ${choice.teamA} 开局`),
+          ]),
+        ],
       };
     })
     .sort((a, b) => a.order - b.order);

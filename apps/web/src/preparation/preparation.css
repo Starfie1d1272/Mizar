@@ -569,3 +569,21 @@
     text-align: left;
   }
 }
+.match-format,
+.match-veto-action {
+  font-size: var(--mizar-type-size-body);
+  font-weight: var(--mizar-type-weight-strong);
+  color: var(--mizar-fg-secondary);
+}
+.match-side-review {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
+.match-side-review summary {
+  color: var(--mizar-status-warning);
+  cursor: pointer;
+  padding-block: var(--mizar-layout-compact);
+}
+.match-side-review p {
+  padding-top: var(--mizar-layout-compact);
+}

@@ -131,7 +131,7 @@ export function MatchDocumentView({
       <Panel>
         <div className="preparation-match__meta">
           <h2>比赛地图</h2>
-          <StatusPill tone="info">{match.format.toUpperCase()}</StatusPill>
+          <span className="match-format">{match.format.toUpperCase()}</span>
         </div>
         <p>
           {match.entrants.a.name} vs {match.entrants.b.name}
@@ -154,7 +154,12 @@ export function MatchDocumentView({
                     <h3>{mapLabel(map.name)}</h3>
                     {map.score ? <strong className="match-map-score">{map.score}</strong> : null}
                     {map.conflict ? (
-                      <StatusPill tone="warning">开局阵营待核对</StatusPill>
+                      <details className="match-side-review">
+                        <summary>选边待核对</summary>
+                        {map.sideNotes.map((note) => (
+                          <p key={note}>{note}</p>
+                        ))}
+                      </details>
                     ) : map.startA ? (
                       <dl className="match-map-sides" aria-label="开局阵营">
                         <div>
@@ -192,13 +197,13 @@ export function MatchDocumentView({
                   <li key={step.stepOrder}>
                     <span className="match-veto-number">{step.stepOrder}</span>
                     {image ? <img src={image.outputPath} alt="" /> : <span />}
-                    <StatusPill tone="info">
+                    <span className="match-veto-action">
                       {
                         { ban: '禁用', pick: '选图', side_pick: '选边', decider: '决胜图' }[
                           step.actionType
                         ]
                       }
-                    </StatusPill>
+                    </span>
                     <div className="match-veto-description">
                       <strong>{mapLabel(step.mapName)}</strong>
                       <span>
