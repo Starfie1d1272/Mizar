@@ -546,4 +546,4 @@ reset 都从当前时刻重新开始，不补播旧动画。
 
 ### 本机制作提示
 
-`GET /local/v1/production-guidance` 为私有、只读、no-store 的本机展示响应，包含当前任务、阶段、地图结果、下一图、图间软提醒和安全的 RivalHub 工作台链接。Bilibili 状态由 Companion 独立 best-effort 查询，仅为本机 UI 使用；失败为 unknown，不进入公开 LiveSnapshot / ReliableEvent 或制作门禁。字段类型见 `ProductionGuidance`，语义见 ADR-0018。
+`GET /local/v1/production-guidance` 为私有、只读、no-store 的本机展示响应，包含当前任务、阶段、地图结果、下一图、图间软提醒和安全的 RivalHub 工作台链接。Bilibili 状态由 Companion 独立 best-effort 查询，仅为本机 UI 使用；失败为 unknown，不进入公开 LiveSnapshot / ReliableEvent 或制作门禁。字段类型见 `ProductionGuidance`，语义见 ADR-0019。

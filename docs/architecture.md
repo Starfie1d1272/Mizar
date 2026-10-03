@@ -465,7 +465,6 @@ RivalHub 已绑定的 Manifest 继续沿用 MatchContextController 与现有本�
 
 `packages/design-tokens` 管理静态 CSS，JSON 是视觉值的唯一源文件，包没有运行时依赖。Web `ui/` 使用用途/组件变量，负责控件样式、无障碍和交互；`patterns/` 组合基础组件；功能页面读取既有业务领域模块，负责布局与组合，不把比赛、运行时或 RivalHub 的业务事实引入基础组件和组合组件。架构检查覆盖依赖方向、变量声明来源、生成物漂移和新增页面主题；历史 CSS 使用精确迁移清单。三类界面与播出渲染例外见 [设计系统](design/README.md) 和 ADR-0012。
 
-
 ## 自动节目编排与静态画面（#106）
 
 Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal fixture 仍由既有排练控制器推进。它消费 Program/SeriesProgress/BP，通过唯一 `ProgramSceneController` 请求切场；手动 Take 进入持续保持，显式恢复自动后重新核验当前事实。最多一个自动切换在途，无离线队列，切换前后检查 revision、代际、地图、上下文和 deadline；失败保持旧场景。BP 的同一个播放 owner 在暂停/过期时冻结其展示时钟。场景 registry 同处的展示 policy 描述 Cut / Fade 与时长，OBS adapter 按本地 transitionKind 解析并只写目标 Mizar 场景 override；淡化以视频转场完成事件和目标场景读回确认。BP 直到淡化成功仍保留当前画面，成功后清理会话，失败可恢复旧场景。手动 Take 取消自动等待，立即走 Cut。
@@ -476,4 +475,4 @@ Companion `ProgramDirector` 在 live/hidden 制作期间默认自动，rehearsal
 
 ### 制作提示与平台状态
 
-Companion 的 ProductionGuidanceStore 基于已有投影和比赛资料生成只读提示；BilibiliStatus 拥有固定域名的有界查询与缓存。Preparation / Workspace 共用 `/local/v1/production-guidance`，不新增 canonical owner，也不改变公开上传契约。Desktop 仅通过受限 HTTPS 工作台命令打开系统浏览器。边界见 ADR-0018。
+Companion 的 ProductionGuidanceStore 基于已有投影和比赛资料生成只读提示；BilibiliStatus 拥有固定域名的有界查询与缓存。Preparation / Workspace 共用 `/local/v1/production-guidance`，不新增 canonical owner，也不改变公开上传契约。Desktop 仅通过受限 HTTPS 工作台命令打开系统浏览器。边界见 [ADR-0019](decisions/0019-production-guidance-and-platform-status.md)。

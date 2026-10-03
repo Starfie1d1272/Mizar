@@ -5,34 +5,69 @@ import { OFFICIAL_RIVALHUB_URL } from '../match-context/rivalhub-connection.js';
 
 /** One current-match reminder clock; canonical results stay in SeriesProgress/MatchContext. */
 export class ProductionGuidanceStore {
-  private matchKey: string | null = null;
-  private ended: { order: number; epoch: number; at: number } | null = null;
+  private scope: string | null = null;
+  private completedKey: string | null = null;
+  private ended: { key: string; at: number } | null = null;
+  private previous: { producer: string; seq: number } | null = null;
+  private eventFloor = -1;
   constructor(
     private readonly now = () => performance.now(),
     private readonly utc = () => Date.now(),
   ) {}
   update(bundle: ProjectionBundle, binding?: MatchContextBinding): void {
     const p = bundle.program;
-    const key = p.match ? `${p.cursor.producerInstanceId}:${p.match.matchId}` : null;
-    if (key !== this.matchKey) {
-      this.matchKey = key;
+    const scope = p.match
+      ? JSON.stringify([p.cursor.producerInstanceId, p.cursor.liveSessionId, p.match.matchId])
+      : null;
+    const completed = [...(p.series?.maps ?? [])]
+      .reverse()
+      .find((map) => map.status === 'completed');
+    const execution = bundle.operator.seriesProgress?.maps.find(
+      (map) =>
+        map.mapOrder === completed?.mapOrder &&
+        map.mapName === completed.mapName &&
+        map.status === 'completed',
+    );
+    const key =
+      scope && completed
+        ? JSON.stringify([
+            scope,
+            completed.mapId,
+            completed.mapOrder,
+            completed.mapName,
+            execution?.executionMapEpoch ?? null,
+            p.cursor.programSourceGeneration,
+          ])
+        : null;
+    if (scope !== this.scope || key !== this.completedKey) {
+      // Invalidate first: missing evidence for the next completion must never retain the old clock.
       this.ended = null;
+      this.eventFloor =
+        this.previous?.producer === p.cursor.producerInstanceId
+          ? scope !== this.scope
+            ? p.cursor.runtimeSeq
+            : this.previous.seq
+          : -1;
+      this.scope = scope;
+      this.completedKey = key;
     }
-    if (!p.match || !p.series) return;
-    const completed = [...p.series.maps].reverse().find((map) => map.status === 'completed');
-    if (!completed) {
-      this.ended = null;
-      return;
-    }
-    if (this.ended?.order === completed.mapOrder) return;
+    this.previous = { producer: p.cursor.producerInstanceId, seq: p.cursor.runtimeSeq };
+    if (!key || !completed || !p.match || !p.series) return;
+    if (this.ended?.key === key) return;
     const transition = [...bundle.operator.runtime.recentTransitions]
       .reverse()
       .find(
         (event) =>
           event.kind === 'map_ended' &&
+          event.runtimeSeq > this.eventFloor &&
+          event.mapEpoch === execution?.executionMapEpoch &&
           event.mapEpoch === p.cursor.mapEpoch &&
           event.producerInstanceId === p.cursor.producerInstanceId &&
-          event.sourceGeneration === p.cursor.programSourceGeneration,
+          (event.liveSession.kind === 'bound' ? event.liveSession.liveSessionId : null) ===
+            p.cursor.liveSessionId &&
+          event.sourceGeneration === p.cursor.programSourceGeneration &&
+          Number.isFinite(event.at.monotonicMs) &&
+          event.at.monotonicMs <= this.now(),
       );
     if (
       p.status.context === 'fresh' &&
@@ -41,24 +76,23 @@ export class ProductionGuidanceStore {
       completed.mapOrder === p.series.currentMapOrder &&
       transition
     ) {
-      this.ended = {
-        order: completed.mapOrder,
-        epoch: p.cursor.mapEpoch,
-        at: transition.at.monotonicMs,
-      };
+      this.ended = { key, at: transition.at.monotonicMs };
       return;
     }
-    const stamp = binding?.context.maps.find(
-      (map) => map.mapOrder === completed.mapOrder,
-    )?.completedAt;
+    const stamp =
+      binding?.context.matchId === p.match.matchId
+        ? binding.context.maps.find(
+            (map) =>
+              map.mapOrder === completed.mapOrder &&
+              map.mapName === completed.mapName &&
+              map.mapId === completed.mapId,
+          )?.completedAt
+        : null;
     const time = stamp ? Date.parse(stamp) : NaN;
-    if (Number.isFinite(time) && time <= this.utc())
-      this.ended = {
-        order: completed.mapOrder,
-        epoch: p.cursor.mapEpoch,
-        at: this.now() - (this.utc() - time),
-      };
+    const utc = this.utc();
+    if (Number.isFinite(time) && time <= utc) this.ended = { key, at: this.now() - (utc - time) };
   }
+
   get(bundle: ProjectionBundle, binding?: MatchContextBinding): ProductionGuidance {
     this.update(bundle, binding);
     const p = bundle.program;
@@ -85,6 +119,12 @@ export class ProductionGuidanceStore {
     const interMapReminder =
       binding?.origin !== 'fixture' &&
       phase === 'map_end' &&
+      completed !== undefined &&
+      series?.maps.some(
+        (map) =>
+          map.mapOrder > completed.mapOrder &&
+          (map.status === 'pending' || map.status === 'current'),
+      ) === true &&
       this.ended !== null &&
       this.now() - this.ended.at >= 600_000;
     return {
