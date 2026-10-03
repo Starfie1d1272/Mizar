@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ProgramScenePage } from '../src/program/ProgramScenePage';
 import { BpPresentation } from '../src/bp/BpPresentation';
+import { getBuiltinResolvedPreset } from '@mizar/hud-config';
+import { getProgramFixture } from '../src/program/fixtures';
+import { programPreviewSnapshot } from '../src/program/presentation-preview';
 
 let root: Root | undefined;
 let container: HTMLDivElement;
@@ -42,6 +45,53 @@ afterEach(() => {
 });
 
 describe('Program scenes preview and safety boundaries', () => {
+  it('reads the activated HUD configuration in preview mode', async () => {
+    const resolved = structuredClone(getBuiltinResolvedPreset());
+    for (const placement of Object.values(resolved.layout.widgets)) placement.visible = false;
+    const fetchMock = vi.fn((path: string) => {
+      if (path !== '/local/v1/hud-config') throw new Error('offline');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ resolved, etag: '"activated"', activeRevision: 'activated' }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/program?preview=1');
+    await act(async () => {
+      root!.render(<ProgramScenePage sceneId="gameplay" />);
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.some(([path]) => path === '/local/v1/hud-config')).toBe(true);
+    expect(container.querySelector('.gameplay-hud')).not.toBeNull();
+    expect(container.querySelector('[data-hud-widget]')).toBeNull();
+  });
+
+  it('applies the same preview variants to HUD teams, players and series without changing fixtures', () => {
+    const original = structuredClone(getProgramFixture('real-live-rich'));
+    const noMedia = programPreviewSnapshot('gameplay', 'no-media').payload;
+    expect(Object.values(noMedia.teams).every((team) => team.logoUrl === null)).toBe(true);
+    expect(noMedia.players.every((player) => player.avatarUrl === null)).toBe(true);
+    const long = programPreviewSnapshot('matchup', 'long-names').payload;
+    for (const team of Object.values(long.teams)) {
+      expect(team.name).toContain('长名称战队');
+      expect(Object.values(long.series!.entrants).some((entry) => entry.name === team.name)).toBe(
+        true,
+      );
+    }
+    for (const [format, maps, wins] of [
+      ['bo1', 1, 1],
+      ['bo5', 5, 3],
+    ] as const) {
+      const snapshot = programPreviewSnapshot('gameplay', format).payload;
+      expect(snapshot.match?.format).toBe(format);
+      expect(snapshot.series?.format).toBe(format);
+      expect(snapshot.series?.requiredWins).toBe(wins);
+      expect(snapshot.series?.maps).toHaveLength(maps);
+    }
+    expect(getProgramFixture('real-live-rich')).toEqual(original);
+  });
+
   it('renders default visual for all program scenes in preview mode when no match is bound', async () => {
     window.history.replaceState({}, '', '/program/waiting?preview=1');
 

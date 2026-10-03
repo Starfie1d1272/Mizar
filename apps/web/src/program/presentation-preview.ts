@@ -3,22 +3,24 @@ import type {
   ProgramPresentation,
   MapSummary,
 } from '@mizar/protocol/program-scenes';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { getProgramFixture } from './fixtures';
 import waitingSchedule from './fixtures/waiting-schedule.json';
 
 /** Renderer-only samples; never posted to Companion or Runtime. */
-export function presentationPreview(
+export function programPreviewSnapshot(
   scene: ProgramSceneId,
   variant: string | null,
-): ProgramPresentation {
+): ProgramSnapshot {
   const snapshot = getProgramFixture(
     scene === 'halftime'
       ? 'real-halftime-after'
-      : scene === 'waiting' || scene === 'matchup'
+      : scene === 'waiting' || scene === 'matchup' || scene === 'gameplay'
         ? 'real-live-rich'
         : 'real-gameover',
   )!;
-  const p = structuredClone(snapshot.payload);
+  const result = structuredClone(snapshot);
+  const p = result.payload;
   // Reuse the existing BO3 presentation plan, independently of the real telemetry.
   // Never infer a production decider from its position in the series.
   const bpPlan = getProgramFixture('series-bo3-map1')?.payload.series;
@@ -32,6 +34,49 @@ export function presentationPreview(
         : map;
     });
   }
+  if (p.series && variant === 'no-media') {
+    p.series.entrants.a.logoUrl = null;
+    p.series.entrants.b.logoUrl = null;
+  }
+  if (p.series && variant === 'long-names') {
+    p.series.entrants.a.name = '长名称战队 · North Star International';
+    p.series.entrants.b.name = '长名称战队 · Southern Cross International';
+  }
+  if (p.series && (variant === 'bo1' || variant === 'bo5')) {
+    const base = p.series.maps[0];
+    p.series.format = variant;
+    p.series.requiredWins = variant === 'bo1' ? 1 : 3;
+    if (p.match) p.match.format = variant;
+    if (base)
+      p.series.maps = Array.from({ length: variant === 'bo1' ? 1 : 5 }, (_, i) => ({
+        ...base,
+        mapOrder: i + 1,
+        status: i === 0 ? base.status : 'pending',
+        finalScore: i === 0 ? base.finalScore : null,
+        winnerEntryId: i === 0 ? base.winnerEntryId : null,
+      }));
+  }
+  for (const team of Object.values(p.teams)) {
+    if (team.mode !== 'canonical' || !p.series) continue;
+    const entrant = Object.values(p.series.entrants).find((item) => item.entryId === team.entryId);
+    if (entrant) {
+      team.name = entrant.name;
+      team.logoUrl = entrant.logoUrl;
+    }
+  }
+  for (const player of p.players) {
+    if (variant === 'no-media') player.avatarUrl = null;
+    if (variant === 'long-names') player.displayName = 'Very Long Player Display Name';
+  }
+  return result;
+}
+
+export function presentationPreview(
+  scene: ProgramSceneId,
+  variant: string | null,
+): ProgramPresentation {
+  const snapshot = programPreviewSnapshot(scene, variant);
+  const p = snapshot.payload;
   const map = p.series?.maps.find((item) => item.mapName === p.map.name);
   const rows = (entryId: string | undefined) => {
     const side = p.teams.ct.entryId === entryId ? 'CT' : p.teams.t.entryId === entryId ? 'T' : null;
@@ -40,8 +85,8 @@ export function presentationPreview(
       .slice(0, 5)
       .map((player) => ({
         id: player.sourcePlayerId,
-        name: variant === 'long-names' ? 'Very Long Player Display Name' : player.displayName,
-        avatarUrl: variant === 'no-media' ? null : player.avatarUrl,
+        name: player.displayName,
+        avatarUrl: player.avatarUrl,
         kills: player.matchStats?.kills ?? null,
         assists: player.matchStats?.assists ?? null,
         deaths: player.matchStats?.deaths ?? null,
@@ -58,26 +103,6 @@ export function presentationPreview(
     },
     players: { a: rows(p.series?.entrants.a.entryId), b: rows(p.series?.entrants.b.entryId) },
   };
-  if (p.series && variant === 'no-media') {
-    p.series.entrants.a.logoUrl = null;
-    p.series.entrants.b.logoUrl = null;
-  }
-  if (p.series && variant === 'long-names') {
-    p.series.entrants.a.name = '长名称战队 · North Star International';
-    p.series.entrants.b.name = '长名称战队 · Southern Cross International';
-  }
-  if (p.series && (variant === 'bo1' || variant === 'bo5')) {
-    const base = p.series.maps[0];
-    p.series.format = variant;
-    if (base)
-      p.series.maps = Array.from({ length: variant === 'bo1' ? 1 : 5 }, (_, i) => ({
-        ...base,
-        mapOrder: i + 1,
-        status: i === 0 ? base.status : 'pending',
-        finalScore: i === 0 ? base.finalScore : null,
-        winnerEntryId: i === 0 ? base.winnerEntryId : null,
-      }));
-  }
   if (scene === 'waiting' && p.series && p.match) {
     const [previous, current, next] = waitingSchedule.matches;
     if (previous && current && next) {

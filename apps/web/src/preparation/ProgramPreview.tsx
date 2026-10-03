@@ -105,7 +105,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
         </span>
       </div>
       {!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding' ? (
-        <p>当前 BP 未显示，连续演示将跳过 BP；可在 BP 标签中先开始演示并播放。</p>
+        <p>当前 BP 未显示，连续演示将跳过 BP。BP 标签中的播放与收起会影响当前播出会话。</p>
       ) : null}
       {preview !== 'bp' ? (
         <div className="program-preview-options">
@@ -155,7 +155,10 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
       ) : null}
       <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
         <ScenePreviewViewport frame={frame} onSettled={onSettled} />
-        {preview === 'bp' && !demo ? <BpWorkspaceControls /> : null}
+        <div hidden={preview !== 'bp' || demo !== null}>
+          <p>当前 BP 播出控制：播放、收起及切换演示来源会同步影响 OBS 的 BP 画面。</p>
+          <BpWorkspaceControls />
+        </div>
       </div>
       {standalone ? null : (
         <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>

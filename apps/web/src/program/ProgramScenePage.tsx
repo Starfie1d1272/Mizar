@@ -8,8 +8,7 @@ import {
 } from '@mizar/protocol/program-scenes';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
-import { getProgramFixture } from './fixtures';
-import { presentationPreview } from './presentation-preview';
+import { presentationPreview, programPreviewSnapshot } from './presentation-preview';
 import { ProgramCanvas } from './ProgramCanvas';
 import { GameplayHud } from './GameplayHud';
 import './program-scenes.css';
@@ -264,11 +263,13 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const liveData = usePresentation(preview);
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
-  const hud = useHudConfigClient(!preview);
+  const hud = useHudConfigClient();
   const intro = useRef<HTMLDivElement>(null);
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
-  const snapshot = preview ? getProgramFixture('real-live-rich') : connection.current;
+  const snapshot = preview
+    ? programPreviewSnapshot('gameplay', params.get('variant'))
+    : connection.current;
   const duration = preview
     ? params.get('intro') === 'short'
       ? 2000

@@ -35,13 +35,13 @@ Warmup 的 BP 完整揭示一次，最终板停留 2s 后回 Waiting。首回合
 
 ## 本地视觉评审
 
-`/preview` 使用同一生产 renderer，提供全部场景、BO 版式、无媒体、长名称、缺邻近赛程，以及 6s / 2s 开场重播和透明底切换。等待样例摘自 `fixtures/rivals-rehearsal/rivals-rehearsal.generated.json`，时间和对阵保留来源，按历史赛前画面隐藏当前和下一场的已知结果；不写入运行时。开场地图背景仅是官方缩略图的静态构图示意，不代表 CS2 实机录像。正式开场保持透明，背景由 OBS Game Capture 提供。
+`/preview` 使用同一生产 renderer，提供全部场景、BO 版式、无媒体、长名称、缺邻近赛程，以及 6s / 2s 开场重播和透明底切换。开场和 Gameplay 样例共用同一份变体转换，队名、队标、头像与 BO 同步；HUD 读取 Companion 已启用的配置，服务不可用时沿用配置客户端的默认值或最后有效值。等待样例摘自 `fixtures/rivals-rehearsal/rivals-rehearsal.generated.json`，时间和对阵保留来源，按历史赛前画面隐藏当前和下一场的已知结果；不写入运行时。开场地图背景仅是官方缩略图的静态构图示意，不代表 CS2 实机录像。正式开场保持透明，背景由 OBS Game Capture 提供。
 
 本轮播出画面复用既有语义变量与 BP 展示字体方向，没有新增主题或动态颜色通道。地图条保留 180px 高度、24px 队标留白和可折叠媒体；统计板继续共用 780 / 120 / 780 网格、5×120px 行，中央重复 K/D。底部赛事身份为主，既有 Mizar 标志作为次级署名。单图结果只保留 series map-wins 数字，删除重复标签。新增样式只属于 `ProgramScenePage` 的固定播出几何；预览控件复用 Button / Select，保留键盘焦点和减少动效。
 
 开场以浏览器合成动画连续播放；初始加载、暂停/恢复或超过 1s 的漂移才校准服务端时间，避免每次轮询反复 seek。HALFTIME 退出要求正数 freezetime countdown 或可信 live。真实 Windows / CS2 / OBS 延迟与最终 60fps 捕获仍由平台验收证明。
 
-共享统计板只显示 K–D，中央每行标记 K/D；assists 仍保留在原有快照契约中，renderer 不显示。默认预览的第三图 DECIDER 复用已有 `series-bo3-map1` 展示计划，与真实遥测来源分开标明；生产画面只认 canonical selection。`/preview` 中 BP 与其他场景共享一个预览视口，直接装载 `/program/bp`。播放、收起、BO1/BO3/BO5 演示和本地录入均在 BP 标签内操作，继续使用既有 BpSession；删除静态 BP fallback 和独立工作台布局。浏览器与桌面入口复用节目预览窗口。旧 `/operator/bp` 仅保留重定向。
+共享统计板只显示 K–D，中央每行标记 K/D；assists 仍保留在原有快照契约中，renderer 不显示。默认预览的第三图 DECIDER 复用已有 `series-bo3-map1` 展示计划，与真实遥测来源分开标明；生产画面只认 canonical selection。`/preview` 中 BP 与其他场景共享一个预览视口，直接装载 `/program/bp`。播放、收起、BO1/BO3/BO5 演示和本地录入均在 BP 标签内操作，继续使用既有 BpSession；这些控制会影响当前 BP 播出，界面明确标注，与只读连续转场演示区分。切换场景或连续演示仅隐藏 BP 控制，保留当前未保存的编辑；删除静态 BP fallback 和独立工作台布局。浏览器与桌面入口复用节目预览窗口。旧 `/operator/bp` 仅保留重定向。
 
 ### 统一转场
 

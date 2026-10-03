@@ -18,15 +18,13 @@ test('preview fades between ready scenes, keeps at most two layers and latest se
     new MutationObserver(() => {
       samples.push(stage.querySelectorAll('iframe').length);
     }).observe(stage, { childList: true });
-    const animate = (
-      element: Element,
-      frames: Keyframe[] | PropertyIndexedKeyframes | null,
-      options?: number | KeyframeAnimationOptions,
-    ) => Element.prototype.animate.call(element, frames, options);
+    // Keep the native method; call below supplies each element as its receiver.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const animate = Element.prototype.animate;
     Element.prototype.animate = function (frames, options) {
       if (this instanceof HTMLIFrameElement && typeof options === 'object')
         animationDurations.push(Number(options.duration));
-      return animate(this, frames, options);
+      return animate.call(this, frames, options);
     };
   });
   await page.getByRole('button', { name: '半场', exact: true }).click();

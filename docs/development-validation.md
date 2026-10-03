@@ -54,6 +54,17 @@
 
 Browser acceptance uses real-derived Program fixtures whenever committed capture evidence exists. Synthetic fixtures are reserved for explicit edge/fail-closed or presentation stress and must declare provenance/reason. Browser acceptance checks behavior and semantic state; diagnostic screenshots may be attached, but do not determine pass/fail.
 
+### 本地 dev 预览
+
+使用仓库要求的 Node / pnpm 版本，首次启动或切换分支后执行 `pnpm install --frozen-lockfile` 与 `pnpm build`。Companion 必须收到非空 `GSI_TOKEN`；只做本机样例演练时可为当前终端设置临时开发值，真实 GSI 接入则应与 CS2 配置一致。
+
+```sh
+export GSI_TOKEN=mizar-local-preview
+pnpm dev
+```
+
+PowerShell 使用 `$env:GSI_TOKEN = "mizar-local-preview"`，再运行 `pnpm dev`。该命令启动 `3000` 的 Companion 与 `4173` 的 Web；通过 `http://127.0.0.1:4173/` 进入准备中心。首页“加载 Rivals 示例”与阶段推进通过 Vite 代理访问 Companion，“画面 → 节目预览”或 `/preview` 检查版式，`/preview?scene=bp` 提供当前 BP 播出控制。当前连续转场演示只读、使用版式样例，不跟随 Rivals 阶段，也不验证自动编排。
+
 ### B.1 Rivals 示例与 15 阶段验证
 
 为了在脱离公网 RivalHub 和未连接现场 CS2 时完整演练与验证全套制作流程，Companion 提供了「加载 Rivals 示例」开发与测试工具：
