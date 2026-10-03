@@ -1,5 +1,7 @@
 # Architecture Decision Records
 
+- [0017：自动节目编排与有界场景展示](0017-program-direction-and-presentation.md)：默认自动、手动保持、节目时序、静态场景连续性与默认视觉边界。
+
 ADR 用于记录会长期约束仓库的技术/产品架构决策，避免重要选择只存在于 Issue、聊天或某次实现里。
 
 ## 状态

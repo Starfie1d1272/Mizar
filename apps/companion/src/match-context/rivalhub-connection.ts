@@ -3,7 +3,8 @@ import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
-import { validateBroadcastScheduleWindow } from '@mizar/rivalhub';
+import type { ScheduleWindowV1 } from '@mizar/core/match-context';
+import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
 import type { ReliableDeliveryResult } from '../output/reliable-outbox.js';
 
@@ -44,6 +45,19 @@ function normalizeBaseUrl(value: string): string {
 
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {
+  private scheduleGeneration = 0;
+  private scheduleCache: {
+    competitionId: string;
+    value: ScheduleWindowV1;
+    acquiredAt: number;
+  } | null = null;
+  getSchedule(): ScheduleWindowV1 | null {
+    return this.installation &&
+      this.scheduleCache?.competitionId === this.installation.competitionId &&
+      performance.now() - this.scheduleCache.acquiredAt < 60_000
+      ? this.scheduleCache.value
+      : null;
+  }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;
   private source: Source | null = null;
@@ -99,6 +113,7 @@ export class RivalHubConnection {
       if (error.code !== 'ENOENT') throw error;
     });
     this.installation = null;
+    this.scheduleCache = null;
     this.source = null;
     this.activeDeviceName = null;
     this.pendingPairing = null;
@@ -224,12 +239,25 @@ export class RivalHubConnection {
   }
 
   async schedule(from: string, to: string) {
+    const generation = ++this.scheduleGeneration;
+    const installation = this.installation;
     const response = await this.request(
       `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     );
     if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
     const result = validateBroadcastScheduleWindow(await response.json());
     if (!result.ok) throw new Error('赛事赛程格式不兼容。');
+    if (
+      this.installation &&
+      result.value.competition.competitionId === this.installation.competitionId &&
+      installation === this.installation &&
+      generation === this.scheduleGeneration
+    )
+      this.scheduleCache = {
+        competitionId: this.installation.competitionId,
+        value: toScheduleWindowV1(result.value),
+        acquiredAt: performance.now(),
+      };
     return result.value;
   }
 

@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import {
@@ -19,6 +19,17 @@ class FakeObs implements ObsRpc {
   transforms = new Map<number, Record<string, unknown>>();
   outputActive = false;
   calls: string[] = [];
+  currentScene = '';
+  overrides = new Map<string, Record<string, unknown>>();
+  transitions = [
+    { transitionKind: 'cut_transition', transitionName: '直接切换' },
+    { transitionKind: 'fade_transition', transitionName: '淡化' },
+  ];
+  listeners = new Set<(name: string) => void>();
+  onTransitionVideoEnded(listener: (name: string) => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
   nextId = 1;
   call(type: string, data: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     return Promise.resolve(this.callSync(type, data));
@@ -50,7 +61,10 @@ class FakeObs implements ObsRpc {
         fpsDenominator: 1,
       };
     if (type === 'GetSceneList')
-      return { scenes: [...this.scenes.keys()].map((sceneName) => ({ sceneName })) };
+      return {
+        currentProgramSceneName: this.currentScene,
+        scenes: [...this.scenes.keys()].map((sceneName) => ({ sceneName })),
+      };
     if (type === 'CreateScene') {
       this.scenes.set(name, []);
       return {};
@@ -106,7 +120,17 @@ class FakeObs implements ObsRpc {
         Number(data.sceneItemIndex);
       return {};
     }
-    if (type === 'SetCurrentProgramScene') return {};
+    if (type === 'GetSceneTransitionList') return { transitions: this.transitions };
+    if (type === 'SetSceneSceneTransitionOverride') {
+      this.overrides.set(name, data);
+      return {};
+    }
+    if (type === 'GetCurrentProgramScene') return { currentProgramSceneName: this.currentScene };
+    if (type === 'GetCurrentSceneTransitionCursor') return { transitionCursor: 1 };
+    if (type === 'SetCurrentProgramScene') {
+      this.currentScene = name;
+      return {};
+    }
     throw new Error(`unknown request ${type}`);
   }
   addItem(sceneName: string, sourceName: string) {
@@ -174,7 +198,7 @@ it('repairs only Mizar collection, browser sources and order, then is idempotent
   );
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   await switchObsScene(obs, 'gameplay');
-  expect(obs.calls.at(-1)).toBe('SetCurrentProgramScene');
+  expect(obs.calls.at(-1)).toBe('GetCurrentProgramScene');
 });
 
 it('refuses collection mutations during output and protects user source names', async () => {
@@ -187,4 +211,95 @@ it('refuses collection mutations during output and protects user source names', 
   obs.inputs.set(ownedBrowser, { kind: 'image_source', settings: {} });
   await expect(repairObsConfiguration(obs, baseUrl)).rejects.toThrow('来源名称冲突');
   expect(obs.scenes.size).toBe(0);
+});
+
+it('uses localized transition kinds only on the target Mizar scene and waits for video completion', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  let done = false;
+  const switching = switchObsScene(obs, 'halftime', {
+    transition: { kind: 'fade', durationMs: 300 },
+  }).then(() => {
+    done = true;
+  });
+  await vi.waitFor(() => expect(obs.currentScene).toBe('Mizar · 半场'));
+  expect(done).toBe(false);
+  expect(obs.overrides.get('Mizar · 半场')).toEqual({
+    sceneName: 'Mizar · 半场',
+    transitionName: '淡化',
+    transitionDuration: 300,
+  });
+  obs.listeners.forEach((listener) => listener('other transition'));
+  await Promise.resolve();
+  expect(done).toBe(false);
+  obs.listeners.forEach((listener) => listener('淡化'));
+  await switching;
+  expect(done).toBe(true);
+  expect(obs.listeners.size).toBe(0);
+  expect(obs.calls).not.toContain('SetCurrentSceneTransition');
+});
+
+it('an immediate Cut has no animation wait and abort releases an in-flight fade listener', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const abort = new AbortController();
+  const switching = switchObsScene(obs, 'waiting', {
+    transition: { kind: 'fade', durationMs: 300 },
+    signal: abort.signal,
+  });
+  const rejected = expect(switching).rejects.toThrow();
+  await vi.waitFor(() => expect(obs.currentScene).toBe('Mizar · 赛前等待'));
+  abort.abort();
+  await rejected;
+  expect(obs.listeners.size).toBe(0);
+  await switchObsScene(obs, 'gameplay', { transition: { kind: 'cut', durationMs: 0 } });
+  expect(obs.currentScene).toBe('Mizar · 比赛中');
+  expect(obs.overrides.get(obs.currentScene)).toMatchObject({
+    transitionName: '直接切换',
+    transitionDuration: null,
+  });
+});
+
+it('fails closed when the required transition is missing or the intent becomes invalid before Take', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.transitions = obs.transitions.filter((t) => t.transitionKind === 'cut_transition');
+  await expect(
+    switchObsScene(obs, 'waiting', { transition: { kind: 'fade', durationMs: 300 } }),
+  ).rejects.toThrow('缺少');
+  expect(obs.calls).not.toContain('SetCurrentProgramScene');
+  await expect(
+    switchObsScene(obs, 'waiting', {
+      transition: { kind: 'cut', durationMs: 0 },
+      valid: () => false,
+    }),
+  ).rejects.toThrow('失效');
+  expect(obs.calls).not.toContain('SetCurrentProgramScene');
+});
+
+it('does not report a fade as complete when OBS omits its completion event', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  vi.useFakeTimers();
+  try {
+    const switching = switchObsScene(obs, 'waiting', {
+      transition: { kind: 'fade', durationMs: 300 },
+    });
+    const rejected = expect(switching).rejects.toThrow('超时');
+    await vi.advanceTimersByTimeAsync(1001);
+    await rejected;
+    expect(obs.listeners.size).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('adopts an already on-air target without waiting for a transition event that will not fire', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.currentScene = 'Mizar · 半场';
+  obs.calls = [];
+  await switchObsScene(obs, 'halftime', { transition: { kind: 'fade', durationMs: 300 } });
+  expect(obs.calls).not.toContain('SetCurrentProgramScene');
+  expect(obs.listeners.size).toBe(0);
 });

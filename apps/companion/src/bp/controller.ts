@@ -12,6 +12,18 @@ export class BpSession {
   private state: BpSnapshot['state'] = 'hidden';
   private count = 0;
   private startedAt = 0;
+  private pausedAt: number | null = null;
+  private pausedDuration = 0;
+  private presentationNow(): number {
+    return (this.pausedAt ?? this.now()) - this.pausedDuration;
+  }
+  setPaused(paused: boolean): void {
+    if (paused && this.pausedAt === null) this.pausedAt = this.now();
+    else if (!paused && this.pausedAt !== null) {
+      this.pausedDuration += Math.max(0, this.now() - this.pausedAt);
+      this.pausedAt = null;
+    }
+  }
   constructor(
     private readonly getProjection: () => CoreBpProjection | null,
     private readonly now = () => performance.now(),
@@ -29,13 +41,13 @@ export class BpSession {
     if (this.state === 'revealing') {
       const count = Math.min(
         this.projection!.steps.length,
-        1 + Math.floor(Math.max(0, this.now() - this.startedAt) / 1600),
+        1 + Math.floor(Math.max(0, this.presentationNow() - this.startedAt) / 1600),
       );
       if (count !== this.count) {
         this.count = count;
       }
       if (count === this.projection!.steps.length) this.state = 'shown';
-    } else if (this.state === 'hiding' && this.now() - this.startedAt >= 360) {
+    } else if (this.state === 'hiding' && this.presentationNow() - this.startedAt >= 360) {
       this.state = 'hidden';
       this.count = 0;
       this.revision++;
@@ -68,6 +80,21 @@ export class BpSession {
       revealedCount: this.count,
     });
   }
+  showFinal(): void {
+    this.get();
+    if (!this.projection) return;
+    this.state = 'shown';
+    this.count = this.projection.steps.length;
+    this.revision++;
+  }
+  /** The scene compositor has finished taking BP off air; no second exit animation. */
+  finishSceneExit(): void {
+    this.get();
+    if (this.state === 'hidden') return;
+    this.state = 'hidden';
+    this.count = 0;
+    this.revision++;
+  }
   command(kind: 'play' | 'hide', revision: string): BpSnapshot | null {
     const current = this.get();
     if (current.revision !== revision) return null;
@@ -79,7 +106,7 @@ export class BpSession {
       if (this.state === 'hidden' || this.state === 'hiding') return null;
       this.state = 'hiding';
     }
-    this.startedAt = this.now();
+    this.startedAt = this.presentationNow();
     this.revision++;
     return this.get();
   }

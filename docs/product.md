@@ -55,7 +55,7 @@ LiveSnapshot V1 已覆盖 RivalHub 第一版 public LIVE 所需的 Program-safe 
 
 制播工作区是产品体验范式。V1 Windows 正式 Host 采用 Tauri 2 和固定布局：真实 CS2 占所选显示器 work area 右上 75% 盒内的最大 16:9 区域，Big Radar 与 Context Panel 在左，Scene / Match / Local / OBS / Status 控制在下。浏览器 `/workspace` 提供相同组件的审查预览，localhost Web-first 页面仍独立可用。窗口与几何只由 Host 管理；比赛与播出状态继续由 Companion 拥有。
 
-Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；制作人员显式切换，数据不足、上下文过期或身份不一致时保持当前安全场景。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 Mizar 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
+Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结果、图间、整场结果。共享 Program Scene registry 决定场景路由与 OBS composition；进入现场后默认自动编排，手动切换后保持当前场景，显式恢复自动才交还控制。数据不足、暂停、上下文过期、身份冲突或 OBS 切换失败时暂停推进；已经播出的静态画面保持连续。Gameplay、BP 和 Radar 复用现有 Renderer 与 projection。OBS 由 Companion 检查、修复 Mizar 自有 Scene Collection；正在推流或录制时不改 Collection，也不自动修改全局视频或输出设置。
 
 ## 4. 现场用户
 
@@ -87,9 +87,11 @@ Break / Emergency
 
 节目状态与 RivalHub 官方事实分离：播放 BP、切换节目场景或手动覆盖展示状态，不应修改赛事后台的 canonical BP、赛果或比赛生命周期。
 
-BP / Veto 只消费已确认赛事事实：制作人员点击“播放 BP”，系统按固定间隔逐项累积展示，完整 BP 保持显示，点击“收起 BP”后统一退场。不提供暂停、上一步、下一步或跳转。`/operator/bp` 提供来源、数据就绪状态、本地填写与同一 Renderer 的预览；未绑定比赛或当前 BP 缺失、不完整、有冲突时，允许本地填写。已绑定比赛的补录保留比赛、赛事、队伍、名单和已完成地图身份，只保存本地 BP；这类 `bound-overlay` 来源模式在保存和缓存恢复后仍锁定 canonical 字段。独立填写创建 `standalone` 本地比赛，可继续编辑本地赛事、阶段、赛制、队名和队标，同时保持稳定 IDs。有效的 RivalHub BP 就绪时隐藏本地补录入口。RivalHub 来源在本地覆盖期间恢复后，先展示比赛摘要并等待制作人员确认切回。独立不透明全屏 `/program/bp` 供 OBS 装载；播放会话由 Companion 持有，不修改 RivalHub canonical BP。Host 与恢复规则见 ADR-0009。
+BP / Veto 只消费已确认赛事事实：制作人员点击“播放 BP”，系统按固定间隔逐项累积展示，完整 BP 保持显示，点击“收起 BP”后统一退场。不提供暂停、上一步、下一步或跳转。`/preview?scene=bp` 提供来源、数据就绪状态、本地填写与同一 Renderer 的预览；未绑定比赛或当前 BP 缺失、不完整、有冲突时，允许本地填写。已绑定比赛的补录保留比赛、赛事、队伍、名单和已完成地图身份，只保存本地 BP；这类 `bound-overlay` 来源模式在保存和缓存恢复后仍锁定 canonical 字段。独立填写创建 `standalone` 本地比赛，可继续编辑本地赛事、阶段、赛制、队名和队标，同时保持稳定 IDs。有效的 RivalHub BP 就绪时隐藏本地补录入口。RivalHub 来源在本地覆盖期间恢复后，先展示比赛摘要并等待制作人员确认切回。独立不透明全屏 `/program/bp` 供 OBS 装载；播放会话由 Companion 持有，不修改 RivalHub canonical BP。Host 与恢复规则见 ADR-0009。
 
-`/operator/bp` 另提供 BO1、BO3、BO5 场景测试，使用 checked-in NJU Rivals 赛事 Manifest 验证 BP 画面、动画和 OBS 输出。Demo 是 ephemeral BP Presentation source：它与真实 BP 共用同一个 `BpSession`，只在 BP Presentation 内生效；不属于本地比赛或 MatchContext source，不持久化，也不写入 RivalHub、LKG、SeriesProgress、IdentityResolver 或 Gameplay Program。Demo 的 Manifest 仍通过标准校验、MatchContext 转换和 `inspectBp` 投影，普通工作台只读取当前 Demo 格式。切换或退出 Demo 需要先收起 BP，退出后恢复最新真实 BP projection。
+`/preview?scene=bp` 另提供 BO1、BO3、BO5 场景测试，使用 checked-in NJU Rivals 赛事 Manifest 验证 BP 画面、动画和 OBS 输出。Demo 是 ephemeral BP Presentation source：它与真实 BP 共用同一个 `BpSession`，只在 BP Presentation 内生效；不属于本地比赛或 MatchContext source，不持久化，也不写入 RivalHub、LKG、SeriesProgress、IdentityResolver 或 Gameplay Program。Demo 的 Manifest 仍通过标准校验、MatchContext 转换和 `inspectBp` 投影，普通工作台只读取当前 Demo 格式。切换或退出 Demo 需要先收起 BP，退出后恢复最新真实 BP projection。
+
+自动场景转场统一采用短淡化：普通场景 300ms、返回比赛画面 150ms。开场到 HUD 延续既有队标收拢，不叠加额外淡化；手动切场及临近/已经开打时立即切入。BP 退场和跨场景淡化共用一次退出过程。节目预览支持只读连续转场演示与立即切入比赛预览，演示不发送生产命令。
 
 ### 5.1 Gameplay HUD
 
@@ -249,7 +251,7 @@ RivalHub 或其它赛事上下文提供方暂时不可达时：
 
 ## 9. 用户界面与语言
 
-Operator、配置、错误、诊断与操作提示默认中文，并避免直接暴露内部枚举、类名或架构术语。正式 on-air HUD 不要求逐项中文化：对于 CS 赛事中通用、短且高识别度的广播标签，可以直接使用英文，例如 `ROUND`、`CURRENT`、`DECIDER`、`TECH PAUSE`；语言选择属于 presentation system，不改变 domain truth。
+Operator、配置、错误、诊断与操作提示默认中文，并避免直接暴露内部枚举、类名或架构术语。正式 on-air HUD 与默认节目包的固定广播标签统一使用常规英文，赛事名、队名及赛事提供的阶段名称保留来源文本，例如 `ROUND`、`CURRENT`、`DECIDER`、`TECH PAUSE`；语言选择属于 presentation system，不改变 domain truth。
 
 Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一层、是否新鲜以及用户应如何判断异常。
 
@@ -259,7 +261,7 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 以下能力可以作为独立增强，但不构成 Mizar 成立的前提：
 
-- 自动导播或自动 TAKE；
+- AI 驱动的 POV 自动切镜；正常节目场景自动编排属于基础制作流程；
 - AI 叙事理解；
 - 强制服务器安装插件；
 - 通用电竞插件市场；
@@ -272,7 +274,7 @@ Debug 页面可以显示原始 JSON，但必须用中文说明数据属于哪一
 
 ## Web 产品入口（#94）
 
-`/` 与桌面 Main 默认进入准备中心；一级导航为总览、比赛、画面、设置。准备 UI 读取 Companion 的本地 projection/control views。比赛资料和选手名单由本机 LocalTournamentStore 或经显式确认的 RivalHub 上下文提供；节目预览只渲染现有 scene projection。Qualification 继续通过单独模式启用，不进入普通制作导航。运行诊断、HUD 编辑器和 BP 工作台由独立工具窗口承载。OBS 浏览器源连接数只表示观察到相应连接，不能证明画面已加载或可见。
+`/` 与桌面 Main 默认进入准备中心；一级导航为总览、比赛、画面、设置。准备 UI 读取 Companion 的本地 projection/control views。比赛资料和选手名单由本机 LocalTournamentStore 或经显式确认的 RivalHub 上下文提供；节目预览只渲染现有 scene projection。Qualification 继续通过单独模式启用，不进入普通制作导航。运行诊断、HUD 编辑器和节目预览由独立工具窗口承载；BP 制作控制位于节目预览的 BP 场景。OBS 浏览器源连接数只表示观察到相应连接，不能证明画面已加载或可见。
 
 ## Mizar 桌面准备与现场工作区（#94）
 

@@ -5,9 +5,17 @@ import {
   OBS_WIDTH,
   obsDesiredScenes,
 } from './desired-state.js';
+import type { ProgramTransition } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  onTransitionVideoEnded?(listener: (transitionName: string) => void): () => void;
+}
+
+export interface ObsSceneSwitchOptions {
+  readonly transition: ProgramTransition;
+  readonly signal?: AbortSignal;
+  readonly valid?: () => boolean;
 }
 
 export interface ObsFinding {
@@ -100,6 +108,16 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
     });
     return findings;
   }
+  const transitionKinds = new Set(
+    objects((await obs.call('GetSceneTransitionList')).transitions).map(
+      (item) => item.transitionKind,
+    ),
+  );
+  if (!transitionKinds.has('fade_transition') || !transitionKinds.has('cut_transition'))
+    findings.push({
+      code: 'transition_missing',
+      message: 'Mizar 场景集合缺少淡化或直接切换转场，请在 OBS 中补齐。',
+    });
   const video = await obs.call('GetVideoSettings');
   const fps = Number(video.fpsNumerator) / Number(video.fpsDenominator);
   if (
@@ -326,14 +344,72 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
 export async function switchObsScene(
   obs: ObsRpc,
   sceneId: Parameters<typeof import('./desired-state.js').obsSceneName>[0],
+  options: ObsSceneSwitchOptions = { transition: { kind: 'cut', durationMs: 0 } },
 ) {
+  const assertCurrent = () => {
+    options.signal?.throwIfAborted();
+    if (options.valid && !options.valid()) throw new Error('场景切换请求已失效。');
+  };
+  assertCurrent();
   const name = desiredSceneName(sceneId);
   const collections = await obs.call('GetSceneCollectionList');
   if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('请先检查并修复 Mizar 场景集合。');
-  const scenes = names((await obs.call('GetSceneList')).scenes, 'sceneName');
+  const sceneList = await obs.call('GetSceneList');
+  const scenes = names(sceneList.scenes, 'sceneName');
   if (!scenes.includes(name)) throw new Error('目标 OBS 场景尚未就绪，请先检查配置。');
-  await obs.call('SetCurrentProgramScene', { sceneName: name });
+  // OBS emits no transition event when the requested scene is already on air.
+  if (sceneList.currentProgramSceneName === name) {
+    const progress = await obs.call('GetCurrentSceneTransitionCursor');
+    assertCurrent();
+    if (progress.transitionCursor === 1) return;
+  }
+  const transitions = objects((await obs.call('GetSceneTransitionList')).transitions);
+  const transition = transitions.find(
+    (item) => item.transitionKind === `${options.transition.kind}_transition`,
+  );
+  if (typeof transition?.transitionName !== 'string')
+    throw new Error('OBS 缺少所需的切换或淡化转场，请检查场景集合。');
+  assertCurrent();
+  await obs.call('SetSceneSceneTransitionOverride', {
+    sceneName: name,
+    transitionName: transition.transitionName,
+    transitionDuration: options.transition.kind === 'fade' ? options.transition.durationMs : null,
+  });
+  assertCurrent();
+  let unsubscribe: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: (() => void) | undefined;
+  try {
+    let finished: Promise<void> | undefined;
+    if (options.transition.kind === 'fade') {
+      if (!obs.onTransitionVideoEnded) throw new Error('无法确认 OBS 转场完成。');
+      finished = new Promise<void>((resolve) => {
+        unsubscribe = obs.onTransitionVideoEnded!((transitionName) => {
+          if (transitionName === transition.transitionName) resolve();
+        });
+        cancel = resolve;
+        options.signal?.addEventListener('abort', cancel, { once: true });
+      });
+    }
+    await obs.call('SetCurrentProgramScene', { sceneName: name });
+    assertCurrent();
+    if (finished) {
+      await Promise.race([
+        finished,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('OBS 转场完成确认超时。')), 1000);
+        }),
+      ]);
+    }
+    assertCurrent();
+    const current = await obs.call('GetCurrentProgramScene');
+    if (current.currentProgramSceneName !== name) throw new Error('OBS 未切入目标场景。');
+  } finally {
+    unsubscribe?.();
+    if (timer) clearTimeout(timer);
+    if (cancel) options.signal?.removeEventListener('abort', cancel);
+  }
 }
 
 function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obsSceneName>[0]) {

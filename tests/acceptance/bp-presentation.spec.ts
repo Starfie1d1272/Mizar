@@ -1,4 +1,4 @@
-import type { BrowserContext, Locator, Page } from '@playwright/test';
+import type { BrowserContext, FrameLocator, Page } from '@playwright/test';
 import { expect, test } from './companion-isolation.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -130,7 +130,7 @@ async function playAndRevealBp(
   operator: Page,
   app: ReturnType<typeof buildApp>,
   clock: ManualBpClock,
-  surfaces: readonly (Page | Locator)[],
+  surfaces: readonly (Page | FrameLocator)[],
 ) {
   await operator.getByRole('button', { name: '播放 BP', exact: true }).click();
   for (const surface of surfaces) {
@@ -158,7 +158,7 @@ async function hideBp(
   operator: Page,
   app: ReturnType<typeof buildApp>,
   clock: ManualBpClock,
-  surfaces: readonly (Page | Locator)[],
+  surfaces: readonly (Page | FrameLocator)[],
 ) {
   await operator.getByRole('button', { name: '收起 BP', exact: true }).click();
   const hiding = JSON.parse((await app.inject('/local/v1/bp')).body) as { state: string };
@@ -183,7 +183,7 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
     await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
     try {
       await page.setViewportSize({ width: 320, height: 844 });
-      await page.goto('/operator/bp');
+      await page.goto('/preview?scene=bp');
       await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
       await expect(page.getByRole('button', { name: '本地填写 BP' })).toBeVisible();
       for (const width of [320, 390]) {
@@ -214,7 +214,10 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
       await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: '切回 RivalHub BP' })).toHaveCount(0);
 
-      await playAndRevealBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
+      await playAndRevealBp(page, app, bpClock, [
+        program,
+        page.frameLocator('iframe[title="节目预览"]'),
+      ]);
       await expect(program.locator('.bp-card')).toHaveCount(7);
       await expect(program.locator('.bp-card[data-kind="ban"]')).toHaveCount(
         format === 'bo1' ? 6 : format === 'bo3' ? 4 : 2,
@@ -226,7 +229,22 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         format === 'bo1' ? 1 : format === 'bo3' ? 3 : 4,
       );
       await expect(program.locator('.bp-scene')).not.toContainText(/DEMO|TEST|fixture/i);
-      await expect(page.locator('.bp-preview-frame .bp-card')).toHaveCount(7);
+      await expect(page.frameLocator('iframe[title="节目预览"]').locator('.bp-card')).toHaveCount(
+        7,
+      );
+
+      await page.getByRole('button', { name: '半场', exact: true }).click();
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.summary-players'),
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'BP', exact: true }).click();
+      await expect(page.locator('iframe[title="节目预览"]')).toHaveCount(1);
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-scene'),
+      ).toHaveAttribute('data-state', 'shown');
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
+      ).toHaveCount(7);
 
       const decider = program.locator('.bp-card[data-kind="decider"]');
       if (format === 'bo1') {
@@ -246,7 +264,7 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         await expect(decider).not.toContainText(/SIDE TBD/i);
       }
 
-      await hideBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
+      await hideBp(page, app, bpClock, [program, page.frameLocator('iframe[title="节目预览"]')]);
       await page.getByRole('button', { name: '退出演示' }).click();
       await expect(page.locator('.bp-source-badge')).toContainText('未连接');
       await expect(page.locator('.bp-scene-testing')).toBeVisible();
@@ -277,7 +295,7 @@ test('BP demo remains stable while the real MatchContext updates and restores it
   await routeCompanionApi(context, () => app);
   await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
   try {
-    await page.goto('/operator/bp');
+    await page.goto('/preview?scene=bp');
     const program = await context.newPage();
     await program.goto('/program/bp');
     await page
@@ -360,23 +378,42 @@ for (const key of ['semifinalA', 'final'] as const) {
     );
     await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
     try {
-      await page.goto('/operator/bp');
+      await page.goto('/preview?scene=bp');
       await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'online');
       await expect(page.getByRole('status').filter({ hasText: 'BP 已就绪' })).toBeVisible();
       await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: '本地填写 BP' })).toHaveCount(0);
-      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
+      await expect(page.frameLocator('iframe[title="节目预览"]').locator('.bp-scene')).toHaveCount(
+        0,
+      );
 
       const program = await context.newPage();
       await program.goto('/program/bp');
       await expect(program.locator('.bp-scene')).toHaveCount(0);
-      await playAndRevealBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
+      await playAndRevealBp(page, app, bpClock, [
+        program,
+        page.frameLocator('iframe[title="节目预览"]'),
+      ]);
       await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(7);
-      await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveAttribute(
-        'data-state',
-        'shown',
-      );
-      await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(7);
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-scene'),
+      ).toHaveAttribute('data-state', 'shown');
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
+      ).toHaveCount(7);
+
+      await page.getByRole('button', { name: '半场', exact: true }).click();
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.summary-players'),
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'BP', exact: true }).click();
+      await expect(page.locator('iframe[title="节目预览"]')).toHaveCount(1);
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-scene'),
+      ).toHaveAttribute('data-state', 'shown');
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
+      ).toHaveCount(7);
 
       const decider = program.locator('.bp-card[data-kind="decider"]');
       await expect(decider).toHaveAttribute('data-entrant', 'none');
@@ -407,10 +444,12 @@ for (const key of ['semifinalA', 'final'] as const) {
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-animate', 'false');
 
-      await hideBp(page, app, bpClock, [program, page.locator('.bp-preview-frame')]);
+      await hideBp(page, app, bpClock, [program, page.frameLocator('iframe[title="节目预览"]')]);
       await page.getByRole('button', { name: '播放 BP', exact: true }).click();
       await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
-      await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
+      await expect(
+        page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
+      ).toHaveCount(1);
       await program.close();
     } finally {
       await app.close();
@@ -437,7 +476,7 @@ test('cache from RivalHub does not offer local override or a redundant source sw
   });
   await routeCompanionApi(context, () => app);
   try {
-    await page.goto('/operator/bp');
+    await page.goto('/preview?scene=bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'cache');
     await expect(page.getByRole('button', { name: '本地填写 BP' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toHaveCount(0);
@@ -487,7 +526,7 @@ test('local BP shows a bounded RivalHub candidate summary and sends both revisio
     },
   );
   try {
-    await page.goto('/operator/bp');
+    await page.goto('/preview?scene=bp');
     const candidate = page.getByRole('region', { name: '待确认的 RivalHub 比赛' });
     await expect(candidate).toContainText('NAVI vs Vitality · BO3');
     await expect(candidate).toContainText('哥本哈根 Major · 四分之一决赛');
@@ -515,7 +554,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
   let app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
   await routeCompanionApi(context, () => app);
   try {
-    await page.goto('/operator/bp');
+    await page.goto('/preview?scene=bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
     expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
       schemaVersion: 'mizar.bp-workspace.v4',
@@ -536,6 +575,15 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
 
     await editor.locator('.bp-editor-match-fields input').nth(0).fill('本地赛事');
     await editor.locator('.bp-editor-match-fields input').nth(1).fill('决赛');
+    await page.getByRole('button', { name: '半场', exact: true }).click();
+    await expect(editor).toBeHidden();
+    await page.getByRole('button', { name: 'BP', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await expect(editor.locator('.bp-editor-match-fields input').nth(0)).toHaveValue('本地赛事');
+    await page.getByRole('button', { name: '连续演示转场', exact: true }).click();
+    await expect(editor).toBeHidden();
+    await page.getByRole('button', { name: 'BP', exact: true }).click();
+    await expect(editor.locator('.bp-editor-match-fields input').nth(1)).toHaveValue('决赛');
     await editor
       .locator('.bp-editor-team[data-entrant="a"] input')
       .first()
@@ -592,14 +640,16 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await expect(
       page.locator('.bp-local-editor .bp-editor-match-fields input').first(),
     ).toBeEnabled();
-    await expect(page.locator('.bp-preview-frame .bp-scene')).toHaveCount(0);
+    await expect(page.frameLocator('iframe[title="节目预览"]').locator('.bp-scene')).toHaveCount(0);
 
     const program = await context.newPage();
     await program.goto('/program/bp');
     await expect(program.locator('.bp-scene')).toHaveCount(0);
     await page.getByRole('button', { name: '播放 BP', exact: true }).click();
     await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
-    await expect(page.locator('.bp-preview-frame .bp-card[data-visible=true]')).toHaveCount(1);
+    await expect(
+      page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
+    ).toHaveCount(1);
     await program.emulateMedia({ reducedMotion: 'reduce' });
     expect(
       await program
@@ -627,7 +677,7 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
   });
   await routeCompanionApi(context, () => app);
   try {
-    await page.goto('/operator/bp');
+    await page.goto('/preview?scene=bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'online');
     await expect(page.getByRole('button', { name: '补录当前比赛 BP' })).toBeVisible();
     await page.getByRole('button', { name: '补录当前比赛 BP' }).click();
@@ -682,4 +732,14 @@ test('bound RivalHub BP fallback locks canonical identity and preserves roster a
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('legacy BP preview address redirects to the single Program workspace', async ({ page }) => {
+  await page.goto('/operator/bp?qualification=1');
+  await expect(page).toHaveURL(/\/preview\?qualification=1&scene=bp$/);
+  await expect(page.getByRole('button', { name: 'BP', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.locator('iframe[title="节目预览"]')).toHaveAttribute('src', '/program/bp');
 });

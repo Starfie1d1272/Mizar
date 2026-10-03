@@ -308,6 +308,8 @@ export default defineConfig({
       '/operator/rivalhub/': 'http://127.0.0.1:3000',
       '/operator/obs/': 'http://127.0.0.1:3000',
       '/operator/program-scene': 'http://127.0.0.1:3000',
+      '/operator/program-director': 'http://127.0.0.1:3000',
+      '/operator/rivals-rehearsal/': 'http://127.0.0.1:3000',
       '/operator/production': 'http://127.0.0.1:3000',
       '/operator/desktop-overlay': 'http://127.0.0.1:3000',
       '/operator/hud-config': 'http://127.0.0.1:3000',

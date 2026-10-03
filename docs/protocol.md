@@ -18,6 +18,10 @@ Companion 提供：`GET /local/v1/readiness` 汇总现有 projection、SceneCont
 
 `packages/protocol/src/program-scenes.ts` 是场景 ID、顺序、中文名称、路径和 composition mode 的唯一 registry。Companion 的 `GET /local/v1/program-scenes` 返回当前 scene、revision、可用 scene 和阻断原因；`POST /operator/program-scene` 使用预期 revision 切换。Workspace 只提交意图，Companion 基于当前 Program/Operator/BP projection 校验并协调 OBS，OBS Browser Source 使用相同 registry 中的路径。Tauri 仅控制本机窗口，不拥有场景真值。
 
+`program-scenes` 另带 `director` 状态：自动、手动保持、阻断或准备，以及下一场景、阻断原因、Intro 时长和本场景已播放的单调时长。`POST /operator/program-director` 接受 `{action: "resume", expectedRevision}`，仍使用 loopback + Origin + revision CAS。`program-scenes.v1` 增加可选 `preparing: {target, revision}`，仅在切场中存在，供开场 renderer 准备展示；`active` 与主 revision 仍在 OBS 完成后提交，提交沿用准备 revision，失败清除准备。该字段不改变四个高频通道。手动 Take 立即取消在途自动转场等待并使请求失效；自动请求也走同一个 controller 和 OBS adapter，失败不自动重试。
+
+`GET /local/v1/program-presentation` 返回严格 `mizar.program-presentation.v1`：内置节目包 ID、赛事/Series 安全展示、半场摘要、最多五张地图结束快照和可用的前后赛程卡。选手只含展示标识、昵称、头像及可空 K/A/D；快照带捕获 cursor。没有 Operator、Lookahead、Raw GSI 或完整 MatchDocument。静态 renderer 断流保留最后安全值，服务端换比赛/上下文后清除；这是展示缓存，不是赛果 owner。`matchup` 使用 Gameplay overlay；`halftime` 使用全屏 composition。
+
 在线比赛入口先按受限 `matchId` 通过配置的只读 HTTPS Manifest URL 获取候选，再走现有 MatchContext 验证、人工确认和 LKG。刷新失败将当前在线来源标记 stale，不清除已确认上下文；本地模式无需在线凭据。OBS 状态与检查/修复通过 Companion 本地控制面提供，密钥不进入浏览器返回值。
 
 ## Mizar-owned 输入与结构化输出 V1

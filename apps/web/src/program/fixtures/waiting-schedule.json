@@ -1,0 +1,94 @@
+{
+  "provenance": {
+    "source": "fixtures/rivals-rehearsal/rivals-rehearsal.generated.json",
+    "capturedAt": "2026-09-29",
+    "usage": "Retrospective pre-match presentation: current and next results are hidden. Not live fixtures."
+  },
+  "competition": {
+    "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
+    "slug": "2026-nju-rivals",
+    "name": "2026 NJU Rivals",
+    "logoUrl": null,
+    "themeColor": "#f97316"
+  },
+  "matches": [
+    {
+      "matchId": "3ed23d38-3507-44db-9a02-e0e2390080e6",
+      "scheduledAt": "2026-05-23T11:00:00.000Z",
+      "startedAt": null,
+      "completedAt": "2026-05-23T13:00:00.000Z",
+      "status": "finished",
+      "format": "bo3",
+      "stage": "playoff",
+      "stageLabel": "正赛",
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "isForfeit": false,
+      "scoreA": 0,
+      "scoreB": 2,
+      "entrantA": {
+        "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+        "name": "她还爱我对不 队",
+        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+      },
+      "entrantB": {
+        "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
+        "name": "Team Plasma",
+        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/fbdf2889-db44-4006-a9f6-08ee88628676/1778943880190.png"
+      }
+    },
+    {
+      "matchId": "d9987c41-180a-4113-8003-c6d18d1ba1e6",
+      "scheduledAt": "2026-05-24T02:30:00.000Z",
+      "startedAt": null,
+      "completedAt": "2026-05-24T06:47:21.636Z",
+      "status": "finished",
+      "format": "bo3",
+      "stage": "playoff",
+      "stageLabel": "正赛",
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "isForfeit": false,
+      "scoreA": 2,
+      "scoreB": 1,
+      "entrantA": {
+        "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
+        "name": "Team D'avenir",
+        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg"
+      },
+      "entrantB": {
+        "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
+        "name": "暴躁南梁",
+        "logoUrl": null
+      }
+    },
+    {
+      "matchId": "e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd",
+      "scheduledAt": "2026-05-24T11:00:00.000Z",
+      "startedAt": null,
+      "completedAt": "2026-05-24T12:50:00.000Z",
+      "status": "finished",
+      "format": "bo3",
+      "stage": "playoff",
+      "stageLabel": "正赛",
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "isForfeit": false,
+      "scoreA": 2,
+      "scoreB": 0,
+      "entrantA": {
+        "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
+        "name": "車一进一宝贝队",
+        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/bd8e019b-be34-46c9-af92-12cfef45cccb/1778943079776.jpg"
+      },
+      "entrantB": {
+        "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
+        "name": "她还爱我对不 队",
+        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+      }
+    }
+  ]
+}

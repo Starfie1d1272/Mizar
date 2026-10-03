@@ -95,11 +95,12 @@ test('Tool surfaces retain their role and Preview changes never TAKE a scene', a
     await expect(page.getByRole('navigation', { name: '制作导航' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: '总览', exact: true })).toHaveCount(0);
   }
-  await page.getByRole('button', { name: '对阵 · 不可用', exact: true }).click();
+  await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect(page.getByTitle('节目预览', { exact: true })).toHaveAttribute(
     'src',
-    '/program/matchup?preview=1',
+    /\/program\/matchup\?preview=1(?:&|$)/,
   );
+  await expect(page.frameLocator('iframe[title="节目预览"]').locator('.intro-body')).toBeVisible();
   expect(commands).toEqual([]);
   await page.goto('/picture');
   const popupPromise = page.waitForEvent('popup');

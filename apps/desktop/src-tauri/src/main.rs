@@ -532,7 +532,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
-        "bp" => ("tool-bp", "BP 工作台", "/operator/bp"),
+        "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
         "preview" => ("tool-preview", "节目预览", "/preview"),
         _ => return Err("工具无法识别。".into()),

@@ -44,13 +44,13 @@ export async function command(path: string, body: unknown = {}) {
 export type Tool = 'hud' | 'bp' | 'diagnostics' | 'preview';
 const toolPaths = {
   hud: '/operator/hud',
-  bp: '/operator/bp',
+  bp: '/preview?scene=bp',
   diagnostics: '/debug',
   preview: '/preview',
 };
 export async function openTool(tool: Tool) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool });
-  else window.open(toolPaths[tool], `mizar-${tool}`);
+  else window.open(toolPaths[tool], `mizar-${tool === 'bp' ? 'preview' : tool}`);
 }
 export async function openRivalHubAuthorization(url: string, popup?: Window | null) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_rivalhub_authorization', { url });

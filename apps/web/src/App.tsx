@@ -64,7 +64,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'bp',
-    path: '/operator/bp',
+    path: '/preview?scene=bp',
     title: 'BP 制作',
     description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
@@ -648,9 +648,14 @@ export function App() {
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   const programScene = programSceneForPath(pathname);
+  if (
+    programScene?.id === 'gameplay' &&
+    new URLSearchParams(window.location.search).get('preview') === '1'
+  )
+    return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp') return <BpPage operator />;
+  if (pathname === '/operator/bp') return <LegacyBpPreviewRedirect />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (
@@ -671,4 +676,13 @@ export function App() {
   if (surface.id === 'operator') return <OperatorPage />;
   if (surface.id === 'hud') return <HudConsolePage />;
   return <SurfacePage surface={surface} />;
+}
+
+function LegacyBpPreviewRedirect() {
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    query.set('scene', 'bp');
+    window.location.replace(`/preview?${query}`);
+  }, []);
+  return null;
 }

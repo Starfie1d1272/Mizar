@@ -4,42 +4,6 @@ import { getMapThumbnail } from '@mizar/cs2-assets';
 import { ProgramCanvas } from '../program/ProgramCanvas';
 import './bp.css';
 
-export const DEFAULT_PREVIEW_BP_PROJECTION: NonNullable<BpSnapshot['projection']> = {
-  competition: 'Mizar',
-  stage: '常规赛',
-  format: 'bo3',
-  entrants: {
-    a: { name: 'FURIA', logoUrl: '/fixtures/ancient-round-03/assets/team-furia.svg' },
-    b: { name: 'G2.Esports', logoUrl: '/fixtures/ancient-round-03/assets/team-g2.png' },
-  },
-  cards: [
-    { mapName: 'de_dust2', kind: 'ban', entrant: 'a', sideChoice: null },
-    { mapName: 'de_inferno', kind: 'ban', entrant: 'b', sideChoice: null },
-    { mapName: 'de_ancient', kind: 'pick', entrant: 'a', sideChoice: { entrant: 'b', side: 'CT' } },
-    { mapName: 'de_mirage', kind: 'pick', entrant: 'b', sideChoice: { entrant: 'a', side: 'T' } },
-    { mapName: 'de_anubis', kind: 'ban', entrant: 'a', sideChoice: null },
-    { mapName: 'de_vertigo', kind: 'ban', entrant: 'b', sideChoice: null },
-    {
-      mapName: 'de_nuke',
-      kind: 'decider',
-      entrant: null,
-      sideChoice: { entrant: 'b', side: 'CT' },
-    },
-  ],
-  steps: [
-    { cardIndex: 0, kind: 'card' },
-    { cardIndex: 1, kind: 'card' },
-    { cardIndex: 2, kind: 'card' },
-    { cardIndex: 2, kind: 'side-choice' },
-    { cardIndex: 3, kind: 'card' },
-    { cardIndex: 3, kind: 'side-choice' },
-    { cardIndex: 4, kind: 'card' },
-    { cardIndex: 5, kind: 'card' },
-    { cardIndex: 6, kind: 'card' },
-    { cardIndex: 6, kind: 'side-choice' },
-  ],
-};
-
 export function BpPresentation({
   snapshot,
   animate = false,
@@ -47,16 +11,9 @@ export function BpPresentation({
   readonly snapshot: BpSnapshot | null;
   readonly animate?: boolean;
 }) {
-  const isPreview =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('preview') === '1';
-  const projection = snapshot?.projection ?? (isPreview ? DEFAULT_PREVIEW_BP_PROJECTION : null);
-  const visible =
-    (snapshot !== null && snapshot.state !== 'hidden') || (isPreview && projection != null);
-  const effectiveRevealedCount =
-    isPreview && (snapshot === null || snapshot?.state === 'hidden') && projection
-      ? projection.steps.length
-      : (snapshot?.revealedCount ?? 0);
+  const projection = snapshot?.projection;
+  const visible = snapshot !== null && snapshot.state !== 'hidden';
+  const effectiveRevealedCount = snapshot?.revealedCount ?? 0;
   return (
     <ProgramCanvas className="bp-canvas">
       {projection && visible ? (
