@@ -87,6 +87,25 @@ export const PACKAGE_BOUNDARIES = Object.freeze({
     forbidNodeBuiltins: true,
     forbiddenWorkspacePackages: ['@mizar/telemetry-gsi', '@mizar/rivalhub'],
   }),
+  '@mizar/radar-view': packageBoundary({
+    message:
+      'Radar view consumes projected presentation inputs; transport, app state and world calibration stay in host/domain adapters.',
+    forbidden: ['fastify', 'ws', '@supabase/', 'drizzle-orm'],
+    forbidNodeBuiltins: true,
+    forbiddenWorkspacePackages: [
+      '@mizar/core',
+      '@mizar/protocol',
+      '@mizar/radar',
+      '@mizar/rivalhub',
+      '@mizar/companion',
+      '@mizar/web',
+      '@mizar/hud-config',
+      '@mizar/telemetry-gsi',
+      '@mizar/telemetry-cstv',
+      '@mizar/testkit',
+    ],
+    forbiddenWorkspacePaths: ['apps/'],
+  }),
   '@mizar/cs2-assets': packageBoundary({
     message:
       'CS2 assets owns presentation asset metadata, generated SVGs, provenance, and framework-neutral resolution; keep Runtime, telemetry, RivalHub, Radar, and renderer ownership outside the package.',

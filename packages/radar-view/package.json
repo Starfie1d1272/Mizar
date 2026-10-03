@@ -1,0 +1,52 @@
+{
+  "name": "@mizar/radar-view",
+  "version": "0.1.0",
+  "description": "Mizar projected radar Canvas renderer for React",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation.d.ts",
+      "import": "./dist/presentation.js"
+    },
+    "./geometry": {
+      "types": "./dist/canvas-geometry.d.ts",
+      "import": "./dist/canvas-geometry.js"
+    },
+    "./effects": {
+      "types": "./dist/effect-geometry.d.ts",
+      "import": "./dist/effect-geometry.js"
+    },
+    "./images": {
+      "types": "./dist/draw-contained-image.d.ts",
+      "import": "./dist/draw-contained-image.js"
+    },
+    "./radar.css": "./dist/radar.css",
+    "./assets/*": "./dist/assets/*"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p examples/tsconfig.json --noEmit",
+    "prepack": "node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@mizar/radar": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
+    "@types/react": "catalog:",
+    "@typescript/native": "catalog:",
+    "prettier": "catalog:"
+  }
+}

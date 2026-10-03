@@ -324,6 +324,9 @@ importers:
       '@mizar/radar':
         specifier: workspace:*
         version: link:../../packages/radar
+      '@mizar/radar-view':
+        specifier: workspace:*
+        version: link:../../packages/radar-view
       '@mizar/replay':
         specifier: workspace:*
         version: link:../../packages/replay
@@ -414,6 +417,28 @@ importers:
       '@typescript/native':
         specifier: 'catalog:'
         version: typescript@7.0.2
+
+  packages/radar-view:
+    dependencies:
+      react:
+        specifier: ^19.0.0
+        version: 19.3.0
+    devDependencies:
+      '@mizar/cs2-assets':
+        specifier: workspace:*
+        version: link:../cs2-assets
+      '@mizar/radar':
+        specifier: workspace:*
+        version: link:../radar
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.3.0
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      prettier:
+        specifier: 'catalog:'
+        version: 3.9.6
 
   packages/replay:
     devDependencies:

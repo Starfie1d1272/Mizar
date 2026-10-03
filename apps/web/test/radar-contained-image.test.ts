@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { drawContainedImage } from '../src/program/widgets/radar/draw-contained-image';
+import { drawContainedImage } from '@mizar/radar-view/images';
 
 describe('Radar contained projectile assets', () => {
   it('preserves the 15:32 smoke asset ratio inside a 28 by 28 box', () => {
