@@ -1,24 +1,19 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { packRadar } from './pack.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const work = await mkdtemp(join(tmpdir(), 'mizar-radar-consumer-'));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const run = (command, args, cwd) => execFileSync(command, args, { cwd, stdio: 'inherit' });
 // The repository build must precede this check. Pack exactly the built artifacts.
-run(
-  npm,
-  ['pack', '--silent', '--ignore-scripts', '--pack-destination', work],
-  join(root, 'packages/radar-view'),
-);
-const tarball = (await readdir(work)).find((name) => name.endsWith('.tgz'));
-assert(tarball);
+const tarball = basename(await packRadar(work));
 await writeFile(join(work, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
 run(
   npm,
@@ -39,6 +34,10 @@ const installed = join(work, 'node_modules/@mizar/radar-view');
 const manifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8'));
 assert(!manifest.dependencies || Object.keys(manifest.dependencies).length === 0);
 assert.equal(manifest.peerDependencies.react, '^19.0.0');
+assert.equal(manifest.devDependencies, undefined);
+assert.equal(manifest.scripts, undefined);
+assert(!/workspace:|catalog:/.test(JSON.stringify(manifest)));
+assert.equal(manifest.publishConfig.access, 'public');
 const fixture = JSON.parse(
   await readFile(join(root, 'packages/protocol/test/fixtures/live-snapshot-v1.radar.json'), 'utf8'),
 );
@@ -128,6 +127,8 @@ const live = JSON.parse(await readFile(new URL('./fixture.json', import.meta.url
 const frame = fromPublicRadar(live.radar, { boundary: JSON.stringify([live.matchId, live.delivery]), sequence: live.delivery.sequence, current: true, bomb: live.bomb });
 const model = new RadarPresentation(); model.accept(frame, 0);
 assert(model.players.size > 0); assert(model.grenades.size > 0);
+assert([...model.grenades.values()].some(g => g.source.flames.length > 0 && g.phase === 'effect'));
+assert([...model.grenades.values()].some(g => g.source.effectTimeSeconds !== null));
 assert(renderToString(createElement(RadarView, {snapshot: frame, assetBaseUrl:'/vendor/radar/0.1.0'})).includes('canvas'));
 for (const path of Object.values(getRadarArtwork(frame.mapName).artwork)) {
   const file = import.meta.resolve('@mizar/radar-view/assets/' + path.replace(/^\\//, ''));
@@ -164,6 +165,7 @@ render('fresh');
 );
 run(process.execPath, [join(root, 'apps/web/node_modules/vite/bin/vite.js'), 'build', work], work);
 const output = join(root, '.agent-tmp/radar-package');
+await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp(join(work, tarball), join(output, tarball));
 const sha256 = createHash('sha256')

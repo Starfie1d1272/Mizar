@@ -14,7 +14,7 @@ Mizar Web 的 adapter 用既有 geometry API 投影本地 RadarSnapshot，再把
 
 地图和图标继续由 `@mizar/cs2-assets` 唯一生成。展示包在构建时从既有 domain 与 asset owner 生成小型展示 manifest：资源路径、calibration revision、楼层和已投影的展示半径；不包含 world origin、z threshold 或 world projection runtime。资源按原 content hash 校验并复制进 npm 产物，附 provenance、LICENSE 与第三方 notices。Host 显式指定 `assetBaseUrl`，可部署在网站子路径或 CDN。
 
-包使用独立 semver，标准 ESM + declaration + CSS + assets 产物，只以 React 为运行时 peer。内部 workspace 包只作为构建依赖，不进入消费端运行图。Mizar 安装同一 workspace 包；外部网站通过普通 registry 版本或固定 tarball 与 lockfile 安装，不用源码 alias、跨仓 deep import 或 workspace 链接。发布本身独立于 PR，不在验证中自动 publish。
+包使用独立 semver，标准 ESM + declaration + CSS + assets 产物，只以 React 为运行时 peer。内部 workspace 包只作为构建依赖，不进入消费端运行图。Mizar 安装同一 workspace 包；外部网站通过普通 registry 版本或固定 tarball 与 lockfile 安装，不用源码 alias、跨仓 deep import 或 workspace 链接。发布本身独立于 PR，不在 PR 验证中自动 publish。干净 tarball 不含 workspace 构建依赖或生命周期脚本；独立 consumer 验证与 npm 发布使用同一打包入口。专用 radar-view 版本标签触发 OIDC 发布，要求精确提交 CI 成功，校验版本后仅发布已安装验证的 tarball；首次 npm scope/建包权限由维护者配置，具体操作见包 README。
 
 ## 验证与边界
 

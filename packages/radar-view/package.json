@@ -48,5 +48,14 @@
     "@types/react": "catalog:",
     "@typescript/native": "catalog:",
     "prettier": "catalog:"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Starfie1d1272/Mizar.git",
+    "directory": "packages/radar-view"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

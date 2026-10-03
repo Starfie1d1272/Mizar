@@ -35,6 +35,22 @@ describe('public radar consumer contract', () => {
     ).toBe(true);
   });
 
+  it('preserves optional Radar C4 state unless the host supplies authoritative bomb fields', () => {
+    const radar = parseLiveSnapshotV1(fixture).radar!;
+    const bomb = { position: null, state: 'carried', sourcePlayerId: 'carrier' };
+    const context = { boundary: 'match', sequence: 1, current: true };
+    expect(fromPublicRadar({ ...radar, bomb }, context)!.payload.bomb).toEqual(bomb);
+    expect(
+      fromPublicRadar(
+        { ...radar, bomb },
+        {
+          ...context,
+          bomb: { state: 'dropped', sourcePlayerId: null },
+        },
+      )!.payload.bomb,
+    ).toEqual({ position: null, state: 'dropped', sourcePlayerId: null });
+  });
+
   it('distinguishes absent public motion evidence from explicitly unknown local velocity', () => {
     const grenade = {
       kind: 'frag',

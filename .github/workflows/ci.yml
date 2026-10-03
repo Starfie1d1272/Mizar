@@ -110,6 +110,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify Radar release guards
+        run: node --test scripts/radar-view/release.test.mjs
+
       - name: Verify standalone Radar package consumer
         run: node scripts/radar-view/consumer-smoke.mjs
 

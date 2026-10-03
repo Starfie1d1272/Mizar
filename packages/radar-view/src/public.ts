@@ -35,7 +35,7 @@ export function fromPublicRadar(
       players: radar.players,
       bomb:
         radar.bomb || context.bomb
-          ? { position: radar.bomb?.position ?? null, ...context.bomb }
+          ? { ...radar.bomb, position: radar.bomb?.position ?? null, ...context.bomb }
           : null,
       grenades: radar.utility,
     },
