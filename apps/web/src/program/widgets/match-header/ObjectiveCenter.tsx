@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { consecutivePresentationSamples } from '../../presentation-sample';
 import type { MatchHeaderPresentation } from './presentation';
 import type { ObjectiveCenterPresentation } from './objective-presentation';
+import type { HudDesign } from '../../hud-design';
 function Icon({
   id,
   defusing = false,
@@ -117,6 +118,7 @@ export function ObjectiveCenter({
   cursor,
   presentationRevision,
 }: {
+  readonly design?: HudDesign;
   readonly presentation: MatchHeaderPresentation;
   readonly cursor: ProjectionCursor;
   readonly presentationRevision: number;
@@ -214,7 +216,29 @@ export function ObjectiveCenter({
       ) : (
         <>
           <div className="objective-center__bomb">
-            <Icon className={plantedTransition ? 'is-planted-commit' : ''} id="objective.c4" />
+            <span className="objective-center__device">
+              <Icon className={plantedTransition ? 'is-planted-commit' : ''} id="objective.c4" />
+              {(c.mode === 'planted' && !c.stateOnly) ||
+              (c.mode === 'planting' && action.value !== null) ? (
+                <span
+                  className="objective-center__code"
+                  aria-hidden="true"
+                  data-code-steps={
+                    c.mode === 'planted' ? 4 : Math.min(4, Math.floor(action.value! * 4) + 1)
+                  }
+                >
+                  {[0, 1, 2, 3].map((step) => (
+                    <i
+                      key={step}
+                      data-filled={
+                        c.mode === 'planted' ||
+                        step < Math.min(4, Math.floor(action.value! * 4) + 1)
+                      }
+                    />
+                  ))}
+                </span>
+              ) : null}
+            </span>
             <span aria-hidden="true" className="objective-center__led" />
             {c.mode === 'planting' ? (
               <div

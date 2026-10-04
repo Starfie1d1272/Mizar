@@ -244,29 +244,128 @@ describe('Focused media and combat presentation lifecycle', () => {
     expect(container.querySelector('[data-timeout-panel="true"]')).toBeNull();
   });
 
-  it('objective defaults never reveal exact objective seconds, and phase fallback has no fake dual tracks', () => {
+  it('maps plant samples to four code steps, clears on seek and keeps fuse centered', () => {
     const container = host();
-    for (const id of [
-      'real-planting',
-      'real-planted',
-      'real-defusing',
-      'objective-dual-progress-edge',
-    ]) {
-      const snapshot = getProgramFixture(id)!;
-      const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+    const base = getProgramFixture('real-planting')!;
+    const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+    const render = (snapshot = base, revision = 0) =>
       act(() =>
         root!.render(
           <TopScoreBar
+            design="arena"
             snapshot={snapshot}
             resolvedPreset={BUILTIN_RESOLVED_PRESET}
             widgetId="top-score-bar"
             placement={placement}
             box={placementToBox('top-score-bar', placement)}
             settings={BUILTIN_RESOLVED_PRESET.widgets['top-score-bar']}
+            presentationRevision={revision}
           />,
         ),
       );
-      expect(container.querySelector('.objective-center')?.textContent).not.toMatch(/\d+\.\d|\d+s/);
+    for (const [progress, steps] of [
+      [0, 1],
+      [0.3, 2],
+      [0.55, 3],
+      [0.8, 4],
+    ] as const) {
+      render({
+        ...base,
+        payload: {
+          ...base.payload,
+          bomb: {
+            ...base.payload.bomb!,
+            state: 'planting',
+            action: {
+              ...base.payload.bomb!.action!,
+              kind: 'plant',
+              durationSeconds: 4,
+              remainingSeconds: 4 * (1 - progress),
+            },
+          },
+        },
+      });
+      expect(
+        container.querySelectorAll('.objective-center__code [data-filled="true"]'),
+      ).toHaveLength(steps);
+      expect(
+        container.querySelector('.objective-center')?.getAttribute('data-objective-mode'),
+      ).toBe('planting');
+    }
+    render(base, 1);
+    expect(
+      container.querySelector('.objective-center')?.getAttribute('data-planted-transition'),
+    ).toBe('false');
+    render(
+      { ...base, payload: { ...base.payload, bomb: { ...base.payload.bomb!, action: null } } },
+      2,
+    );
+    expect(container.querySelector('.objective-center__code')).toBeNull();
+    const planted = getProgramFixture('real-planted')!;
+    for (const remainingSeconds of [40, 20, 5]) {
+      render({
+        ...planted,
+        payload: {
+          ...planted.payload,
+          bomb: {
+            ...planted.payload.bomb!,
+            explosion: {
+              ...planted.payload.bomb!.explosion!,
+              durationSeconds: 40,
+              remainingSeconds,
+            },
+          },
+        },
+      });
+      expect(
+        container.querySelectorAll('.objective-center__code [data-filled="true"]'),
+      ).toHaveLength(4);
+      const fill = container.querySelector<HTMLElement>('[data-fuse-value]')!;
+      expect(fill.style.left).toBe('50%');
+      expect(fill.style.transform).toBe('translateX(-50%)');
+      expect(fill.style.width).toBe(`${(remainingSeconds / 40) * 100}%`);
     }
   });
+
+  it.each(['current', 'arena', 'studio'] as const)(
+    '%s objective never invents seconds or action progress',
+    (design) => {
+      const container = host();
+      for (const id of [
+        'real-planting',
+        'real-planted',
+        'real-defusing',
+        'objective-dual-progress-edge',
+      ]) {
+        const snapshot = getProgramFixture(id)!;
+        const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+        act(() =>
+          root!.render(
+            <TopScoreBar
+              design={design}
+              snapshot={snapshot}
+              resolvedPreset={BUILTIN_RESOLVED_PRESET}
+              widgetId="top-score-bar"
+              placement={placement}
+              box={placementToBox('top-score-bar', placement)}
+              settings={BUILTIN_RESOLVED_PRESET.widgets['top-score-bar']}
+            />,
+          ),
+        );
+        expect(container.querySelector('.objective-center')?.textContent).not.toMatch(
+          /\d+\.\d|\d+s/,
+        );
+        const mode = container
+          .querySelector('.objective-center')
+          ?.getAttribute('data-objective-mode');
+        expect(container.querySelector('.objective-center')?.textContent).not.toMatch(
+          /[\u4e00-\u9fff]/,
+        );
+        expect(container.querySelector('.objective-center__readout')).toBeNull();
+        if (mode === 'planting' || mode === 'defusing') {
+          expect(container.querySelectorAll('[data-objective-track="action"]')).toHaveLength(1);
+        }
+      }
+    },
+  );
 });

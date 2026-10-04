@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { HudDesign } from './hud-design';
 
 import {
   HUD_WIDGET_IDS,
@@ -19,6 +20,7 @@ import { RadarWidget } from './widgets/radar/Radar';
 import { PlayerRail } from './widgets/player-rails';
 
 interface HudWidgetRendererBaseProps {
+  readonly design?: HudDesign;
   readonly resolvedPreset: HudResolvedPreset;
   readonly widgetId: HudWidgetId;
   readonly placement: HudWidgetPlacement;
