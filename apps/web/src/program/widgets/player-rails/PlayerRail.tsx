@@ -17,6 +17,18 @@ export function PlayerRail({
   const physicalSide = widgetId === 'team-t-rail' ? 'right' : 'left';
   const rail = physicalSide === 'left' ? presentation.left : presentation.right;
   const side = rail.side;
+  const remaining = snapshot.payload.bomb?.explosion?.remainingSeconds;
+  const showPrediction =
+    snapshot.payload.status.telemetry === 'fresh' &&
+    snapshot.payload.bombDamage?.status === 'available' &&
+    (snapshot.payload.bomb?.state === 'planted' || snapshot.payload.bomb?.state === 'defusing') &&
+    snapshot.payload.round?.phase !== 'over' &&
+    snapshot.payload.clock?.phase !== 'over' &&
+    snapshot.payload.clock?.phase !== 'paused' &&
+    remaining != null &&
+    Number.isFinite(remaining) &&
+    remaining > 0 &&
+    remaining <= 10;
   return (
     <section
       aria-label={`${physicalSide === 'left' ? '左' : '右'}选手栏`}
@@ -43,8 +55,7 @@ export function PlayerRail({
         {rail.players.slice(0, 5).map((player) => (
           <PlayerCard
             prediction={
-              snapshot.payload.status.telemetry === 'fresh' &&
-              snapshot.payload.bombDamage?.status === 'available'
+              showPrediction
                 ? snapshot.payload.bombDamage.players.find(
                     (entry): entry is Extract<typeof entry, { status: 'predicted' }> =>
                       entry.sourcePlayerId === player.sourcePlayerId &&

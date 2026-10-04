@@ -21,6 +21,37 @@
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card {
   --ewc-half-taper: 22px;
 }
+/* Named slots own layout; asset facing never changes their alignment. Reserve
+ * three-digit HP before sizing the weapon, rather than overlaying two boxes. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) 70px;
+  grid-template-rows: 32px 1fr;
+  grid-template-areas: 'name weapon health' '. . .';
+  column-gap: 8px;
+  align-items: center;
+  padding: 7px 48px 0 10px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body {
+  grid-template-columns: 70px minmax(0, 1fr) 78px;
+  grid-template-areas: 'health weapon name' '. . .';
+  padding: 7px 10px 0 48px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__identity {
+  display: contents;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__name {
+  grid-area: name;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-value {
+  grid-area: health;
+  margin: 0;
+  text-align: right;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-value {
+  margin: 0;
+  text-align: left;
+}
 .hud-widget-design[data-hud-design='ewc'] .player-rail__body::before {
   content: '';
   display: block;
@@ -85,17 +116,19 @@
   text-transform: uppercase;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__weapons {
-  left: 100px;
-  width: 88px;
+  position: static;
+  grid-area: weapon;
+  justify-self: center;
+  width: 100%;
+  max-width: 88px;
 }
-.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__weapons {
-  right: 100px;
-  left: auto;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__weapon-icons {
+  justify-content: center;
 }
 .hud-widget-design[data-hud-design='ewc']
   .player-rail__combat
-  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
-  width: 88px;
+  .player-rail__icon[data-weapon-visual-role] {
+  width: 100%;
   max-width: 88px;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__kd {
@@ -132,15 +165,6 @@
   font-size: 18px;
   line-height: 22px;
   height: 22px;
-}
-.hud-widget-design[data-hud-design='ewc'] .player-rail__identity {
-  right: 48px;
-}
-.hud-widget-design[data-hud-design='ewc']
-  .player-rail__card[data-physical-side='right']
-  .player-rail__identity {
-  left: 48px;
-  right: 10px;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__utility-icons {
   right: 108px;

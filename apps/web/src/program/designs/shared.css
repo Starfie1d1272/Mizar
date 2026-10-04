@@ -204,6 +204,7 @@
   left: 118px;
   right: auto;
   justify-content: flex-start;
+  flex-direction: row-reverse;
 }
 .hud-widget-design.hud-redraw .player-rail__utility-icons {
   position: absolute;
@@ -216,6 +217,7 @@
 .hud-widget-design.hud-redraw .player-rail--right .player-rail__utility-icons {
   left: 28px;
   right: auto;
+  flex-direction: row-reverse;
 }
 .hud-widget-design.hud-redraw .player-rail__round-kill-slot {
   position: absolute;

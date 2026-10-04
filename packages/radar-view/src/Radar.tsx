@@ -338,8 +338,8 @@ export function RadarView({
       ctx.translate(-z.x * logicalSize, -z.y * logicalSize);
       ctx.filter =
         (appearance === 'shanghai'
-          ? 'grayscale(1) brightness(0.43) contrast(1.08) '
-          : 'grayscale(0.82) saturate(0.1) brightness(0.72) contrast(1.16) ') +
+          ? 'grayscale(1) contrast(1.08) '
+          : 'grayscale(0.82) saturate(0.1) contrast(1.16) ') +
         'drop-shadow(3px 0 0 rgba(243,246,250,.72)) ' +
         'drop-shadow(-3px 0 0 rgba(243,246,250,.72)) ' +
         'drop-shadow(0 3px 0 rgba(243,246,250,.72)) ' +

@@ -32,6 +32,8 @@ alive / dead、avatar present / missing、freezetime / live、objective / pause 
 
 组件内部同样遵循这一约束：physical side 显式决定队名、倒计时、剩余次数、装备栏位与外侧色边的位置，gameplay side 只决定阵营事实和颜色。外框换侧不代表内部已镜像；使用同一 DOM 的命名 grid area 交换栏位，不依赖父级 RTL 或整块 `scaleX(-1)`。枪械朝向只在素材叶节点处理，文字、头像和库存组不翻转；底板、C4 预测等独立形状仍可按自身几何镜像。浏览器验收检查左右内部坐标、色边与可见武器的实际翻转次数。
 
+素材蒙版使用同一份翻转前对齐规则，不能再随 physical side 交换 mask-position，避免重复镜像造成图案偏移。EWC 顶行的姓名、武器、生命采用命名 grid area，预留三位数生命宽度；左右只交换栏位顺序。浏览器验收同时检查栏位互不重叠，并对同一素材和生命值测量镜像后的内部坐标。
+
 ### 4. 一项事实只有一个主要视觉 owner
 
 Top Score、Series Strip、Player Rails、Focused Player 与 Radar 可以共享同一 Program truth，但不应为了“信息更满”重复显示同一事实。

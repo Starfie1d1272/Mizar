@@ -227,6 +227,8 @@ test('three broadcast presets save, activate and reload through the shared Progr
       );
       await expect(program.locator('.player-rail__avatar img').first()).toBeVisible();
       await assertBroadcastAssetFacing(program, false);
+      await assertBroadcastInventoryOrder(program);
+      if (style === 'ewc') await assertEwcCombatSlots(program);
       for (const [id, side] of [
         ['real-timeout-ct', 'left'],
         ['real-timeout-t', 'right'],
@@ -497,6 +499,7 @@ async function assertBroadcastAssetFacing(page: Page, paused: boolean) {
             side: root.getAttribute('data-physical-side'),
             label: icon.getAttribute('aria-label'),
             flips,
+            maskPosition: getComputedStyle(icon).maskPosition,
           };
         }),
     );
@@ -505,4 +508,59 @@ async function assertBroadcastAssetFacing(page: Page, paused: boolean) {
   expect(result.some((value) => value.side === 'right')).toBe(true);
   for (const value of result)
     expect(value.flips, `${value.side} ${value.label}`).toBe(value.side === 'right' ? 1 : 0);
+  // The same pre-flip alignment is essential for short artwork in a wide slot.
+  expect(new Set(result.map((value) => value.maskPosition)).size).toBe(1);
+}
+
+async function assertEwcCombatSlots(page: Page) {
+  const rows = await page
+    .locator('.player-rail__card:not(.player-rail__card--dead)')
+    .evaluateAll((cards) =>
+      cards.map((card) => {
+        const bounds = card.getBoundingClientRect();
+        const box = (selector: string) => {
+          const rect = card.querySelector(selector)!.getBoundingClientRect();
+          return {
+            x: rect.x - bounds.x,
+            y: rect.y - bounds.y,
+            width: rect.width,
+            height: rect.height,
+          };
+        };
+        return {
+          side: card.getAttribute('data-physical-side'),
+          width: bounds.width,
+          name: box('.player-rail__name'),
+          weapon: box('.player-rail__weapons'),
+          health: box('.player-rail__health-value'),
+        };
+      }),
+    );
+  const left = rows.find((row) => row.side === 'left')!;
+  const right = rows.find((row) => row.side === 'right')!;
+  for (const key of ['name', 'weapon', 'health'] as const) {
+    expect(left[key].x + right[key].x + right[key].width).toBeCloseTo(left.width, 0);
+    expect(left[key].width).toBeCloseTo(right[key].width, 0);
+    expect(left[key].y).toBeCloseTo(right[key].y, 0);
+  }
+  for (const row of rows) {
+    const slots = [row.name, row.weapon, row.health].sort((a, b) => a.x - b.x);
+    expect(slots[0]!.x + slots[0]!.width).toBeLessThan(slots[1]!.x);
+    expect(slots[1]!.x + slots[1]!.width).toBeLessThan(slots[2]!.x);
+  }
+}
+
+async function assertBroadcastInventoryOrder(page: Page) {
+  const groups = await page
+    .locator('.player-rail__equipment, .player-rail__utility-icons')
+    .evaluateAll((elements) =>
+      elements.map((element) => ({
+        side: element.closest('[data-physical-side]')!.getAttribute('data-physical-side'),
+        positions: [...element.children].map((child) => child.getBoundingClientRect().x),
+      })),
+    );
+  for (const group of groups)
+    expect(group.positions).toEqual(
+      [...group.positions].sort((a, b) => (group.side === 'left' ? a - b : b - a)),
+    );
 }
