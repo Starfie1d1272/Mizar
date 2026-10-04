@@ -53,6 +53,8 @@ describe('Generic HUD widget settings', () => {
     }
     act(() => root!.render(<Editor />));
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
+    expect(container.querySelector('.focused-player__metrics')).toBeNull();
+    act(() => container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!.click());
     expect(container.querySelector('.focused-player__metrics')).not.toBeNull();
     act(() => container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!.click());
     expect(container.querySelector('.focused-player__metrics')).toBeNull();

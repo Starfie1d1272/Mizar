@@ -25,6 +25,7 @@ import './designs/ewc.css';
 import './designs/iem.css';
 import './designs/esl.css';
 import './designs/perfectworld.css';
+import './designs/native.css';
 import { hudDesignForVariant } from './hud-design';
 import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause';
 import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand';
@@ -83,7 +84,6 @@ export function GameplayHud({
   if (
     programFresh &&
     snapshot &&
-    design !== 'current' &&
     resolvedPreset.layout.widgets['top-score-bar'].visible &&
     topScoreBarSettingsSchema.parse(score.settings).showTimeout &&
     (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')

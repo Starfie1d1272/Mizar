@@ -1,5 +1,14 @@
 import type { HudWidgetId } from './types.js';
 
+/** Default composition; legacy implicit dimensions below still describe saved layouts. */
+export const NATIVE_WIDGET_DIMENSIONS: Partial<
+  Record<HudWidgetId, { width: number; height: number }>
+> = {
+  'top-score-bar': { width: 800, height: 152 },
+  'focused-player': { width: 480, height: 176 },
+  'round-history': { width: 720, height: 84 },
+};
+
 export const WIDGET_DIMENSIONS: Record<
   HudWidgetId,
   { readonly width: number; readonly height: number }

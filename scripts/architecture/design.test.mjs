@@ -2,6 +2,7 @@ import { URL } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import postcss from 'postcss';
 import { checkArchitecture } from './check.mjs';
 import { RUNTIME_COLORS } from './design.mjs';
 
@@ -17,6 +18,27 @@ const check = (extra) => checkArchitecture({ rootDir: root, files: { ...files, .
 const designRules = (violations) => violations.filter((v) => v.ruleId.startsWith('ARCH_DESIGN'));
 
 describe('Design System architecture guard', () => {
+  it('keeps native broadcast artwork inside the default widget scope', () => {
+    const sheet = postcss.parse(
+      readFileSync(
+        new URL('../../apps/web/src/program/designs/native.css', import.meta.url),
+        'utf8',
+      ),
+    );
+    const unscoped = [];
+    sheet.walkRules((rule) => {
+      let scoped = false;
+      for (let node = rule; node; node = node.parent) {
+        if (
+          node.type === 'rule' &&
+          node.selector.includes(".hud-widget-design[data-hud-design='current']")
+        )
+          scoped = true;
+      }
+      if (!scoped) unscoped.push(rule.selector);
+    });
+    expect(unscoped).toEqual([]);
+  });
   it.each([
     ['color', '.feature { color: #123456; }', 'ARCH_DESIGN_RAW_COLOR'],
     ['rgb', '.feature { background: rgb(0 0 0); }', 'ARCH_DESIGN_RAW_COLOR'],

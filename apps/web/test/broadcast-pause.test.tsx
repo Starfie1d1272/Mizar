@@ -178,7 +178,7 @@ describe('Shared broadcast pause composition', () => {
     mount(base, preset, node);
     expect(node.querySelector('[data-broadcast-pause]')).toBeNull();
     mount(base, getBuiltinResolvedPreset(), node);
-    expect(node.querySelector('[data-broadcast-pause]')).toBeNull();
+    expect(node.querySelector('[data-broadcast-pause]')).not.toBeNull();
   });
   it('prioritizes the supplied event and bounds optional platform/sponsor assets', () => {
     const node = document.createElement('div');

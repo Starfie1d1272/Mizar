@@ -391,13 +391,13 @@ function PlayerBody({
                   <div className="player-rail__weapons">
                     <div className="player-rail__weapon-icons">
                       <WeaponIcon
-                        physicalSide={design === 'current' ? 'left' : physicalSide}
+                        physicalSide={physicalSide}
                         pairedWithFirearm={pairedWithFirearm}
                         weapon={player.primaryWeapon}
                       />
                       {secondaryVisible ? (
                         <WeaponIcon
-                          physicalSide={design === 'current' ? 'left' : physicalSide}
+                          physicalSide={physicalSide}
                           pairedWithFirearm={pairedWithFirearm}
                           weapon={player.secondaryWeapon}
                         />

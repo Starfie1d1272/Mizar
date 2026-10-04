@@ -36,3 +36,9 @@ Web 按各 widget 已保存的 variant 在同一 renderer 上建立局部样式�
 Descriptor 为每个 variant 声明固定 envelope；Layout 继续保存锚点、偏移、显隐与 Radar 的受控尺寸，resolver 按组件方案选择 envelope 并约束到画布。编辑框、拖动和 Renderer 消费同一 resolved Layout。固定组件尺寸只接受 descriptor 声明值，不再由通用 parser 按赛事写特例。已启用 snapshot 的 envelope 严格校验，不在读取时重排。
 
 预设文件 `format: mizar-hud-preset`、`formatVersion: 1` 包含独立 authoring Preset/Layout/Theme；不携带启用状态、比赛事实、代码或素材。schema、variant、recipe 和内部引用均严格校验，UTF-8 文件最多 256 KiB。导入复用现有 Companion commit queue、editor revision CAS 和持久化事务，一次创建三个新 ID 并重写引用；失败不留下部分资源，导入成功也不改变 on-air snapshot。导出使用当前已保存且与预设引用一致的资源。未来分发可复用此格式，不引入通用 plugin framework。
+
+## 2026-10-04：默认包装更新与 current-version snapshot
+
+Mizar 默认 variant 升级原生包装，仍复用同一 renderer、既有设置 schema 与四层 owner。新的默认比分、Focus、历史 envelope 分别为 800×152、480×176、720×84；新内置布局显式保存尺寸，三套赛事布局从其原有 placement 底稿构造，不继承默认版的新位置。
+
+为遵守本轮“不重置已保存自定义配置”的要求，当前版本冻结 snapshot 继续接受精确历史默认尺寸 480×152、360×176、560×56（含原无 `size` 的隐式布局），不重新解析其主题、位置或开关。任意其它不匹配尺寸仍拒绝；主动切换方案继续由 descriptor 解析当前 envelope。这是同一 schema version 的保存内容连续性，不恢复旧版本解析或第二套旧默认 renderer。窄尺寸消费同一原生样式的容器规则，历史窗口也统一复用现有实现。

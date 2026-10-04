@@ -5,6 +5,7 @@ import {
   BUILTIN_THEME_ID,
   BUILTIN_PRESET_ID,
 } from './constants.js';
+import { NATIVE_WIDGET_DIMENSIONS } from './widget-dimensions.js';
 import { DEFAULT_PLACEMENTS } from './geometry.js';
 import { cloneJson, deepFreeze, completeWidgetRecord } from './json.js';
 import { getHudWidgetDescriptor, switchHudWidgetVariant } from './widget-registry.js';
@@ -24,7 +25,7 @@ export function getBuiltinLayouts(): HudLayout[] {
               ...getBuiltinLayout(),
               id: `builtin:${style}-layout`,
               name: layout.name,
-              widgets: { ...getBuiltinLayout().widgets, ...cloneJson(layout.widgets) },
+              widgets: { ...cloneJson(DEFAULT_PLACEMENTS), ...cloneJson(layout.widgets) },
             },
           ],
     ),
@@ -80,7 +81,32 @@ const BUILTIN_LAYOUT: HudLayout = deepFreeze({
   schemaVersion: HUD_CONFIG_SCHEMA_VERSION,
   id: BUILTIN_LAYOUT_ID,
   name: 'Mizar 默认布局',
-  widgets: completeWidgetRecord((id) => cloneJson(DEFAULT_PLACEMENTS[id])),
+  widgets: {
+    ...completeWidgetRecord((id) => cloneJson(DEFAULT_PLACEMENTS[id])),
+    'top-score-bar': {
+      visible: true,
+      anchor: 'top-center',
+      offsetX: 0,
+      offsetY: 24,
+      size: NATIVE_WIDGET_DIMENSIONS['top-score-bar']!,
+    },
+    'team-ct-rail': { visible: true, anchor: 'top-left', offsetX: 20, offsetY: 492 },
+    'team-t-rail': { visible: true, anchor: 'top-right', offsetX: -20, offsetY: 492 },
+    'round-history': {
+      visible: true,
+      anchor: 'top-center',
+      offsetX: 0,
+      offsetY: 128,
+      size: NATIVE_WIDGET_DIMENSIONS['round-history']!,
+    },
+    'focused-player': {
+      visible: true,
+      anchor: 'bottom-center',
+      offsetX: 0,
+      offsetY: -110,
+      size: NATIVE_WIDGET_DIMENSIONS['focused-player']!,
+    },
+  },
 });
 
 const BUILTIN_THEME: HudTheme = deepFreeze({
@@ -88,7 +114,7 @@ const BUILTIN_THEME: HudTheme = deepFreeze({
   id: BUILTIN_THEME_ID,
   name: 'Mizar 默认外观',
   recipe: 'mizar-default',
-  brandColor: '#c8ef78',
+  brandColor: '#38bdf8',
   panelStyle: 'standard',
   cornerStyle: 'square',
 });

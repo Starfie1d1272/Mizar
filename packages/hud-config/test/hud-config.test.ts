@@ -36,7 +36,7 @@ import {
 } from '../src/index.js';
 
 describe('hud-config schema and framework contract', () => {
-  it('resolves styled history envelopes while retaining the original hidden history', () => {
+  it('resolves all built-in freeze history envelopes without enabling standalone objective widgets', () => {
     for (const style of ['ewc', 'iem', 'perfectworld', 'esl']) {
       const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
       const parsed = parseHudResolvedPreset(preset);
@@ -46,7 +46,54 @@ describe('hud-config schema and framework contract', () => {
         { width: 720, height: 84 },
       );
     }
-    expect(getBuiltinResolvedPreset().layout.widgets['round-history'].visible).toBe(false);
+    expect(getBuiltinResolvedPreset().layout.widgets['round-history'].visible).toBe(true);
+  });
+  it('reads already-saved default snapshots without changing geometry, theme or explicit metrics', () => {
+    const saved = getBuiltinResolvedPreset();
+    saved.layout.widgets['top-score-bar'] = {
+      visible: true,
+      anchor: 'top-center',
+      offsetX: 0,
+      offsetY: 36,
+    };
+    saved.layout.widgets['focused-player'] = {
+      visible: true,
+      anchor: 'bottom-center',
+      offsetX: 0,
+      offsetY: -28,
+    };
+    saved.layout.widgets['round-history'] = {
+      visible: false,
+      anchor: 'top-center',
+      offsetX: 0,
+      offsetY: 136,
+    };
+    saved.widgets['focused-player'].settings.showMetrics = true;
+    saved.theme.brandColor = '#c8ef78';
+    const before = JSON.stringify(saved);
+    expect(parseHudResolvedPreset(saved)).toEqual(saved);
+    expect(JSON.stringify(saved)).toBe(before);
+    expect(placementToBox('top-score-bar', saved.layout.widgets['top-score-bar'])).toEqual({
+      left: 720,
+      top: 36,
+      width: 480,
+      height: 152,
+    });
+    expect(() =>
+      parseHudResolvedPreset({
+        ...saved,
+        layout: {
+          ...saved.layout,
+          widgets: {
+            ...saved.layout.widgets,
+            'top-score-bar': {
+              ...saved.layout.widgets['top-score-bar'],
+              size: { width: 799, height: 152 },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
   it('retains ESL identity, accent and variant envelopes in a frozen custom snapshot', () => {
     const builtin = getBuiltinResolvedPreset('builtin:esl-preset');
@@ -92,9 +139,9 @@ describe('hud-config schema and framework contract', () => {
     expect(Object.keys(layout.widgets).sort()).toEqual([...HUD_WIDGET_IDS].sort());
     expect(layout.widgets.radar.size).toEqual({ width: 400, height: 400 });
     expect(placementToBox('top-score-bar', layout.widgets['top-score-bar'])).toMatchObject({
-      left: 720,
-      top: 36,
-      width: 480,
+      left: 560,
+      top: 24,
+      width: 800,
       height: 152,
     });
     expect(placementToBox('series-strip', layout.widgets['series-strip'])).toMatchObject({
@@ -104,31 +151,31 @@ describe('hud-config schema and framework contract', () => {
       height: 72,
     });
     expect(placementToBox('team-ct-rail', layout.widgets['team-ct-rail'])).toMatchObject({
-      left: 0,
-      top: 524,
+      left: 20,
+      top: 492,
       width: 440,
       height: 478,
     });
     expect(placementToBox('team-t-rail', layout.widgets['team-t-rail'])).toMatchObject({
-      left: 1480,
-      top: 524,
+      left: 1460,
+      top: 492,
       width: 440,
       height: 478,
     });
     expect(placementToBox('focused-player', layout.widgets['focused-player'])).toMatchObject({
-      left: 780,
-      top: 876,
-      width: 360,
+      left: 720,
+      top: 794,
+      width: 480,
       height: 176,
     });
-    expect(layout.widgets['round-history'].visible).toBe(false);
+    expect(layout.widgets['round-history'].visible).toBe(true);
     expect(layout.widgets.objective.visible).toBe(false);
     expect(layout.widgets['round-result'].visible).toBe(false);
     expect(placementToBox('round-history', layout.widgets['round-history'])).toMatchObject({
-      left: 680,
-      top: 136,
-      width: 560,
-      height: 56,
+      left: 600,
+      top: 128,
+      width: 720,
+      height: 84,
     });
     expect(getHudWidgetDescriptor('top-score-bar').rendererAvailability).toBe('implemented');
     expect(getHudWidgetDescriptor('series-strip').rendererAvailability).toBe('implemented');
@@ -481,7 +528,7 @@ describe('widget customization contract', () => {
       expect(
         focusedPlayerPresentationSettings(getBuiltinResolvedPreset().widgets['focused-player'])
           .showMetrics,
-      ).toBe(true);
+      ).toBe(false);
     },
   );
 

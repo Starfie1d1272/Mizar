@@ -1,4 +1,4 @@
-import { WIDGET_DIMENSIONS } from './widget-dimensions.js';
+import { WIDGET_DIMENSIONS, NATIVE_WIDGET_DIMENSIONS } from './widget-dimensions.js';
 import { HUD_BROADCAST_STYLE_CATALOG } from './presets/catalog.js';
 import { z } from 'zod';
 import { HUD_WIDGET_IDS, HUD_BROADCAST_STYLES } from './constants.js';
@@ -173,6 +173,7 @@ function widgetContract(id: HudWidgetId) {
     }
   if (id === 'focused-player') {
     variantLabels.default = '标准信息';
+    defaultSettingsByVariant.default = { ...defaults, showMetrics: false };
     variantLabels.minimal = '精简信息';
     defaultSettingsByVariant.ewc = {
       ...defaultSettingsByVariant.ewc,
@@ -202,9 +203,11 @@ function widgetContract(id: HudWidgetId) {
   const dimensionsByVariant = Object.fromEntries(
     variants.map((variant) => [
       variant,
-      HUD_BROADCAST_STYLE_CATALOG.find((style) => style.style === variant)?.widgetDimensions?.[
-        id
-      ] ?? WIDGET_DIMENSIONS[id],
+      (variant === 'default' ? NATIVE_WIDGET_DIMENSIONS[id] : undefined) ??
+        HUD_BROADCAST_STYLE_CATALOG.find((style) => style.style === variant)?.widgetDimensions?.[
+          id
+        ] ??
+        WIDGET_DIMENSIONS[id],
     ]),
   );
   return {

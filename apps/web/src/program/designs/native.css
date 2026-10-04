@@ -1,0 +1,845 @@
+/* Mizar native broadcast. Existing default variants only; tournament recipes stay isolated.
+ * Short paired rules are the single graphic signature. No gameplay clock is owned here. */
+.hud-widget-design[data-hud-design='current'] {
+  container-type: inline-size;
+
+  .match-header__top-score {
+    width: 100%;
+  }
+  .match-header__score-shell {
+    width: 100%;
+    height: 80px;
+    overflow: visible;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 76px 120px 76px minmax(0, 1fr);
+    grid-template-areas: 'team-a score-a clock score-b team-b';
+    gap: 2px;
+    background: transparent;
+  }
+  .match-header__score-zone,
+  .match-header__center {
+    position: relative;
+    inset: auto;
+    width: auto;
+    height: 80px;
+    background: var(--mizar-hud-surface-strong);
+  }
+  .match-header__score-zone--logo {
+    height: 64px;
+    align-self: center;
+    gap: 12px;
+    padding: 0 16px;
+    justify-content: flex-start;
+  }
+  .match-header__score-zone--logo-a {
+    grid-area: team-a;
+  }
+  .match-header__score-zone--logo-b {
+    grid-area: team-b;
+    flex-direction: row-reverse;
+    text-align: right;
+  }
+  .match-header__team-logo {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+  }
+  .match-header__team-name {
+    display: block;
+    position: static;
+    min-width: 0;
+    width: auto;
+    max-width: none;
+    font-size: 19px;
+    font-weight: 650;
+    line-height: 1.1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    overflow: hidden;
+  }
+  .match-header__score-zone--score-a {
+    grid-area: score-a;
+  }
+  .match-header__score-zone--score-b {
+    grid-area: score-b;
+  }
+  .match-header__score-zone--score {
+    background: var(--mizar-hud-surface-primary);
+    padding-bottom: 8px;
+  }
+  .match-header__map-score {
+    font-family: var(--mizar-type-family-display);
+    font-size: 58px;
+    line-height: 60px;
+    font-weight: 700;
+  }
+  .match-header__win-slots {
+    bottom: 7px;
+    gap: 3px;
+  }
+  .match-header__win-slots span {
+    width: 12px;
+    height: 3px;
+  }
+  .match-header__center {
+    grid-area: clock;
+    overflow: visible;
+    color: var(--mizar-hud-surface-strong);
+    background: var(--mizar-hud-text-primary);
+  }
+  .match-header__center::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    width: 64px;
+    height: 4px;
+    background: linear-gradient(
+      90deg,
+      var(--mizar-accent-primary) 56.25%,
+      transparent 56.25% 68.75%,
+      var(--mizar-accent-primary) 68.75%
+    );
+  }
+  .match-header__clock-value {
+    font-family: var(--mizar-type-family-display);
+    font-size: 34px;
+    font-weight: 700;
+    color: inherit;
+  }
+  .match-header__round-meta {
+    margin-top: 14px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+  .match-header__side-accent {
+    top: 76px;
+    height: 4px;
+    width: calc(50% - 62px);
+  }
+  .match-header__alive-matchup {
+    inset-inline: 0;
+    margin-inline: auto;
+    top: 104px;
+  }
+  .match-header__timeout-panel--b {
+    left: auto;
+    right: 0;
+  }
+  .objective-center {
+    animation: none;
+  }
+  .objective-center__icon,
+  .objective-center[data-objective-mode='defusing'] .objective-center__icon,
+  .objective-center__code i {
+    background: var(--mizar-hud-surface-strong);
+  }
+  .objective-center[data-objective-mode='planted'] .objective-center__icon,
+  .objective-center[data-objective-mode='planted'] .objective-center__code i {
+    background: var(--mizar-hud-state-danger);
+  }
+  .objective-center__caption {
+    color: var(--mizar-hud-surface-primary);
+  }
+  .objective-center__ring-track {
+    stroke: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
+  }
+  .objective-center__ring-fill {
+    stroke: var(--mizar-hud-surface-strong);
+  }
+  .objective-center__plant-progress {
+    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
+  }
+  .objective-center__plant-progress span {
+    background: var(--mizar-hud-surface-strong);
+  }
+  .objective-center__fuse {
+    top: 88px;
+    left: 16px;
+    width: calc(100% - 32px);
+    height: 8px;
+    background: var(--mizar-hud-surface-strong);
+  }
+  .objective-center__fuse span {
+    background: var(--mizar-hud-objective-bomb);
+  }
+  .objective-center__icon.is-planted-commit {
+    animation: hud-objective-confirm 280ms ease-out both;
+  }
+  .objective-center__led {
+    animation: none;
+  }
+
+  .player-rail {
+    width: 400px;
+    overflow: visible;
+  }
+  .player-rail--right {
+    margin-left: auto;
+  }
+  .player-rail__header,
+  .player-rail__players,
+  .player-rail__summary,
+  .player-rail__economy,
+  .player-rail__utility {
+    width: 100%;
+  }
+  .player-rail__header {
+    height: 24px;
+    flex-basis: 24px;
+    background: transparent;
+    padding: 0 8px;
+  }
+  .player-rail__header strong {
+    font-size: 14px;
+    font-weight: 650;
+    text-shadow: 0 1px 3px var(--mizar-hud-surface-strong);
+  }
+  .player-rail__header::before {
+    display: none;
+  }
+  .player-rail__players {
+    height: 412px;
+    flex-basis: 412px;
+    grid-template-rows: repeat(5, 76px);
+    gap: 8px;
+  }
+  .player-rail__card,
+  .player-rail__empty-card {
+    width: 100%;
+    height: 76px;
+    flex-basis: 76px;
+  }
+  .player-rail__card {
+    isolation: isolate;
+  }
+  .player-rail__avatar,
+  .player-rail__avatar img {
+    width: 76px;
+    height: 76px;
+    flex-basis: 76px;
+  }
+  .player-rail__avatar {
+    background: var(--mizar-hud-surface-strong);
+  }
+  .player-rail__card[data-avatar='false'] .player-rail__avatar {
+    width: 20px;
+    flex-basis: 20px;
+    background: transparent;
+  }
+  .player-rail__body {
+    display: block;
+    flex: 1;
+    width: auto;
+    height: 76px;
+    background: linear-gradient(
+      var(--mizar-hud-surface-primary) 0 30px,
+      color-mix(in srgb, var(--mizar-hud-surface-strong) 94%, transparent) 30px
+    );
+  }
+  .player-rail__body::before {
+    display: none;
+  }
+  .player-rail__identity {
+    position: absolute;
+    inset: 4px 10px auto;
+    height: 24px;
+    padding: 0 !important;
+    z-index: 3;
+  }
+  .player-rail__name {
+    max-width: calc(100% - 94px);
+    font-size: 19px;
+    font-weight: 650;
+    letter-spacing: 0;
+    text-shadow: none;
+  }
+  .player-rail__health-value {
+    position: absolute;
+    right: 0;
+    top: 27px;
+    width: 52px;
+    font-family: var(--mizar-type-family-display);
+    font-size: 34px;
+    line-height: 36px;
+    text-shadow: none;
+  }
+  .player-rail--right .player-rail__health-value {
+    right: auto;
+    left: 0;
+  }
+  .player-rail__health-bar,
+  .player-rail__health-spacer {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    width: 100%;
+    height: 7px;
+    margin: 0;
+    z-index: 2;
+  }
+  .player-rail__health-bar > span:not(.combat-damage-ghost):not(.player-rail__bomb-prediction) {
+    height: 7px;
+    background: var(--mizar-side-ct);
+  }
+  .player-rail__card[data-side='T']
+    .player-rail__health-bar
+    > span:not(.combat-damage-ghost):not(.player-rail__bomb-prediction) {
+    background: var(--mizar-side-t);
+  }
+  .player-rail__card.is-low-health
+    .player-rail__health-bar
+    > span:not(.combat-damage-ghost):not(.player-rail__bomb-prediction) {
+    background: var(--mizar-hud-state-danger);
+  }
+  .player-rail__health-bar > .combat-damage-ghost,
+  .player-rail__health-spacer > .combat-damage-ghost {
+    height: 7px;
+    background: var(--mizar-hud-text-primary);
+  }
+  .player-rail__bomb-prediction {
+    z-index: 1;
+  }
+  .player-rail__combat,
+  .player-rail__context,
+  .player-rail__loadout,
+  .player-rail__bottom {
+    display: contents;
+  }
+  .player-rail__weapons {
+    position: absolute;
+    right: 66px;
+    top: 32px;
+    width: 104px;
+    height: 28px;
+    z-index: 3;
+  }
+  .player-rail--right .player-rail__weapons {
+    right: auto;
+    left: 66px;
+  }
+  .player-rail__weapon-icons {
+    width: 104px;
+    height: 28px;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .player-rail__combat .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+    width: 76px;
+    max-width: 76px;
+    height: 27px;
+  }
+  .player-rail__combat .player-rail__icon[data-weapon-visual-role='secondary-pistol'] {
+    width: 24px;
+    max-width: 24px;
+    height: 18px;
+  }
+  .player-rail__icon[data-weapon-active='false'] {
+    opacity: 0.5;
+  }
+  .player-rail__icon[data-weapon-active='true'] {
+    opacity: 1;
+  }
+  .player-rail__combat .player-rail__kd {
+    position: absolute;
+    right: 10px;
+    top: 7px;
+    left: auto;
+    width: 58px;
+    margin: 0;
+    font-size: 11px;
+    z-index: 3;
+  }
+  .player-rail--right .player-rail__combat .player-rail__kd {
+    left: 10px;
+    right: auto;
+  }
+  .player-rail__money {
+    position: absolute;
+    left: 10px;
+    bottom: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mizar-hud-text-primary);
+    z-index: 3;
+  }
+  .player-rail--right .player-rail__money {
+    left: auto;
+    right: 10px;
+  }
+  .player-rail__equipment {
+    position: absolute;
+    left: 10px;
+    top: 29px;
+    width: 64px;
+    height: 17px;
+    justify-content: flex-start;
+    z-index: 3;
+  }
+  .player-rail--right .player-rail__equipment {
+    left: auto;
+    right: 10px;
+    flex-direction: row-reverse;
+  }
+  .player-rail__equipment-slot {
+    width: 15px;
+    height: 16px;
+    flex-basis: 15px;
+  }
+  .player-rail__utility-icons {
+    position: absolute;
+    left: 78px;
+    top: 30px;
+    width: 64px;
+    height: 30px;
+    gap: 0;
+    z-index: 3;
+  }
+  .player-rail--right .player-rail__utility-icons {
+    left: auto;
+    right: 78px;
+    flex-direction: row-reverse;
+  }
+  .player-rail__utility-item,
+  .player-rail__utility-item .player-rail__icon {
+    width: 16px;
+    min-width: 0;
+    flex: 0 0 16px;
+  }
+  .player-rail__spent {
+    position: absolute;
+    left: 78px;
+    bottom: 9px;
+    font-size: 10px;
+    color: var(--mizar-hud-text-muted);
+  }
+  .player-rail--right .player-rail__spent {
+    left: auto;
+    right: 78px;
+  }
+  .player-rail__card--freezetime .player-rail__utility-icons {
+    top: 22px;
+  }
+  .player-rail__endcap {
+    left: 0;
+    right: auto;
+    top: 0;
+    width: 18px;
+    height: 20px;
+    border: 0;
+    background: var(--mizar-hud-surface-strong);
+    z-index: 4;
+  }
+  .player-rail__endcap--right {
+    left: auto;
+    right: 0;
+  }
+  .player-rail__endcap strong {
+    color: var(--mizar-hud-text-primary);
+    font-size: 12px;
+  }
+  .player-rail__endcap[data-observed='true'] {
+    background: var(--mizar-hud-text-primary);
+  }
+  .player-rail__endcap[data-observed='true'] strong {
+    color: var(--mizar-hud-surface-strong);
+  }
+  .player-rail__card::after {
+    display: none;
+  }
+  .player-rail__card[data-observed='true'] {
+    outline: 1px solid var(--mizar-hud-text-primary);
+    outline-offset: -1px;
+  }
+  .player-rail__round-kill-slot {
+    position: absolute;
+    right: 74px;
+    left: auto;
+    top: 7px;
+    width: 18px;
+    height: 18px;
+    z-index: 4;
+  }
+  .player-rail--right .player-rail__round-kill-slot {
+    left: 74px;
+    right: auto;
+  }
+  .player-rail__round-kill-badge,
+  .player-rail__round-kill-badge svg {
+    width: 18px;
+    height: 18px;
+  }
+  .player-rail__card--dead .player-rail__body {
+    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 58%, transparent);
+  }
+  .player-rail__card--dead .player-rail__avatar {
+    opacity: 0.45;
+  }
+  .player-rail__life-state {
+    position: absolute;
+    right: 0;
+    top: 29px;
+    font-size: 11px;
+    color: var(--mizar-hud-text-muted);
+  }
+  .player-rail--right .player-rail__life-state {
+    left: 0;
+    right: auto;
+  }
+  .player-rail__dead-stats {
+    position: absolute;
+    right: 56px;
+    bottom: 13px;
+    left: auto;
+    display: flex;
+    gap: 14px;
+    width: auto;
+    padding: 0;
+  }
+  .player-rail--right .player-rail__dead-stats {
+    right: auto;
+    left: 56px;
+  }
+  .player-rail__dead-stats b {
+    font-size: 15px;
+    line-height: 18px;
+  }
+  .player-rail__summary-slot {
+    height: 42px;
+    flex-basis: 42px;
+  }
+  .player-rail__summary {
+    height: 42px;
+    grid-template-rows: 21px 21px;
+  }
+  .player-rail__economy,
+  .player-rail__utility {
+    height: 21px;
+    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 90%, transparent);
+  }
+  .player-rail__economy strong {
+    color: var(--mizar-hud-text-primary);
+  }
+
+  .focused-player {
+    width: 100%;
+    margin-top: 80px;
+    height: 96px;
+    background: var(--mizar-hud-surface-strong);
+  }
+  .focused-player::after {
+    content: '';
+    position: absolute;
+    right: 16px;
+    top: 14px;
+    width: 40px;
+    height: 4px;
+    background: linear-gradient(
+      90deg,
+      var(--mizar-accent-primary) 55%,
+      transparent 55% 70%,
+      var(--mizar-accent-primary) 70%
+    );
+    pointer-events: none;
+  }
+  .focused-player__name {
+    padding-right: 52px;
+  }
+  .focused-player[data-show-metrics='true'] {
+    margin-top: 56px;
+    height: 120px;
+  }
+  .focused-player__face {
+    display: block;
+    background: var(--mizar-hud-surface-strong);
+  }
+  .focused-player__identity {
+    position: absolute;
+    left: 80px;
+    top: 0;
+    right: 0;
+    width: auto;
+    height: 32px;
+    padding: 0 12px;
+    background: var(--mizar-hud-surface-primary);
+  }
+  .focused-player__name {
+    font-size: 20px;
+    font-weight: 650;
+  }
+  .focused-player__metrics {
+    position: absolute;
+    top: 99px;
+    left: 12px;
+    right: 12px;
+    justify-content: flex-end;
+    gap: 16px;
+  }
+  .focused-player__action,
+  .focused-player__face[data-dead='true'] .focused-player__action {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 96px;
+    padding: 0;
+  }
+  .focused-player__media,
+  .focused-player__media img {
+    position: absolute;
+    top: 8px;
+    left: 0;
+    width: 80px;
+    height: 80px;
+  }
+  .focused-player__media img {
+    top: 0;
+  }
+  .focused-player__face[data-media-unavailable='true'] {
+    .focused-player__media {
+      display: none;
+    }
+    .focused-player__identity {
+      left: 0;
+    }
+    .focused-player__vitals {
+      left: 12px;
+    }
+    .focused-player__active {
+      left: 32%;
+      width: 40%;
+    }
+    .focused-player__dead-state {
+      left: 12px;
+      width: calc(100% - 24px);
+    }
+  }
+  .focused-player__observer-tile-number {
+    width: 80px;
+    height: 80px;
+    line-height: 80px;
+  }
+  .focused-player__active {
+    position: absolute;
+    top: 36px;
+    left: 48%;
+    width: 28%;
+    height: 54px;
+  }
+  .focused-player__active .focused-player__icon {
+    max-width: 120px;
+  }
+  .focused-player__ammo {
+    position: absolute;
+    top: 34px;
+    right: 12px;
+    width: 66px;
+    height: 54px;
+  }
+  .focused-player__ammo > strong {
+    font-family: var(--mizar-type-family-display);
+    font-size: 38px;
+    line-height: 38px;
+  }
+  .focused-player__vitals {
+    position: absolute;
+    top: 34px;
+    left: 92px;
+    width: 115px;
+    height: 56px;
+    padding: 0;
+  }
+  .focused-player__vitals-values {
+    gap: 10px;
+  }
+  .focused-player__hp {
+    font-family: var(--mizar-type-family-display);
+    font-size: 38px;
+    line-height: 38px;
+  }
+  .focused-player__health-track {
+    width: 60px;
+    height: 4px;
+  }
+  .focused-player__armor b {
+    font-size: 12px;
+  }
+  .focused-player__dead-state {
+    position: absolute;
+    left: 220px;
+    top: 40px;
+    width: 150px;
+    height: 46px;
+    background: transparent;
+    font-size: 18px;
+    color: var(--mizar-hud-text-muted);
+  }
+
+  .match-header__series-strip,
+  .match-header__series-maps {
+    height: 60px;
+  }
+  .match-header__series-maps {
+    gap: 2px;
+  }
+  .match-header__series-map {
+    height: 60px;
+    grid-template-rows: 28px 19px 13px;
+  }
+  .match-header__series-map-name {
+    font-family: var(--mizar-type-family-display);
+    font-size: 18px;
+    line-height: 19px;
+  }
+  .match-header__series-map-status {
+    color: var(--mizar-hud-text-muted);
+    font-size: 9px;
+  }
+  .match-header__series-map--current {
+    border-bottom: 2px solid var(--mizar-accent-primary);
+  }
+  .match-header__series-map-art-image {
+    opacity: 0.65;
+  }
+
+  .broadcast-pause__bar {
+    border-bottom-width: 1px;
+  }
+  .broadcast-pause__score {
+    background: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
+  }
+  .broadcast-pause__score > b {
+    font-family: var(--mizar-type-family-display);
+    font-size: 48px;
+  }
+  .broadcast-pause__brand {
+    background: var(--mizar-hud-surface-strong);
+  }
+  .broadcast-pause__economy strong {
+    font-family: var(--mizar-type-family-display);
+    font-size: 28px;
+  }
+
+  .player-rail__economy {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .player-rail__economy div {
+    padding: 0 6px;
+  }
+  .player-rail__economy strong {
+    font-size: 13px;
+  }
+  .player-rail__utility {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .player-rail__summary-utility {
+    width: auto;
+    height: 21px;
+  }
+  .player-status-effects {
+    z-index: 1;
+  }
+  .player-rail__body {
+    overflow: visible;
+  }
+  .player-rail__identity {
+    z-index: 4;
+  }
+  .broadcast-pause__score {
+    color: var(--mizar-hud-text-primary);
+    background: var(--mizar-hud-surface-strong);
+  }
+  .broadcast-pause__score > b {
+    color: var(--mizar-hud-surface-strong);
+    background: var(--mizar-hud-text-primary);
+  }
+  .broadcast-pause__money {
+    color: var(--mizar-hud-text-primary);
+  }
+  .broadcast-pause__player-name {
+    font-family: var(--mizar-type-family-body);
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .broadcast-pause__brand::before {
+    opacity: 0.05;
+  }
+}
+/* The same renderer also fits already-saved default envelopes without changing their layout. */
+@container (max-width: 500px) {
+  .hud-widget-design[data-hud-design='current'] .match-header__score-shell {
+    grid-template-columns: minmax(0, 1fr) 54px 104px 54px minmax(0, 1fr);
+  }
+  .hud-widget-design[data-hud-design='current'] .match-header__score-zone--logo {
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .hud-widget-design[data-hud-design='current'] .match-header__team-logo {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+  }
+  .hud-widget-design[data-hud-design='current'] .match-header__team-name {
+    font-size: 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-widget-design[data-hud-design='current'] .objective-center__icon.is-planted-commit {
+    animation: none;
+  }
+}
+
+@container (max-width: 600px) {
+  .hud-widget-design[data-hud-design='current'] .round-history-panel[data-history-mode='freeze'] {
+    header {
+      height: 18px;
+      font-size: 10px;
+    }
+    .round-history-panel__rounds {
+      gap: 2px;
+      padding: 3px;
+    }
+    .round-history-panel__round {
+      height: 30px;
+      gap: 4px;
+      font-size: 12px;
+    }
+    .round-history-panel__round > svg,
+    .round-history-panel__kit {
+      width: 14px;
+      height: 14px;
+      flex-basis: 14px;
+    }
+  }
+}
+@container (max-width: 400px) {
+  .hud-widget-design[data-hud-design='current'] {
+    .focused-player__vitals {
+      left: 88px;
+      width: 72px;
+    }
+    .focused-player__armor {
+      position: absolute;
+      top: 38px;
+      left: 72px;
+    }
+    .focused-player__active {
+      left: 46%;
+      width: 30%;
+    }
+    .focused-player__ammo {
+      right: 8px;
+      width: 64px;
+    }
+    .focused-player__active .focused-player__icon {
+      max-width: 92px;
+    }
+    .focused-player__dead-state {
+      left: 172px;
+      width: 140px;
+    }
+  }
+}

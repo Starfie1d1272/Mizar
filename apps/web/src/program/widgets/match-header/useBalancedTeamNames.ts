@@ -14,6 +14,7 @@ export function useBalancedTeamNames<T extends HTMLElement = HTMLElement>(
     const fit = () => {
       if (disposed) return;
       for (const node of nodes) node.style.fontSize = '';
+      if (design === 'current' && selector === '.match-header__team-name') return;
       const sizes = nodes
         .filter((node) => node.clientWidth > 0)
         .map((node) => {

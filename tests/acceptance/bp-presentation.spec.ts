@@ -160,7 +160,15 @@ async function hideBp(
   clock: ManualBpClock,
   surfaces: readonly (Page | FrameLocator)[],
 ) {
-  await operator.getByRole('button', { name: '收起 BP', exact: true }).click();
+  const [response] = await Promise.all([
+    operator.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/operator/bp-command' &&
+        response.request().method() === 'POST',
+    ),
+    operator.getByRole('button', { name: '收起 BP', exact: true }).click(),
+  ]);
+  expect(response.ok()).toBe(true);
   const hiding = JSON.parse((await app.inject('/local/v1/bp')).body) as { state: string };
   expect(hiding.state).toBe('hiding');
   clock.advanceBy(360);
@@ -433,7 +441,7 @@ for (const key of ['semifinalA', 'final'] as const) {
       const sceneBounds = await program.locator('.bp-scene').boundingBox();
       expect(sceneBounds?.width).toBe(1920);
       expect(sceneBounds?.height).toBe(1080);
-      await expect(program.locator('.bp-scene')).toHaveCSS('background-color', 'rgb(8, 13, 22)');
+      await expect(program.locator('.bp-scene')).toHaveCSS('background-color', 'rgb(11, 16, 24)');
 
       await program.reload();
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');

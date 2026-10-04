@@ -1,8 +1,8 @@
-import type { CSSProperties } from 'react';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { ProgramCanvas } from '../program/ProgramCanvas';
 import './bp.css';
+import '../program/broadcast-material.css';
 
 export function BpPresentation({
   snapshot,
@@ -72,16 +72,6 @@ export function BpPresentation({
                   data-visible={shown}
                   aria-hidden={!shown}
                   data-entrant={card.entrant ?? 'none'}
-                  style={
-                    {
-                      '--bp-accent':
-                        card.entrant === 'a'
-                          ? 'var(--bp-a)'
-                          : card.entrant === 'b'
-                            ? 'var(--bp-b)'
-                            : '#d5d9db',
-                    } as CSSProperties
-                  }
                 >
                   {image ? <img className="bp-map-art" src={image.outputPath} alt="" /> : null}
                   <div className="bp-shade" />

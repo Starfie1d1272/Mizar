@@ -105,11 +105,11 @@ describe('variant envelopes', () => {
     expect(parseHudResolvedPreset(resolved)).toEqual(resolved);
     const restored = resolveHudPreset(getBuiltinPreset(), resolved.layout, getBuiltinTheme());
     expect(placementToBox('top-score-bar', restored.layout.widgets['top-score-bar'])).toMatchObject(
-      { width: 480, height: 152 },
+      { width: 800, height: 152 },
     );
     expect(
       placementToBox('focused-player', restored.layout.widgets['focused-player']),
-    ).toMatchObject({ width: 360, height: 176 });
+    ).toMatchObject({ width: 480, height: 176 });
     expect(layout.widgets['top-score-bar'].size).toBeUndefined();
   });
 

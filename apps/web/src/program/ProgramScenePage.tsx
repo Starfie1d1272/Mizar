@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import {
@@ -12,6 +12,15 @@ import { presentationPreview, programPreviewSnapshot } from './presentation-prev
 import { ProgramCanvas } from './ProgramCanvas';
 import { GameplayHud } from './GameplayHud';
 import './program-scenes.css';
+import './broadcast-material.css';
+
+const motionQuery = '(prefers-reduced-motion: reduce)';
+const subscribeMotion = (notify: () => void) => {
+  const query = window.matchMedia(motionQuery);
+  query.addEventListener('change', notify);
+  return () => query.removeEventListener('change', notify);
+};
+const readReducedMotion = () => window.matchMedia(motionQuery).matches;
 
 function Media({
   src,
@@ -219,14 +228,7 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
 function Waiting({ data }: { data: ProgramPresentation }) {
   const series = data.series;
   return (
-    <main className="waiting-layout">
-      {series?.maps[0] && getMapThumbnail(series.maps[0].mapName) ? (
-        <img
-          className="waiting-backdrop"
-          src={getMapThumbnail(series.maps[0].mapName)!.outputPath}
-          alt=""
-        />
-      ) : null}
+    <main className="waiting-layout" data-schedule={Boolean(data.previous || data.next)}>
       <header className="waiting-event">
         <Media src={data.eventLogoUrl} />
         <span>{data.match?.competition.name ?? ''}</span>
@@ -242,12 +244,11 @@ function Waiting({ data }: { data: ProgramPresentation }) {
           <div className="waiting-hero">
             {(['a', 'b'] as const).map((side) => (
               <div className={`waiting-team waiting-team--${side}`} key={side}>
-                <div className="waiting-emblem">
-                  <Media
-                    src={series.entrants[side].logoUrl}
-                    fallback={teamInitials(series.entrants[side].name)}
-                  />
-                </div>
+                {series.entrants[side].logoUrl ? (
+                  <div className="waiting-emblem">
+                    <Media src={series.entrants[side].logoUrl} />
+                  </div>
+                ) : null}
                 <strong>{series.entrants[side].name}</strong>
               </div>
             ))}
@@ -263,13 +264,15 @@ function Waiting({ data }: { data: ProgramPresentation }) {
         <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
       )}
       <div className="waiting-schedule">
-        {(['previous', 'next'] as const).map((kind) => {
+        {(['next', 'previous'] as const).map((kind) => {
           const card = data[kind];
           return card ? (
             <article className={`waiting-schedule--${kind}`} key={kind}>
               <small>{kind === 'next' ? 'UP NEXT' : 'PREVIOUS MATCH'}</small>
               <strong>
-                {card.a} <span>{card.score ?? 'VS'}</span> {card.b}
+                <span className="waiting-schedule-team">{card.a}</span>
+                <span>{card.score ?? 'VS'}</span>
+                <span className="waiting-schedule-team">{card.b}</span>
               </strong>
               <p>
                 {card.stage} · {card.format.toUpperCase()}
@@ -347,60 +350,113 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       : scenes?.revision;
   const hasSnapshot = snapshot != null;
   const hasPresentation = data != null;
+  const targetSignature = JSON.stringify([
+    hud.current.layout.widgets['top-score-bar'],
+    hud.current.widgets['top-score-bar'],
+    data?.series?.entrants,
+  ]);
   const syncedAnimations = useRef(new WeakSet<Animation>());
+  const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
+  const synchronizeNewAnimations = useEffectEvent((animations: Animation[], root: HTMLElement) => {
+    const elapsed =
+      preview || preparingIntro
+        ? Number(root.getAnimations()[0]?.currentTime ?? 0)
+        : (scenes?.director?.sceneElapsedMs ?? 0);
+    for (const animation of animations) {
+      animation.currentTime = elapsed;
+      syncedAnimations.current.add(animation);
+      if (!preview && !preparingIntro && scenes?.director?.mode === 'blocked') animation.pause();
+    }
+  });
   useEffect(() => {
-    if (
-      sceneId !== 'matchup' ||
-      !intro.current ||
-      !hasSnapshot ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    )
-      return;
+    if (sceneId !== 'matchup' || !intro.current || !hasSnapshot || reducedMotion) return;
     const root = intro.current;
     const canvas = root.closest('.program-scene')!;
-    const scale = canvas.getBoundingClientRect().width / 1920;
     const animations: Animation[] = [];
-    for (const side of ['a', 'b']) {
-      const logo = root.querySelector<HTMLElement>(`.intro-team--${side} img`);
-      const destination = canvas.querySelector<HTMLElement>(`[data-team-logo-slot="${side}"] img`);
-      if (!logo || !destination || !logo.animate) continue;
-      const from = logo.getBoundingClientRect();
-      const to = destination.getBoundingClientRect();
-      const dx = (to.x + to.width / 2 - from.x - from.width / 2) / scale;
-      const dy = (to.y + to.height / 2 - from.y - from.height / 2) / scale;
-      animations.push(
-        logo.animate(
-          [
-            { transform: 'translate(0,0) scale(1)' },
-            { transform: `translate(${dx}px,${dy}px) scale(${to.width / from.width})` },
-          ],
-          {
-            duration: 600,
-            delay: Math.max(0, duration - 1200),
-            fill: 'forwards',
-            easing: 'cubic-bezier(.22,.7,.2,1)',
-          },
-        ),
-      );
-      const name = root.querySelector<HTMLElement>(`.intro-team--${side} strong`);
-      if (name)
-        animations.push(
-          name.animate(
-            [
-              { opacity: 1, transform: 'translateY(0)' },
-              { opacity: 0, transform: `translate(${dx}px,${dy}px) scale(.4)` },
-            ],
-            {
-              duration: 600,
-              delay: Math.max(0, duration - 1200),
-              fill: 'forwards',
-              easing: 'ease-in-out',
-            },
-          ),
+    let cancelled = false;
+    const measure = () => {
+      if (cancelled) return;
+      const scale = canvas.getBoundingClientRect().width / 1920;
+      const short = duration <= 2000;
+      const hold = short ? 0.48 : 0.72;
+      for (const side of ['a', 'b']) {
+        const logo = root.querySelector<HTMLImageElement>(`.intro-team--${side} img`);
+        const name = root.querySelector<HTMLElement>(`.intro-team--${side} strong`);
+        const targetLogo = canvas.querySelector<HTMLImageElement>(
+          `[data-team-logo-slot="${side}"] img`,
         );
-    }
-    return () => animations.forEach((animation) => animation.cancel());
-  }, [sceneId, duration, revision, hasSnapshot, hasPresentation]);
+        const targetName = canvas.querySelector<HTMLElement>(
+          `[data-team-logo-slot="${side}"] .match-header__team-name`,
+        );
+        const source = logo?.naturalWidth ? logo : name;
+        const target =
+          source === logo && targetLogo?.naturalWidth
+            ? targetLogo
+            : source === name && targetName?.getBoundingClientRect().width
+              ? targetName
+              : null;
+        const entrance = side === 'a' ? -28 : 28;
+        if (source) {
+          const from = source.getBoundingClientRect();
+          const to = target?.getBoundingClientRect();
+          const transform =
+            to && from.width && from.height
+              ? `translate(${(to.x + to.width / 2 - from.x - from.width / 2) / scale}px,${(to.y + to.height / 2 - from.y - from.height / 2) / scale}px) scale(${to.width / from.width},${to.height / from.height})`
+              : 'translateY(-12px)';
+          animations.push(
+            source.animate(
+              [
+                { opacity: 0, transform: short ? 'none' : `translateX(${entrance}px)`, offset: 0 },
+                { opacity: 1, transform: 'none', offset: short ? 0.08 : 0.1 },
+                {
+                  opacity: 1,
+                  transform: 'none',
+                  offset: hold,
+                  easing: 'cubic-bezier(.22,.7,.2,1)',
+                },
+                { opacity: target ? 1 : 0, transform, offset: 0.9 },
+                { opacity: 0, transform, offset: 1 },
+              ],
+              { duration, fill: 'both', easing: 'linear' },
+            ),
+          );
+        }
+        if (name && source !== name)
+          animations.push(
+            name.animate(
+              [
+                { opacity: 0, transform: short ? 'none' : `translateX(${entrance}px)`, offset: 0 },
+                { opacity: 1, transform: 'none', offset: 0.1 },
+                {
+                  opacity: 1,
+                  transform: 'none',
+                  offset: hold,
+                  easing: 'cubic-bezier(.22,.7,.2,1)',
+                },
+                { opacity: 0, transform: 'translateY(-12px)', offset: 0.86 },
+                { opacity: 0, transform: 'translateY(-12px)', offset: 1 },
+              ],
+              { duration, fill: 'both', easing: 'linear' },
+            ),
+          );
+      }
+      // New animations join the accepted presentation position once. Polling only
+      // corrects significant drift; no browser clock can extend the Director budget.
+      synchronizeNewAnimations(animations, root);
+    };
+    const images = [
+      ...canvas.querySelectorAll<HTMLImageElement>('.intro-team img, [data-team-logo-slot] img'),
+    ];
+    void Promise.all([
+      document.fonts.ready,
+      ...images.map((img) => img.decode().catch(() => undefined)),
+    ]).then(measure);
+    return () => {
+      cancelled = true;
+      animations.forEach((animation) => animation.cancel());
+    };
+    // Director polling is handled below, not by recreating this choreography.
+  }, [sceneId, duration, revision, hasSnapshot, hasPresentation, targetSignature, reducedMotion]);
   useEffect(() => {
     if (!intro.current?.getAnimations) return;
     const hudEntrance = intro.current.parentElement?.querySelector('.intro-hud');
@@ -467,6 +523,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
             <div
               ref={intro}
               className="intro-body"
+              data-intro-mode={duration <= 2000 ? 'short' : 'full'}
               key={revision}
               style={{ animationDuration: `${duration}ms` }}
             >
@@ -474,10 +531,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
                 className="intro-orbit"
                 style={{ animationDelay: `${Math.max(0, duration - 1200)}ms` }}
               />
-              <div
-                className="intro-star"
-                style={{ animationDelay: `${Math.max(0, duration - 600)}ms` }}
-              />
+
               <p className="intro-map">
                 MAP {data.series?.currentMapOrder ?? 1} ·{' '}
                 {mapName(
@@ -487,12 +541,11 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
               </p>
               {(['a', 'b'] as const).map((side) => (
                 <div className={`intro-team intro-team--${side}`} key={side}>
-                  <div className="intro-emblem">
-                    <Media
-                      src={data.series?.entrants[side].logoUrl}
-                      fallback={data.series?.entrants[side].name.slice(0, 2) ?? ''}
-                    />
-                  </div>
+                  {data.series?.entrants[side].logoUrl ? (
+                    <div className="intro-emblem">
+                      <Media src={data.series.entrants[side].logoUrl} />
+                    </div>
+                  ) : null}
                   <strong>{data.series?.entrants[side].name}</strong>
                 </div>
               ))}

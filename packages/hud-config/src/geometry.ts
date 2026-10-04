@@ -188,7 +188,8 @@ export function resizeRadarPlacement(
   delta: number,
   snap = true,
 ): HudWidgetPlacement {
-  if (placement.size === undefined) throw new Error('Radar placement 缺少 square size');
+  if (placement.size === undefined || placement.size.width !== placement.size.height)
+    throw new Error('Radar placement 缺少 square size');
   const current = placementToBox('radar', placement);
   const nextSize = current.width + delta;
   const size = Math.max(

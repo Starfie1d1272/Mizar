@@ -1,3 +1,4 @@
+import { WIDGET_DIMENSIONS } from './widget-dimensions.js';
 import { HUD_WIDGET_IDS } from './constants.js';
 import { getHudWidgetDescriptor } from './widget-registry.js';
 import { getWidgetDimensions, normalizeHudPlacement } from './geometry.js';
@@ -31,7 +32,12 @@ export function validateHudVariantLayout(layout: HudLayout, widgets: HudPreset['
     if (descriptor.resizePolicy !== 'none') continue;
     const expected = descriptor.dimensionsByVariant[widgets[id].variant]!;
     const actual = getWidgetDimensions(id, layout.widgets[id]);
-    if (actual.width !== expected.width || actual.height !== expected.height)
+    // Same current-version saved snapshot: retain its exact envelope and all settings.
+    const storedDefault =
+      widgets[id].variant === 'default' &&
+      actual.width === WIDGET_DIMENSIONS[id].width &&
+      actual.height === WIDGET_DIMENSIONS[id].height;
+    if (!storedDefault && (actual.width !== expected.width || actual.height !== expected.height))
       throw new Error(`组件 ${id} 的尺寸与 variant 不一致`);
   }
 }
