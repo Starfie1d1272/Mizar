@@ -1,3 +1,4 @@
+import { EquipmentIcon } from '../player-equipment/EquipmentIcon';
 import { StatGlyph } from '../player-status-effects/StatGlyph';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
@@ -19,7 +20,6 @@ import {
   type PlayerCardPresentation,
   type PlayerRailAsset,
   type PlayerRailWeapon,
-  type WeaponVisualRole,
 } from './presentation';
 
 function displayNumber(value: number | null): string {
@@ -94,47 +94,22 @@ function usePresenceItems<T extends { readonly key: string }>(
   return rendered;
 }
 
-function MaskIcon({
-  asset,
-  className = '',
-  label,
-  weaponVisualRole,
-  active,
-}: {
-  readonly asset: PlayerRailAsset | null;
-  readonly className?: string;
-  readonly label: string;
-  readonly weaponVisualRole?: WeaponVisualRole;
-  readonly active?: boolean | undefined;
-}) {
-  if (asset === null) return null;
-  const style = { '--player-rail-icon': `url("${asset.outputPath}")` } as CSSProperties;
-  return (
-    <span
-      aria-label={label}
-      className={`player-rail__icon ${className}`.trim()}
-      data-asset-id={asset.canonicalKey}
-      data-weapon-visual-role={weaponVisualRole}
-      data-weapon-active={active}
-      role="img"
-      style={style}
-    />
-  );
-}
-
 function WeaponIcon({
   weapon,
   pairedWithFirearm,
+  physicalSide,
 }: {
   readonly weapon: PlayerRailWeapon | null;
   readonly pairedWithFirearm: boolean;
+  readonly physicalSide: 'left' | 'right';
 }) {
   const visualRole = weapon === null ? undefined : weaponVisualRole(weapon, pairedWithFirearm);
   return (
-    <MaskIcon
+    <EquipmentIcon
       asset={weapon?.asset ?? null}
       active={weapon?.active}
-      className={visualRole === undefined ? '' : `is-${visualRole}`}
+      className={`player-rail__icon ${visualRole === undefined ? '' : `is-${visualRole}`}`}
+      physicalSide={physicalSide}
       label={weapon?.name ?? 'Weapon'}
       {...(visualRole === undefined ? {} : { weaponVisualRole: visualRole })}
     />
@@ -199,7 +174,7 @@ function Equipment({
           data-motion-phase={slot.motionPhase}
           key={slot.key}
         >
-          <MaskIcon asset={slot.asset} label={slot.label} />
+          <EquipmentIcon className="player-rail__icon" asset={slot.asset} label={slot.label} />
         </span>
       ))}
     </div>
@@ -254,7 +229,12 @@ function UtilityIcons({
           data-motion-phase={utility.motionPhase}
           key={utility.key}
         >
-          <MaskIcon asset={utility.asset} label={utility.family} active={utility.active} />
+          <EquipmentIcon
+            className="player-rail__icon"
+            asset={utility.asset}
+            label={utility.family}
+            active={utility.active}
+          />
         </span>
       ))}
     </div>
@@ -299,6 +279,7 @@ type BombPrediction = Extract<
 function PlayerBody({
   prediction,
   design,
+  physicalSide,
   player,
   dead,
   presentationRevision,
@@ -306,6 +287,7 @@ function PlayerBody({
   options,
 }: {
   readonly design: HudDesign;
+  readonly physicalSide: 'left' | 'right';
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
   readonly presentationRevision: number;
@@ -403,11 +385,13 @@ function PlayerBody({
                   <div className="player-rail__weapons">
                     <div className="player-rail__weapon-icons">
                       <WeaponIcon
+                        physicalSide={design === 'current' ? 'left' : physicalSide}
                         pairedWithFirearm={pairedWithFirearm}
                         weapon={player.primaryWeapon}
                       />
                       {secondaryVisible ? (
                         <WeaponIcon
+                          physicalSide={design === 'current' ? 'left' : physicalSide}
                           pairedWithFirearm={pairedWithFirearm}
                           weapon={player.secondaryWeapon}
                         />
@@ -495,6 +479,7 @@ export function PlayerCard({
   );
   const body = (
     <PlayerBody
+      physicalSide={physicalSide}
       design={design}
       prediction={prediction}
       options={options}
@@ -534,6 +519,7 @@ export function PlayerCard({
       {avatar}
       {body}
       <PlayerStatusEffects
+        design={design}
         key={`status:${presentationRevision}`}
         anchor={physicalSide}
         state={player.statusEffects}

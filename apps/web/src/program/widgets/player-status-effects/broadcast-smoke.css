@@ -1,0 +1,115 @@
+/* Smoke is below information and above media. Flash/fire retain their original plane. */
+.broadcast-smoke {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.broadcast-smoke .player-status-effects__smoke {
+  position: absolute;
+  inset: auto;
+  left: -20px;
+  bottom: -8px;
+  width: 62%;
+  height: 94%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.72);
+  background: linear-gradient(
+    180deg,
+    color-mix(
+      in srgb,
+      color-mix(in srgb, var(--mizar-hud-text-muted) 60%, var(--mizar-hud-text-primary)) 60%,
+      transparent
+    ),
+    color-mix(in srgb, var(--mizar-hud-text-muted) 60%, var(--mizar-hud-text-primary))
+  );
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 90'%3E%3Cpath fill='white' d='M0 90V76Q8 57 31 68Q26 47 49 42Q56 21 78 34Q83 8 106 22Q124 6 141 27Q159 20 169 43Q189 39 195 59Q211 56 220 76V90Z'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+  filter: blur(1.3px);
+  transform: translate3d(0, 0, 0);
+  transition: opacity 320ms ease-out;
+}
+.broadcast-smoke[data-anchor='right'] .player-status-effects__smoke {
+  left: auto;
+  right: -20px;
+}
+.broadcast-smoke[data-smoked='true'] .player-status-effects__smoke {
+  transition-duration: 110ms;
+}
+.broadcast-smoke .player-status-effects__smoke::before,
+.broadcast-smoke .player-status-effects__smoke::after {
+  display: none;
+}
+.hud-widget-design.hud-redraw .player-rail__card {
+  isolation: isolate;
+}
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__body {
+  isolation: auto;
+}
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__avatar {
+  z-index: 1;
+}
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__health-bar,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__health-spacer {
+  z-index: 0;
+}
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__identity,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__weapons,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__equipment,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__utility-icons,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__money,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__kd,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__dead-stats,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__spent {
+  z-index: 3;
+}
+/* Only IEM adds a small side tint; neutral clouds share canonical HUD colors. */
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-side='T']
+  .broadcast-smoke
+  .player-status-effects__smoke {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--mizar-side-t) 18%, transparent),
+    color-mix(in srgb, var(--mizar-side-t) 28%, var(--mizar-hud-text-primary))
+  );
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-side='CT']
+  .broadcast-smoke
+  .player-status-effects__smoke {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--mizar-side-ct) 8%, transparent),
+    color-mix(in srgb, var(--mizar-side-ct) 14%, var(--mizar-hud-text-primary))
+  );
+}
+.hud-widget-design[data-hud-design='iem'] .broadcast-smoke .player-status-effects__smoke {
+  filter: blur(0.7px);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card > .broadcast-smoke {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 0 100%);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__card
+  > .broadcast-smoke {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 44px 100%);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .broadcast-smoke .player-status-effects__smoke {
+  height: 90%;
+  width: 65%;
+  filter: blur(2px);
+}
+.focused-player .broadcast-smoke {
+  z-index: 3;
+}
+.focused-player .broadcast-smoke .player-status-effects__smoke {
+  width: 56%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .broadcast-smoke .player-status-effects__smoke {
+    animation: none;
+    transition: none;
+  }
+}

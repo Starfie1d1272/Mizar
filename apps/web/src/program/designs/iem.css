@@ -17,14 +17,14 @@
   top: 78px;
   height: 3px;
 }
-/* IEM: straight card, square portrait between identity and combat information. */
+/* IEM hierarchy adapted to square Steam avatars at the outside edge. */
 .hud-widget-design[data-hud-design='iem'] .player-rail {
   width: 360px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__avatar {
   position: absolute;
   z-index: 2;
-  left: 110px;
+  left: 12px;
   width: 76px;
   height: 76px;
   background: transparent;
@@ -36,7 +36,7 @@
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__avatar {
   left: auto;
-  right: 110px;
+  right: 12px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__body {
   flex: 0 0 100%;
@@ -56,12 +56,12 @@
   z-index: -2;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__identity {
-  inset: 4px 8px auto 20px;
+  inset: 4px 8px auto 98px;
 }
 .hud-widget-design[data-hud-design='iem']
   .player-rail__card[data-physical-side='right']
   .player-rail__identity {
-  inset: 4px 20px auto 8px;
+  inset: 4px 98px auto 8px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__name {
   font-family: var(--mizar-type-family-display);
@@ -74,22 +74,22 @@
   font-size: 38px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__kd {
-  left: 20px;
+  left: 98px;
   bottom: 26px;
   font-size: 15px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__kd {
   left: auto;
-  right: 20px;
+  right: 98px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__money {
-  left: 20px;
+  left: 98px;
   bottom: 5px;
   font-size: 16px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__money {
   left: auto;
-  right: 20px;
+  right: 98px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__weapons {
   left: 192px;
@@ -193,6 +193,11 @@
 }
 .hud-widget-design[data-hud-design='iem'] .match-header__score-shell {
   border: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 65%, transparent);
+  background: linear-gradient(
+    145deg,
+    var(--mizar-hud-surface-primary),
+    color-mix(in srgb, var(--mizar-side-ct) 70%, var(--mizar-hud-surface-primary))
+  );
 }
 .hud-widget-design[data-hud-design='iem'] .match-header__map-score {
   font-family: var(--mizar-type-family-display);
@@ -223,4 +228,30 @@
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__name {
   color: var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='iem'] .iem-event-ribbon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -20px;
+  height: 20px;
+  display: grid;
+  grid-template-columns: 1fr 30px 1fr;
+  align-items: center;
+  text-align: center;
+  background: var(--mizar-hud-surface-primary);
+  font-family: var(--mizar-type-family-display);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.iem-event-ribbon > span {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.iem-event-ribbon svg {
+  width: 18px;
+  height: 18px;
+  fill: var(--mizar-hud-text-primary);
+  justify-self: center;
 }

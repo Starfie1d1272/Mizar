@@ -49,6 +49,7 @@ export interface MatchHeaderRoundPresentation {
   readonly state: 'known' | 'missing';
   readonly winner: MatchHeaderEntrantKey | 'unknown';
   readonly winnerSide: MatchHeaderSide | 'unknown';
+  readonly winCondition: 'elimination' | 'bomb' | 'defuse' | 'time' | 'unknown';
 }
 
 export interface MatchHeaderRoundHistoryPresentation {
@@ -285,6 +286,7 @@ function buildRoundHistory(
         state: 'missing',
         winner: 'unknown',
         winnerSide: 'unknown',
+        winCondition: 'unknown',
       });
       continue;
     }
@@ -299,6 +301,7 @@ function buildRoundHistory(
             : 'unknown',
       winnerSide:
         round.winnerSide === 'CT' || round.winnerSide === 'T' ? round.winnerSide : 'unknown',
+      winCondition: round.winCondition,
     });
   }
   return { completeness: history.completeness, rounds };

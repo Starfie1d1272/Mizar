@@ -1,3 +1,4 @@
+import { useBalancedTeamNames } from './useBalancedTeamNames';
 import { assetForCanonicalKey } from '../player-rails/presentation';
 import type { CSSProperties } from 'react';
 import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-config';
@@ -5,7 +6,7 @@ import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-
  * (MIT). Angular shell, series pips and objective choreography follow the user-provided reference.
  * Team binding and all gameplay progress remain owned by the existing presentation join/Core. */
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ObjectiveCenter, ObjectiveDefused, ObjectiveFuse } from './ObjectiveCenter';
 import {
   buildMatchHeaderPresentation,
@@ -75,31 +76,6 @@ function TeamLogo({
       src={team.logoUrl}
     />
   );
-}
-
-function useBalancedTeamNames(names: string, design: string) {
-  const ref = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {
-    const nodes = [
-      ...(ref.current?.querySelectorAll<HTMLElement>('.match-header__team-name') ?? []),
-    ];
-    const fit = () => {
-      for (const node of nodes) node.style.fontSize = '';
-      const sizes = nodes
-        .filter((node) => node.clientWidth > 0)
-        .map((node) => {
-          const base = Number.parseFloat(getComputedStyle(node).fontSize);
-          return base * Math.min(1, node.clientWidth / Math.max(1, node.scrollWidth));
-        });
-      if (sizes.length) for (const node of nodes) node.style.fontSize = `${Math.min(...sizes)}px`;
-    };
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
-    for (const node of nodes) observer?.observe(node);
-    void document.fonts?.ready.then(fit);
-    fit();
-    return () => observer?.disconnect();
-  }, [names, design]);
-  return ref;
 }
 
 function Team({
@@ -177,6 +153,15 @@ export function TopScoreBar({
       data-side-mapping={p.currentSideMapping}
       data-freeze={snapshot.payload.round?.phase === 'freezetime'}
     >
+      {design === 'iem' && (p.competitionName || p.stageName) ? (
+        <div className="iem-event-ribbon">
+          <span>{p.competitionName}</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M7 2h10v10a5 5 0 0 1-4 5v3h4v2H7v-2h4v-3a5 5 0 0 1-4-5zM5 4H2v4q0 5 5 5v-2Q4 11 4 8V6h1zM19 4h3v4q0 5-5 5v-2q3 0 3-3V6h-1z" />
+          </svg>
+          <span>{p.stageName}</span>
+        </div>
+      ) : null}
       <div className="match-header__score-shell">
         <Team team={p.teamA} options={options} />
         <div

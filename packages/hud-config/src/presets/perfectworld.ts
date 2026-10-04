@@ -6,6 +6,7 @@ export const PERFECTWORLD_STYLE = {
   label: '类 Perfect World',
   showTeamName: false,
   widgetDimensions: {
+    'round-history': { width: 720, height: 84 },
     'top-score-bar': { width: 800, height: 210 },
     'focused-player': { width: 342, height: 192 },
   },
@@ -29,6 +30,7 @@ export const PERFECTWORLD_STYLE = {
   layout: {
     name: '上海布局',
     widgets: {
+      'round-history': { visible: true, anchor: 'top-center', offsetX: 0, offsetY: 104 },
       'top-score-bar': {
         visible: true,
         anchor: 'top-center',

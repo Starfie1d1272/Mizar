@@ -1,3 +1,4 @@
+import type { Page, WebSocketRoute } from '@playwright/test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -170,10 +171,16 @@ test('three broadcast presets save, activate and reload through the shared Progr
       ) as unknown,
     );
     const snapshot = artifact.fixtures['real-live-rich']!.snapshot;
-    await context.routeWebSocket(/\/local\/v1\/program$/, (socket) =>
-      socket.send(JSON.stringify(snapshot)),
-    );
+    let programSocket: WebSocketRoute | undefined;
+    let publication = 100;
+    await context.routeWebSocket(/\/local\/v1\/program$/, (socket) => {
+      socket.send(JSON.stringify(snapshot));
+    });
     const program = await context.newPage();
+    await program.routeWebSocket(/\/local\/v1\/program$/, (socket) => {
+      programSocket = socket;
+      socket.send(JSON.stringify(snapshot));
+    });
     for (const style of ['ewc', 'iem', 'perfectworld']) {
       await page.goto('/operator/hud?hud-config=companion');
       await page
@@ -210,6 +217,83 @@ test('three broadcast presets save, activate and reload through the shared Progr
         style,
       );
       await expect(program.locator('.player-rail__avatar img').first()).toBeVisible();
+      await assertBroadcastAssetFacing(program, false);
+      for (const [id, side] of [
+        ['real-timeout-ct', 'left'],
+        ['real-timeout-t', 'right'],
+      ] as const) {
+        const captured = artifact.fixtures[id]!.snapshot;
+        publication += 1;
+        programSocket!.send(
+          JSON.stringify({
+            ...captured,
+            channelSeq: publication,
+            cursor: {
+              ...captured.cursor,
+              // Independent real captures share this test connection: advance transport
+              // sequencing and reset presentation without changing their gameplay payload.
+              producerInstanceId: snapshot.cursor.producerInstanceId,
+              runtimeSeq: publication,
+              programSourceGeneration: publication,
+            },
+          }),
+        );
+        const notice = program.locator(`[data-pause-info-side="${side}"]`);
+        await expect(notice).toBeVisible();
+        await expect(
+          program.locator(`[data-pause-history-side="${side === 'left' ? 'right' : 'left'}"]`),
+        ).toBeVisible();
+        const geometry = await notice.evaluate((element) => {
+          const x = (selector: string) =>
+            element.querySelector(selector)!.getBoundingClientRect().x;
+          const css = getComputedStyle(element);
+          return {
+            label: x('[data-pause-header-part="label"]'),
+            team: x('[data-pause-header-part="team"]'),
+            clock: x('[data-pause-countdown-part="clock"]'),
+            remaining: x('[data-pause-countdown-part="remaining"]'),
+            leftEdge: parseFloat(css.borderLeftWidth),
+            rightEdge: parseFloat(css.borderRightWidth),
+            transform: css.transform,
+          };
+        });
+        expect(geometry.transform).toBe('none');
+        expect(geometry.label < geometry.team).toBe(side === 'left');
+        expect(geometry.clock < geometry.remaining).toBe(side === 'left');
+        expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
+        await assertBroadcastAssetFacing(program, true);
+        const columns = await program.locator('.broadcast-pause__roster').evaluateAll((elements) =>
+          elements.map((rail) => {
+            const row = rail.querySelector('.broadcast-pause__player')!;
+            const x = (name: string) =>
+              row.querySelector(`.broadcast-pause__${name}`)!.getBoundingClientRect().x;
+            return {
+              side: rail.getAttribute('data-physical-side'),
+              avatar: x('avatar'),
+              name: x('player-name'),
+              armor: x('armor'),
+              utility: x('utility'),
+              secondary: x('secondary'),
+              primary: x('primary'),
+              money: x('money'),
+            };
+          }),
+        );
+        for (const column of columns) {
+          const positions = [
+            column.avatar,
+            column.name,
+            column.armor,
+            column.utility,
+            column.secondary,
+            column.primary,
+            column.money,
+          ];
+          expect(positions).toEqual(
+            [...positions].sort((a, b) => (column.side === 'left' ? a - b : b - a)),
+          );
+        }
+      }
     }
     await program.close();
   } finally {
@@ -379,3 +463,37 @@ test('mixing Shanghai components with default layout uses one envelope for previ
   await expect(overlay).toHaveCSS('width', '342px');
   await expect(overlay).toHaveCSS('height', '192px');
 });
+
+/** Check rendered facing, including ancestor transforms, rather than matching CSS source. */
+async function assertBroadcastAssetFacing(page: Page, paused: boolean) {
+  const result = await page.evaluate((paused) => {
+    const roots = paused ? '.broadcast-pause__roster' : '.player-rail__card';
+    const selector = paused
+      ? '.broadcast-pause__weapon, .broadcast-pause__pistol'
+      : '.player-rail__icon[data-weapon-visual-role]';
+    return [...document.querySelectorAll(roots)].flatMap((root) =>
+      [...root.querySelectorAll(selector)]
+        .filter((icon) => icon.getClientRects().length > 0)
+        .map((icon) => {
+          let flips = 0;
+          for (
+            let element: Element | null = icon;
+            element && element !== root.parentElement;
+            element = element.parentElement
+          ) {
+            const transform = getComputedStyle(element).transform;
+            if (transform !== 'none' && new DOMMatrixReadOnly(transform).a < 0) flips++;
+          }
+          return {
+            side: root.getAttribute('data-physical-side'),
+            label: icon.getAttribute('aria-label'),
+            flips,
+          };
+        }),
+    );
+  }, paused);
+  expect(result.some((value) => value.side === 'left')).toBe(true);
+  expect(result.some((value) => value.side === 'right')).toBe(true);
+  for (const value of result)
+    expect(value.flips, `${value.side} ${value.label}`).toBe(value.side === 'right' ? 1 : 0);
+}

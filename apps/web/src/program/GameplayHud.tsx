@@ -2,7 +2,12 @@ import { presentationBoundaryKey } from './presentation-boundary';
 import type { RadarProps } from './widgets/radar/Radar';
 import type { CSSProperties, ReactElement } from 'react';
 
-import { HUD_WIDGET_REGISTRY, placementToBox, type HudResolvedPreset } from '@mizar/hud-config';
+import {
+  HUD_WIDGET_REGISTRY,
+  placementToBox,
+  topScoreBarSettingsSchema,
+  type HudResolvedPreset,
+} from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import {
@@ -20,6 +25,8 @@ import './designs/ewc.css';
 import './designs/iem.css';
 import './designs/perfectworld.css';
 import { hudDesignForVariant } from './hud-design';
+import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause';
+import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand';
 
 export interface GameplayHudProps {
   readonly radarClient?: RadarProps['client'];
@@ -27,6 +34,7 @@ export interface GameplayHudProps {
   readonly snapshot: ProgramSnapshot | null;
   readonly presentationRevision?: number;
   readonly resolvedPreset: HudResolvedPreset;
+  readonly broadcastBranding?: BroadcastBranding;
   /** Test-only injection keeps the production registry closed while exercising the React seam. */
   readonly rendererRegistry?: HudRendererRegistry;
 }
@@ -62,10 +70,39 @@ export function GameplayHud({
   resolvedPreset,
   presentationRevision = 0,
   rendererRegistry = HUD_RENDERER_REGISTRY,
+  broadcastBranding,
 }: GameplayHudProps) {
   const programFresh = snapshot?.payload.status.telemetry === 'fresh';
   const radarAvailable = radarClient !== undefined || radarSnapshot != null;
   if (!programFresh && !radarAvailable) return null;
+
+  const score = resolvedPreset.widgets['top-score-bar'];
+  const design = hudDesignForVariant(score.variant);
+  const phase = snapshot?.payload.clock?.phase;
+  if (
+    programFresh &&
+    snapshot &&
+    design !== 'current' &&
+    resolvedPreset.layout.widgets['top-score-bar'].visible &&
+    topScoreBarSettingsSchema.parse(score.settings).showTimeout &&
+    (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')
+  ) {
+    return (
+      <div
+        className="gameplay-hud"
+        data-gameplay-hud="true"
+        data-hud-preset-id={resolvedPreset.preset.id}
+        style={themeStyle(resolvedPreset.theme)}
+      >
+        <BroadcastPause
+          snapshot={snapshot}
+          resolvedPreset={resolvedPreset}
+          design={design}
+          branding={broadcastBranding}
+        />
+      </div>
+    );
+  }
 
   return (
     <div

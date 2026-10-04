@@ -4,6 +4,13 @@ import type { HudBroadcastStyleDefinition } from '../types.js';
 export const EWC_STYLE = {
   style: 'ewc',
   label: '类 EWC',
+  widgetDimensions: { 'round-history': { width: 720, height: 84 } },
+  layout: {
+    name: 'EWC 布局',
+    widgets: {
+      'round-history': { visible: true, anchor: 'top-center', offsetX: 0, offsetY: 132 },
+    },
+  },
   showTeamName: false,
   recipe: {
     ...DEFAULT_THEME_RECIPE,

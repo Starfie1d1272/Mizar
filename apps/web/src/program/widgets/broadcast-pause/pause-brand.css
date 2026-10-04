@@ -1,0 +1,104 @@
+.broadcast-pause__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 34px;
+  background: var(--mizar-hud-surface-primary);
+  position: relative;
+  overflow: hidden;
+}
+.broadcast-pause__brand::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.1;
+  background: linear-gradient(
+    150deg,
+    transparent 0 28%,
+    var(--mizar-hud-text-primary) 28.2% 28.6%,
+    transparent 28.8% 61%,
+    var(--mizar-hud-text-primary) 61.2% 61.6%,
+    transparent 61.8%
+  );
+  pointer-events: none;
+}
+.broadcast-pause__event {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+.broadcast-pause__event img {
+  width: 86px;
+  height: 76px;
+  object-fit: contain;
+}
+.broadcast-pause__event strong {
+  font-family: var(--mizar-hud-font-family);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.broadcast-pause__brand-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.broadcast-pause__brand-main img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+.broadcast-pause__brand-main strong {
+  font-family: var(--mizar-hud-font-family);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  line-height: 1.1;
+  text-align: center;
+}
+.broadcast-pause__brand-main[data-event-present='true'] {
+  margin-top: 8px;
+  opacity: 0.65;
+}
+.broadcast-pause__brand-main[data-event-present='true'] img {
+  width: 22px;
+  height: 22px;
+}
+.broadcast-pause__brand-main[data-event-present='true'] strong {
+  font-size: 15px;
+}
+.broadcast-pause__stage {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+  line-height: 1.1;
+}
+.broadcast-pause__partners {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  height: 26px;
+}
+.broadcast-pause__partners img {
+  max-width: 86px;
+  max-height: 26px;
+  object-fit: contain;
+}
+.broadcast-pause[data-hud-design='iem'] .broadcast-pause__brand {
+  background: linear-gradient(
+    150deg,
+    var(--mizar-hud-surface-primary),
+    color-mix(in srgb, var(--mizar-side-ct) 65%, var(--mizar-hud-surface-primary))
+  );
+}
+.broadcast-pause[data-hud-design='perfectworld'] .broadcast-pause__brand {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 91%, transparent);
+}

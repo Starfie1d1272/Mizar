@@ -4,6 +4,13 @@ import type { HudBroadcastStyleDefinition } from '../types.js';
 export const IEM_STYLE = {
   style: 'iem',
   label: '类 IEM',
+  widgetDimensions: { 'round-history': { width: 720, height: 84 } },
+  layout: {
+    name: 'IEM 布局',
+    widgets: {
+      'round-history': { visible: true, anchor: 'top-center', offsetX: 0, offsetY: 132 },
+    },
+  },
   showTeamName: true,
   recipe: {
     ...DEFAULT_THEME_RECIPE,

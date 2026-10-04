@@ -107,6 +107,7 @@ function widgetContract(id: HudWidgetId) {
     'team-t-rail',
     'focused-player',
     'series-strip',
+    'round-history',
   ].includes(id);
   const variants = [
     ...(id === 'focused-player' ? ['default', 'minimal'] : ['default']),

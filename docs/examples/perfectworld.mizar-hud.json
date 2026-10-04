@@ -67,7 +67,7 @@
         "settings": {}
       },
       "round-history": {
-        "variant": "default",
+        "variant": "perfectworld",
         "settings": {}
       },
       "objective": {
@@ -140,10 +140,14 @@
         "offsetY": 6
       },
       "round-history": {
-        "visible": false,
+        "visible": true,
         "anchor": "top-center",
         "offsetX": 0,
-        "offsetY": 136
+        "offsetY": 104,
+        "size": {
+          "width": 720,
+          "height": 84
+        }
       },
       "objective": {
         "visible": false,

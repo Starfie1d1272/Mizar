@@ -36,6 +36,18 @@ import {
 } from '../src/index.js';
 
 describe('hud-config schema and framework contract', () => {
+  it('resolves styled history envelopes while retaining the original hidden history', () => {
+    for (const style of ['ewc', 'iem', 'perfectworld']) {
+      const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
+      const parsed = parseHudResolvedPreset(preset);
+      expect(parsed.widgets['round-history'].variant).toBe(style);
+      expect(parsed.layout.widgets['round-history'].visible).toBe(true);
+      expect(placementToBox('round-history', parsed.layout.widgets['round-history'])).toMatchObject(
+        { width: 720, height: 84 },
+      );
+    }
+    expect(getBuiltinResolvedPreset().layout.widgets['round-history'].visible).toBe(false);
+  });
   it('provides a complete immutable-by-convention built-in registry', () => {
     const preset = getBuiltinPreset();
     const layout = getBuiltinLayout();

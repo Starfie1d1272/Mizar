@@ -1,0 +1,141 @@
+.broadcast-pause__roster {
+  display: grid;
+  grid-template-rows: repeat(5, 36px);
+  row-gap: 2px;
+  padding-top: 2px;
+}
+.broadcast-pause__player {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 296px 88px;
+  grid-template-areas: 'avatar name equipment money';
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 87%, transparent);
+  border-inline: 3px solid var(--mizar-side-ct);
+  border-inline-end-width: 0;
+}
+.broadcast-pause__roster[data-side='T'] .broadcast-pause__player {
+  border-color: var(--mizar-side-t);
+}
+.broadcast-pause__roster[data-side='unknown'] .broadcast-pause__player {
+  border-color: var(--mizar-hud-text-muted);
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__player {
+  grid-template-columns: 88px 296px minmax(0, 1fr) 32px;
+  grid-template-areas: 'money equipment name avatar';
+  border-inline-start-width: 0;
+  border-inline-end-width: 3px;
+  padding: 0 4px 0 10px;
+}
+.broadcast-pause__avatar {
+  grid-area: avatar;
+  height: 32px;
+  width: 32px;
+  background: color-mix(in srgb, var(--mizar-hud-text-primary) 6%, transparent);
+}
+.broadcast-pause__avatar img {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+}
+.broadcast-pause__player-name {
+  grid-area: name;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__player-name {
+  text-align: right;
+}
+.broadcast-pause__equipment {
+  grid-area: equipment;
+  display: grid;
+  grid-template-columns: 64px 80px 40px 88px;
+  grid-template-areas: 'armor utility secondary primary';
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__equipment {
+  grid-template-columns: 88px 40px 80px 64px;
+  grid-template-areas: 'primary secondary utility armor';
+}
+.broadcast-pause__equipment > div {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 26px;
+  border-inline-end: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent);
+  padding-inline-end: 4px;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__equipment > div {
+  justify-content: flex-start;
+  border-inline-end: 0;
+  border-inline-start: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent);
+  padding-inline-end: 0;
+  padding-inline-start: 4px;
+}
+.broadcast-pause__equipment .broadcast-pause__icon {
+  width: 18px;
+  height: 20px;
+  flex: 0 0 18px;
+  background: var(--mizar-hud-text-primary);
+}
+.broadcast-pause__equipment .broadcast-pause__weapon {
+  width: 82px;
+  height: 26px;
+  flex-basis: 82px;
+}
+.broadcast-pause__equipment .broadcast-pause__pistol {
+  width: 32px;
+  height: 22px;
+  flex-basis: 32px;
+}
+.broadcast-pause__utility .broadcast-pause__icon {
+  width: 16px;
+  flex-basis: 16px;
+}
+.broadcast-pause__armor {
+  grid-area: armor;
+  gap: 2px;
+}
+.broadcast-pause__utility {
+  grid-area: utility;
+  gap: 3px;
+}
+.broadcast-pause__armor .broadcast-pause__icon {
+  opacity: 0.75;
+}
+.broadcast-pause__money {
+  grid-area: money;
+  color: var(--mizar-hud-state-success);
+  font-size: 22px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__money {
+  text-align: left;
+}
+.broadcast-pause[data-hud-design='perfectworld'] .broadcast-pause__player {
+  border-radius: 3px;
+}
+.broadcast-pause__secondary {
+  grid-area: secondary;
+}
+.broadcast-pause__primary {
+  grid-area: primary;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__armor {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+}
+.broadcast-pause__roster[data-physical-side='right'] .broadcast-pause__utility {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+}
