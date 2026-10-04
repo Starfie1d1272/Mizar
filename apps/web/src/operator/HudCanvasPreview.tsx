@@ -14,8 +14,12 @@ import { HudEditorOverlay } from '../program/HudEditorOverlay';
 import { GameplayHud } from '../program/GameplayHud';
 import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
 import type { LocalChannelConnectionState } from '../realtime';
+import { getMapThumbnail } from '@mizar/cs2-assets';
+import type { HudDesign } from '../program/hud-design';
 
 export interface HudCanvasPreviewProps {
+  readonly design?: HudDesign;
+  readonly mapBackground?: boolean;
   readonly radarClient?: RadarProps['client'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly resolvedPreset: HudResolvedPreset;
@@ -37,6 +41,8 @@ export interface HudCanvasPreviewProps {
 }
 
 export function HudCanvasPreview({
+  design = 'current',
+  mapBackground = false,
   resolvedPreset,
   radarClient,
   radarSnapshot,
@@ -78,6 +84,10 @@ export function HudCanvasPreview({
       ? snapshot
       : null
     : snapshot;
+  const mapImage =
+    mapBackground && presentationSnapshot?.payload.map?.name
+      ? getMapThumbnail(presentationSnapshot.payload.map.name)?.outputPath
+      : undefined;
 
   return (
     <div className="hud-console__canvas-frame" ref={frameRef}>
@@ -86,6 +96,7 @@ export function HudCanvasPreview({
         className="hud-console__canvas-logical"
         style={{ transform: `scale(${scale})` }}
       >
+        {mapImage ? <img className="hud-console__map-background" src={mapImage} alt="" /> : null}
         {showGrid ? (
           <div className="hud-console__guide hud-console__guide--grid" style={guideStyle} />
         ) : null}
@@ -96,6 +107,7 @@ export function HudCanvasPreview({
           <div className="hud-console__guide hud-console__guide--safe" style={guideStyle} />
         ) : null}
         <GameplayHud
+          design={design}
           radarClient={radarClient}
           radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}

@@ -116,6 +116,7 @@ function Team({
   );
 }
 export function TopScoreBar({
+  design = 'current',
   snapshot,
   settings,
   presentationRevision = 0,
@@ -150,6 +151,7 @@ export function TopScoreBar({
             </div>
           ) : objective ? (
             <ObjectiveCenter
+              design={design}
               cursor={snapshot.cursor}
               presentation={p}
               presentationRevision={presentationRevision}

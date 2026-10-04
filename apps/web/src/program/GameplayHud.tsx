@@ -15,8 +15,11 @@ import './widgets/focused-player/focused-player.css';
 import './widgets/match-header/match-header.css';
 import './widgets/player-rails/player-rails.css';
 import './widgets/player-status-effects/player-status-effects.css';
+import './hud-designs.css';
+import type { HudDesign } from './hud-design';
 
 export interface GameplayHudProps {
+  readonly design?: HudDesign;
   readonly radarClient?: RadarProps['client'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
@@ -51,6 +54,7 @@ export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
 }
 
 export function GameplayHud({
+  design = 'current',
   snapshot,
   radarClient,
   radarSnapshot,
@@ -64,8 +68,9 @@ export function GameplayHud({
 
   return (
     <div
-      className="gameplay-hud"
+      className={`gameplay-hud${design === 'current' ? '' : ' hud-redraw'}`}
       data-gameplay-hud="true"
+      data-hud-design={design}
       data-hud-preset-id={resolvedPreset.preset.id}
       style={themeStyle(resolvedPreset.theme)}
     >
@@ -82,6 +87,7 @@ export function GameplayHud({
           const Renderer = rendererEntry.renderer;
           content = (
             <Renderer
+              design={design}
               box={box}
               placement={placement}
               resolvedPreset={resolvedPreset}
