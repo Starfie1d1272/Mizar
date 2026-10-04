@@ -519,17 +519,23 @@ async function assertEwcCombatSlots(page: Page) {
       cards.map((card) => {
         const bounds = card.getBoundingClientRect();
         const box = (selector: string) => {
-          const rect = card.querySelector(selector)!.getBoundingClientRect();
+          const element = card.querySelector(selector)!;
+          const rect = element.getBoundingClientRect();
           return {
             x: rect.x - bounds.x,
             y: rect.y - bounds.y,
             width: rect.width,
             height: rect.height,
+            z: Number(getComputedStyle(element).zIndex),
           };
         };
         return {
           side: card.getAttribute('data-physical-side'),
           width: bounds.width,
+          paint: Math.max(
+            Number(getComputedStyle(card.querySelector('.player-rail__health-bar')!).zIndex),
+            Number(getComputedStyle(card.querySelector('.broadcast-smoke')!).zIndex),
+          ),
           name: box('.player-rail__name'),
           weapon: box('.player-rail__weapons'),
           health: box('.player-rail__health-value'),
@@ -544,6 +550,10 @@ async function assertEwcCombatSlots(page: Page) {
     expect(left[key].y).toBeCloseTo(right[key].y, 0);
   }
   for (const row of rows) {
+    // display:contents has no painted box: the grid items must own the
+    // information plane so HP paint and smoke cannot conceal their text.
+    expect(row.name.z).toBeGreaterThan(row.paint);
+    expect(row.health.z).toBeGreaterThan(row.paint);
     const slots = [row.name, row.weapon, row.health].sort((a, b) => a.x - b.x);
     expect(slots[0]!.x + slots[0]!.width).toBeLessThan(slots[1]!.x);
     expect(slots[1]!.x + slots[1]!.width).toBeLessThan(slots[2]!.x);

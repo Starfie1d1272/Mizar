@@ -54,6 +54,8 @@
   z-index: 0;
 }
 .hud-widget-design.hud-redraw .player-rail__card .player-rail__identity,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__name,
+.hud-widget-design.hud-redraw .player-rail__card .player-rail__health-value,
 .hud-widget-design.hud-redraw .player-rail__card .player-rail__weapons,
 .hud-widget-design.hud-redraw .player-rail__card .player-rail__equipment,
 .hud-widget-design.hud-redraw .player-rail__card .player-rail__utility-icons,
