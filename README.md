@@ -1,34 +1,36 @@
 # Mizar
 
-Mizar 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**。它把赛事上下文、CS2 实时数据、HUD、雷达、场景、制作控制和观察辅助放在同一套可靠运行时上，同时保持播出画面与辅助信息严格隔离。
+Mizar 是一套 **本地优先、开源、中文优先的 CS2 赛事制播工具**，面向校园赛、社区赛和小型赛事的解说、OB 与制作人员。它把比赛资料、HUD、雷达、节目场景和 OBS 控制放进同一套本地工作流。
 
-产品方向同时包含**独立模式**和 **RivalHub 连接模式**。RivalHub 是最完整的第一方赛事上下文提供方，但不应成为运行 HUD、雷达、播出画面或观察辅助的前置条件。当前实现优先服务自己的真实赛事，并逐步补齐独立模式所需的本地比赛配置、安装与使用体验。
+## 为什么使用 Mizar
 
-## 产品形态
+- **为长时间直播稳定性设计。** HUD 和雷达优先消费当前状态，避免积压旧帧后越来越慢半拍；实际稳定性与性能仍需用具体版本的真实赛事环境验证。
+- **从准备到播出，一处完成。** 创建或选择比赛，检查 CS2 / GSI / OBS，预览画面后进入现场；比赛资料可以保存在本机并复用。
+- **减少比赛中的手动切节目。** 现场默认自动编排赛前等待、对阵、BP、比赛中、半场、单图结果、图间和整场结果；需要接管时手动切换，确认后再恢复自动。
+- **让身份与比分跟随比赛连续变化。** 共用运行时维护阵容、换边、地图与系列赛进度；缺少证据时提示或安全隐藏，不靠昵称猜身份或补造赛果。
+- **选择适合赛事的画面。** 默认、类 EWC、类 IEM、类 Perfect World HUD 可预览、另存和启用；支持受控的布局与组件设置，以及预设文件分享。
+- **为现场刷新、断线和重启设计。** 保留比赛资料与已启用预设，重连取得当前状态；遇到故障可以检查配置、修复 OBS 场景并导出诊断摘要。
 
-```text
-Mizar
-├─ 独立模式
-│  ├─ 本地比赛上下文
-│  ├─ HUD / Radar / OBS
-│  └─ 制播工作区 / 观察辅助（按能力逐步完善）
-│
-└─ RivalHub 连接模式
-   └─ 通过版本化契约读取 RivalHub 的完整赛事上下文
-```
+## 开始使用
 
-校园赛、社区赛和小型赛事是重要适用场景，不是第三种运行模式；它们既可以独立使用 Mizar，也可以选择连接 RivalHub。
+Windows 用户将完整便携包解压到可写目录，双击 `Mizar.exe`，从「总览 / 比赛 / 画面 / 设置」开始准备。包内带 Node；桌面需要 Microsoft Edge WebView2 Evergreen Runtime。
 
-共享运行时、HUD、雷达和观察辅助不依赖 RivalHub 内部数据库或页面实现。两种运行方式共享同一套 Runtime 和领域模型，只在赛事上下文来源上不同。完整产品边界见 ADR-0006。
+按 [快速开始与故障排查](docs/quick-start.md) 完成 GSI、OBS、比赛与 HUD 配置。进入现场后，私有 Workspace 围绕真实 CS2 画面展开；正式节目由 OBS 输出。预览画面不会自行切换 OBS 场景，推流启停由操作者确认。
 
-产品可以从四个层次理解：
+支持两种运行方式：
 
-- **制播工作区（Mizar Workspace）**：制作人员实际使用的统一工作环境；CS2 画面保持视觉主体，雷达、状态、控制和辅助信息围绕它组织。
+- **独立模式**：使用本机比赛资料运行 HUD、雷达和节目流程，不需要 RivalHub 在线服务。
+- **RivalHub 连接模式**：通过授权加载赛事平台已有比赛资料；两种模式共享相同的本地制播运行时。在线接管、恢复和云端数据链路有各自的适用验收边界。
 
-Windows 正式桌面入口使用 Tauri 2 Host，默认打开 Main 准备中心（`/`），在“总览 / 比赛 / 画面 / 设置”完成制作准备；首次进入现场时才创建左栏、底部 Workspace 和本机 Program Overlay。Companion 继续管理 OBS。浏览器可在 `/workspace` 检查同一套现场界面；Program Scene 清单由 `packages/protocol` 统一提供。启动失败会保留本机诊断日志并显示原生错误提示；真实 CS2/OBS 的现场验收边界见 [`docs/development-validation.md`](docs/development-validation.md)。
-- **Lookahead 观察辅助**：利用较早的比赛时间轴，为延迟播出画面生成低干扰的确定性提示。
-- **运行时基础**：负责数据源连续性、身份、状态、Projection、本地协议、replay 和有界投递。
-- **中文、开源、本地优先**：降低校园赛与社区赛的部署门槛，并让赛事方长期掌控自己的制播工具。
+Gameplay HUD 还提供可关闭的 **C4 爆炸伤害预测**：内置十张地图资源，按当前位置与站立姿态估算，仅在已下包或拆弹且爆炸倒计时最后十秒内显示。它不改变真实血量，也不保证必死或必活。操作与不显示的原因见 [C4 说明](docs/quick-start.md#c4-爆炸伤害预测)。
+
+当前正在准备 1.0 候选版本。代码、自动化检查与真实 Windows + CS2 + OBS 验收分别记录；尚未据此宣称 1.0 正式发布或实机 PASS。候选版本移交规则见 [RC 与发布检查清单](docs/release-readiness.md)，对外文案初稿见 [发布说明草案](docs/release-notes-draft.md)。
+
+## 后续方向与生态
+
+RivalHub 负责赛事运营和官方上下文，Mizar 负责现场制播，DAK（CS2 Demo Analysis Kit）面向赛后分析。它们可以围绕赛事协作，当前不承诺一键贯通的完整云端闭环。
+
+Lookahead / Observer Assist 是独立的增强研发方向，尚不作为现成的观察辅助能力宣传；未来信息必须保持私有，不能进入正式节目。更多美术方案、可安装视觉包和社区分发按后续需求推进。能力与依赖边界见 [产品文档](docs/product.md) 和 [路线](docs/roadmap.md)。
 
 ## 核心边界
 
@@ -68,7 +70,9 @@ CS2 数据源 → RuntimeState
 /          制作准备中心
 /program   播出画面
 /program/bp  BP 全屏播出画面
-/operator/bp  BP 控制与预览
+/preview   节目预览与 BP 工作台
+/operator/bp  重定向到 BP 预览工作台
+/workspace  私有制播工作区
 /operator  制作控制
 /operator/hud  Gameplay HUD 控制台
 /debug     运行诊断
@@ -118,7 +122,9 @@ scripts/                架构检查、CI、现场验收和维护工具
 
 ## 文档
 
-- [`docs/quick-start.md`](docs/quick-start.md)：Windows 首次使用、GSI/OBS、进入/退出现场、诊断导出与故障恢复。
+- [`docs/quick-start.md`](docs/quick-start.md)：Windows 首次使用、GSI/OBS、HUD 预设、C4、现场控制与故障恢复。
+- [`docs/release-readiness.md`](docs/release-readiness.md)：exact RC 的构建身份、资源与实机验收移交。
+- [`docs/release-notes-draft.md`](docs/release-notes-draft.md)：待最终版本和实机证据冻结的发布说明。
 
 - [`docs/design/README.md`](docs/design/README.md)：唯一设计系统入口、三类界面、设计变量、共享组件与文案。
 - [`docs/product.md`](docs/product.md)：产品定义与需求。
@@ -164,7 +170,7 @@ Mizar 使用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**�
 
 ## BP 播放
 
-在 `/workspace` 可先只填双方队名与 BO 创建本地比赛，再逐步补齐赛事、赛程、名单、图片与地图池；BP 不是创建前置条件。在 `/operator/bp` 工作台确认来源与 BP 后，可播放/收起并在同一页面预览。RivalHub 比赛复用已绑定的比赛上下文；独立模式的比赛资料保存到 Mizar 本机赛事库，BP 继续由现有 consumer 读取兼容视图，不会反写 RivalHub。系统每 1.6 秒逐项揭示，最终完整 BP 保持显示。OBS 添加 `http://127.0.0.1:3000/program/bp`，宽 1920、高 1080，作为独立不透明的全屏赛前场景装载；它与 `/program` Gameplay 分开。服务重启后恢复当前比赛上下文，播放会话保持收起。
+在准备中心「比赛」配置比赛资料，通过「节目预览」的 BP 工作台核对来源、填写本地 BP、播放与收起；浏览器入口为 `/preview?scene=bp`。BP 全屏输出 `/program/bp` 与 Gameplay `/program` 分开，OBS 的 Mizar 场景由设置页检查和修复。操作步骤见 [快速开始](docs/quick-start.md#节目编排与现场控制)。
 
 ### 结构化输出的 HTTP reference adapter
 
