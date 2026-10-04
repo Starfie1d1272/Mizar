@@ -288,16 +288,6 @@
 .objective-center[data-objective-mode='planted'] .objective-center__code i {
   background: var(--mizar-hud-state-danger);
 }
-.gameplay-hud[data-hud-design='arena']
-  .objective-center[data-objective-mode='planting']
-  .objective-center__icon,
-.gameplay-hud[data-hud-design='arena']
-  .objective-center[data-objective-mode='planting']
-  .objective-center__code
-  i {
-  background: var(--mizar-hud-surface-strong);
-}
-
 .objective-center__led {
   position: absolute;
   top: 5px;

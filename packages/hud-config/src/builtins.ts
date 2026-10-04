@@ -78,14 +78,14 @@ export function getBuiltinThemes(): HudTheme[] {
 const BUILTIN_LAYOUT: HudLayout = deepFreeze({
   schemaVersion: HUD_CONFIG_SCHEMA_VERSION,
   id: BUILTIN_LAYOUT_ID,
-  name: 'RivalHub 默认布局',
+  name: 'Mizar 默认布局',
   widgets: completeWidgetRecord((id) => cloneJson(DEFAULT_PLACEMENTS[id])),
 });
 
 const BUILTIN_THEME: HudTheme = deepFreeze({
   schemaVersion: HUD_CONFIG_SCHEMA_VERSION,
   id: BUILTIN_THEME_ID,
-  name: 'RivalHub 默认外观',
+  name: 'Mizar 默认外观',
   recipe: 'mizar-default',
   brandColor: '#c8ef78',
   panelStyle: 'standard',
@@ -95,7 +95,7 @@ const BUILTIN_THEME: HudTheme = deepFreeze({
 const BUILTIN_PRESET: HudPreset = deepFreeze({
   schemaVersion: HUD_CONFIG_SCHEMA_VERSION,
   id: BUILTIN_PRESET_ID,
-  name: 'RivalHub 默认预设',
+  name: 'Mizar 默认预设',
   layoutId: BUILTIN_LAYOUT_ID,
   themeId: BUILTIN_THEME_ID,
   widgets: completeWidgetRecord((id) => {
