@@ -56,7 +56,7 @@ IEM 使用 360px 卡宽，76px 方形头像位于身份区和战斗区之间；P
 - 真回放使用 Ancient 第 3 回合（完整）及第 11 回合拆弹片段；静态地图仅作预览背景，不伪装同步游戏视频。
 - 每套检查左右、生存/残血/死亡、C4、头像缺失、长名、满库存、回放跳转和 reduced motion。
 - 持久化测试覆盖内置启用重载、自定义副本/主题复制、保存不改变已启用画面；浏览器覆盖预设选择→另存→启用→磁盘重载→Program 同一 renderer。
-- 属于播出画面，固定几何位于 `hud-designs.css`；配色来自 schema 校验的 Theme recipe，字体来自 canonical tokens。复用产品控件，未增加共享基础组件或旧样式额度。
+- 属于播出画面，固定几何位于 `apps/web/src/program/designs/`，共用规则与各赛事风格分开，上海按组件拆分；配色来自 schema 校验的 Theme recipe，字体来自 canonical tokens。复用产品控件，未增加共享基础组件或旧样式额度。
 - Windows/CS2/OBS 真实验收与本地浏览器检查分开；参考不完整的状态沿用已有组件行为，不宣称赛事动画已经逐帧复刻。
 
 ## 上海状态与实测
@@ -72,3 +72,15 @@ IEM 使用 360px 卡宽，76px 方形头像位于身份区和战斗区之间；P
 当前 RivalHub 公共入口和 Mizar entrant 只有 `name`，没有正式 `shortName`。本轮保留完整名称并按可用宽度适配字号，禁止省略号；未把 G2.Esports 擅自裁为 G2。后续可联合增加可选 `shortName`：RivalHub 队伍编辑/存储及公开 manifest → adapter → Core entrant → Program → 比分 presentation。冻结用 name，live 用 shortName ?? name。此为展示元数据扩展，不需要改变 GSI 或 Runtime 事件架构；不得将按比赛变化的队名写入全局主题预设。
 
 原始上海WebP的逐组件复核与剩余差异见 [PR120视觉复核](reviews/120-shanghai.md)。
+
+## 维护与分享
+
+- 公共 API：`packages/hud-config/src/index.ts`；schema/type、descriptor/registry、geometry、校验、资源目录与 resolver 分别独立。三套风格各放在 `src/presets/ewc.ts`、`iem.ts`、`perfectworld.ts`，共同目录在 `catalog.ts`；同一文件管理该风格的 recipe 和内置布局组合。
+- 组件方案的 envelope 由 descriptor 声明。换成上海比分或 Focus 时，即便引用默认布局，也分别解析为 800×210 和 342×192；换回其他方案使用它自己的尺寸。锚点和偏移沿用布局，越界时在解析阶段约束到画布。布局编辑、拖动和播出消费同一尺寸。Radar 保持独立的正方形 resize。冻结 snapshot 尺寸不匹配时拒绝，不在读取时重排。
+- 上海不展示实际不渲染的“队名”“系列赛胜图”“存活对比”控件；已有 schema 字段继续可读，避免改写已启用的当前版本快照。左右主体只镜像内侧圆角，死亡与不显示头像的主体维持四角圆角；文字、图标保持原方向。
+
+用户在预设工作区保存更改后点击“导出预设文件”；文件完整包含组件方案、布局与外观。可以分享文件，也可以编辑其中的已声明设置和布局偏移，再点击“导入预设文件”。导入创建完整的新副本，用户从预设列表选择它预览，再显式启用。文件不依赖导出机器的自定义 ID，重复导入也不会覆盖已有资源。
+
+格式为 `format: "mizar-hud-preset"`、`formatVersion: 1`，顶层仅有 `format`、`formatVersion`、`preset`、`layout`、`theme`；三个资源仍使用各自 `schemaVersion: 1`。内部 `preset.layoutId/themeId` 必须指向文件内的资源，导入后重写为本机的新 ID。UTF-8 文件上限 256 KiB。完整可编辑示例见 [Perfect World 预设文件](../examples/perfectworld.mizar-hud.json)。
+
+新增现有组件方案的组合只需一份通过 `parseHudPresetPack` 的配置文件，可作为用户文件、未来内置数据或社区下载内容复用。新增组件结构或赛事造型仍需实现并注册 renderer/variant/recipe 和对应 CSS，再更新受控枚举；文件不会执行任意代码。未来社区可在这个格式上增加分发、预览和作者信息；当前实现只负责文件交换与本地持久化。

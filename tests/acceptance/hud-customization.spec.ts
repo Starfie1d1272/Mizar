@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { HudConfigStore } from '../../apps/companion/src/hud-config/store.js';
 import { parseRealProgramArtifact } from '../../apps/web/src/program/fixtures/real-program-fixtures.js';
-import type { HudResolvedPreset } from '../../packages/hud-config/src/index.js';
+import { readHudPresetPack, type HudResolvedPreset } from '../../packages/hud-config/src/index.js';
 import { expect, test } from './companion-isolation.js';
 
 test('HUD settings preview → save → disk reload → activate → Program', async ({
@@ -217,4 +217,165 @@ test('three broadcast presets save, activate and reload through the shared Progr
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('preset files export, edit, import and activate without replacing resources or changing Program early', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(90_000);
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-preset-files-'));
+  const filePath = join(directory, 'hud.json');
+  const store = new HudConfigStore({ filePath });
+  const app = buildApp({ hudConfigStore: store });
+  try {
+    await app.ready();
+    await context.route(/\/(?:operator|local\/v1)\/hud-config$/, async (route) => {
+      const request = route.request();
+      const response = await app.inject({
+        method: request.method() as 'GET' | 'POST',
+        url: new URL(request.url()).pathname,
+        headers: request.headers(),
+        ...(request.postData() === null ? {} : { payload: request.postData()! }),
+      });
+      await route.fulfill({
+        status: response.statusCode,
+        headers: response.headers as Record<string, string>,
+        body: response.body,
+      });
+    });
+    const artifact = parseRealProgramArtifact(
+      JSON.parse(
+        await readFile(
+          new URL(
+            '../../apps/web/src/program/fixtures/generated/real-program-fixtures.generated.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ) as unknown,
+    );
+    await context.routeWebSocket(/\/local\/v1\/program$/, (socket) =>
+      socket.send(JSON.stringify(artifact.fixtures['real-live-rich']!.snapshot)),
+    );
+    await page.goto('/operator/hud?hud-config=companion');
+    await page
+      .getByRole('combobox', { name: '预设', exact: true })
+      .selectOption('builtin:perfectworld-preset');
+    const right = page
+      .locator(
+        '[data-hud-widget="team-t-rail"] .player-rail__card:not(.player-rail__card--dead)[data-avatar="true"] .player-rail__body',
+      )
+      .first();
+    const left = page
+      .locator(
+        '[data-hud-widget="team-ct-rail"] .player-rail__card:not(.player-rail__card--dead)[data-avatar="true"] .player-rail__body',
+      )
+      .first();
+    await expect(left).toHaveCSS('border-radius', '0px 4px 4px 0px');
+    await expect(right).toHaveCSS('border-radius', '4px 0px 0px 4px');
+    await page
+      .getByRole('combobox', { name: '示例比赛', exact: true })
+      .selectOption('real-planted');
+    await expect(page.locator('.player-rail__card--dead .player-rail__body').first()).toHaveCSS(
+      'border-radius',
+      '4px',
+    );
+    await page
+      .getByRole('combobox', { name: '配置组件', exact: true })
+      .selectOption('top-score-bar');
+    await expect(page.getByRole('checkbox', { name: '显示存活对比', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('checkbox', { name: '显示系列赛胜图', exact: true })).toHaveCount(
+      0,
+    );
+    const before = store.getState();
+    const downloadEvent = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出预设文件', exact: true }).click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toMatch(/\.mizar-hud\.json$/);
+    const exportedPath = join(directory, 'export.mizar-hud.json');
+    await download.saveAs(exportedPath);
+    const pack = readHudPresetPack(await readFile(exportedPath, 'utf8'));
+    pack.preset.name = '分享包往返';
+    pack.preset.widgets.radar.settings.zoomMode = 'auto';
+    pack.preset.widgets['team-ct-rail'].settings.showMoney = false;
+    pack.layout.widgets['top-score-bar'].offsetY = 16;
+    await page.getByLabel('选择预设文件', { exact: true }).setInputFiles({
+      name: 'edited.mizar-hud.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(pack)),
+    });
+    await expect(
+      page.getByText('已导入「分享包往返」。请在预设列表中选择并预览，启用后才会上屏。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(store.getState().resolved).toEqual(before.resolved);
+    const imported = store.getState().document.customPresets[0]!;
+    expect(imported.id).not.toBe(pack.preset.id);
+    expect(imported.layoutId).not.toBe(pack.layout.id);
+    expect(imported.themeId).not.toBe(pack.theme.id);
+    await page.getByRole('combobox', { name: '预设', exact: true }).selectOption(imported.id);
+    await expect(page.locator('[data-hud-widget="team-ct-rail"] .player-rail__money')).toHaveCount(
+      0,
+    );
+    await expect(page.locator('[data-hud-widget="top-score-bar"]')).toHaveCSS('width', '800px');
+    await expect(page.locator('[data-hud-widget="focused-player"]')).toHaveCSS('height', '192px');
+    await page.getByRole('button', { name: '启用当前预设', exact: true }).click();
+    await expect(page.getByText('当前预设已启用。', { exact: true })).toBeVisible();
+    const program = await context.newPage();
+    await program.goto('/program?hud-config=companion');
+    await expect(program.locator('[data-gameplay-hud]')).toHaveAttribute(
+      'data-hud-preset-id',
+      imported.id,
+    );
+    await expect(
+      program.locator('[data-hud-widget="team-ct-rail"] .player-rail__money'),
+    ).toHaveCount(0);
+    await expect(program.locator('[data-hud-widget="top-score-bar"]')).toHaveCSS('top', '16px');
+    await program.close();
+    const loaded = new HudConfigStore({ filePath });
+    await loaded.load();
+    expect(loaded.getState().resolved).toEqual(store.getState().resolved);
+    const valid = store.getState().document;
+    await page.getByLabel('选择预设文件', { exact: true }).setInputFiles({
+      name: 'invalid.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from('{ invalid'),
+    });
+    await expect(
+      page.getByText('预设文件无效或版本不受支持，请检查 JSON、组件方案、外观与资源引用。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(store.getState().document).toEqual(valid);
+    await page.getByLabel('名称', { exact: true }).fill('未保存');
+    await expect(page.getByRole('button', { name: '导入预设文件', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '导出预设文件', exact: true })).toBeDisabled();
+  } finally {
+    await context.unrouteAll({ behavior: 'wait' });
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('mixing Shanghai components with default layout uses one envelope for preview and layout editing', async ({
+  page,
+}) => {
+  await page.goto('/operator/hud');
+  await page.getByRole('combobox', { name: '配置组件', exact: true }).selectOption('top-score-bar');
+  await page.getByLabel('呈现方案', { exact: true }).selectOption('perfectworld');
+  await expect(page.locator('[data-hud-widget="top-score-bar"]')).toHaveCSS('width', '800px');
+  await expect(page.locator('[data-hud-widget="top-score-bar"]')).toHaveCSS('height', '210px');
+  await page
+    .getByRole('combobox', { name: '配置组件', exact: true })
+    .selectOption('focused-player');
+  await page.getByLabel('呈现方案', { exact: true }).selectOption('perfectworld');
+  await expect(page.locator('[data-hud-widget="focused-player"]')).toHaveCSS('width', '342px');
+  await expect(page.locator('[data-hud-widget="focused-player"]')).toHaveCSS('height', '192px');
+  await page.getByRole('button', { name: '布局', exact: true }).click();
+  await page.getByRole('button', { name: '选择当前观察选手', exact: true }).click();
+  const overlay = page.locator('.hud-editor-overlay__widget[data-hud-widget="focused-player"]');
+  await expect(overlay).toHaveCSS('width', '342px');
+  await expect(overlay).toHaveCSS('height', '192px');
 });

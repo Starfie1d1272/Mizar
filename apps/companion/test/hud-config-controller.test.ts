@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { getBuiltinPreset, getBuiltinTheme, type HudConfigDocument } from '@mizar/hud-config';
+import {
+  createHudPresetPack,
+  getBuiltinLayout,
+  getBuiltinPreset,
+  getBuiltinTheme,
+  type HudConfigDocument,
+} from '@mizar/hud-config';
 
 import { buildApp } from '../src/app.js';
 import { HudConfigStore } from '../src/hud-config/store.js';
@@ -61,6 +67,68 @@ describe('HUD config control plane', () => {
     await Promise.all(
       temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
     );
+  });
+
+  it('accepts versioned packs with CAS and keeps imports loopback-only and off-air', async () => {
+    const store = new HudConfigStore();
+    app = buildApp({ hudConfigStore: store });
+    const before = store.getState();
+    const payload = {
+      kind: 'import-preset-pack',
+      value: createHudPresetPack(getBuiltinPreset(), getBuiltinLayout(), getBuiltinTheme()),
+      expectedEditorRevision: before.editorRevision,
+    };
+    expect(
+      (await app.inject({ method: 'POST', url: '/operator/hud-config', payload })).statusCode,
+    ).toBe(403);
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/operator/hud-config',
+      headers: LOCAL_MUTATION_HEADERS,
+      payload,
+    });
+    expect(imported.statusCode).toBe(200);
+    expect(parseHudMutationBody(imported.json()).command.kind).toBe('import-preset-pack');
+    expect(store.getState().resolved).toEqual(before.resolved);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/hud-config',
+          headers: LOCAL_MUTATION_HEADERS,
+          payload,
+        })
+      ).statusCode,
+    ).toBe(409);
+    const after = store.getState();
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/operator/hud-config',
+      headers: LOCAL_MUTATION_HEADERS,
+      payload: {
+        ...payload,
+        expectedEditorRevision: after.editorRevision,
+        value: { ...payload.value, formatVersion: 999 },
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(store.getState().document).toEqual(after.document);
+    await app.close();
+    app = buildApp({
+      host: '192.168.1.20',
+      localWebLanMode: true,
+      localWebAllowedOrigins: ['http://caster-pc:4173'],
+    });
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/hud-config',
+          headers: { origin: 'http://caster-pc:4173' },
+          payload,
+        })
+      ).statusCode,
+    ).toBe(403);
   });
 
   it('serves the resolved preset with conditional ETag polling', async () => {

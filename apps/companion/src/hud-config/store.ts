@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   BUILTIN_PRESET_IDS,
   canonicalJson,
+  instantiateHudPresetPack,
   createDefaultHudConfigDocument,
   getBuiltinLayouts,
   getBuiltinResolvedPreset,
@@ -72,7 +73,7 @@ export interface HudConfigState {
 }
 
 export interface HudConfigCommandResult {
-  readonly kind: 'save-resource' | 'save-as' | 'activate-preset';
+  readonly kind: 'save-resource' | 'save-as' | 'activate-preset' | 'import-preset-pack';
   readonly resource?: HudResourceKind;
   readonly resourceId?: string;
   readonly sourceId?: string;
@@ -191,6 +192,30 @@ export class HudConfigStore {
 
   getState(): HudConfigState {
     return createState(this.document, this.persistenceError);
+  }
+
+  async importPresetPack(
+    value: unknown,
+    expectedEditorRevision?: string,
+  ): Promise<HudConfigMutationState> {
+    let resources: ReturnType<typeof instantiateHudPresetPack>;
+    try {
+      resources = instantiateHudPresetPack(value, randomUUID);
+    } catch {
+      throw new HudConfigCommandError(
+        '预设文件无效或版本不受支持，请检查组件方案、外观与资源引用。',
+      );
+    }
+    return this.commit(
+      () => ({
+        ...this.document,
+        customPresets: [...this.document.customPresets, resources.preset],
+        customLayouts: [...this.document.customLayouts, resources.layout],
+        customThemes: [...this.document.customThemes, resources.theme],
+      }),
+      { kind: 'import-preset-pack', resource: 'preset', resourceId: resources.preset.id },
+      expectedEditorRevision,
+    );
   }
 
   async saveResource(

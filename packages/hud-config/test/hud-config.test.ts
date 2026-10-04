@@ -280,6 +280,10 @@ describe('hud-config schema and framework contract', () => {
       defaultVariant: 'compact',
       resizePolicy: 'square',
       defaultPlacement: getBuiltinLayout().widgets.radar,
+      dimensionsByVariant: {
+        default: { width: 400, height: 400 },
+        compact: { width: 400, height: 400 },
+      },
       settingsSchemaByVariant: {
         default: (value: unknown) => z.object({ showLabel: z.boolean() }).strict().parse(value),
         compact: (value: unknown) =>

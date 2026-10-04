@@ -1,0 +1,333 @@
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-logo {
+  width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__win-slots {
+  bottom: -20px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__fuse {
+  top: 63px;
+  height: 5px;
+}
+/* Shanghai 1920 reference: 570×56 score shell, 300×84 cards, 8px row gap. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  width: 570px;
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  height: 58px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone {
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  flex-direction: row-reverse;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
+  width: 50px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
+  width: 50px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
+  top: 0;
+  width: 110px;
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock {
+  position: static;
+  height: 56px;
+  display: grid;
+  place-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock-value {
+  line-height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__round-meta,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__win-slots {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent {
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent--b {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center {
+  height: 56px;
+}
+.shanghai-round-strip {
+  position: absolute;
+  top: 60px;
+  width: 230px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--mizar-hud-surface-primary);
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mizar-hud-text-muted);
+}
+.shanghai-round-strip::before,
+.shanghai-round-strip::after {
+  content: '';
+  width: 34px;
+  height: 4px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--mizar-hud-text-muted) 0 14px,
+    transparent 14px 20px
+  );
+  opacity: 0.45;
+}
+.shanghai-fuse,
+.shanghai-action-track {
+  position: absolute;
+  top: 60px;
+  width: 164px;
+  height: 22px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--mizar-hud-surface-primary);
+}
+.shanghai-fuse[data-owner='a'],
+.shanghai-action-track[data-owner='a'],
+.shanghai-event-panel[data-owner='a'] {
+  left: 0;
+}
+.shanghai-fuse[data-owner='b'],
+.shanghai-action-track[data-owner='b'],
+.shanghai-event-panel[data-owner='b'] {
+  right: 0;
+}
+.shanghai-fuse i,
+.shanghai-action-track i {
+  display: block;
+  height: 100%;
+  background: var(--mizar-hud-objective-bomb);
+}
+.shanghai-action-track[data-kind='defuse'] i {
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-event-panel {
+  position: absolute;
+  top: 86px;
+  width: 164px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.shanghai-event-panel span {
+  font-size: 14px;
+  font-weight: 700;
+}
+.shanghai-round-winner {
+  top: 60px;
+  padding: 0;
+}
+.shanghai-round-winner .match-header__team-logo {
+  width: 58px;
+  height: 88px;
+  flex: 1;
+  min-height: 0;
+}
+.shanghai-round-winner strong {
+  align-self: stretch;
+  padding: 0;
+  text-align: center;
+  background: var(--mizar-side-t);
+}
+.shanghai-round-winner[data-side='CT'] strong {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
+  gap: 6px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
+  display: block;
+  font-weight: 700;
+  font-size: 21px;
+}
+/* The widget reserves the freeze envelope; the live shell remains centered inside it. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score {
+  --shanghai-wing: 180px;
+  width: 570px;
+  margin-inline: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score[data-freeze='true'] {
+  --shanghai-wing: 295px;
+  width: 800px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  width: 100%;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
+  background: transparent;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 0 14px;
+  width: var(--shanghai-wing);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
+  left: var(--shanghai-wing);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
+  left: calc(var(--shanghai-wing) + 50px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
+  left: calc(var(--shanghai-wing) + 160px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  left: calc(var(--shanghai-wing) + 210px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  text-overflow: clip;
+  overflow: visible;
+}
+.shanghai-round-strip {
+  justify-content: space-evenly;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo-b
+  .match-header__team-name {
+  text-align: right;
+}
+/* Geometry calibrated against Shanghai01–05, 2940px source / 1920px canvas. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-a {
+  padding: 0 4px 0 24px;
+  gap: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  padding: 0 24px 0 4px;
+  gap: 12px;
+}
+.shanghai-event-panel[data-kind='plant'] {
+  top: 60px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__ring > svg,
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__caption {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
+  letter-spacing: 0;
+  font-size: 34px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock-value {
+  font-size: 29px;
+  font-weight: 700;
+}
+.shanghai-event-panel {
+  justify-content: center;
+  gap: 5px;
+  height: 118px;
+  min-height: 118px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+}
+.shanghai-event-panel strong {
+  font-size: 22px;
+  line-height: 27px;
+}
+.shanghai-event-panel span:not(.shanghai-kit) {
+  font-size: 13px;
+  line-height: 20px;
+}
+.shanghai-event-panel b {
+  font-size: 23px;
+  line-height: 29px;
+}
+.shanghai-event-panel[data-kind='defuse'] b {
+  font-size: 29px;
+  line-height: 34px;
+}
+.shanghai-kit {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 19px;
+  height: 19px;
+  background: var(--mizar-hud-objective-defuse);
+  border-radius: 50%;
+}
+.shanghai-kit::after {
+  content: '';
+  display: block;
+  margin: 3px;
+  width: 13px;
+  height: 13px;
+  background: var(--mizar-hud-text-primary);
+  mask: var(--shanghai-kit) center / contain no-repeat;
+}
+.shanghai-action-track .shanghai-kit {
+  top: 1px;
+}
+.shanghai-round-winner {
+  gap: 0;
+}
+.shanghai-round-winner strong {
+  font-size: 18px;
+  line-height: 30px;
+}
+/* Fine curved artwork stays behind all score and identity content. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.24;
+  background: var(--mizar-side-t);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 570 58'%3E%3Cg fill='none' stroke='white' stroke-width='1'%3E%3Cpath d='M-30 0C50 40 90 14 136 70M326-12C220 40 530 6 578 64M510-10C540 15 553 10 590 28'/%3E%3C/g%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+/* Both countdowns retreat from the outside edge toward the round label. */
+.shanghai-action-track[data-owner='a'] i,
+.shanghai-fuse[data-owner='a'] i {
+  margin-left: auto;
+}
+.shanghai-action-track[data-owner='b'] i,
+.shanghai-fuse[data-owner='b'] i {
+  margin-right: auto;
+}
+.shanghai-event-panel[data-kind='defuse'] {
+  box-sizing: border-box;
+  padding-bottom: 12px;
+}
+.shanghai-winner-name {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo:not(:has(.match-header__team-logo)) {
+  padding-inline: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo:not(:has(.match-header__team-logo))
+  .match-header__team-name {
+  text-align: center;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .objective-center[data-objective-mode='defused']
+  .objective-center__icon {
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-round-winner span.shanghai-winner-name {
+  font-size: 24px;
+  line-height: 1.2;
+}

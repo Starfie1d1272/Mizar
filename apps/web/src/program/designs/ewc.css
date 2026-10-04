@@ -1,0 +1,321 @@
+/* EWC reference: inward tapered cards, separate triangular observer tabs,
+ * rectangular logo wings around a light trapezoidal score field. */
+/* Paint uses a single physical-side contour; do not inherit the old gradient flip. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail {
+  width: 376px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-observed='true']
+  .player-rail__avatar {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  outline-offset: -2px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card .player-rail__body {
+  overflow: visible;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  opacity: 1;
+  width: 100%;
+  transform: none;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 55%, transparent);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 38%, transparent);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-status-effects,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-combat-transition,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body::before,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-bar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-spacer {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 0 100%);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__card
+  > .player-status-effects,
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__card
+  > .player-combat-transition,
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body::before,
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-bar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-spacer {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 44px 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-slot {
+  top: -8px;
+  left: 118px;
+  width: 18px;
+  height: 16px;
+  z-index: 6;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 118px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge svg {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__avatar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__avatar img {
+  width: 76px;
+  flex-basis: 76px;
+  object-fit: contain;
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__name {
+  max-width: 78px;
+  font-family: 'Barlow Condensed', var(--mizar-hud-font-family);
+  font-size: 20px;
+  text-transform: uppercase;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__weapons {
+  left: 100px;
+  width: 88px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__weapons {
+  right: 100px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 88px;
+  max-width: 88px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__kd {
+  bottom: 25px;
+  font-size: 17px;
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__money {
+  left: 10px;
+  bottom: 4px;
+  font-size: 19px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__money {
+  right: 10px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__equipment {
+  right: 48px;
+  width: 54px;
+  bottom: 4px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__equipment {
+  left: 48px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__endcap {
+  width: 44px;
+  height: 38px;
+  align-items: flex-start;
+  padding-top: 2px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__endcap strong {
+  font-size: 18px;
+  line-height: 22px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__identity {
+  right: 48px;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  left: 48px;
+  right: 10px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__utility-icons {
+  right: 108px;
+  bottom: 4px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__utility-icons {
+  left: 108px;
+  right: auto;
+}
+/* Death statistics stay inside the tapered card's rectangular safe area. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail__dead-stats {
+  right: 58px;
+  bottom: 5px;
+  gap: 4px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__dead-stats {
+  left: 58px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__endcap {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-shell {
+  left: 12px;
+  width: 456px;
+  background: var(--mizar-hud-surface-strong);
+  clip-path: none;
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0 72px;
+  background: var(--mizar-hud-text-primary);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 44px 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo {
+  background: transparent;
+}
+/* EWC's 473px shell at 1988px frame width becomes 457px at 1920px. */
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo-b {
+  left: 384px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__center {
+  left: 164px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--score-a {
+  left: 104px;
+  width: 88px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--score-b {
+  left: 264px;
+  width: 88px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__center,
+.hud-widget-design[data-hud-design='ewc'] .match-header__map-score {
+  color: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__win-slots span {
+  width: 14px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 20%, transparent);
+  transform: skewX(30deg);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone--score-b
+  .match-header__win-slots
+  span {
+  transform: skewX(-30deg);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone[data-side='CT']
+  .match-header__win-slots
+  span[data-series-win-slot='won'] {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone[data-side='T']
+  .match-header__win-slots
+  span[data-series-win-slot='won'] {
+  background: var(--mizar-side-t);
+}
+/* Residual health keeps the same slope as the outer edge, mirrored once. */
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  width: 100%;
+  clip-path: polygon(
+    0 0,
+    calc(var(--player-rail-health) + 22px) 0,
+    calc(var(--player-rail-health) - 22px) 100%,
+    0 100%
+  );
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  clip-path: polygon(
+    calc(100% - var(--player-rail-health) - 22px) 0,
+    100% 0,
+    100% 100%,
+    calc(100% - var(--player-rail-health) + 22px) 100%
+  );
+}
+/* Death shortens paint, not the stable row or identity position. */
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__health-bar
+  > span[data-health-empty='true'] {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
+  clip-path: polygon(0 0, calc(100% - 84px) 0, calc(100% - 128px) 100%, 0 100%);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body::before {
+  clip-path: polygon(84px 0, 100% 0, 100% 100%, 128px 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__avatar {
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__avatar img {
+  opacity: 0.65;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__name {
+  color: var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__life-state,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__dead-stats {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__death-watermark {
+  position: absolute;
+  display: block;
+  top: 0;
+  left: 96px;
+  width: 88px;
+  height: 76px;
+  fill: var(--mizar-hud-text-primary);
+  opacity: 0.25;
+  pointer-events: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__death-watermark {
+  left: auto;
+  right: 96px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__round-meta {
+  margin-top: 10px;
+  height: 20px;
+  font-size: 18px;
+  line-height: 20px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__clock-value {
+  font-size: 34px;
+  line-height: 38px;
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__fuse {
+  left: 12px;
+  width: 456px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__clock-value,
+.hud-widget-design[data-hud-design='ewc'] .focused-player__hp,
+.hud-widget-design[data-hud-design='ewc'] .focused-player__ammo > strong {
+  font-family: var(--mizar-type-family-display);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-value {
+  font-family: var(--mizar-hud-font-family);
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.05em;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__map-score {
+  transform: translateY(-7px);
+  font-family: var(--mizar-hud-font-family);
+  font-size: 50px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}

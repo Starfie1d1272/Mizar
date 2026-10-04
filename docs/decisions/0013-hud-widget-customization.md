@@ -30,3 +30,9 @@ Gameplay 共同颜色通过 schema 校验过的 resolved Theme 传入局部 `--m
 原版继续保留；新增 ewc / iem / perfectworld 组件变体与同名 Theme recipe，组合为三个内置预设。配色 recipe 是外观文档的受控枚举，另存为时随文档保留，不通过自定义资源 ID 猜风格。Resolved Theme 必须包含 recipe 与完整语义值，仍不得在加载时重新套用默认值；保存/启用、冻结 snapshot 和 revision CAS ownership 不变。
 
 Web 按各 widget 已保存的 variant 在同一 renderer 上建立局部样式边界，不从 URL 或独立预览开关决定正式节目造型。左右卡片继续共用 DOM 和 presentation model；Steam 头像按正方形适配。死亡态允许可见底板收短，但五张卡的固定行位和组件外框不随状态重排。
+
+## 2026-10-04：组件几何与预设文件
+
+Descriptor 为每个 variant 声明固定 envelope；Layout 继续保存锚点、偏移、显隐与 Radar 的受控尺寸，resolver 按组件方案选择 envelope 并约束到画布。编辑框、拖动和 Renderer 消费同一 resolved Layout。固定组件尺寸只接受 descriptor 声明值，不再由通用 parser 按赛事写特例。已启用 snapshot 的 envelope 严格校验，不在读取时重排。
+
+预设文件 `format: mizar-hud-preset`、`formatVersion: 1` 包含独立 authoring Preset/Layout/Theme；不携带启用状态、比赛事实、代码或素材。schema、variant、recipe 和内部引用均严格校验，UTF-8 文件最多 256 KiB。导入复用现有 Companion commit queue、editor revision CAS 和持久化事务，一次创建三个新 ID 并重写引用；失败不留下部分资源，导入成功也不改变 on-air snapshot。导出使用当前已保存且与预设引用一致的资源。未来分发可复用此格式，不引入通用 plugin framework。

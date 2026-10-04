@@ -81,7 +81,10 @@ describe('Generic HUD widget settings', () => {
         />,
       ),
     );
-    const select = container.querySelector('select')!;
+    const label = [...container.querySelectorAll('label')].find(
+      (element) => element.textContent === '雷达视野',
+    )!;
+    const select = container.querySelector<HTMLSelectElement>(`select[id="${label.htmlFor}"]`)!;
     expect(select.getAttribute('aria-describedby')).toBeTruthy();
     expect(container.textContent).toContain('由雷达投影决定可用视野。');
     act(() => {

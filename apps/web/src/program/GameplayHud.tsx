@@ -15,7 +15,10 @@ import './widgets/focused-player/focused-player.css';
 import './widgets/match-header/match-header.css';
 import './widgets/player-rails/player-rails.css';
 import './widgets/player-status-effects/player-status-effects.css';
-import './hud-designs.css';
+import './designs/shared.css';
+import './designs/ewc.css';
+import './designs/iem.css';
+import './designs/perfectworld.css';
 import { hudDesignForVariant } from './hud-design';
 
 export interface GameplayHudProps {

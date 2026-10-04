@@ -45,7 +45,7 @@
 - Fastify Companion；
 - 静态网页与本地 WebSocket；
 - `/program` / `/operator` / `/debug`；
-- `/operator/hud` 的三类配置工作区、共享 `GameplayHud` 预览与 HUD ETag conditional polling；
+- `/operator/hud` 的预设／布局工作区、共享 `GameplayHud` 预览与 HUD ETag conditional polling；
 - HUD Replay 的真实 capture browser acceptance，包括事件 seek/play、Radar utility 阶段、objective progress、Focused Player observer handoff；
 - 浏览器 reconnect；
 - current baseline；

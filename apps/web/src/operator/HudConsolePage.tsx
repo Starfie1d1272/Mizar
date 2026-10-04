@@ -1,3 +1,4 @@
+import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
 import { ToolShell } from '../patterns';
 import {
@@ -22,6 +23,7 @@ import {
   getBuiltinPreset,
   getBuiltinTheme,
   moveWidgetPlacement,
+  resolveHudVariantLayout,
   normalizeHudPlacement,
   placementToBox,
   resetLayoutDraft,
@@ -472,7 +474,7 @@ export function HudConsolePage() {
 
   function selectedDraft(kind: HudWorkspace): HudResource {
     if (kind === 'preset') return presetDraft;
-    if (kind === 'layout') return layoutDraft;
+    if (kind === 'layout') return resolveHudVariantLayout(layoutDraft, presetDraft.widgets);
     return themeDraft;
   }
 
@@ -622,6 +624,53 @@ export function HudConsolePage() {
     }
   }
 
+  async function importPresetFile(file: File): Promise<void> {
+    if (busy || !editorReady || hasDirtyDraft || hudEditor.revision === null) return;
+    const expectedEditorRevision = hudEditor.revision;
+    setBusy(true);
+    setCommandState(null);
+    try {
+      const value = await readHudPresetFile(file);
+      const response = await mutateHudConfig({
+        kind: 'import-preset-pack',
+        value,
+        expectedEditorRevision,
+      });
+      // Merge into the existing editor document; never replace in-flight drafts or activate.
+      hudEditor.applyResponse(response.editor);
+      setCommandState(
+        `已导入「${value.preset.name.trim()}」。请在预设列表中选择并预览，启用后才会上屏。`,
+      );
+    } catch (error: unknown) {
+      setCommandState(
+        error instanceof HudConfigMutationError && error.status === 409
+          ? '已在另一页面更新，请重新读取后导入。'
+          : error instanceof Error
+            ? error.message
+            : '预设文件导入失败，请重试。',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function exportPresetFile(): void {
+    if (
+      busy ||
+      !editorReady ||
+      hasDirtyDraft ||
+      selectedLayoutId !== presetDraft.layoutId ||
+      selectedThemeId !== presetDraft.themeId
+    )
+      return;
+    try {
+      downloadHudPresetFile(presetDraft, layoutDraft, themeDraft);
+      setCommandState('已导出预设文件，包含组件方案、布局与外观。');
+    } catch {
+      setCommandState('预设文件未导出，请检查当前配置。');
+    }
+  }
+
   async function activateSelectedPreset(): Promise<void> {
     if (busy || !editorReady || hudEditor.revision === null) return;
     setBusy(true);
@@ -679,7 +728,7 @@ export function HudConsolePage() {
       widgetId,
       startX: point.x,
       startY: point.y,
-      placement: clone(layoutDraft.widgets[widgetId]),
+      placement: clone(previewResolved.layout.widgets[widgetId]),
     });
   }
 
@@ -734,11 +783,11 @@ export function HudConsolePage() {
   );
 
   const selectedPlacement =
-    selectedWidgetId === null ? null : layoutDraft.widgets[selectedWidgetId];
+    selectedWidgetId === null ? null : previewResolved.layout.widgets[selectedWidgetId];
   const selectedBox =
     selectedWidgetId === null
       ? null
-      : placementToBox(selectedWidgetId, layoutDraft.widgets[selectedWidgetId]);
+      : placementToBox(selectedWidgetId, previewResolved.layout.widgets[selectedWidgetId]);
 
   function updateSelectedPlacement(
     update: (placement: HudLayout['widgets'][HudWidgetId]) => HudLayout['widgets'][HudWidgetId],
@@ -750,7 +799,8 @@ export function HudConsolePage() {
       widgets: {
         ...current.widgets,
         [selectedWidgetId]: (() => {
-          const currentPlacement = current.widgets[selectedWidgetId];
+          const currentPlacement = resolveHudVariantLayout(current, previewResolved.widgets)
+            .widgets[selectedWidgetId];
           const updatedPlacement = update(currentPlacement);
           return preserveVisualBox
             ? changePlacementAnchor(selectedWidgetId, currentPlacement, updatedPlacement.anchor)
@@ -770,6 +820,8 @@ export function HudConsolePage() {
     layoutDraft,
     layoutNameError,
     onActivate: () => void activateSelectedPreset(),
+    onImportPresetFile: (file: File) => void importPresetFile(file),
+    onExportPresetFile: exportPresetFile,
     onDiscard: discard,
     onLayoutDraftChange: (draft: HudLayout) => setLayoutDraft(draft),
     onPresetDraftChange: (draft: HudPreset) => setPresetDraft(draft),

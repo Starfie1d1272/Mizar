@@ -109,6 +109,10 @@ export function registerHudConfigRoutes(
             : await options.store.saveAs(resource, body.value, body.expectedEditorRevision);
         return reply.code(200).send(mutationResponse(state));
       }
+      if (body.kind === 'import-preset-pack' && 'value' in body) {
+        const state = await options.store.importPresetPack(body.value, body.expectedEditorRevision);
+        return reply.code(200).send(mutationResponse(state));
+      }
       if (body.kind === 'activate-preset' && typeof body.sourceId === 'string') {
         const state = await options.store.activatePreset(
           body.sourceId,

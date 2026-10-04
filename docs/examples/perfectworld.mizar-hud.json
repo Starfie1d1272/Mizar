@@ -1,0 +1,171 @@
+{
+  "format": "mizar-hud-preset",
+  "formatVersion": 1,
+  "preset": {
+    "schemaVersion": 1,
+    "id": "builtin:perfectworld-preset",
+    "name": "类 Perfect World",
+    "layoutId": "builtin:perfectworld-layout",
+    "themeId": "builtin:perfectworld-theme",
+    "widgets": {
+      "top-score-bar": {
+        "variant": "perfectworld",
+        "settings": {
+          "showTeamLogo": true,
+          "showSeriesWins": false,
+          "showAliveMatchup": false,
+          "showTimeout": true,
+          "showObjectiveAuxiliary": true
+        }
+      },
+      "team-ct-rail": {
+        "variant": "perfectworld",
+        "settings": {
+          "showTeamName": false,
+          "showAvatar": true,
+          "showMoney": true,
+          "showLoadout": true,
+          "showUtility": true,
+          "showTeamSummary": true,
+          "showBombPrediction": true,
+          "deadInformation": "stats"
+        }
+      },
+      "team-t-rail": {
+        "variant": "perfectworld",
+        "settings": {
+          "showTeamName": false,
+          "showAvatar": true,
+          "showMoney": true,
+          "showLoadout": true,
+          "showUtility": true,
+          "showTeamSummary": true,
+          "showBombPrediction": true,
+          "deadInformation": "stats"
+        }
+      },
+      "radar": {
+        "variant": "perfectworld",
+        "settings": {
+          "zoomMode": "full-map"
+        }
+      },
+      "focused-player": {
+        "variant": "perfectworld",
+        "settings": {
+          "showMedia": true,
+          "showMetrics": true,
+          "showReserveAmmo": true
+        }
+      },
+      "series-strip": {
+        "variant": "perfectworld",
+        "settings": {}
+      },
+      "series-overview": {
+        "variant": "default",
+        "settings": {}
+      },
+      "round-history": {
+        "variant": "default",
+        "settings": {}
+      },
+      "objective": {
+        "variant": "default",
+        "settings": {}
+      },
+      "round-result": {
+        "variant": "default",
+        "settings": {}
+      }
+    }
+  },
+  "layout": {
+    "schemaVersion": 1,
+    "id": "builtin:perfectworld-layout",
+    "name": "上海布局",
+    "widgets": {
+      "top-score-bar": {
+        "visible": true,
+        "anchor": "top-center",
+        "offsetX": 0,
+        "offsetY": 6,
+        "size": {
+          "width": 800,
+          "height": 210
+        }
+      },
+      "team-ct-rail": {
+        "visible": true,
+        "anchor": "top-left",
+        "offsetX": 20,
+        "offsetY": 584
+      },
+      "team-t-rail": {
+        "visible": true,
+        "anchor": "top-right",
+        "offsetX": -20,
+        "offsetY": 584
+      },
+      "radar": {
+        "visible": true,
+        "anchor": "top-left",
+        "offsetX": 6,
+        "offsetY": 58,
+        "size": {
+          "width": 360,
+          "height": 360
+        }
+      },
+      "focused-player": {
+        "visible": true,
+        "anchor": "bottom-center",
+        "offsetX": 0,
+        "offsetY": -20,
+        "size": {
+          "width": 342,
+          "height": 192
+        }
+      },
+      "series-strip": {
+        "visible": true,
+        "anchor": "top-left",
+        "offsetX": 6,
+        "offsetY": 6
+      },
+      "series-overview": {
+        "visible": true,
+        "anchor": "top-right",
+        "offsetX": -6,
+        "offsetY": 6
+      },
+      "round-history": {
+        "visible": false,
+        "anchor": "top-center",
+        "offsetX": 0,
+        "offsetY": 136
+      },
+      "objective": {
+        "visible": false,
+        "anchor": "top-right",
+        "offsetX": -28,
+        "offsetY": 28
+      },
+      "round-result": {
+        "visible": false,
+        "anchor": "center",
+        "offsetX": 0,
+        "offsetY": 210
+      }
+    }
+  },
+  "theme": {
+    "schemaVersion": 1,
+    "id": "builtin:perfectworld-theme",
+    "name": "类 Perfect World",
+    "brandColor": "#c8ef78",
+    "panelStyle": "standard",
+    "cornerStyle": "square",
+    "recipe": "perfectworld"
+  }
+}

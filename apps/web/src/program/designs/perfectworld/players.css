@@ -1,0 +1,654 @@
+/* Shanghai: compact charcoal identity panels and a separate lower combat band. */
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 3px 8px auto 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__health-value {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__kd {
+  left: 8px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__weapons {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 82px;
+  max-width: 82px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__utility-icons {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
+  top: 0;
+  width: 24px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__avatar,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__life-state {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__dead-stats {
+  left: auto;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__damage {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap[data-side] {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy div {
+  gap: 3px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy strong {
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy span {
+  font-size: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail {
+  width: 300px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__header {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__empty-card {
+  height: 84px;
+  min-height: 84px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  object-fit: cover;
+  width: 84px;
+  height: 84px;
+  flex-basis: 84px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__identity {
+  height: 24px;
+  inset: 4px 6px auto 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
+  max-width: 132px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-bar {
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 25%, transparent);
+  top: 56px;
+  height: 28px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side='T']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
+  position: absolute;
+  right: auto;
+  top: 50px;
+  left: 0;
+  font-size: 22px;
+  line-height: 28px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__money {
+  color: var(--mizar-hud-state-success);
+  opacity: 1;
+  left: 8px;
+  bottom: 32px;
+  font-size: 16px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__money {
+  left: auto;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__kd {
+  left: auto;
+  right: 8px;
+  bottom: auto;
+  top: 6px;
+  font-size: 14px;
+  gap: 3px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__weapons {
+  left: auto;
+  top: 57px;
+  right: 5px;
+  width: 78px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
+  right: auto;
+  left: 42px;
+  bottom: 1px;
+  width: 42px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__equipment {
+  right: 42px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__utility-icons {
+  right: 8px;
+  bottom: auto;
+  width: 82px;
+  top: 28px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap {
+  right: auto;
+  border-radius: 50%;
+  background: var(--mizar-hud-surface-strong);
+  left: -11px;
+  top: 27px;
+  width: 24px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap--right {
+  left: auto;
+  right: -11px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap strong {
+  color: var(--mizar-hud-text-primary);
+  line-height: 24px;
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__body {
+  position: absolute;
+  left: 0;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
+  width: 180px;
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats {
+  left: 8px;
+  right: auto;
+  gap: 0;
+  bottom: 6px;
+  font-size: 13px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
+  top: auto;
+  bottom: 6px;
+  font-size: 13px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card[data-observed='true'] {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  border-radius: 5px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-observed='true']
+  .player-rail__body {
+  outline-offset: -1px;
+  outline: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card {
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
+  height: 84px;
+}
+/* Inward corners follow the physical side; content keeps its original direction. */
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-physical-side='right']:not(.player-rail__card--dead)
+  .player-rail__body {
+  border-radius: 4px 0 0 4px;
+}
+
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__identity {
+  inset-inline: 18px 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__identity {
+  inset-inline: 8px 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__money {
+  color: var(--mizar-hud-text-muted);
+  left: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__money {
+  left: auto;
+  right: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead[data-observed='true'] {
+  outline: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead[data-observed='true']
+  .player-rail__body {
+  outline: 2px solid var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__summary-slot {
+  height: 26px;
+  flex-basis: 26px;
+  position: relative;
+}
+.shanghai-summary {
+  position: absolute;
+  bottom: 6px;
+  left: 0;
+  width: 166px;
+  height: 60px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+  border-left: 5px solid var(--mizar-side-ct);
+  display: flex;
+  align-items: center;
+}
+.shanghai-summary[data-side='T'] {
+  border-color: var(--mizar-side-t);
+}
+.shanghai-summary[data-summary-economy-visible='true'] {
+  width: 400px;
+}
+.player-rail--right .shanghai-summary {
+  left: auto;
+  right: 0;
+  flex-direction: row-reverse;
+  border-left: 0;
+  border-right: 5px solid var(--mizar-side-t);
+}
+.player-rail--right .shanghai-summary[data-side='CT'] {
+  border-color: var(--mizar-side-ct);
+}
+.shanghai-summary[aria-hidden='true'] {
+  visibility: hidden;
+}
+.shanghai-summary__economy {
+  display: flex;
+}
+.shanghai-summary__economy div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shanghai-summary__economy strong {
+  font-size: 16px;
+  color: var(--mizar-hud-state-success);
+}
+.shanghai-summary__economy span {
+  color: var(--mizar-hud-text-muted);
+}
+.shanghai-summary__utility {
+  display: flex;
+  align-items: center;
+}
+.shanghai-summary__utility > span {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.shanghai-summary__utility .player-rail__icon {
+  width: 12px;
+  height: 22px;
+}
+.shanghai-summary__utility b {
+  font-size: 14px;
+  color: var(--mizar-side-ct);
+}
+.shanghai-summary[data-side='T'] .shanghai-summary__utility b {
+  color: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__players {
+  height: 452px;
+  gap: 8px;
+  grid-template-rows: repeat(5, 84px);
+  flex-basis: 452px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge path {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge circle {
+  r: 10;
+  stroke: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side='T']
+  .player-rail__round-kill-badge
+  circle {
+  stroke: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge text {
+  font-size: 13px;
+}
+/* Reserve the outer corner for round kills; square Steam images never sit under badges. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  position: absolute;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__avatar img {
+  right: auto;
+  left: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge svg {
+  width: 24px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__dead-stats {
+  left: 18px;
+  right: auto;
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd,
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__kd {
+  left: auto;
+  right: 18px;
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats small,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats b {
+  font-size: 14px;
+}
+/* Shanghai information hierarchy: identity, economy, then the combat band. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
+  letter-spacing: 0;
+  font-size: 19px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
+  border-radius: 0 4px 4px 0;
+  overflow: visible;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 90%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  width: 60px;
+  height: 60px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side]
+  .player-rail__avatar {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 90%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__identity {
+  top: 7px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__money {
+  bottom: 30px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__name {
+  font-weight: 600;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
+  bottom: 5px;
+  height: 20px;
+  align-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__bomb-prediction {
+  background: var(--mizar-hud-objective-bomb);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__metrics
+  .player-rail__stat-glyph {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.65;
+}
+.shanghai-summary__economy span {
+  font-weight: 700;
+}
+.player-rail--right .shanghai-summary__economy {
+  flex-direction: row-reverse;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background: var(--mizar-hud-text-primary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 216 84'%3E%3Cpath d='M-20 82C150 22 6-3 96 8S214 102 248 64' fill='none' stroke='white' stroke-width='1'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+/* Armor belongs to health; carried kit/C4 belongs to the inventory row. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  bottom: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
+  z-index: 3;
+  left: -84px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: -84px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: 150px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 150px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
+  display: contents;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment-slot {
+  position: absolute;
+  left: 49px;
+  top: 59px;
+  width: 18px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot {
+  left: auto;
+  right: 49px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='kit'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='c4'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  left: auto;
+  right: 7px;
+  top: 31px;
+  width: 20px;
+  height: 20px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='kit'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='c4'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  left: 7px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='kit'] {
+  background: var(--mizar-hud-objective-defuse);
+  border-radius: 50%;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'], [data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: 30px;
+  width: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'], [data-equipment='zeus'])
+  .player-rail__utility-icons {
+  left: 30px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'])
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  right: 31px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'])
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  right: auto;
+  left: 31px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4']):has([data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: 54px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4']):has([data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: auto;
+  left: 54px;
+}
+.shanghai-summary {
+  justify-content: flex-start;
+  padding: 0 7px;
+  gap: 6px;
+  box-sizing: border-box;
+}
+.shanghai-summary__economy {
+  align-items: center;
+  gap: 6px;
+}
+.shanghai-summary__side {
+  height: 38px;
+  object-fit: contain;
+  align-self: center;
+  opacity: 0.8;
+  width: 34px;
+  margin-right: 3px;
+}
+.player-rail--right .shanghai-summary__side {
+  margin-right: 0;
+  margin-left: 3px;
+}
+.shanghai-summary__utility {
+  margin-left: auto;
+  gap: 2px;
+}
+.player-rail--right .shanghai-summary__utility {
+  margin-left: 0;
+  margin-right: auto;
+}
+.shanghai-summary:not([data-summary-economy-visible='true']) .shanghai-summary__utility {
+  margin: 0;
+}
+.shanghai-summary[data-summary-economy-visible='true'] .shanghai-summary__utility > span {
+  min-width: 36px;
+}
+.shanghai-summary[data-summary-economy-visible='true'] .shanghai-summary__utility b {
+  font-size: 16px;
+}
+.shanghai-summary__economy span {
+  font-size: 11px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__avatar {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__body {
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__round-kill-slot {
+  left: 4px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__identity {
+  left: 32px;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__identity {
+  left: 8px;
+  right: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__equipment-slot[data-equipment='armor'] {
+  left: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__equipment-slot[data-equipment='armor'] {
+  left: auto;
+  right: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__money {
+  left: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__money {
+  left: auto;
+  right: 32px;
+}

@@ -1,0 +1,81 @@
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-strip {
+  display: flex;
+  width: 364px;
+  height: 34px;
+  align-items: center;
+  background: var(--mizar-hud-surface-primary);
+}
+.shanghai-series-stage {
+  flex: 0 0 190px;
+  padding-left: 6px;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-maps {
+  flex: 1;
+  width: auto;
+  height: 34px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  height: 34px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  font-family: var(--mizar-type-family-body);
+  font-weight: 800;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-status {
+  display: none;
+}
+.shanghai-series-overview {
+  display: grid;
+  gap: 4px;
+  width: 340px;
+}
+.shanghai-series-detail {
+  display: grid;
+  grid-template-columns: 80px 60px 96px 80px;
+  align-items: center;
+  height: 46px;
+  gap: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
+  color: var(--mizar-hud-text-primary);
+  font-size: 14px;
+}
+.shanghai-series-detail__map {
+  align-self: stretch;
+  background-size: cover;
+  display: flex;
+  align-items: end;
+}
+.shanghai-series-detail__map strong {
+  width: 100%;
+  background: var(--mizar-hud-surface-primary);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.shanghai-series-detail img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  justify-self: center;
+}
+.shanghai-series-detail--heading {
+  height: 30px;
+}
+.shanghai-series-detail--heading svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  justify-self: center;
+}
+.shanghai-series-detail > strong,
+.shanghai-series-detail > span {
+  text-align: center;
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  padding-inline: 0;
+  font-size: 11px;
+}

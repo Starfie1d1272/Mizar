@@ -376,7 +376,11 @@ ETag/revision；保存资源不会改变正式节目的 ETag，只有启用 pres
 编辑器通过仅限 loopback 且要求 valid local Origin 的本地 HTTP mutation 保存资源或启用 preset；LAN
 mode 下该 endpoint 只读，任何 mutation 都会拒绝。当前版本 custom snapshot 在重启和 recipe 升级后仍保持最后
 一次上屏内容，直到重新启用，built-in reference 则解析当前代码版本。配置读取/解析失败保留
-last-known-valid runtime，不让 HUD 配置故障伪造或中断 Gameplay telemetry。1.0 前不保留旧版本兼容；resolved v2 必须完整，拒绝旧版本与缺失设置，不加载时套用当前默认值。
+last-known-valid runtime，不让 HUD 配置故障伪造或中断 Gameplay telemetry。1.0 前不保留旧版本兼容；resolved v3 必须完整，拒绝旧版本与缺失设置，不加载时套用当前默认值。
+
+配置包的公共入口 `packages/hud-config/src/index.ts` 只导出 API；schemas/types、widget registry/descriptor、geometry/variant-layout、validation/document、resolver、builtins 与 preset-pack 分别维护自己的边界。赛事 recipe 和布局组合放在 `src/presets/` 的单套风格文件，通过 catalog 注册。Web 的共用造型与 EWC/IEM/Perfect World CSS 分开；上海再按比分、选手栏、Focus、系列信息和 Radar 拆分。
+
+可分享预设文件仅包含 authoring Preset/Layout/Theme，导入通过现有控制面原子创建三个新副本并重写引用，不写 activePreset；导出也不携带 telemetry 或启用快照。Descriptor 声明各 variant 的固定 envelope，解析、编辑框与 renderer 使用同一 resolved Layout；冻结快照只校验尺寸，不随新 defaults 重排。
 
 连接建立后立即发送当前 baseline；断线重连重新取得 current baseline，不补发历史 snapshot。
 
