@@ -1,3 +1,4 @@
+import { StatGlyph } from '../player-status-effects/StatGlyph';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
@@ -257,26 +258,6 @@ function UtilityIcons({
   );
 }
 
-function StatGlyph({ kind }: { readonly kind: 'kills' | 'deaths' }) {
-  return (
-    <svg aria-hidden="true" className="player-rail__stat-glyph" viewBox="0 0 16 16">
-      {kind === 'kills' ? (
-        <>
-          <circle cx="8" cy="8" r="3.25" />
-          <path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3" />
-        </>
-      ) : (
-        <>
-          <path d="M4 7.25a4 4 0 1 1 8 0v2.1c0 .8-.42 1.55-1.1 1.97V14H5.1v-2.68A2.3 2.3 0 0 1 4 9.35z" />
-          <circle cx="6.45" cy="7.55" r="0.8" />
-          <circle cx="9.55" cy="7.55" r="0.8" />
-          <path d="M7 11.1h2M6.25 14v-1.8M8 14v-1.8M9.75 14v-1.8" />
-        </>
-      )}
-    </svg>
-  );
-}
-
 function Kd({ player }: { readonly player: PlayerCardPresentation }) {
   return (
     <span className="player-rail__kd" aria-label="Kills and deaths" data-player-rail-row-part="kd">
@@ -443,7 +424,11 @@ function PlayerBody({
 
       <div className="player-rail__bottom">
         {options.showMoney && (!dead || options.deadInformation === 'stats') ? (
-          <span className="player-rail__money">{displayMoney(player.money)}</span>
+          <span className="player-rail__money">
+            {design === 'perfectworld'
+              ? displayMoney(player.money).replaceAll(',', '')
+              : displayMoney(player.money)}
+          </span>
         ) : null}
         {options.showMoney && player.mode === 'freezetime' && !dead ? (
           <span className="player-rail__spent">{displaySpent(player.roundMoneySpent)}</span>

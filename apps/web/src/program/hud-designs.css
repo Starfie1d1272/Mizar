@@ -660,8 +660,6 @@
   position: absolute;
   top: 0;
   left: 12px;
-  width: 56px;
-  height: 64px;
 }
 .hud-widget-design.hud-redraw .focused-player__media img {
   left: 0;
@@ -1200,22 +1198,17 @@
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
   flex-direction: row-reverse;
-  left: 390px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
-  left: 180px;
   width: 50px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
-  left: 340px;
   width: 50px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
   letter-spacing: 0;
-  font-size: 34px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
-  left: 230px;
   top: 0;
   width: 110px;
   height: 56px;
@@ -1227,7 +1220,6 @@
   place-items: center;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__clock-value {
-  font-size: 30px;
   line-height: 56px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__round-meta,
@@ -1247,7 +1239,6 @@
 .shanghai-round-strip {
   position: absolute;
   top: 60px;
-  left: 170px;
   width: 230px;
   height: 22px;
   border-radius: 4px;
@@ -1304,29 +1295,19 @@
   position: absolute;
   top: 86px;
   width: 164px;
-  min-height: 118px;
   border-radius: 4px;
-  background: var(--mizar-hud-surface-primary);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-}
-.shanghai-event-panel strong {
-  font-size: 22px;
 }
 .shanghai-event-panel span {
   font-size: 14px;
   font-weight: 700;
 }
-.shanghai-event-panel b {
-  font-size: 24px;
-}
 .shanghai-round-winner {
   top: 60px;
   padding: 0;
-  gap: 0;
 }
 .shanghai-round-winner .match-header__team-logo {
   width: 58px;
@@ -1337,9 +1318,7 @@
 .shanghai-round-winner strong {
   align-self: stretch;
   padding: 0;
-  line-height: 30px;
   text-align: center;
-  font-size: 18px;
   background: var(--mizar-side-t);
 }
 .shanghai-round-winner[data-side='CT'] strong {
@@ -1369,7 +1348,6 @@
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
   letter-spacing: 0;
-  font-size: 18px;
   max-width: 132px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-bar {
@@ -1513,31 +1491,18 @@
 /* Square Steam media beside the Shanghai information column. */
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player {
   margin-top: 0;
-  width: 360px;
-  height: 176px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player::before {
   display: none;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__face {
   display: block;
-  background: var(--mizar-side-ct);
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-side='T'] {
-  background: var(--mizar-side-t);
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
   position: absolute;
   top: 0;
-  left: 176px;
-  width: 184px;
-  height: 176px;
-  padding: 12px;
   display: block;
   background: transparent;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__name {
-  font-size: 18px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span:nth-child(2) {
   display: none;
@@ -1552,24 +1517,18 @@
   position: absolute;
   left: 0;
   top: 0;
-  width: 176px;
-  height: 176px;
   margin: 0;
   border: 0;
   object-fit: cover;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals {
   position: absolute;
-  top: 42px;
   left: 188px;
   right: 0;
   width: 166px;
   padding: 0;
   height: 42px;
   background: transparent;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__hp {
-  font-size: 32px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__health-track {
   display: none;
@@ -1584,9 +1543,6 @@
   height: 28px;
   width: 92px;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
-  font-size: 22px;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-dead='true'] {
   background: var(--mizar-hud-surface-primary);
 }
@@ -1594,7 +1550,6 @@
   overflow: visible;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
-  background: var(--mizar-hud-surface-primary);
   height: 84px;
   border-radius: 0 4px 4px 0;
   overflow: visible;
@@ -1606,29 +1561,21 @@
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
   position: absolute;
-  left: 12px;
-  bottom: 36px;
-  right: 8px;
-  gap: 8px;
   color: var(--mizar-hud-text-primary);
   top: auto;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
   gap: 6px;
   background: transparent;
-  width: 180px;
   justify-content: flex-start;
   box-sizing: border-box;
   padding: 0 14px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
   display: block;
-  overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
   font-weight: 700;
   font-size: 21px;
-  max-width: 120px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__identity {
   inset-inline: 18px 8px;
@@ -1697,7 +1644,6 @@
 }
 .shanghai-summary__economy {
   display: flex;
-  gap: 8px;
 }
 .shanghai-summary__economy div {
   display: flex;
@@ -1709,7 +1655,6 @@
   color: var(--mizar-hud-state-success);
 }
 .shanghai-summary__economy span {
-  font-size: 10px;
   color: var(--mizar-hud-text-muted);
 }
 .shanghai-summary__utility {
@@ -1764,7 +1709,6 @@
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
   font-family: var(--mizar-type-family-body);
-  font-size: 12px;
   font-weight: 800;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-status {
@@ -1773,15 +1717,12 @@
 
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
   position: absolute;
-  bottom: 8px;
   left: 188px;
   display: flex;
   flex-direction: row;
   justify-content: flex-start;
-  gap: 4px;
   align-items: baseline;
   top: auto;
-  height: 26px;
   right: 8px;
   width: 164px;
 }
@@ -1905,9 +1846,6 @@
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
   position: absolute;
   right: 0;
-  bottom: 0;
-  width: 60px;
-  height: 60px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__avatar img {
   right: auto;
@@ -1944,9 +1882,6 @@
 .shanghai-event-panel[data-kind='plant'] {
   top: 60px;
 }
-.shanghai-event-panel[data-kind='defuse'] b {
-  font-size: 30px;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .objective-center__ring > svg,
 .hud-widget-design[data-hud-design='perfectworld'] .objective-center__caption {
   display: none;
@@ -1973,11 +1908,6 @@
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals-values {
   justify-content: flex-start;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
-  font-size: 12px;
-  gap: 6px;
-  bottom: 36px;
 }
 .shanghai-focus-utility {
   position: absolute;
@@ -2059,4 +1989,349 @@
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats small,
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats b {
   font-size: 14px;
+}
+/* Shanghai information hierarchy: identity, economy, then the combat band. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
+  font-size: 19px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 90%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  width: 60px;
+  height: 60px;
+  bottom: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side]
+  .player-rail__avatar {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 90%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__identity {
+  top: 7px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__money {
+  bottom: 30px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__name {
+  font-weight: 600;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
+  bottom: 5px;
+  height: 20px;
+  align-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__bomb-prediction {
+  background: var(--mizar-hud-objective-bomb);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face {
+  background: linear-gradient(
+    180deg,
+    var(--mizar-side-ct),
+    color-mix(in srgb, var(--mizar-side-ct) 42%, var(--mizar-hud-surface-primary))
+  );
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-side='T'] {
+  background: linear-gradient(
+    180deg,
+    var(--mizar-side-t),
+    color-mix(in srgb, var(--mizar-side-t) 68%, var(--mizar-hud-surface-primary))
+  );
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  padding: 10px 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__name {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
+  left: 0;
+  right: 0;
+  bottom: 29px;
+  height: 26px;
+  padding: 0 8px;
+  gap: 7px;
+  justify-content: flex-start;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 22%, transparent);
+  font-size: 12px;
+  line-height: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span {
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics small {
+  font-size: 11px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__metrics
+  .player-rail__stat-glyph {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.65;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  bottom: 3px;
+  height: 25px;
+  gap: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
+  font-size: 20px;
+  line-height: 25px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals {
+  top: 40px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__hp {
+  font-size: 30px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__slot-badge {
+  display: none;
+}
+.shanghai-focus-kills {
+  position: absolute;
+  right: 155px;
+  top: 5px;
+  width: 36px;
+  height: 54px;
+  border: 1px solid var(--mizar-hud-text-primary);
+  border-radius: 3px;
+  display: grid;
+  grid-template-rows: 14px 22px 14px;
+  justify-items: center;
+  background: var(--mizar-side-ct);
+  color: var(--mizar-hud-text-primary);
+}
+.focused-player__face[data-side='T'] .shanghai-focus-kills {
+  background: var(--mizar-side-t);
+}
+.shanghai-focus-kills b {
+  font-size: 22px;
+  line-height: 22px;
+}
+.shanghai-focus-kills svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.shanghai-summary__side {
+  width: 34px;
+  height: 38px;
+  object-fit: contain;
+  align-self: center;
+  opacity: 0.8;
+}
+.shanghai-summary__economy {
+  align-items: center;
+  gap: 6px;
+}
+.shanghai-summary__economy span {
+  font-size: 10px;
+  font-weight: 700;
+}
+.player-rail--right .shanghai-summary__economy {
+  flex-direction: row-reverse;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
+  font-size: 34px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock-value {
+  font-size: 29px;
+  font-weight: 700;
+}
+.shanghai-event-panel {
+  gap: 5px;
+  height: 118px;
+  min-height: 118px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+}
+.shanghai-event-panel strong {
+  font-size: 22px;
+  line-height: 27px;
+}
+.shanghai-event-panel span:not(.shanghai-kit) {
+  font-size: 13px;
+  line-height: 20px;
+}
+.shanghai-event-panel b {
+  font-size: 23px;
+  line-height: 29px;
+}
+.shanghai-event-panel[data-kind='defuse'] b {
+  font-size: 29px;
+  line-height: 34px;
+}
+.shanghai-kit {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 19px;
+  height: 19px;
+  background: var(--mizar-hud-objective-defuse);
+  border-radius: 50%;
+}
+.shanghai-kit::after {
+  content: '';
+  display: block;
+  margin: 3px;
+  width: 13px;
+  height: 13px;
+  background: var(--mizar-hud-text-primary);
+  mask: var(--shanghai-kit) center / contain no-repeat;
+}
+.shanghai-action-track .shanghai-kit {
+  top: 1px;
+}
+.shanghai-round-winner {
+  gap: 0;
+}
+.shanghai-round-winner strong {
+  font-size: 18px;
+  line-height: 30px;
+}
+
+/* Fine curved artwork stays behind all score and identity content. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.24;
+  background: var(--mizar-side-t);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 570 58'%3E%3Cg fill='none' stroke='white' stroke-width='1'%3E%3Cpath d='M-30 0C50 40 90 14 136 70M326-12C220 40 530 6 578 64M510-10C540 15 553 10 590 28'/%3E%3C/g%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background: var(--mizar-hud-text-primary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 216 84'%3E%3Cpath d='M-20 82C150 22 6-3 96 8S214 102 248 64' fill='none' stroke='white' stroke-width='1'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+
+/* Armor belongs to health; carried kit/C4 belongs to the inventory row. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  bottom: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
+  left: -84px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: -84px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: 150px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 150px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
+  display: contents;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment-slot {
+  position: absolute;
+  left: 49px;
+  top: 59px;
+  width: 18px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot {
+  left: auto;
+  right: 49px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='kit'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='c4'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  left: auto;
+  right: 7px;
+  top: 31px;
+  width: 20px;
+  height: 20px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='kit'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='c4'],
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  left: 7px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__equipment-slot[data-equipment='kit'] {
+  background: var(--mizar-hud-objective-defuse);
+  border-radius: 50%;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'], [data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: 30px;
+  width: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'], [data-equipment='zeus'])
+  .player-rail__utility-icons {
+  left: 30px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'])
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  right: 31px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4'])
+  .player-rail__equipment-slot[data-equipment='zeus'] {
+  right: auto;
+  left: 31px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4']):has([data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: 54px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__body:has([data-equipment='kit'], [data-equipment='c4']):has([data-equipment='zeus'])
+  .player-rail__utility-icons {
+  right: auto;
+  left: 54px;
 }

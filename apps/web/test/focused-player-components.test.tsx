@@ -204,6 +204,29 @@ describe('Focused media and combat presentation lifecycle', () => {
     );
     expect(container.querySelector('.focused-player__metrics')?.textContent).toBe('K—A4D11ADR82.3');
   });
+  it('separates Shanghai round kills and live ADR and preserves a reported death zero', () => {
+    const container = host();
+    const player = buildFocusedPlayerPresentation(getProgramFixture('real-live-rich')!.payload)!;
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{ ...player, roundKills: 3, liveAdr: 123, completedAdr: 82 }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.shanghai-focus-kills')?.textContent).toBe('3');
+    expect(container.querySelector('.focused-player__metrics')?.textContent).toContain('ADR123');
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{ ...player, dead: true, health: null, reportedHealth: 0 }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.focused-player__dead-state')?.textContent).toBe('0');
+  });
   it('keeps timeout exit motion presentation-local and clears it on a new revision', () => {
     vi.useFakeTimers();
     const container = host();

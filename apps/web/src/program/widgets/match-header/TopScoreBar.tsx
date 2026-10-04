@@ -1,3 +1,5 @@
+import { assetForCanonicalKey } from '../player-rails/presentation';
+import type { CSSProperties } from 'react';
 import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-config';
 /** Match composition adapted from Lexogrine cs2-react-hud@7874750c97fcecd8f72eb3fad382917e035ec651
  * (MIT). Angular shell, series pips and objective choreography follow the user-provided reference.
@@ -310,6 +312,17 @@ function TimeoutPanel({
   );
 }
 
+function ShanghaiKit() {
+  const asset = assetForCanonicalKey('equipment.defuse-kit');
+  return asset === null ? null : (
+    <span
+      className="shanghai-kit"
+      aria-hidden="true"
+      style={{ '--shanghai-kit': `url("${asset.outputPath}")` } as CSSProperties}
+    />
+  );
+}
+
 function ShanghaiPanels({
   snapshot,
   presentation: p,
@@ -358,9 +371,11 @@ function ShanghaiPanels({
           {action.kind === 'defuse' && p.objective.action !== null ? (
             <div className="shanghai-action-track" data-owner={actionOwner} data-kind={action.kind}>
               <i style={{ width: `${p.objective.action * 100}%` }} />
+              <ShanghaiKit />
             </div>
           ) : null}
           <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
+            {action.kind === 'defuse' ? <ShanghaiKit /> : null}
             {action.kind === 'defuse' ? (
               <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
             ) : null}

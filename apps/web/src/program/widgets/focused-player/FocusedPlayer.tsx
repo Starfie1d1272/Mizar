@@ -1,3 +1,4 @@
+import { StatGlyph } from '../player-status-effects/StatGlyph';
 import {
   focusedPlayerSettingsSchema,
   focusedPlayerPresentationSettings,
@@ -228,7 +229,7 @@ function FocusedPlayerFace({
         {options.showMetrics ? (
           <div className="focused-player__metrics" aria-label="K A D ADR">
             <span>
-              <small>K</small>
+              {design === 'perfectworld' ? <StatGlyph kind="kills" /> : <small>K</small>}
               <b>{p.stats.kills ?? '—'}</b>
             </span>
             <span>
@@ -236,12 +237,16 @@ function FocusedPlayerFace({
               <b>{p.stats.assists ?? '—'}</b>
             </span>
             <span>
-              <small>D</small>
+              {design === 'perfectworld' ? <StatGlyph kind="deaths" /> : <small>D</small>}
               <b>{p.stats.deaths ?? '—'}</b>
             </span>
             <span>
               <small>ADR</small>
-              <b>{p.completedAdr === null ? '—' : Number(p.completedAdr.toFixed(1))}</b>
+              <b>
+                {(design === 'perfectworld' ? (p.liveAdr ?? p.completedAdr) : p.completedAdr)
+                  ?.toFixed(design === 'perfectworld' ? 0 : 1)
+                  .replace(/\.0$/, '') ?? '—'}
+              </b>
             </span>
           </div>
         ) : null}
@@ -291,7 +296,7 @@ function FocusedPlayerFace({
         />
         {p.dead ? (
           <div aria-label="Dead" className="focused-player__dead-state">
-            <span>{design === 'current' ? 'DEAD' : (p.health ?? '—')}</span>
+            <span>{design === 'current' ? 'DEAD' : (p.reportedHealth ?? '—')}</span>
           </div>
         ) : (
           <>
@@ -379,6 +384,13 @@ function FocusedPlayerFace({
           </div>
         )}
       </div>
+      {design === 'perfectworld' && p.roundKills != null && p.roundKills > 0 ? (
+        <div className="shanghai-focus-kills" aria-label={`Round kills ${p.roundKills}`}>
+          <StatGlyph kind="deaths" />
+          <b>{p.roundKills}</b>
+          <StatGlyph kind="kills" />
+        </div>
+      ) : null}
       <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
     </div>
   );

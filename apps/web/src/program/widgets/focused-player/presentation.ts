@@ -109,6 +109,9 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
       deaths: player.matchStats?.deaths ?? null,
     },
     completedAdr: player.completedAdr,
+    liveAdr: player.liveAdr,
+    roundKills: player.state.roundKills,
+    reportedHealth: dead && player.state.health !== 0 ? null : player.state.health,
     health: dead ? null : player.state.health,
     healthFill:
       dead || player.state.health === null ? null : Math.max(0, Math.min(100, player.state.health)),

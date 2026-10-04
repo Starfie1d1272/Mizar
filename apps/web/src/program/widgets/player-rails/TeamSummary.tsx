@@ -1,3 +1,4 @@
+import { getSideLogo } from '@mizar/cs2-assets';
 import type { HudDesign } from '../../hud-design';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
@@ -92,12 +93,15 @@ export function TeamSummary({
       >
         {economyVisible ? (
           <div className="shanghai-summary__economy">
+            {side === 'CT' || side === 'T' ? (
+              <img className="shanghai-summary__side" src={getSideLogo(side)?.outputPath} alt="" />
+            ) : null}
             <div>
-              <strong>{formatMoney(displayed.lossBonus)}</strong>
+              <strong>{formatMoney(displayed.lossBonus).replaceAll(',', '')}</strong>
               <span>Loss Bonus</span>
             </div>
             <div>
-              <strong>{formatMoney(displayed.equip)}</strong>
+              <strong>{formatMoney(displayed.equip).replaceAll(',', '')}</strong>
               <span>Equipment Value</span>
             </div>
           </div>
@@ -141,7 +145,7 @@ export function TeamSummary({
         </div>
         <div>
           <span>LOSS</span>
-          <strong>{formatMoney(displayed.lossBonus)}</strong>
+          <strong>{formatMoney(displayed.lossBonus).replaceAll(',', '')}</strong>
         </div>
       </div>
       <div
