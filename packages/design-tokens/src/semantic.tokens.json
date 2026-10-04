@@ -177,5 +177,20 @@
     "disabled-opacity": {
       "$value": "{opacity.disabled}"
     }
+  },
+  "brand": {
+    "$type": "color",
+    "primary": {
+      "$value": "{color.brand.cobalt}"
+    },
+    "front": {
+      "$value": "{color.brand.ice}"
+    },
+    "companion": {
+      "$value": "{color.brand.gold}"
+    },
+    "depth": {
+      "$value": "{color.brand.depth}"
+    }
   }
 }

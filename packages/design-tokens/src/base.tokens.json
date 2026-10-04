@@ -163,6 +163,40 @@
           "alpha": 1
         }
       }
+    },
+    "brand": {
+      "cobalt": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.192157, 0.501961, 0.952941],
+          "alpha": 1
+        }
+      },
+      "ice": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.878431, 0.94902, 1.0],
+          "alpha": 1
+        }
+      },
+      "gold": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [1.0, 0.823529, 0.478431],
+          "alpha": 1
+        }
+      },
+      "depth": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.090196, 0.227451, 0.568627],
+          "alpha": 1
+        }
+      }
     }
   },
   "space": {

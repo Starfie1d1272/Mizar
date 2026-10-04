@@ -1,5 +1,5 @@
 /* Mizar native broadcast. Existing default variants only; tournament recipes stay isolated.
- * Short paired rules are the single graphic signature. No gameplay clock is owned here. */
+ * Straight combat grids share the program palette; arc surfaces stay outside critical numbers. No gameplay clock is owned here. */
 .hud-widget-design[data-hud-design='current'] {
   container-type: inline-size;
 
@@ -11,9 +11,9 @@
     height: 80px;
     overflow: visible;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 76px 120px 76px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 84px 120px 84px minmax(0, 1fr);
     grid-template-areas: 'team-a score-a clock score-b team-b';
-    gap: 2px;
+    gap: 0;
     background: transparent;
   }
   .match-header__score-zone,
@@ -25,11 +25,17 @@
     background: var(--mizar-hud-surface-strong);
   }
   .match-header__score-zone--logo {
-    height: 64px;
+    height: 80px;
     align-self: center;
     gap: 12px;
     padding: 0 16px;
     justify-content: flex-start;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--mizar-hud-surface-primary) 92%, var(--mizar-broadcast-brand-front)),
+      var(--mizar-hud-surface-primary)
+    );
+    box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 18%, transparent);
   }
   .match-header__score-zone--logo-a {
     grid-area: team-a;
@@ -65,11 +71,12 @@
     grid-area: score-b;
   }
   .match-header__score-zone--score {
-    background: var(--mizar-hud-surface-primary);
     padding-bottom: 8px;
+    color: var(--mizar-hud-text-primary);
   }
   .match-header__map-score {
     font-family: var(--mizar-type-family-display);
+    color: var(--mizar-hud-text-primary);
     font-size: 58px;
     line-height: 60px;
     font-weight: 700;
@@ -81,25 +88,16 @@
   .match-header__win-slots span {
     width: 12px;
     height: 3px;
+    background: color-mix(in srgb, var(--mizar-hud-text-primary) 22%, transparent);
   }
   .match-header__center {
     grid-area: clock;
     overflow: visible;
     color: var(--mizar-hud-surface-strong);
-    background: var(--mizar-hud-text-primary);
+    background: var(--mizar-broadcast-brand-front);
   }
-  .match-header__center::after {
-    content: '';
-    position: absolute;
-    top: 4px;
-    width: 64px;
-    height: 4px;
-    background: linear-gradient(
-      90deg,
-      var(--mizar-accent-primary) 56.25%,
-      transparent 56.25% 68.75%,
-      var(--mizar-accent-primary) 68.75%
-    );
+  .match-header__win-slots span[data-series-win-slot='won'] {
+    background: var(--mizar-hud-text-primary);
   }
   .match-header__clock-value {
     font-family: var(--mizar-type-family-display);
@@ -115,7 +113,7 @@
   .match-header__side-accent {
     top: 76px;
     height: 4px;
-    width: calc(50% - 62px);
+    width: calc(50% - 60px);
   }
   .match-header__alive-matchup {
     inset-inline: 0;
@@ -236,6 +234,7 @@
       var(--mizar-hud-surface-primary) 0 30px,
       color-mix(in srgb, var(--mizar-hud-surface-strong) 94%, transparent) 30px
     );
+    box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
   }
   .player-rail__body::before {
     display: none;
@@ -278,7 +277,7 @@
     width: 100%;
     height: 7px;
     margin: 0;
-    z-index: 2;
+    z-index: 3;
   }
   .player-rail__health-bar > span:not(.combat-damage-ghost):not(.player-rail__bomb-prediction) {
     height: 7px;
@@ -528,24 +527,22 @@
     margin-top: 80px;
     height: 96px;
     background: var(--mizar-hud-surface-strong);
+    overflow: hidden;
   }
   .focused-player::after {
     content: '';
     position: absolute;
-    right: 16px;
-    top: 14px;
-    width: 40px;
-    height: 4px;
-    background: linear-gradient(
-      90deg,
-      var(--mizar-accent-primary) 55%,
-      transparent 55% 70%,
-      var(--mizar-accent-primary) 70%
-    );
+    right: 0;
+    top: 32px;
+    width: 86px;
+    height: 64px;
+    background: var(--mizar-broadcast-brand-front);
+    mask: url('./arc-cut.svg') center / 100% 100% no-repeat;
     pointer-events: none;
   }
-  .focused-player__name {
-    padding-right: 52px;
+  .focused-player:has(.focused-player__face[data-dead='true'])::after,
+  .focused-player:not(:has(.focused-player__ammo > strong))::after {
+    display: none;
   }
   .focused-player[data-show-metrics='true'] {
     margin-top: 56px;
@@ -553,7 +550,7 @@
   }
   .focused-player__face {
     display: block;
-    background: var(--mizar-hud-surface-strong);
+    background: transparent;
   }
   .focused-player__identity {
     position: absolute;
@@ -564,6 +561,7 @@
     height: 32px;
     padding: 0 12px;
     background: var(--mizar-hud-surface-primary);
+    box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
   }
   .focused-player__name {
     font-size: 20px;
@@ -632,16 +630,22 @@
     max-width: 120px;
   }
   .focused-player__ammo {
+    z-index: 2;
+    color: var(--mizar-hud-surface-strong);
     position: absolute;
     top: 34px;
-    right: 12px;
-    width: 66px;
+    right: 10px;
+    width: 50px;
     height: 54px;
   }
   .focused-player__ammo > strong {
+    color: var(--mizar-hud-surface-strong);
     font-family: var(--mizar-type-family-display);
     font-size: 38px;
     line-height: 38px;
+  }
+  .focused-player__ammo > span {
+    color: var(--mizar-hud-surface-strong);
   }
   .focused-player__vitals {
     position: absolute;
@@ -698,7 +702,7 @@
     font-size: 9px;
   }
   .match-header__series-map--current {
-    border-bottom: 2px solid var(--mizar-accent-primary);
+    border-bottom: 2px solid var(--mizar-broadcast-brand-primary);
   }
   .match-header__series-map-art-image {
     opacity: 0.65;
@@ -742,6 +746,27 @@
   .player-status-effects {
     z-index: 1;
   }
+  /* Shared tournament smoke: media < smoke < name / HP / loadout. */
+  .broadcast-smoke .player-status-effects__smoke {
+    opacity: calc(var(--rh-player-status-smoke, 0) * 0.54);
+  }
+  .player-rail__avatar {
+    z-index: 1;
+  }
+  .player-rail__card > .broadcast-smoke .player-status-effects__smoke {
+    width: 56%;
+    height: 88%;
+  }
+  .focused-player .broadcast-smoke {
+    z-index: 2;
+  }
+  .focused-player__identity,
+  .focused-player__vitals,
+  .focused-player__active,
+  .focused-player__ammo,
+  .focused-player__metrics {
+    z-index: 4;
+  }
   .player-rail__body {
     overflow: visible;
   }
@@ -765,7 +790,11 @@
     font-weight: 600;
   }
   .broadcast-pause__brand::before {
-    opacity: 0.05;
+    inset: 0 0 0 auto;
+    width: 28px;
+    opacity: 1;
+    background: var(--mizar-broadcast-brand-primary);
+    mask: url('./arc-cut.svg') center / 100% 100% no-repeat;
   }
 }
 /* The same renderer also fits already-saved default envelopes without changing their layout. */
@@ -784,6 +813,9 @@
   }
   .hud-widget-design[data-hud-design='current'] .match-header__team-name {
     font-size: 14px;
+  }
+  .hud-widget-design[data-hud-design='current'] .match-header__map-score {
+    font-size: 42px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

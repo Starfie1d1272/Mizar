@@ -13,6 +13,7 @@ import { ProgramCanvas } from './ProgramCanvas';
 import { GameplayHud } from './GameplayHud';
 import './program-scenes.css';
 import './broadcast-material.css';
+import { BroadcastArc } from './BroadcastArc';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
 const subscribeMotion = (notify: () => void) => {
@@ -395,7 +396,25 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
             : source === name && targetName?.getBoundingClientRect().width
               ? targetName
               : null;
-        const entrance = side === 'a' ? -28 : 28;
+        const team = root.querySelector<HTMLElement>(`.intro-team--${side}`);
+        if (team) {
+          const origin = side === 'a' ? '0% 100%' : '100% 100%';
+          animations.push(
+            team.animate(
+              [
+                {
+                  clipPath: `ellipse(0% 0% at ${origin})`,
+                  offset: 0,
+                  easing: 'cubic-bezier(.2,.7,.2,1)',
+                },
+                { clipPath: `ellipse(150% 180% at ${origin})`, offset: short ? 0.2 : 0.18 },
+                { clipPath: 'none', offset: short ? 0.21 : 0.19 },
+                { clipPath: 'none', offset: 1 },
+              ],
+              { duration, fill: 'both', easing: 'linear' },
+            ),
+          );
+        }
         if (source) {
           const from = source.getBoundingClientRect();
           const to = target?.getBoundingClientRect();
@@ -406,8 +425,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           animations.push(
             source.animate(
               [
-                { opacity: 0, transform: short ? 'none' : `translateX(${entrance}px)`, offset: 0 },
-                { opacity: 1, transform: 'none', offset: short ? 0.08 : 0.1 },
+                { opacity: 0, transform: 'none', offset: 0 },
+                { opacity: 1, transform: 'none', offset: 0.04 },
                 {
                   opacity: 1,
                   transform: 'none',
@@ -425,8 +444,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           animations.push(
             name.animate(
               [
-                { opacity: 0, transform: short ? 'none' : `translateX(${entrance}px)`, offset: 0 },
-                { opacity: 1, transform: 'none', offset: 0.1 },
+                { opacity: 0, transform: 'none', offset: 0 },
+                { opacity: 1, transform: 'none', offset: 0.04 },
                 {
                   opacity: 1,
                   transform: 'none',
@@ -500,6 +519,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
           style={{ backgroundImage: `url(${getMapThumbnail('de_ancient')?.outputPath})` }}
         />
       ) : null}
+      {sceneId !== 'matchup' && sceneId !== 'gameplay' ? (
+        <BroadcastArc hero={sceneId === 'waiting'} />
+      ) : null}
       {data && sceneId !== 'matchup' && sceneId !== 'gameplay' ? (
         <BroadcastIdentity data={data} />
       ) : null}
@@ -527,11 +549,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
               key={revision}
               style={{ animationDuration: `${duration}ms` }}
             >
-              <div
-                className="intro-orbit"
-                style={{ animationDelay: `${Math.max(0, duration - 1200)}ms` }}
-              />
-
+              <div className="intro-art">
+                <BroadcastArc hero />
+              </div>
               <p className="intro-map">
                 MAP {data.series?.currentMapOrder ?? 1} ·{' '}
                 {mapName(

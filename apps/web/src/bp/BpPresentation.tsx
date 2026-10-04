@@ -3,6 +3,7 @@ import { getMapThumbnail } from '@mizar/cs2-assets';
 import { ProgramCanvas } from '../program/ProgramCanvas';
 import './bp.css';
 import '../program/broadcast-material.css';
+import { BroadcastArc } from '../program/BroadcastArc';
 
 export function BpPresentation({
   snapshot,
@@ -25,6 +26,7 @@ export function BpPresentation({
           data-format={projection.format}
           data-revealed-count={effectiveRevealedCount}
         >
+          <BroadcastArc />
           <div className="bp-kicker">
             <strong>{projection.competition}</strong>
             <span>

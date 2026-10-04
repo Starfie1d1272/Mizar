@@ -532,7 +532,6 @@ export function PlayerCard({
       {avatar}
       {body}
       <PlayerStatusEffects
-        design={design}
         key={`status:${presentationRevision}`}
         anchor={physicalSide}
         state={player.statusEffects}

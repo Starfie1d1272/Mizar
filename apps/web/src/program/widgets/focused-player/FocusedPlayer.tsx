@@ -399,11 +399,7 @@ function FocusedPlayerFace({
           <StatGlyph kind="deaths" />
         </div>
       ) : null}
-      <PlayerStatusEffects
-        design={design}
-        key={`status:${presentationRevision}`}
-        state={p.statusEffects}
-      />
+      <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
     </div>
   );
 }

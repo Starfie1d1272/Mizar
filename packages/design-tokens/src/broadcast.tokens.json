@@ -20,6 +20,21 @@
       "gap": {
         "$value": "{layout.gap}"
       }
+    },
+    "brand": {
+      "$type": "color",
+      "primary": {
+        "$value": "{brand.primary}"
+      },
+      "front": {
+        "$value": "{brand.front}"
+      },
+      "companion": {
+        "$value": "{brand.companion}"
+      },
+      "depth": {
+        "$value": "{brand.depth}"
+      }
     }
   }
 }

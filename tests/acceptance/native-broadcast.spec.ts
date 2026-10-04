@@ -94,6 +94,30 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
       expect((await bar.boundingBox())!.height).toBe(7);
     const focus = page.locator('.focused-player');
     if (await focus.count()) expect((await focus.boundingBox())!.height).toBe(96);
+    if (id === 'real-live-rich') {
+      // A light ammo surface must explicitly override inherited white / muted text.
+      const ratios = await focus.evaluate((el) => {
+        const context = document.createElement('canvas').getContext('2d')!;
+        const luminance = (color: string) => {
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          const rgb = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map((c) => {
+            const value = c / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          });
+          return rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722;
+        };
+        const surface = luminance(getComputedStyle(el, '::after').backgroundColor);
+        return [
+          ...el.querySelectorAll('.focused-player__ammo > strong, .focused-player__ammo > span'),
+        ].map((text) => {
+          const ink = luminance(getComputedStyle(text).color);
+          return (Math.max(ink, surface) + 0.05) / (Math.min(ink, surface) + 0.05);
+        });
+      });
+      expect(ratios).toHaveLength(2);
+      expect(ratios.every((ratio) => ratio >= 4.5)).toBe(true);
+    }
   }
 });
 
@@ -205,6 +229,8 @@ test('full and short Intro land on measured logo slots, missing media use names 
     expect(Math.abs(from.y + from.height / 2 - to.y - to.height / 2)).toBeLessThan(2);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect.poll(() => moving.evaluate((el) => el.getAnimations().length)).toBe(0);
+    await expect(page.locator('.intro-art')).toBeHidden();
+    await expect(page.locator('.intro-team--a')).toHaveCSS('clip-path', 'none');
     await page.emulateMedia({ reducedMotion: 'no-preference' });
   }
   await page.goto('/program/matchup?preview=1&intro=short');
@@ -304,21 +330,20 @@ test('Waiting treats real team logos as the primary identity, with aligned name 
   page,
 }) => {
   const { payload } = sample('real-live-rich');
+  const presentation = {
+    schemaVersion: 'mizar.program-presentation.v1',
+    packageId: 'builtin:mizar-default',
+    match: payload.match,
+    series: payload.series,
+    halftime: null,
+    completed: [],
+    eventLogoUrl: null,
+    scheduledAt: null as string | null,
+    previous: null,
+    next: null,
+  };
   await page.route('**/local/v1/program-presentation', (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 'mizar.program-presentation.v1',
-        packageId: 'builtin:mizar-default',
-        match: payload.match,
-        series: payload.series,
-        halftime: null,
-        completed: [],
-        eventLogoUrl: null,
-        scheduledAt: null,
-        previous: null,
-        next: null,
-      },
-    }),
+    route.fulfill({ json: presentation }),
   );
   await page.goto('/program/waiting');
   await expect(page.locator('.waiting-team img')).toHaveCount(2);
@@ -338,4 +363,97 @@ test('Waiting treats real team logos as the primary identity, with aligned name 
     .locator('.waiting-team strong')
     .evaluateAll((nodes) => nodes.map((n) => n.getBoundingClientRect().y));
   expect(names[0]).toBe(names[1]);
+
+  // Combine existing long-name/media edges: artwork must not intersect rendered text lines.
+  presentation.series!.entrants.a.name = '长名称战队 · North Star International';
+  presentation.series!.entrants.b.name = '长名称战队 · Southern Cross International';
+  presentation.scheduledAt = '2026-05-24T02:30:00Z';
+  await page.reload();
+  await page.evaluate(() => document.fonts.ready);
+  const clear = await page.locator('.program-scene').evaluate((root) => {
+    const labels = [...root.querySelectorAll('.waiting-team strong')].flatMap((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()];
+    });
+    const edge = root.querySelector<SVGPathElement>('.broadcast-arc__front')!;
+    const matrix = edge.getScreenCTM()!;
+    const length = edge.getTotalLength();
+    for (let i = 0; i <= 512; i++) {
+      const p = edge.getPointAtLength((length * i) / 512);
+      const point = new DOMPoint(p.x, p.y).matrixTransform(matrix);
+      if (
+        labels.some(
+          (box) =>
+            point.x >= box.left &&
+            point.x <= box.right &&
+            point.y >= box.top &&
+            point.y <= box.bottom,
+        )
+      )
+        return false;
+    }
+    const time = root.querySelector('.waiting-time')!.getBoundingClientRect();
+    return labels.every((box) => box.bottom < time.top);
+  });
+  expect(clear).toBe(true);
+});
+
+test('native smoke uses the shared cloud below combat information and clears at freeze', async ({
+  page,
+}) => {
+  const preset = getBuiltinResolvedPreset();
+  let snapshot = sample('real-live-rich');
+  await page.route('**/local/v1/hud-config', (route) =>
+    route.fulfill({ json: { resolved: preset, etag: 'smoke', activeRevision: 'smoke' } }),
+  );
+  await page.routeWebSocket('**/local/v1/program', (socket) =>
+    socket.send(JSON.stringify(snapshot)),
+  );
+  await page.goto('/program?hud-config=companion');
+  const affected = snapshot.payload.players.filter((player) => (player.state?.smoked ?? 0) > 0);
+  expect(affected).toHaveLength(2);
+  for (const player of affected) {
+    const card = page.locator(`[data-player-card="${player.sourcePlayerId}"]`);
+    await expect(card.locator(':scope > .broadcast-smoke')).toHaveAttribute('data-smoked', 'true');
+    await expect(
+      card.locator('.player-status-effects > .player-status-effects__smoke'),
+    ).toHaveCount(0);
+    const planes = await card.evaluate((el) => {
+      const z = (selector: string) => Number(getComputedStyle(el.querySelector(selector)!).zIndex);
+      return {
+        smoke: z('.broadcast-smoke'),
+        media: z('.player-rail__avatar'),
+        info: [
+          '.player-rail__identity',
+          '.player-rail__health-bar',
+          '.player-rail__weapons',
+          '.player-rail__equipment',
+          '.player-rail__utility-icons',
+        ].map(z),
+      };
+    });
+    expect(planes.smoke).toBeGreaterThan(planes.media);
+    expect(planes.info.every((z) => z > planes.smoke)).toBe(true);
+  }
+  // Presentation-only observer switch; retain the captured player smoke values.
+  snapshot.payload.observedPlayerSourceId = affected[0]!.sourcePlayerId;
+  await page.reload();
+  const focus = page.locator('.focused-player__face').last();
+  await expect(focus.locator('.broadcast-smoke')).toHaveAttribute('data-smoked', 'true');
+  const visible = await focus.evaluate((el) => {
+    const plane = Number(getComputedStyle(el.querySelector('.broadcast-smoke')!).zIndex);
+    return [
+      '.focused-player__identity',
+      '.focused-player__vitals',
+      '.focused-player__active',
+      '.focused-player__ammo',
+    ].every((selector) => Number(getComputedStyle(el.querySelector(selector)!).zIndex) > plane);
+  });
+  expect(visible).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(focus.locator('.player-status-effects__smoke')).toHaveCSS('animation-name', 'none');
+  snapshot = sample('real-post-explosion-freezetime');
+  await page.reload();
+  await expect(page.locator('.broadcast-smoke[data-smoked="true"]')).toHaveCount(0);
 });

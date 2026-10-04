@@ -9,8 +9,16 @@
   --mizar-bg-surface: var(--mizar-color-gray-900);
   --mizar-border-default: var(--mizar-color-gray-700);
   --mizar-border-strong: var(--mizar-color-gray-500);
+  --mizar-brand-companion: var(--mizar-color-brand-gold);
+  --mizar-brand-depth: var(--mizar-color-brand-depth);
+  --mizar-brand-front: var(--mizar-color-brand-ice);
+  --mizar-brand-primary: var(--mizar-color-brand-cobalt);
   --mizar-broadcast-bg-canvas: var(--mizar-bg-canvas);
   --mizar-broadcast-bg-surface: var(--mizar-bg-surface);
+  --mizar-broadcast-brand-companion: var(--mizar-brand-companion);
+  --mizar-broadcast-brand-depth: var(--mizar-brand-depth);
+  --mizar-broadcast-brand-front: var(--mizar-brand-front);
+  --mizar-broadcast-brand-primary: var(--mizar-brand-primary);
   --mizar-broadcast-density-gap: var(--mizar-layout-gap);
   --mizar-broadcast-fg-primary: var(--mizar-fg-primary);
   --mizar-color-amber-300: rgb(251 191 36 / 1);
@@ -18,6 +26,10 @@
   --mizar-color-blue-300: rgb(125 211 252 / 1);
   --mizar-color-blue-400: rgb(56 189 248 / 1);
   --mizar-color-blue-800: rgb(18 54 74 / 1);
+  --mizar-color-brand-cobalt: rgb(49 128 243 / 1);
+  --mizar-color-brand-depth: rgb(23 58 145 / 1);
+  --mizar-color-brand-gold: rgb(255 210 122 / 1);
+  --mizar-color-brand-ice: rgb(224 242 255 / 1);
   --mizar-color-cyan-300: rgb(118 207 219 / 1);
   --mizar-color-gray-0: rgb(255 255 255 / 1);
   --mizar-color-gray-300: rgb(195 206 218 / 1);
