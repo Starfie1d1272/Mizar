@@ -815,12 +815,8 @@ export function HudConsolePage() {
         <header className="hud-console__header">
           <div>
             <p className="hud-console__eyebrow">Mizar</p>
-            <h1>{reviewingDesign ? 'HUD 设计预览' : 'HUD 编辑器'}</h1>
-            <p className="hud-console__intro">
-              {reviewingDesign
-                ? '同一回合，两种设计。播放完整回合，或保持当前时刻切换比较。'
-                : '调整预设与布局，预览确认后启用。'}
-            </p>
+            <h1>HUD 编辑器</h1>
+            <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
           </div>
           <div className="hud-console__header-meta">
             <span>连接状态</span>
@@ -854,7 +850,7 @@ export function HudConsolePage() {
                   value={mapBackground ? 'map' : 'plain'}
                   onChange={(event) => setMapBackground(event.target.value === 'map')}
                 >
-                  <option value="map">地图画面</option>
+                  <option value="map">静态地图</option>
                   <option value="plain">纯色底板</option>
                 </Select>
               ) : null}
@@ -1099,9 +1095,7 @@ export function HudConsolePage() {
               snapshot={activeSnapshot}
             />
             <p className="hud-console__preview-caption">
-              {reviewingDesign
-                ? `${HUD_DESIGN_CHOICES.find((choice) => choice.id === design)!.description} · 设计预览，不改变已启用 HUD${mapBackground ? ' · 地图背景为静态素材，HUD 为真实数据回放' : ''}`
-                : '1920 × 1080 · 10px 网格'}
+              {reviewingDesign ? '1920 × 1080 · 仅预览' : '1920 × 1080 · 10px 网格'}
             </p>
           </div>
 
