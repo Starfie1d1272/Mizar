@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getProgramFixture } from '../src/program/fixtures';
 import {
   buildPlayerRailsPresentation,
+  weaponPresentation,
   lossBonusForConsecutiveRoundLosses,
 } from '../src/program/widgets/player-rails/presentation';
 
@@ -160,4 +161,13 @@ describe('Player Rails presentation selector', () => {
       utilityAvailable: false,
     });
   });
+});
+
+it('preserves observed held/holstered weapon state instead of highlighting the primary slot', () => {
+  const weapon = payload().players.flatMap((player) => player.weapons)[0]!;
+  expect(weaponPresentation({ ...weapon, name: 'weapon_ak47', state: 'active' }).active).toBe(true);
+  expect(weaponPresentation({ ...weapon, name: 'weapon_ak47', state: 'holstered' }).active).toBe(
+    false,
+  );
+  expect(weaponPresentation({ ...weapon, name: 'weapon_ak47', state: null }).active).toBe(false);
 });

@@ -295,11 +295,29 @@ function FocusedPlayerFace({
           </div>
         ) : (
           <>
-            <ActiveItemSlot
-              cursor={cursor}
-              player={p}
-              presentationRevision={presentationRevision}
-            />
+            {design === 'perfectworld' ? (
+              <div className="shanghai-focus-utility" aria-label="道具">
+                {p.utility
+                  .flatMap((item) =>
+                    Array.from({ length: item.count }, (_, index) => (
+                      <span
+                        key={`${item.sourceWeaponId}:${index}`}
+                        data-held={item.active && index === 0}
+                      >
+                        <Icon asset={item.asset} />
+                      </span>
+                    )),
+                  )
+                  .slice(0, 4)}
+                {p.c4 ? <Icon asset={p.c4} /> : null}
+              </div>
+            ) : (
+              <ActiveItemSlot
+                cursor={cursor}
+                player={p}
+                presentationRevision={presentationRevision}
+              />
+            )}
             <span
               aria-hidden="true"
               className="focused-player__action-gap focused-player__action-gap--b"
@@ -353,6 +371,11 @@ function FocusedPlayerFace({
               <Icon asset={p.armorAsset} />
               <b>{p.armor ?? '—'}</b>
             </span>
+            {design === 'perfectworld' && p.kit ? (
+              <span className="shanghai-focus-kit">
+                <Icon asset={p.kit} />
+              </span>
+            ) : null}
           </div>
         )}
       </div>

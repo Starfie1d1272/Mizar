@@ -68,28 +68,29 @@ function TeamLogo({ team }: { readonly team: MatchHeaderTeamPresentation }) {
   );
 }
 
-function TeamName({ name }: { readonly name: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
+function useBalancedTeamNames(names: string, design: string) {
+  const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
+    const nodes = [
+      ...(ref.current?.querySelectorAll<HTMLElement>('.match-header__team-name') ?? []),
+    ];
     const fit = () => {
-      node.style.fontSize = '';
-      const base = Number.parseFloat(getComputedStyle(node).fontSize);
-      if (node.scrollWidth > node.clientWidth && node.clientWidth > 0)
-        node.style.fontSize = `${(base * node.clientWidth) / node.scrollWidth}px`;
+      for (const node of nodes) node.style.fontSize = '';
+      const sizes = nodes
+        .filter((node) => node.clientWidth > 0)
+        .map((node) => {
+          const base = Number.parseFloat(getComputedStyle(node).fontSize);
+          return base * Math.min(1, node.clientWidth / Math.max(1, node.scrollWidth));
+        });
+      if (sizes.length) for (const node of nodes) node.style.fontSize = `${Math.min(...sizes)}px`;
     };
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
-    observer?.observe(node);
+    for (const node of nodes) observer?.observe(node);
     void document.fonts?.ready.then(fit);
     fit();
     return () => observer?.disconnect();
-  }, [name]);
-  return (
-    <span ref={ref} className="match-header__team-name" title={name}>
-      {name}
-    </span>
-  );
+  }, [names, design]);
+  return ref;
 }
 
 function Team({
@@ -110,7 +111,9 @@ function Team({
         {options.showTeamLogo ? (
           <TeamLogo key={`${team.key}:${team.logoUrl ?? ''}`} team={team} />
         ) : null}
-        <TeamName name={team.name} />
+        <span className="match-header__team-name" title={team.name}>
+          {team.name}
+        </span>
       </div>
       <div
         aria-label={`${team.name} score`}
@@ -149,6 +152,7 @@ export function TopScoreBar({
   const options = topScoreBarSettingsSchema.parse(settings.settings);
   const p = buildMatchHeaderPresentation(snapshot.payload);
   const timeout = p.timeoutPanel;
+  const nameContainer = useBalancedTeamNames(`${p.teamA.name}:${p.teamB.name}`, design);
   const shanghai = design === 'perfectworld';
   const objective =
     p.objective.mode !== 'normal' &&
@@ -157,6 +161,7 @@ export function TopScoreBar({
     p.clockTone !== 'paused';
   return (
     <section
+      ref={nameContainer}
       aria-label="比赛头部"
       className="match-header match-header__top-score"
       data-match-header-widget="top-score-bar"
@@ -350,15 +355,20 @@ function ShanghaiPanels({
       ) : null}
       {options.showObjectiveAuxiliary && active && action ? (
         <>
-          {p.objective.action !== null ? (
+          {action.kind === 'defuse' && p.objective.action !== null ? (
             <div className="shanghai-action-track" data-owner={actionOwner} data-kind={action.kind}>
               <i style={{ width: `${p.objective.action * 100}%` }} />
             </div>
           ) : null}
           <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
+            {action.kind === 'defuse' ? (
+              <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
+            ) : null}
             <strong>{actor?.displayName ?? 'PLAYER'}</strong>
             <span>{action.kind === 'plant' ? 'PLANTING BOMB' : 'DEFUSING THE BOMB'}</span>
-            <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
+            {action.kind === 'plant' ? (
+              <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
+            ) : null}
           </div>
         </>
       ) : winner ? (

@@ -507,7 +507,12 @@ export function parseHudLayout(value: unknown): HudLayout {
       if (placement.scale !== undefined) throw new Error(`组件 ${id} 不允许持久化 scale`);
       if (
         placement.size !== undefined &&
-        !(id === 'top-score-bar' && placement.size.width === 800 && placement.size.height === 210)
+        !(
+          id === 'top-score-bar' &&
+          placement.size.width === 800 &&
+          placement.size.height === 210
+        ) &&
+        !(id === 'focused-player' && placement.size.width === 342 && placement.size.height === 192)
       )
         throw new Error(`组件 ${id} 不允许调整尺寸`);
     } else if (descriptor.resizePolicy === 'square') {
@@ -840,7 +845,13 @@ export function getBuiltinLayouts(): HudLayout[] {
           offsetY: 58,
           size: { width: 360, height: 360 },
         },
-        'focused-player': { visible: true, anchor: 'bottom-center', offsetX: 0, offsetY: -20 },
+        'focused-player': {
+          visible: true,
+          anchor: 'bottom-center',
+          offsetX: 0,
+          offsetY: -20,
+          size: { width: 342, height: 192 },
+        },
       },
     },
   ];

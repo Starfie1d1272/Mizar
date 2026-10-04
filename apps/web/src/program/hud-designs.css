@@ -1067,15 +1067,17 @@
   left: 8px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
-  left: -70px;
-  top: 1px;
+  left: -80px;
+  top: 0;
+  width: 24px;
+  height: 24px;
   z-index: 3;
 }
 .hud-widget-design[data-hud-design='perfectworld']
   .player-rail--right
   .player-rail__round-kill-slot {
   left: auto;
-  right: -70px;
+  right: -80px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__avatar,
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__life-state {
@@ -1746,7 +1748,7 @@
   background: var(--mizar-hud-surface-primary);
 }
 .shanghai-series-stage {
-  flex: 0 0 160px;
+  flex: 0 0 190px;
   padding-left: 6px;
   box-sizing: border-box;
   font-size: 12px;
@@ -1871,12 +1873,12 @@
 }
 .shanghai-series-detail {
   display: grid;
-  grid-template-columns: 84px 60px 1fr;
+  grid-template-columns: 80px 60px 96px 80px;
   align-items: center;
   height: 46px;
-  gap: 12px;
+  gap: 8px;
   border-radius: 4px;
-  background: var(--mizar-hud-surface-primary);
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
   color: var(--mizar-hud-text-primary);
   font-size: 14px;
 }
@@ -1897,4 +1899,164 @@
   height: 34px;
   object-fit: contain;
   justify-self: center;
+}
+
+/* Reserve the outer corner for round kills; square Steam images never sit under badges. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 60px;
+  height: 60px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__avatar img {
+  right: auto;
+  left: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge svg {
+  width: 24px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo-b
+  .match-header__team-name {
+  text-align: right;
+}
+/* Match the reference's bright held weapon and subdued holstered inventory. */
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='false'] {
+  opacity: 0.45;
+}
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='true'] {
+  opacity: 1;
+  color: var(--mizar-hud-text-primary);
+}
+
+/* Geometry calibrated against Shanghai01–05, 2940px source / 1920px canvas. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-a {
+  padding: 0 4px 0 24px;
+  gap: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  padding: 0 24px 0 4px;
+  gap: 12px;
+}
+.shanghai-event-panel[data-kind='plant'] {
+  top: 60px;
+}
+.shanghai-event-panel[data-kind='defuse'] b {
+  font-size: 30px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__ring > svg,
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__caption {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
+  width: 342px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
+  width: 192px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  left: 192px;
+  width: 150px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__dead-state,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  left: 204px;
+  width: 126px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals-values {
+  justify-content: flex-start;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
+  font-size: 12px;
+  gap: 6px;
+  bottom: 36px;
+}
+.shanghai-focus-utility {
+  position: absolute;
+  left: 204px;
+  top: 90px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+}
+.shanghai-focus-utility > span {
+  opacity: 0.55;
+}
+.shanghai-focus-utility > span[data-held='true'] {
+  opacity: 1;
+}
+.shanghai-focus-utility .focused-player__icon {
+  width: 20px;
+  height: 26px;
+}
+
+.shanghai-series-detail--heading {
+  height: 30px;
+}
+.shanghai-series-detail--heading svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  justify-self: center;
+}
+.shanghai-series-detail > strong,
+.shanghai-series-detail > span {
+  text-align: center;
+  font-size: 12px;
+}
+
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side]
+  .player-rail__avatar {
+  background: var(--mizar-hud-surface-primary);
+}
+
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__dead-stats {
+  left: 18px;
+  right: auto;
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd,
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__kd {
+  left: auto;
+  right: 18px;
+  font-size: 14px;
+}
+
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  padding-inline: 0;
+  font-size: 11px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__armor .focused-player__icon {
+  width: 22px;
+  height: 22px;
+}
+.shanghai-focus-kit {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-focus-kit .focused-player__icon {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats small,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats b {
+  font-size: 14px;
 }

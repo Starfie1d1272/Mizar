@@ -98,11 +98,13 @@ function MaskIcon({
   className = '',
   label,
   weaponVisualRole,
+  active,
 }: {
   readonly asset: PlayerRailAsset | null;
   readonly className?: string;
   readonly label: string;
   readonly weaponVisualRole?: WeaponVisualRole;
+  readonly active?: boolean | undefined;
 }) {
   if (asset === null) return null;
   const style = { '--player-rail-icon': `url("${asset.outputPath}")` } as CSSProperties;
@@ -112,6 +114,7 @@ function MaskIcon({
       className={`player-rail__icon ${className}`.trim()}
       data-asset-id={asset.canonicalKey}
       data-weapon-visual-role={weaponVisualRole}
+      data-weapon-active={active}
       role="img"
       style={style}
     />
@@ -129,6 +132,7 @@ function WeaponIcon({
   return (
     <MaskIcon
       asset={weapon?.asset ?? null}
+      active={weapon?.active}
       className={visualRole === undefined ? '' : `is-${visualRole}`}
       label={weapon?.name ?? 'Weapon'}
       {...(visualRole === undefined ? {} : { weaponVisualRole: visualRole })}
@@ -209,13 +213,14 @@ function UtilityIcons({
 }) {
   const counts = new Map<
     PlayerCardPresentation['utility'][number]['family'],
-    { count: number; asset: PlayerRailAsset | null }
+    { count: number; asset: PlayerRailAsset | null; active: boolean }
   >();
   for (const utility of player.utility) {
     const current = counts.get(utility.family);
     counts.set(utility.family, {
       count: (current?.count ?? 0) + utility.count,
       asset: current?.asset ?? utility.asset,
+      active: Boolean(current?.active || utility.active),
     });
   }
 
@@ -227,6 +232,7 @@ function UtilityIcons({
       asset,
       family,
       key: `${family}-${index}`,
+      active: utility.active && index === 0,
     }));
   }).slice(0, 4);
   const signature = icons
@@ -244,7 +250,7 @@ function UtilityIcons({
           data-motion-phase={utility.motionPhase}
           key={utility.key}
         >
-          <MaskIcon asset={utility.asset} label={utility.family} />
+          <MaskIcon asset={utility.asset} label={utility.family} active={utility.active} />
         </span>
       ))}
     </div>
