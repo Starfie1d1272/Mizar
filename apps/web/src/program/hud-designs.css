@@ -1,0 +1,858 @@
+/* Two review compositions over the same production widgets and fixed envelopes.
+ * Shared colors remain resolved Theme values. No gameplay clocks live here. */
+.gameplay-hud.hud-redraw .player-rail {
+  width: 420px;
+  overflow: visible;
+}
+.gameplay-hud.hud-redraw .player-rail--right {
+  margin-left: auto;
+}
+.gameplay-hud.hud-redraw .player-rail__header,
+.gameplay-hud.hud-redraw .player-rail__players,
+.gameplay-hud.hud-redraw .player-rail__summary,
+.gameplay-hud.hud-redraw .player-rail__economy,
+.gameplay-hud.hud-redraw .player-rail__utility {
+  width: 100%;
+}
+.gameplay-hud.hud-redraw .player-rail__summary-slot {
+  height: 42px;
+  flex-basis: 42px;
+}
+.gameplay-hud.hud-redraw .player-rail__header {
+  height: 24px;
+  flex-basis: 24px;
+  background: transparent;
+  padding: 0 8px;
+}
+.gameplay-hud.hud-redraw .player-rail__header strong {
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: var(--mizar-hud-text-primary);
+  text-shadow: 0 1px 4px var(--mizar-hud-surface-strong);
+}
+.gameplay-hud.hud-redraw .player-rail__header::before {
+  display: none;
+}
+.gameplay-hud.hud-redraw .player-rail__players {
+  height: 412px;
+  flex-basis: 412px;
+  grid-template-rows: repeat(5, 76px);
+  gap: 8px;
+}
+.gameplay-hud.hud-redraw .player-rail__card,
+.gameplay-hud.hud-redraw .player-rail__empty-card {
+  width: 100%;
+  height: 76px;
+  flex-basis: 76px;
+}
+.gameplay-hud.hud-redraw .player-rail__avatar,
+.gameplay-hud.hud-redraw .player-rail__avatar img {
+  width: 64px;
+  height: 76px;
+  flex-basis: 64px;
+  object-fit: cover;
+}
+.gameplay-hud.hud-redraw .player-rail__body {
+  display: block;
+  flex: 1 1 auto;
+  width: auto;
+  height: 76px;
+  isolation: isolate;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud.hud-redraw .player-rail__body::before {
+  display: none;
+}
+.gameplay-hud.hud-redraw .player-rail__identity {
+  position: absolute;
+  inset: 7px 28px auto 10px;
+  height: 32px;
+  padding: 0;
+  z-index: 1;
+}
+.gameplay-hud.hud-redraw .player-rail__card[data-physical-side='right'] .player-rail__identity {
+  inset: 7px 10px auto 28px;
+  padding: 0;
+}
+.gameplay-hud.hud-redraw .player-rail__card[data-physical-side='left'] .player-rail__identity {
+  padding: 0;
+}
+.gameplay-hud.hud-redraw .player-rail__name {
+  max-width: 100px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+.gameplay-hud.hud-redraw .player-rail__health-value {
+  margin-left: auto;
+  font-size: 36px;
+  line-height: 38px;
+  color: var(--mizar-hud-text-primary);
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__health-value {
+  margin-right: auto;
+  margin-left: 0;
+}
+.gameplay-hud.hud-redraw .player-rail__health-bar,
+.gameplay-hud.hud-redraw .player-rail__health-spacer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  z-index: -1;
+  background: transparent;
+}
+.gameplay-hud.hud-redraw .player-rail__health-bar > span:not(.combat-damage-ghost) {
+  height: 100%;
+  background: color-mix(in srgb, var(--mizar-side-ct) 64%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud.hud-redraw
+  .player-rail__card[data-side='T']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: color-mix(in srgb, var(--mizar-side-t) 62%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud.hud-redraw
+  .player-rail__card.is-low-health
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: color-mix(
+    in srgb,
+    var(--mizar-hud-state-danger) 80%,
+    var(--mizar-hud-surface-strong)
+  );
+}
+.gameplay-hud.hud-redraw .player-rail__health-bar > .combat-damage-ghost,
+.gameplay-hud.hud-redraw .player-rail__health-spacer > .combat-damage-ghost {
+  height: 100%;
+}
+.gameplay-hud.hud-redraw .player-rail__combat,
+.gameplay-hud.hud-redraw .player-rail__context,
+.gameplay-hud.hud-redraw .player-rail__loadout,
+.gameplay-hud.hud-redraw .player-rail__bottom {
+  display: contents;
+}
+.gameplay-hud.hud-redraw .player-rail__weapons {
+  position: absolute;
+  top: 10px;
+  left: 136px;
+  width: 106px;
+  height: 26px;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__weapons {
+  right: 136px;
+  left: auto;
+}
+.gameplay-hud.hud-redraw .player-rail__weapon-icons {
+  width: 100%;
+  height: 100%;
+}
+.gameplay-hud.hud-redraw
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 106px;
+  max-width: 106px;
+  height: 26px;
+}
+.gameplay-hud.hud-redraw .player-rail__icon[data-weapon-visual-role='secondary-pistol'] {
+  display: none;
+}
+.gameplay-hud.hud-redraw .player-rail__kd {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  height: 18px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 3px;
+  opacity: 0.8;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__kd {
+  left: auto;
+  right: 10px;
+}
+.gameplay-hud.hud-redraw .player-rail__money {
+  position: absolute;
+  left: 83px;
+  bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mizar-hud-text-primary);
+  opacity: 0.82;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__money {
+  left: auto;
+  right: 83px;
+}
+.gameplay-hud.hud-redraw .player-rail__spent {
+  display: none;
+}
+.gameplay-hud.hud-redraw .player-rail__equipment {
+  position: absolute;
+  right: 118px;
+  bottom: 6px;
+  width: 62px;
+  height: 26px;
+  justify-content: flex-end;
+  opacity: 0.85;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__equipment {
+  left: 118px;
+  right: auto;
+  justify-content: flex-start;
+}
+.gameplay-hud.hud-redraw .player-rail__utility-icons {
+  position: absolute;
+  right: 28px;
+  bottom: 6px;
+  width: 82px;
+  height: 26px;
+  gap: 0;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__utility-icons {
+  left: 28px;
+  right: auto;
+}
+.gameplay-hud.hud-redraw .player-rail__round-kill-slot {
+  position: absolute;
+  top: 1px;
+  left: 110px;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 110px;
+}
+.gameplay-hud.hud-redraw .player-rail__endcap {
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 76px;
+  border: 0;
+  background: var(--mizar-side-ct);
+}
+.gameplay-hud.hud-redraw .player-rail__endcap[data-side='T'] {
+  background: var(--mizar-side-t);
+}
+.gameplay-hud.hud-redraw .player-rail__endcap--right {
+  right: auto;
+  left: 0;
+}
+.gameplay-hud.hud-redraw .player-rail__endcap strong {
+  color: var(--mizar-hud-surface-strong);
+  font-size: 13px;
+}
+.gameplay-hud.hud-redraw .player-rail__endcap[data-observed='true'] {
+  background: var(--mizar-hud-text-primary);
+}
+.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__body {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 82%, transparent);
+}
+.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__avatar {
+  opacity: 0.5;
+}
+.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__name,
+.gameplay-hud.hud-redraw .player-rail__life-state {
+  color: var(--mizar-hud-text-muted);
+}
+.gameplay-hud.hud-redraw .player-rail__life-state {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__life-state {
+  margin-left: 0;
+  margin-right: auto;
+}
+.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__endcap {
+  background: var(--mizar-hud-surface-primary);
+}
+.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__endcap strong {
+  color: var(--mizar-hud-text-muted);
+}
+.gameplay-hud.hud-redraw .player-rail__dead-stats {
+  position: absolute;
+  right: 24px;
+  bottom: 6px;
+  width: auto;
+  padding: 0;
+  gap: 8px;
+}
+.gameplay-hud.hud-redraw .player-rail--right .player-rail__dead-stats {
+  right: auto;
+  left: 24px;
+}
+.gameplay-hud.hud-redraw .player-rail__dead-stats b {
+  color: var(--mizar-hud-text-muted);
+  font-size: 13px;
+}
+.gameplay-hud.hud-redraw .player-rail__utility {
+  grid-template-columns: repeat(4, 1fr);
+}
+.gameplay-hud.hud-redraw .player-rail__summary-utility {
+  width: auto;
+}
+.gameplay-hud.hud-redraw .player-rail__summary.is-utility-only .player-rail__utility {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 70%, transparent);
+}
+
+/* EWC reference: inward tapered cards, separate triangular observer tabs,
+ * rectangular logo wings around a light trapezoidal score field. */
+/* Clip paint, never the content: the round-kill marker sits above the card. */
+.gameplay-hud[data-hud-design='arena'] .player-rail__card,
+.gameplay-hud[data-hud-design='arena'] .player-rail__card .player-rail__body {
+  overflow: visible;
+  background: transparent;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__body::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  opacity: 1;
+  width: 100%;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__card--dead .player-rail__body::before {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 82%, transparent);
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__card > .player-status-effects,
+.gameplay-hud[data-hud-design='arena'] .player-rail__card > .player-combat-transition,
+.gameplay-hud[data-hud-design='arena'] .player-rail__body::before,
+.gameplay-hud[data-hud-design='arena'] .player-rail__health-bar,
+.gameplay-hud[data-hud-design='arena'] .player-rail__health-spacer {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 0 100%);
+}
+.gameplay-hud[data-hud-design='arena']
+  .player-rail--right
+  .player-rail__card
+  > .player-status-effects,
+.gameplay-hud[data-hud-design='arena']
+  .player-rail--right
+  .player-rail__card
+  > .player-combat-transition,
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__body::before,
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__health-bar,
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__health-spacer {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 44px 100%);
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-slot {
+  top: -8px;
+  left: 118px;
+  width: 18px;
+  height: 16px;
+  z-index: 6;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 118px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-badge,
+.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-badge svg {
+  width: 16px;
+  height: 16px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__avatar,
+.gameplay-hud[data-hud-design='arena'] .player-rail__avatar img {
+  width: 132px;
+  flex-basis: 132px;
+  object-fit: contain;
+  background: var(--mizar-hud-surface-strong);
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__name {
+  max-width: 78px;
+  font-family: 'Barlow Condensed', var(--mizar-hud-font-family);
+  font-size: 20px;
+  text-transform: uppercase;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__weapons {
+  left: 96px;
+  width: 76px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__weapons {
+  right: 96px;
+  left: auto;
+}
+.gameplay-hud[data-hud-design='arena']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 76px;
+  max-width: 76px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__kd {
+  bottom: 25px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__money {
+  left: 10px;
+  bottom: 4px;
+  font-size: 17px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__money {
+  right: 10px;
+  left: auto;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__equipment {
+  right: 48px;
+  width: 54px;
+  bottom: 4px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__equipment {
+  left: 48px;
+  right: auto;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__endcap {
+  width: 44px;
+  height: 38px;
+  align-items: flex-start;
+  padding-top: 2px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__endcap strong {
+  font-size: 18px;
+  line-height: 22px;
+  height: 22px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__identity {
+  right: 48px;
+}
+.gameplay-hud[data-hud-design='arena']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  left: 48px;
+  right: 10px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__utility-icons {
+  right: 108px;
+  bottom: 4px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__utility-icons {
+  left: 108px;
+  right: auto;
+}
+/* Death statistics stay inside the tapered card's rectangular safe area. */
+.gameplay-hud[data-hud-design='arena'] .player-rail__dead-stats {
+  right: 58px;
+  bottom: 5px;
+  gap: 4px;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__dead-stats {
+  left: 58px;
+  right: auto;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__card--dead .player-rail__endcap {
+  display: none;
+}
+
+.gameplay-hud[data-hud-design='arena'] .match-header__score-shell {
+  background: var(--mizar-hud-surface-strong);
+  clip-path: none;
+  overflow: visible;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__score-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0 72px;
+  background: var(--mizar-hud-text-primary);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 40px) 100%, 40px 100%);
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--logo {
+  background: transparent;
+}
+/* Reference centers at 32.5% / 67.5%; the lower trapezoid corners start at 23.3%. */
+.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--score-a {
+  left: 112px;
+  width: 88px;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--score-b {
+  left: 280px;
+  width: 88px;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span {
+  width: 14px;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__center,
+.gameplay-hud[data-hud-design='arena'] .match-header__map-score {
+  color: var(--mizar-hud-surface-strong);
+}
+.gameplay-hud.hud-redraw .match-header__map-score {
+  font-size: 52px;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+}
+.gameplay-hud.hud-redraw .match-header__clock-value {
+  font-size: 29px;
+  font-weight: 750;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 20%, transparent);
+  transform: skewX(-18deg);
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span[data-series-win-slot='won'] {
+  background: var(--mizar-hud-surface-strong);
+}
+
+/* Studio: narrower rails, a quiet identity band and a lower health field. */
+.gameplay-hud[data-hud-design='studio'] .player-rail {
+  width: 380px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__avatar,
+.gameplay-hud[data-hud-design='studio'] .player-rail__avatar img {
+  width: 52px;
+  flex-basis: 52px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__avatar img {
+  object-fit: contain;
+  background: var(--mizar-hud-surface-strong);
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__identity {
+  top: 2px;
+  height: 28px;
+}
+.gameplay-hud[data-hud-design='studio']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  top: 2px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__name {
+  max-width: 128px;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__body {
+  background: var(--mizar-hud-surface-primary);
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__health-bar {
+  top: 32px;
+  height: 44px;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 22%, transparent);
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__health-value {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  font-size: 32px;
+  line-height: 34px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__health-value {
+  right: auto;
+  left: 0;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__weapons {
+  top: 38px;
+  left: 10px;
+  width: 88px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__weapons {
+  left: auto;
+  right: 10px;
+}
+.gameplay-hud[data-hud-design='studio']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 88px;
+  max-width: 88px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__equipment {
+  right: 174px;
+  width: 54px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__equipment {
+  left: 174px;
+  right: auto;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__utility-icons {
+  right: 100px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__utility-icons {
+  left: 100px;
+  right: auto;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__kd {
+  top: 7px;
+  bottom: auto;
+  left: auto;
+  right: 29px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__kd {
+  right: auto;
+  left: 29px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__money {
+  display: none;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__card--freezetime .player-rail__money {
+  display: block;
+  top: 10px;
+  left: 154px;
+  bottom: auto;
+  font-size: 11px;
+}
+.gameplay-hud[data-hud-design='studio']
+  .player-rail--right
+  .player-rail__card--freezetime
+  .player-rail__money {
+  right: 154px;
+  left: auto;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__endcap {
+  width: 20px;
+  height: 30px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__card--dead .player-rail__kd {
+  top: 44px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__dead-stats {
+  right: auto;
+  left: 10px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__dead-stats {
+  left: auto;
+  right: 10px;
+}
+.gameplay-hud[data-hud-design='studio'] .match-header__score-shell {
+  border-bottom: 2px solid color-mix(in srgb, var(--mizar-hud-text-primary) 30%, transparent);
+}
+.gameplay-hud[data-hud-design='studio'] .match-header__score-zone--score[data-side='CT'] {
+  background: color-mix(in srgb, var(--mizar-side-ct) 20%, transparent);
+}
+.gameplay-hud[data-hud-design='studio'] .match-header__score-zone--score[data-side='T'] {
+  background: color-mix(in srgb, var(--mizar-side-t) 20%, transparent);
+}
+
+.gameplay-hud[data-hud-design='studio'] .player-rail__utility-icons {
+  width: 64px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__utility-item {
+  width: 16px;
+  flex-basis: 16px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__utility-item .player-rail__icon {
+  width: 15px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__equipment-slot {
+  width: 14px;
+  flex-basis: 14px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__equipment-slot .player-rail__icon {
+  max-width: 14px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail__round-kill-slot {
+  left: 146px;
+}
+.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__round-kill-slot {
+  right: 146px;
+  left: auto;
+}
+
+/* POV: identity above one combat row; statistics become a small footer. */
+.gameplay-hud.hud-redraw .focused-player {
+  margin-top: 40px;
+  height: 136px;
+}
+.gameplay-hud.hud-redraw .focused-player__face {
+  display: block;
+  background: var(--mizar-hud-surface-primary);
+}
+.gameplay-hud.hud-redraw .focused-player__identity {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 36px;
+  background: color-mix(in srgb, var(--mizar-side-ct) 40%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud.hud-redraw .focused-player__face[data-side='T'] .focused-player__identity {
+  background: color-mix(in srgb, var(--mizar-side-t) 40%, var(--mizar-hud-surface-strong));
+}
+.gameplay-hud.hud-redraw .focused-player__name {
+  font-size: 22px;
+  font-weight: 800;
+}
+.gameplay-hud.hud-redraw .focused-player__metrics {
+  position: absolute;
+  top: 112px;
+  left: 12px;
+  right: 12px;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.gameplay-hud.hud-redraw .focused-player__action,
+.gameplay-hud.hud-redraw .focused-player__face[data-dead='true'] .focused-player__action {
+  position: absolute;
+  top: 42px;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 64px;
+  padding: 0;
+}
+.gameplay-hud.hud-redraw .focused-player__media,
+.gameplay-hud.hud-redraw .focused-player__media img {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  width: 56px;
+  height: 64px;
+}
+.gameplay-hud.hud-redraw .focused-player__media img {
+  left: 0;
+}
+.gameplay-hud.hud-redraw .focused-player__observer-tile-number {
+  width: 56px;
+  height: 64px;
+  line-height: 64px;
+}
+.gameplay-hud.hud-redraw .focused-player__active {
+  position: absolute;
+  top: 0;
+  left: 158px;
+  width: 110px;
+  height: 64px;
+}
+.gameplay-hud.hud-redraw .focused-player__active .focused-player__icon {
+  max-width: 104px;
+}
+.gameplay-hud.hud-redraw .focused-player__ammo {
+  position: absolute;
+  right: 12px;
+  top: 0;
+  width: 66px;
+  height: 64px;
+}
+.gameplay-hud.hud-redraw .focused-player__ammo > strong {
+  font-size: 36px;
+}
+.gameplay-hud.hud-redraw .focused-player__vitals {
+  position: absolute;
+  top: 42px;
+  left: 82px;
+  width: 68px;
+  height: 64px;
+  padding: 0;
+}
+.gameplay-hud.hud-redraw .focused-player__vitals-values {
+  flex-direction: column;
+  align-items: flex-start;
+  height: 64px;
+}
+.gameplay-hud.hud-redraw .focused-player__health-cluster {
+  width: 68px;
+  height: 42px;
+}
+.gameplay-hud.hud-redraw .focused-player__hp {
+  font-size: 36px;
+  line-height: 38px;
+}
+.gameplay-hud.hud-redraw .focused-player__health-track {
+  width: 54px;
+  height: 3px;
+}
+.gameplay-hud.hud-redraw .focused-player__armor b {
+  font-size: 12px;
+}
+.gameplay-hud.hud-redraw .focused-player__armor .focused-player__icon {
+  width: 14px;
+  height: 14px;
+}
+.gameplay-hud.hud-redraw .focused-player__dead-state {
+  margin-left: 82px;
+  width: 266px;
+  height: 64px;
+  background: transparent;
+  color: var(--mizar-hud-text-muted);
+}
+.gameplay-hud[data-hud-design='studio'] .focused-player {
+  margin-top: 56px;
+  height: 120px;
+}
+.gameplay-hud[data-hud-design='studio'] .focused-player__identity {
+  background: var(--mizar-hud-surface-strong);
+}
+.gameplay-hud[data-hud-design='studio']
+  .focused-player__face[data-side='T']
+  .focused-player__identity {
+  background: var(--mizar-hud-surface-strong);
+}
+.gameplay-hud[data-hud-design='studio'] .focused-player__metrics {
+  display: none;
+}
+
+/* Objective: no perpetual icon bounce. Only a short planted confirmation and
+ * a small urgent indicator; progress still comes from accepted Core samples. */
+.gameplay-hud.hud-redraw .objective-center {
+  animation: none;
+}
+/* Preserve the centered icon and ring; confirmation changes opacity only. */
+.gameplay-hud.hud-redraw .objective-center__icon.is-planted-commit {
+  animation: hud-objective-confirm 280ms ease-out both;
+}
+.gameplay-hud.hud-redraw .objective-center[data-planted-transition='true'] .objective-center__led {
+  animation: none;
+}
+.gameplay-hud.hud-redraw .objective-center__fuse {
+  top: 76px;
+  left: 0;
+  width: 480px;
+  height: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 75%, transparent);
+}
+.gameplay-hud.hud-redraw .objective-center__fuse span {
+  background: var(--mizar-hud-objective-bomb);
+}
+.gameplay-hud.hud-redraw .objective-center__fuse[data-danger='true'] span {
+  background: var(--mizar-hud-state-danger);
+}
+.gameplay-hud[data-hud-design='studio'] .objective-center__fuse {
+  top: 78px;
+  height: 3px;
+}
+@keyframes hud-objective-confirm {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gameplay-hud.hud-redraw .objective-center__icon.is-planted-commit {
+    animation: none !important;
+  }
+}
+
+.gameplay-hud[data-hud-design='arena'] .match-header__map-score,
+.gameplay-hud[data-hud-design='arena'] .match-header__clock-value,
+.gameplay-hud[data-hud-design='arena'] .player-rail__health-value,
+.gameplay-hud[data-hud-design='arena'] .focused-player__hp,
+.gameplay-hud[data-hud-design='arena'] .focused-player__ammo > strong {
+  font-family: var(--mizar-type-family-display);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.gameplay-hud[data-hud-design='arena'] .player-rail__health-value {
+  font-size: 42px;
+}
+.gameplay-hud[data-hud-design='arena'] .match-header__map-score {
+  font-size: 58px;
+}
+.gameplay-hud.hud-redraw .objective-center__fuse span::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--mizar-hud-text-primary);
+  content: '';
+}
+.gameplay-hud.hud-redraw .player-rail__summary {
+  height: 42px;
+  grid-template-rows: 21px 21px;
+}
+.gameplay-hud.hud-redraw .player-rail__economy,
+.gameplay-hud.hud-redraw .player-rail__utility {
+  height: 21px;
+}
