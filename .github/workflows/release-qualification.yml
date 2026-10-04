@@ -37,7 +37,6 @@ jobs:
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          version: 12.3.4
           runtime: node@24
           cache: true
           cache-dependency-path: pnpm-lock.yaml

@@ -103,3 +103,9 @@ PR 使用 changed-surface CI planner；未知、工具链、workflow 和 planner
 ## 设计系统
 
 界面变更先读取 [`docs/design/README.md`](docs/design/README.md)，回答其中的 PR 检查项。品牌、三类界面、设计变量、共享组件、动态颜色与用户文案以该入口为准。复用 `packages/design-tokens` → `apps/web/src/ui/` → `apps/web/src/patterns/`；页面只负责布局与组合，不新增局部主题或旧命名空间。新增共享组件需提供组件样例，并检查键盘操作、可见焦点、减少动效、状态和无障碍。运行 `pnpm design:check`；页面重构时同步删除旧 CSS 和迁移清单项，不增加旧样式额度。
+
+## 依赖安装与更新
+
+依赖维护遵循 [`docs/dependency-maintenance.md`](docs/dependency-maintenance.md)。使用 manifest 指定的 pnpm，日常冻结安装，版本更新时自动生成锁文件；不要手改锁文件或恢复旧文件掩盖依赖变化。
+
+云环境中如存在 `/workspace/.onboarding/activate.sh`，每个 shell 执行仓库命令前先 source 该文件，以选择可写缓存和 manifest 对应的包管理器。

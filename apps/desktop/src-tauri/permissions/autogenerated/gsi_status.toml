@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gsi-status"
+description = "Enables the gsi_status command without any pre-configured scope."
+commands.allow = ["gsi_status"]
+
+[[permission]]
+identifier = "deny-gsi-status"
+description = "Denies the gsi_status command without any pre-configured scope."
+commands.deny = ["gsi_status"]

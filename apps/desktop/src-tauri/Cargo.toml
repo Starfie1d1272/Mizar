@@ -5,17 +5,17 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-tauri = { version = "=2.11.6", features = ["tray-icon"] }
-tauri-runtime = "=2.11.3"
-tauri-runtime-wry = "=2.11.4"
-tauri-utils = "=2.9.3"
-tauri-macros = "=2.6.3"
-serde_json = "1.0"
+tauri = { version = "=2.12.1", features = ["tray-icon"] }
+tauri-runtime = "=2.12.1"
+tauri-runtime-wry = "=2.12.1"
+tauri-utils = "=2.10.1"
+tauri-macros = "=2.7.1"
+serde_json = "1.0.151"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
-tauri-plugin-dialog = "=2.7.3"
+tauri-plugin-dialog = "=2.8.1"
 
 [build-dependencies]
-tauri-build = "=2.6.3"
+tauri-build = "=2.7.1"
 
 [profile.release]
 strip = true
