@@ -15,6 +15,7 @@ const WIDGET_DIMENSIONS: Record<HudWidgetId, { readonly width: number; readonly 
     radar: { width: 400, height: 400 },
     'focused-player': { width: 360, height: 176 },
     'series-strip': { width: 400, height: 72 },
+    'series-overview': { width: 340, height: 180 },
     'round-history': { width: 560, height: 56 },
     objective: { width: 360, height: 160 },
     'round-result': { width: 500, height: 160 },
@@ -33,6 +34,7 @@ export const DEFAULT_PLACEMENTS: Record<HudWidgetId, HudWidgetPlacement> = {
   },
   'focused-player': { visible: true, anchor: 'bottom-center', offsetX: 0, offsetY: -28 },
   'series-strip': { visible: true, anchor: 'top-left', offsetX: 44, offsetY: 36 },
+  'series-overview': { visible: false, anchor: 'top-right', offsetX: -6, offsetY: 6 },
   'round-history': { visible: false, anchor: 'top-center', offsetX: 0, offsetY: 136 },
   objective: { visible: false, anchor: 'top-right', offsetX: -28, offsetY: 28 },
   'round-result': { visible: false, anchor: 'center', offsetX: 0, offsetY: 210 },
@@ -46,7 +48,7 @@ export function getWidgetDimensions(
   id: HudWidgetId,
   placement: HudWidgetPlacement = DEFAULT_PLACEMENTS[id],
 ): { readonly width: number; readonly height: number } {
-  if (id === 'radar' && placement.size !== undefined) {
+  if (placement.size !== undefined) {
     return { width: placement.size.width, height: placement.size.height };
   }
   return WIDGET_DIMENSIONS[id];

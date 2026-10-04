@@ -587,6 +587,7 @@ function makeLivePayload({
   readonly coverage?: ProgramPayload['coverage'];
 } = {}): ProgramPayload {
   return {
+    bombDamage: { status: 'unavailable', reason: 'fixture', model: null, players: [] },
     status: { telemetry: 'fresh', context, identity },
     match,
     teams,
@@ -623,6 +624,7 @@ function makeSnapshot(payload: ProgramPayload): ProgramSnapshot {
 
 function awaitingPayload(): ProgramPayload {
   return {
+    bombDamage: { status: 'unavailable', reason: 'fixture', model: null, players: [] },
     status: { telemetry: 'awaiting', context: 'unbound', identity: 'unbound' },
     match: null,
     teams: { ct: neutralTeam('CT'), t: neutralTeam('T') },

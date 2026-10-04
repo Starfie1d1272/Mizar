@@ -293,7 +293,7 @@ revision 不变时不得改变。
 必须拒绝 mutation。GSI ingress 继续使用独立的 `GSI_TOKEN`，qualification-only control plane
 继续使用独立的 `QUALIFICATION_CONTROL_TOKEN`。mutation response 必须返回本次 command 的明确
 `resourceId` / `sourceId`，客户端不得从前后资源 ID 集合差推断本次创建的资源。内置 `builtin:*` 资源只读；
-配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v2
+配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v3
 compatibility boundary：严格校验 schema version、exact widget keys、嵌入布局、preset/layout/theme
 引用一致性、descriptor-owned settings，以及颜色、透明度、圆角和字体等 semantic value 的安全域；
 加载时不得通过当前 Theme recipe 重算并要求 canonical bytes 相同。recipe 变化不会改写旧 custom
@@ -547,3 +547,8 @@ reset 都从当前时刻重新开始，不补播旧动画。
 ### 本机制作提示
 
 `GET /local/v1/production-guidance` 为私有、只读、no-store 的本机展示响应，包含当前任务、阶段、地图结果、下一图、图间软提醒和安全的 RivalHub 工作台链接。Bilibili 状态由 Companion 独立 best-effort 查询，仅为本机 UI 使用；失败为 unknown，不进入公开 LiveSnapshot / ReliableEvent 或制作门禁。字段类型见 `ProductionGuidance`，语义见 ADR-0019。
+
+
+### Program v8：站立 C4 预测
+
+`bombDamage` 为 required、有界最多 10 人的 Program-safe derived projection，含 available/unavailable、reason、模型版本与资源 SHA-256、逐人 predicted/unavailable。predicted 保留 standing、damage、hpAfter、lethal、assumptions 与 unknownInputs。只允许当前 Program accepted cursor 的 fresh 同图同代数据；不带 Lookahead。失效时显式 unavailable；真实 player.health 不变。HUD resolved v3 增加 showBombPrediction 与独立 series-overview 组件。

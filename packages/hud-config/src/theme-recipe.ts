@@ -71,9 +71,11 @@ export const HUD_THEME_RECIPE_REGISTRY: readonly HudThemeRecipe[] = deepFreeze([
     id: 'perfectworld',
     colors: {
       ...DEFAULT_THEME_RECIPE.colors,
-      sideCt: '#427bd1',
-      sideT: '#d29a20',
+      sideCt: '#478af0',
+      sideT: '#e6a91d',
       stateSuccess: '#5dde74',
+      objectiveBomb: '#f34d83',
+      objectiveDefuse: '#30c853',
     },
     surfaces: {
       solid: { primary: '#333335', strong: '#242426', opacity: 0.98, borderOpacity: 0.28 },

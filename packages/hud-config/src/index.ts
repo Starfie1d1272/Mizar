@@ -26,7 +26,7 @@ export const HUD_CONFIG_SCHEMA_VERSION = 1 as const;
  * change must not reinterpret an already activated snapshot; incompatible
  * snapshot versions are rejected before 1.0; there is no legacy migration.
  */
-export const HUD_RESOLVED_SNAPSHOT_SCHEMA_VERSION = 2 as const;
+export const HUD_RESOLVED_SNAPSHOT_SCHEMA_VERSION = 3 as const;
 export const HUD_CANVAS_WIDTH = 1920 as const;
 export const HUD_CANVAS_HEIGHT = 1080 as const;
 export const HUD_GRID_SIZE = 10 as const;
@@ -38,6 +38,7 @@ export const HUD_WIDGET_IDS = [
   'radar',
   'focused-player',
   'series-strip',
+  'series-overview',
   'round-history',
   'objective',
   'round-result',
@@ -464,6 +465,7 @@ export const HUD_WIDGET_LABELS: Record<HudWidgetId, string> = {
   radar: '雷达',
   'focused-player': '当前观察选手',
   'series-strip': '系列赛信息',
+  'series-overview': '冻结期地图详情',
   'round-history': '回合历史',
   objective: '目标状态',
   'round-result': '回合结果',
@@ -503,7 +505,11 @@ export function parseHudLayout(value: unknown): HudLayout {
     const descriptor = getHudWidgetDescriptor(id);
     if (descriptor.resizePolicy === 'none') {
       if (placement.scale !== undefined) throw new Error(`组件 ${id} 不允许持久化 scale`);
-      if (placement.size !== undefined) throw new Error(`组件 ${id} 不允许调整尺寸`);
+      if (
+        placement.size !== undefined &&
+        !(id === 'top-score-bar' && placement.size.width === 800 && placement.size.height === 210)
+      )
+        throw new Error(`组件 ${id} 不允许调整尺寸`);
     } else if (descriptor.resizePolicy === 'square') {
       if (placement.scale !== undefined) throw new Error(`组件 ${id} 不允许持久化 scale`);
       if (placement.size === undefined)
@@ -576,7 +582,7 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
   assertUniqueCustomIds(parsed.customThemes, '外观');
   assertUniqueCustomIds(parsed.customPresets, '预设');
   const layouts = new Map<string, HudLayout>([
-    [BUILTIN_LAYOUT_ID, getBuiltinLayout()],
+    ...getBuiltinLayouts().map((item) => [item.id, item] as const),
     ...parsed.customLayouts.map((item) => [item.id, parseHudLayout(item)] as const),
   ]);
   const themes = new Map<string, HudTheme>([
@@ -606,7 +612,7 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
     ...parsed,
     activePreset,
     customPresets: presets,
-    customLayouts: [...layouts.values()].filter((item) => item.id !== BUILTIN_LAYOUT_ID),
+    customLayouts: [...layouts.values()].filter((item) => !item.id.startsWith('builtin:')),
     customThemes: [...themes.values()].filter((item) => !item.id.startsWith('builtin:')),
   };
 }
@@ -622,6 +628,7 @@ export const playerRailSettingsSchema = z.strictObject({
   showLoadout: z.boolean().default(true),
   showUtility: z.boolean().default(true),
   showTeamSummary: z.boolean().default(true),
+  showBombPrediction: z.boolean().default(true),
   deadInformation: z.enum(['stats', 'minimal']).default('stats'),
 });
 export type PlayerRailSettings = z.infer<typeof playerRailSettingsSchema>;
@@ -675,6 +682,7 @@ function widgetContract(id: HudWidgetId) {
     showLoadout: '显示武器与装备',
     showUtility: '显示道具',
     showTeamSummary: '显示队伍汇总',
+    showBombPrediction: 'C4 伤害预测',
     showMedia: '显示头像与观察位',
     showMetrics: '显示 K/A/D/ADR',
     showReserveAmmo: '显示备用弹药',
@@ -780,6 +788,7 @@ export const HUD_WIDGET_REGISTRY: readonly HudWidgetDescriptor[] = deepFreeze(
         id === 'team-ct-rail' ||
         id === 'team-t-rail' ||
         id === 'series-strip' ||
+        id === 'series-overview' ||
         id === 'round-history'
           ? 'implemented'
           : 'unimplemented',
@@ -803,6 +812,40 @@ export function getBuiltinLayout(): HudLayout {
   return cloneJson(BUILTIN_LAYOUT);
 }
 
+export function getBuiltinLayouts(): HudLayout[] {
+  const shanghai = getBuiltinLayout();
+  return [
+    getBuiltinLayout(),
+    {
+      ...shanghai,
+      id: 'builtin:perfectworld-layout',
+      name: '上海布局',
+      widgets: {
+        ...shanghai.widgets,
+        'top-score-bar': {
+          visible: true,
+          anchor: 'top-center',
+          offsetX: 0,
+          offsetY: 6,
+          size: { width: 800, height: 210 },
+        },
+        'team-ct-rail': { visible: true, anchor: 'top-left', offsetX: 20, offsetY: 584 },
+        'team-t-rail': { visible: true, anchor: 'top-right', offsetX: -20, offsetY: 584 },
+        'series-strip': { visible: true, anchor: 'top-left', offsetX: 6, offsetY: 6 },
+        'series-overview': { visible: true, anchor: 'top-right', offsetX: -6, offsetY: 6 },
+        radar: {
+          visible: true,
+          anchor: 'top-left',
+          offsetX: 6,
+          offsetY: 58,
+          size: { width: 360, height: 360 },
+        },
+        'focused-player': { visible: true, anchor: 'bottom-center', offsetX: 0, offsetY: -20 },
+      },
+    },
+  ];
+}
+
 export function getBuiltinTheme(): HudTheme {
   return cloneJson(BUILTIN_THEME);
 }
@@ -819,6 +862,7 @@ export function getBuiltinPresets(): HudPreset[] {
       id: `builtin:${style}-preset`,
       name: BROADCAST_STYLE_LABELS[style],
       themeId: `builtin:${style}-theme`,
+      layoutId: style === 'perfectworld' ? 'builtin:perfectworld-layout' : BUILTIN_LAYOUT_ID,
       widgets: completeWidgetRecord((id) => {
         const descriptor = getHudWidgetDescriptor(id);
         const settings = switchHudWidgetVariant(
@@ -850,7 +894,11 @@ export function getBuiltinResolvedPreset(id: string = BUILTIN_PRESET_ID): HudRes
   const preset = getBuiltinPresets().find((item) => item.id === id);
   if (preset === undefined) throw new Error(`未知内置 HUD 预设：${id}`);
   const theme = getBuiltinThemes().find((item) => item.id === preset.themeId)!;
-  return resolveHudPreset(preset, BUILTIN_LAYOUT, theme);
+  return resolveHudPreset(
+    preset,
+    getBuiltinLayouts().find((layout) => layout.id === preset.layoutId)!,
+    theme,
+  );
 }
 
 const BUILTIN_LAYOUT: HudLayout = deepFreeze({

@@ -2,11 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import {
-  BUILTIN_LAYOUT_ID,
   BUILTIN_PRESET_IDS,
   canonicalJson,
   createDefaultHudConfigDocument,
-  getBuiltinLayout,
+  getBuiltinLayouts,
   getBuiltinResolvedPreset,
   getBuiltinThemes,
   hudThemeSchema,
@@ -130,10 +129,9 @@ function savedResolvedPreset(document: HudConfigDocument): HudResolvedPreset {
     return getBuiltinResolvedPreset(document.activePreset.sourceId);
   const preset = document.customPresets.find((item) => item.id === document.activePreset.sourceId);
   if (preset === undefined) throw new Error('activePreset 引用的自定义预设不存在');
-  const layout =
-    preset.layoutId === BUILTIN_LAYOUT_ID
-      ? getBuiltinLayout()
-      : document.customLayouts.find((item) => item.id === preset.layoutId);
+  const layout = [...getBuiltinLayouts(), ...document.customLayouts].find(
+    (item) => item.id === preset.layoutId,
+  );
   const theme = [...getBuiltinThemes(), ...document.customThemes].find(
     (item) => item.id === preset.themeId,
   );
@@ -261,10 +259,9 @@ export class HudConfigStore {
         }
         const preset = this.document.customPresets.find((item) => item.id === sourceId);
         if (preset === undefined) throw new Error(`找不到要启用的 HUD 预设：${sourceId}`);
-        const layout =
-          preset.layoutId === BUILTIN_LAYOUT_ID
-            ? getBuiltinLayout()
-            : this.document.customLayouts.find((item) => item.id === preset.layoutId);
+        const layout = [...getBuiltinLayouts(), ...this.document.customLayouts].find(
+          (item) => item.id === preset.layoutId,
+        );
         const theme = [...getBuiltinThemes(), ...this.document.customThemes].find(
           (item) => item.id === preset.themeId,
         );

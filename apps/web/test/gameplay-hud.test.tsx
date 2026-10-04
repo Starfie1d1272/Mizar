@@ -89,16 +89,16 @@ describe('GameplayHud shared renderer boundary', () => {
     const editor = HudEditorOverlay({ resolvedPreset, selectedWidgetId: null });
 
     expect(program).toMatchObject({ props: { 'data-gameplay-hud': 'true' } });
-    expect(childrenOf(program)).toHaveLength(9);
+    expect(childrenOf(program)).toHaveLength(10);
     expect(childrenOf(program).filter((child) => child !== null)).toHaveLength(5);
     expect(editor).toMatchObject({ props: { 'data-hud-editor-overlay': 'true' } });
-    expect(childrenOf(editor)).toHaveLength(9);
+    expect(childrenOf(editor)).toHaveLength(10);
     const preview = HudEditorOverlay({
       mode: 'preview',
       resolvedPreset,
       selectedWidgetId: null,
     });
-    expect(childrenOf(preview)).toHaveLength(9);
+    expect(childrenOf(preview)).toHaveLength(10);
   });
 
   it('never exposes unimplemented widgets even when a saved layout makes them visible', () => {
@@ -178,7 +178,7 @@ describe('GameplayHud shared renderer boundary', () => {
     expect(() => assertHudRendererRegistryConsistency()).not.toThrow();
     expect(
       Object.values(HUD_RENDERER_REGISTRY).filter((entry) => entry.renderer !== null),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
   });
 
   it('renders hook-based components through the same registry and resets only at the boundary key', () => {

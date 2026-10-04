@@ -34,6 +34,7 @@ function snapshot(
     channelSeq,
     cursor: { ...cursor, ...cursorOverrides },
     payload: {
+      bombDamage: { status: 'unavailable', reason: 'inactive', model: null, players: [] },
       status: { telemetry: 'fresh', context: 'unbound', identity: 'unbound' },
       match: null,
       teams: {

@@ -1,4 +1,4 @@
-/* Two review compositions over the same production widgets and fixed envelopes.
+/* Broadcast recipes over shared production widgets and preset-owned envelopes.
  * Shared colors remain resolved Theme values. No gameplay clocks live here. */
 .hud-widget-design.hud-redraw .player-rail {
   width: 420px;
@@ -1038,79 +1038,18 @@
 }
 
 /* Shanghai: compact charcoal identity panels and a separate lower combat band. */
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail {
-  width: 320px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar,
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
-  width: 76px;
-  height: 76px;
-  flex-basis: 76px;
-  object-fit: cover;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
-  background: var(--mizar-hud-surface-primary);
-  border-radius: 4px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__identity {
-  inset: 3px 8px auto 8px;
-  height: 24px;
-}
 .hud-widget-design[data-hud-design='perfectworld']
   .player-rail__card[data-physical-side='right']
   .player-rail__identity {
   inset: 3px 8px auto 8px;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
-  font-size: 17px;
-  max-width: 130px;
-  letter-spacing: 0;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-bar {
-  top: 52px;
-  height: 24px;
-  background: color-mix(in srgb, var(--mizar-hud-text-muted) 25%, transparent);
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
-  position: absolute;
-  top: 49px;
-  left: 0;
-  right: auto;
-  font-size: 23px;
-  line-height: 24px;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__health-value {
   left: auto;
   right: 0;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__money {
-  left: 24px;
-  bottom: 27px;
-  font-size: 16px;
-  color: var(--mizar-hud-state-success);
-  opacity: 1;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__money {
-  left: auto;
-  right: 24px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__kd {
-  left: auto;
-  right: 8px;
-  bottom: auto;
-  top: 6px;
-  font-size: 11px;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__kd {
   left: 8px;
   right: auto;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__weapons {
-  top: 53px;
-  left: auto;
-  right: 8px;
-  width: 82px;
-  height: 22px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__weapons {
   right: auto;
@@ -1123,45 +1062,9 @@
   max-width: 82px;
   height: 22px;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__utility-icons {
-  top: 26px;
-  right: 8px;
-  bottom: auto;
-  width: 82px;
-  height: 24px;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__utility-icons {
   right: auto;
   left: 8px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
-  left: 58px;
-  right: auto;
-  bottom: 0;
-  width: 68px;
-  height: 24px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__equipment {
-  left: auto;
-  right: 58px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap {
-  left: 0;
-  right: auto;
-  top: 30px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--mizar-hud-surface-strong);
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap--right {
-  left: auto;
-  right: 0;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap strong {
-  color: var(--mizar-hud-text-primary);
-  line-height: 22px;
-  font-size: 14px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
   left: -70px;
@@ -1178,29 +1081,12 @@
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__life-state {
   display: none;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__body {
-  position: absolute;
-  left: 0;
-  width: 180px;
-  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
-}
 .hud-widget-design[data-hud-design='perfectworld']
   .player-rail--right
   .player-rail__card--dead
   .player-rail__body {
   left: auto;
   right: 0;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
-  top: auto;
-  bottom: 4px;
-  font-size: 12px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats {
-  left: 8px;
-  right: auto;
-  bottom: 4px;
-  gap: 0;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__dead-stats {
   left: auto;
@@ -1212,59 +1098,10 @@
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__card::after {
   display: none;
 }
-.hud-widget-design[data-hud-design='perfectworld']
-  .player-rail__card[data-observed='true']
-  .player-rail__body {
-  outline: 1px solid var(--mizar-hud-text-primary);
-  outline-offset: -1px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
-  height: 58px;
-  border-radius: 4px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone {
-  height: 58px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
-  width: 148px;
-  gap: 6px;
-  background: transparent;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
-  left: 332px;
-  flex-direction: row-reverse;
-}
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__team-logo {
   width: 38px;
   height: 38px;
   flex-basis: 38px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
-  display: block;
-  max-width: 96px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 17px;
-  font-weight: 700;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
-  left: 148px;
-  width: 48px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
-  left: 284px;
-  width: 48px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
-  font-size: 32px;
-  letter-spacing: 0;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent {
-  height: 58px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
-  top: -8px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__win-slots {
   bottom: -20px;
@@ -1272,18 +1109,6 @@
 .hud-widget-design[data-hud-design='perfectworld'] .objective-center__fuse {
   top: 63px;
   height: 5px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
-  height: 156px;
-  margin-top: 20px;
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
-  background: var(--mizar-hud-surface-primary);
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
-  width: 64px;
-  height: 64px;
 }
 .hud-widget-design.hud-redraw .focused-player__media,
 .hud-widget-design.hud-redraw .focused-player__media img {
@@ -1355,4 +1180,721 @@
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__name {
   color: var(--mizar-hud-text-primary);
+}
+
+/* Shanghai 1920 reference: 570×56 score shell, 300×84 cards, 8px row gap. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  width: 570px;
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  height: 58px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone {
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  flex-direction: row-reverse;
+  left: 390px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
+  left: 180px;
+  width: 50px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
+  left: 340px;
+  width: 50px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
+  letter-spacing: 0;
+  font-size: 34px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
+  left: 230px;
+  top: 0;
+  width: 110px;
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock {
+  position: static;
+  height: 56px;
+  display: grid;
+  place-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__clock-value {
+  font-size: 30px;
+  line-height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__round-meta,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__win-slots {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent {
+  height: 56px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent--b {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center {
+  height: 56px;
+}
+.shanghai-round-strip {
+  position: absolute;
+  top: 60px;
+  left: 170px;
+  width: 230px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--mizar-hud-surface-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mizar-hud-text-muted);
+}
+.shanghai-round-strip::before,
+.shanghai-round-strip::after {
+  content: '';
+  width: 34px;
+  height: 4px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--mizar-hud-text-muted) 0 14px,
+    transparent 14px 20px
+  );
+  opacity: 0.45;
+}
+.shanghai-fuse,
+.shanghai-action-track {
+  position: absolute;
+  top: 60px;
+  width: 164px;
+  height: 22px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--mizar-hud-surface-primary);
+}
+.shanghai-fuse[data-owner='a'],
+.shanghai-action-track[data-owner='a'],
+.shanghai-event-panel[data-owner='a'] {
+  left: 0;
+}
+.shanghai-fuse[data-owner='b'],
+.shanghai-action-track[data-owner='b'],
+.shanghai-event-panel[data-owner='b'] {
+  right: 0;
+}
+.shanghai-fuse i,
+.shanghai-action-track i {
+  display: block;
+  height: 100%;
+  background: var(--mizar-hud-objective-bomb);
+}
+.shanghai-action-track[data-kind='defuse'] i {
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-event-panel {
+  position: absolute;
+  top: 86px;
+  width: 164px;
+  min-height: 118px;
+  border-radius: 4px;
+  background: var(--mizar-hud-surface-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.shanghai-event-panel strong {
+  font-size: 22px;
+}
+.shanghai-event-panel span {
+  font-size: 14px;
+  font-weight: 700;
+}
+.shanghai-event-panel b {
+  font-size: 24px;
+}
+.shanghai-round-winner {
+  top: 60px;
+  padding: 0;
+  gap: 0;
+}
+.shanghai-round-winner .match-header__team-logo {
+  width: 58px;
+  height: 88px;
+  flex: 1;
+  min-height: 0;
+}
+.shanghai-round-winner strong {
+  align-self: stretch;
+  padding: 0;
+  line-height: 30px;
+  text-align: center;
+  font-size: 18px;
+  background: var(--mizar-side-t);
+}
+.shanghai-round-winner[data-side='CT'] strong {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail {
+  width: 300px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__header {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__empty-card {
+  height: 84px;
+  min-height: 84px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  object-fit: cover;
+  width: 84px;
+  height: 84px;
+  flex-basis: 84px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__identity {
+  height: 24px;
+  inset: 4px 6px auto 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
+  letter-spacing: 0;
+  font-size: 18px;
+  max-width: 132px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-bar {
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 25%, transparent);
+  top: 56px;
+  height: 28px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side='T']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
+  position: absolute;
+  right: auto;
+  top: 50px;
+  left: 0;
+  font-size: 22px;
+  line-height: 28px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__money {
+  color: var(--mizar-hud-state-success);
+  opacity: 1;
+  left: 8px;
+  bottom: 32px;
+  font-size: 16px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__money {
+  left: auto;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__kd {
+  left: auto;
+  right: 8px;
+  bottom: auto;
+  top: 6px;
+  font-size: 14px;
+  gap: 3px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__weapons {
+  left: auto;
+  top: 57px;
+  right: 5px;
+  width: 78px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
+  right: auto;
+  left: 42px;
+  bottom: 1px;
+  width: 42px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__equipment {
+  right: 42px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__utility-icons {
+  right: 8px;
+  bottom: auto;
+  width: 82px;
+  top: 28px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap {
+  right: auto;
+  border-radius: 50%;
+  background: var(--mizar-hud-surface-strong);
+  left: -11px;
+  top: 27px;
+  width: 24px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap--right {
+  left: auto;
+  right: -11px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap strong {
+  color: var(--mizar-hud-text-primary);
+  line-height: 24px;
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__body {
+  position: absolute;
+  left: 0;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
+  width: 180px;
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats {
+  left: 8px;
+  right: auto;
+  gap: 0;
+  bottom: 6px;
+  font-size: 13px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
+  top: auto;
+  bottom: 6px;
+  font-size: 13px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card[data-observed='true'] {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  border-radius: 5px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-observed='true']
+  .player-rail__body {
+  outline-offset: -1px;
+  outline: none;
+}
+.player-rail__bomb-prediction {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent) 5px 7px
+    ),
+    color-mix(in srgb, var(--mizar-hud-objective-bomb) 80%, transparent);
+  clip-path: polygon(
+    var(--prediction-start) 0,
+    var(--prediction-end) 0,
+    var(--prediction-end) 100%,
+    var(--prediction-start) 100%
+  );
+  pointer-events: none;
+}
+.player-rail--right .player-rail__bomb-prediction {
+  transform: scaleX(-1);
+}
+
+/* Square Steam media beside the Shanghai information column. */
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
+  margin-top: 0;
+  width: 360px;
+  height: 176px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player::before {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face {
+  display: block;
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-side='T'] {
+  background: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  position: absolute;
+  top: 0;
+  left: 176px;
+  width: 184px;
+  height: 176px;
+  padding: 12px;
+  display: block;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__name {
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span:nth-child(2) {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__action {
+  position: static;
+  display: block;
+  padding: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 176px;
+  height: 176px;
+  margin: 0;
+  border: 0;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals {
+  position: absolute;
+  top: 42px;
+  left: 188px;
+  right: 0;
+  width: 166px;
+  padding: 0;
+  height: 42px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__hp {
+  font-size: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__health-track {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__armor b {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__active {
+  position: absolute;
+  top: 86px;
+  left: 188px;
+  height: 28px;
+  width: 92px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
+  font-size: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-dead='true'] {
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card {
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
+  background: var(--mizar-hud-surface-primary);
+  height: 84px;
+  border-radius: 0 4px 4px 0;
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-dead='true']
+  .focused-player__action {
+  position: static;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
+  position: absolute;
+  left: 12px;
+  bottom: 36px;
+  right: 8px;
+  gap: 8px;
+  color: var(--mizar-hud-text-primary);
+  top: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
+  gap: 6px;
+  background: transparent;
+  width: 180px;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 0 14px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 700;
+  font-size: 21px;
+  max-width: 120px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__identity {
+  inset-inline: 18px 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__identity {
+  inset-inline: 8px 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__money {
+  color: var(--mizar-hud-text-muted);
+  left: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__money {
+  left: auto;
+  right: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead[data-observed='true'] {
+  outline: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead[data-observed='true']
+  .player-rail__body {
+  outline: 2px solid var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__summary-slot {
+  height: 26px;
+  flex-basis: 26px;
+  position: relative;
+}
+.shanghai-summary {
+  position: absolute;
+  bottom: 6px;
+  left: 0;
+  width: 166px;
+  height: 60px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
+  border-left: 5px solid var(--mizar-side-ct);
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+}
+.shanghai-summary[data-side='T'] {
+  border-color: var(--mizar-side-t);
+}
+.shanghai-summary[data-summary-economy-visible='true'] {
+  width: 400px;
+}
+.player-rail--right .shanghai-summary {
+  left: auto;
+  right: 0;
+  flex-direction: row-reverse;
+  border-left: 0;
+  border-right: 5px solid var(--mizar-side-t);
+}
+.player-rail--right .shanghai-summary[data-side='CT'] {
+  border-color: var(--mizar-side-ct);
+}
+.shanghai-summary[aria-hidden='true'] {
+  visibility: hidden;
+}
+.shanghai-summary__economy {
+  display: flex;
+  gap: 8px;
+}
+.shanghai-summary__economy div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shanghai-summary__economy strong {
+  font-size: 16px;
+  color: var(--mizar-hud-state-success);
+}
+.shanghai-summary__economy span {
+  font-size: 10px;
+  color: var(--mizar-hud-text-muted);
+}
+.shanghai-summary__utility {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.shanghai-summary__utility > span {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.shanghai-summary__utility .player-rail__icon {
+  width: 12px;
+  height: 22px;
+}
+.shanghai-summary__utility b {
+  font-size: 14px;
+  color: var(--mizar-side-ct);
+}
+.shanghai-summary[data-side='T'] .shanghai-summary__utility b {
+  color: var(--mizar-side-t);
+}
+
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__players {
+  height: 452px;
+  gap: 8px;
+  grid-template-rows: repeat(5, 84px);
+  flex-basis: 452px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-strip {
+  display: flex;
+  width: 364px;
+  height: 34px;
+  align-items: center;
+  background: var(--mizar-hud-surface-primary);
+}
+.shanghai-series-stage {
+  flex: 0 0 160px;
+  padding-left: 6px;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-maps {
+  flex: 1;
+  width: auto;
+  height: 34px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  height: 34px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  font-family: var(--mizar-type-family-body);
+  font-size: 12px;
+  font-weight: 800;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-status {
+  display: none;
+}
+
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  position: absolute;
+  bottom: 8px;
+  left: 188px;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 4px;
+  align-items: baseline;
+  top: auto;
+  height: 26px;
+  right: 8px;
+  width: 164px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-side='T']
+  .focused-player__identity {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals-values {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__health-cluster {
+  width: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__dead-state {
+  position: absolute;
+  margin-left: 0;
+  width: 164px;
+  justify-content: flex-start;
+  line-height: 42px;
+  left: 188px;
+  top: 42px;
+  height: 42px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge path {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge circle {
+  r: 10;
+  stroke: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-side='T']
+  .player-rail__round-kill-badge
+  circle {
+  stroke: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-badge text {
+  font-size: 13px;
+}
+
+/* The widget reserves the freeze envelope; the live shell remains centered inside it. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score {
+  --shanghai-wing: 180px;
+  width: 570px;
+  margin-inline: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__top-score[data-freeze='true'] {
+  --shanghai-wing: 295px;
+  width: 800px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  width: 100%;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
+  width: var(--shanghai-wing);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
+  left: var(--shanghai-wing);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
+  left: calc(var(--shanghai-wing) + 50px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
+  left: calc(var(--shanghai-wing) + 160px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  left: calc(var(--shanghai-wing) + 210px);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  text-overflow: clip;
+  overflow: visible;
+}
+.shanghai-round-strip {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.shanghai-series-overview {
+  display: grid;
+  gap: 4px;
+  width: 340px;
+}
+.shanghai-series-detail {
+  display: grid;
+  grid-template-columns: 84px 60px 1fr;
+  align-items: center;
+  height: 46px;
+  gap: 12px;
+  border-radius: 4px;
+  background: var(--mizar-hud-surface-primary);
+  color: var(--mizar-hud-text-primary);
+  font-size: 14px;
+}
+.shanghai-series-detail__map {
+  align-self: stretch;
+  background-size: cover;
+  display: flex;
+  align-items: end;
+}
+.shanghai-series-detail__map strong {
+  width: 100%;
+  background: var(--mizar-hud-surface-primary);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.shanghai-series-detail img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  justify-self: center;
 }

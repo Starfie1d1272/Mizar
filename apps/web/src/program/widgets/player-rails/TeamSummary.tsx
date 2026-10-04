@@ -1,3 +1,4 @@
+import type { HudDesign } from '../../hud-design';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
@@ -49,10 +50,12 @@ function UtilityAsset({
 }
 
 export function TeamSummary({
+  design = 'current',
   phase,
   side,
   summary,
 }: {
+  readonly design?: HudDesign;
   readonly phase: 'freezetime' | 'live' | 'unknown';
   readonly side: PlayerRailSide;
   readonly summary: TeamSummaryPresentation;
@@ -79,6 +82,36 @@ export function TeamSummary({
   const displayed = summary;
   const utility = displayed.utility;
 
+  if (design === 'perfectworld')
+    return (
+      <div
+        className="shanghai-summary"
+        data-summary-economy-visible={economyVisible}
+        data-side={side}
+        aria-hidden={!visible}
+      >
+        {economyVisible ? (
+          <div className="shanghai-summary__economy">
+            <div>
+              <strong>{formatMoney(displayed.lossBonus)}</strong>
+              <span>Loss Bonus</span>
+            </div>
+            <div>
+              <strong>{formatMoney(displayed.equip)}</strong>
+              <span>Equipment Value</span>
+            </div>
+          </div>
+        ) : null}
+        <div className="shanghai-summary__utility">
+          {UTILITY_SLOTS.map(({ family, label }) => (
+            <span key={family} aria-label={`${label} ${formatUtility(utility?.[family] ?? null)}`}>
+              <UtilityAsset family={family} label={label} side={side} />
+              <b>x{formatUtility(utility?.[family] ?? null)}</b>
+            </span>
+          ))}
+        </div>
+      </div>
+    );
   return (
     <div
       aria-hidden={!visible}

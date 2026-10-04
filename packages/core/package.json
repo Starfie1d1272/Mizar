@@ -49,5 +49,8 @@
   },
   "devDependencies": {
     "@typescript/native": "catalog:"
+  },
+  "dependencies": {
+    "cs2-c4-damage": "0.1.0"
   }
 }

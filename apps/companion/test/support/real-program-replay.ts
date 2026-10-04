@@ -279,6 +279,10 @@ export async function replayRealProgram(options: {
       ...(options.faultPlan === undefined ? {} : { faultPlan: options.faultPlan }),
     })) {
       options.beforeEvent?.(event, pipeline);
+      if (event.kind === 'frame' && event.result.ok)
+        await composition.coordinator.prepareBombDamageMap(
+          event.result.observation.telemetry.map?.name ?? null,
+        );
       const snapshots = composition.accept(event);
       if (event.kind === 'frame' && snapshots !== null) {
         acceptedSequences.push(event.sourceFrame.sequence);

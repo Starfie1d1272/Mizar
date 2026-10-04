@@ -17,7 +17,7 @@ Radar 设置已有 schema，但编辑器手写特例，其余组件缺少受控�
 
 通用 Inspector 复用产品基础控件，先验证再更新 preset draft。Variant 切换从目标 variant 的声明默认值开始，不携带不兼容字段。当前观察选手提供标准/精简信息方案；精简结构隐藏 media 与统计，仅开放备用弹药开关且默认关闭，保持核心生命、护甲、当前物品和固定 envelope。方案改变信息密度，不冻结另一套最终美术。其余组件保持默认 variant；Radar 仍是唯一 square resize。
 
-保存与启用继续走 Companion 的 revision compare-and-swap。Authoring 的已声明字段可由当前 schema 默认值补齐；未知字段/variant/类型拒绝。Resolved snapshot 必须完整，不能加载时补齐当前默认值或重新计算 Theme recipe。新 resolved 格式显式使用 v2，1.0 前不提供旧版本迁移或读取兼容；当前版本的已启用内容仍在保存与重载后保持冻结。
+保存与启用继续走 Companion 的 revision compare-and-swap。Authoring 的已声明字段可由当前 schema 默认值补齐；未知字段/variant/类型拒绝。Resolved snapshot 必须完整，不能加载时补齐当前默认值或重新计算 Theme recipe。新 resolved 格式显式使用 v3，1.0 前不提供旧版本迁移或读取兼容；当前版本的已启用内容仍在保存与重载后保持冻结。
 
 Gameplay 共同颜色通过 schema 校验过的 resolved Theme 传入局部 `--mizar-hud-*` 变量；赛事强调色与 CT/T 使用既有 `--mizar-event-accent`、`--mizar-side-ct/t`。这些变量只在 Gameplay 子树设置，具体白名单见设计系统规范。共同字体回退与动效消费 canonical tokens。Renderer 保留固定几何、图标组合、地图美术与组件网格，不新增通用颜色、字体或 CSS 编辑器。
 

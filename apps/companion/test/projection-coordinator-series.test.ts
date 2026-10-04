@@ -295,10 +295,10 @@ describe('Section IV.E: Program / Protocol integration and boundaries', () => {
     }
   });
 
-  it('E.5, E.6, E.7 verifies Local Protocol v1, Program schema v7, Operator schema v3, ProgramCue v1 completely unaffected', async () => {
+  it('E.5, E.6, E.7 verifies Local Protocol v1, Program schema v8, Operator schema v3, ProgramCue v1 completely unaffected', async () => {
     expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('mizar.local.v1');
     expect(LOCAL_PROTOCOL_VERSION).toBe(1);
-    expect(PROGRAM_SCHEMA_VERSION).toBe(7);
+    expect(PROGRAM_SCHEMA_VERSION).toBe(8);
     expect(OPERATOR_SCHEMA_VERSION).toBe(4);
     expect(PROGRAM_CUE_SCHEMA_VERSION).toBe(1);
 

@@ -28,7 +28,12 @@ export function PlayerRail({
     >
       <div className="player-rail__summary-slot" data-team-summary-slot="true">
         {options.showTeamSummary ? (
-          <TeamSummary phase={presentation.phase} side={side} summary={rail.summary} />
+          <TeamSummary
+            design={design}
+            phase={presentation.phase}
+            side={side}
+            summary={rail.summary}
+          />
         ) : null}
       </div>
       <div className="player-rail__header" data-rail-header="true">
@@ -37,6 +42,16 @@ export function PlayerRail({
       <div className="player-rail__players">
         {rail.players.slice(0, 5).map((player) => (
           <PlayerCard
+            prediction={
+              snapshot.payload.status.telemetry === 'fresh' &&
+              snapshot.payload.bombDamage?.status === 'available'
+                ? snapshot.payload.bombDamage.players.find(
+                    (entry): entry is Extract<typeof entry, { status: 'predicted' }> =>
+                      entry.sourcePlayerId === player.sourcePlayerId &&
+                      entry.status === 'predicted',
+                  )
+                : undefined
+            }
             design={design}
             key={player.sourcePlayerId}
             cursor={snapshot.cursor}

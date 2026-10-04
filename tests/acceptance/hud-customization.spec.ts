@@ -127,6 +127,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     ).toEqual(resolved);
     await program.close();
   } finally {
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -191,11 +192,13 @@ test('three broadcast presets save, activate and reload through the shared Progr
       await expect(page.getByText('当前预设已启用。', { exact: true })).toBeVisible();
       const frozen = store.getState().resolved;
       expect(frozen.theme.recipe).toBe(style);
-      await app.close();
+      const previousApp = app;
       store = new HudConfigStore({ filePath });
       await store.load();
-      app = buildApp({ hudConfigStore: store });
-      await app.ready();
+      const restartedApp = buildApp({ hudConfigStore: store });
+      await restartedApp.ready();
+      app = restartedApp;
+      await previousApp.close();
       expect(store.getState().resolved).toEqual(frozen);
       await program.goto('/program?hud-config=companion');
       await expect(program.locator('[data-hud-widget="top-score-bar"]')).toHaveAttribute(
@@ -210,6 +213,7 @@ test('three broadcast presets save, activate and reload through the shared Progr
     }
     await program.close();
   } finally {
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }

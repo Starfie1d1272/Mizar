@@ -1,4 +1,9 @@
 import {
+  projectBombDamage,
+  type BombDamageProjection,
+  type BombDamageResource,
+} from './bomb-damage.js';
+import {
   type ActiveLineupPlayer,
   type ActiveLineupResolution,
   type IdentityResolution,
@@ -192,6 +197,7 @@ export interface ProgramBombProjection {
 }
 
 export interface ProgramProjection {
+  readonly bombDamage: BombDamageProjection;
   readonly cursor: ProjectionCursor;
   readonly status: {
     readonly telemetry: ProgramSafeRuntimeFreshness;
@@ -251,6 +257,7 @@ export interface ProgramProjection {
 }
 
 export interface ProgramProjectionInput {
+  readonly bombDamageResource?: BombDamageResource;
   readonly runtime: ProgramSafeRuntimeView;
   readonly context?: MatchContext;
   readonly contextFreshness?: 'fresh' | 'stale';
@@ -622,6 +629,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
 
   return {
     cursor: input.runtime.cursor,
+    bombDamage: projectBombDamage(input),
     status: {
       telemetry: telemetryFreshness,
       context: contextFreshness,

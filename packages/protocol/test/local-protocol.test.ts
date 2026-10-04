@@ -23,6 +23,7 @@ const cursor = {
 
 function payload() {
   return {
+    bombDamage: { status: 'unavailable', reason: 'inactive', model: null, players: [] },
     status: {
       telemetry: 'fresh' as const,
       context: 'unbound' as const,
@@ -94,13 +95,13 @@ describe('Local Protocol V1 and channel schema acceptance', () => {
 
     expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('mizar.local.v1');
     expect(LOCAL_PROTOCOL_VERSION).toBe(1);
-    expect(PROGRAM_SCHEMA_VERSION).toBe(7);
+    expect(PROGRAM_SCHEMA_VERSION).toBe(8);
     expect(parsed.channel).toBe('program');
     expect(parsed).not.toHaveProperty('lookahead');
     expect(parsed.payload).not.toHaveProperty('futureCue');
   });
 
-  it('requires the Program v7 series, player evidence, ADR views, and life state fields', () => {
+  it('requires the Program v8 series, player evidence, ADR views, and life state fields', () => {
     const player = {
       sourcePlayerId: 'player-1',
       canonicalPlayerId: null,

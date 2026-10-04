@@ -340,6 +340,7 @@ async function main() {
     await pruneDependencyTestFiles(appDir);
     await rm(deployedAppDir, { recursive: true, force: true });
     await restorePortableWorkspaceDependencySpecifiers(appDir);
+    await runCommand(process.execPath, [join(scriptDir, 'verify-c4-resources.mjs'), appDir]);
     await cp(join(rootDir, 'apps', 'web', 'dist'), join(resourcesDir, 'web', 'dist'), {
       recursive: true,
       dereference: true,

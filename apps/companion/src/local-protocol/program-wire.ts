@@ -28,6 +28,18 @@ function mapSeries(projection: ProgramProjection['series']): ProgramPayload['ser
 export function mapProgramProjection(projection: ProgramProjection): ProgramPayload {
   return {
     status: projection.status,
+    bombDamage: {
+      ...projection.bombDamage,
+      players: projection.bombDamage.players.map((player) =>
+        player.status === 'predicted'
+          ? {
+              ...player,
+              assumptions: [...player.assumptions],
+              unknownInputs: [...player.unknownInputs],
+            }
+          : { ...player },
+      ),
+    },
     match: projection.match,
     teams: projection.teams,
     series: mapSeries(projection.series),

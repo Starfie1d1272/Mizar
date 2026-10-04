@@ -1,3 +1,4 @@
+import { BombDamageResources } from './bomb-damage-resources.js';
 import {
   emptyActiveLineup,
   identityEvidenceFromObservation,
@@ -143,6 +144,7 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly bombDamageResources = new BombDamageResources(() => this.refresh());
   private readonly presentationListeners = new Set<(bundle: ProjectionBundle) => void>();
 
   subscribePresentation(listener: (bundle: ProjectionBundle) => void): () => void {
@@ -274,6 +276,9 @@ export class ProjectionCoordinator {
       const nowMonotonicMs = this.nowMonotonicMs();
       const program = projectProgram({
         runtime: runtimeView,
+        bombDamageResource: this.bombDamageResources.get(
+          runtimeView.telemetry?.telemetry.map?.name ?? null,
+        ),
         ...(context === undefined ? {} : { context }),
         ...(this.contextBinding === undefined
           ? {}
@@ -323,6 +328,10 @@ export class ProjectionCoordinator {
     } finally {
       this.refreshing = false;
     }
+  }
+
+  async prepareBombDamageMap(mapName: string | null): Promise<void> {
+    await this.bombDamageResources.prepare(mapName);
   }
 
   getBpProjection() {
@@ -396,6 +405,7 @@ export class ProjectionCoordinator {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.bombDamageResources.close();
     this.cancelStaleTimer();
     for (const unsubscribe of this.sourceUnsubscribers) unsubscribe();
     await Promise.all([

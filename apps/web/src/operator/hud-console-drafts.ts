@@ -1,6 +1,6 @@
 import {
   canonicalJson,
-  getBuiltinLayout,
+  getBuiltinLayouts,
   getBuiltinPresets,
   getBuiltinThemes,
   type HudConfigDocument,
@@ -32,7 +32,7 @@ export function cloneHudValue<T>(value: T): T {
 
 export function resourceList(document: HudConfigDocument, kind: HudWorkspace): HudResource[] {
   if (kind === 'preset') return [...getBuiltinPresets(), ...document.customPresets];
-  if (kind === 'layout') return [getBuiltinLayout(), ...document.customLayouts];
+  if (kind === 'layout') return [...getBuiltinLayouts(), ...document.customLayouts];
   return [...getBuiltinThemes(), ...document.customThemes];
 }
 

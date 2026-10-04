@@ -12,6 +12,7 @@ import {
 } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
+import { SeriesOverview } from './widgets/match-header/SeriesOverview';
 import { RoundHistory, SeriesStrip, TopScoreBar } from './widgets/match-header';
 import { FocusedPlayer } from './widgets/focused-player/FocusedPlayer';
 import type { RadarSnapshot } from '@mizar/protocol/radar';
@@ -71,6 +72,7 @@ const IMPLEMENTED_RENDERERS: Partial<Record<HudWidgetId, HudRendererEntry>> = {
   'top-score-bar': { availability: 'implemented', source: 'program', renderer: TopScoreBar },
   'team-ct-rail': { availability: 'implemented', source: 'program', renderer: PlayerRail },
   'team-t-rail': { availability: 'implemented', source: 'program', renderer: PlayerRail },
+  'series-overview': { availability: 'implemented', source: 'program', renderer: SeriesOverview },
   'series-strip': { availability: 'implemented', source: 'program', renderer: SeriesStrip },
   'round-history': { availability: 'implemented', source: 'program', renderer: RoundHistory },
 };

@@ -1,3 +1,4 @@
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
@@ -300,7 +301,13 @@ function RoundKillBadge({ kills }: { readonly kills: number }) {
   );
 }
 
+type BombPrediction = Extract<
+  ProgramPayload['bombDamage']['players'][number],
+  { status: 'predicted' }
+>;
+
 function PlayerBody({
+  prediction,
   design,
   player,
   dead,
@@ -314,6 +321,7 @@ function PlayerBody({
   readonly presentationRevision: number;
   readonly damageGhost: DamageGhostState | null;
   readonly options: PlayerRailSettings;
+  readonly prediction?: BombPrediction | undefined;
 }) {
   const healthStyle = { '--player-rail-health': `${player.healthPercent ?? 0}%` } as CSSProperties;
   const secondaryVisible = player.secondaryWeapon !== null;
@@ -353,6 +361,19 @@ function PlayerBody({
       ) : (
         <div className="player-rail__health-bar" data-health-bar="true">
           <span style={healthStyle} data-health-empty={!player.healthPercent} />
+          {options.showBombPrediction && prediction && prediction.damage > 0 ? (
+            <i
+              className="player-rail__bomb-prediction"
+              data-bomb-prediction={prediction.lethal ? 'lethal' : 'surviving'}
+              aria-label={`C4 standing estimate: ${prediction.damage} damage, ${prediction.hpAfter} HP remaining`}
+              style={
+                {
+                  '--prediction-start': `${Math.max(0, Math.min(100, prediction.hpAfter))}%`,
+                  '--prediction-end': `${player.healthPercent ?? 0}%`,
+                } as CSSProperties
+              }
+            />
+          ) : null}
           <DamageGhost state={damageGhost} />
         </div>
       )}
@@ -443,6 +464,7 @@ function PlayerBody({
 
 export function PlayerCard({
   design = 'current',
+  prediction,
   player,
   cursor = null,
   physicalSide = 'left',
@@ -450,6 +472,7 @@ export function PlayerCard({
   options = playerRailSettingsSchema.parse({}),
 }: {
   readonly design?: HudDesign;
+  readonly prediction?: BombPrediction | undefined;
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
@@ -473,6 +496,7 @@ export function PlayerCard({
   const body = (
     <PlayerBody
       design={design}
+      prediction={prediction}
       options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}

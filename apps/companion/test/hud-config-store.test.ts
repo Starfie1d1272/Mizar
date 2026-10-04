@@ -117,6 +117,22 @@ describe('HudConfigStore', () => {
     expect(reloaded.getState().resolved.theme.brandColor).toBe('#00ffaa');
   });
 
+  it('persists the Shanghai prediction switch without replacing its layout', async () => {
+    const filePath = await temporaryConfigPath();
+    const store = new HudConfigStore({ filePath });
+    const preset = getBuiltinPresets().find((p) => p.id === 'builtin:perfectworld-preset')!;
+    preset.widgets['team-ct-rail'].settings.showBombPrediction = false;
+    preset.widgets['team-t-rail'].settings.showBombPrediction = false;
+    const saved = await store.saveAs('preset', { ...preset, name: '预测关闭' });
+    await store.activatePreset(saved.command.resourceId!);
+    const restarted = new HudConfigStore({ filePath });
+    await restarted.load();
+    const resolved = restarted.getState().resolved;
+    expect(resolved.layout.id).toBe('builtin:perfectworld-layout');
+    expect(resolved.widgets['team-ct-rail'].settings.showBombPrediction).toBe(false);
+    expect(resolved.widgets['team-t-rail'].settings.showBombPrediction).toBe(false);
+  });
+
   it('does not overwrite a malformed file during startup recovery', async () => {
     const filePath = await temporaryConfigPath();
     const malformed = '{"schemaVersion":999,"customPresets":[]}\n';
