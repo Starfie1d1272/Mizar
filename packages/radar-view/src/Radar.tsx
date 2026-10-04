@@ -27,6 +27,7 @@ import {
 import { smokeContour, smokeLobes } from './effect-geometry.js';
 
 export interface RadarViewProps {
+  readonly appearance?: 'default' | 'shanghai';
   readonly client?: RadarViewSource | undefined;
   readonly snapshot?: RadarViewFrame | null | undefined;
   readonly zoomMode?: 'full-map' | 'auto' | undefined;
@@ -41,6 +42,7 @@ export interface RadarViewProps {
 /** React owns the surface. Accepted channel samples and rAF own all motion. */
 export function RadarView({
   client,
+  appearance = 'default',
   snapshot,
   assetBaseUrl,
   className,
@@ -219,7 +221,7 @@ export function RadarView({
       const upperImage = upperAsset ? imageFor(upperAsset) : null;
       const lowerImage = lowerAsset ? imageFor(lowerAsset) : null;
       const placementFor = (layer: string): RadarCanvasPlacement | null =>
-        geometry === null ? null : radarBroadcastPlacement(geometry.mapKey, layer);
+        geometry === null ? null : radarBroadcastPlacement(geometry.mapKey, layer, appearance);
       const pointAt = (point: { x: number; y: number; layer?: string }, layerHint?: string) => {
         const placement = placementFor(layerHint ?? point.layer ?? model.layer);
         if (placement !== null && !radarPointInsideViewport(point, placement.viewport)) return null;
@@ -268,7 +270,7 @@ export function RadarView({
       element.dataset.radarLayer = model.layer;
       element.dataset.radarLayers = multiLayer ? 'simultaneous' : model.layer;
       element.dataset.radarCompositor = detachedFloors
-        ? 'ewc-detached-floor-shared-calibration'
+        ? `${appearance === 'shanghai' ? 'shanghai' : 'ewc'}-detached-floor-shared-calibration`
         : multiLayer
           ? 'shared-calibration'
           : 'single-calibration';
@@ -335,7 +337,9 @@ export function RadarView({
       ctx.scale(z.scale, z.scale);
       ctx.translate(-z.x * logicalSize, -z.y * logicalSize);
       ctx.filter =
-        'grayscale(0.82) saturate(0.1) brightness(0.72) contrast(1.16) ' +
+        (appearance === 'shanghai'
+          ? 'grayscale(1) brightness(0.43) contrast(1.08) '
+          : 'grayscale(0.82) saturate(0.1) brightness(0.72) contrast(1.16) ') +
         'drop-shadow(3px 0 0 rgba(243,246,250,.72)) ' +
         'drop-shadow(-3px 0 0 rgba(243,246,250,.72)) ' +
         'drop-shadow(0 3px 0 rgba(243,246,250,.72)) ' +
@@ -800,7 +804,7 @@ export function RadarView({
       model.reset();
       images.clear();
     };
-  }, [client, zoomMode, assetBaseUrl]);
+  }, [client, zoomMode, assetBaseUrl, appearance]);
   return (
     <canvas
       aria-label="比赛雷达"

@@ -1,3 +1,4 @@
+import { hudDesignForVariant } from '../../hud-design';
 import { useMemo } from 'react';
 import { RadarView, type RadarViewSource } from '@mizar-hud/radar-view';
 import '@mizar-hud/radar-view/radar.css';
@@ -7,13 +8,20 @@ import type { RadarHudWidgetRendererProps } from '../../hud-renderer-registry';
 import { toRadarViewFrame } from './adapter';
 
 export interface RadarProps {
+  readonly appearance?: 'default' | 'shanghai';
   readonly client?: LocalChannelClient<'radar'> | undefined;
   readonly snapshot?: RadarSnapshot | null | undefined;
   readonly zoomMode?: 'full-map' | 'auto' | undefined;
   readonly presentationRevision?: number | undefined;
 }
 
-export function Radar({ client, snapshot, zoomMode, presentationRevision }: RadarProps) {
+export function Radar({
+  client,
+  snapshot,
+  zoomMode,
+  presentationRevision,
+  appearance = 'default',
+}: RadarProps) {
   const source = useMemo<RadarViewSource | undefined>(() => {
     if (!client) return undefined;
     let last: ReturnType<typeof client.getSnapshot> | undefined;
@@ -33,6 +41,7 @@ export function Radar({ client, snapshot, zoomMode, presentationRevision }: Rada
   const frame = useMemo(() => toRadarViewFrame(snapshot ?? null), [snapshot]);
   return (
     <RadarView
+      appearance={appearance}
       client={source}
       snapshot={frame}
       zoomMode={zoomMode}
@@ -51,6 +60,7 @@ export function RadarWidget({
 }: RadarHudWidgetRendererProps) {
   return (
     <Radar
+      appearance={hudDesignForVariant(settings.variant) === 'perfectworld' ? 'shanghai' : 'default'}
       client={radarClient}
       snapshot={radarSnapshot}
       presentationRevision={presentationRevision}

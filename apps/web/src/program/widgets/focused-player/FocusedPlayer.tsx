@@ -328,6 +328,11 @@ function FocusedPlayerFace({
               className="focused-player__action-gap focused-player__action-gap--b"
             />
             <div className="focused-player__ammo">
+              {design === 'perfectworld' && p.activeItemKind === 'firearm' ? (
+                <span className="shanghai-focus-firearm">
+                  <Icon asset={p.activeItem?.asset ?? null} />
+                </span>
+              ) : null}
               {p.clip === null ? null : <strong>{p.clip}</strong>}
               {!options.showReserveAmmo || p.reserveMagazine === null ? null : (
                 <span

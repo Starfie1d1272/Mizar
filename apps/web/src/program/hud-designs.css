@@ -2335,3 +2335,74 @@
   right: auto;
   left: 54px;
 }
+
+/* Both countdowns retreat from the outside edge toward the round label. */
+.shanghai-action-track[data-owner='a'] i,
+.shanghai-fuse[data-owner='a'] i {
+  margin-left: auto;
+}
+.shanghai-action-track[data-owner='b'] i,
+.shanghai-fuse[data-owner='b'] i {
+  margin-right: auto;
+}
+.shanghai-focus-firearm {
+  display: flex;
+  align-items: center;
+  flex: 0 0 50px;
+  align-self: center;
+}
+.shanghai-focus-firearm .focused-player__icon {
+  width: 50px;
+  height: 20px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  gap: 3px;
+  align-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .radar {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 34%, transparent);
+}
+.shanghai-summary {
+  justify-content: flex-start;
+  padding: 0 7px;
+  gap: 6px;
+  box-sizing: border-box;
+}
+.shanghai-summary__economy {
+  gap: 6px;
+}
+.shanghai-summary__side {
+  width: 34px;
+  margin-right: 3px;
+}
+.player-rail--right .shanghai-summary__side {
+  margin-right: 0;
+  margin-left: 3px;
+}
+.shanghai-summary__utility {
+  margin-left: auto;
+  gap: 2px;
+}
+.player-rail--right .shanghai-summary__utility {
+  margin-left: 0;
+  margin-right: auto;
+}
+.shanghai-summary:not([data-summary-economy-visible='true']) .shanghai-summary__utility {
+  margin: 0;
+}
+.shanghai-summary[data-summary-economy-visible='true'] .shanghai-summary__utility > span {
+  min-width: 36px;
+}
+.shanghai-summary[data-summary-economy-visible='true'] .shanghai-summary__utility b {
+  font-size: 16px;
+}
+.shanghai-summary__economy span {
+  font-size: 11px;
+}
+.shanghai-event-panel[data-kind='defuse'] {
+  box-sizing: border-box;
+  padding-bottom: 12px;
+}

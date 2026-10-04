@@ -8,7 +8,7 @@ import {
   type ReplaySessionScheduler,
 } from '@mizar/replay';
 
-export type ReplaySourceId = 'ancient-round-03' | 'ancient-round-11-defuse';
+export type ReplaySourceId = 'ancient-round-03' | 'ancient-round-11-defuse' | 'nuke-demo-round-01';
 
 export interface AcceptanceReplayFrame extends ReplaySessionFrame {
   readonly program: ProgramSnapshot;
@@ -16,6 +16,8 @@ export interface AcceptanceReplayFrame extends ReplaySessionFrame {
 }
 
 interface CaptureManifest {
+  readonly captureId?: string;
+  readonly demoSource?: { readonly kind: string; readonly demoSha256: string };
   readonly frameCount: number;
   readonly framesSha256?: string;
   readonly provenance?: {
@@ -35,6 +37,7 @@ interface ReplayArtifactManifest {
   readonly harnessVersion: number;
   readonly source: {
     readonly id: ReplaySourceId;
+    readonly kind?: 'demo-derived';
     readonly capturePath: string;
     readonly sourceCaptureId: string;
     readonly sourceFramesSha256: string;
@@ -58,6 +61,7 @@ interface SourceFiles {
 }
 
 const sourceFiles: Record<ReplaySourceId, SourceFiles> = {
+  'nuke-demo-round-01': { basePath: '/fixtures/nuke-demo-round-01/replay' },
   'ancient-round-03': {
     basePath: '/fixtures/ancient-round-03/replay',
   },
@@ -195,7 +199,20 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
   ) {
     throw new Error('Replay source capture hash mismatch');
   }
-  if (
+  const demoDerived = manifest.source.kind === 'demo-derived';
+  if (demoDerived) {
+    if (
+      import.meta.env.VITE_VISUAL_FIXTURES !== '1' ||
+      !import.meta.env.DEV ||
+      captureManifest.demoSource?.kind !== 'demo-derived' ||
+      captureManifest.demoSource.demoSha256 !== manifest.source.sourceFramesSha256 ||
+      captureManifest.captureId !== manifest.source.sourceCaptureId
+    ) {
+      throw new Error(
+        'Demo reference provenance mismatch or unavailable outside visual development',
+      );
+    }
+  } else if (
     captureManifest.provenance?.sourceCaptureId !== manifest.source.sourceCaptureId ||
     captureManifest.provenance?.sourceFramesSha256 !== manifest.source.sourceFramesSha256 ||
     captureManifest.provenance?.sanitizerVersion !== 2
@@ -227,7 +244,10 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     if (
       frame.cursor.captureIndex !== index ||
       frame.cursor.sequence !==
-        (captureManifest.provenance?.sourceFrameSelection?.firstSequence ?? -1) + index ||
+        (demoDerived
+          ? 1
+          : (captureManifest.provenance?.sourceFrameSelection?.firstSequence ?? -1)) +
+          index ||
       frame.cursor.sequence !== frame.program.cursor.programReceiveSequence ||
       frame.cursor.sequence !== frame.radar.cursor.programReceiveSequence ||
       cursorKey(frame.program) !== cursorKey(frame.radar)

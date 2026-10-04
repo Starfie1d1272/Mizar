@@ -698,6 +698,7 @@ function widgetContract(id: HudWidgetId) {
     showObjectiveAuxiliary: '显示目标附加进度',
   };
   const styled = [
+    'radar',
     'top-score-bar',
     'team-ct-rail',
     'team-t-rail',

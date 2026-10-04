@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "eventIndexSchemaVersion": 1,
+  "harnessVersion": 1,
+  "source": {
+    "id": "nuke-demo-round-01",
+    "kind": "demo-derived",
+    "sourceCaptureId": "demo-derived-nuke-lgcy-flc-round-1",
+    "sourceFramesSha256": "2b08640110e8c619f1f2d711fe13772c039e7f668e3a43994f9d57b66f50b730"
+  },
+  "firstSequence": 1,
+  "frameCount": 265,
+  "eventCount": 17,
+  "framesSha256": "b4d84fbf0d477dce37db2905556a5f421fd32debe33afcfc1581b60f54d55bf6",
+  "eventIndexSha256": "76453fcb4551322453c1ad7931610b0c2b5f9e06b89d042f2a0c1f614867f01a",
+  "matchContextSha256": "1b819371079a17c7fe2f3df9d06118a9522b7824722efb2d107874a0af6f7a71",
+  "captureManifestSha256": "715b5c4043c46bb0e5d5284e0f162fe88919893a921960e0c2a0c97b3c2b619d",
+  "coverage": []
+}

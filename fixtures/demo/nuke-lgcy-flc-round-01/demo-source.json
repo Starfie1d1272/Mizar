@@ -1,0 +1,10 @@
+{
+  "kind": "demo-derived",
+  "demoSha256": "2b08640110e8c619f1f2d711fe13772c039e7f668e3a43994f9d57b66f50b730",
+  "sourceFileName": "falcons-vs-legacy-m1-nuke.dem",
+  "tickrate": 64,
+  "startTick": 7307,
+  "endTick": 9396,
+  "explosionIntervalTicks": 2624,
+  "notes": "Position/HP/held item from 8-tick samples; exact plant/defuse events. Explosion countdown uses same-demo 41s event interval, not a measured fuse netvar. Observer selected for inspection; money, armor, ammo and inventory absent, never invented."
+}

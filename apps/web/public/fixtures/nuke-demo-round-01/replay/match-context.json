@@ -1,0 +1,161 @@
+{
+  "manifest": {
+    "schemaVersion": "rivalhub.broadcast-manifest.v1",
+    "revision": "fixture-manifest-r1",
+    "match": {
+      "matchId": "match-m2-01",
+      "competition": {
+        "competitionId": "competition-m2",
+        "slug": "m2-sample",
+        "name": "M2 示例赛",
+        "themeColor": "#1d4ed8"
+      },
+      "status": "in_progress",
+      "format": "bo1",
+      "stage": "DEMO REPLAY",
+      "round": 1,
+      "entryRound": "upper",
+      "scheduledAt": "2026-09-16T10:00:00.000Z",
+      "startedAt": null,
+      "completedAt": null,
+      "scoreA": null,
+      "scoreB": null,
+      "isForfeit": false
+    },
+    "entrants": {
+      "a": {
+        "entryId": "entry-m2-a",
+        "name": "FLC",
+        "logoUrl": null,
+        "roster": {
+          "rosterId": "roster-m2-a",
+          "players": [
+            {
+              "playerId": "steam-76561197989430253",
+              "steam64": "76561197989430253",
+              "displayName": "karrigan",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561197996678278",
+              "steam64": "76561197996678278",
+              "displayName": "TeSeS",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198041683378",
+              "steam64": "76561198041683378",
+              "displayName": "NiKo",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198074762801",
+              "steam64": "76561198074762801",
+              "displayName": "m0NESY",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561199032006224",
+              "steam64": "76561199032006224",
+              "displayName": "kyousuke",
+              "avatarUrl": null,
+              "isStarter": true
+            }
+          ]
+        }
+      },
+      "b": {
+        "entryId": "entry-m2-b",
+        "name": "LGCY",
+        "logoUrl": null,
+        "roster": {
+          "rosterId": "roster-m2-b",
+          "players": [
+            {
+              "playerId": "steam-76561198043769572",
+              "steam64": "76561198043769572",
+              "displayName": "arT",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198061763596",
+              "steam64": "76561198061763596",
+              "displayName": "n1ssim",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198100494962",
+              "steam64": "76561198100494962",
+              "displayName": "saadzin",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198194325317",
+              "steam64": "76561198194325317",
+              "displayName": "dumau",
+              "avatarUrl": null,
+              "isStarter": true
+            },
+            {
+              "playerId": "steam-76561198850020186",
+              "steam64": "76561198850020186",
+              "displayName": "latto",
+              "avatarUrl": null,
+              "isStarter": true
+            }
+          ]
+        }
+      }
+    },
+    "maps": [
+      {
+        "mapId": "map-m2-03",
+        "mapOrder": 1,
+        "mapName": "de_nuke",
+        "pickedByEntryId": null,
+        "teamAStartSide": "ct",
+        "scoreA": null,
+        "scoreB": null,
+        "completedAt": null
+      }
+    ],
+    "veto": [
+      {
+        "stepOrder": 1,
+        "actionType": "ban",
+        "mapName": "de_dust2",
+        "entryId": "entry-m2-a",
+        "side": null
+      },
+      {
+        "stepOrder": 2,
+        "actionType": "ban",
+        "mapName": "de_inferno",
+        "entryId": "entry-m2-b",
+        "side": null
+      },
+      {
+        "stepOrder": 3,
+        "actionType": "pick",
+        "mapName": "de_ancient",
+        "entryId": "entry-m2-a",
+        "side": "t"
+      }
+    ],
+    "commentators": [
+      {
+        "userId": "user-commentator-m2",
+        "displayName": "现场解说",
+        "avatarUrl": null,
+        "liveStreamUrl": "https://stream.example.test/m2"
+      }
+    ]
+  }
+}

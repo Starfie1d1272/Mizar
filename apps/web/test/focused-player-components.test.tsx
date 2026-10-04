@@ -227,6 +227,76 @@ describe('Focused media and combat presentation lifecycle', () => {
     );
     expect(container.querySelector('.focused-player__dead-state')?.textContent).toBe('0');
   });
+  it('shows a held firearm together with Shanghai ammunition', () => {
+    const container = host();
+    const player = buildFocusedPlayerPresentation(getProgramFixture('real-live-rich')!.payload)!;
+    act(() => root!.render(<FocusedPlayerCard design="perfectworld" player={player} />));
+    expect(player.activeItemKind).toBe('firearm');
+    {
+      expect(
+        container
+          .querySelector('.focused-player__ammo .shanghai-focus-firearm [data-asset-id]')
+          ?.getAttribute('data-asset-id'),
+      ).toBe(player.activeItem?.asset?.canonicalKey);
+    }
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{
+            ...player,
+            activeItemKind: 'knife',
+            clip: null,
+            reserveMagazine: null,
+            reserveText: null,
+          }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.shanghai-focus-firearm')).toBeNull();
+    expect(container.querySelector('.focused-player__ammo')?.textContent).toBe('');
+  });
+  it('uses remaining rather than completed defuse time for Shanghai', () => {
+    const container = host();
+    const preset = getBuiltinResolvedPreset('builtin:perfectworld-preset');
+    const placement = preset.layout.widgets['top-score-bar'];
+    const snapshot = getProgramFixture('real-live-rich')!;
+    act(() =>
+      root!.render(
+        <TopScoreBar
+          design="perfectworld"
+          resolvedPreset={preset}
+          placement={placement}
+          box={placementToBox('top-score-bar', placement)}
+          widgetId="top-score-bar"
+          settings={preset.widgets['top-score-bar']}
+          snapshot={{
+            ...snapshot,
+            payload: {
+              ...snapshot.payload,
+              round: { ...snapshot.payload.round!, phase: 'live' },
+              bomb: {
+                state: 'defusing',
+                sourcePlayerId: null,
+                explosion: { remainingSeconds: 20, durationSeconds: 40 },
+                action: {
+                  kind: 'defuse',
+                  sourcePlayerId: null,
+                  remainingSeconds: 4,
+                  durationSeconds: 5,
+                  hasDefuseKit: true,
+                },
+              },
+            },
+          }}
+        />,
+      ),
+    );
+    expect(container.querySelector<HTMLElement>('.shanghai-action-track i')?.style.width).toBe(
+      '80%',
+    );
+    expect(container.querySelector<HTMLElement>('.shanghai-fuse i')?.style.width).toBe('50%');
+  });
   it('keeps timeout exit motion presentation-local and clears it on a new revision', () => {
     vi.useFakeTimers();
     const container = host();

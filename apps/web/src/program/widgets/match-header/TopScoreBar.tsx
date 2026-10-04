@@ -370,12 +370,12 @@ function ShanghaiPanels({
         <>
           {action.kind === 'defuse' && p.objective.action !== null ? (
             <div className="shanghai-action-track" data-owner={actionOwner} data-kind={action.kind}>
-              <i style={{ width: `${p.objective.action * 100}%` }} />
-              <ShanghaiKit />
+              <i style={{ width: `${(1 - p.objective.action) * 100}%` }} />
+              {p.objective.hasKit ? <ShanghaiKit /> : null}
             </div>
           ) : null}
           <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
-            {action.kind === 'defuse' ? <ShanghaiKit /> : null}
+            {action.kind === 'defuse' && p.objective.hasKit ? <ShanghaiKit /> : null}
             {action.kind === 'defuse' ? (
               <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
             ) : null}

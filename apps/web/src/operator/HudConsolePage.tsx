@@ -906,6 +906,11 @@ export function HudConsolePage() {
                   >
                     <option value="ancient-round-03">Ancient · 第 3 回合</option>
                     <option value="ancient-round-11-defuse">Ancient · 第 11 回合拆弹</option>
+                    {import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1' ? (
+                      <option value="nuke-demo-round-01">
+                        Nuke · Legacy / Falcons · Demo 回合 1
+                      </option>
+                    ) : null}
                   </select>
                 </label>
               ) : null}
