@@ -56,8 +56,10 @@ const NUKE_LOWER_PLACEMENT: RadarCanvasPlacement = Object.freeze({
 export function radarBroadcastPlacement(
   mapKey: string,
   layer: string,
-  appearance: 'default' | 'shanghai' = 'default',
+  appearance: 'default' | 'shanghai' | 'esl' = 'default',
 ): RadarCanvasPlacement | null {
+  // overlay4 displays the full canonical overview, without the EWC detached-floor crop.
+  if (appearance === 'esl') return null;
   if (mapKey === 'de_ancient') return ANCIENT_PLACEMENT;
   if (mapKey === 'de_vertigo') return VERTIGO_PLACEMENT;
   if (mapKey !== 'de_nuke') return null;

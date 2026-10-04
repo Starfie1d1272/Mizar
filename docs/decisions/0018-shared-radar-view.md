@@ -21,3 +21,5 @@ Mizar Web 的 adapter 用既有 geometry API 投影本地 RadarSnapshot，再把
 本地真实 capture 衍生回归覆盖 utility、烟雾、火焰、轨迹、死亡、射击和回放重置；公共 contract 测试覆盖既有 wire fixture、2 Hz 插值、重复/乱序、代际与楼层变化、缺失位置和不兼容地图。独立临时项目实际安装 tarball，检查声明、ESM、SSR 与 assets；提供可对 RivalHub 实际 `projectPublicLive` 运行的最小 consumer 验证。
 
 提取完成不代表 RivalHub 整个公开 Live 页面完成，也不替代 Windows + CS2 + OBS 的真实环境验收。发布渠道、后续网站布局与连接策略仍由各自 host 管理。
+
+类ESL 作为可选 appearance 仅调整地图原色、标记、烟火与 C4 装饰脉冲。参考方向/开火图案随包复制并附来源，不替换 cs2-assets 地图/游戏图标 owner，不新增输入事实或协议。字体由 host 的类ESL 样式本地加载。

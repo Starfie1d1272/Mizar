@@ -148,13 +148,20 @@ function widgetContract(id: HudWidgetId) {
                       ['showSeriesWins', 'showAliveMatchup'].includes(path)) ||
                     ((id === 'team-ct-rail' || id === 'team-t-rail') && path === 'showTeamName')
                   ? variants.filter((variant) => variant !== 'perfectworld')
-                  : variants,
+                  : (id === 'focused-player' && path === 'showReserveAmmo') ||
+                      ((id === 'team-ct-rail' || id === 'team-t-rail') &&
+                        path === 'showTeamSummary')
+                    ? variants.filter((variant) => variant !== 'esl')
+                    : variants,
           },
   );
   const settingsSchemaByVariant: Record<string, (value: unknown) => Record<string, unknown>> = {
     default: (value) => schema.parse(value),
   };
   const defaultSettingsByVariant: Record<string, Record<string, unknown>> = { default: defaults };
+  if (id === 'team-ct-rail' || id === 'team-t-rail') {
+    defaultSettingsByVariant.esl = { ...defaultSettingsByVariant.esl, showTeamSummary: false };
+  }
   if (id === 'focused-player') {
     settingsSchemaByVariant.minimal = (value) => minimalFocusedPlayerSettingsSchema.parse(value);
     defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
@@ -173,6 +180,10 @@ function widgetContract(id: HudWidgetId) {
     variantLabels.minimal = '精简信息';
     defaultSettingsByVariant.ewc = {
       ...defaultSettingsByVariant.ewc,
+      showMetrics: false,
+    };
+    defaultSettingsByVariant.esl = {
+      ...defaultSettingsByVariant.esl,
       showMetrics: false,
     };
     defaultSettingsByVariant.iem = {

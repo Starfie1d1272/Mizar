@@ -66,11 +66,12 @@ export function getBuiltinPresets(): HudPreset[] {
 export function getBuiltinThemes(): HudTheme[] {
   return [
     getBuiltinTheme(),
-    ...HUD_BROADCAST_STYLE_CATALOG.map(({ style, label }) => ({
+    ...HUD_BROADCAST_STYLE_CATALOG.map(({ style, label, brandColor }) => ({
       ...getBuiltinTheme(),
       id: `builtin:${style}-theme`,
       name: label,
       recipe: style,
+      ...(brandColor === undefined ? {} : { brandColor }),
     })),
   ];
 }

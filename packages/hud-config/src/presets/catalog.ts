@@ -1,4 +1,5 @@
 import { deepFreeze } from '../json.js';
+import { ESL_STYLE } from './esl.js';
 import { EWC_STYLE } from './ewc.js';
 import { IEM_STYLE } from './iem.js';
 import { PERFECTWORLD_STYLE } from './perfectworld.js';
@@ -9,4 +10,5 @@ export const HUD_BROADCAST_STYLE_CATALOG: readonly HudBroadcastStyleDefinition[]
   EWC_STYLE,
   IEM_STYLE,
   PERFECTWORLD_STYLE,
+  ESL_STYLE,
 ]);

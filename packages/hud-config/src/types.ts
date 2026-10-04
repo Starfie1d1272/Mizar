@@ -147,6 +147,7 @@ export interface HudBroadcastStyleDefinition {
   readonly style: (typeof HUD_BROADCAST_STYLES)[number];
   readonly label: string;
   readonly showTeamName: boolean;
+  readonly brandColor?: string;
   readonly recipe: HudThemeRecipe;
   readonly widgetDimensions?: Partial<
     Record<HudWidgetId, { readonly width: number; readonly height: number }>

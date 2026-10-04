@@ -1,0 +1,543 @@
+/* overlay4 presentation using local reference artwork and fonts. Gameplay facts and clocks stay in existing owners. */
+.hud-widget-design[data-hud-design='esl'] .match-header__top-score {
+  width: 440px;
+  height: 184px;
+}
+.hud-widget-design[data-hud-design='esl'] .broadcast-event-ribbon {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 28px;
+  display: grid;
+  grid-template-columns: 1fr 28px 1fr;
+  align-items: center;
+  text-align: center;
+  background: var(--mizar-hud-surface-primary);
+  color: var(--mizar-event-accent);
+  font-size: 16px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='esl'] .broadcast-event-ribbon svg {
+  width: 20px;
+  height: 20px;
+  fill: var(--mizar-event-accent);
+  justify-self: center;
+}
+.hud-widget-design[data-hud-design='esl'] .broadcast-event-ribbon > span {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-shell {
+  top: 36px;
+  width: 440px;
+  height: 80px;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 14px,
+      color-mix(in srgb, var(--mizar-hud-text-muted) 6%, transparent) 14px 16px
+    ),
+    var(--mizar-hud-surface-primary);
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-zone {
+  height: 80px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-zone--logo {
+  width: 64px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-zone--logo-b {
+  left: 376px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-zone--score-a {
+  left: 64px;
+  width: 96px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-zone--score-b {
+  left: 280px;
+  width: 96px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__center {
+  left: 160px;
+  width: 120px;
+  height: 80px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__map-score {
+  font-size: 60px;
+  line-height: 64px;
+  color: var(--mizar-event-accent);
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__win-slots {
+  top: 14px;
+  bottom: auto;
+  left: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .match-header__score-zone--score-b
+  .match-header__win-slots {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__win-slots span {
+  width: 10px;
+  height: 10px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .match-header__win-slots
+  span[data-series-win-slot='won'] {
+  background: var(--mizar-event-accent);
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__side-accent {
+  top: 70px;
+  height: 5px;
+  width: 32px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__side-accent--a {
+  left: 96px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__side-accent--b {
+  right: 96px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__round-meta {
+  font-size: 24px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__clock-value {
+  font-size: 22px;
+}
+.hud-widget-design[data-hud-design='esl'] .objective-center__fuse {
+  top: 120px;
+  width: 440px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__alive-matchup {
+  top: 132px;
+  left: 154px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__timeout-panel {
+  top: 120px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail {
+  width: 308px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__header {
+  background: var(--mizar-side-ct);
+  height: 32px;
+  flex-basis: 32px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--t .player-rail__header {
+  background: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__header strong {
+  color: var(--mizar-hud-surface-strong);
+  text-shadow: none;
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__body::before {
+  display: block;
+  inset: 0;
+  width: 100%;
+  transform: none;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 90%, transparent);
+  z-index: -2;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__name {
+  max-width: 128px;
+  font-size: 21px;
+  font-weight: 400;
+  letter-spacing: 1.9px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__weapons {
+  left: 164px;
+  top: 12px;
+  width: 88px;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__weapons {
+  right: 164px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__utility-icons {
+  right: 52px;
+  bottom: 4px;
+  width: 88px;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__utility-icons {
+  left: 52px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__equipment {
+  right: 4px;
+  bottom: 5px;
+  width: 44px;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__equipment {
+  left: 4px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__round-kill-slot {
+  left: 164px;
+  top: -10px;
+  z-index: 5;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__round-kill-slot {
+  right: 164px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__body::before {
+  width: 216px;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__death-watermark {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 156px;
+  width: 64px;
+  height: 76px;
+  fill: var(--mizar-hud-text-primary);
+  opacity: 0.4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__death-watermark {
+  right: 156px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__card[data-observed='true']:not(.player-rail__card--dead) {
+  outline: 2px solid color-mix(in srgb, var(--mizar-hud-text-primary) 60%, transparent);
+  outline-offset: -2px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--mizar-side-ct) 38%, var(--mizar-hud-surface-strong)),
+    color-mix(in srgb, var(--mizar-side-ct) 65%, var(--mizar-hud-surface-strong))
+  );
+  background-image: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--mizar-side-ct) 45%, transparent),
+    color-mix(in srgb, var(--mizar-side-ct) 30%, transparent)
+  );
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__card[data-side='T']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--mizar-side-t) 38%, var(--mizar-hud-surface-strong)),
+    color-mix(in srgb, var(--mizar-side-t) 65%, var(--mizar-hud-surface-strong))
+  );
+  background-image: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--mizar-side-t) 45%, transparent),
+    color-mix(in srgb, var(--mizar-side-t) 30%, transparent)
+  );
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player {
+  margin-top: 0;
+  width: 296px;
+  height: 316px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__face {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__action,
+.hud-widget-design[data-hud-design='esl']
+  .focused-player__face[data-dead='true']
+  .focused-player__action {
+  top: 0;
+  height: 316px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__media,
+.hud-widget-design[data-hud-design='esl'] .focused-player__media img {
+  top: 0;
+  left: 28px;
+  width: 240px;
+  height: 240px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__media img {
+  left: 0;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__observer-tile-number {
+  width: 240px;
+  height: 240px;
+  line-height: 240px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__identity {
+  top: 240px;
+  height: 36px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--mizar-side-ct) 40%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__name {
+  max-width: 220px;
+  font-size: 22px;
+  text-transform: uppercase;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__vitals {
+  top: 240px;
+  left: auto;
+  right: 4px;
+  width: 64px;
+  height: 36px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__vitals-values {
+  height: 36px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__health-cluster {
+  width: 64px;
+  height: 36px;
+  text-align: right;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__hp {
+  font-size: 32px;
+  line-height: 36px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__health-track {
+  position: absolute;
+  right: 0;
+  width: 296px;
+  height: 2px;
+  top: 34px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__armor {
+  position: absolute;
+  top: 42px;
+  right: 94px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__active {
+  top: 232px;
+  left: 8px;
+  width: 96px;
+  height: 30px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__ammo {
+  top: 232px;
+  right: 8px;
+  width: 84px;
+  height: 30px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__ammo > strong {
+  font-size: 28px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__metrics {
+  left: 8px;
+  right: 8px;
+  justify-content: space-between;
+  gap: 8px;
+  top: 40px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__dead-state {
+  top: 240px;
+  right: 4px;
+  width: 64px;
+  height: 36px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__dead-state span {
+  font-size: 32px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__series-strip,
+.hud-widget-design[data-hud-design='esl'] .match-header__series-maps,
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map {
+  height: 28px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map {
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map-art {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map-name {
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='esl'] .broadcast-pause__brand {
+  border-top: 2px solid var(--mizar-event-accent);
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__avatar {
+  position: absolute;
+  top: 0;
+  left: 44px;
+  width: 160px;
+  height: 76px;
+  z-index: 1;
+  background: transparent;
+  opacity: 0.75;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__avatar img {
+  width: 160px;
+  height: 76px;
+  object-fit: cover;
+  object-position: top;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__avatar {
+  left: auto;
+  right: 44px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__body {
+  isolation: auto;
+  flex: 0 0 100%;
+  width: 100%;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__identity {
+  inset: 0 8px auto 20px;
+  height: 32px;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 0 20px auto 8px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__health-value {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  font-size: 40px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__health-value {
+  right: auto;
+  left: 0;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__kd {
+  left: 20px;
+  bottom: 28px;
+  font-size: 18px;
+  opacity: 1;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__kd {
+  right: 20px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__money {
+  left: 20px;
+  bottom: 5px;
+  font-size: 20px;
+  opacity: 1;
+  z-index: 4;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__money {
+  right: 20px;
+  left: auto;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 88px;
+  max-width: 88px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__endcap {
+  left: 0;
+  right: auto;
+  width: 12px;
+  height: 76px;
+  align-items: flex-start;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__endcap--right {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__endcap strong {
+  font-size: 20px;
+  line-height: 28px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__round-kill-badge {
+  border: 0;
+  width: auto;
+  height: 18px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__round-kill-badge svg {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__life-state,
+.hud-widget-design[data-hud-design='esl'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='esl'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__body {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__avatar {
+  opacity: 0.4;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body::before {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player,
+.hud-widget-design[data-hud-design='esl'] .focused-player__face {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__active,
+.hud-widget-design[data-hud-design='esl'] .focused-player__ammo,
+.hud-widget-design[data-hud-design='esl'] .focused-player__armor {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail,
+.hud-widget-design[data-hud-design='esl'] .focused-player,
+.hud-widget-design[data-hud-design='esl'] .match-header {
+  font-family: ESLLegend, SourceHanSans, var(--mizar-type-family-display), sans-serif;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__name,
+.hud-widget-design[data-hud-design='esl'] .player-rail__health-value {
+  font-family: inherit;
+}
+@font-face {
+  font-family: ESLLegend;
+  src: url('/brand/fonts/esl/legend-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: ESLLegend;
+  src: url('/brand/fonts/esl/legend-bold.woff2') format('woff2');
+  font-weight: 600 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: ESLLegend;
+  src: url('/brand/fonts/esl/legend-light.woff2') format('woff2');
+  font-weight: 300;
+  font-display: swap;
+}
+@font-face {
+  font-family: SourceHanSans;
+  src: url('/brand/fonts/esl/SourceHanSansCN-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__score-shell,
+.hud-widget-design[data-hud-design='esl'] .broadcast-event-ribbon,
+.hud-widget-design[data-hud-design='esl'] .player-rail__body::before,
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map,
+.hud-widget-design[data-hud-design='esl'] .focused-player__identity {
+  background-image: url('/brand/hud/esl/texture.svg');
+  background-size: 150% auto;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player::before,
+.hud-widget-design[data-hud-design='esl'] .focused-player__action-gap {
+  display: none;
+}
+
+.hud-widget-design[data-hud-design='esl'] .player-rail__card {
+  isolation: isolate;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__avatar::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__health-bar {
+  z-index: 0;
+}
+
+.hud-widget-design[data-hud-design='esl'] .player-rail__summary-slot {
+  display: none;
+}

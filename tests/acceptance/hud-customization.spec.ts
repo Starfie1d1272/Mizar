@@ -143,7 +143,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
   }
 });
 
-test('three broadcast presets save, activate and reload through the shared Program renderer', async ({
+test('four broadcast presets save, activate and reload through the shared Program renderer', async ({
   page,
   context,
 }) => {
@@ -190,7 +190,7 @@ test('three broadcast presets save, activate and reload through the shared Progr
       programSocket = socket;
       socket.send(JSON.stringify(snapshot));
     });
-    for (const style of ['ewc', 'iem', 'perfectworld']) {
+    for (const style of ['ewc', 'iem', 'perfectworld', 'esl']) {
       await page.goto('/operator/hud?hud-config=companion');
       await page
         .locator('select:has(option[value="builtin:ewc-preset"])')

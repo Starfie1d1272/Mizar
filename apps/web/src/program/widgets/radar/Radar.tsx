@@ -8,7 +8,7 @@ import type { RadarHudWidgetRendererProps } from '../../hud-renderer-registry';
 import { toRadarViewFrame } from './adapter';
 
 export interface RadarProps {
-  readonly appearance?: 'default' | 'shanghai';
+  readonly appearance?: 'default' | 'shanghai' | 'esl';
   readonly client?: LocalChannelClient<'radar'> | undefined;
   readonly snapshot?: RadarSnapshot | null | undefined;
   readonly zoomMode?: 'full-map' | 'auto' | undefined;
@@ -60,7 +60,13 @@ export function RadarWidget({
 }: RadarHudWidgetRendererProps) {
   return (
     <Radar
-      appearance={hudDesignForVariant(settings.variant) === 'perfectworld' ? 'shanghai' : 'default'}
+      appearance={
+        hudDesignForVariant(settings.variant) === 'perfectworld'
+          ? 'shanghai'
+          : hudDesignForVariant(settings.variant) === 'esl'
+            ? 'esl'
+            : 'default'
+      }
       client={radarClient}
       snapshot={radarSnapshot}
       presentationRevision={presentationRevision}

@@ -23,6 +23,7 @@ import './widgets/player-status-effects/player-status-effects.css';
 import './designs/shared.css';
 import './designs/ewc.css';
 import './designs/iem.css';
+import './designs/esl.css';
 import './designs/perfectworld.css';
 import { hudDesignForVariant } from './hud-design';
 import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause';

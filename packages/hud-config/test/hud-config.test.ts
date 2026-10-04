@@ -37,7 +37,7 @@ import {
 
 describe('hud-config schema and framework contract', () => {
   it('resolves styled history envelopes while retaining the original hidden history', () => {
-    for (const style of ['ewc', 'iem', 'perfectworld']) {
+    for (const style of ['ewc', 'iem', 'perfectworld', 'esl']) {
       const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
       const parsed = parseHudResolvedPreset(preset);
       expect(parsed.widgets['round-history'].variant).toBe(style);
@@ -47,6 +47,41 @@ describe('hud-config schema and framework contract', () => {
       );
     }
     expect(getBuiltinResolvedPreset().layout.widgets['round-history'].visible).toBe(false);
+  });
+  it('retains ESL identity, accent and variant envelopes in a frozen custom snapshot', () => {
+    const builtin = getBuiltinResolvedPreset('builtin:esl-preset');
+    expect(builtin.preset.name).toBe('类ESL');
+    expect(builtin.theme.brandColor).toBe('#0bf201');
+    expect(builtin.theme.recipe).toBe('esl');
+    expect(builtin.layout.widgets['team-ct-rail']).toMatchObject({
+      anchor: 'bottom-left',
+      offsetY: -16,
+    });
+    expect(getHudWidgetDescriptor('team-ct-rail').dimensionsByVariant?.esl).toEqual({
+      width: 308,
+      height: 444,
+    });
+    expect(placementToBox('top-score-bar', builtin.layout.widgets['top-score-bar'])).toMatchObject({
+      width: 440,
+      height: 184,
+    });
+    expect(
+      placementToBox('focused-player', builtin.layout.widgets['focused-player']),
+    ).toMatchObject({ width: 296, height: 316 });
+    const frozen = parseHudResolvedPreset(
+      JSON.parse(
+        JSON.stringify({
+          ...builtin,
+          preset: { ...builtin.preset, id: 'custom:esl-copy', name: 'ESL 副本' },
+          theme: { ...builtin.theme, brandColor: '#123456' },
+        }),
+      ),
+    );
+    expect(frozen.theme.brandColor).toBe('#123456');
+    expect(frozen.widgets['team-t-rail'].variant).toBe('esl');
+    expect(focusedPlayerPresentationSettings(frozen.widgets['focused-player']).showMetrics).toBe(
+      false,
+    );
   });
   it('provides a complete immutable-by-convention built-in registry', () => {
     const preset = getBuiltinPreset();

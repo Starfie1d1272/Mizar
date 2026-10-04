@@ -38,7 +38,7 @@ function mount(snapshot: ProgramSnapshot, preset: HudResolvedPreset, node?: HTML
   return container;
 }
 describe('Shared broadcast pause composition', () => {
-  it.each(['iem', 'ewc', 'perfectworld'])(
+  it.each(['iem', 'ewc', 'perfectworld', 'esl'])(
     'swaps physical pause/history sides in %s without changing Program or map strip',
     (style) => {
       const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);

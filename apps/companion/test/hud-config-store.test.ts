@@ -88,7 +88,7 @@ describe('HudConfigStore', () => {
     expect(store.getState().resolved).toEqual(before.resolved);
   });
 
-  it.each(['ewc', 'iem', 'perfectworld'])(
+  it.each(['ewc', 'iem', 'perfectworld', 'esl'])(
     'persists %s and preserves its recipe when copied',
     async (style) => {
       const filePath = await temporaryConfigPath();
