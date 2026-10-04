@@ -144,9 +144,11 @@ function WeaponIcon({
 function Avatar({
   player,
   dead,
+  onUnavailable,
 }: {
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
+  readonly onUnavailable?: () => void;
 }) {
   return (
     <div
@@ -160,6 +162,7 @@ function Avatar({
           alt=""
           onError={(event) => {
             event.currentTarget.style.display = 'none';
+            onUnavailable?.();
           }}
           src={player.avatarUrl}
           data-dead={dead}
@@ -478,9 +481,15 @@ export function PlayerCard({
     cursor,
     presentationRevision,
   });
-  const hasAvatar = options.showAvatar && player.avatarUrl !== null;
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
+  const hasAvatar =
+    options.showAvatar && player.avatarUrl !== null && failedAvatarUrl !== player.avatarUrl;
   const avatar = options.showAvatar ? (
-    <Avatar dead={dead} player={player} />
+    <Avatar
+      dead={dead}
+      player={player}
+      onUnavailable={() => setFailedAvatarUrl(player.avatarUrl)}
+    />
   ) : (
     <div className="player-rail__avatar" data-card-part="avatar" />
   );

@@ -2406,3 +2406,161 @@
   box-sizing: border-box;
   padding-bottom: 12px;
 }
+
+/* Missing media has its own compact composition, without an empty portrait tile. */
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true'] {
+  width: 260px;
+  height: 132px;
+  top: 60px;
+  left: 41px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__media {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__identity {
+  left: 0;
+  width: 260px;
+  height: 132px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__name {
+  max-width: 190px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__vitals,
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__dead-state {
+  left: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__ammo {
+  left: 122px;
+  width: 126px;
+  bottom: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__metrics {
+  bottom: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .shanghai-focus-utility {
+  left: 12px;
+  top: 76px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .shanghai-focus-kills {
+  right: 8px;
+  top: 8px;
+}
+.shanghai-focus-kills > svg:first-child {
+  justify-self: start;
+  margin: 2px 0 0 3px;
+}
+.shanghai-focus-kills > svg:last-child {
+  justify-self: end;
+  margin-right: 3px;
+  transform: rotate(180deg);
+}
+.shanghai-winner-name {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo:not(:has(.match-header__team-logo)) {
+  padding-inline: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .match-header__score-zone--logo:not(:has(.match-header__team-logo))
+  .match-header__team-name {
+  text-align: center;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__avatar {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__body {
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__round-kill-slot {
+  left: 4px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__identity {
+  left: 32px;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__identity {
+  left: 8px;
+  right: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 4px;
+}
+
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player:has(.focused-player__face[data-media-unavailable='true']) {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__equipment-slot[data-equipment='armor'] {
+  left: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__equipment-slot[data-equipment='armor'] {
+  left: auto;
+  right: 80px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__money {
+  left: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']:not(.player-rail__card--dead)
+  .player-rail__money {
+  left: auto;
+  right: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .objective-center[data-objective-mode='defused']
+  .objective-center__icon {
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-round-winner span.shanghai-winner-name {
+  font-size: 24px;
+  line-height: 1.2;
+}

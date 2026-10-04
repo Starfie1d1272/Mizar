@@ -8,6 +8,11 @@ import {
   buildReserveAmmoPresentation,
 } from '../src/program/widgets/focused-player/presentation';
 import { FocusedPlayerCard } from '../src/program/widgets/focused-player/FocusedPlayer';
+import {
+  ObjectiveCenter,
+  ObjectiveDefused,
+} from '../src/program/widgets/match-header/ObjectiveCenter';
+import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
 import { TopScoreBar } from '../src/program/widgets/match-header/TopScoreBar';
 import { getBuiltinResolvedPreset, placementToBox } from '@mizar/hud-config';
 
@@ -461,4 +466,43 @@ describe('Focused media and combat presentation lifecycle', () => {
       }
     },
   );
+});
+
+describe('objective action symbols', () => {
+  it.each([true, false, null])('uses pliers while defusing, kit ownership %s', (hasDefuseKit) => {
+    const container = host();
+    const snapshot = getProgramFixture('real-defusing')!;
+    const payload = {
+      ...snapshot.payload,
+      bomb: {
+        ...snapshot.payload.bomb!,
+        state: 'defusing' as const,
+        action: {
+          kind: 'defuse' as const,
+          sourcePlayerId: null,
+          remainingSeconds: 2,
+          durationSeconds: 10,
+          hasDefuseKit,
+        },
+      },
+    };
+    act(() =>
+      root!.render(
+        <ObjectiveCenter
+          presentation={buildMatchHeaderPresentation(payload)}
+          cursor={snapshot.cursor}
+          presentationRevision={0}
+        />,
+      ),
+    );
+    expect(container.querySelector('[data-asset-id="equipment.defuse-kit"]')).not.toBeNull();
+    expect(container.querySelector('[data-asset-id="objective.c4"]')).toBeNull();
+  });
+  it('uses a completed C4 symbol only in the completed presentation', () => {
+    const container = host();
+    act(() => root!.render(<ObjectiveDefused />));
+    expect(
+      container.querySelector('[data-objective-mode="defused"] [data-asset-id="objective.c4"]'),
+    ).not.toBeNull();
+  });
 });

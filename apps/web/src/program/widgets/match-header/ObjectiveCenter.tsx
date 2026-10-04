@@ -31,6 +31,13 @@ function Icon({
     />
   );
 }
+export function ObjectiveDefused() {
+  return (
+    <div className="objective-center" data-objective-mode="defused" aria-label="DEFUSED">
+      <Icon id="objective.c4" defusing />
+    </div>
+  );
+}
 function useInterpolatedProgress(
   value: number | null,
   mode: ObjectiveCenterPresentation['mode'],
@@ -189,7 +196,7 @@ export function ObjectiveCenter({
             data-objective-track="action"
             data-progress={c.action === null || c.stateOnly ? 'unavailable' : 'determinate'}
           >
-            <Icon id={c.hasKit ? 'equipment.defuse-kit' : 'objective.c4'} defusing />
+            <Icon id="equipment.defuse-kit" defusing />
             <svg viewBox="0 0 64 64" aria-hidden="true">
               <circle className="objective-center__ring-track" cx="32" cy="32" r="29" />
               {action.value === null || c.stateOnly ? null : (

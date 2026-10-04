@@ -6,7 +6,7 @@ import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-
  * Team binding and all gameplay progress remain owned by the existing presentation join/Core. */
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ObjectiveCenter, ObjectiveFuse } from './ObjectiveCenter';
+import { ObjectiveCenter, ObjectiveDefused, ObjectiveFuse } from './ObjectiveCenter';
 import {
   buildMatchHeaderPresentation,
   formatMatchHeaderScore,
@@ -57,9 +57,16 @@ function usePanelPresence<T>(value: T | null, exitMs = PANEL_EXIT_MS) {
 }
 /* eslint-enable react-hooks/set-state-in-effect */
 
-function TeamLogo({ team }: { readonly team: MatchHeaderTeamPresentation }) {
+function TeamLogo({
+  team,
+  fallback = false,
+}: {
+  readonly team: MatchHeaderTeamPresentation;
+  readonly fallback?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
-  if (team.logoUrl === null || failed) return null;
+  if (team.logoUrl === null || failed)
+    return fallback ? <span className="shanghai-winner-name">{team.name}</span> : null;
   return (
     <img
       alt=""
@@ -183,6 +190,8 @@ export function TopScoreBar({
               </svg>
               <strong>TECH PAUSE</strong>
             </div>
+          ) : shanghai && snapshot.payload.bomb?.state === 'defused' ? (
+            <ObjectiveDefused />
           ) : objective && !(shanghai && p.objective.mode === 'planting') ? (
             <ObjectiveCenter
               design={design}
@@ -354,7 +363,7 @@ function ShanghaiPanels({
         <span>
           {payload.map.roundNumber === null
             ? 'ROUND —'
-            : `ROUND ${payload.map.roundNumber + (payload.round?.phase === 'over' ? 0 : 1)}${payload.map.roundNumber < 24 ? '/24' : ''}`}
+            : `ROUND ${payload.map.roundNumber + 1}${payload.map.roundNumber < 24 ? '/24' : ''}`}
         </span>
       </div>
       {options.showObjectiveAuxiliary && p.objective.fuse !== null ? (
@@ -392,7 +401,7 @@ function ShanghaiPanels({
           data-owner={winner.key}
           data-side={winner.side}
         >
-          <TeamLogo team={winner} />
+          <TeamLogo team={winner} fallback />
           <strong>ROUND WINNER</strong>
         </div>
       ) : null}

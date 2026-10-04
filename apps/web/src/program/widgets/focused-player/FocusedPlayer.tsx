@@ -219,6 +219,9 @@ function FocusedPlayerFace({
       aria-hidden={outgoing || pending || undefined}
       className={`focused-player__face${outgoing ? ' focused-player__face--outgoing' : ''}${incoming ? ' focused-player__face--incoming' : ''}${pending ? ' focused-player__face--pending' : ''}`}
       data-avatar={showAvatar}
+      data-media-unavailable={
+        !options.showMedia || p.avatarUrl === null || failedAvatarUrl === p.avatarUrl
+      }
       data-side={p.side}
       data-dead={p.dead}
     >
@@ -393,7 +396,7 @@ function FocusedPlayerFace({
         <div className="shanghai-focus-kills" aria-label={`Round kills ${p.roundKills}`}>
           <StatGlyph kind="deaths" />
           <b>{p.roundKills}</b>
-          <StatGlyph kind="kills" />
+          <StatGlyph kind="deaths" />
         </div>
       ) : null}
       <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
