@@ -175,6 +175,10 @@ function widgetContract(id: HudWidgetId) {
       ...defaultSettingsByVariant.ewc,
       showMetrics: false,
     };
+    defaultSettingsByVariant.iem = {
+      ...defaultSettingsByVariant.iem,
+      showMetrics: false,
+    };
   }
   if (id === 'team-ct-rail' || id === 'team-t-rail')
     defaultSettingsByVariant.perfectworld = {

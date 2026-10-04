@@ -10,8 +10,9 @@
   .focused-player__identity {
   background: var(--mizar-hud-surface-strong);
 }
-.hud-widget-design[data-hud-design='iem'] .focused-player__metrics {
-  display: none;
+.hud-widget-design[data-hud-design='iem'] .focused-player[data-show-metrics='true'] {
+  margin-top: 40px;
+  height: 136px;
 }
 .hud-widget-design[data-hud-design='iem'] .objective-center__fuse {
   top: 78px;

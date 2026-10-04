@@ -429,23 +429,26 @@ describe('hud-config logical geometry', () => {
 });
 
 describe('widget customization contract', () => {
-  it('starts EWC Focus without duplicate metrics and preserves an explicit saved opt-in', () => {
-    const preset = getBuiltinResolvedPreset('builtin:ewc-preset');
-    expect(focusedPlayerPresentationSettings(preset.widgets['focused-player'])).toMatchObject({
-      showMetrics: false,
-      showMedia: true,
-      showReserveAmmo: true,
-    });
-    preset.widgets['focused-player'].settings.showMetrics = true;
-    const restored = parseHudResolvedPreset(JSON.parse(JSON.stringify(preset)));
-    expect(focusedPlayerPresentationSettings(restored.widgets['focused-player']).showMetrics).toBe(
-      true,
-    );
-    expect(
-      focusedPlayerPresentationSettings(getBuiltinResolvedPreset().widgets['focused-player'])
-        .showMetrics,
-    ).toBe(true);
-  });
+  it.each(['ewc', 'iem'] as const)(
+    'starts %s Focus without metrics and preserves an explicit saved opt-in',
+    (style) => {
+      const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
+      expect(focusedPlayerPresentationSettings(preset.widgets['focused-player'])).toMatchObject({
+        showMetrics: false,
+        showMedia: true,
+        showReserveAmmo: true,
+      });
+      preset.widgets['focused-player'].settings.showMetrics = true;
+      const restored = parseHudResolvedPreset(JSON.parse(JSON.stringify(preset)));
+      expect(
+        focusedPlayerPresentationSettings(restored.widgets['focused-player']).showMetrics,
+      ).toBe(true);
+      expect(
+        focusedPlayerPresentationSettings(getBuiltinResolvedPreset().widgets['focused-player'])
+          .showMetrics,
+      ).toBe(true);
+    },
+  );
 
   it('validates every declared default and control value, rejecting undeclared fields', () => {
     for (const descriptor of HUD_WIDGET_REGISTRY) {

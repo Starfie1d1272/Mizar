@@ -121,6 +121,7 @@ export function ObjectiveFuse({
   );
 }
 export function ObjectiveCenter({
+  design = 'current',
   presentation,
   cursor,
   presentationRevision,
@@ -224,7 +225,16 @@ export function ObjectiveCenter({
         <>
           <div className="objective-center__bomb">
             <span className="objective-center__device">
-              <Icon className={plantedTransition ? 'is-planted-commit' : ''} id="objective.c4" />
+              <Icon
+                className={
+                  design === 'perfectworld' && c.mode === 'planted'
+                    ? 'shanghai-c4'
+                    : plantedTransition
+                      ? 'is-planted-commit'
+                      : ''
+                }
+                id="objective.c4"
+              />
               {(c.mode === 'planted' && !c.stateOnly) ||
               (c.mode === 'planting' && action.value !== null) ? (
                 <span

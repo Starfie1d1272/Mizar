@@ -61,6 +61,9 @@
 .hud-widget-design[data-hud-design='perfectworld'] .objective-center {
   height: 56px;
 }
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__icon.shanghai-c4 {
+  animation: shanghai-c4-pulse 1400ms ease-in-out infinite alternate;
+}
 .shanghai-round-strip {
   position: absolute;
   top: 60px;
@@ -335,4 +338,18 @@
 .shanghai-round-winner span.shanghai-winner-name {
   font-size: 24px;
   line-height: 1.2;
+}
+
+@keyframes shanghai-c4-pulse {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-widget-design[data-hud-design='perfectworld'] .objective-center__icon.shanghai-c4 {
+    animation: none;
+  }
 }

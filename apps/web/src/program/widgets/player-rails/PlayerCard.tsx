@@ -91,7 +91,13 @@ function usePresenceItems<T extends { readonly key: string }>(
     return () => window.clearTimeout(timer);
   }, [exitMs, presentationRevision, signature]);
 
-  return rendered;
+  // Presence owns membership and motion, never the current equipment state.
+  // Only departing items retain their last presentation until the exit completes.
+  const currentByKey = new Map(items.map((item) => [item.key, item]));
+  return rendered.map((item) => ({
+    ...(currentByKey.get(item.key) ?? item),
+    motionPhase: item.motionPhase,
+  }));
 }
 
 function WeaponIcon({
@@ -119,10 +125,12 @@ function WeaponIcon({
 function Avatar({
   player,
   dead,
+  unavailable,
   onUnavailable,
 }: {
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
+  readonly unavailable: boolean;
   readonly onUnavailable?: () => void;
 }) {
   return (
@@ -132,13 +140,11 @@ function Avatar({
       data-avatar-present={player.avatarUrl !== null}
       data-card-part="avatar"
     >
-      {player.avatarUrl === null ? null : (
+      {player.avatarUrl === null || unavailable ? null : (
         <img
+          key={player.avatarUrl}
           alt=""
-          onError={(event) => {
-            event.currentTarget.style.display = 'none';
-            onUnavailable?.();
-          }}
+          onError={onUnavailable}
           src={player.avatarUrl}
           data-dead={dead}
         />
@@ -470,6 +476,7 @@ export function PlayerCard({
     options.showAvatar && player.avatarUrl !== null && failedAvatarUrl !== player.avatarUrl;
   const avatar = options.showAvatar ? (
     <Avatar
+      unavailable={failedAvatarUrl === player.avatarUrl}
       dead={dead}
       player={player}
       onUnavailable={() => setFailedAvatarUrl(player.avatarUrl)}

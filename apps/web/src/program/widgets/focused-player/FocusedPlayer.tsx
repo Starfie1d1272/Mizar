@@ -529,6 +529,7 @@ export function FocusedPlayerCard({
     <article
       aria-label="Focused player"
       className="focused-player"
+      data-show-metrics={options.showMetrics}
       data-focused-player={player.sourcePlayerId}
       data-avatar={
         options.showMedia && loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined

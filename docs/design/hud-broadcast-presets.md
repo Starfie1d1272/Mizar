@@ -53,7 +53,7 @@ IEM 使用 360px 卡宽，76px 方形头像位于外侧；Perfect World 使用 3
 
 ## C4 与事实边界
 
-保留既有居中 C4 图标、安放密码格 1→4、已安放后变红及拆弹环形进度。剩余时间条保持两侧向中心收缩；安装完成只做短淡入。动效和进度由既有 accepted samples 驱动，跳转/重播使旧瞬态失效。缺少时长证据时不补猜进度。
+保留既有居中 C4 图标、安放密码格 1→4、已安放后变红及拆弹环形进度。剩余时间条保持两侧向中心收缩；安装完成只做短淡入；上海已下包图标补充 1400ms 的轻微透明度呼吸，减少动态效果时关闭，不增加 JS 计时或改写游戏时钟。动效和进度由既有 accepted samples 驱动，跳转/重播使旧瞬态失效。缺少时长证据时不补猜进度。
 
 上海粉色斜纹段已接入 #52：`cs2-c4-damage@0.1.0`。Companion 加载并校验官方随包地图资源，Core 使用站立预测器，Program v8 发布有界逐人结果。只在同代、同地图、当前完整名单、fresh 且已安放/拆弹时计算；姿态、遮挡等未知条件保留在结果中。HUD 仅在 accepted 爆炸倒计时 `0 < remainingSeconds <= 10` 时显示，不在浏览器建立另一个游戏时钟；结束、暂停或过期立即隐藏。预测仅叠在真实 HP 条，不改写生命或死亡事实。组件设置「C4 伤害预测」可持久化关闭；资源、身份、位置缺失时隐藏。雷达保留预设去色和地图描边，删除额外的 brightness 压暗。详见 ADR 0019。
 
@@ -101,3 +101,11 @@ IEM 九张参考与本轮暂停/烟雾/历史取舍见 [IEM 视觉复核](review
 格式为 `format: "mizar-hud-preset"`、`formatVersion: 1`，顶层仅有 `format`、`formatVersion`、`preset`、`layout`、`theme`；三个资源仍使用各自 `schemaVersion: 1`。内部 `preset.layoutId/themeId` 必须指向文件内的资源，导入后重写为本机的新 ID。UTF-8 文件上限 256 KiB。完整可编辑示例见 [Perfect World 预设文件](../examples/perfectworld.mizar-hud.json)。
 
 新增现有组件方案的组合只需一份通过 `parseHudPresetPack` 的配置文件，可作为用户文件、未来内置数据或社区下载内容复用。新增组件结构或赛事造型仍需实现并注册 renderer/variant/recipe 和对应 CSS，再更新受控枚举；文件不会执行任意代码。未来社区可在这个格式上增加分发、预览和作者信息；当前实现只负责文件交换与本地持久化。
+
+## PR 120 最后一轮状态修复与展示分享
+
+IEM Focus 默认不显示统计；手动启用 K/A/D/ADR 时使用同一 176px envelope 内的 136px 主体与 40px 顶部留白，统计不被裁切。已保存的启用设置继续有效。道具 presence 只保留动画阶段与退出项，当前持有状态每次渲染读取新 presentation，换持有物不重启动画。选手头像失败使用声明式回退，换 URL 后可恢复。
+
+上海安放/拆弹附加面板只在同类动作剩余时间有限且大于零时显示；完成、计时失效、状态切换或取消时同帧撤掉，不显示占位时间，也不等待退出计时器。语义 C4 图标仍由 Program bomb 状态控制，后端未启动导致的数据缺失不作为图标资源 bug 处理。
+
+`node scripts/hud-reference/build-perfectworld.mjs` 从实际 renderer 生成离线展示 ZIP，包含预览、DOM 样本、展示数据、样式、源码、素材和许可。用途是给 Vue 项目参考移植；它不建立公共 SDK、插件协议或第二个 Runtime。说明见 [参考包 README](../../scripts/hud-reference/README.md)。

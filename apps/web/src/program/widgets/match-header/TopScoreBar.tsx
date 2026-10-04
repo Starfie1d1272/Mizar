@@ -342,6 +342,14 @@ function ShanghaiPanels({
       : undefined;
   const active = p.objective.mode === 'planting' || p.objective.mode === 'defusing';
   const remaining = action?.remainingSeconds;
+  const timedAction =
+    active &&
+    action != null &&
+    remaining != null &&
+    Number.isFinite(remaining) &&
+    remaining > 0 &&
+    ((p.objective.mode === 'planting' && action.kind === 'plant') ||
+      (p.objective.mode === 'defusing' && action.kind === 'defuse'));
   return (
     <>
       <div className="shanghai-round-strip">
@@ -360,7 +368,7 @@ function ShanghaiPanels({
           <i style={{ width: `${p.objective.fuse * 100}%` }} />
         </div>
       ) : null}
-      {options.showObjectiveAuxiliary && active && action ? (
+      {options.showObjectiveAuxiliary && timedAction ? (
         <>
           {action.kind === 'defuse' && p.objective.action !== null ? (
             <div className="shanghai-action-track" data-owner={actionOwner} data-kind={action.kind}>
@@ -370,14 +378,10 @@ function ShanghaiPanels({
           ) : null}
           <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
             {action.kind === 'defuse' && p.objective.hasKit ? <ShanghaiKit /> : null}
-            {action.kind === 'defuse' ? (
-              <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
-            ) : null}
+            {action.kind === 'defuse' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
             <strong>{actor?.displayName ?? 'PLAYER'}</strong>
             <span>{action.kind === 'plant' ? 'PLANTING BOMB' : 'DEFUSING THE BOMB'}</span>
-            {action.kind === 'plant' ? (
-              <b>{remaining == null ? '—' : Math.max(0, remaining).toFixed(2).replace('.', ':')}</b>
-            ) : null}
+            {action.kind === 'plant' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
           </div>
         </>
       ) : winner ? (

@@ -453,3 +453,56 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     await expect(card).toHaveAttribute('data-observer-transition', 'false');
   });
 });
+
+test('Shanghai planting panel exits without a placeholder and planted C4 has reduced-motion-safe feedback', async ({
+  page,
+}) => {
+  await installReplayClock(page);
+  await page.goto('/operator/hud');
+  await pauseReplayClock(page);
+  await page
+    .getByRole('combobox', { name: '预设', exact: true })
+    .selectOption('builtin:perfectworld-preset');
+  await page.getByLabel('预览来源').selectOption('replay');
+  const replay = page.getByRole('region', { name: '重放控制' });
+  const { events, frames } = await loadAncientReplay(page);
+  await selectReplayEvent(
+    page,
+    replay,
+    eventAt(events, 'bomb-state', 1016, (event) => event.detail.to === 'planting'),
+  );
+  await expect(page.locator('.shanghai-event-panel[data-kind="plant"]')).toBeVisible();
+  await advanceReplayTo(page, replay, frames, 1028);
+  await advanceReplayTo(page, replay, frames, 1029);
+  await expect(page.locator('.shanghai-event-panel[data-kind="plant"]')).toHaveCount(0);
+  const c4 = page.locator('.objective-center .shanghai-c4');
+  await expect(c4).toBeVisible();
+  await expect(c4).toHaveAttribute('data-asset-id', 'objective.c4');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(c4).toHaveCSS('animation-name', 'shanghai-c4-pulse');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(c4).toHaveCSS('animation-name', 'none');
+});
+
+test('IEM metrics opt-in is visible and contained in the existing focus envelope', async ({
+  page,
+}) => {
+  await page.goto('/operator/hud');
+  await page
+    .getByRole('combobox', { name: '预设', exact: true })
+    .selectOption('builtin:iem-preset');
+  await page
+    .getByRole('combobox', { name: '配置组件', exact: true })
+    .selectOption('focused-player');
+  const toggle = page.getByRole('checkbox', { name: '显示 K/A/D/ADR', exact: true });
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  const metrics = page.locator('.focused-player__metrics');
+  await expect(metrics).toBeVisible();
+  const footer = (await metrics.boundingBox())!;
+  const card = (await page.locator('.focused-player').boundingBox())!;
+  expect(footer.y).toBeGreaterThanOrEqual(card.y);
+  expect(footer.y + footer.height).toBeLessThanOrEqual(card.y + card.height);
+  await toggle.uncheck();
+  await expect(metrics).toHaveCount(0);
+});
