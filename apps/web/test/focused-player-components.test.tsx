@@ -8,6 +8,11 @@ import {
   buildReserveAmmoPresentation,
 } from '../src/program/widgets/focused-player/presentation';
 import { FocusedPlayerCard } from '../src/program/widgets/focused-player/FocusedPlayer';
+import {
+  ObjectiveCenter,
+  ObjectiveDefused,
+} from '../src/program/widgets/match-header/ObjectiveCenter';
+import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
 import { TopScoreBar } from '../src/program/widgets/match-header/TopScoreBar';
 import { getBuiltinResolvedPreset, placementToBox } from '@mizar/hud-config';
 
@@ -204,6 +209,99 @@ describe('Focused media and combat presentation lifecycle', () => {
     );
     expect(container.querySelector('.focused-player__metrics')?.textContent).toBe('K—A4D11ADR82.3');
   });
+  it('separates Shanghai round kills and live ADR and preserves a reported death zero', () => {
+    const container = host();
+    const player = buildFocusedPlayerPresentation(getProgramFixture('real-live-rich')!.payload)!;
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{ ...player, roundKills: 3, liveAdr: 123, completedAdr: 82 }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.shanghai-focus-kills')?.textContent).toBe('3');
+    expect(container.querySelector('.focused-player__metrics')?.textContent).toContain('ADR123');
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{ ...player, dead: true, health: null, reportedHealth: 0 }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.focused-player__dead-state')?.textContent).toBe('0');
+  });
+  it('shows a held firearm together with Shanghai ammunition', () => {
+    const container = host();
+    const player = buildFocusedPlayerPresentation(getProgramFixture('real-live-rich')!.payload)!;
+    act(() => root!.render(<FocusedPlayerCard design="perfectworld" player={player} />));
+    expect(player.activeItemKind).toBe('firearm');
+    {
+      expect(
+        container
+          .querySelector('.focused-player__ammo .shanghai-focus-firearm [data-asset-id]')
+          ?.getAttribute('data-asset-id'),
+      ).toBe(player.activeItem?.asset?.canonicalKey);
+    }
+    act(() =>
+      root!.render(
+        <FocusedPlayerCard
+          design="perfectworld"
+          player={{
+            ...player,
+            activeItemKind: 'knife',
+            clip: null,
+            reserveMagazine: null,
+            reserveText: null,
+          }}
+        />,
+      ),
+    );
+    expect(container.querySelector('.shanghai-focus-firearm')).toBeNull();
+    expect(container.querySelector('.focused-player__ammo')?.textContent).toBe('');
+  });
+  it('uses remaining rather than completed defuse time for Shanghai', () => {
+    const container = host();
+    const preset = getBuiltinResolvedPreset('builtin:perfectworld-preset');
+    const placement = preset.layout.widgets['top-score-bar'];
+    const snapshot = getProgramFixture('real-live-rich')!;
+    act(() =>
+      root!.render(
+        <TopScoreBar
+          design="perfectworld"
+          resolvedPreset={preset}
+          placement={placement}
+          box={placementToBox('top-score-bar', placement)}
+          widgetId="top-score-bar"
+          settings={preset.widgets['top-score-bar']}
+          snapshot={{
+            ...snapshot,
+            payload: {
+              ...snapshot.payload,
+              round: { ...snapshot.payload.round!, phase: 'live' },
+              bomb: {
+                state: 'defusing',
+                sourcePlayerId: null,
+                explosion: { remainingSeconds: 20, durationSeconds: 40 },
+                action: {
+                  kind: 'defuse',
+                  sourcePlayerId: null,
+                  remainingSeconds: 4,
+                  durationSeconds: 5,
+                  hasDefuseKit: true,
+                },
+              },
+            },
+          }}
+        />,
+      ),
+    );
+    expect(container.querySelector<HTMLElement>('.shanghai-action-track i')?.style.width).toBe(
+      '80%',
+    );
+    expect(container.querySelector<HTMLElement>('.shanghai-fuse i')?.style.width).toBe('50%');
+  });
   it('keeps timeout exit motion presentation-local and clears it on a new revision', () => {
     vi.useFakeTimers();
     const container = host();
@@ -244,29 +342,167 @@ describe('Focused media and combat presentation lifecycle', () => {
     expect(container.querySelector('[data-timeout-panel="true"]')).toBeNull();
   });
 
-  it('objective defaults never reveal exact objective seconds, and phase fallback has no fake dual tracks', () => {
+  it('maps plant samples to four code steps, clears on seek and keeps fuse centered', () => {
     const container = host();
-    for (const id of [
-      'real-planting',
-      'real-planted',
-      'real-defusing',
-      'objective-dual-progress-edge',
-    ]) {
-      const snapshot = getProgramFixture(id)!;
-      const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+    const base = getProgramFixture('real-planting')!;
+    const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+    const render = (snapshot = base, revision = 0) =>
       act(() =>
         root!.render(
           <TopScoreBar
+            design="ewc"
             snapshot={snapshot}
             resolvedPreset={BUILTIN_RESOLVED_PRESET}
             widgetId="top-score-bar"
             placement={placement}
             box={placementToBox('top-score-bar', placement)}
             settings={BUILTIN_RESOLVED_PRESET.widgets['top-score-bar']}
+            presentationRevision={revision}
           />,
         ),
       );
-      expect(container.querySelector('.objective-center')?.textContent).not.toMatch(/\d+\.\d|\d+s/);
+    for (const [progress, steps] of [
+      [0, 1],
+      [0.3, 2],
+      [0.55, 3],
+      [0.8, 4],
+    ] as const) {
+      render({
+        ...base,
+        payload: {
+          ...base.payload,
+          bomb: {
+            ...base.payload.bomb!,
+            state: 'planting',
+            action: {
+              ...base.payload.bomb!.action!,
+              kind: 'plant',
+              durationSeconds: 4,
+              remainingSeconds: 4 * (1 - progress),
+            },
+          },
+        },
+      });
+      expect(
+        container.querySelectorAll('.objective-center__code [data-filled="true"]'),
+      ).toHaveLength(steps);
+      expect(
+        container.querySelector('.objective-center')?.getAttribute('data-objective-mode'),
+      ).toBe('planting');
     }
+    render(base, 1);
+    expect(
+      container.querySelector('.objective-center')?.getAttribute('data-planted-transition'),
+    ).toBe('false');
+    render(
+      { ...base, payload: { ...base.payload, bomb: { ...base.payload.bomb!, action: null } } },
+      2,
+    );
+    expect(container.querySelector('.objective-center__code')).toBeNull();
+    const planted = getProgramFixture('real-planted')!;
+    for (const remainingSeconds of [40, 20, 5]) {
+      render({
+        ...planted,
+        payload: {
+          ...planted.payload,
+          bomb: {
+            ...planted.payload.bomb!,
+            explosion: {
+              ...planted.payload.bomb!.explosion!,
+              durationSeconds: 40,
+              remainingSeconds,
+            },
+          },
+        },
+      });
+      expect(
+        container.querySelectorAll('.objective-center__code [data-filled="true"]'),
+      ).toHaveLength(4);
+      const fill = container.querySelector<HTMLElement>('[data-fuse-value]')!;
+      expect(fill.style.left).toBe('50%');
+      expect(fill.style.transform).toBe('translateX(-50%)');
+      expect(fill.style.width).toBe(`${(remainingSeconds / 40) * 100}%`);
+    }
+  });
+
+  it.each(['current', 'ewc', 'iem'] as const)(
+    '%s objective never invents seconds or action progress',
+    (design) => {
+      const container = host();
+      for (const id of [
+        'real-planting',
+        'real-planted',
+        'real-defusing',
+        'objective-dual-progress-edge',
+      ]) {
+        const snapshot = getProgramFixture(id)!;
+        const placement = BUILTIN_RESOLVED_PRESET.layout.widgets['top-score-bar'];
+        act(() =>
+          root!.render(
+            <TopScoreBar
+              design={design}
+              snapshot={snapshot}
+              resolvedPreset={BUILTIN_RESOLVED_PRESET}
+              widgetId="top-score-bar"
+              placement={placement}
+              box={placementToBox('top-score-bar', placement)}
+              settings={BUILTIN_RESOLVED_PRESET.widgets['top-score-bar']}
+            />,
+          ),
+        );
+        expect(container.querySelector('.objective-center')?.textContent).not.toMatch(
+          /\d+\.\d|\d+s/,
+        );
+        const mode = container
+          .querySelector('.objective-center')
+          ?.getAttribute('data-objective-mode');
+        expect(container.querySelector('.objective-center')?.textContent).not.toMatch(
+          /[\u4e00-\u9fff]/,
+        );
+        expect(container.querySelector('.objective-center__readout')).toBeNull();
+        if (mode === 'planting' || mode === 'defusing') {
+          expect(container.querySelectorAll('[data-objective-track="action"]')).toHaveLength(1);
+        }
+      }
+    },
+  );
+});
+
+describe('objective action symbols', () => {
+  it.each([true, false, null])('uses pliers while defusing, kit ownership %s', (hasDefuseKit) => {
+    const container = host();
+    const snapshot = getProgramFixture('real-defusing')!;
+    const payload = {
+      ...snapshot.payload,
+      bomb: {
+        ...snapshot.payload.bomb!,
+        state: 'defusing' as const,
+        action: {
+          kind: 'defuse' as const,
+          sourcePlayerId: null,
+          remainingSeconds: 2,
+          durationSeconds: 10,
+          hasDefuseKit,
+        },
+      },
+    };
+    act(() =>
+      root!.render(
+        <ObjectiveCenter
+          presentation={buildMatchHeaderPresentation(payload)}
+          cursor={snapshot.cursor}
+          presentationRevision={0}
+        />,
+      ),
+    );
+    expect(container.querySelector('[data-asset-id="equipment.defuse-kit"]')).not.toBeNull();
+    expect(container.querySelector('[data-asset-id="objective.c4"]')).toBeNull();
+  });
+  it('uses a completed C4 symbol only in the completed presentation', () => {
+    const container = host();
+    act(() => root!.render(<ObjectiveDefused />));
+    expect(
+      container.querySelector('[data-objective-mode="defused"] [data-asset-id="objective.c4"]'),
+    ).not.toBeNull();
   });
 });

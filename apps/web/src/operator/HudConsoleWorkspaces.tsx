@@ -13,6 +13,7 @@ import {
   type HudWidgetPlacement,
 } from '@mizar/hud-config';
 
+import { HudPresetFiles } from './HudPresetFiles';
 import { HudWidgetInspector } from './HudWidgetInspector';
 import { activePresetId, resourceFor, resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
@@ -74,6 +75,8 @@ export interface HudConsoleWorkspaceProps {
   readonly onDiscard: (kind: HudWorkspace) => void;
   readonly onReset: (kind: HudWorkspace) => void;
   readonly onActivate: () => void;
+  readonly onImportPresetFile: (file: File) => void;
+  readonly onExportPresetFile: () => void;
 }
 
 function isBuiltin(id: string): boolean {
@@ -127,6 +130,8 @@ export function HudConsoleWorkspaces({
   onDiscard,
   onReset,
   onActivate,
+  onImportPresetFile,
+  onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
   const activePresetResourceId = activePresetId(configDocument);
   const activePresetName = resourceName(
@@ -207,6 +212,15 @@ export function HudConsoleWorkspaces({
             {activationLabel}
           </span>
         </div>
+        <HudPresetFiles
+          disabled={busy || !editorReady || hasDirtyDraft}
+          exportDisabled={!previewMatchesPresetReferences}
+          onImport={onImportPresetFile}
+          onExport={onExportPresetFile}
+        />
+        <p className="hud-console__hint">
+          先保存更改再分享或导入。导入会创建新副本，启用后才会上屏。
+        </p>
         <label className="hud-console__field">
           预设
           <select

@@ -5,6 +5,10 @@
   box-sizing: border-box;
 }
 
+.player-rail__death-watermark {
+  display: none;
+}
+
 .player-rail {
   position: relative;
   display: flex;
@@ -477,7 +481,9 @@
   margin-left: auto;
 }
 
-.player-rail--right .player-rail__icon[data-weapon-visual-role] {
+/* The original preset keeps unflipped artwork. Facing-aware assets already
+ * mirror their left-aligned mask at the leaf; aligning right would flip twice. */
+.player-rail--right .player-rail__icon[data-weapon-visual-role][data-asset-facing='right'] {
   mask-position: right center;
   -webkit-mask-position: right center;
 }

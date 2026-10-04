@@ -1,4 +1,5 @@
-import { Button } from '../ui';
+import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
+import { Button, Select } from '../ui';
 import { ToolShell } from '../patterns';
 import {
   Fragment,
@@ -22,6 +23,7 @@ import {
   getBuiltinPreset,
   getBuiltinTheme,
   moveWidgetPlacement,
+  resolveHudVariantLayout,
   normalizeHudPlacement,
   placementToBox,
   resetLayoutDraft,
@@ -159,6 +161,8 @@ export function HudConsolePage() {
   const editorStatus = visualFixtureMode ? 'ready' : hudEditor.status;
   const initialDocument = fixtureDocument;
   const [workspace, setWorkspace] = useState<HudWorkspace>('preset');
+  const [mapBackground, setMapBackground] = useState(true);
+  const reviewFrameRef = useRef<HTMLDivElement>(null);
   const [selectedPresetId, setSelectedPresetId] = useState(() => activePresetId(initialDocument));
   const [selectedLayoutId, setSelectedLayoutId] = useState(() => {
     const preset = resourceFor(initialDocument, 'preset', activePresetId(initialDocument));
@@ -470,7 +474,7 @@ export function HudConsolePage() {
 
   function selectedDraft(kind: HudWorkspace): HudResource {
     if (kind === 'preset') return presetDraft;
-    if (kind === 'layout') return layoutDraft;
+    if (kind === 'layout') return resolveHudVariantLayout(layoutDraft, presetDraft.widgets);
     return themeDraft;
   }
 
@@ -620,6 +624,53 @@ export function HudConsolePage() {
     }
   }
 
+  async function importPresetFile(file: File): Promise<void> {
+    if (busy || !editorReady || hasDirtyDraft || hudEditor.revision === null) return;
+    const expectedEditorRevision = hudEditor.revision;
+    setBusy(true);
+    setCommandState(null);
+    try {
+      const value = await readHudPresetFile(file);
+      const response = await mutateHudConfig({
+        kind: 'import-preset-pack',
+        value,
+        expectedEditorRevision,
+      });
+      // Merge into the existing editor document; never replace in-flight drafts or activate.
+      hudEditor.applyResponse(response.editor);
+      setCommandState(
+        `已导入「${value.preset.name.trim()}」。请在预设列表中选择并预览，启用后才会上屏。`,
+      );
+    } catch (error: unknown) {
+      setCommandState(
+        error instanceof HudConfigMutationError && error.status === 409
+          ? '已在另一页面更新，请重新读取后导入。'
+          : error instanceof Error
+            ? error.message
+            : '预设文件导入失败，请重试。',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function exportPresetFile(): void {
+    if (
+      busy ||
+      !editorReady ||
+      hasDirtyDraft ||
+      selectedLayoutId !== presetDraft.layoutId ||
+      selectedThemeId !== presetDraft.themeId
+    )
+      return;
+    try {
+      downloadHudPresetFile(presetDraft, layoutDraft, themeDraft);
+      setCommandState('已导出预设文件，包含组件方案、布局与外观。');
+    } catch {
+      setCommandState('预设文件未导出，请检查当前配置。');
+    }
+  }
+
   async function activateSelectedPreset(): Promise<void> {
     if (busy || !editorReady || hudEditor.revision === null) return;
     setBusy(true);
@@ -677,7 +728,7 @@ export function HudConsolePage() {
       widgetId,
       startX: point.x,
       startY: point.y,
-      placement: clone(layoutDraft.widgets[widgetId]),
+      placement: clone(previewResolved.layout.widgets[widgetId]),
     });
   }
 
@@ -732,11 +783,11 @@ export function HudConsolePage() {
   );
 
   const selectedPlacement =
-    selectedWidgetId === null ? null : layoutDraft.widgets[selectedWidgetId];
+    selectedWidgetId === null ? null : previewResolved.layout.widgets[selectedWidgetId];
   const selectedBox =
     selectedWidgetId === null
       ? null
-      : placementToBox(selectedWidgetId, layoutDraft.widgets[selectedWidgetId]);
+      : placementToBox(selectedWidgetId, previewResolved.layout.widgets[selectedWidgetId]);
 
   function updateSelectedPlacement(
     update: (placement: HudLayout['widgets'][HudWidgetId]) => HudLayout['widgets'][HudWidgetId],
@@ -748,7 +799,8 @@ export function HudConsolePage() {
       widgets: {
         ...current.widgets,
         [selectedWidgetId]: (() => {
-          const currentPlacement = current.widgets[selectedWidgetId];
+          const currentPlacement = resolveHudVariantLayout(current, previewResolved.widgets)
+            .widgets[selectedWidgetId];
           const updatedPlacement = update(currentPlacement);
           return preserveVisualBox
             ? changePlacementAnchor(selectedWidgetId, currentPlacement, updatedPlacement.anchor)
@@ -768,6 +820,8 @@ export function HudConsolePage() {
     layoutDraft,
     layoutNameError,
     onActivate: () => void activateSelectedPreset(),
+    onImportPresetFile: (file: File) => void importPresetFile(file),
+    onExportPresetFile: exportPresetFile,
     onDiscard: discard,
     onLayoutDraftChange: (draft: HudLayout) => setLayoutDraft(draft),
     onPresetDraftChange: (draft: HudPreset) => setPresetDraft(draft),
@@ -824,8 +878,25 @@ export function HudConsolePage() {
         </header>
 
         <div className="hud-console__layout">
-          <div className="hud-console__preview-column">
+          <div className="hud-console__preview-column" ref={reviewFrameRef}>
             <section className="hud-console__preview-toolbar" aria-label="预览设置">
+              <Select
+                label="预览背景"
+                value={mapBackground ? 'map' : 'plain'}
+                onChange={(event) => setMapBackground(event.target.value === 'map')}
+              >
+                <option value="map">静态地图</option>
+                <option value="plain">纯色底板</option>
+              </Select>
+              {document.fullscreenEnabled ? (
+                <Button
+                  onClick={() =>
+                    void reviewFrameRef.current?.requestFullscreen().catch(() => undefined)
+                  }
+                >
+                  全屏预览
+                </Button>
+              ) : null}
               <div>
                 <span className="hud-console__kicker">预览</span>
                 <strong>
@@ -887,6 +958,11 @@ export function HudConsolePage() {
                   >
                     <option value="ancient-round-03">Ancient · 第 3 回合</option>
                     <option value="ancient-round-11-defuse">Ancient · 第 11 回合拆弹</option>
+                    {import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1' ? (
+                      <option value="nuke-demo-round-01">
+                        Nuke · Legacy / Falcons · Demo 回合 1
+                      </option>
+                    ) : null}
                   </select>
                 </label>
               ) : null}
@@ -1036,6 +1112,7 @@ export function HudConsolePage() {
             ) : null}
 
             <HudCanvasPreview
+              mapBackground={mapBackground}
               radarSnapshot={activeRadarSnapshot}
               radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
               presentationRevision={
@@ -1050,9 +1127,9 @@ export function HudConsolePage() {
               onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
               resolvedPreset={previewResolved}
               selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
-              showCenter={showCenter}
-              showGrid={showGrid}
-              showSafeArea={showSafeArea}
+              showCenter={workspace === 'layout' && showCenter}
+              showGrid={workspace === 'layout' && showGrid}
+              showSafeArea={workspace === 'layout' && showSafeArea}
               snapshot={activeSnapshot}
             />
             <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>

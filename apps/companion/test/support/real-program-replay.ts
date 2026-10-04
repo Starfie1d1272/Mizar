@@ -239,6 +239,7 @@ export interface RealReplayPipeline {
 
 /** Shared production composition for semantic fixtures and full-match fault replay. */
 export async function replayRealProgram(options: {
+  readonly configureManifest?: (manifest: BroadcastManifestV1) => BroadcastManifestV1;
   readonly capturePath: string;
   readonly targetSequence?: number;
   readonly faultPlan?: ReplayFaultPlanV1;
@@ -256,7 +257,8 @@ export async function replayRealProgram(options: {
   const capture = await verifyCapture(options.capturePath);
   const sourceManifest = await buildReplayManifestFromCapture(capture, await readReplayManifest());
   const enrichedManifest = await applyFixturePresentationEnrichment(capture, sourceManifest);
-  const manifest = await normalizeReplayManifest(capture, enrichedManifest);
+  const normalizedManifest = await normalizeReplayManifest(capture, enrichedManifest);
+  const manifest = options.configureManifest?.(normalizedManifest) ?? normalizedManifest;
   const context = toMatchContext(manifest);
   const composition = createProductionReplayComposition({
     producerInstanceId: 'real-program-replay',
@@ -279,6 +281,10 @@ export async function replayRealProgram(options: {
       ...(options.faultPlan === undefined ? {} : { faultPlan: options.faultPlan }),
     })) {
       options.beforeEvent?.(event, pipeline);
+      if (event.kind === 'frame' && event.result.ok)
+        await composition.coordinator.prepareBombDamageMap(
+          event.result.observation.telemetry.map?.name ?? null,
+        );
       const snapshots = composition.accept(event);
       if (event.kind === 'frame' && snapshots !== null) {
         acceptedSequences.push(event.sourceFrame.sequence);

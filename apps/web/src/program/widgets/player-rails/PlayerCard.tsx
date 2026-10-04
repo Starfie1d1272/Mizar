@@ -1,8 +1,12 @@
+import { EquipmentIcon } from '../player-equipment/EquipmentIcon';
+import { StatGlyph } from '../player-status-effects/StatGlyph';
+import type { ProgramPayload } from '@mizar/protocol/program';
 import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { observerHotkeyLabel } from '../../observer-hotkey';
+import type { HudDesign } from '../../hud-design';
 import {
   CombatTransitionEffects,
   DamageGhost,
@@ -16,7 +20,6 @@ import {
   type PlayerCardPresentation,
   type PlayerRailAsset,
   type PlayerRailWeapon,
-  type WeaponVisualRole,
 } from './presentation';
 
 function displayNumber(value: number | null): string {
@@ -88,46 +91,31 @@ function usePresenceItems<T extends { readonly key: string }>(
     return () => window.clearTimeout(timer);
   }, [exitMs, presentationRevision, signature]);
 
-  return rendered;
-}
-
-function MaskIcon({
-  asset,
-  className = '',
-  label,
-  weaponVisualRole,
-}: {
-  readonly asset: PlayerRailAsset | null;
-  readonly className?: string;
-  readonly label: string;
-  readonly weaponVisualRole?: WeaponVisualRole;
-}) {
-  if (asset === null) return null;
-  const style = { '--player-rail-icon': `url("${asset.outputPath}")` } as CSSProperties;
-  return (
-    <span
-      aria-label={label}
-      className={`player-rail__icon ${className}`.trim()}
-      data-asset-id={asset.canonicalKey}
-      data-weapon-visual-role={weaponVisualRole}
-      role="img"
-      style={style}
-    />
-  );
+  // Presence owns membership and motion, never the current equipment state.
+  // Only departing items retain their last presentation until the exit completes.
+  const currentByKey = new Map(items.map((item) => [item.key, item]));
+  return rendered.map((item) => ({
+    ...(currentByKey.get(item.key) ?? item),
+    motionPhase: item.motionPhase,
+  }));
 }
 
 function WeaponIcon({
   weapon,
   pairedWithFirearm,
+  physicalSide,
 }: {
   readonly weapon: PlayerRailWeapon | null;
   readonly pairedWithFirearm: boolean;
+  readonly physicalSide: 'left' | 'right';
 }) {
   const visualRole = weapon === null ? undefined : weaponVisualRole(weapon, pairedWithFirearm);
   return (
-    <MaskIcon
+    <EquipmentIcon
       asset={weapon?.asset ?? null}
-      className={visualRole === undefined ? '' : `is-${visualRole}`}
+      active={weapon?.active}
+      className={`player-rail__icon ${visualRole === undefined ? '' : `is-${visualRole}`}`}
+      physicalSide={physicalSide}
       label={weapon?.name ?? 'Weapon'}
       {...(visualRole === undefined ? {} : { weaponVisualRole: visualRole })}
     />
@@ -137,9 +125,13 @@ function WeaponIcon({
 function Avatar({
   player,
   dead,
+  unavailable,
+  onUnavailable,
 }: {
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
+  readonly unavailable: boolean;
+  readonly onUnavailable?: () => void;
 }) {
   return (
     <div
@@ -148,12 +140,11 @@ function Avatar({
       data-avatar-present={player.avatarUrl !== null}
       data-card-part="avatar"
     >
-      {player.avatarUrl === null ? null : (
+      {player.avatarUrl === null || unavailable ? null : (
         <img
+          key={player.avatarUrl}
           alt=""
-          onError={(event) => {
-            event.currentTarget.style.display = 'none';
-          }}
+          onError={onUnavailable}
           src={player.avatarUrl}
           data-dead={dead}
         />
@@ -189,7 +180,7 @@ function Equipment({
           data-motion-phase={slot.motionPhase}
           key={slot.key}
         >
-          <MaskIcon asset={slot.asset} label={slot.label} />
+          <EquipmentIcon className="player-rail__icon" asset={slot.asset} label={slot.label} />
         </span>
       ))}
     </div>
@@ -207,13 +198,14 @@ function UtilityIcons({
 }) {
   const counts = new Map<
     PlayerCardPresentation['utility'][number]['family'],
-    { count: number; asset: PlayerRailAsset | null }
+    { count: number; asset: PlayerRailAsset | null; active: boolean }
   >();
   for (const utility of player.utility) {
     const current = counts.get(utility.family);
     counts.set(utility.family, {
       count: (current?.count ?? 0) + utility.count,
       asset: current?.asset ?? utility.asset,
+      active: Boolean(current?.active || utility.active),
     });
   }
 
@@ -225,6 +217,7 @@ function UtilityIcons({
       asset,
       family,
       key: `${family}-${index}`,
+      active: utility.active && index === 0,
     }));
   }).slice(0, 4);
   const signature = icons
@@ -242,30 +235,15 @@ function UtilityIcons({
           data-motion-phase={utility.motionPhase}
           key={utility.key}
         >
-          <MaskIcon asset={utility.asset} label={utility.family} />
+          <EquipmentIcon
+            className="player-rail__icon"
+            asset={utility.asset}
+            label={utility.family}
+            active={utility.active}
+          />
         </span>
       ))}
     </div>
-  );
-}
-
-function StatGlyph({ kind }: { readonly kind: 'kills' | 'deaths' }) {
-  return (
-    <svg aria-hidden="true" className="player-rail__stat-glyph" viewBox="0 0 16 16">
-      {kind === 'kills' ? (
-        <>
-          <circle cx="8" cy="8" r="3.25" />
-          <path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3" />
-        </>
-      ) : (
-        <>
-          <path d="M4 7.25a4 4 0 1 1 8 0v2.1c0 .8-.42 1.55-1.1 1.97V14H5.1v-2.68A2.3 2.3 0 0 1 4 9.35z" />
-          <circle cx="6.45" cy="7.55" r="0.8" />
-          <circle cx="9.55" cy="7.55" r="0.8" />
-          <path d="M7 11.1h2M6.25 14v-1.8M8 14v-1.8M9.75 14v-1.8" />
-        </>
-      )}
-    </svg>
   );
 }
 
@@ -299,18 +277,29 @@ function RoundKillBadge({ kills }: { readonly kills: number }) {
   );
 }
 
+type BombPrediction = Extract<
+  ProgramPayload['bombDamage']['players'][number],
+  { status: 'predicted' }
+>;
+
 function PlayerBody({
+  prediction,
+  design,
+  physicalSide,
   player,
   dead,
   presentationRevision,
   damageGhost,
   options,
 }: {
+  readonly design: HudDesign;
+  readonly physicalSide: 'left' | 'right';
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
   readonly presentationRevision: number;
   readonly damageGhost: DamageGhostState | null;
   readonly options: PlayerRailSettings;
+  readonly prediction?: BombPrediction | undefined;
 }) {
   const healthStyle = { '--player-rail-health': `${player.healthPercent ?? 0}%` } as CSSProperties;
   const secondaryVisible = player.secondaryWeapon !== null;
@@ -320,6 +309,14 @@ function PlayerBody({
   ].some((weapon) => weapon?.item?.kind === 'firearm' && weapon.item.family !== 'pistol');
   return (
     <div className="player-rail__body" data-card-part="body" data-dead={dead}>
+      {dead && (design === 'ewc' || design === 'iem') ? (
+        <svg className="player-rail__death-watermark" aria-hidden="true" viewBox="3 2 10 12">
+          <path
+            fillRule="evenodd"
+            d="M4 7.25a4 4 0 1 1 8 0v2.1c0 .8-.42 1.55-1.1 1.97V14H5.1v-2.68A2.3 2.3 0 0 1 4 9.35z M5.2 7.6a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M8.4 7.6a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M8 9.2l-1 1.6h2z M6 12v2h.7v-2z M7.65 12v2h.7v-2z M9.3 12v2h.7v-2z"
+          />
+        </svg>
+      ) : null}
       <div className="player-rail__identity">
         <span className="player-rail__name" title={player.displayName ?? undefined}>
           {player.displayName ?? 'PLAYER'}
@@ -341,7 +338,20 @@ function PlayerBody({
         </div>
       ) : (
         <div className="player-rail__health-bar" data-health-bar="true">
-          <span style={healthStyle} />
+          <span style={healthStyle} data-health-empty={!player.healthPercent} />
+          {options.showBombPrediction && prediction && prediction.damage > 0 ? (
+            <i
+              className="player-rail__bomb-prediction"
+              data-bomb-prediction={prediction.lethal ? 'lethal' : 'surviving'}
+              aria-label={`C4 standing estimate: ${prediction.damage} damage, ${prediction.hpAfter} HP remaining`}
+              style={
+                {
+                  '--prediction-start': `${Math.max(0, Math.min(100, prediction.hpAfter))}%`,
+                  '--prediction-end': `${player.healthPercent ?? 0}%`,
+                } as CSSProperties
+              }
+            />
+          ) : null}
           <DamageGhost state={damageGhost} />
         </div>
       )}
@@ -381,11 +391,13 @@ function PlayerBody({
                   <div className="player-rail__weapons">
                     <div className="player-rail__weapon-icons">
                       <WeaponIcon
+                        physicalSide={design === 'current' ? 'left' : physicalSide}
                         pairedWithFirearm={pairedWithFirearm}
                         weapon={player.primaryWeapon}
                       />
                       {secondaryVisible ? (
                         <WeaponIcon
+                          physicalSide={design === 'current' ? 'left' : physicalSide}
                           pairedWithFirearm={pairedWithFirearm}
                           weapon={player.secondaryWeapon}
                         />
@@ -405,7 +417,11 @@ function PlayerBody({
 
       <div className="player-rail__bottom">
         {options.showMoney && (!dead || options.deadInformation === 'stats') ? (
-          <span className="player-rail__money">{displayMoney(player.money)}</span>
+          <span className="player-rail__money">
+            {design === 'perfectworld'
+              ? displayMoney(player.money).replaceAll(',', '')
+              : displayMoney(player.money)}
+          </span>
         ) : null}
         {options.showMoney && player.mode === 'freezetime' && !dead ? (
           <span className="player-rail__spent">{displaySpent(player.roundMoneySpent)}</span>
@@ -431,12 +447,16 @@ function PlayerBody({
 }
 
 export function PlayerCard({
+  design = 'current',
+  prediction,
   player,
   cursor = null,
   physicalSide = 'left',
   presentationRevision = 0,
   options = playerRailSettingsSchema.parse({}),
 }: {
+  readonly design?: HudDesign;
+  readonly prediction?: BombPrediction | undefined;
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
@@ -451,14 +471,24 @@ export function PlayerCard({
     cursor,
     presentationRevision,
   });
-  const hasAvatar = options.showAvatar && player.avatarUrl !== null;
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
+  const hasAvatar =
+    options.showAvatar && player.avatarUrl !== null && failedAvatarUrl !== player.avatarUrl;
   const avatar = options.showAvatar ? (
-    <Avatar dead={dead} player={player} />
+    <Avatar
+      unavailable={failedAvatarUrl === player.avatarUrl}
+      dead={dead}
+      player={player}
+      onUnavailable={() => setFailedAvatarUrl(player.avatarUrl)}
+    />
   ) : (
     <div className="player-rail__avatar" data-card-part="avatar" />
   );
   const body = (
     <PlayerBody
+      physicalSide={physicalSide}
+      design={design}
+      prediction={prediction}
       options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}
@@ -496,6 +526,7 @@ export function PlayerCard({
       {avatar}
       {body}
       <PlayerStatusEffects
+        design={design}
         key={`status:${presentationRevision}`}
         anchor={physicalSide}
         state={player.statusEffects}

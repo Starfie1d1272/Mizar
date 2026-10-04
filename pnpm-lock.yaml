@@ -313,6 +313,9 @@ importers:
       '@mizar/telemetry-gsi':
         specifier: workspace:*
         version: link:../../packages/telemetry-gsi
+      cs2-c4-damage:
+        specifier: 0.1.0
+        version: 0.1.0
       fastify:
         specifier: 'catalog:'
         version: 5.12.5
@@ -413,6 +416,10 @@ importers:
         version: 5.0.3(@types/node@26.6.4)(@vitest/browser-playwright@5.0.3)(@vitest/ui@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(tsx@4.23.15))
 
   packages/core:
+    dependencies:
+      cs2-c4-damage:
+        specifier: 0.1.0
+        version: 0.1.0
     devDependencies:
       '@typescript/native':
         specifier: 'catalog:'
@@ -1862,6 +1869,11 @@ packages:
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
     deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
+
+  cs2-c4-damage@0.1.0:
+    resolution: {integrity: sha512-cEUrIN9ilacoTeCLQzL56kUBAx80KAR3bFl5yeKxEXVXKT8Pmt6WG3SXhuVdhDPXgEbq6TQa4jQCEpyj9khyIA==}
+    engines: {node: '>=22'}
+    hasBin: true
 
   cs2parser@2.7.2:
     resolution: {integrity: sha512-eHB6QWUUAgdxoowlCrgWxbkFuZvc1MzGIKr253tgfCBTzMsXyoyTZcl1SiZkEZCzRE/gEvVAd+or+7tqMTGZuA==}
@@ -4133,6 +4145,8 @@ snapshots:
       which: 2.0.2
 
   crypto-js@4.2.0: {}
+
+  cs2-c4-damage@0.1.0: {}
 
   cs2parser@2.7.2:
     dependencies:

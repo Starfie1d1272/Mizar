@@ -68,7 +68,7 @@ function displayName(snapshot: ProgramSnapshot, sourcePlayerId: string): string 
   );
 }
 
-function createSemanticEvents(
+export function createSemanticEvents(
   frames: readonly AtomicReplayFrame[],
   provenance: {
     readonly capturePath: string;

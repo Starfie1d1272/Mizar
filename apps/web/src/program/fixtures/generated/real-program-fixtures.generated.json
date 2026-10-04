@@ -16,8 +16,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -27,6 +27,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "coverage",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -874,8 +880,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -885,6 +891,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -1862,8 +1874,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -1873,6 +1885,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -2526,8 +2544,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 3,
+        "schemaVersion": 8,
+        "channelSeq": 4,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -2537,6 +2555,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -3356,8 +3380,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 14,
+        "schemaVersion": 8,
+        "channelSeq": 15,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -3367,6 +3391,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -4155,8 +4185,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 16,
+        "schemaVersion": 8,
+        "channelSeq": 17,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -4166,6 +4196,167 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "available",
+            "reason": null,
+            "model": {
+              "packageVersion": "0.1.0",
+              "mapName": "de_ancient",
+              "modelRevision": "cs2-win64-2026-10-02-static-v2",
+              "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"
+            },
+            "players": [
+              {
+                "sourcePlayerId": "76561197960690195",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198058500492",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198134401925",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198164970560",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 255,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198200982290",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 0,
+                "hpAfter": 100,
+                "lethal": false,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198012872053",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 255,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198053126645",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 0,
+                "hpAfter": 100,
+                "lethal": false,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198068002993",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198294381090",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 100,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561199046478501",
+                "status": "unavailable",
+                "reason": "player-input"
+              }
+            ]
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -4898,8 +5089,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 3,
+        "schemaVersion": 8,
+        "channelSeq": 4,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -4909,6 +5100,147 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "available",
+            "reason": null,
+            "model": {
+              "packageVersion": "0.1.0",
+              "mapName": "de_ancient",
+              "modelRevision": "cs2-win64-2026-10-02-static-v2",
+              "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"
+            },
+            "players": [
+              {
+                "sourcePlayerId": "76561197960690195",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 255,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198058500492",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 255,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198134401925",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 85,
+                "hpAfter": 15,
+                "lethal": false,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198164970560",
+                "status": "predicted",
+                "stance": "standing",
+                "damage": 100,
+                "hpAfter": 0,
+                "lethal": true,
+                "modelRevision": "cs2-win64-2026-10-02-static-v2",
+                "assumptions": [
+                  "standard-damage-rules",
+                  "snapshot-is-current-and-synchronized",
+                  "field-matches-current-map",
+                  "forward-matches-native-view",
+                  "forward-renormalized",
+                  "player-position-is-pawn-absolute-origin",
+                  "upright-unscaled-standard-hull",
+                  "standing-height-72-crouched-height-54",
+                  "first-field-result-not-replaced-by-ground-resampling"
+                ],
+                "unknownInputs": [
+                  "native-runtime-validation",
+                  "native-sample-state",
+                  "ground-collision-state"
+                ]
+              },
+              {
+                "sourcePlayerId": "76561198200982290",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198012872053",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198053126645",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198068002993",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561198294381090",
+                "status": "unavailable",
+                "reason": "player-input"
+              },
+              {
+                "sourcePlayerId": "76561199046478501",
+                "status": "unavailable",
+                "reason": "player-input"
+              }
+            ]
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -5644,8 +5976,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 24,
+        "schemaVersion": 8,
+        "channelSeq": 25,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -5655,6 +5987,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -6385,8 +6723,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 3,
+        "schemaVersion": 8,
+        "channelSeq": 4,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -6396,6 +6734,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -7083,8 +7427,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 23,
+        "schemaVersion": 8,
+        "channelSeq": 24,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -7094,6 +7438,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -7917,8 +8267,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -7928,6 +8278,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -8871,8 +9227,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -8882,6 +9238,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -9787,8 +10149,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -9798,6 +10160,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -10937,8 +11305,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -10948,6 +11316,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -11735,8 +12109,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 4,
+        "schemaVersion": 8,
+        "channelSeq": 5,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -11746,6 +12120,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -12533,8 +12913,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 36,
+        "schemaVersion": 8,
+        "channelSeq": 37,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -12544,6 +12924,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -13403,8 +13789,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 2,
+        "schemaVersion": 8,
+        "channelSeq": 3,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -13414,6 +13800,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -14291,8 +14683,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 4,
+        "schemaVersion": 8,
+        "channelSeq": 5,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -14302,6 +14694,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",
@@ -15179,8 +15577,8 @@
         "type": "snapshot",
         "protocolVersion": 1,
         "channel": "program",
-        "schemaVersion": 7,
-        "channelSeq": 3,
+        "schemaVersion": 8,
+        "channelSeq": 4,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -15190,6 +15588,12 @@
           "mapEpoch": 1
         },
         "payload": {
+          "bombDamage": {
+            "status": "unavailable",
+            "reason": "inactive",
+            "model": null,
+            "players": []
+          },
           "status": { "telemetry": "fresh", "context": "fresh", "identity": "matched" },
           "match": {
             "matchId": "match-m2-01",

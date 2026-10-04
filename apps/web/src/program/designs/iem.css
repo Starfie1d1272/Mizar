@@ -1,0 +1,258 @@
+.hud-widget-design[data-hud-design='iem'] .focused-player {
+  margin-top: 56px;
+  height: 120px;
+}
+.hud-widget-design[data-hud-design='iem'] .focused-player__identity {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='iem']
+  .focused-player__face[data-side='T']
+  .focused-player__identity {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='iem'] .focused-player[data-show-metrics='true'] {
+  margin-top: 40px;
+  height: 136px;
+}
+.hud-widget-design[data-hud-design='iem'] .objective-center__fuse {
+  top: 78px;
+  height: 3px;
+}
+/* IEM hierarchy adapted to square Steam avatars at the outside edge. */
+.hud-widget-design[data-hud-design='iem'] .player-rail {
+  width: 360px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__avatar {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  width: 76px;
+  height: 76px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__avatar img {
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__avatar {
+  left: auto;
+  right: 12px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__body {
+  flex: 0 0 100%;
+  width: 100%;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__body::before {
+  display: block;
+  inset: 0;
+  width: 100%;
+  transform: none;
+  opacity: 1;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 50%, transparent);
+  z-index: -2;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__identity {
+  inset: 4px 8px auto 98px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 4px 98px auto 8px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__name {
+  font-family: var(--mizar-type-family-display);
+  font-size: 21px;
+  max-width: 88px;
+  text-transform: uppercase;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__health-value {
+  font-family: var(--mizar-type-family-display);
+  font-size: 38px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__kd {
+  left: 98px;
+  bottom: 26px;
+  font-size: 15px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__kd {
+  left: auto;
+  right: 98px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__money {
+  left: 98px;
+  bottom: 5px;
+  font-size: 16px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__money {
+  left: auto;
+  right: 98px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__weapons {
+  left: 192px;
+  top: 8px;
+  width: 96px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__weapons {
+  left: auto;
+  right: 192px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 96px;
+  max-width: 96px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__equipment {
+  right: 8px;
+  bottom: 4px;
+  width: 58px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__equipment {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__utility-icons {
+  right: 70px;
+  bottom: 4px;
+  width: 88px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__utility-icons {
+  right: auto;
+  left: 70px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap {
+  left: 0;
+  right: auto;
+  width: 12px;
+  height: 76px;
+  align-items: flex-start;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap--right {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap strong {
+  font-size: 14px;
+  line-height: 20px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-slot {
+  left: 196px;
+  top: -8px;
+  z-index: 3;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 196px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge svg {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body::before {
+  width: 256px;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 38%, transparent);
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body::before {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__avatar {
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__death-watermark {
+  display: block;
+  position: absolute;
+  left: 188px;
+  width: 66px;
+  height: 76px;
+  fill: var(--mizar-hud-text-primary);
+  opacity: 0.25;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__death-watermark {
+  left: auto;
+  right: 188px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__life-state,
+.hud-widget-design[data-hud-design='iem'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='iem'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-observed='true']
+  .player-rail__avatar {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  outline-offset: -2px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__score-shell {
+  border: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 65%, transparent);
+  background: linear-gradient(
+    145deg,
+    var(--mizar-hud-surface-primary),
+    color-mix(in srgb, var(--mizar-side-ct) 70%, var(--mizar-hud-surface-primary))
+  );
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__map-score {
+  font-family: var(--mizar-type-family-display);
+  font-size: 52px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__win-slots {
+  top: 16px;
+  bottom: auto;
+  left: 6px;
+  flex-direction: column;
+  gap: 4px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .match-header__score-zone--score-b
+  .match-header__win-slots {
+  left: auto;
+  right: 6px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__win-slots span {
+  width: 9px;
+  height: 9px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__score-zone--logo {
+  background: var(--mizar-hud-surface-strong);
+  margin: 6px;
+  width: 60px;
+  height: 62px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__name {
+  color: var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='iem'] .iem-event-ribbon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -20px;
+  height: 20px;
+  display: grid;
+  grid-template-columns: 1fr 30px 1fr;
+  align-items: center;
+  text-align: center;
+  background: var(--mizar-hud-surface-primary);
+  font-family: var(--mizar-type-family-display);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.iem-event-ribbon > span {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.iem-event-ribbon svg {
+  width: 18px;
+  height: 18px;
+  fill: var(--mizar-hud-text-primary);
+  justify-self: center;
+}

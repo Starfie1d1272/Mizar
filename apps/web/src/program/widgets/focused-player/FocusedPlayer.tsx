@@ -1,3 +1,4 @@
+import { StatGlyph } from '../player-status-effects/StatGlyph';
 import {
   focusedPlayerSettingsSchema,
   focusedPlayerPresentationSettings,
@@ -14,6 +15,7 @@ import {
 } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
+import type { HudDesign } from '../../hud-design';
 import { consecutivePresentationSamples } from '../../presentation-sample';
 import { observerHotkeyLabel } from '../../observer-hotkey';
 import type { PlayerRailAsset } from '../player-rails/presentation';
@@ -147,6 +149,7 @@ function ActiveItemSlot({
 }
 
 function FocusedPlayerFace({
+  design,
   player: p,
   options,
   cursor,
@@ -159,6 +162,7 @@ function FocusedPlayerFace({
   pending = false,
   combatFeedback = null,
 }: {
+  readonly design: HudDesign;
   readonly player: FocusedPlayerPresentation;
   readonly options: FocusedPlayerSettings;
   readonly cursor: ProjectionCursor | null;
@@ -215,6 +219,9 @@ function FocusedPlayerFace({
       aria-hidden={outgoing || pending || undefined}
       className={`focused-player__face${outgoing ? ' focused-player__face--outgoing' : ''}${incoming ? ' focused-player__face--incoming' : ''}${pending ? ' focused-player__face--pending' : ''}`}
       data-avatar={showAvatar}
+      data-media-unavailable={
+        !options.showMedia || p.avatarUrl === null || failedAvatarUrl === p.avatarUrl
+      }
       data-side={p.side}
       data-dead={p.dead}
     >
@@ -225,7 +232,7 @@ function FocusedPlayerFace({
         {options.showMetrics ? (
           <div className="focused-player__metrics" aria-label="K A D ADR">
             <span>
-              <small>K</small>
+              {design === 'perfectworld' ? <StatGlyph kind="kills" /> : <small>K</small>}
               <b>{p.stats.kills ?? '—'}</b>
             </span>
             <span>
@@ -233,12 +240,16 @@ function FocusedPlayerFace({
               <b>{p.stats.assists ?? '—'}</b>
             </span>
             <span>
-              <small>D</small>
+              {design === 'perfectworld' ? <StatGlyph kind="deaths" /> : <small>D</small>}
               <b>{p.stats.deaths ?? '—'}</b>
             </span>
             <span>
               <small>ADR</small>
-              <b>{p.completedAdr === null ? '—' : Number(p.completedAdr.toFixed(1))}</b>
+              <b>
+                {(design === 'perfectworld' ? (p.liveAdr ?? p.completedAdr) : p.completedAdr)
+                  ?.toFixed(design === 'perfectworld' ? 0 : 1)
+                  .replace(/\.0$/, '') ?? '—'}
+              </b>
             </span>
           </div>
         ) : null}
@@ -288,20 +299,43 @@ function FocusedPlayerFace({
         />
         {p.dead ? (
           <div aria-label="Dead" className="focused-player__dead-state">
-            <span>DEAD</span>
+            <span>{design === 'current' ? 'DEAD' : (p.reportedHealth ?? '—')}</span>
           </div>
         ) : (
           <>
-            <ActiveItemSlot
-              cursor={cursor}
-              player={p}
-              presentationRevision={presentationRevision}
-            />
+            {design === 'perfectworld' ? (
+              <div className="shanghai-focus-utility" aria-label="道具">
+                {p.utility
+                  .flatMap((item) =>
+                    Array.from({ length: item.count }, (_, index) => (
+                      <span
+                        key={`${item.sourceWeaponId}:${index}`}
+                        data-held={item.active && index === 0}
+                      >
+                        <Icon asset={item.asset} />
+                      </span>
+                    )),
+                  )
+                  .slice(0, 4)}
+                {p.c4 ? <Icon asset={p.c4} /> : null}
+              </div>
+            ) : (
+              <ActiveItemSlot
+                cursor={cursor}
+                player={p}
+                presentationRevision={presentationRevision}
+              />
+            )}
             <span
               aria-hidden="true"
               className="focused-player__action-gap focused-player__action-gap--b"
             />
             <div className="focused-player__ammo">
+              {design === 'perfectworld' && p.activeItemKind === 'firearm' ? (
+                <span className="shanghai-focus-firearm">
+                  <Icon asset={p.activeItem?.asset ?? null} />
+                </span>
+              ) : null}
               {p.clip === null ? null : <strong>{p.clip}</strong>}
               {!options.showReserveAmmo || p.reserveMagazine === null ? null : (
                 <span
@@ -350,10 +384,26 @@ function FocusedPlayerFace({
               <Icon asset={p.armorAsset} />
               <b>{p.armor ?? '—'}</b>
             </span>
+            {design === 'perfectworld' && p.kit ? (
+              <span className="shanghai-focus-kit">
+                <Icon asset={p.kit} />
+              </span>
+            ) : null}
           </div>
         )}
       </div>
-      <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
+      {design === 'perfectworld' && p.roundKills != null && p.roundKills > 0 ? (
+        <div className="shanghai-focus-kills" aria-label={`Round kills ${p.roundKills}`}>
+          <StatGlyph kind="deaths" />
+          <b>{p.roundKills}</b>
+          <StatGlyph kind="deaths" />
+        </div>
+      ) : null}
+      <PlayerStatusEffects
+        design={design}
+        key={`status:${presentationRevision}`}
+        state={p.statusEffects}
+      />
     </div>
   );
 }
@@ -365,12 +415,14 @@ type FocusedPlayerHandoff = {
 };
 
 export function FocusedPlayerCard({
+  design = 'current',
   player,
   cursor = null,
   presentationRevision = 0,
   options = focusedPlayerSettingsSchema.parse({}),
 }: {
   readonly player: FocusedPlayerPresentation;
+  readonly design?: HudDesign;
   readonly options?: FocusedPlayerSettings;
   readonly cursor?: ProjectionCursor | null;
   readonly presentationRevision?: number;
@@ -477,6 +529,7 @@ export function FocusedPlayerCard({
     <article
       aria-label="Focused player"
       className="focused-player"
+      data-show-metrics={options.showMetrics}
       data-focused-player={player.sourcePlayerId}
       data-avatar={
         options.showMedia && loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined
@@ -487,6 +540,7 @@ export function FocusedPlayerCard({
     >
       {!options.showMedia || handoff === null ? null : (
         <FocusedPlayerFace
+          design={design}
           key={`outgoing:${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
           options={options}
           avatarIdentityKey={`${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
@@ -499,6 +553,7 @@ export function FocusedPlayerCard({
         />
       )}
       <FocusedPlayerFace
+        design={design}
         key={`current:${player.sourcePlayerId}:${player.avatarUrl ?? ''}`}
         options={options}
         avatarIdentityKey={currentAvatarIdentityKey}
@@ -518,6 +573,7 @@ export function FocusedPlayerCard({
 }
 
 export function FocusedPlayer({
+  design = 'current',
   snapshot,
   settings,
   presentationRevision = 0,
@@ -526,6 +582,7 @@ export function FocusedPlayer({
   const player = buildFocusedPlayerPresentation(snapshot.payload);
   return player === null ? null : (
     <FocusedPlayerCard
+      design={design}
       options={options}
       cursor={snapshot.cursor}
       player={player}

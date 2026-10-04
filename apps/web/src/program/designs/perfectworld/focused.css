@@ -1,0 +1,338 @@
+/* Square Steam media beside the Shanghai information column. */
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
+  margin-top: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player::before {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face {
+  display: block;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  position: absolute;
+  top: 0;
+  display: block;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span:nth-child(2) {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__action {
+  position: static;
+  display: block;
+  padding: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 0;
+  border: 0;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals {
+  position: absolute;
+  left: 188px;
+  right: 0;
+  width: 166px;
+  height: 42px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__health-track {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__armor b {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__active {
+  position: absolute;
+  top: 86px;
+  left: 188px;
+  height: 28px;
+  width: 92px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-dead='true'] {
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-dead='true']
+  .focused-player__action {
+  position: static;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
+  position: absolute;
+  color: var(--mizar-hud-text-primary);
+  top: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  position: absolute;
+  left: 188px;
+  display: flex;
+  flex-direction: row;
+  top: auto;
+  right: 8px;
+  width: 164px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-side='T']
+  .focused-player__identity {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals-values {
+  height: 42px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__health-cluster {
+  width: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__dead-state {
+  position: absolute;
+  margin-left: 0;
+  width: 164px;
+  justify-content: flex-start;
+  line-height: 42px;
+  left: 188px;
+  top: 42px;
+  height: 42px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
+  width: 342px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
+  width: 192px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  width: 150px;
+  height: 192px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__dead-state,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  left: 204px;
+  width: 126px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals-values {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+}
+.shanghai-focus-utility {
+  position: absolute;
+  left: 204px;
+  top: 90px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+}
+.shanghai-focus-utility > span {
+  opacity: 0.55;
+}
+.shanghai-focus-utility > span[data-held='true'] {
+  opacity: 1;
+}
+.shanghai-focus-utility .focused-player__icon {
+  width: 20px;
+  height: 26px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__armor .focused-player__icon {
+  width: 22px;
+  height: 22px;
+}
+.shanghai-focus-kit {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mizar-hud-objective-defuse);
+}
+.shanghai-focus-kit .focused-player__icon {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face {
+  background: linear-gradient(
+    180deg,
+    var(--mizar-side-ct),
+    color-mix(in srgb, var(--mizar-side-ct) 42%, var(--mizar-hud-surface-primary))
+  );
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-side='T'] {
+  background: linear-gradient(
+    180deg,
+    var(--mizar-side-t),
+    color-mix(in srgb, var(--mizar-side-t) 68%, var(--mizar-hud-surface-primary))
+  );
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  left: 192px;
+  padding: 10px 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__name {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics {
+  left: 0;
+  right: 0;
+  bottom: 29px;
+  height: 26px;
+  padding: 0 8px;
+  gap: 7px;
+  justify-content: flex-start;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 22%, transparent);
+  font-size: 12px;
+  line-height: 18px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span {
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics small {
+  font-size: 11px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  bottom: 3px;
+  height: 25px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
+  line-height: 25px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__vitals {
+  padding: 0;
+  top: 40px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__hp {
+  font-size: 30px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__slot-badge {
+  display: none;
+}
+.shanghai-focus-kills {
+  position: absolute;
+  right: 155px;
+  top: 5px;
+  width: 36px;
+  height: 54px;
+  border: 1px solid var(--mizar-hud-text-primary);
+  border-radius: 3px;
+  display: grid;
+  grid-template-rows: 14px 22px 14px;
+  justify-items: center;
+  background: var(--mizar-side-ct);
+  color: var(--mizar-hud-text-primary);
+}
+.focused-player__face[data-side='T'] .shanghai-focus-kills {
+  background: var(--mizar-side-t);
+}
+.shanghai-focus-kills b {
+  font-size: 22px;
+  line-height: 22px;
+}
+.shanghai-focus-kills svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.shanghai-focus-firearm {
+  display: flex;
+  align-items: center;
+  flex: 0 0 50px;
+  align-self: center;
+}
+.shanghai-focus-firearm .focused-player__icon {
+  width: 50px;
+  height: 20px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo {
+  justify-content: flex-start;
+  gap: 3px;
+  align-items: center;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__ammo strong {
+  font-size: 18px;
+}
+/* Missing media has its own compact composition, without an empty portrait tile. */
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true'] {
+  width: 260px;
+  height: 132px;
+  top: 60px;
+  left: 41px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__media {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__identity {
+  left: 0;
+  width: 260px;
+  height: 132px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__name {
+  max-width: 190px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__vitals,
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__dead-state {
+  left: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__ammo {
+  left: 122px;
+  width: 126px;
+  bottom: 32px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .focused-player__metrics {
+  bottom: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .shanghai-focus-utility {
+  left: 12px;
+  top: 76px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player__face[data-media-unavailable='true']
+  .shanghai-focus-kills {
+  right: 8px;
+  top: 8px;
+}
+.shanghai-focus-kills > svg:first-child {
+  justify-self: start;
+  margin: 2px 0 0 3px;
+}
+.shanghai-focus-kills > svg:last-child {
+  justify-self: end;
+  margin-right: 3px;
+  transform: rotate(180deg);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player:has(.focused-player__face[data-media-unavailable='true']) {
+  background: transparent;
+}

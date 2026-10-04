@@ -1,0 +1,8 @@
+.hud-equipment-icon {
+  display: block;
+  background: currentColor;
+  mask: var(--player-rail-icon) center / contain no-repeat;
+}
+.hud-equipment-icon[data-asset-facing='left'] {
+  transform: scaleX(-1);
+}

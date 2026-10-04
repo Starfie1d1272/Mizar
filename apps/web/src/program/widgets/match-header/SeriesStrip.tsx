@@ -4,7 +4,7 @@ import type { CSSProperties } from 'react';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 import { buildMatchHeaderPresentation } from './presentation';
 
-export function SeriesStrip({ snapshot }: HudWidgetRendererProps) {
+export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererProps) {
   const presentation = buildMatchHeaderPresentation(snapshot.payload);
   const maps = presentation.seriesMaps;
   if (maps === null) return null;
@@ -15,6 +15,11 @@ export function SeriesStrip({ snapshot }: HudWidgetRendererProps) {
       className="match-header match-header__series-strip"
       data-match-header-widget="series-strip"
     >
+      {design === 'perfectworld' ? (
+        <strong className="shanghai-series-stage">
+          {broadcastStage(snapshot.payload.match?.stage)}
+        </strong>
+      ) : null}
       <div
         className="match-header__series-maps"
         role="list"
@@ -89,5 +94,22 @@ export function SeriesStrip({ snapshot }: HudWidgetRendererProps) {
         })}
       </div>
     </section>
+  );
+}
+
+function broadcastStage(stage: string | undefined): string {
+  if (!stage) return '';
+  const labels: Record<string, string> = {
+    瑞士赛: 'SWISS STAGE',
+    淘汰赛: 'PLAYOFF STAGE',
+    决赛: 'GRAND FINAL',
+    总决赛: 'GRAND FINAL',
+    final: 'GRAND FINAL',
+    swiss: 'SWISS STAGE',
+    playoffs: 'PLAYOFF STAGE',
+  };
+  return (
+    labels[stage] ??
+    (/^[a-z0-9 _-]+$/i.test(stage) ? stage.replaceAll('_', ' ').toUpperCase() : 'MATCH')
   );
 }

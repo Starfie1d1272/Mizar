@@ -24,7 +24,7 @@ export interface HudConfigEditorResponse {
 }
 
 export interface HudConfigCommandResult {
-  readonly kind: 'save-resource' | 'save-as' | 'activate-preset';
+  readonly kind: 'save-resource' | 'save-as' | 'activate-preset' | 'import-preset-pack';
   readonly resource?: 'preset' | 'layout' | 'theme';
   readonly resourceId?: string;
   readonly sourceId?: string;
@@ -111,7 +111,8 @@ function parseMutationResponse(value: unknown): HudConfigMutationResponse {
   if (
     (command.kind !== 'save-resource' &&
       command.kind !== 'save-as' &&
-      command.kind !== 'activate-preset') ||
+      command.kind !== 'activate-preset' &&
+      command.kind !== 'import-preset-pack') ||
     (command.resource !== undefined &&
       command.resource !== 'preset' &&
       command.resource !== 'layout' &&
@@ -332,7 +333,7 @@ export function useHudConfigEditorClient(enabled = true): HudConfigEditorClientV
 }
 
 export interface HudConfigMutation {
-  readonly kind: 'save-resource' | 'save-as' | 'activate-preset';
+  readonly kind: 'save-resource' | 'save-as' | 'activate-preset' | 'import-preset-pack';
   readonly resource?: 'preset' | 'layout' | 'theme';
   readonly value?: unknown;
   readonly sourceId?: string;

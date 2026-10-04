@@ -6,6 +6,7 @@ import { buildPlayerRailsPresentation } from './presentation';
 import { TeamSummary } from './TeamSummary';
 
 export function PlayerRail({
+  design = 'current',
   snapshot,
   settings,
   widgetId,
@@ -16,6 +17,18 @@ export function PlayerRail({
   const physicalSide = widgetId === 'team-t-rail' ? 'right' : 'left';
   const rail = physicalSide === 'left' ? presentation.left : presentation.right;
   const side = rail.side;
+  const remaining = snapshot.payload.bomb?.explosion?.remainingSeconds;
+  const showPrediction =
+    snapshot.payload.status.telemetry === 'fresh' &&
+    snapshot.payload.bombDamage?.status === 'available' &&
+    (snapshot.payload.bomb?.state === 'planted' || snapshot.payload.bomb?.state === 'defusing') &&
+    snapshot.payload.round?.phase !== 'over' &&
+    snapshot.payload.clock?.phase !== 'over' &&
+    snapshot.payload.clock?.phase !== 'paused' &&
+    remaining != null &&
+    Number.isFinite(remaining) &&
+    remaining > 0 &&
+    remaining <= 10;
   return (
     <section
       aria-label={`${physicalSide === 'left' ? '左' : '右'}选手栏`}
@@ -27,7 +40,12 @@ export function PlayerRail({
     >
       <div className="player-rail__summary-slot" data-team-summary-slot="true">
         {options.showTeamSummary ? (
-          <TeamSummary phase={presentation.phase} side={side} summary={rail.summary} />
+          <TeamSummary
+            design={design}
+            phase={presentation.phase}
+            side={side}
+            summary={rail.summary}
+          />
         ) : null}
       </div>
       <div className="player-rail__header" data-rail-header="true">
@@ -36,6 +54,16 @@ export function PlayerRail({
       <div className="player-rail__players">
         {rail.players.slice(0, 5).map((player) => (
           <PlayerCard
+            prediction={
+              showPrediction
+                ? snapshot.payload.bombDamage.players.find(
+                    (entry): entry is Extract<typeof entry, { status: 'predicted' }> =>
+                      entry.sourcePlayerId === player.sourcePlayerId &&
+                      entry.status === 'predicted',
+                  )
+                : undefined
+            }
+            design={design}
             key={player.sourcePlayerId}
             cursor={snapshot.cursor}
             physicalSide={physicalSide}

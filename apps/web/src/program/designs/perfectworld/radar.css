@@ -1,0 +1,3 @@
+.hud-widget-design[data-hud-design='perfectworld'] .radar {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 34%, transparent);
+}

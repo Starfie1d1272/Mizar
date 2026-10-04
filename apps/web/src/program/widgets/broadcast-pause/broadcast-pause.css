@@ -1,0 +1,36 @@
+@import './pause-score.css';
+@import './pause-roster.css';
+@import './pause-brand.css';
+@import './pause-notice.css';
+
+.broadcast-pause {
+  position: absolute;
+  inset: 0;
+  color: var(--mizar-hud-text-primary);
+  font-family: var(--mizar-type-family-display), var(--mizar-hud-font-family);
+}
+.broadcast-pause__dock {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 110px;
+  height: 256px;
+}
+.broadcast-pause__bar,
+.broadcast-pause__body {
+  display: grid;
+  grid-template-columns: 1fr 640px 1fr;
+}
+.broadcast-pause__body {
+  height: 190px;
+}
+.broadcast-pause__history {
+  position: absolute;
+  top: 116px;
+}
+.broadcast-pause__history[data-pause-history-side='left'] {
+  left: 40px;
+}
+.broadcast-pause__history[data-pause-history-side='right'] {
+  right: 40px;
+}

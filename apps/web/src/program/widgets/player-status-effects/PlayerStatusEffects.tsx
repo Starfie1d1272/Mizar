@@ -1,4 +1,6 @@
 import type { CSSProperties } from 'react';
+import type { HudDesign } from '../../hud-design';
+import './broadcast-smoke.css';
 
 import type { PlayerStatusEffectState } from './presentation';
 
@@ -11,9 +13,11 @@ function effectStrength(value: number | null): number {
 export function PlayerStatusEffects({
   state,
   anchor = 'left',
+  design = 'current',
 }: {
   readonly state: PlayerStatusEffectState;
   readonly anchor?: 'left' | 'right';
+  readonly design?: HudDesign;
 }) {
   const smoke = effectStrength(state.smoked);
   const burning = effectStrength(state.burning);
@@ -26,18 +30,31 @@ export function PlayerStatusEffects({
   } as CSSProperties;
 
   return (
-    <div
-      aria-hidden="true"
-      className="player-status-effects"
-      data-anchor={anchor}
-      data-burning={burning > 0}
-      data-flashed={flashed > 0}
-      data-smoked={smoke > 0}
-      style={style}
-    >
-      <span className="player-status-effects__smoke" />
-      <span className="player-status-effects__fire" />
-      <span className="player-status-effects__flash" />
-    </div>
+    <>
+      {design !== 'current' ? (
+        <div
+          className="broadcast-smoke"
+          data-smoked={smoke > 0}
+          data-anchor={anchor}
+          style={style}
+          aria-hidden="true"
+        >
+          <span className="player-status-effects__smoke" />
+        </div>
+      ) : null}
+      <div
+        aria-hidden="true"
+        className="player-status-effects"
+        data-anchor={anchor}
+        data-burning={burning > 0}
+        data-flashed={flashed > 0}
+        data-smoked={smoke > 0}
+        style={style}
+      >
+        {design === 'current' ? <span className="player-status-effects__smoke" /> : null}
+        <span className="player-status-effects__fire" />
+        <span className="player-status-effects__flash" />
+      </div>
+    </>
   );
 }

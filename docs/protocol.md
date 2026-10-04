@@ -287,17 +287,19 @@ revision 不变时不得改变。
 `500` 的 response 只包含 bounded user-facing message，详细的底层错误只写入 Companion diagnostics/log。
 编辑器收到 `409` 后必须保留本地 draft，并明确提示用户先处理 conflict；不能把 stale mutation 当成成功。
 
-`POST` 只接受 `save-resource`、`save-as` 和 `activate-preset` 三类明确命令。正常 Operator ingress
+`POST` 只接受 `save-resource`、`save-as`、`activate-preset` 和 `import-preset-pack` 四类明确命令。正常 Operator ingress
 不接受 Operator token、Bearer credential 或其他普通凭据；写操作只允许 Companion 以 loopback bind
 接收，且请求必须通过 valid local Origin；`LOCAL_WEB_LAN_MODE=1` 时 control-plane 保持 read-only，即使 Origin 在 LAN allowlist 中也
 必须拒绝 mutation。GSI ingress 继续使用独立的 `GSI_TOKEN`，qualification-only control plane
 继续使用独立的 `QUALIFICATION_CONTROL_TOKEN`。mutation response 必须返回本次 command 的明确
 `resourceId` / `sourceId`，客户端不得从前后资源 ID 集合差推断本次创建的资源。内置 `builtin:*` 资源只读；
-配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v2
+配置文件由 Companion 以同目录临时文件加原子 rename 保存。`HudResolvedPreset` activation snapshot 有独立的 v3
 compatibility boundary：严格校验 schema version、exact widget keys、嵌入布局、preset/layout/theme
 引用一致性、descriptor-owned settings，以及颜色、透明度、圆角和字体等 semantic value 的安全域；
 加载时不得通过当前 Theme recipe 重算并要求 canonical bytes 相同。recipe 变化不会改写旧 custom
 snapshot，重新 Activate 才产生当前 recipe 的新 snapshot。1.0 发布前不保留旧版本兼容，旧 resolved 版本直接拒绝，不提供 migration；当前 resolved settings 必须完整，不读取时补默认值。该 control-plane 的版本与 Local Protocol / channel schema 版本独立。
+
+`import-preset-pack` 提交 `{ kind, value: HudPresetPack, expectedEditorRevision }`，复用同一 loopback/Origin/CAS 边界。`value` 使用 `format: "mizar-hud-preset"`、`formatVersion: 1`，包含完整 `preset`、`layout`、`theme`，最多 256 KiB UTF-8 JSON；未知字段、组件方案、recipe、版本及不一致引用拒绝。成功一次性保存三个新 ID 并重写引用，response 的 `command` 返回 `resource: "preset"` 与新 `resourceId`，on-air snapshot/ETag 保持不变；持久化失败或 revision 冲突不留下部分资源。外部预设文件不成为新网络通道，不允许脚本、CSS、素材 URL 或比赛数据注入。
 
 ### 4.3 快照 envelope
 
@@ -547,3 +549,8 @@ reset 都从当前时刻重新开始，不补播旧动画。
 ### 本机制作提示
 
 `GET /local/v1/production-guidance` 为私有、只读、no-store 的本机展示响应，包含当前任务、阶段、地图结果、下一图、图间软提醒和安全的 RivalHub 工作台链接。Bilibili 状态由 Companion 独立 best-effort 查询，仅为本机 UI 使用；失败为 unknown，不进入公开 LiveSnapshot / ReliableEvent 或制作门禁。字段类型见 `ProductionGuidance`，语义见 ADR-0019。
+
+
+### Program v8：站立 C4 预测
+
+`bombDamage` 为 required、有界最多 10 人的 Program-safe derived projection，含 available/unavailable、reason、模型版本与资源 SHA-256、逐人 predicted/unavailable。predicted 保留 standing、damage、hpAfter、lethal、assumptions 与 unknownInputs。只允许当前 Program accepted cursor 的 fresh 同图同代数据；不带 Lookahead。失效时显式 unavailable；真实 player.health 不变。HUD resolved v3 增加 showBombPrediction 与独立 series-overview 组件。

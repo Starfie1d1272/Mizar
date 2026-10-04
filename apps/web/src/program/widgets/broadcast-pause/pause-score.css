@@ -1,0 +1,154 @@
+.broadcast-pause__bar {
+  height: 66px;
+  background: var(--mizar-hud-surface-primary);
+  border-bottom: 2px solid color-mix(in srgb, var(--mizar-hud-text-primary) 35%, transparent);
+}
+.broadcast-pause__economy {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas: 'equipment loss timeouts';
+  align-items: center;
+  padding: 0 12px;
+}
+.broadcast-pause__economy[data-physical-side='right'] {
+  grid-template-areas: 'timeouts loss equipment';
+}
+.broadcast-pause__economy > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border-right: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 20%, transparent);
+}
+.broadcast-pause__economy[data-physical-side='left'] [data-economy-field='timeouts'] {
+  border-right: 0;
+}
+.broadcast-pause__economy[data-physical-side='right'] [data-economy-field='equipment'] {
+  border-right: 0;
+}
+.broadcast-pause__economy [data-economy-field='equipment'] {
+  grid-area: equipment;
+}
+.broadcast-pause__economy [data-economy-field='loss'] {
+  grid-area: loss;
+}
+.broadcast-pause__economy [data-economy-field='timeouts'] {
+  grid-area: timeouts;
+}
+.broadcast-pause__economy span {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+}
+.broadcast-pause__economy strong {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+}
+.broadcast-pause__score {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 48px 24px 48px minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--mizar-hud-surface-strong);
+}
+.broadcast-pause__score > b {
+  font-size: 44px;
+  line-height: 1;
+  font-weight: 700;
+  text-align: center;
+}
+.broadcast-pause__score > span {
+  font-size: 12px;
+  opacity: 0.6;
+  text-align: center;
+}
+.broadcast-pause__team-name {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  font-size: 23px;
+  line-height: 1;
+  font-weight: 600;
+}
+.broadcast-pause__team-logo {
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-inline: 3px solid var(--mizar-side-ct);
+  border-inline-end-width: 0;
+}
+.broadcast-pause__team-logo[data-side='T'] {
+  border-color: var(--mizar-side-t);
+}
+.broadcast-pause__team-logo[data-side='unknown'] {
+  border-color: var(--mizar-hud-text-muted);
+}
+.broadcast-pause__team-logo img {
+  max-width: 44px;
+  max-height: 44px;
+  object-fit: contain;
+}
+.broadcast-pause[data-hud-design='iem'] .broadcast-pause__bar {
+  background: linear-gradient(
+    150deg,
+    var(--mizar-hud-surface-primary),
+    color-mix(in srgb, var(--mizar-side-ct) 65%, var(--mizar-hud-surface-primary))
+  );
+}
+.broadcast-pause[data-hud-design='ewc'] .broadcast-pause__score {
+  background: var(--mizar-hud-text-primary);
+  color: var(--mizar-hud-surface-strong);
+}
+.broadcast-pause__team-identity {
+  min-width: 0;
+}
+.broadcast-pause__series-wins {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.broadcast-pause__series-wins i {
+  width: 14px;
+  height: 4px;
+  background: color-mix(in srgb, currentColor 25%, transparent);
+}
+.broadcast-pause__series-wins i[data-series-win-slot='won'] {
+  background: currentColor;
+}
+.broadcast-pause[data-hud-design='ewc'] .broadcast-pause__team-logo {
+  background: var(--mizar-hud-surface-primary);
+  padding: 4px;
+}
+.broadcast-pause__timeout-slots {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  align-items: center;
+}
+.broadcast-pause__timeout-slots i {
+  width: 20px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-text-primary) 7%, transparent);
+}
+.broadcast-pause__economy[data-side='CT']
+  .broadcast-pause__timeout-slots
+  i[data-timeout-available='true'] {
+  border-color: var(--mizar-side-ct);
+  background: color-mix(in srgb, var(--mizar-side-ct) 65%, var(--mizar-hud-text-primary));
+}
+.broadcast-pause__economy[data-side='T']
+  .broadcast-pause__timeout-slots
+  i[data-timeout-available='true'] {
+  border-color: var(--mizar-side-t);
+  background: color-mix(in srgb, var(--mizar-side-t) 85%, var(--mizar-hud-text-primary));
+}
+.broadcast-pause__team-logo[data-physical-side='right'] {
+  border-inline-start-width: 0;
+  border-inline-end-width: 3px;
+}

@@ -24,6 +24,7 @@ export interface PlayerRailWeapon {
   readonly item: Cs2ItemMetadata | null;
   readonly asset: PlayerRailAsset | null;
   readonly ammoReserve: number | null;
+  readonly active?: boolean;
 }
 
 export type WeaponVisualRole = 'primary-firearm' | 'standalone-pistol' | 'secondary-pistol';
@@ -170,6 +171,7 @@ export function weaponPresentation(
       item: null,
       asset: null,
       ammoReserve: weapon.ammoReserve,
+      active: weapon.state === 'active',
     };
   }
   return {
@@ -178,6 +180,7 @@ export function weaponPresentation(
     item: resolution.item,
     asset: { canonicalKey: resolution.item.canonicalKey, outputPath: resolution.asset.outputPath },
     ammoReserve: weapon.ammoReserve,
+    active: weapon.state === 'active',
   };
 }
 

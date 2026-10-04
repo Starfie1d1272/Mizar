@@ -1,10 +1,13 @@
+import { useBalancedTeamNames } from './useBalancedTeamNames';
+import { assetForCanonicalKey } from '../player-rails/presentation';
+import type { CSSProperties } from 'react';
 import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-config';
 /** Match composition adapted from Lexogrine cs2-react-hud@7874750c97fcecd8f72eb3fad382917e035ec651
  * (MIT). Angular shell, series pips and objective choreography follow the user-provided reference.
  * Team binding and all gameplay progress remain owned by the existing presentation join/Core. */
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 import { useEffect, useRef, useState } from 'react';
-import { ObjectiveCenter, ObjectiveFuse } from './ObjectiveCenter';
+import { ObjectiveCenter, ObjectiveDefused, ObjectiveFuse } from './ObjectiveCenter';
 import {
   buildMatchHeaderPresentation,
   formatMatchHeaderScore,
@@ -55,9 +58,16 @@ function usePanelPresence<T>(value: T | null, exitMs = PANEL_EXIT_MS) {
 }
 /* eslint-enable react-hooks/set-state-in-effect */
 
-function TeamLogo({ team }: { readonly team: MatchHeaderTeamPresentation }) {
+function TeamLogo({
+  team,
+  fallback = false,
+}: {
+  readonly team: MatchHeaderTeamPresentation;
+  readonly fallback?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
-  if (team.logoUrl === null || failed) return null;
+  if (team.logoUrl === null || failed)
+    return fallback ? <span className="shanghai-winner-name">{team.name}</span> : null;
   return (
     <img
       alt=""
@@ -86,6 +96,9 @@ function Team({
         {options.showTeamLogo ? (
           <TeamLogo key={`${team.key}:${team.logoUrl ?? ''}`} team={team} />
         ) : null}
+        <span className="match-header__team-name" title={team.name}>
+          {team.name}
+        </span>
       </div>
       <div
         aria-label={`${team.name} score`}
@@ -116,6 +129,7 @@ function Team({
   );
 }
 export function TopScoreBar({
+  design = 'current',
   snapshot,
   settings,
   presentationRevision = 0,
@@ -123,6 +137,8 @@ export function TopScoreBar({
   const options = topScoreBarSettingsSchema.parse(settings.settings);
   const p = buildMatchHeaderPresentation(snapshot.payload);
   const timeout = p.timeoutPanel;
+  const nameContainer = useBalancedTeamNames(`${p.teamA.name}:${p.teamB.name}`, design);
+  const shanghai = design === 'perfectworld';
   const objective =
     p.objective.mode !== 'normal' &&
     p.objective.mode !== 'paused' &&
@@ -130,11 +146,22 @@ export function TopScoreBar({
     p.clockTone !== 'paused';
   return (
     <section
+      ref={nameContainer}
       aria-label="比赛头部"
       className="match-header match-header__top-score"
       data-match-header-widget="top-score-bar"
       data-side-mapping={p.currentSideMapping}
+      data-freeze={snapshot.payload.round?.phase === 'freezetime'}
     >
+      {design === 'iem' && (p.competitionName || p.stageName) ? (
+        <div className="iem-event-ribbon">
+          <span>{p.competitionName}</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M7 2h10v10a5 5 0 0 1-4 5v3h4v2H7v-2h4v-3a5 5 0 0 1-4-5zM5 4H2v4q0 5 5 5v-2Q4 11 4 8V6h1zM19 4h3v4q0 5-5 5v-2q3 0 3-3V6h-1z" />
+          </svg>
+          <span>{p.stageName}</span>
+        </div>
+      ) : null}
       <div className="match-header__score-shell">
         <Team team={p.teamA} options={options} />
         <div
@@ -148,13 +175,16 @@ export function TopScoreBar({
               </svg>
               <strong>TECH PAUSE</strong>
             </div>
-          ) : objective ? (
+          ) : shanghai && snapshot.payload.bomb?.state === 'defused' ? (
+            <ObjectiveDefused />
+          ) : objective && !(shanghai && p.objective.mode === 'planting') ? (
             <ObjectiveCenter
+              design={design}
               cursor={snapshot.cursor}
               presentation={p}
               presentationRevision={presentationRevision}
             />
-          ) : p.phaseLabel === 'ROUND OVER' ? (
+          ) : !shanghai && p.phaseLabel === 'ROUND OVER' ? (
             <div className="match-header__round-over" data-round-over="true">
               <span>ROUND</span>
               <strong>OVER</strong>
@@ -165,14 +195,20 @@ export function TopScoreBar({
                 {p.roundLabel === null ? null : <span data-round-label="true">{p.roundLabel}</span>}
               </div>
               <div className="match-header__clock" data-clock="true">
-                <strong className="match-header__clock-value">{p.clockText ?? p.phaseLabel}</strong>
+                <strong className="match-header__clock-value">
+                  {shanghai && p.phaseLabel === 'ROUND OVER'
+                    ? '0:00'
+                    : (p.clockText ?? p.phaseLabel)}
+                </strong>
               </div>
             </>
           )}
         </div>
         <Team team={p.teamB} options={options} />
       </div>
-      {options.showObjectiveAuxiliary &&
+      {shanghai ? <ShanghaiPanels snapshot={snapshot} presentation={p} options={options} /> : null}
+      {!shanghai &&
+      options.showObjectiveAuxiliary &&
       objective &&
       (p.objective.mode === 'planted' || p.objective.mode === 'defusing') &&
       !p.objective.stateOnly ? (
@@ -184,7 +220,7 @@ export function TopScoreBar({
       ) : null}
       <MatchHeaderPanels
         key={`panels:${presentationRevision}:${options.showAliveMatchup}:${options.showTimeout}`}
-        aliveCount={options.showAliveMatchup ? p.objective.aliveCount : null}
+        aliveCount={!shanghai && options.showAliveMatchup ? p.objective.aliveCount : null}
         teamASide={p.teamA.side}
         teamBSide={p.teamB.side}
         timeout={options.showTimeout ? timeout : null}
@@ -267,5 +303,97 @@ function TimeoutPanel({
       <strong className="match-header__timeout-label">TACTICAL TIMEOUT</strong>
       <span className="match-header__timeout-count">{timeout.remaining ?? '—'} LEFT</span>
     </div>
+  );
+}
+
+function ShanghaiKit() {
+  const asset = assetForCanonicalKey('equipment.defuse-kit');
+  return asset === null ? null : (
+    <span
+      className="shanghai-kit"
+      aria-hidden="true"
+      style={{ '--shanghai-kit': `url("${asset.outputPath}")` } as CSSProperties}
+    />
+  );
+}
+
+function ShanghaiPanels({
+  snapshot,
+  presentation: p,
+  options,
+}: {
+  readonly snapshot: HudWidgetRendererProps['snapshot'];
+  readonly presentation: ReturnType<typeof buildMatchHeaderPresentation>;
+  readonly options: TopScoreBarSettings;
+}) {
+  const payload = snapshot.payload;
+  const action = payload.status.telemetry === 'fresh' ? payload.bomb?.action : null;
+  const actor = payload.players.find(
+    (player) =>
+      player.sourcePlayerId === action?.sourcePlayerId && player.lineupEvidence === 'current',
+  );
+  const actionSide = action?.kind === 'defuse' ? 'CT' : 'T';
+  const actionOwner = p.teamA.side === actionSide ? 'a' : 'b';
+  const winner =
+    payload.round?.phase === 'over'
+      ? [p.teamA, p.teamB].find(
+          (team) => team.side !== null && team.side === payload.round?.winnerSide,
+        )
+      : undefined;
+  const active = p.objective.mode === 'planting' || p.objective.mode === 'defusing';
+  const remaining = action?.remainingSeconds;
+  const timedAction =
+    active &&
+    action != null &&
+    remaining != null &&
+    Number.isFinite(remaining) &&
+    remaining > 0 &&
+    ((p.objective.mode === 'planting' && action.kind === 'plant') ||
+      (p.objective.mode === 'defusing' && action.kind === 'defuse'));
+  return (
+    <>
+      <div className="shanghai-round-strip">
+        <span>
+          {payload.map.roundNumber === null
+            ? 'ROUND —'
+            : `ROUND ${payload.map.roundNumber + 1}${payload.map.roundNumber < 24 ? '/24' : ''}`}
+        </span>
+      </div>
+      {options.showObjectiveAuxiliary && p.objective.fuse !== null ? (
+        <div
+          className="shanghai-fuse"
+          data-owner={p.teamA.side === 'T' ? 'a' : 'b'}
+          data-objective-track="fuse"
+        >
+          <i style={{ width: `${p.objective.fuse * 100}%` }} />
+        </div>
+      ) : null}
+      {options.showObjectiveAuxiliary && timedAction ? (
+        <>
+          {action.kind === 'defuse' && p.objective.action !== null ? (
+            <div className="shanghai-action-track" data-owner={actionOwner} data-kind={action.kind}>
+              <i style={{ width: `${(1 - p.objective.action) * 100}%` }} />
+              {p.objective.hasKit ? <ShanghaiKit /> : null}
+            </div>
+          ) : null}
+          <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
+            {action.kind === 'defuse' && p.objective.hasKit ? <ShanghaiKit /> : null}
+            {action.kind === 'defuse' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
+            <strong>{actor?.displayName ?? 'PLAYER'}</strong>
+            <span>{action.kind === 'plant' ? 'PLANTING BOMB' : 'DEFUSING THE BOMB'}</span>
+            {action.kind === 'plant' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
+          </div>
+        </>
+      ) : winner ? (
+        <div
+          className="shanghai-event-panel shanghai-round-winner"
+          data-owner={winner.key}
+          data-side={winner.side}
+        >
+          <TeamLogo team={winner} fallback />
+          <strong>ROUND WINNER</strong>
+        </div>
+      ) : null}
+    </>
   );
 }

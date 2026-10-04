@@ -176,7 +176,42 @@ const bombSchema = z.object({
   action: bombActionSchema.nullable(),
 });
 
+export const bombDamageSchema = z.object({
+  status: z.enum(['available', 'unavailable']),
+  reason: z.string().max(160).nullable(),
+  model: z
+    .object({
+      packageVersion: z.literal('0.1.0'),
+      mapName: z.string().max(64),
+      modelRevision: z.string().max(128),
+      resourceSha256: z.string().length(64),
+    })
+    .nullable(),
+  players: z
+    .array(
+      z.discriminatedUnion('status', [
+        z.object({
+          sourcePlayerId: z.string(),
+          status: z.literal('unavailable'),
+          reason: z.string().max(160),
+        }),
+        z.object({
+          sourcePlayerId: z.string(),
+          status: z.literal('predicted'),
+          stance: z.literal('standing'),
+          damage: z.number().int().min(0).max(255),
+          hpAfter: z.number().finite().min(0),
+          lethal: z.boolean(),
+          modelRevision: z.string().max(128),
+          assumptions: z.array(z.string().max(256)).max(32),
+          unknownInputs: z.array(z.string().max(256)).max(32),
+        }),
+      ]),
+    )
+    .max(10),
+});
 export const programPayloadSchema = z.object({
+  bombDamage: bombDamageSchema,
   status: z.object({
     telemetry: z.enum(['awaiting', 'fresh', 'stale']),
     context: z.enum(['unbound', 'fresh', 'stale']),

@@ -50,3 +50,10 @@ export type {
 } from './bp.js';
 export { DEFAULT_LOCAL_BP_MAP_POOL, LOCAL_BP_MAP_CATALOG, localBpSequence } from './bp-sequence.js';
 export type { BpSequenceAction } from './bp-sequence.js';
+
+export { prepareBombDamage, projectBombDamage } from './bomb-damage.js';
+export type {
+  PreparedBombDamage,
+  BombDamageResource,
+  BombDamageProjection,
+} from './bomb-damage.js';

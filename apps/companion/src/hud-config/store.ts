@@ -2,14 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import {
-  BUILTIN_LAYOUT_ID,
-  BUILTIN_PRESET_ID,
-  BUILTIN_THEME_ID,
+  BUILTIN_PRESET_IDS,
   canonicalJson,
+  instantiateHudPresetPack,
   createDefaultHudConfigDocument,
-  getBuiltinLayout,
+  getBuiltinLayouts,
   getBuiltinResolvedPreset,
-  getBuiltinTheme,
+  getBuiltinThemes,
   hudThemeSchema,
   parseHudConfigDocument,
   parseHudLayout,
@@ -74,7 +73,7 @@ export interface HudConfigState {
 }
 
 export interface HudConfigCommandResult {
-  readonly kind: 'save-resource' | 'save-as' | 'activate-preset';
+  readonly kind: 'save-resource' | 'save-as' | 'activate-preset' | 'import-preset-pack';
   readonly resource?: HudResourceKind;
   readonly resourceId?: string;
   readonly sourceId?: string;
@@ -127,17 +126,16 @@ function parseResource(kind: HudResourceKind, value: unknown): HudResource {
 }
 
 function savedResolvedPreset(document: HudConfigDocument): HudResolvedPreset {
-  if (document.activePreset.kind === 'builtin') return getBuiltinResolvedPreset();
+  if (document.activePreset.kind === 'builtin')
+    return getBuiltinResolvedPreset(document.activePreset.sourceId);
   const preset = document.customPresets.find((item) => item.id === document.activePreset.sourceId);
   if (preset === undefined) throw new Error('activePreset 引用的自定义预设不存在');
-  const layout =
-    preset.layoutId === BUILTIN_LAYOUT_ID
-      ? getBuiltinLayout()
-      : document.customLayouts.find((item) => item.id === preset.layoutId);
-  const theme =
-    preset.themeId === BUILTIN_THEME_ID
-      ? getBuiltinTheme()
-      : document.customThemes.find((item) => item.id === preset.themeId);
+  const layout = [...getBuiltinLayouts(), ...document.customLayouts].find(
+    (item) => item.id === preset.layoutId,
+  );
+  const theme = [...getBuiltinThemes(), ...document.customThemes].find(
+    (item) => item.id === preset.themeId,
+  );
   if (layout === undefined || theme === undefined) throw new Error('预设引用的资源不存在');
   return resolveHudPreset(preset, layout, theme);
 }
@@ -196,6 +194,30 @@ export class HudConfigStore {
     return createState(this.document, this.persistenceError);
   }
 
+  async importPresetPack(
+    value: unknown,
+    expectedEditorRevision?: string,
+  ): Promise<HudConfigMutationState> {
+    let resources: ReturnType<typeof instantiateHudPresetPack>;
+    try {
+      resources = instantiateHudPresetPack(value, randomUUID);
+    } catch {
+      throw new HudConfigCommandError(
+        '预设文件无效或版本不受支持，请检查组件方案、外观与资源引用。',
+      );
+    }
+    return this.commit(
+      () => ({
+        ...this.document,
+        customPresets: [...this.document.customPresets, resources.preset],
+        customLayouts: [...this.document.customLayouts, resources.layout],
+        customThemes: [...this.document.customThemes, resources.theme],
+      }),
+      { kind: 'import-preset-pack', resource: 'preset', resourceId: resources.preset.id },
+      expectedEditorRevision,
+    );
+  }
+
   async saveResource(
     kind: HudResourceKind,
     value: unknown,
@@ -251,22 +273,23 @@ export class HudConfigStore {
   ): Promise<HudConfigMutationState> {
     return this.commit(
       () => {
-        if (sourceId === BUILTIN_PRESET_ID) {
+        if (BUILTIN_PRESET_IDS.includes(sourceId as (typeof BUILTIN_PRESET_IDS)[number])) {
           return {
             ...this.document,
-            activePreset: { kind: 'builtin', sourceId: BUILTIN_PRESET_ID },
+            activePreset: {
+              kind: 'builtin',
+              sourceId: sourceId as (typeof BUILTIN_PRESET_IDS)[number],
+            },
           };
         }
         const preset = this.document.customPresets.find((item) => item.id === sourceId);
         if (preset === undefined) throw new Error(`找不到要启用的 HUD 预设：${sourceId}`);
-        const layout =
-          preset.layoutId === BUILTIN_LAYOUT_ID
-            ? getBuiltinLayout()
-            : this.document.customLayouts.find((item) => item.id === preset.layoutId);
-        const theme =
-          preset.themeId === BUILTIN_THEME_ID
-            ? getBuiltinTheme()
-            : this.document.customThemes.find((item) => item.id === preset.themeId);
+        const layout = [...getBuiltinLayouts(), ...this.document.customLayouts].find(
+          (item) => item.id === preset.layoutId,
+        );
+        const theme = [...getBuiltinThemes(), ...this.document.customThemes].find(
+          (item) => item.id === preset.themeId,
+        );
         if (layout === undefined || theme === undefined) throw new Error('预设引用的资源不存在');
         const snapshot = resolveHudPreset(preset, layout, theme);
         return {

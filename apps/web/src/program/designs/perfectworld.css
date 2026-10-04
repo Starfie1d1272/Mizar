@@ -1,0 +1,6 @@
+/* Perfect World broadcast design; component rules share the same resolved theme. */
+@import './perfectworld/score.css';
+@import './perfectworld/players.css';
+@import './perfectworld/focused.css';
+@import './perfectworld/series.css';
+@import './perfectworld/radar.css';

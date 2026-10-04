@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { consecutivePresentationSamples } from '../../presentation-sample';
 import type { MatchHeaderPresentation } from './presentation';
 import type { ObjectiveCenterPresentation } from './objective-presentation';
+import type { HudDesign } from '../../hud-design';
 function Icon({
   id,
   defusing = false,
@@ -28,6 +29,13 @@ function Icon({
       className={`objective-center__icon${defusing ? ' is-defusing' : ''}${className ? ` ${className}` : ''}`}
       style={{ '--objective-icon': `url("${asset.outputPath}")` } as CSSProperties}
     />
+  );
+}
+export function ObjectiveDefused() {
+  return (
+    <div className="objective-center" data-objective-mode="defused" aria-label="DEFUSED">
+      <Icon id="objective.c4" defusing />
+    </div>
   );
 }
 function useInterpolatedProgress(
@@ -113,10 +121,12 @@ export function ObjectiveFuse({
   );
 }
 export function ObjectiveCenter({
+  design = 'current',
   presentation,
   cursor,
   presentationRevision,
 }: {
+  readonly design?: HudDesign;
   readonly presentation: MatchHeaderPresentation;
   readonly cursor: ProjectionCursor;
   readonly presentationRevision: number;
@@ -187,7 +197,7 @@ export function ObjectiveCenter({
             data-objective-track="action"
             data-progress={c.action === null || c.stateOnly ? 'unavailable' : 'determinate'}
           >
-            <Icon id={c.hasKit ? 'equipment.defuse-kit' : 'objective.c4'} defusing />
+            <Icon id="equipment.defuse-kit" defusing />
             <svg viewBox="0 0 64 64" aria-hidden="true">
               <circle className="objective-center__ring-track" cx="32" cy="32" r="29" />
               {action.value === null || c.stateOnly ? null : (
@@ -214,7 +224,38 @@ export function ObjectiveCenter({
       ) : (
         <>
           <div className="objective-center__bomb">
-            <Icon className={plantedTransition ? 'is-planted-commit' : ''} id="objective.c4" />
+            <span className="objective-center__device">
+              <Icon
+                className={
+                  design === 'perfectworld' && c.mode === 'planted'
+                    ? 'shanghai-c4'
+                    : plantedTransition
+                      ? 'is-planted-commit'
+                      : ''
+                }
+                id="objective.c4"
+              />
+              {(c.mode === 'planted' && !c.stateOnly) ||
+              (c.mode === 'planting' && action.value !== null) ? (
+                <span
+                  className="objective-center__code"
+                  aria-hidden="true"
+                  data-code-steps={
+                    c.mode === 'planted' ? 4 : Math.min(4, Math.floor(action.value! * 4) + 1)
+                  }
+                >
+                  {[0, 1, 2, 3].map((step) => (
+                    <i
+                      key={step}
+                      data-filled={
+                        c.mode === 'planted' ||
+                        step < Math.min(4, Math.floor(action.value! * 4) + 1)
+                      }
+                    />
+                  ))}
+                </span>
+              ) : null}
+            </span>
             <span aria-hidden="true" className="objective-center__led" />
             {c.mode === 'planting' ? (
               <div

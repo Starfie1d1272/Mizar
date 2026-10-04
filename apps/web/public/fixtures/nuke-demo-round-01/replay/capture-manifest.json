@@ -1,0 +1,23 @@
+{
+  "formatVersion": 1,
+  "captureId": "demo-derived-nuke-lgcy-flc-round-1",
+  "createdAt": "2026-06-10T18:02:05.368Z",
+  "platform": "offline-demo-export",
+  "broadcastCommit": "d1f90aa",
+  "scenario": "Nuke real demo round 1, protocol-shaped offline replay; not a GSI recording",
+  "gsiConfig": {},
+  "complete": true,
+  "frameCount": 265,
+  "droppedFrames": 0,
+  "framesSha256": "0a0f5f5a6485eacceb0a870ebc7c33db2650e94edd9b4b9967ce9392042ef8a0",
+  "demoSource": {
+    "kind": "demo-derived",
+    "demoSha256": "2b08640110e8c619f1f2d711fe13772c039e7f668e3a43994f9d57b66f50b730",
+    "sourceFileName": "falcons-vs-legacy-m1-nuke.dem",
+    "tickrate": 64,
+    "startTick": 7307,
+    "endTick": 9396,
+    "explosionIntervalTicks": 2624,
+    "notes": "Position/HP/held item from 8-tick samples; exact plant/defuse events. Explosion countdown uses same-demo 41s event interval, not a measured fuse netvar. Observer selected for inspection; money, armor, ammo and inventory absent, never invented."
+  }
+}

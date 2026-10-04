@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
+import { playerRailSettingsSchema } from '@mizar/hud-config';
 import { getCs2Item } from '@mizar/cs2-assets';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -142,6 +143,51 @@ describe('Player Rails card presentation', () => {
       root = undefined;
     }
   });
+
+  it.each(['ewc', 'perfectworld'] as const)(
+    '%s renders the estimate separately from HP and removes it when disabled or unavailable',
+    (design) => {
+      const fixture = getProgramFixture('real-planted')!;
+      const players = buildPlayerRailsPresentation(fixture.payload);
+      const player = [...players.left.players, ...players.right.players].find(
+        (p) => p.mode !== 'dead',
+      )!;
+      const container = document.createElement('div');
+      root = createRoot(container);
+      const prediction = {
+        status: 'predicted' as const,
+        sourcePlayerId: player.sourcePlayerId,
+        stance: 'standing' as const,
+        damage: 255,
+        hpAfter: 0,
+        lethal: true,
+        modelRevision: 'test',
+        assumptions: ['standing'],
+        unknownInputs: ['collision'],
+      };
+      act(() =>
+        root?.render(<PlayerCard design={design} player={player} prediction={prediction} />),
+      );
+      expect(container.querySelector('[data-bomb-prediction="lethal"]')).not.toBeNull();
+      expect(container.querySelector('[data-health-value]')?.textContent).toBe(
+        String(player.health),
+      );
+      expect(container.querySelector('[data-life-state-label="dead"]')).toBeNull();
+      act(() =>
+        root?.render(
+          <PlayerCard
+            design={design}
+            player={player}
+            prediction={prediction}
+            options={playerRailSettingsSchema.parse({ showBombPrediction: false })}
+          />,
+        ),
+      );
+      expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
+      act(() => root?.render(<PlayerCard design={design} player={player} />));
+      expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
+    },
+  );
 
   it('renders real GSI smoke state across the full player card', () => {
     const snapshot = getProgramFixture('real-live-rich');
@@ -285,6 +331,45 @@ describe('Player Rails card presentation', () => {
     expect(container.querySelector('[data-health-spacer="true"]')).not.toBeNull();
     expect(container.querySelector('.player-rail__dead-stats')).not.toBeNull();
     expect(container.querySelector('[data-player-equipment="true"]')).toBeNull();
+  });
+
+  it('limits the death watermark to Arena and keeps unknown health empty', () => {
+    const snapshot = getProgramFixture('player-rails-dead-observed');
+    if (snapshot === null) throw new Error('fixture missing');
+    const player = buildPlayerRailsPresentation(snapshot.payload).ct.players.find(
+      (candidate) => candidate.mode === 'dead',
+    );
+    if (player === undefined) throw new Error('dead player missing');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    for (const physicalSide of ['left', 'right'] as const) {
+      act(() =>
+        root?.render(<PlayerCard design="ewc" physicalSide={physicalSide} player={player} />),
+      );
+      expect(container.querySelector('.player-rail__death-watermark')).not.toBeNull();
+      expect(container.querySelector('article')?.getAttribute('aria-label')).toContain('DEAD');
+      expect(container.querySelector('[data-health-bar]')).toBeNull();
+      for (const design of ['current', 'perfectworld'] as const) {
+        act(() =>
+          root?.render(<PlayerCard design={design} physicalSide={physicalSide} player={player} />),
+        );
+        expect(container.querySelector('.player-rail__death-watermark')).toBeNull();
+      }
+    }
+    for (const health of [null, 0]) {
+      act(() =>
+        root?.render(
+          <PlayerCard
+            design="ewc"
+            player={{ ...player, mode: 'live', health, healthPercent: health }}
+          />,
+        ),
+      );
+      expect(
+        container.querySelector('[data-health-bar] > span')?.getAttribute('data-health-empty'),
+      ).toBe('true');
+    }
   });
 
   it('keeps KD in the same row for alive and dead players and preserves round kills', () => {

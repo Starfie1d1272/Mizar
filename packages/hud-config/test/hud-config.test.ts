@@ -36,6 +36,18 @@ import {
 } from '../src/index.js';
 
 describe('hud-config schema and framework contract', () => {
+  it('resolves styled history envelopes while retaining the original hidden history', () => {
+    for (const style of ['ewc', 'iem', 'perfectworld']) {
+      const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
+      const parsed = parseHudResolvedPreset(preset);
+      expect(parsed.widgets['round-history'].variant).toBe(style);
+      expect(parsed.layout.widgets['round-history'].visible).toBe(true);
+      expect(placementToBox('round-history', parsed.layout.widgets['round-history'])).toMatchObject(
+        { width: 720, height: 84 },
+      );
+    }
+    expect(getBuiltinResolvedPreset().layout.widgets['round-history'].visible).toBe(false);
+  });
   it('provides a complete immutable-by-convention built-in registry', () => {
     const preset = getBuiltinPreset();
     const layout = getBuiltinLayout();
@@ -172,6 +184,7 @@ describe('hud-config schema and framework contract', () => {
     const light = resolveHudTheme({
       schemaVersion: 1,
       id: 'theme-1',
+      recipe: 'mizar-default',
       name: '测试外观',
       brandColor: '#ff00aa',
       panelStyle: 'light',
@@ -279,6 +292,10 @@ describe('hud-config schema and framework contract', () => {
       defaultVariant: 'compact',
       resizePolicy: 'square',
       defaultPlacement: getBuiltinLayout().widgets.radar,
+      dimensionsByVariant: {
+        default: { width: 400, height: 400 },
+        compact: { width: 400, height: 400 },
+      },
       settingsSchemaByVariant: {
         default: (value: unknown) => z.object({ showLabel: z.boolean() }).strict().parse(value),
         compact: (value: unknown) =>
@@ -412,6 +429,27 @@ describe('hud-config logical geometry', () => {
 });
 
 describe('widget customization contract', () => {
+  it.each(['ewc', 'iem'] as const)(
+    'starts %s Focus without metrics and preserves an explicit saved opt-in',
+    (style) => {
+      const preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
+      expect(focusedPlayerPresentationSettings(preset.widgets['focused-player'])).toMatchObject({
+        showMetrics: false,
+        showMedia: true,
+        showReserveAmmo: true,
+      });
+      preset.widgets['focused-player'].settings.showMetrics = true;
+      const restored = parseHudResolvedPreset(JSON.parse(JSON.stringify(preset)));
+      expect(
+        focusedPlayerPresentationSettings(restored.widgets['focused-player']).showMetrics,
+      ).toBe(true);
+      expect(
+        focusedPlayerPresentationSettings(getBuiltinResolvedPreset().widgets['focused-player'])
+          .showMetrics,
+      ).toBe(true);
+    },
+  );
+
   it('validates every declared default and control value, rejecting undeclared fields', () => {
     for (const descriptor of HUD_WIDGET_REGISTRY) {
       expect(Object.keys(descriptor.settingsSchemaByVariant).sort()).toEqual(

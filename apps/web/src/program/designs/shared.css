@@ -1,0 +1,554 @@
+/* Broadcast recipes over shared production widgets and preset-owned envelopes.
+ * Shared colors remain resolved Theme values. No gameplay clocks live here. */
+.hud-widget-design.hud-redraw .player-rail {
+  width: 420px;
+  overflow: visible;
+}
+.hud-widget-design.hud-redraw .player-rail--right {
+  margin-left: auto;
+}
+.hud-widget-design.hud-redraw .player-rail__header,
+.hud-widget-design.hud-redraw .player-rail__players,
+.hud-widget-design.hud-redraw .player-rail__summary,
+.hud-widget-design.hud-redraw .player-rail__economy,
+.hud-widget-design.hud-redraw .player-rail__utility {
+  width: 100%;
+}
+.hud-widget-design.hud-redraw .player-rail__summary-slot {
+  height: 42px;
+  flex-basis: 42px;
+}
+.hud-widget-design.hud-redraw .player-rail__header {
+  height: 24px;
+  flex-basis: 24px;
+  background: transparent;
+  padding: 0 8px;
+}
+.hud-widget-design.hud-redraw .player-rail__header strong {
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: var(--mizar-hud-text-primary);
+  text-shadow: 0 1px 4px var(--mizar-hud-surface-strong);
+}
+.hud-widget-design.hud-redraw .player-rail__header::before {
+  display: none;
+}
+.hud-widget-design.hud-redraw .player-rail__players {
+  height: 412px;
+  flex-basis: 412px;
+  grid-template-rows: repeat(5, 76px);
+  gap: 8px;
+}
+.hud-widget-design.hud-redraw .player-rail__card,
+.hud-widget-design.hud-redraw .player-rail__empty-card {
+  width: 100%;
+  height: 76px;
+  flex-basis: 76px;
+}
+.hud-widget-design.hud-redraw .player-rail__avatar,
+.hud-widget-design.hud-redraw .player-rail__avatar img {
+  width: 64px;
+  height: 76px;
+  flex-basis: 64px;
+  object-fit: cover;
+}
+.hud-widget-design.hud-redraw .player-rail__body {
+  display: block;
+  flex: 1 1 auto;
+  width: auto;
+  height: 76px;
+  isolation: isolate;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design.hud-redraw .player-rail__body::before {
+  display: none;
+}
+.hud-widget-design.hud-redraw .player-rail__identity {
+  position: absolute;
+  inset: 7px 28px auto 10px;
+  height: 32px;
+  padding: 0;
+  z-index: 1;
+}
+.hud-widget-design.hud-redraw
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 7px 10px auto 28px;
+  padding: 0;
+}
+.hud-widget-design.hud-redraw .player-rail__card[data-physical-side='left'] .player-rail__identity {
+  padding: 0;
+}
+.hud-widget-design.hud-redraw .player-rail__name {
+  max-width: 100px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+.hud-widget-design.hud-redraw .player-rail__health-value {
+  margin-left: auto;
+  font-size: 36px;
+  line-height: 38px;
+  color: var(--mizar-hud-text-primary);
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__health-value {
+  margin-right: auto;
+  margin-left: 0;
+}
+.hud-widget-design.hud-redraw .player-rail__health-bar,
+.hud-widget-design.hud-redraw .player-rail__health-spacer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  z-index: -1;
+  background: transparent;
+}
+.hud-widget-design.hud-redraw .player-rail__health-bar > span:not(.combat-damage-ghost) {
+  height: 100%;
+  background: color-mix(in srgb, var(--mizar-side-ct) 64%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design.hud-redraw
+  .player-rail__card[data-side='T']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: color-mix(in srgb, var(--mizar-side-t) 62%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design.hud-redraw
+  .player-rail__card.is-low-health
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  background: color-mix(
+    in srgb,
+    var(--mizar-hud-state-danger) 80%,
+    var(--mizar-hud-surface-strong)
+  );
+}
+.hud-widget-design.hud-redraw .player-rail__health-bar > .combat-damage-ghost,
+.hud-widget-design.hud-redraw .player-rail__health-spacer > .combat-damage-ghost {
+  height: 100%;
+}
+.hud-widget-design.hud-redraw .player-rail__combat,
+.hud-widget-design.hud-redraw .player-rail__context,
+.hud-widget-design.hud-redraw .player-rail__loadout,
+.hud-widget-design.hud-redraw .player-rail__bottom {
+  display: contents;
+}
+.hud-widget-design.hud-redraw .player-rail__weapons {
+  position: absolute;
+  top: 10px;
+  left: 136px;
+  width: 106px;
+  height: 26px;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__weapons {
+  right: 136px;
+  left: auto;
+}
+.hud-widget-design.hud-redraw .player-rail__weapon-icons {
+  width: 100%;
+  height: 100%;
+}
+.hud-widget-design.hud-redraw
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 106px;
+  max-width: 106px;
+  height: 26px;
+}
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-visual-role='secondary-pistol'] {
+  display: none;
+}
+.hud-widget-design.hud-redraw .player-rail__kd {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  height: 18px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 3px;
+  opacity: 0.8;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__kd {
+  left: auto;
+  right: 10px;
+}
+.hud-widget-design.hud-redraw .player-rail__money {
+  position: absolute;
+  left: 83px;
+  bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mizar-hud-text-primary);
+  opacity: 0.82;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__money {
+  left: auto;
+  right: 83px;
+}
+.hud-widget-design.hud-redraw .player-rail__spent {
+  display: none;
+}
+.hud-widget-design.hud-redraw .player-rail__equipment {
+  position: absolute;
+  right: 118px;
+  bottom: 6px;
+  width: 62px;
+  height: 26px;
+  justify-content: flex-end;
+  opacity: 0.85;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__equipment {
+  left: 118px;
+  right: auto;
+  justify-content: flex-start;
+  flex-direction: row-reverse;
+}
+.hud-widget-design.hud-redraw .player-rail__utility-icons {
+  position: absolute;
+  right: 28px;
+  bottom: 6px;
+  width: 82px;
+  height: 26px;
+  gap: 0;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__utility-icons {
+  left: 28px;
+  right: auto;
+  flex-direction: row-reverse;
+}
+.hud-widget-design.hud-redraw .player-rail__round-kill-slot {
+  position: absolute;
+  top: 1px;
+  left: 110px;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 110px;
+}
+.hud-widget-design.hud-redraw .player-rail__endcap {
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 76px;
+  border: 0;
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design.hud-redraw .player-rail__endcap[data-side='T'] {
+  background: var(--mizar-side-t);
+}
+.hud-widget-design.hud-redraw .player-rail__endcap--right {
+  right: auto;
+  left: 0;
+}
+.hud-widget-design.hud-redraw .player-rail__endcap strong {
+  color: var(--mizar-hud-surface-strong);
+  font-size: 13px;
+}
+.hud-widget-design.hud-redraw .player-rail__endcap[data-observed='true'] {
+  background: var(--mizar-hud-text-primary);
+}
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__body {
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 82%, transparent);
+}
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__avatar {
+  opacity: 0.5;
+}
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__name,
+.hud-widget-design.hud-redraw .player-rail__life-state {
+  color: var(--mizar-hud-text-muted);
+}
+.hud-widget-design.hud-redraw .player-rail__life-state {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__life-state {
+  margin-left: 0;
+  margin-right: auto;
+}
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__endcap {
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__endcap strong {
+  color: var(--mizar-hud-text-muted);
+}
+.hud-widget-design.hud-redraw .player-rail__dead-stats {
+  position: absolute;
+  right: 24px;
+  bottom: 6px;
+  width: auto;
+  padding: 0;
+  gap: 8px;
+}
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__dead-stats {
+  right: auto;
+  left: 24px;
+}
+.hud-widget-design.hud-redraw .player-rail__dead-stats b {
+  color: var(--mizar-hud-text-muted);
+  font-size: 13px;
+}
+.hud-widget-design.hud-redraw .player-rail__utility {
+  grid-template-columns: repeat(4, 1fr);
+}
+.hud-widget-design.hud-redraw .player-rail__summary-utility {
+  width: auto;
+}
+.hud-widget-design.hud-redraw .player-rail__summary.is-utility-only .player-rail__utility {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 70%, transparent);
+}
+.hud-widget-design.hud-redraw .match-header__map-score {
+  font-size: 52px;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+}
+.hud-widget-design.hud-redraw .match-header__clock-value {
+  font-size: 29px;
+  font-weight: 750;
+}
+/* POV: identity above one combat row; statistics become a small footer. */
+.hud-widget-design.hud-redraw .focused-player {
+  margin-top: 40px;
+  height: 136px;
+}
+.hud-widget-design.hud-redraw .focused-player__face {
+  display: block;
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design.hud-redraw .focused-player__identity {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 36px;
+  background: color-mix(in srgb, var(--mizar-side-ct) 40%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design.hud-redraw .focused-player__face[data-side='T'] .focused-player__identity {
+  background: color-mix(in srgb, var(--mizar-side-t) 40%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design.hud-redraw .focused-player__name {
+  font-size: 22px;
+  font-weight: 800;
+}
+.hud-widget-design.hud-redraw .focused-player__metrics {
+  position: absolute;
+  top: 112px;
+  left: 12px;
+  right: 12px;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.hud-widget-design.hud-redraw .focused-player__action,
+.hud-widget-design.hud-redraw .focused-player__face[data-dead='true'] .focused-player__action {
+  position: absolute;
+  top: 42px;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 64px;
+  padding: 0;
+}
+.hud-widget-design.hud-redraw .focused-player__media,
+.hud-widget-design.hud-redraw .focused-player__media img {
+  position: absolute;
+  top: 0;
+  left: 12px;
+}
+.hud-widget-design.hud-redraw .focused-player__media img {
+  left: 0;
+}
+.hud-widget-design.hud-redraw .focused-player__observer-tile-number {
+  width: 56px;
+  height: 64px;
+  line-height: 64px;
+}
+.hud-widget-design.hud-redraw .focused-player__active {
+  position: absolute;
+  top: 0;
+  left: 158px;
+  width: 110px;
+  height: 64px;
+}
+.hud-widget-design.hud-redraw .focused-player__active .focused-player__icon {
+  max-width: 104px;
+}
+.hud-widget-design.hud-redraw .focused-player__ammo {
+  position: absolute;
+  right: 12px;
+  top: 0;
+  width: 66px;
+  height: 64px;
+}
+.hud-widget-design.hud-redraw .focused-player__ammo > strong {
+  font-size: 36px;
+}
+.hud-widget-design.hud-redraw .focused-player__vitals {
+  position: absolute;
+  top: 42px;
+  left: 82px;
+  width: 68px;
+  height: 64px;
+  padding: 0;
+}
+.hud-widget-design.hud-redraw .focused-player__vitals-values {
+  flex-direction: column;
+  align-items: flex-start;
+  height: 64px;
+}
+.hud-widget-design.hud-redraw .focused-player__health-cluster {
+  width: 68px;
+  height: 42px;
+}
+.hud-widget-design.hud-redraw .focused-player__hp {
+  font-size: 36px;
+  line-height: 38px;
+}
+.hud-widget-design.hud-redraw .focused-player__health-track {
+  width: 54px;
+  height: 3px;
+}
+.hud-widget-design.hud-redraw .focused-player__armor b {
+  font-size: 12px;
+}
+.hud-widget-design.hud-redraw .focused-player__armor .focused-player__icon {
+  width: 14px;
+  height: 14px;
+}
+.hud-widget-design.hud-redraw .focused-player__dead-state {
+  width: 266px;
+  height: 64px;
+  background: transparent;
+}
+/* Objective: no perpetual icon bounce. Only a short planted confirmation and
+ * a small urgent indicator; progress still comes from accepted Core samples. */
+.hud-widget-design.hud-redraw .objective-center {
+  animation: none;
+}
+/* Preserve the centered icon and ring; confirmation changes opacity only. */
+.hud-widget-design.hud-redraw .objective-center__icon.is-planted-commit {
+  animation: hud-objective-confirm 280ms ease-out both;
+}
+.hud-widget-design.hud-redraw
+  .objective-center[data-planted-transition='true']
+  .objective-center__led {
+  animation: none;
+}
+.hud-widget-design.hud-redraw .objective-center__fuse {
+  top: 76px;
+  left: 0;
+  width: 480px;
+  height: 4px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 75%, transparent);
+}
+.hud-widget-design.hud-redraw .objective-center__fuse span {
+  background: var(--mizar-hud-objective-bomb);
+}
+.hud-widget-design.hud-redraw .objective-center__fuse[data-danger='true'] span {
+  background: var(--mizar-hud-state-danger);
+}
+@keyframes hud-objective-confirm {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-widget-design.hud-redraw .objective-center__icon.is-planted-commit {
+    animation: none !important;
+  }
+}
+.hud-widget-design.hud-redraw .objective-center__fuse span::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--mizar-hud-text-primary);
+  content: '';
+}
+.hud-widget-design.hud-redraw .player-rail__summary {
+  height: 42px;
+  grid-template-rows: 21px 21px;
+}
+.hud-widget-design.hud-redraw .player-rail__economy,
+.hud-widget-design.hud-redraw .player-rail__utility {
+  height: 21px;
+}
+.hud-widget-design.hud-redraw .focused-player__media,
+.hud-widget-design.hud-redraw .focused-player__media img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-strip,
+.hud-widget-design[data-hud-design='iem'] .match-header__series-maps,
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-strip,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-maps,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  height: 28px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-art,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-art {
+  display: none;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-name,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  font-family: var(--mizar-type-family-display);
+  font-size: 17px;
+  line-height: 24px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-status,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-status {
+  font-size: 10px;
+}
+.hud-widget-design.hud-redraw .focused-player__dead-state {
+  margin-left: 82px;
+  color: var(--mizar-hud-text-muted);
+  text-align: left;
+  font-family: var(--mizar-type-family-display);
+  font-size: 38px;
+  letter-spacing: 0;
+  line-height: 64px;
+}
+.player-rail__bomb-prediction {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent) 5px 7px
+    ),
+    color-mix(in srgb, var(--mizar-hud-objective-bomb) 80%, transparent);
+  clip-path: polygon(
+    var(--prediction-start) 0,
+    var(--prediction-end) 0,
+    var(--prediction-end) 100%,
+    var(--prediction-start) 100%
+  );
+  pointer-events: none;
+}
+.player-rail--right .player-rail__bomb-prediction {
+  transform: scaleX(-1);
+}
+/* Match the reference's bright held weapon and subdued holstered inventory. */
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='false'] {
+  opacity: 0.45;
+}
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='true'] {
+  opacity: 1;
+  color: var(--mizar-hud-text-primary);
+}

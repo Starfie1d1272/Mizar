@@ -56,10 +56,24 @@ const NUKE_LOWER_PLACEMENT: RadarCanvasPlacement = Object.freeze({
 export function radarBroadcastPlacement(
   mapKey: string,
   layer: string,
+  appearance: 'default' | 'shanghai' = 'default',
 ): RadarCanvasPlacement | null {
   if (mapKey === 'de_ancient') return ANCIENT_PLACEMENT;
   if (mapKey === 'de_vertigo') return VERTIGO_PLACEMENT;
   if (mapKey !== 'de_nuke') return null;
+  if (appearance === 'shanghai') {
+    // Shanghai01: upper map inset, lower floor narrower and closer to it.
+    // Only display placement changes; artwork AND every entity use this transform.
+    return layer === 'lower'
+      ? {
+          viewport: NUKE_LOWER_PLACEMENT.viewport,
+          rect: { x: 170, y: 400, width: 210, height: 405 },
+        }
+      : {
+          viewport: NUKE_UPPER_PLACEMENT.viewport,
+          rect: { x: 55, y: -35, width: 923, height: 560 },
+        };
+  }
   return layer === 'lower' ? NUKE_LOWER_PLACEMENT : NUKE_UPPER_PLACEMENT;
 }
 

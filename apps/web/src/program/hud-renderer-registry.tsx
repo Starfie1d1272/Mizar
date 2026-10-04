@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { HudDesign } from './hud-design';
 
 import {
   HUD_WIDGET_IDS,
@@ -11,6 +12,7 @@ import {
 } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
+import { SeriesOverview } from './widgets/match-header/SeriesOverview';
 import { RoundHistory, SeriesStrip, TopScoreBar } from './widgets/match-header';
 import { FocusedPlayer } from './widgets/focused-player/FocusedPlayer';
 import type { RadarSnapshot } from '@mizar/protocol/radar';
@@ -19,6 +21,7 @@ import { RadarWidget } from './widgets/radar/Radar';
 import { PlayerRail } from './widgets/player-rails';
 
 interface HudWidgetRendererBaseProps {
+  readonly design?: HudDesign;
   readonly resolvedPreset: HudResolvedPreset;
   readonly widgetId: HudWidgetId;
   readonly placement: HudWidgetPlacement;
@@ -69,6 +72,7 @@ const IMPLEMENTED_RENDERERS: Partial<Record<HudWidgetId, HudRendererEntry>> = {
   'top-score-bar': { availability: 'implemented', source: 'program', renderer: TopScoreBar },
   'team-ct-rail': { availability: 'implemented', source: 'program', renderer: PlayerRail },
   'team-t-rail': { availability: 'implemented', source: 'program', renderer: PlayerRail },
+  'series-overview': { availability: 'implemented', source: 'program', renderer: SeriesOverview },
   'series-strip': { availability: 'implemented', source: 'program', renderer: SeriesStrip },
   'round-history': { availability: 'implemented', source: 'program', renderer: RoundHistory },
 };

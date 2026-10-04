@@ -1,6 +1,8 @@
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 
 import { buildMatchHeaderPresentation, type MatchHeaderRoundPresentation } from './presentation';
+import { FreezeRoundHistory } from './FreezeRoundHistory';
+import './round-history.css';
 
 /** Clean-room renderer. It consumes #48's entrant-oriented series.roundHistory only. */
 
@@ -43,7 +45,9 @@ function roundHistoryDensity(roundCount: number): {
   return { gap, marker };
 }
 
-export function RoundHistory({ snapshot }: HudWidgetRendererProps) {
+export function RoundHistory(props: HudWidgetRendererProps) {
+  const { snapshot, design = 'current' } = props;
+  if (design !== 'current') return <FreezeRoundHistory {...props} />;
   const presentation = buildMatchHeaderPresentation(snapshot.payload);
   const history = presentation.roundHistory;
   if (history === null) return null;
