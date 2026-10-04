@@ -16,10 +16,9 @@ import './widgets/match-header/match-header.css';
 import './widgets/player-rails/player-rails.css';
 import './widgets/player-status-effects/player-status-effects.css';
 import './hud-designs.css';
-import type { HudDesign } from './hud-design';
+import { hudDesignForVariant } from './hud-design';
 
 export interface GameplayHudProps {
-  readonly design?: HudDesign;
   readonly radarClient?: RadarProps['client'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
@@ -54,7 +53,6 @@ export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
 }
 
 export function GameplayHud({
-  design = 'current',
   snapshot,
   radarClient,
   radarSnapshot,
@@ -68,9 +66,8 @@ export function GameplayHud({
 
   return (
     <div
-      className={`gameplay-hud${design === 'current' ? '' : ' hud-redraw'}`}
+      className="gameplay-hud"
       data-gameplay-hud="true"
-      data-hud-design={design}
       data-hud-preset-id={resolvedPreset.preset.id}
       style={themeStyle(resolvedPreset.theme)}
     >
@@ -81,6 +78,7 @@ export function GameplayHud({
         if (rendererEntry.renderer === null) return null;
 
         const box = placementToBox(descriptor.id, placement);
+        const design = hudDesignForVariant(resolvedPreset.widgets[descriptor.id].variant);
         let content: ReactElement;
         if (rendererEntry.source === 'program') {
           if (!programFresh || snapshot === null) return null;
@@ -116,7 +114,8 @@ export function GameplayHud({
 
         return (
           <div
-            className="gameplay-hud__widget"
+            className={`gameplay-hud__widget hud-widget-design${design === 'current' ? '' : ' hud-redraw'}`}
+            data-hud-design={design}
             data-hud-widget={descriptor.id}
             data-renderer-availability={descriptor.rendererAvailability}
             key={

@@ -172,6 +172,7 @@ describe('hud-config schema and framework contract', () => {
     const light = resolveHudTheme({
       schemaVersion: 1,
       id: 'theme-1',
+      recipe: 'mizar-default',
       name: '测试外观',
       brandColor: '#ff00aa',
       panelStyle: 'light',

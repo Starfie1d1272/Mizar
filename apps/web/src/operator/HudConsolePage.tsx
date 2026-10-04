@@ -1,5 +1,4 @@
 import { Button, Select } from '../ui';
-import { HUD_DESIGN_CHOICES, parseHudDesign, type HudDesign } from '../program/hud-design';
 import { ToolShell } from '../patterns';
 import {
   Fragment,
@@ -160,10 +159,6 @@ export function HudConsolePage() {
   const editorStatus = visualFixtureMode ? 'ready' : hudEditor.status;
   const initialDocument = fixtureDocument;
   const [workspace, setWorkspace] = useState<HudWorkspace>('preset');
-  const [design, setDesign] = useState<HudDesign>(() =>
-    parseHudDesign(new URLSearchParams(window.location.search).get('design')),
-  );
-  const reviewingDesign = design !== 'current';
   const [mapBackground, setMapBackground] = useState(true);
   const reviewFrameRef = useRef<HTMLDivElement>(null);
   const [selectedPresetId, setSelectedPresetId] = useState(() => activePresetId(initialDocument));
@@ -811,7 +806,7 @@ export function HudConsolePage() {
 
   return (
     <ToolShell title="HUD 编辑器">
-      <main className="hud-console" data-surface="hud-console" data-design-review={reviewingDesign}>
+      <main className="hud-console" data-surface="hud-console">
         <header className="hud-console__header">
           <div>
             <p className="hud-console__eyebrow">Mizar</p>
@@ -834,27 +829,14 @@ export function HudConsolePage() {
           <div className="hud-console__preview-column" ref={reviewFrameRef}>
             <section className="hud-console__preview-toolbar" aria-label="预览设置">
               <Select
-                label="HUD 设计"
-                value={design}
-                onChange={(event) => setDesign(parseHudDesign(event.target.value))}
+                label="预览背景"
+                value={mapBackground ? 'map' : 'plain'}
+                onChange={(event) => setMapBackground(event.target.value === 'map')}
               >
-                {HUD_DESIGN_CHOICES.map((choice) => (
-                  <option key={choice.id} value={choice.id}>
-                    {choice.label}
-                  </option>
-                ))}
+                <option value="map">静态地图</option>
+                <option value="plain">纯色底板</option>
               </Select>
-              {reviewingDesign ? (
-                <Select
-                  label="预览背景"
-                  value={mapBackground ? 'map' : 'plain'}
-                  onChange={(event) => setMapBackground(event.target.value === 'map')}
-                >
-                  <option value="map">静态地图</option>
-                  <option value="plain">纯色底板</option>
-                </Select>
-              ) : null}
-              {reviewingDesign && document.fullscreenEnabled ? (
+              {document.fullscreenEnabled ? (
                 <Button
                   onClick={() =>
                     void reviewFrameRef.current?.requestFullscreen().catch(() => undefined)
@@ -1073,8 +1055,7 @@ export function HudConsolePage() {
             ) : null}
 
             <HudCanvasPreview
-              design={design}
-              mapBackground={reviewingDesign && mapBackground}
+              mapBackground={mapBackground}
               radarSnapshot={activeRadarSnapshot}
               radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
               presentationRevision={
@@ -1082,24 +1063,22 @@ export function HudConsolePage() {
               }
               canvasFrameRef={canvasFrameRef}
               connectionState={program.state}
-              editorMode={!reviewingDesign && workspace === 'layout' ? 'layout' : 'preview'}
-              editorInteractive={!reviewingDesign && editorReady && workspace === 'layout'}
+              editorMode={workspace === 'layout' ? 'layout' : 'preview'}
+              editorInteractive={editorReady && workspace === 'layout'}
               liveSource={activePreviewSource === 'current-live'}
               onRadarResizePointerDown={workspace === 'layout' ? startRadarResize : undefined}
               onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
               resolvedPreset={previewResolved}
               selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
-              showCenter={!reviewingDesign && showCenter}
-              showGrid={!reviewingDesign && showGrid}
-              showSafeArea={!reviewingDesign && showSafeArea}
+              showCenter={workspace === 'layout' && showCenter}
+              showGrid={workspace === 'layout' && showGrid}
+              showSafeArea={workspace === 'layout' && showSafeArea}
               snapshot={activeSnapshot}
             />
-            <p className="hud-console__preview-caption">
-              {reviewingDesign ? '1920 × 1080 · 仅预览' : '1920 × 1080 · 10px 网格'}
-            </p>
+            <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
           </div>
 
-          <div className="hud-console__editor-column" hidden={reviewingDesign}>
+          <div className="hud-console__editor-column">
             <div className="hud-console__tabs" aria-label="HUD 编辑区域">
               {WORKSPACES.map((item) => (
                 <Button

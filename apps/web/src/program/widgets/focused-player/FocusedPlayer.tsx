@@ -14,6 +14,7 @@ import {
 } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
+import type { HudDesign } from '../../hud-design';
 import { consecutivePresentationSamples } from '../../presentation-sample';
 import { observerHotkeyLabel } from '../../observer-hotkey';
 import type { PlayerRailAsset } from '../player-rails/presentation';
@@ -147,6 +148,7 @@ function ActiveItemSlot({
 }
 
 function FocusedPlayerFace({
+  design,
   player: p,
   options,
   cursor,
@@ -159,6 +161,7 @@ function FocusedPlayerFace({
   pending = false,
   combatFeedback = null,
 }: {
+  readonly design: HudDesign;
   readonly player: FocusedPlayerPresentation;
   readonly options: FocusedPlayerSettings;
   readonly cursor: ProjectionCursor | null;
@@ -288,7 +291,7 @@ function FocusedPlayerFace({
         />
         {p.dead ? (
           <div aria-label="Dead" className="focused-player__dead-state">
-            <span>DEAD</span>
+            <span>{design === 'current' ? 'DEAD' : (p.health ?? '—')}</span>
           </div>
         ) : (
           <>
@@ -365,12 +368,14 @@ type FocusedPlayerHandoff = {
 };
 
 export function FocusedPlayerCard({
+  design = 'current',
   player,
   cursor = null,
   presentationRevision = 0,
   options = focusedPlayerSettingsSchema.parse({}),
 }: {
   readonly player: FocusedPlayerPresentation;
+  readonly design?: HudDesign;
   readonly options?: FocusedPlayerSettings;
   readonly cursor?: ProjectionCursor | null;
   readonly presentationRevision?: number;
@@ -487,6 +492,7 @@ export function FocusedPlayerCard({
     >
       {!options.showMedia || handoff === null ? null : (
         <FocusedPlayerFace
+          design={design}
           key={`outgoing:${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
           options={options}
           avatarIdentityKey={`${handoff.outgoing.sourcePlayerId}:${handoff.outgoing.avatarUrl ?? ''}`}
@@ -499,6 +505,7 @@ export function FocusedPlayerCard({
         />
       )}
       <FocusedPlayerFace
+        design={design}
         key={`current:${player.sourcePlayerId}:${player.avatarUrl ?? ''}`}
         options={options}
         avatarIdentityKey={currentAvatarIdentityKey}
@@ -518,6 +525,7 @@ export function FocusedPlayerCard({
 }
 
 export function FocusedPlayer({
+  design = 'current',
   snapshot,
   settings,
   presentationRevision = 0,
@@ -526,6 +534,7 @@ export function FocusedPlayer({
   const player = buildFocusedPlayerPresentation(snapshot.payload);
   return player === null ? null : (
     <FocusedPlayerCard
+      design={design}
       options={options}
       cursor={snapshot.cursor}
       player={player}

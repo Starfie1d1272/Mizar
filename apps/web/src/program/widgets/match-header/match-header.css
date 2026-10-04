@@ -835,3 +835,7 @@
   padding-inline: 1px;
   font-size: 11px;
 }
+
+.match-header__team-name {
+  display: none;
+}

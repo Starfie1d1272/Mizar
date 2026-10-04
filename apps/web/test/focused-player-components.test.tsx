@@ -252,7 +252,7 @@ describe('Focused media and combat presentation lifecycle', () => {
       act(() =>
         root!.render(
           <TopScoreBar
-            design="arena"
+            design="ewc"
             snapshot={snapshot}
             resolvedPreset={BUILTIN_RESOLVED_PRESET}
             widgetId="top-score-bar"
@@ -327,7 +327,7 @@ describe('Focused media and combat presentation lifecycle', () => {
     }
   });
 
-  it.each(['current', 'arena', 'studio'] as const)(
+  it.each(['current', 'ewc', 'iem'] as const)(
     '%s objective never invents seconds or action progress',
     (design) => {
       const container = host();

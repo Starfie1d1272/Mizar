@@ -51,15 +51,40 @@ const DEFAULT_THEME_RECIPE: HudThemeRecipe = deepFreeze({
 /** Code-owned recipes leave room for richer built-in themes without widening v1 user controls. */
 export const HUD_THEME_RECIPE_REGISTRY: readonly HudThemeRecipe[] = deepFreeze([
   DEFAULT_THEME_RECIPE,
+  {
+    ...DEFAULT_THEME_RECIPE,
+    id: 'ewc',
+    colors: { ...DEFAULT_THEME_RECIPE.colors, sideCt: '#3864c3', sideT: '#b69117' },
+  },
+  {
+    ...DEFAULT_THEME_RECIPE,
+    id: 'iem',
+    colors: { ...DEFAULT_THEME_RECIPE.colors, sideCt: '#203995', sideT: '#a9911c' },
+    surfaces: {
+      solid: { primary: '#071658', strong: '#02082c', opacity: 0.98, borderOpacity: 0.28 },
+      standard: { primary: '#071658', strong: '#02082c', opacity: 0.88, borderOpacity: 0.16 },
+      light: { primary: '#071658', strong: '#02082c', opacity: 0.7, borderOpacity: 0.14 },
+    },
+  },
+  {
+    ...DEFAULT_THEME_RECIPE,
+    id: 'perfectworld',
+    colors: {
+      ...DEFAULT_THEME_RECIPE.colors,
+      sideCt: '#427bd1',
+      sideT: '#d29a20',
+      stateSuccess: '#5dde74',
+    },
+    surfaces: {
+      solid: { primary: '#333335', strong: '#242426', opacity: 0.98, borderOpacity: 0.28 },
+      standard: { primary: '#333335', strong: '#242426', opacity: 0.88, borderOpacity: 0.16 },
+      light: { primary: '#333335', strong: '#242426', opacity: 0.7, borderOpacity: 0.14 },
+    },
+  },
 ]);
 
-const THEME_RECIPE_BY_THEME_ID: Readonly<Record<string, string>> = {};
-
-export function resolveHudThemeRecipe(theme: HudTheme, builtinThemeId: string): HudResolvedTheme {
-  const recipeId =
-    theme.id === builtinThemeId
-      ? DEFAULT_THEME_RECIPE.id
-      : (THEME_RECIPE_BY_THEME_ID[theme.id] ?? DEFAULT_THEME_RECIPE.id);
+export function resolveHudThemeRecipe(theme: HudTheme): HudResolvedTheme {
+  const recipeId = theme.recipe;
   const recipe =
     HUD_THEME_RECIPE_REGISTRY.find((item) => item.id === recipeId) ?? DEFAULT_THEME_RECIPE;
   return {

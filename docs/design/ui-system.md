@@ -87,6 +87,6 @@ ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消�
 
 本轮字体、媒体单元格与结果底图属于 `ProgramScenePage` 的播出呈现；不新增 runtime 颜色或数据通道。复核见 `tests/acceptance/program-direction.spec.ts` 的长名称、缺失素材、多赛制、比分边界和动效交接检查。产品交互继续复用 Button / Panel / Select 和原生 details，状态来源与命令不变。
 
-### Gameplay HUD 双方案审阅
+### Gameplay HUD 播出预设
 
-HUD 编辑器支持竞技场与演播室两种本地设计预览，复用同一真实回合、组件和状态机。方案用途、C4 动效、字体与固定播出几何见 [双方案说明](hud-two-directions.md)。这组规则独立于上面的 Issue #107 场景复查范围；不更改已启用预设。
+HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World 四个内置预设，复用同一真实回合、组件和状态机。组件造型由已保存 variant 决定，颜色由 Theme recipe 决定；选择和另存不自动启用。适配范围、C4 动效、几何测量与缺失参考状态见 [播出预设说明](hud-broadcast-presets.md)。

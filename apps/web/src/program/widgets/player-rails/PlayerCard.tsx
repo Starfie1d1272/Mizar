@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { observerHotkeyLabel } from '../../observer-hotkey';
+import type { HudDesign } from '../../hud-design';
 import {
   CombatTransitionEffects,
   DamageGhost,
@@ -300,12 +301,14 @@ function RoundKillBadge({ kills }: { readonly kills: number }) {
 }
 
 function PlayerBody({
+  design,
   player,
   dead,
   presentationRevision,
   damageGhost,
   options,
 }: {
+  readonly design: HudDesign;
   readonly player: PlayerCardPresentation;
   readonly dead: boolean;
   readonly presentationRevision: number;
@@ -320,6 +323,14 @@ function PlayerBody({
   ].some((weapon) => weapon?.item?.kind === 'firearm' && weapon.item.family !== 'pistol');
   return (
     <div className="player-rail__body" data-card-part="body" data-dead={dead}>
+      {dead && (design === 'ewc' || design === 'iem') ? (
+        <svg className="player-rail__death-watermark" aria-hidden="true" viewBox="3 2 10 12">
+          <path
+            fillRule="evenodd"
+            d="M4 7.25a4 4 0 1 1 8 0v2.1c0 .8-.42 1.55-1.1 1.97V14H5.1v-2.68A2.3 2.3 0 0 1 4 9.35z M5.2 7.6a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M8.4 7.6a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M8 9.2l-1 1.6h2z M6 12v2h.7v-2z M7.65 12v2h.7v-2z M9.3 12v2h.7v-2z"
+          />
+        </svg>
+      ) : null}
       <div className="player-rail__identity">
         <span className="player-rail__name" title={player.displayName ?? undefined}>
           {player.displayName ?? 'PLAYER'}
@@ -341,7 +352,7 @@ function PlayerBody({
         </div>
       ) : (
         <div className="player-rail__health-bar" data-health-bar="true">
-          <span style={healthStyle} />
+          <span style={healthStyle} data-health-empty={!player.healthPercent} />
           <DamageGhost state={damageGhost} />
         </div>
       )}
@@ -431,12 +442,14 @@ function PlayerBody({
 }
 
 export function PlayerCard({
+  design = 'current',
   player,
   cursor = null,
   physicalSide = 'left',
   presentationRevision = 0,
   options = playerRailSettingsSchema.parse({}),
 }: {
+  readonly design?: HudDesign;
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
@@ -459,6 +472,7 @@ export function PlayerCard({
   );
   const body = (
     <PlayerBody
+      design={design}
       options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}

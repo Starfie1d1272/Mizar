@@ -24,3 +24,9 @@ Gameplay 共同颜色通过 schema 校验过的 resolved Theme 传入局部 `--m
 ## 验证与后果
 
 配置、控件、Renderer、Companion 保存/重载/启用与浏览器语义测试保护扩展链路。设置不修改安全投影或重新计算事实；隐藏附加信息保留预留位置。后续美术主要修改 renderer / variant / CSS，无需重建 Runtime、Program、Radar、Replay 或持久化生命周期。真实 Windows + CS2 + OBS 验收与自动化证据继续分开。
+
+## 2026-10-04：内置赛事风格
+
+原版继续保留；新增 ewc / iem / perfectworld 组件变体与同名 Theme recipe，组合为三个内置预设。配色 recipe 是外观文档的受控枚举，另存为时随文档保留，不通过自定义资源 ID 猜风格。Resolved Theme 必须包含 recipe 与完整语义值，仍不得在加载时重新套用默认值；保存/启用、冻结 snapshot 和 revision CAS ownership 不变。
+
+Web 按各 widget 已保存的 variant 在同一 renderer 上建立局部样式边界，不从 URL 或独立预览开关决定正式节目造型。左右卡片继续共用 DOM 和 presentation model；Steam 头像按正方形适配。死亡态允许可见底板收短，但五张卡的固定行位和组件外框不随状态重排。

@@ -6,6 +6,7 @@ import { buildPlayerRailsPresentation } from './presentation';
 import { TeamSummary } from './TeamSummary';
 
 export function PlayerRail({
+  design = 'current',
   snapshot,
   settings,
   widgetId,
@@ -36,6 +37,7 @@ export function PlayerRail({
       <div className="player-rail__players">
         {rail.players.slice(0, 5).map((player) => (
           <PlayerCard
+            design={design}
             key={player.sourcePlayerId}
             cursor={snapshot.cursor}
             physicalSide={physicalSide}

@@ -86,6 +86,7 @@ function Team({
         {options.showTeamLogo ? (
           <TeamLogo key={`${team.key}:${team.logoUrl ?? ''}`} team={team} />
         ) : null}
+        <span className="match-header__team-name">{team.name}</span>
       </div>
       <div
         aria-label={`${team.name} score`}

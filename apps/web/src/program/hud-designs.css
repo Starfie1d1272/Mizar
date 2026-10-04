@@ -1,58 +1,58 @@
 /* Two review compositions over the same production widgets and fixed envelopes.
  * Shared colors remain resolved Theme values. No gameplay clocks live here. */
-.gameplay-hud.hud-redraw .player-rail {
+.hud-widget-design.hud-redraw .player-rail {
   width: 420px;
   overflow: visible;
 }
-.gameplay-hud.hud-redraw .player-rail--right {
+.hud-widget-design.hud-redraw .player-rail--right {
   margin-left: auto;
 }
-.gameplay-hud.hud-redraw .player-rail__header,
-.gameplay-hud.hud-redraw .player-rail__players,
-.gameplay-hud.hud-redraw .player-rail__summary,
-.gameplay-hud.hud-redraw .player-rail__economy,
-.gameplay-hud.hud-redraw .player-rail__utility {
+.hud-widget-design.hud-redraw .player-rail__header,
+.hud-widget-design.hud-redraw .player-rail__players,
+.hud-widget-design.hud-redraw .player-rail__summary,
+.hud-widget-design.hud-redraw .player-rail__economy,
+.hud-widget-design.hud-redraw .player-rail__utility {
   width: 100%;
 }
-.gameplay-hud.hud-redraw .player-rail__summary-slot {
+.hud-widget-design.hud-redraw .player-rail__summary-slot {
   height: 42px;
   flex-basis: 42px;
 }
-.gameplay-hud.hud-redraw .player-rail__header {
+.hud-widget-design.hud-redraw .player-rail__header {
   height: 24px;
   flex-basis: 24px;
   background: transparent;
   padding: 0 8px;
 }
-.gameplay-hud.hud-redraw .player-rail__header strong {
+.hud-widget-design.hud-redraw .player-rail__header strong {
   font-size: 14px;
   letter-spacing: 0.12em;
   color: var(--mizar-hud-text-primary);
   text-shadow: 0 1px 4px var(--mizar-hud-surface-strong);
 }
-.gameplay-hud.hud-redraw .player-rail__header::before {
+.hud-widget-design.hud-redraw .player-rail__header::before {
   display: none;
 }
-.gameplay-hud.hud-redraw .player-rail__players {
+.hud-widget-design.hud-redraw .player-rail__players {
   height: 412px;
   flex-basis: 412px;
   grid-template-rows: repeat(5, 76px);
   gap: 8px;
 }
-.gameplay-hud.hud-redraw .player-rail__card,
-.gameplay-hud.hud-redraw .player-rail__empty-card {
+.hud-widget-design.hud-redraw .player-rail__card,
+.hud-widget-design.hud-redraw .player-rail__empty-card {
   width: 100%;
   height: 76px;
   flex-basis: 76px;
 }
-.gameplay-hud.hud-redraw .player-rail__avatar,
-.gameplay-hud.hud-redraw .player-rail__avatar img {
+.hud-widget-design.hud-redraw .player-rail__avatar,
+.hud-widget-design.hud-redraw .player-rail__avatar img {
   width: 64px;
   height: 76px;
   flex-basis: 64px;
   object-fit: cover;
 }
-.gameplay-hud.hud-redraw .player-rail__body {
+.hud-widget-design.hud-redraw .player-rail__body {
   display: block;
   flex: 1 1 auto;
   width: auto;
@@ -60,41 +60,43 @@
   isolation: isolate;
   background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
 }
-.gameplay-hud.hud-redraw .player-rail__body::before {
+.hud-widget-design.hud-redraw .player-rail__body::before {
   display: none;
 }
-.gameplay-hud.hud-redraw .player-rail__identity {
+.hud-widget-design.hud-redraw .player-rail__identity {
   position: absolute;
   inset: 7px 28px auto 10px;
   height: 32px;
   padding: 0;
   z-index: 1;
 }
-.gameplay-hud.hud-redraw .player-rail__card[data-physical-side='right'] .player-rail__identity {
+.hud-widget-design.hud-redraw
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
   inset: 7px 10px auto 28px;
   padding: 0;
 }
-.gameplay-hud.hud-redraw .player-rail__card[data-physical-side='left'] .player-rail__identity {
+.hud-widget-design.hud-redraw .player-rail__card[data-physical-side='left'] .player-rail__identity {
   padding: 0;
 }
-.gameplay-hud.hud-redraw .player-rail__name {
+.hud-widget-design.hud-redraw .player-rail__name {
   max-width: 100px;
   font-size: 19px;
   font-weight: 800;
   letter-spacing: -0.035em;
 }
-.gameplay-hud.hud-redraw .player-rail__health-value {
+.hud-widget-design.hud-redraw .player-rail__health-value {
   margin-left: auto;
   font-size: 36px;
   line-height: 38px;
   color: var(--mizar-hud-text-primary);
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__health-value {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__health-value {
   margin-right: auto;
   margin-left: 0;
 }
-.gameplay-hud.hud-redraw .player-rail__health-bar,
-.gameplay-hud.hud-redraw .player-rail__health-spacer {
+.hud-widget-design.hud-redraw .player-rail__health-bar,
+.hud-widget-design.hud-redraw .player-rail__health-spacer {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -103,17 +105,17 @@
   z-index: -1;
   background: transparent;
 }
-.gameplay-hud.hud-redraw .player-rail__health-bar > span:not(.combat-damage-ghost) {
+.hud-widget-design.hud-redraw .player-rail__health-bar > span:not(.combat-damage-ghost) {
   height: 100%;
   background: color-mix(in srgb, var(--mizar-side-ct) 64%, var(--mizar-hud-surface-strong));
 }
-.gameplay-hud.hud-redraw
+.hud-widget-design.hud-redraw
   .player-rail__card[data-side='T']
   .player-rail__health-bar
   > span:not(.combat-damage-ghost) {
   background: color-mix(in srgb, var(--mizar-side-t) 62%, var(--mizar-hud-surface-strong));
 }
-.gameplay-hud.hud-redraw
+.hud-widget-design.hud-redraw
   .player-rail__card.is-low-health
   .player-rail__health-bar
   > span:not(.combat-damage-ghost) {
@@ -123,42 +125,42 @@
     var(--mizar-hud-surface-strong)
   );
 }
-.gameplay-hud.hud-redraw .player-rail__health-bar > .combat-damage-ghost,
-.gameplay-hud.hud-redraw .player-rail__health-spacer > .combat-damage-ghost {
+.hud-widget-design.hud-redraw .player-rail__health-bar > .combat-damage-ghost,
+.hud-widget-design.hud-redraw .player-rail__health-spacer > .combat-damage-ghost {
   height: 100%;
 }
-.gameplay-hud.hud-redraw .player-rail__combat,
-.gameplay-hud.hud-redraw .player-rail__context,
-.gameplay-hud.hud-redraw .player-rail__loadout,
-.gameplay-hud.hud-redraw .player-rail__bottom {
+.hud-widget-design.hud-redraw .player-rail__combat,
+.hud-widget-design.hud-redraw .player-rail__context,
+.hud-widget-design.hud-redraw .player-rail__loadout,
+.hud-widget-design.hud-redraw .player-rail__bottom {
   display: contents;
 }
-.gameplay-hud.hud-redraw .player-rail__weapons {
+.hud-widget-design.hud-redraw .player-rail__weapons {
   position: absolute;
   top: 10px;
   left: 136px;
   width: 106px;
   height: 26px;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__weapons {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__weapons {
   right: 136px;
   left: auto;
 }
-.gameplay-hud.hud-redraw .player-rail__weapon-icons {
+.hud-widget-design.hud-redraw .player-rail__weapon-icons {
   width: 100%;
   height: 100%;
 }
-.gameplay-hud.hud-redraw
+.hud-widget-design.hud-redraw
   .player-rail__combat
   .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
   width: 106px;
   max-width: 106px;
   height: 26px;
 }
-.gameplay-hud.hud-redraw .player-rail__icon[data-weapon-visual-role='secondary-pistol'] {
+.hud-widget-design.hud-redraw .player-rail__icon[data-weapon-visual-role='secondary-pistol'] {
   display: none;
 }
-.gameplay-hud.hud-redraw .player-rail__kd {
+.hud-widget-design.hud-redraw .player-rail__kd {
   position: absolute;
   left: 10px;
   bottom: 10px;
@@ -169,11 +171,11 @@
   gap: 3px;
   opacity: 0.8;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__kd {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__kd {
   left: auto;
   right: 10px;
 }
-.gameplay-hud.hud-redraw .player-rail__money {
+.hud-widget-design.hud-redraw .player-rail__money {
   position: absolute;
   left: 83px;
   bottom: 10px;
@@ -182,14 +184,14 @@
   color: var(--mizar-hud-text-primary);
   opacity: 0.82;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__money {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__money {
   left: auto;
   right: 83px;
 }
-.gameplay-hud.hud-redraw .player-rail__spent {
+.hud-widget-design.hud-redraw .player-rail__spent {
   display: none;
 }
-.gameplay-hud.hud-redraw .player-rail__equipment {
+.hud-widget-design.hud-redraw .player-rail__equipment {
   position: absolute;
   right: 118px;
   bottom: 6px;
@@ -198,12 +200,12 @@
   justify-content: flex-end;
   opacity: 0.85;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__equipment {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__equipment {
   left: 118px;
   right: auto;
   justify-content: flex-start;
 }
-.gameplay-hud.hud-redraw .player-rail__utility-icons {
+.hud-widget-design.hud-redraw .player-rail__utility-icons {
   position: absolute;
   right: 28px;
   bottom: 6px;
@@ -211,20 +213,20 @@
   height: 26px;
   gap: 0;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__utility-icons {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__utility-icons {
   left: 28px;
   right: auto;
 }
-.gameplay-hud.hud-redraw .player-rail__round-kill-slot {
+.hud-widget-design.hud-redraw .player-rail__round-kill-slot {
   position: absolute;
   top: 1px;
   left: 110px;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__round-kill-slot {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__round-kill-slot {
   left: auto;
   right: 110px;
 }
-.gameplay-hud.hud-redraw .player-rail__endcap {
+.hud-widget-design.hud-redraw .player-rail__endcap {
   top: 0;
   right: 0;
   width: 22px;
@@ -232,46 +234,46 @@
   border: 0;
   background: var(--mizar-side-ct);
 }
-.gameplay-hud.hud-redraw .player-rail__endcap[data-side='T'] {
+.hud-widget-design.hud-redraw .player-rail__endcap[data-side='T'] {
   background: var(--mizar-side-t);
 }
-.gameplay-hud.hud-redraw .player-rail__endcap--right {
+.hud-widget-design.hud-redraw .player-rail__endcap--right {
   right: auto;
   left: 0;
 }
-.gameplay-hud.hud-redraw .player-rail__endcap strong {
+.hud-widget-design.hud-redraw .player-rail__endcap strong {
   color: var(--mizar-hud-surface-strong);
   font-size: 13px;
 }
-.gameplay-hud.hud-redraw .player-rail__endcap[data-observed='true'] {
+.hud-widget-design.hud-redraw .player-rail__endcap[data-observed='true'] {
   background: var(--mizar-hud-text-primary);
 }
-.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__body {
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__body {
   background: color-mix(in srgb, var(--mizar-hud-surface-primary) 82%, transparent);
 }
-.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__avatar {
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__avatar {
   opacity: 0.5;
 }
-.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__name,
-.gameplay-hud.hud-redraw .player-rail__life-state {
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__name,
+.hud-widget-design.hud-redraw .player-rail__life-state {
   color: var(--mizar-hud-text-muted);
 }
-.gameplay-hud.hud-redraw .player-rail__life-state {
+.hud-widget-design.hud-redraw .player-rail__life-state {
   margin-left: auto;
   font-size: 10px;
   letter-spacing: 0.12em;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__life-state {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__life-state {
   margin-left: 0;
   margin-right: auto;
 }
-.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__endcap {
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__endcap {
   background: var(--mizar-hud-surface-primary);
 }
-.gameplay-hud.hud-redraw .player-rail__card--dead .player-rail__endcap strong {
+.hud-widget-design.hud-redraw .player-rail__card--dead .player-rail__endcap strong {
   color: var(--mizar-hud-text-muted);
 }
-.gameplay-hud.hud-redraw .player-rail__dead-stats {
+.hud-widget-design.hud-redraw .player-rail__dead-stats {
   position: absolute;
   right: 24px;
   bottom: 6px;
@@ -279,33 +281,45 @@
   padding: 0;
   gap: 8px;
 }
-.gameplay-hud.hud-redraw .player-rail--right .player-rail__dead-stats {
+.hud-widget-design.hud-redraw .player-rail--right .player-rail__dead-stats {
   right: auto;
   left: 24px;
 }
-.gameplay-hud.hud-redraw .player-rail__dead-stats b {
+.hud-widget-design.hud-redraw .player-rail__dead-stats b {
   color: var(--mizar-hud-text-muted);
   font-size: 13px;
 }
-.gameplay-hud.hud-redraw .player-rail__utility {
+.hud-widget-design.hud-redraw .player-rail__utility {
   grid-template-columns: repeat(4, 1fr);
 }
-.gameplay-hud.hud-redraw .player-rail__summary-utility {
+.hud-widget-design.hud-redraw .player-rail__summary-utility {
   width: auto;
 }
-.gameplay-hud.hud-redraw .player-rail__summary.is-utility-only .player-rail__utility {
+.hud-widget-design.hud-redraw .player-rail__summary.is-utility-only .player-rail__utility {
   background: color-mix(in srgb, var(--mizar-hud-surface-strong) 70%, transparent);
 }
 
 /* EWC reference: inward tapered cards, separate triangular observer tabs,
  * rectangular logo wings around a light trapezoidal score field. */
-/* Clip paint, never the content: the round-kill marker sits above the card. */
-.gameplay-hud[data-hud-design='arena'] .player-rail__card,
-.gameplay-hud[data-hud-design='arena'] .player-rail__card .player-rail__body {
+/* Paint uses a single physical-side contour; do not inherit the old gradient flip. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail {
+  width: 376px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-observed='true']
+  .player-rail__avatar {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  outline-offset: -2px;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card .player-rail__body {
   overflow: visible;
   background: transparent;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__body::before {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body::before {
   content: '';
   display: block;
   position: absolute;
@@ -313,351 +327,302 @@
   z-index: -2;
   opacity: 1;
   width: 100%;
-  background: color-mix(in srgb, var(--mizar-hud-text-muted) 28%, var(--mizar-hud-surface-strong));
+  transform: none;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 55%, transparent);
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__card--dead .player-rail__body::before {
-  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 82%, transparent);
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 38%, transparent);
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__card > .player-status-effects,
-.gameplay-hud[data-hud-design='arena'] .player-rail__card > .player-combat-transition,
-.gameplay-hud[data-hud-design='arena'] .player-rail__body::before,
-.gameplay-hud[data-hud-design='arena'] .player-rail__health-bar,
-.gameplay-hud[data-hud-design='arena'] .player-rail__health-spacer {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-status-effects,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-combat-transition,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body::before,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-bar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-spacer {
   clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 0 100%);
 }
-.gameplay-hud[data-hud-design='arena']
+.hud-widget-design[data-hud-design='ewc']
   .player-rail--right
   .player-rail__card
   > .player-status-effects,
-.gameplay-hud[data-hud-design='arena']
+.hud-widget-design[data-hud-design='ewc']
   .player-rail--right
   .player-rail__card
   > .player-combat-transition,
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__body::before,
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__health-bar,
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__health-spacer {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body::before,
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-bar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-spacer {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 44px 100%);
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-slot {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-slot {
   top: -8px;
   left: 118px;
   width: 18px;
   height: 16px;
   z-index: 6;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__round-kill-slot {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__round-kill-slot {
   left: auto;
   right: 118px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-badge,
-.gameplay-hud[data-hud-design='arena'] .player-rail__round-kill-badge svg {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge svg {
   width: 16px;
   height: 16px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__avatar,
-.gameplay-hud[data-hud-design='arena'] .player-rail__avatar img {
-  width: 132px;
-  flex-basis: 132px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__avatar,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__avatar img {
+  width: 76px;
+  flex-basis: 76px;
   object-fit: contain;
   background: var(--mizar-hud-surface-strong);
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__name {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__name {
   max-width: 78px;
   font-family: 'Barlow Condensed', var(--mizar-hud-font-family);
   font-size: 20px;
   text-transform: uppercase;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__weapons {
-  left: 96px;
-  width: 76px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__weapons {
+  left: 100px;
+  width: 88px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__weapons {
-  right: 96px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__weapons {
+  right: 100px;
   left: auto;
 }
-.gameplay-hud[data-hud-design='arena']
+.hud-widget-design[data-hud-design='ewc']
   .player-rail__combat
   .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
-  width: 76px;
-  max-width: 76px;
+  width: 88px;
+  max-width: 88px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__kd {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__kd {
   bottom: 25px;
+  font-size: 17px;
+  opacity: 1;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__money {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__money {
   left: 10px;
   bottom: 4px;
-  font-size: 17px;
+  font-size: 19px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__money {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__money {
   right: 10px;
   left: auto;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__equipment {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__equipment {
   right: 48px;
   width: 54px;
   bottom: 4px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__equipment {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__equipment {
   left: 48px;
   right: auto;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__endcap {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__endcap {
   width: 44px;
   height: 38px;
   align-items: flex-start;
   padding-top: 2px;
   clip-path: polygon(0 0, 100% 0, 50% 100%);
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__endcap strong {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__endcap strong {
   font-size: 18px;
   line-height: 22px;
   height: 22px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__identity {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__identity {
   right: 48px;
 }
-.gameplay-hud[data-hud-design='arena']
+.hud-widget-design[data-hud-design='ewc']
   .player-rail__card[data-physical-side='right']
   .player-rail__identity {
   left: 48px;
   right: 10px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__utility-icons {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__utility-icons {
   right: 108px;
   bottom: 4px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__utility-icons {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__utility-icons {
   left: 108px;
   right: auto;
 }
 /* Death statistics stay inside the tapered card's rectangular safe area. */
-.gameplay-hud[data-hud-design='arena'] .player-rail__dead-stats {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__dead-stats {
   right: 58px;
   bottom: 5px;
   gap: 4px;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail--right .player-rail__dead-stats {
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__dead-stats {
   left: 58px;
   right: auto;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__card--dead .player-rail__endcap {
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__endcap {
   display: none;
 }
 
-.gameplay-hud[data-hud-design='arena'] .match-header__score-shell {
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-shell {
+  left: 12px;
+  width: 456px;
   background: var(--mizar-hud-surface-strong);
   clip-path: none;
   overflow: visible;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__score-shell::before {
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-shell::before {
   content: '';
   position: absolute;
   inset: 0 72px;
   background: var(--mizar-hud-text-primary);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 40px) 100%, 40px 100%);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 44px 100%);
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--logo {
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo {
   background: transparent;
 }
-/* Reference centers at 32.5% / 67.5%; the lower trapezoid corners start at 23.3%. */
-.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--score-a {
-  left: 112px;
+/* EWC's 473px shell at 1988px frame width becomes 457px at 1920px. */
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo-b {
+  left: 384px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__center {
+  left: 164px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--score-a {
+  left: 104px;
   width: 88px;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__score-zone--score-b {
-  left: 280px;
+.hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--score-b {
+  left: 264px;
   width: 88px;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span {
+.hud-widget-design[data-hud-design='ewc'] .match-header__win-slots span {
   width: 14px;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__center,
-.gameplay-hud[data-hud-design='arena'] .match-header__map-score {
+.hud-widget-design[data-hud-design='ewc'] .match-header__center,
+.hud-widget-design[data-hud-design='ewc'] .match-header__map-score {
   color: var(--mizar-hud-surface-strong);
 }
-.gameplay-hud.hud-redraw .match-header__map-score {
+.hud-widget-design.hud-redraw .match-header__map-score {
   font-size: 52px;
   font-weight: 900;
   letter-spacing: -0.06em;
 }
-.gameplay-hud.hud-redraw .match-header__clock-value {
+.hud-widget-design.hud-redraw .match-header__clock-value {
   font-size: 29px;
   font-weight: 750;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span {
+.hud-widget-design[data-hud-design='ewc'] .match-header__win-slots span {
   background: color-mix(in srgb, var(--mizar-hud-surface-strong) 20%, transparent);
-  transform: skewX(-18deg);
+  transform: skewX(30deg);
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__win-slots span[data-series-win-slot='won'] {
-  background: var(--mizar-hud-surface-strong);
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone--score-b
+  .match-header__win-slots
+  span {
+  transform: skewX(-30deg);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone[data-side='CT']
+  .match-header__win-slots
+  span[data-series-win-slot='won'] {
+  background: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone[data-side='T']
+  .match-header__win-slots
+  span[data-series-win-slot='won'] {
+  background: var(--mizar-side-t);
 }
 
-/* Studio: narrower rails, a quiet identity band and a lower health field. */
-.gameplay-hud[data-hud-design='studio'] .player-rail {
-  width: 380px;
+/* Residual health keeps the same slope as the outer edge, mirrored once. */
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  width: 100%;
+  clip-path: polygon(
+    0 0,
+    calc(var(--player-rail-health) + 22px) 0,
+    calc(var(--player-rail-health) - 22px) 100%,
+    0 100%
+  );
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__avatar,
-.gameplay-hud[data-hud-design='studio'] .player-rail__avatar img {
-  width: 52px;
-  flex-basis: 52px;
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__health-bar
+  > span:not(.combat-damage-ghost) {
+  clip-path: polygon(
+    calc(100% - var(--player-rail-health) - 22px) 0,
+    100% 0,
+    100% 100%,
+    calc(100% - var(--player-rail-health) + 22px) 100%
+  );
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__avatar img {
-  object-fit: contain;
-  background: var(--mizar-hud-surface-strong);
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__identity {
-  top: 2px;
-  height: 28px;
-}
-.gameplay-hud[data-hud-design='studio']
-  .player-rail__card[data-physical-side='right']
-  .player-rail__identity {
-  top: 2px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__name {
-  max-width: 128px;
-  font-size: 17px;
-  letter-spacing: 0;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__body {
-  background: var(--mizar-hud-surface-primary);
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__health-bar {
-  top: 32px;
-  height: 44px;
-  background: color-mix(in srgb, var(--mizar-hud-text-muted) 22%, transparent);
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__health-value {
-  position: absolute;
-  top: 34px;
-  right: 0;
-  font-size: 32px;
-  line-height: 34px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__health-value {
-  right: auto;
-  left: 0;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__weapons {
-  top: 38px;
-  left: 10px;
-  width: 88px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__weapons {
-  left: auto;
-  right: 10px;
-}
-.gameplay-hud[data-hud-design='studio']
-  .player-rail__combat
-  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
-  width: 88px;
-  max-width: 88px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__equipment {
-  right: 174px;
-  width: 54px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__equipment {
-  left: 174px;
-  right: auto;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__utility-icons {
-  right: 100px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__utility-icons {
-  left: 100px;
-  right: auto;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__kd {
-  top: 7px;
-  bottom: auto;
-  left: auto;
-  right: 29px;
-  font-size: 11px;
-  opacity: 0.6;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__kd {
-  right: auto;
-  left: 29px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__money {
+/* Death shortens paint, not the stable row or identity position. */
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__health-bar
+  > span[data-health-empty='true'] {
   display: none;
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__card--freezetime .player-rail__money {
-  display: block;
-  top: 10px;
-  left: 154px;
-  bottom: auto;
-  font-size: 11px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
+  clip-path: polygon(0 0, calc(100% - 84px) 0, calc(100% - 128px) 100%, 0 100%);
 }
-.gameplay-hud[data-hud-design='studio']
+.hud-widget-design[data-hud-design='ewc']
   .player-rail--right
-  .player-rail__card--freezetime
-  .player-rail__money {
-  right: 154px;
+  .player-rail__card--dead
+  .player-rail__body::before {
+  clip-path: polygon(84px 0, 100% 0, 100% 100%, 128px 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__avatar {
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__avatar img {
+  opacity: 0.65;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__name {
+  color: var(--mizar-hud-text-primary);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__life-state,
+.hud-widget-design[data-hud-design='ewc'] .player-rail__dead-stats {
+  display: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__death-watermark {
+  position: absolute;
+  display: block;
+  top: 0;
+  left: 96px;
+  width: 88px;
+  height: 76px;
+  fill: var(--mizar-hud-text-primary);
+  opacity: 0.25;
+  pointer-events: none;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__death-watermark {
   left: auto;
+  right: 96px;
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__endcap {
-  width: 20px;
-  height: 30px;
+.hud-widget-design[data-hud-design='ewc'] .match-header__map-score {
+  transform: translateY(-7px);
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__card--dead .player-rail__kd {
-  top: 44px;
+.hud-widget-design[data-hud-design='ewc'] .match-header__round-meta {
+  margin-top: 10px;
+  height: 20px;
+  font-size: 18px;
+  line-height: 20px;
 }
-.gameplay-hud[data-hud-design='studio'] .player-rail__dead-stats {
-  right: auto;
-  left: 10px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__dead-stats {
-  left: auto;
-  right: 10px;
-}
-.gameplay-hud[data-hud-design='studio'] .match-header__score-shell {
-  border-bottom: 2px solid color-mix(in srgb, var(--mizar-hud-text-primary) 30%, transparent);
-}
-.gameplay-hud[data-hud-design='studio'] .match-header__score-zone--score[data-side='CT'] {
-  background: color-mix(in srgb, var(--mizar-side-ct) 20%, transparent);
-}
-.gameplay-hud[data-hud-design='studio'] .match-header__score-zone--score[data-side='T'] {
-  background: color-mix(in srgb, var(--mizar-side-t) 20%, transparent);
-}
-
-.gameplay-hud[data-hud-design='studio'] .player-rail__utility-icons {
-  width: 64px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__utility-item {
-  width: 16px;
-  flex-basis: 16px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__utility-item .player-rail__icon {
-  width: 15px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__equipment-slot {
-  width: 14px;
-  flex-basis: 14px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__equipment-slot .player-rail__icon {
-  max-width: 14px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail__round-kill-slot {
-  left: 146px;
-}
-.gameplay-hud[data-hud-design='studio'] .player-rail--right .player-rail__round-kill-slot {
-  right: 146px;
-  left: auto;
+.hud-widget-design[data-hud-design='ewc'] .match-header__clock-value {
+  font-size: 34px;
+  line-height: 38px;
 }
 
 /* POV: identity above one combat row; statistics become a small footer. */
-.gameplay-hud.hud-redraw .focused-player {
+.hud-widget-design.hud-redraw .focused-player {
   margin-top: 40px;
   height: 136px;
 }
-.gameplay-hud.hud-redraw .focused-player__face {
+.hud-widget-design.hud-redraw .focused-player__face {
   display: block;
   background: var(--mizar-hud-surface-primary);
 }
-.gameplay-hud.hud-redraw .focused-player__identity {
+.hud-widget-design.hud-redraw .focused-player__identity {
   position: absolute;
   top: 0;
   left: 0;
@@ -665,14 +630,14 @@
   height: 36px;
   background: color-mix(in srgb, var(--mizar-side-ct) 40%, var(--mizar-hud-surface-strong));
 }
-.gameplay-hud.hud-redraw .focused-player__face[data-side='T'] .focused-player__identity {
+.hud-widget-design.hud-redraw .focused-player__face[data-side='T'] .focused-player__identity {
   background: color-mix(in srgb, var(--mizar-side-t) 40%, var(--mizar-hud-surface-strong));
 }
-.gameplay-hud.hud-redraw .focused-player__name {
+.hud-widget-design.hud-redraw .focused-player__name {
   font-size: 22px;
   font-weight: 800;
 }
-.gameplay-hud.hud-redraw .focused-player__metrics {
+.hud-widget-design.hud-redraw .focused-player__metrics {
   position: absolute;
   top: 112px;
   left: 12px;
@@ -680,8 +645,8 @@
   justify-content: flex-end;
   gap: 14px;
 }
-.gameplay-hud.hud-redraw .focused-player__action,
-.gameplay-hud.hud-redraw .focused-player__face[data-dead='true'] .focused-player__action {
+.hud-widget-design.hud-redraw .focused-player__action,
+.hud-widget-design.hud-redraw .focused-player__face[data-dead='true'] .focused-player__action {
   position: absolute;
   top: 42px;
   left: 0;
@@ -690,43 +655,43 @@
   height: 64px;
   padding: 0;
 }
-.gameplay-hud.hud-redraw .focused-player__media,
-.gameplay-hud.hud-redraw .focused-player__media img {
+.hud-widget-design.hud-redraw .focused-player__media,
+.hud-widget-design.hud-redraw .focused-player__media img {
   position: absolute;
   top: 0;
   left: 12px;
   width: 56px;
   height: 64px;
 }
-.gameplay-hud.hud-redraw .focused-player__media img {
+.hud-widget-design.hud-redraw .focused-player__media img {
   left: 0;
 }
-.gameplay-hud.hud-redraw .focused-player__observer-tile-number {
+.hud-widget-design.hud-redraw .focused-player__observer-tile-number {
   width: 56px;
   height: 64px;
   line-height: 64px;
 }
-.gameplay-hud.hud-redraw .focused-player__active {
+.hud-widget-design.hud-redraw .focused-player__active {
   position: absolute;
   top: 0;
   left: 158px;
   width: 110px;
   height: 64px;
 }
-.gameplay-hud.hud-redraw .focused-player__active .focused-player__icon {
+.hud-widget-design.hud-redraw .focused-player__active .focused-player__icon {
   max-width: 104px;
 }
-.gameplay-hud.hud-redraw .focused-player__ammo {
+.hud-widget-design.hud-redraw .focused-player__ammo {
   position: absolute;
   right: 12px;
   top: 0;
   width: 66px;
   height: 64px;
 }
-.gameplay-hud.hud-redraw .focused-player__ammo > strong {
+.hud-widget-design.hud-redraw .focused-player__ammo > strong {
   font-size: 36px;
 }
-.gameplay-hud.hud-redraw .focused-player__vitals {
+.hud-widget-design.hud-redraw .focused-player__vitals {
   position: absolute;
   top: 42px;
   left: 82px;
@@ -734,81 +699,87 @@
   height: 64px;
   padding: 0;
 }
-.gameplay-hud.hud-redraw .focused-player__vitals-values {
+.hud-widget-design.hud-redraw .focused-player__vitals-values {
   flex-direction: column;
   align-items: flex-start;
   height: 64px;
 }
-.gameplay-hud.hud-redraw .focused-player__health-cluster {
+.hud-widget-design.hud-redraw .focused-player__health-cluster {
   width: 68px;
   height: 42px;
 }
-.gameplay-hud.hud-redraw .focused-player__hp {
+.hud-widget-design.hud-redraw .focused-player__hp {
   font-size: 36px;
   line-height: 38px;
 }
-.gameplay-hud.hud-redraw .focused-player__health-track {
+.hud-widget-design.hud-redraw .focused-player__health-track {
   width: 54px;
   height: 3px;
 }
-.gameplay-hud.hud-redraw .focused-player__armor b {
+.hud-widget-design.hud-redraw .focused-player__armor b {
   font-size: 12px;
 }
-.gameplay-hud.hud-redraw .focused-player__armor .focused-player__icon {
+.hud-widget-design.hud-redraw .focused-player__armor .focused-player__icon {
   width: 14px;
   height: 14px;
 }
-.gameplay-hud.hud-redraw .focused-player__dead-state {
+.hud-widget-design.hud-redraw .focused-player__dead-state {
   margin-left: 82px;
   width: 266px;
   height: 64px;
   background: transparent;
   color: var(--mizar-hud-text-muted);
 }
-.gameplay-hud[data-hud-design='studio'] .focused-player {
+.hud-widget-design[data-hud-design='iem'] .focused-player {
   margin-top: 56px;
   height: 120px;
 }
-.gameplay-hud[data-hud-design='studio'] .focused-player__identity {
+.hud-widget-design[data-hud-design='iem'] .focused-player__identity {
   background: var(--mizar-hud-surface-strong);
 }
-.gameplay-hud[data-hud-design='studio']
+.hud-widget-design[data-hud-design='iem']
   .focused-player__face[data-side='T']
   .focused-player__identity {
   background: var(--mizar-hud-surface-strong);
 }
-.gameplay-hud[data-hud-design='studio'] .focused-player__metrics {
+.hud-widget-design[data-hud-design='iem'] .focused-player__metrics {
   display: none;
 }
 
 /* Objective: no perpetual icon bounce. Only a short planted confirmation and
  * a small urgent indicator; progress still comes from accepted Core samples. */
-.gameplay-hud.hud-redraw .objective-center {
+.hud-widget-design.hud-redraw .objective-center {
   animation: none;
 }
 /* Preserve the centered icon and ring; confirmation changes opacity only. */
-.gameplay-hud.hud-redraw .objective-center__icon.is-planted-commit {
+.hud-widget-design.hud-redraw .objective-center__icon.is-planted-commit {
   animation: hud-objective-confirm 280ms ease-out both;
 }
-.gameplay-hud.hud-redraw .objective-center[data-planted-transition='true'] .objective-center__led {
+.hud-widget-design.hud-redraw
+  .objective-center[data-planted-transition='true']
+  .objective-center__led {
   animation: none;
 }
-.gameplay-hud.hud-redraw .objective-center__fuse {
+.hud-widget-design.hud-redraw .objective-center__fuse {
   top: 76px;
   left: 0;
   width: 480px;
   height: 4px;
   background: color-mix(in srgb, var(--mizar-hud-surface-strong) 75%, transparent);
 }
-.gameplay-hud.hud-redraw .objective-center__fuse span {
+.hud-widget-design.hud-redraw .objective-center__fuse span {
   background: var(--mizar-hud-objective-bomb);
 }
-.gameplay-hud.hud-redraw .objective-center__fuse[data-danger='true'] span {
+.hud-widget-design.hud-redraw .objective-center__fuse[data-danger='true'] span {
   background: var(--mizar-hud-state-danger);
 }
-.gameplay-hud[data-hud-design='studio'] .objective-center__fuse {
+.hud-widget-design[data-hud-design='iem'] .objective-center__fuse {
   top: 78px;
   height: 3px;
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__fuse {
+  left: 12px;
+  width: 456px;
 }
 @keyframes hud-objective-confirm {
   from {
@@ -819,27 +790,31 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .gameplay-hud.hud-redraw .objective-center__icon.is-planted-commit {
+  .hud-widget-design.hud-redraw .objective-center__icon.is-planted-commit {
     animation: none !important;
   }
 }
 
-.gameplay-hud[data-hud-design='arena'] .match-header__map-score,
-.gameplay-hud[data-hud-design='arena'] .match-header__clock-value,
-.gameplay-hud[data-hud-design='arena'] .player-rail__health-value,
-.gameplay-hud[data-hud-design='arena'] .focused-player__hp,
-.gameplay-hud[data-hud-design='arena'] .focused-player__ammo > strong {
+.hud-widget-design[data-hud-design='ewc'] .match-header__clock-value,
+.hud-widget-design[data-hud-design='ewc'] .focused-player__hp,
+.hud-widget-design[data-hud-design='ewc'] .focused-player__ammo > strong {
   font-family: var(--mizar-type-family-display);
   font-weight: 700;
   letter-spacing: 0;
 }
-.gameplay-hud[data-hud-design='arena'] .player-rail__health-value {
-  font-size: 42px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__health-value {
+  font-family: var(--mizar-hud-font-family);
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.05em;
 }
-.gameplay-hud[data-hud-design='arena'] .match-header__map-score {
-  font-size: 58px;
+.hud-widget-design[data-hud-design='ewc'] .match-header__map-score {
+  font-family: var(--mizar-hud-font-family);
+  font-size: 50px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
 }
-.gameplay-hud.hud-redraw .objective-center__fuse span::after {
+.hud-widget-design.hud-redraw .objective-center__fuse span::after {
   position: absolute;
   top: 0;
   right: 0;
@@ -848,11 +823,536 @@
   background: var(--mizar-hud-text-primary);
   content: '';
 }
-.gameplay-hud.hud-redraw .player-rail__summary {
+.hud-widget-design.hud-redraw .player-rail__summary {
   height: 42px;
   grid-template-rows: 21px 21px;
 }
-.gameplay-hud.hud-redraw .player-rail__economy,
-.gameplay-hud.hud-redraw .player-rail__utility {
+.hud-widget-design.hud-redraw .player-rail__economy,
+.hud-widget-design.hud-redraw .player-rail__utility {
   height: 21px;
+}
+
+/* IEM: straight card, square portrait between identity and combat information. */
+.hud-widget-design[data-hud-design='iem'] .player-rail {
+  width: 360px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__avatar {
+  position: absolute;
+  z-index: 2;
+  left: 110px;
+  width: 76px;
+  height: 76px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__avatar img {
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__avatar {
+  left: auto;
+  right: 110px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__body {
+  flex: 0 0 100%;
+  width: 100%;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__body::before {
+  display: block;
+  inset: 0;
+  width: 100%;
+  transform: none;
+  opacity: 1;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 50%, transparent);
+  z-index: -2;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__identity {
+  inset: 4px 8px auto 20px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 4px 20px auto 8px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__name {
+  font-family: var(--mizar-type-family-display);
+  font-size: 21px;
+  max-width: 88px;
+  text-transform: uppercase;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__health-value {
+  font-family: var(--mizar-type-family-display);
+  font-size: 38px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__kd {
+  left: 20px;
+  bottom: 26px;
+  font-size: 15px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__kd {
+  left: auto;
+  right: 20px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__money {
+  left: 20px;
+  bottom: 5px;
+  font-size: 16px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__money {
+  left: auto;
+  right: 20px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__weapons {
+  left: 192px;
+  top: 8px;
+  width: 96px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__weapons {
+  left: auto;
+  right: 192px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 96px;
+  max-width: 96px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__equipment {
+  right: 8px;
+  bottom: 4px;
+  width: 58px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__equipment {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__utility-icons {
+  right: 70px;
+  bottom: 4px;
+  width: 88px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__utility-icons {
+  right: auto;
+  left: 70px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap {
+  left: 0;
+  right: auto;
+  width: 12px;
+  height: 76px;
+  align-items: flex-start;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap--right {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__endcap strong {
+  font-size: 14px;
+  line-height: 20px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-slot {
+  left: 196px;
+  top: -8px;
+  z-index: 3;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__round-kill-slot {
+  left: auto;
+  right: 196px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge,
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge svg {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body::before {
+  width: 256px;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 38%, transparent);
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body::before {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__avatar {
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__death-watermark {
+  display: block;
+  position: absolute;
+  left: 188px;
+  width: 66px;
+  height: 76px;
+  fill: var(--mizar-hud-text-primary);
+  opacity: 0.25;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__death-watermark {
+  left: auto;
+  right: 188px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__life-state,
+.hud-widget-design[data-hud-design='iem'] .player-rail__dead-stats,
+.hud-widget-design[data-hud-design='iem'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-observed='true']
+  .player-rail__avatar {
+  outline: 2px solid var(--mizar-hud-text-primary);
+  outline-offset: -2px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__score-shell {
+  border: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 65%, transparent);
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__map-score {
+  font-family: var(--mizar-type-family-display);
+  font-size: 52px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__win-slots {
+  top: 16px;
+  bottom: auto;
+  left: 6px;
+  flex-direction: column;
+  gap: 4px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .match-header__score-zone--score-b
+  .match-header__win-slots {
+  left: auto;
+  right: 6px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__win-slots span {
+  width: 9px;
+  height: 9px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__score-zone--logo {
+  background: var(--mizar-hud-surface-strong);
+  margin: 6px;
+  width: 60px;
+  height: 62px;
+}
+
+/* Shanghai: compact charcoal identity panels and a separate lower combat band. */
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail {
+  width: 320px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__avatar img {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+  object-fit: cover;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__body {
+  background: var(--mizar-hud-surface-primary);
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__identity {
+  inset: 3px 8px auto 8px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-physical-side='right']
+  .player-rail__identity {
+  inset: 3px 8px auto 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__name {
+  font-size: 17px;
+  max-width: 130px;
+  letter-spacing: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-bar {
+  top: 52px;
+  height: 24px;
+  background: color-mix(in srgb, var(--mizar-hud-text-muted) 25%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
+  position: absolute;
+  top: 49px;
+  left: 0;
+  right: auto;
+  font-size: 23px;
+  line-height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__health-value {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__money {
+  left: 24px;
+  bottom: 27px;
+  font-size: 16px;
+  color: var(--mizar-hud-state-success);
+  opacity: 1;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__money {
+  left: auto;
+  right: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__kd {
+  left: auto;
+  right: 8px;
+  bottom: auto;
+  top: 6px;
+  font-size: 11px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__kd {
+  left: 8px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__weapons {
+  top: 53px;
+  left: auto;
+  right: 8px;
+  width: 82px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__weapons {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__combat
+  .player-rail__icon[data-weapon-visual-role='primary-firearm'] {
+  width: 82px;
+  max-width: 82px;
+  height: 22px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__utility-icons {
+  top: 26px;
+  right: 8px;
+  bottom: auto;
+  width: 82px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__utility-icons {
+  right: auto;
+  left: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__equipment {
+  left: 58px;
+  right: auto;
+  bottom: 0;
+  width: 68px;
+  height: 24px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__equipment {
+  left: auto;
+  right: 58px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap {
+  left: 0;
+  right: auto;
+  top: 30px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap--right {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap strong {
+  color: var(--mizar-hud-text-primary);
+  line-height: 22px;
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__round-kill-slot {
+  left: -70px;
+  top: 1px;
+  z-index: 3;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: -70px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__avatar,
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__life-state {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__body {
+  position: absolute;
+  left: 0;
+  width: 180px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 85%, transparent);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__body {
+  left: auto;
+  right: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card--dead .player-rail__kd {
+  top: auto;
+  bottom: 4px;
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__dead-stats {
+  left: 8px;
+  right: auto;
+  bottom: 4px;
+  gap: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__dead-stats {
+  left: auto;
+  right: 8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__damage {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__card::after {
+  display: none;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card[data-observed='true']
+  .player-rail__body {
+  outline: 1px solid var(--mizar-hud-text-primary);
+  outline-offset: -1px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
+  height: 58px;
+  border-radius: 4px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone {
+  height: 58px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
+  width: 148px;
+  gap: 6px;
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo-b {
+  left: 332px;
+  flex-direction: row-reverse;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-logo {
+  width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__team-name {
+  display: block;
+  max-width: 96px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 17px;
+  font-weight: 700;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-a {
+  left: 148px;
+  width: 48px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--score-b {
+  left: 284px;
+  width: 48px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__map-score {
+  font-size: 32px;
+  letter-spacing: 0;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__side-accent {
+  height: 58px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__center {
+  top: -8px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__win-slots {
+  bottom: -20px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .objective-center__fuse {
+  top: 63px;
+  height: 5px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player {
+  height: 156px;
+  margin-top: 20px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
+  background: var(--mizar-hud-surface-primary);
+}
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media,
+.hud-widget-design[data-hud-design='perfectworld'] .focused-player__media img {
+  width: 64px;
+  height: 64px;
+}
+.hud-widget-design.hud-redraw .focused-player__media,
+.hud-widget-design.hud-redraw .focused-player__media img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+}
+
+.hud-widget-design[data-hud-design='iem'] .match-header__series-strip,
+.hud-widget-design[data-hud-design='iem'] .match-header__series-maps,
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-strip,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-maps,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  height: 28px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-art,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-art {
+  display: none;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-name,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-name {
+  font-family: var(--mizar-type-family-display);
+  font-size: 17px;
+  line-height: 24px;
+}
+.hud-widget-design[data-hud-design='iem'] .match-header__series-map-status,
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__series-map-status {
+  font-size: 10px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__endcap[data-side] {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: 150px;
+  right: auto;
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 150px;
+}
+
+.hud-widget-design.hud-redraw .focused-player__dead-state {
+  text-align: left;
+  font-family: var(--mizar-type-family-display);
+  font-size: 38px;
+  letter-spacing: 0;
+  line-height: 64px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy div {
+  gap: 3px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy strong {
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='perfectworld'] .player-rail__economy span {
+  font-size: 8px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__name {
+  color: var(--mizar-hud-text-primary);
 }

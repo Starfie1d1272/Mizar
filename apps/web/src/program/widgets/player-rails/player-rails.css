@@ -5,6 +5,10 @@
   box-sizing: border-box;
 }
 
+.player-rail__death-watermark {
+  display: none;
+}
+
 .player-rail {
   position: relative;
   display: flex;

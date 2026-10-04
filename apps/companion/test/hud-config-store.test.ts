@@ -6,6 +6,8 @@ import {
   createDefaultHudConfigDocument,
   getBuiltinLayout,
   getBuiltinPreset,
+  getBuiltinPresets,
+  getBuiltinThemes,
   getBuiltinTheme,
 } from '@mizar/hud-config';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -27,6 +29,37 @@ async function temporaryConfigPath(): Promise<string> {
 }
 
 describe('HudConfigStore', () => {
+  it.each(['ewc', 'iem', 'perfectworld'])(
+    'persists %s and preserves its recipe when copied',
+    async (style) => {
+      const filePath = await temporaryConfigPath();
+      const store = new HudConfigStore({ filePath });
+      await store.load();
+      const preset = getBuiltinPresets().find((item) => item.id === `builtin:${style}-preset`)!;
+      const theme = getBuiltinThemes().find((item) => item.id === preset.themeId)!;
+      const active = await store.activatePreset(preset.id);
+      expect(active.resolved.widgets['team-ct-rail'].variant).toBe(style);
+      expect(active.resolved.theme.recipe).toBe(style);
+      const loaded = new HudConfigStore({ filePath });
+      await loaded.load();
+      expect(loaded.getState().resolved).toEqual(active.resolved);
+      expect(loaded.getState().document.customThemes).toHaveLength(0);
+      const copiedTheme = await loaded.saveAs('theme', { ...theme, name: `${style} theme copy` });
+      const themeId = copiedTheme.document.customThemes[0]!.id;
+      const copied = await loaded.saveAs('preset', { ...preset, name: `${style} copy`, themeId });
+      expect(copied.resolved).toEqual(active.resolved);
+      const customId = copied.document.customPresets[0]!.id;
+      const customActive = await loaded.activatePreset(customId);
+      expect(customActive.resolved.theme.semantic).toEqual(active.resolved.theme.semantic);
+      expect(customActive.resolved.widgets).toEqual(active.resolved.widgets);
+      const restarted = new HudConfigStore({ filePath });
+      await restarted.load();
+      expect(restarted.getState().resolved).toEqual(customActive.resolved);
+      await restarted.activatePreset('builtin:mizar-default-preset');
+      expect(restarted.getState().resolved.widgets['team-ct-rail'].variant).toBe('default');
+    },
+  );
+
   it('uses the built-in default when the file is absent and preserves activation separately from saves', async () => {
     const filePath = await temporaryConfigPath();
     const store = new HudConfigStore({ filePath });

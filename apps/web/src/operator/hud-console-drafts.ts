@@ -1,9 +1,8 @@
 import {
-  BUILTIN_PRESET_ID,
   canonicalJson,
   getBuiltinLayout,
-  getBuiltinPreset,
-  getBuiltinTheme,
+  getBuiltinPresets,
+  getBuiltinThemes,
   type HudConfigDocument,
   type HudLayout,
   type HudPreset,
@@ -32,9 +31,9 @@ export function cloneHudValue<T>(value: T): T {
 }
 
 export function resourceList(document: HudConfigDocument, kind: HudWorkspace): HudResource[] {
-  if (kind === 'preset') return [getBuiltinPreset(), ...document.customPresets];
+  if (kind === 'preset') return [...getBuiltinPresets(), ...document.customPresets];
   if (kind === 'layout') return [getBuiltinLayout(), ...document.customLayouts];
-  return [getBuiltinTheme(), ...document.customThemes];
+  return [...getBuiltinThemes(), ...document.customThemes];
 }
 
 export function resourceFor(
@@ -46,9 +45,7 @@ export function resourceFor(
 }
 
 export function activePresetId(document: HudConfigDocument): string {
-  return document.activePreset.kind === 'custom'
-    ? document.activePreset.sourceId
-    : BUILTIN_PRESET_ID;
+  return document.activePreset.sourceId;
 }
 
 export function isHudResourceSame(left: unknown, right: unknown): boolean {

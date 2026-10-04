@@ -67,6 +67,19 @@ export const HUD_CORNER_STYLES = ['square', 'soft', 'rounded'] as const;
 export type HudCornerStyle = (typeof HUD_CORNER_STYLES)[number];
 
 export const BUILTIN_PRESET_ID = 'builtin:mizar-default-preset' as const;
+export const HUD_BROADCAST_STYLES = ['ewc', 'iem', 'perfectworld'] as const;
+export const BUILTIN_PRESET_IDS = [
+  BUILTIN_PRESET_ID,
+  'builtin:ewc-preset',
+  'builtin:iem-preset',
+  'builtin:perfectworld-preset',
+] as const;
+export const HUD_THEME_RECIPES = ['mizar-default', ...HUD_BROADCAST_STYLES] as const;
+const BROADCAST_STYLE_LABELS = {
+  ewc: '类 EWC',
+  iem: '类 IEM',
+  perfectworld: '类 Perfect World',
+} as const;
 export const BUILTIN_LAYOUT_ID = 'builtin:mizar-default-layout' as const;
 export const BUILTIN_THEME_ID = 'builtin:mizar-default-theme' as const;
 
@@ -120,6 +133,7 @@ export const hudThemeSchema = z
     brandColor: hexColorSchema,
     panelStyle: z.enum(HUD_PANEL_STYLES),
     cornerStyle: z.enum(HUD_CORNER_STYLES),
+    recipe: z.enum(HUD_THEME_RECIPES).default('mizar-default'),
   })
   .strict();
 
@@ -220,6 +234,7 @@ export const hudResolvedThemeSchema = z
     brandColor: hexColorSchema,
     panelStyle: z.enum(HUD_PANEL_STYLES),
     cornerStyle: z.enum(HUD_CORNER_STYLES),
+    recipe: z.enum(HUD_THEME_RECIPES),
     semantic: z
       .object({
         colors: z
@@ -272,7 +287,7 @@ const activePresetReferenceSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('builtin'),
-      sourceId: z.literal(BUILTIN_PRESET_ID),
+      sourceId: z.enum(BUILTIN_PRESET_IDS),
     })
     .strict(),
   z
@@ -565,7 +580,7 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
     ...parsed.customLayouts.map((item) => [item.id, parseHudLayout(item)] as const),
   ]);
   const themes = new Map<string, HudTheme>([
-    [BUILTIN_THEME_ID, getBuiltinTheme()] as const,
+    ...getBuiltinThemes().map((item) => [item.id, item] as const),
     ...parsed.customThemes.map((item) => [item.id, hudThemeSchema.parse(item)] as const),
   ]);
   const presets = parsed.customPresets.map((item) => parseHudPreset(item));
@@ -592,7 +607,7 @@ export function parseHudConfigDocument(value: unknown): HudConfigDocument {
     activePreset,
     customPresets: presets,
     customLayouts: [...layouts.values()].filter((item) => item.id !== BUILTIN_LAYOUT_ID),
-    customThemes: [...themes.values()].filter((item) => item.id !== BUILTIN_THEME_ID),
+    customThemes: [...themes.values()].filter((item) => !item.id.startsWith('builtin:')),
   };
 }
 
@@ -669,7 +684,17 @@ function widgetContract(id: HudWidgetId) {
     showTimeout: '显示暂停附加信息',
     showObjectiveAuxiliary: '显示目标附加进度',
   };
-  const variants = id === 'focused-player' ? ['default', 'minimal'] : ['default'];
+  const styled = [
+    'top-score-bar',
+    'team-ct-rail',
+    'team-t-rail',
+    'focused-player',
+    'series-strip',
+  ].includes(id);
+  const variants = [
+    ...(id === 'focused-player' ? ['default', 'minimal'] : ['default']),
+    ...(styled ? HUD_BROADCAST_STYLES : []),
+  ];
   const defaults = schema.parse({});
   const editorControls: HudEditorControl[] = Object.keys(defaults).map((path) =>
     path === 'zoomMode'
@@ -699,7 +724,9 @@ function widgetContract(id: HudWidgetId) {
             label: labels[path]!,
             type: 'boolean',
             variants:
-              id === 'focused-player' && path !== 'showReserveAmmo' ? ['default'] : variants,
+              id === 'focused-player' && path !== 'showReserveAmmo'
+                ? variants.filter((variant) => variant !== 'minimal')
+                : variants,
           },
   );
   const settingsSchemaByVariant: Record<string, (value: unknown) => Record<string, unknown>> = {
@@ -711,6 +738,12 @@ function widgetContract(id: HudWidgetId) {
     defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
   }
   const variantLabels: Record<string, string> = { default: '默认' };
+  if (styled)
+    for (const style of HUD_BROADCAST_STYLES) {
+      settingsSchemaByVariant[style] = (value) => schema.parse(value);
+      defaultSettingsByVariant[style] = cloneJson(defaults);
+      variantLabels[style] = BROADCAST_STYLE_LABELS[style];
+    }
   if (id === 'focused-player') {
     variantLabels.default = '标准信息';
     variantLabels.minimal = '精简信息';
@@ -778,8 +811,46 @@ export function getBuiltinPreset(): HudPreset {
   return cloneJson(BUILTIN_PRESET);
 }
 
-export function getBuiltinResolvedPreset(): HudResolvedPreset {
-  return resolveHudPreset(BUILTIN_PRESET, BUILTIN_LAYOUT, BUILTIN_THEME);
+export function getBuiltinPresets(): HudPreset[] {
+  return [
+    getBuiltinPreset(),
+    ...HUD_BROADCAST_STYLES.map((style) => ({
+      ...getBuiltinPreset(),
+      id: `builtin:${style}-preset`,
+      name: BROADCAST_STYLE_LABELS[style],
+      themeId: `builtin:${style}-theme`,
+      widgets: completeWidgetRecord((id) => {
+        const descriptor = getHudWidgetDescriptor(id);
+        const settings = switchHudWidgetVariant(
+          descriptor,
+          descriptor.supportedVariants.includes(style) ? style : descriptor.defaultVariant,
+        );
+        if (id === 'team-ct-rail' || id === 'team-t-rail') {
+          settings.settings.showTeamName = style === 'iem';
+        }
+        return settings;
+      }),
+    })),
+  ];
+}
+
+export function getBuiltinThemes(): HudTheme[] {
+  return [
+    getBuiltinTheme(),
+    ...HUD_BROADCAST_STYLES.map((style) => ({
+      ...getBuiltinTheme(),
+      id: `builtin:${style}-theme`,
+      name: BROADCAST_STYLE_LABELS[style],
+      recipe: style,
+    })),
+  ];
+}
+
+export function getBuiltinResolvedPreset(id: string = BUILTIN_PRESET_ID): HudResolvedPreset {
+  const preset = getBuiltinPresets().find((item) => item.id === id);
+  if (preset === undefined) throw new Error(`未知内置 HUD 预设：${id}`);
+  const theme = getBuiltinThemes().find((item) => item.id === preset.themeId)!;
+  return resolveHudPreset(preset, BUILTIN_LAYOUT, theme);
 }
 
 const BUILTIN_LAYOUT: HudLayout = deepFreeze({
@@ -793,6 +864,7 @@ const BUILTIN_THEME: HudTheme = deepFreeze({
   schemaVersion: HUD_CONFIG_SCHEMA_VERSION,
   id: BUILTIN_THEME_ID,
   name: 'RivalHub 默认外观',
+  recipe: 'mizar-default',
   brandColor: '#c8ef78',
   panelStyle: 'standard',
   cornerStyle: 'square',
@@ -821,7 +893,7 @@ export function createDefaultHudConfigDocument(): HudConfigDocument {
 }
 
 export function resolveHudTheme(theme: HudTheme): HudResolvedTheme {
-  return resolveHudThemeRecipe(theme, BUILTIN_THEME_ID);
+  return resolveHudThemeRecipe(theme);
 }
 
 export function resolveHudPreset(
@@ -852,7 +924,7 @@ export function resolveHudPreset(
 export function resolveActiveHudPreset(document: HudConfigDocument): HudResolvedPreset {
   const parsed = parseHudConfigDocument(document);
   if (parsed.activePreset.kind === 'custom') return cloneJson(parsed.activePreset.snapshot);
-  return getBuiltinResolvedPreset();
+  return getBuiltinResolvedPreset(parsed.activePreset.sourceId);
 }
 
 export function resetLayoutDraft(draft: HudLayout): HudLayout {

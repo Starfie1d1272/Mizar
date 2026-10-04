@@ -287,6 +287,45 @@ describe('Player Rails card presentation', () => {
     expect(container.querySelector('[data-player-equipment="true"]')).toBeNull();
   });
 
+  it('limits the death watermark to Arena and keeps unknown health empty', () => {
+    const snapshot = getProgramFixture('player-rails-dead-observed');
+    if (snapshot === null) throw new Error('fixture missing');
+    const player = buildPlayerRailsPresentation(snapshot.payload).ct.players.find(
+      (candidate) => candidate.mode === 'dead',
+    );
+    if (player === undefined) throw new Error('dead player missing');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    for (const physicalSide of ['left', 'right'] as const) {
+      act(() =>
+        root?.render(<PlayerCard design="ewc" physicalSide={physicalSide} player={player} />),
+      );
+      expect(container.querySelector('.player-rail__death-watermark')).not.toBeNull();
+      expect(container.querySelector('article')?.getAttribute('aria-label')).toContain('DEAD');
+      expect(container.querySelector('[data-health-bar]')).toBeNull();
+      for (const design of ['current', 'perfectworld'] as const) {
+        act(() =>
+          root?.render(<PlayerCard design={design} physicalSide={physicalSide} player={player} />),
+        );
+        expect(container.querySelector('.player-rail__death-watermark')).toBeNull();
+      }
+    }
+    for (const health of [null, 0]) {
+      act(() =>
+        root?.render(
+          <PlayerCard
+            design="ewc"
+            player={{ ...player, mode: 'live', health, healthPercent: health }}
+          />,
+        ),
+      );
+      expect(
+        container.querySelector('[data-health-bar] > span')?.getAttribute('data-health-empty'),
+      ).toBe('true');
+    }
+  });
+
   it('keeps KD in the same row for alive and dead players and preserves round kills', () => {
     const snapshot = getProgramFixture('player-rails-freezetime');
     if (snapshot === null) throw new Error('fixture missing');

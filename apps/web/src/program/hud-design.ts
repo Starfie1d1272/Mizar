@@ -1,12 +1,8 @@
-/** Local visual review choices; these do not change or activate a saved HUD preset. */
-export const HUD_DESIGN_CHOICES = [
-  { id: 'arena', label: 'A · 竞技场' },
-  { id: 'studio', label: 'B · 演播室' },
-  { id: 'current', label: '现有版本' },
-] as const;
+import { HUD_BROADCAST_STYLES } from '@mizar/hud-config';
 
-export type HudDesign = (typeof HUD_DESIGN_CHOICES)[number]['id'];
+export type HudDesign = 'current' | (typeof HUD_BROADCAST_STYLES)[number];
 
-export function parseHudDesign(value: string | null): HudDesign {
-  return value === 'arena' || value === 'studio' ? value : 'current';
+/** Presentation comes from the saved widget variant, including custom presets. */
+export function hudDesignForVariant(variant: string): HudDesign {
+  return HUD_BROADCAST_STYLES.find((style) => style === variant) ?? 'current';
 }

@@ -72,7 +72,7 @@ Program V1 场景为赛前等待、对阵、BP、比赛中、半场、单图结�
 
 ## 5. 播出画面制播
 
-HUD 编辑器提供本地设计比较，可在同一真实回合时刻切换竞技场与演播室方案，并复用完整回合播放、暂停、重播和事件跳转。审阅选择不改变正式启用的 HUD；静态地图底图与回放数据明确区分。
+HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World 四个内置预设，可在同一真实回合时刻切换比较。新风格通过已保存的组件 variant 与 Theme recipe 渲染，支持另存、启用和重启恢复；选择与保存不自动改变正式节目。Steam 头像按正方形适配，视频源独立于本轮。
 
 播出画面由 Program-safe 数据驱动，至少覆盖：
 
@@ -135,7 +135,7 @@ Gameplay HUD 的普通用户界面提供“HUD 预设”和“HUD 布局”两�
 
 Layout、Widget Settings、Theme / Design Tokens、Program / Radar Truth 四层 ownership 见 ADR-0013。设置不提供通用视觉参数或任意 CSS，系列图条与回合历史本轮不增加缺乏明确价值的字段。
 
-外观 schema 与内置 theme 保留；品牌色、面板风格与圆角尚未被全部生产组件一致消费，暂不开放外观工作区或预设外观选择。重新开放须有共享 renderer 与每项公开选项的视觉验收证据。
+内置风格各自引用 Theme recipe；recipe 标识跟随外观另存，resolved snapshot 保存完整语义值，复制预设后不会丢失颜色风格。组件造型通过 descriptor variant 保存，可独立组合；布局仍复用原有坐标体系。通用品牌色、面板风格与圆角尚未被全部生产组件一致消费，暂不开放通用外观编辑工作区。
 
 保存、另存与启用相互独立；保存不会改变播出画面，只有启用预设才更新 on-air snapshot。布局按 1920×1080 logical pixels 保存，缩放不改变坐标。预览保留真实样例、确定性重放与实时比赛；实时来源失效时安全隐藏，不回退到样例。编辑器与播出画面共享 Gameplay HUD renderer。
 
