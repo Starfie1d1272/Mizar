@@ -99,13 +99,13 @@
         "visible": true,
         "anchor": "top-left",
         "offsetX": 20,
-        "offsetY": 584
+        "offsetY": 492
       },
       "team-t-rail": {
         "visible": true,
         "anchor": "top-right",
         "offsetX": -20,
-        "offsetY": 584
+        "offsetY": 492
       },
       "radar": {
         "visible": true,

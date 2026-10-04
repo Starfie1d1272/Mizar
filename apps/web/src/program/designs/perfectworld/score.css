@@ -168,6 +168,11 @@
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-shell {
   width: 100%;
 }
+/* The panel is inside the centered live/freeze shell, so its right edge follows both widths. */
+.hud-widget-design[data-hud-design='perfectworld'] .match-header__timeout-panel--b {
+  left: auto;
+  right: 0;
+}
 .hud-widget-design[data-hud-design='perfectworld'] .match-header__score-zone--logo {
   background: transparent;
   justify-content: flex-start;

@@ -36,8 +36,8 @@ export const PERFECTWORLD_STYLE = {
         offsetY: 6,
         size: { width: 800, height: 210 },
       },
-      'team-ct-rail': { visible: true, anchor: 'top-left', offsetX: 20, offsetY: 584 },
-      'team-t-rail': { visible: true, anchor: 'top-right', offsetX: -20, offsetY: 584 },
+      'team-ct-rail': { visible: true, anchor: 'top-left', offsetX: 20, offsetY: 492 },
+      'team-t-rail': { visible: true, anchor: 'top-right', offsetX: -20, offsetY: 492 },
       'series-strip': { visible: true, anchor: 'top-left', offsetX: 6, offsetY: 6 },
       'series-overview': { visible: true, anchor: 'top-right', offsetX: -6, offsetY: 6 },
       radar: {

@@ -144,45 +144,50 @@ describe('Player Rails card presentation', () => {
     }
   });
 
-  it('renders the estimate separately from HP and removes it when disabled or unavailable', () => {
-    const fixture = getProgramFixture('real-planted')!;
-    const players = buildPlayerRailsPresentation(fixture.payload);
-    const player = [...players.left.players, ...players.right.players].find(
-      (p) => p.mode !== 'dead',
-    )!;
-    const container = document.createElement('div');
-    root = createRoot(container);
-    const prediction = {
-      status: 'predicted' as const,
-      sourcePlayerId: player.sourcePlayerId,
-      stance: 'standing' as const,
-      damage: 255,
-      hpAfter: 0,
-      lethal: true,
-      modelRevision: 'test',
-      assumptions: ['standing'],
-      unknownInputs: ['collision'],
-    };
-    act(() =>
-      root?.render(<PlayerCard design="perfectworld" player={player} prediction={prediction} />),
-    );
-    expect(container.querySelector('[data-bomb-prediction="lethal"]')).not.toBeNull();
-    expect(container.querySelector('[data-health-value]')?.textContent).toBe(String(player.health));
-    expect(container.querySelector('[data-life-state-label="dead"]')).toBeNull();
-    act(() =>
-      root?.render(
-        <PlayerCard
-          design="perfectworld"
-          player={player}
-          prediction={prediction}
-          options={playerRailSettingsSchema.parse({ showBombPrediction: false })}
-        />,
-      ),
-    );
-    expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
-    act(() => root?.render(<PlayerCard design="perfectworld" player={player} />));
-    expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
-  });
+  it.each(['ewc', 'perfectworld'] as const)(
+    '%s renders the estimate separately from HP and removes it when disabled or unavailable',
+    (design) => {
+      const fixture = getProgramFixture('real-planted')!;
+      const players = buildPlayerRailsPresentation(fixture.payload);
+      const player = [...players.left.players, ...players.right.players].find(
+        (p) => p.mode !== 'dead',
+      )!;
+      const container = document.createElement('div');
+      root = createRoot(container);
+      const prediction = {
+        status: 'predicted' as const,
+        sourcePlayerId: player.sourcePlayerId,
+        stance: 'standing' as const,
+        damage: 255,
+        hpAfter: 0,
+        lethal: true,
+        modelRevision: 'test',
+        assumptions: ['standing'],
+        unknownInputs: ['collision'],
+      };
+      act(() =>
+        root?.render(<PlayerCard design={design} player={player} prediction={prediction} />),
+      );
+      expect(container.querySelector('[data-bomb-prediction="lethal"]')).not.toBeNull();
+      expect(container.querySelector('[data-health-value]')?.textContent).toBe(
+        String(player.health),
+      );
+      expect(container.querySelector('[data-life-state-label="dead"]')).toBeNull();
+      act(() =>
+        root?.render(
+          <PlayerCard
+            design={design}
+            player={player}
+            prediction={prediction}
+            options={playerRailSettingsSchema.parse({ showBombPrediction: false })}
+          />,
+        ),
+      );
+      expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
+      act(() => root?.render(<PlayerCard design={design} player={player} />));
+      expect(container.querySelector('[data-bomb-prediction]')).toBeNull();
+    },
+  );
 
   it('renders real GSI smoke state across the full player card', () => {
     const snapshot = getProgramFixture('real-live-rich');

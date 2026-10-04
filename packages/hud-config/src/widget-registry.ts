@@ -170,6 +170,10 @@ function widgetContract(id: HudWidgetId) {
   if (id === 'focused-player') {
     variantLabels.default = '标准信息';
     variantLabels.minimal = '精简信息';
+    defaultSettingsByVariant.ewc = {
+      ...defaultSettingsByVariant.ewc,
+      showMetrics: false,
+    };
   }
   if (id === 'team-ct-rail' || id === 'team-t-rail')
     defaultSettingsByVariant.perfectworld = {

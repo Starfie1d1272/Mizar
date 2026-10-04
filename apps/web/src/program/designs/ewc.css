@@ -18,6 +18,9 @@
   overflow: visible;
   background: transparent;
 }
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card {
+  --ewc-half-taper: 22px;
+}
 .hud-widget-design[data-hud-design='ewc'] .player-rail__body::before {
   content: '';
   display: block;
@@ -37,7 +40,7 @@
 .hud-widget-design[data-hud-design='ewc'] .player-rail__body::before,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__health-bar,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__health-spacer {
-  clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 0 100%);
+  clip-path: polygon(0 0, 100% 0, calc(100% - var(--ewc-half-taper) * 2) 100%, 0 100%);
 }
 .hud-widget-design[data-hud-design='ewc']
   .player-rail--right
@@ -50,7 +53,7 @@
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body::before,
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-bar,
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__health-spacer {
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 44px 100%);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, calc(var(--ewc-half-taper) * 2) 100%);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-slot {
   top: -8px;
@@ -226,8 +229,8 @@
   width: 100%;
   clip-path: polygon(
     0 0,
-    calc(var(--player-rail-health) + 22px) 0,
-    calc(var(--player-rail-health) - 22px) 100%,
+    calc(var(--player-rail-health) + var(--ewc-half-taper)) 0,
+    calc(var(--player-rail-health) - var(--ewc-half-taper)) 100%,
     0 100%
   );
 }
@@ -236,11 +239,71 @@
   .player-rail__health-bar
   > span:not(.combat-damage-ghost) {
   clip-path: polygon(
-    calc(100% - var(--player-rail-health) - 22px) 0,
+    calc(100% - var(--player-rail-health) - var(--ewc-half-taper)) 0,
     100% 0,
     100% 100%,
-    calc(100% - var(--player-rail-health) + 22px) 100%
+    calc(100% - var(--player-rail-health) + var(--ewc-half-taper)) 100%
   );
+}
+/* Prediction remains a full-height overlay. Its two boundaries follow HP;
+ * the shared right-side transform mirrors it exactly once. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail__bomb-prediction {
+  clip-path: polygon(
+    calc(var(--prediction-start) + var(--ewc-half-taper)) 0,
+    calc(var(--prediction-end) + var(--ewc-half-taper)) 0,
+    calc(var(--prediction-end) - var(--ewc-half-taper)) 100%,
+    calc(var(--prediction-start) - var(--ewc-half-taper)) 100%
+  );
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__bomb-prediction[data-bomb-prediction='lethal'] {
+  clip-path: polygon(
+    0 0,
+    calc(var(--prediction-end) + var(--ewc-half-taper)) 0,
+    calc(var(--prediction-end) - var(--ewc-half-taper)) 100%,
+    0 100%
+  );
+}
+/* Keep the full geometry during the fade; scaleX would change the slope. */
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-physical-side]
+  .combat-damage-ghost {
+  left: 0;
+  right: 0;
+  width: 100%;
+  clip-path: polygon(
+    calc(var(--rh-damage-to) + var(--ewc-half-taper)) 0,
+    calc(var(--rh-damage-from) + var(--ewc-half-taper)) 0,
+    calc(var(--rh-damage-from) - var(--ewc-half-taper)) 100%,
+    calc(var(--rh-damage-to) - var(--ewc-half-taper)) 100%
+  );
+  animation: ewc-damage-ghost-fade 380ms cubic-bezier(0.2, 0.72, 0.2, 1) both;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-physical-side='right']
+  .combat-damage-ghost {
+  clip-path: polygon(
+    calc(100% - var(--rh-damage-from) - var(--ewc-half-taper)) 0,
+    calc(100% - var(--rh-damage-to) - var(--ewc-half-taper)) 0,
+    calc(100% - var(--rh-damage-to) + var(--ewc-half-taper)) 100%,
+    calc(100% - var(--rh-damage-from) + var(--ewc-half-taper)) 100%
+  );
+}
+@keyframes ewc-damage-ghost-fade {
+  0%,
+  24% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-widget-design[data-hud-design='ewc']
+    .player-rail__card[data-physical-side]
+    .combat-damage-ghost {
+    animation: none;
+  }
 }
 /* Death shortens paint, not the stable row or identity position. */
 .hud-widget-design[data-hud-design='ewc']
@@ -318,4 +381,75 @@
   font-size: 50px;
   font-weight: 800;
   letter-spacing: -0.04em;
+}
+/* Dark, larger defuse artwork stays readable on the light center field. */
+.hud-widget-design[data-hud-design='ewc'] .objective-center__ring,
+.hud-widget-design[data-hud-design='ewc'] .objective-center__ring svg {
+  width: 60px;
+  height: 60px;
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__ring .objective-center__icon {
+  width: 32px;
+  height: 40px;
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__ring-track {
+  stroke: color-mix(in srgb, var(--mizar-hud-surface-strong) 25%, transparent);
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__ring-fill {
+  stroke: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .objective-center[data-objective-mode='defusing']
+  .objective-center__caption {
+  display: none;
+}
+/* Timeout panels share the outer edges of the logo wings. */
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-panel--a {
+  left: 12px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-panel--b {
+  left: auto;
+  right: 12px;
+  padding-left: 0;
+  padding-right: 8px;
+  border-left: 0;
+  border-right: 3px solid var(--mizar-hud-text-muted);
+  text-align: right;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-panel--b[data-side='CT'] {
+  border-right-color: var(--mizar-side-ct);
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-panel--b[data-side='T'] {
+  border-right-color: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-label {
+  font-size: 12px;
+  line-height: 15px;
+}
+.hud-widget-design[data-hud-design='ewc'] .match-header__timeout-count {
+  font-size: 16px;
+  line-height: 19px;
+}
+.hud-widget-design[data-hud-design='ewc'] .focused-player__hp,
+.hud-widget-design[data-hud-design='ewc'] .focused-player__ammo > strong {
+  font-size: 42px;
+  line-height: 42px;
+}
+.hud-widget-design[data-hud-design='ewc'] .focused-player__armor b {
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='ewc'] .focused-player__ammo > span {
+  font-size: 13px;
+  line-height: 15px;
+}
+.hud-widget-design[data-hud-design='ewc'] .focused-player__dead-state {
+  width: 68px;
+  justify-content: flex-start;
+  font-size: 42px;
+}
+.hud-widget-design[data-hud-design='ewc'] .focused-player__dead-state span {
+  color: var(--mizar-hud-text-primary);
+  font: inherit;
+  letter-spacing: 0;
 }
