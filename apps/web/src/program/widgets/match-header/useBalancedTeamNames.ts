@@ -10,6 +10,7 @@ export function useBalancedTeamNames<T extends HTMLElement = HTMLElement>(
   useLayoutEffect(() => {
     const nodes = [...(ref.current?.querySelectorAll<HTMLElement>(selector) ?? [])];
     let disposed = false;
+    let pendingFit: number | null = null;
     const fit = () => {
       if (disposed) return;
       for (const node of nodes) node.style.fontSize = '';
@@ -28,13 +29,23 @@ export function useBalancedTeamNames<T extends HTMLElement = HTMLElement>(
         });
       if (sizes.length) for (const node of nodes) node.style.fontSize = `${Math.min(...sizes)}px`;
     };
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    // Fitting changes the observed text's dimensions. Write outside the observer
+    // delivery cycle, and coalesce notifications into one cancellable frame.
+    const scheduleFit = () => {
+      if (disposed || pendingFit !== null) return;
+      pendingFit = window.requestAnimationFrame(() => {
+        pendingFit = null;
+        fit();
+      });
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleFit);
     for (const node of nodes) observer?.observe(node);
     void document.fonts?.ready.then(fit);
     fit();
     return () => {
       disposed = true;
       observer?.disconnect();
+      if (pendingFit !== null) window.cancelAnimationFrame(pendingFit);
     };
   }, [names, design, selector, maxHeight]);
   return ref;

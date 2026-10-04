@@ -6,7 +6,16 @@ import { buildApp } from '../../apps/companion/src/app.js';
 import { HudConfigStore } from '../../apps/companion/src/hud-config/store.js';
 import { parseRealProgramArtifact } from '../../apps/web/src/program/fixtures/real-program-fixtures.js';
 import { readHudPresetPack, type HudResolvedPreset } from '../../packages/hud-config/src/index.js';
-import { expect, test } from './companion-isolation.js';
+import { expect, test as baseTest } from './companion-isolation.js';
+
+const test = baseTest.extend({
+  context: async ({ context }, use) => {
+    const errors: string[] = [];
+    context.on('page', (page) => page.on('pageerror', (error) => errors.push(error.message)));
+    await use(context);
+    expect(errors, 'HUD authoring and Program pages have no uncaught browser errors').toEqual([]);
+  },
+});
 
 test('HUD settings preview → save → disk reload → activate → Program', async ({
   page,
