@@ -1,43 +1,59 @@
-# Mizar
+<p align="center">
+  <img src="apps/web/public/brand/mizar-app-icon.svg" width="112" height="112" alt="Mizar 标志" />
+</p>
+<h1 align="center">Mizar</h1>
+<p align="center"><strong>让校园赛事，也有职业赛场的转播呈现。</strong></p>
 
-**让校园赛事，也有职业赛场的转播呈现。**
+<p align="center">
+  <a href="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml"><img src="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI 检查状态" /></a>
+  <a href="docs/quick-start.md"><img src="https://img.shields.io/badge/平台-Windows-0078D4" alt="桌面平台：Windows" /></a>
+  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/badge/版本-开发预览-E9A23B" alt="版本状态：开发预览" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-AGPL--3.0--only-2563EB" alt="许可证：AGPL-3.0-only" /></a>
+</p>
 
-Mizar 是面向校园与社区 CS2 赛事的开源制播系统。结合游戏实时数据与赛事资料，自动组织从赛前到赛后的节目画面，将 HUD、雷达、OBS 控制与直播状态集中在一个制播工作台。
+<p align="center">
+  <a href="docs/quick-start.md">开始使用</a> ·
+  <a href="docs/screenshots/README.md">画面预览</a> ·
+  <a href="docs/README.md">使用文档</a> ·
+  <a href="CONTRIBUTING.md">参与开发</a>
+</p>
 
-[开始使用](docs/quick-start.md) · [画面预览](docs/screenshots/README.md) · [文档](docs/README.md) · [参与开发](CONTRIBUTING.md)
+Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
-![Mizar 默认节目包装的半场数据页](docs/screenshots/halftime.png)
+![Mizar Pulse 半场数据画面](docs/screenshots/halftime.png)
 
-*当前浏览器示例画面；截图来源与 Windows 实机待补范围见[画面预览](docs/screenshots/README.md)。*
+*浏览器示例画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。*
 
 ## 比赛进行到哪里，节目就呈现到哪里
 
-从赛前等待、BP 和对阵开场，到比赛 HUD、半场数据、单图结果、图间与整场结果，Mizar 根据比赛进程自动编排节目并切换 OBS 场景。需要接管时手动切场，确认后再恢复自动。
+赛前等待、BP 展示、对阵开场、局内 HUD、半场数据、赛后结果——Mizar 通过 GSI 读取游戏进展，结合赛事资料自动推进节目、切换 OBS 场景。少一些重复操作，多一些精力留给比赛。
 
-GSI 提供游戏实时数据，本地资料或赛事平台提供队伍、赛程和 BP。画面、比分与节目流程共用这些信息，减少现场重复填写和常规切场操作。
+需要临场调整时，随时手动接管；由你决定何时恢复自动。
 
-## 游戏、全局与播出，一处掌握
+## 看清比赛，也掌握播出
 
-Windows 制播工作台围绕真实 CS2 画面展开：大雷达帮助解说和观察者理解局势，比赛资料与制作提示给出下一步，OBS 画面确认、推流状态和 B 站开播状态帮助检查播出情况。
+在 Windows 制播工作台里，同时查看真实 CS2 画面、大雷达和比赛资料。解说更容易掌握全局，导播也能通过 OBS 定期画面预览、推流状态和 B 站开播状态确认现场情况。
 
-## 一套完整包装，多种 HUD 风格
+## 从第一张画面到最后一个比分，风格连贯
 
-Mizar Pulse 默认包装贯穿赛前、局内和赛后；另有类 EWC、类 IEM、类 Perfect World、类 ESL 四套 HUD 风格。支持组件设置、布局调整和预设文件分享，预览满意后再启用。
+默认的 **Mizar Pulse** 包装贯穿赛前、局内和赛后，另有四套参考 EWC、IEM、Perfect World、ESL 赛事视觉的 HUD 风格。
 
-更多画面见[预览图集](docs/screenshots/README.md)。
+调整组件、布局与外观，预览满意后再用于播出；也可以分享预设，让下一场赛事沿用熟悉的风格。
 
-## 独立办赛，也能连接赛事网站
+## 本地就能办赛，连接网站还能做更多
 
-本机创建比赛即可使用，无需 RivalHub 在线服务。接入 RivalHub 后可复用已有赛事资料，并向网站提供局内实时状态与雷达；其他平台可基于公开接口适配。
+直接在本机创建比赛，无需依赖赛事网站。接入 **RivalHub** 后，可以复用队伍、赛程与 BP 资料，并将局内实时状态与雷达提供给网站展示；其他赛事平台也可通过公开接口适配。
 
-RivalHub 负责赛事运营，Mizar 负责现场制播，[DAK](https://github.com/Starfie1d1272/cs2-demo-analysis-kit) 面向赛后分析。已有接口、适用限制与后续方向分别见[产品说明](docs/product.md)、[数据源能力](docs/data-source-capabilities.md)和[路线图](docs/roadmap.md)。
+从 RivalHub 的赛事运营，到 Mizar 的现场制播，再到 [DAK](https://github.com/Starfie1d1272/cs2-demo-analysis-kit) 的赛后分析，让一场比赛的台前幕后相互连接。
 
-## 为持续制播而设计
+## 让现场操作更从容
 
-借鉴开源社区的 HUD、雷达与制播经验，Mizar 用统一的数据链路支撑节目：高频状态只保留最新值，慢页面不积压无限旧帧；重连恢复当前状态，缺少数据时明确降级。设计与验证依据见[架构](docs/architecture.md)和[开发验证](docs/development-validation.md)。
+HUD、雷达与节目使用同一份比赛信息，减少重复录入；编辑与预览独立于正式播出，调整画面时更安心。连接中断后尝试恢复当前状态，缺少数据时明确提示，帮助制作人员判断下一步。
 
-当前处于 1.0 候选版本准备阶段。**先构建 RC，再用该包完成 Windows + CS2 + OBS 实机验收**；最终发布状态见 [Release Closure #90](https://github.com/Starfie1d1272/Mizar/issues/90)。使用入口与系统要求见[快速开始](docs/quick-start.md)。
+准备开始？查看[快速开始](docs/quick-start.md)，了解环境要求与第一场比赛的设置。适用范围见[产品说明](docs/product.md)，后续计划见[路线图](docs/roadmap.md)。
 
 ## 开源与致谢
 
-使用 [AGPL-3.0-only](LICENSE)。感谢开源社区提供的实践与工具，CS2 资源处理使用 [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)。依赖、字体和素材权利见[第三方说明](THIRD-PARTY-NOTICES.md)，研究来源见[参考项目](docs/references.md)。
+Mizar 使用 [AGPL-3.0-only](LICENSE) 许可证，欢迎试用、[反馈问题](https://github.com/Starfie1d1272/Mizar/issues)和[参与开发](CONTRIBUTING.md)。
+
+感谢开源社区的 HUD、雷达与制播实践；CS2 资源处理使用 [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)。项目与相关赛事品牌无隶属或背书关系。依赖、字体和素材权利见[第三方说明](THIRD-PARTY-NOTICES.md)，研究来源见[参考项目](docs/references.md)。
