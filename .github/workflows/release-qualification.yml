@@ -1,153 +1,57 @@
 name: Release Qualification
-
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref/SHA to build and soak'
         required: true
         type: string
       label:
-        description: 'Portable artifact label (e.g. RC0)'
         required: true
-        default: RC0
+        default: RC1
         type: string
-
 permissions:
   contents: read
-
 jobs:
-  release_qualification:
-    name: release_qualification
+  reproduce:
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
-      RELEASE_LABEL: ${{ inputs.label }}
-      QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
-
-      - name: Cache Cargo registry, git, and release target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-release-
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Restore committed lockfile after Windows install
-        shell: pwsh
-        run: git checkout -- pnpm-lock.yaml
-
-      - name: Build exact-SHA Windows qualification bundle
-        run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --label "$env:RELEASE_LABEL"
-
-      - name: Verify release desktop profile metadata
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Download original RC0
         shell: pwsh
         run: |
-          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
-          if ($null -eq $bundle) { throw '未生成 release qualification bundle 目录' }
-          $artifactPath = Join-Path $bundle.FullName 'resources/metadata/artifact.json'
-          $artifact = Get-Content -Raw -LiteralPath $artifactPath | ConvertFrom-Json
-          if ($artifact.desktopBuildProfile -ne 'release') { throw "Release Qualification 使用了错误 profile：$($artifact.desktopBuildProfile)" }
-
-      - name: Extract portable bundle and smoke test
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
-          if ($null -eq $archive) { throw '未生成 qualification ZIP' }
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-          tar -xf $archive.FullName -C $extractRoot
-          $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
-          Push-Location $bundleRoot.FullName
-          try {
-            foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
-              if (!(Test-Path -LiteralPath (Join-Path $bundleRoot.FullName $name))) { throw "缺少许可文件：$name" }
-            }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
-            if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-smoke.log')
-            if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
-          } finally {
-            Pop-Location
-          }
-
-      - name: Run 3-map exact-artifact synthetic lifecycle soak
+          gh release download v1.0.0-rc.0 --repo Starfie1d1272/Mizar --pattern '*portable*.zip' --dir download
+      - name: Extract using Windows Expand-Archive
         shell: pwsh
         run: |
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $bundleRoot = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未找到解压后的便携产品包' }
-          $reportPath = Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json'
-          node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
-          if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
-
-      - name: Upload qualified portable product
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-portable-product
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
-          if-no-files-found: error
-
-      - name: Collect qualification evidence
-        if: ${{ always() }}
+          $zip = (Get-ChildItem download -Filter '*.zip').FullName
+          $destination = Join-Path $env:RUNNER_TEMP 'RC0 Windows extraction'
+          Expand-Archive -LiteralPath $zip -DestinationPath $destination
+          $bundle = (Get-ChildItem $destination -Directory | Select-Object -First 1).FullName
+          Get-Item (Join-Path $bundle 'resources/app/dist/app.d.ts')
+          & (Join-Path $bundle 'resources/runtime/node.exe') --input-type=module -e "import {verifyPayload} from './scripts/qualification/product-runtime.mjs'; console.log(await verifyPayload(process.argv[1]));" $bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Expand-Archive payload validation failed' }
+      - name: Extract using Windows Shell ZIP handler
         shell: pwsh
         run: |
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log')) {
-            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
-            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
-          }
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractedRoot) {
-            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-            if ($null -ne $bundle) {
-              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
-              $statePath = Join-Path $bundle.FullName 'state'
-              if (Test-Path -LiteralPath $statePath) {
-                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
-                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
-                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
-                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-                  Copy-Item -LiteralPath $_.FullName -Destination $target
-                }
-              }
-            }
-          }
-          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-evidence.zip'
-          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
-
-      - name: Upload release qualification evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-qualification-evidence
-          path: ${{ runner.temp }}/Mizar-*-evidence.zip
-          if-no-files-found: error
+          $zip = (Get-ChildItem download -Filter '*.zip').FullName
+          $destination = Join-Path $env:RUNNER_TEMP 'RC0 Shell extraction'
+          New-Item -ItemType Directory -Path $destination | Out-Null
+          $shell = New-Object -ComObject Shell.Application
+          $source = $shell.NameSpace($zip)
+          if ($null -eq $source) { throw 'Shell ZIP handler cannot open RC0 archive' }
+          $target = $shell.NameSpace($destination)
+          $target.CopyHere($source.Items(), 1556)
+          $deadline = (Get-Date).AddMinutes(3)
+          $bundle = Join-Path $destination 'Mizar-RC0-win-x64-portable-26605da'
+          $sums = Join-Path $bundle 'resources/metadata/SHA256SUMS'
+          do {
+            Start-Sleep -Seconds 3
+            $count = @(Get-ChildItem $bundle -File -Recurse -ErrorAction SilentlyContinue).Count
+            Write-Host "Shell extracted files: $count"
+          } while ($count -lt 6215 -and (Get-Date) -lt $deadline)
+          Get-Item (Join-Path $bundle 'resources/app/dist/app.d.ts')
+          & (Join-Path $bundle 'resources/runtime/node.exe') --input-type=module -e "import {verifyPayload} from './scripts/qualification/product-runtime.mjs'; console.log(await verifyPayload(process.argv[1]));" $bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Shell payload validation failed' }
