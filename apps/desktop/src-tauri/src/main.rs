@@ -551,7 +551,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
+async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),
@@ -568,6 +568,7 @@ fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
             )
             .map_err(|_| "工具窗口未能恢复。")?;
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
