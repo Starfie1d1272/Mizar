@@ -68,3 +68,14 @@ await copyFile(
   resolve(root, 'packages/cs2-assets/generated/manifest.json'),
   resolve(pkg, 'dist/icon-provenance.json'),
 );
+
+for (const name of ['playerBg.png', 'shootFire.png']) {
+  const target = resolve(pkg, 'dist/assets/brand/hud/esl', name);
+  await mkdir(dirname(target), { recursive: true });
+  await copyFile(resolve(pkg, 'assets/radar-reference/esl', name), target);
+}
+
+await copyFile(
+  resolve(pkg, 'assets/radar-reference/esl/SOURCE.md'),
+  resolve(pkg, 'dist/esl-artwork-provenance.md'),
+);

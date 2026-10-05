@@ -1,0 +1,153 @@
+/* One ESL presentation language across pause, history and optional match panels. */
+.hud-widget-design[data-hud-design='esl'],
+.hud-widget-design[data-hud-design='esl'] .round-history-panel,
+.hud-widget-design[data-hud-design='esl'] .broadcast-pause__event strong,
+.hud-widget-design[data-hud-design='esl'] .broadcast-pause__brand-main strong {
+  font-family: ESLLegend, SourceHanSans, var(--mizar-type-family-display), sans-serif;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__dock {
+  left: 16px;
+  right: 16px;
+  bottom: 24px;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__bar {
+  border-bottom: 0;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__bar,
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__score,
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__brand,
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__player,
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice,
+.hud-widget-design[data-hud-design='esl'] .round-history-panel,
+.hud-widget-design[data-hud-design='esl'] .shanghai-series-overview {
+  background-image: url('/brand/hud/esl/texture.svg');
+  background-size: 440px auto;
+  border-radius: 0;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__score {
+  border-bottom: 3px solid var(--mizar-event-accent);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__score > b {
+  color: var(--mizar-event-accent);
+  font-size: 52px;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__series-wins i {
+  width: 8px;
+  height: 8px;
+}
+.broadcast-pause[data-hud-design='esl']
+  .broadcast-pause__series-wins
+  i[data-series-win-slot='won'] {
+  background: var(--mizar-event-accent);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__economy {
+  border-bottom: 3px solid var(--mizar-side-ct);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__economy[data-side='T'] {
+  border-color: var(--mizar-side-t);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__economy[data-side='unknown'] {
+  border-color: var(--mizar-hud-text-muted);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__economy strong {
+  font-size: 28px;
+  font-weight: 400;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__player-name {
+  font-weight: 400;
+  letter-spacing: 1px;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__money {
+  color: var(--mizar-hud-text-primary);
+  font-weight: 400;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__avatar img {
+  object-fit: contain;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__brand::before {
+  display: none;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__event strong {
+  color: var(--mizar-event-accent);
+  font-size: 36px;
+  font-weight: 400;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__stage {
+  color: var(--mizar-event-accent);
+  font-size: 16px;
+  opacity: 0.85;
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice {
+  border-inline-width: 0;
+  border-bottom: 3px solid var(--mizar-side-ct);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice[data-side='T'] {
+  border-color: var(--mizar-side-t);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice[data-side='unknown'] {
+  border-color: var(--mizar-hud-text-muted);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice header {
+  height: 28px;
+  padding: 0 12px;
+  background: var(--mizar-event-accent);
+  color: var(--mizar-hud-surface-strong);
+}
+.broadcast-pause[data-hud-design='esl'] .broadcast-pause__countdown > strong {
+  font-size: 60px;
+  font-weight: 400;
+  color: var(--mizar-event-accent);
+}
+.hud-widget-design[data-hud-design='esl'] .round-history-panel header {
+  background: var(--mizar-event-accent);
+  color: var(--mizar-hud-surface-strong);
+  font-size: 14px;
+}
+.hud-widget-design[data-hud-design='esl'] .round-history-panel header > span {
+  opacity: 0.8;
+  font-size: 12px;
+}
+.hud-widget-design[data-hud-design='esl'] .round-history-panel__round {
+  background: color-mix(in srgb, var(--mizar-hud-text-primary) 4%, transparent);
+  font-size: 20px;
+  font-weight: 400;
+}
+.hud-widget-design[data-hud-design='esl'] .round-history-panel__round[data-round-state='missing'] {
+  background: transparent;
+}
+.hud-widget-design[data-hud-design='esl'] .round-history-panel[data-history-mode='pause'] header {
+  font-size: 18px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .round-history-panel[data-history-mode='pause']
+  .round-history-panel__round {
+  font-size: 24px;
+}
+.hud-widget-design[data-hud-design='esl'] .shanghai-series-detail--heading {
+  background: var(--mizar-event-accent);
+  color: var(--mizar-hud-surface-strong);
+}
+
+.hud-widget-design.hud-redraw[data-hud-design='esl']
+  .focused-player__face[data-side]
+  .focused-player__identity {
+  background-image: url('/brand/hud/esl/texture.svg');
+  background-size: 440px auto;
+}
+.hud-widget-design[data-hud-design='esl'] .shanghai-series-detail {
+  border-radius: 0;
+}
+.hud-widget-design[data-hud-design='esl']
+  .shanghai-series-detail:not(.shanghai-series-detail--heading) {
+  background-image: url('/brand/hud/esl/texture.svg');
+  background-size: 440px auto;
+}
+.hud-widget-design[data-hud-design='esl'] .player-rail__bomb-prediction {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--mizar-hud-text-primary) 18%, transparent) 5px 7px
+    ),
+    color-mix(in srgb, var(--mizar-hud-state-danger) 32%, transparent);
+}

@@ -27,7 +27,7 @@ import {
 import { smokeContour, smokeLobes } from './effect-geometry.js';
 
 export interface RadarViewProps {
-  readonly appearance?: 'default' | 'shanghai';
+  readonly appearance?: 'default' | 'shanghai' | 'esl';
   readonly client?: RadarViewSource | undefined;
   readonly snapshot?: RadarViewFrame | null | undefined;
   readonly zoomMode?: 'full-map' | 'auto' | undefined;
@@ -336,16 +336,19 @@ export function RadarView({
       ctx.translate(logicalSize / 2, logicalSize / 2);
       ctx.scale(z.scale, z.scale);
       ctx.translate(-z.x * logicalSize, -z.y * logicalSize);
+      element.dataset.radarAppearance = appearance;
       ctx.filter =
-        (appearance === 'shanghai'
-          ? 'grayscale(1) contrast(1.08) '
-          : 'grayscale(0.82) saturate(0.1) contrast(1.16) ') +
-        'drop-shadow(3px 0 0 rgba(243,246,250,.72)) ' +
-        'drop-shadow(-3px 0 0 rgba(243,246,250,.72)) ' +
-        'drop-shadow(0 3px 0 rgba(243,246,250,.72)) ' +
-        'drop-shadow(0 -3px 0 rgba(243,246,250,.72))';
+        appearance === 'esl'
+          ? 'none'
+          : (appearance === 'shanghai'
+              ? 'grayscale(1) contrast(1.08) '
+              : 'grayscale(0.82) saturate(0.1) contrast(1.16) ') +
+            'drop-shadow(3px 0 0 rgba(243,246,250,.72)) ' +
+            'drop-shadow(-3px 0 0 rgba(243,246,250,.72)) ' +
+            'drop-shadow(0 3px 0 rgba(243,246,250,.72)) ' +
+            'drop-shadow(0 -3px 0 rgba(243,246,250,.72))';
       if (singleImage) {
-        ctx.globalAlpha = 0.84;
+        ctx.globalAlpha = appearance === 'esl' ? 1 : 0.84;
         drawArtwork(singleImage, placementFor('single'));
         ctx.globalAlpha = 1;
       } else if (geometry && multiLayer) {
@@ -381,12 +384,12 @@ export function RadarView({
         ctx.textBaseline = 'middle';
         ctx.fillText(label, point.x, point.y + 1);
       };
-      if (geometry?.mapKey === 'de_ancient') {
+      if (appearance !== 'esl' && geometry?.mapKey === 'de_ancient') {
         // Valve overview artwork already owns spawn-zone geometry. Only add
         // calibrated broadcast labels at the centers of the source bombsites.
         drawSiteBadge('A', { x: 0.302, y: 0.26 }, 'single');
         drawSiteBadge('B', { x: 0.8, y: 0.4 }, 'single');
-      } else if (geometry?.mapKey === 'de_nuke') {
+      } else if (appearance !== 'esl' && geometry?.mapKey === 'de_nuke') {
         drawSiteBadge('A', { x: 0.58, y: 0.48 }, 'upper');
         drawSiteBadge('B', { x: 0.58, y: 0.58 }, 'lower');
       }
@@ -406,6 +409,20 @@ export function RadarView({
             marker.source.flames.length === 0
           )
             return;
+          if (appearance === 'esl') {
+            ctx.save();
+            for (const flame of marker.source.flames) {
+              if (flameCount >= RADAR_PRESENTATION.maxFlames) break;
+              flameCount += 1;
+              const point =
+                flame.position && !flame.position.outOfBounds ? pointAt(flame.position) : null;
+              if (!point) continue;
+              ctx.globalAlpha = alpha * layerOpacity(flame.position, model.layer) * 0.5;
+              circle(point.x, point.y, 6, '#ff0000', '#ffa500', 2);
+            }
+            ctx.restore();
+            return;
+          }
           let totalX = 0;
           let totalY = 0;
           let totalOpacity = 0;
@@ -487,6 +504,13 @@ export function RadarView({
           const y = point.y;
           const opacity = layerOpacity(marker.target, model.layer) * alpha;
           const radius = radiusAt(144 * geometry.unitRadius, marker.target.layer);
+          if (appearance === 'esl') {
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            circle(x, y, radius, '#ffffff80', sideColor(marker.side), 5);
+            ctx.restore();
+            return;
+          }
           const contour = smokeContour(marker.source.sourceEntityId, radius).map((offset) => ({
             x: x + offset.x,
             y: y + offset.y,
@@ -579,7 +603,7 @@ export function RadarView({
           ctx.strokeStyle = sideColor(marker.side);
           ctx.lineWidth = 2;
           ctx.lineCap = 'round';
-          ctx.setLineDash([7, 6]);
+          ctx.setLineDash(appearance === 'esl' ? [] : [7, 6]);
           for (let index = 1; index < marker.trail.length; index += 1) {
             const before = pointAt(marker.trail[index - 1]!, marker.target.layer);
             const after = pointAt(marker.trail[index]!, marker.target.layer);
@@ -700,6 +724,14 @@ export function RadarView({
               const x = point.x;
               const y = point.y;
               ctx.globalAlpha = layerOpacity(p, model.layer);
+              if (appearance === 'esl' && (bomb.state === 'planted' || bomb.state === 'defusing')) {
+                // A local decorative pulse, independent of the accepted objective clock.
+                const phase = reduceMotion ? 0.5 : (now % 2000) / 2000;
+                ctx.save();
+                ctx.globalAlpha *= (1 - phase) * 0.5;
+                circle(x, y, (24 + phase * 80) / z.scale, '#ff0000');
+                ctx.restore();
+              }
               if (bombIcon) ctx.drawImage(bombIcon, x - 18, y - 18, 36, 36);
               ctx.globalAlpha = 1;
             }
@@ -725,6 +757,16 @@ export function RadarView({
               ? bombCarrierColor
               : color;
           ctx.globalAlpha = layerOpacity(marker.target, model.layer);
+          if (appearance === 'esl' && markerKind === 'dead') {
+            ctx.globalAlpha *= 0.2;
+            ctx.fillStyle = color;
+            ctx.font = `900 ${48 / z.scale}px ESLLegend, SourceHanSans, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.label ?? '', x, y + 1);
+            ctx.globalAlpha = 1;
+            continue;
+          }
           if (markerKind === 'dead') {
             ctx.strokeStyle = color;
             ctx.lineWidth = 7;
@@ -734,6 +776,51 @@ export function RadarView({
             ctx.moveTo(x - 19, y + 19);
             ctx.lineTo(x + 19, y - 19);
             ctx.stroke();
+            ctx.globalAlpha = 1;
+            continue;
+          }
+          if (appearance === 'esl') {
+            const observed = payload.observedPlayerSourceId === p.sourcePlayerId;
+            const radius = (observed ? 30 : 27.5) / z.scale;
+            if (p.facing) {
+              ctx.save();
+              ctx.translate(x, y);
+              ctx.rotate((marker.angle * Math.PI) / 180);
+              const direction = imageFor('brand/hud/esl/playerBg.png');
+              if (direction) {
+                ctx.save();
+                ctx.rotate((135 * Math.PI) / 180);
+                ctx.drawImage(
+                  direction,
+                  -radius * 1.15,
+                  -radius * 1.15,
+                  radius * 2.3,
+                  radius * 2.3,
+                );
+                ctx.restore();
+              }
+              if (marker.shootingUntil > now) {
+                const fire = imageFor('brand/hud/esl/shootFire.png');
+                if (fire) {
+                  ctx.globalAlpha *= reduceMotion || Math.floor(now / 125) % 2 === 0 ? 1 : 0;
+                  ctx.drawImage(fire, 0, -radius * 2, radius * 4, radius * 4);
+                }
+              }
+              ctx.restore();
+            }
+            const flashRatio =
+              p.flashAmount != null ? Math.min(1, Math.max(0, p.flashAmount / 255)) : 0;
+            circle(x, y, radius, markerFill);
+            if (flashRatio > 0) {
+              ctx.globalAlpha *= flashRatio;
+              circle(x, y, radius, '#ffffff');
+              ctx.globalAlpha = layerOpacity(marker.target, model.layer);
+            }
+            ctx.fillStyle = '#000000';
+            ctx.font = `900 ${48 / z.scale}px ESLLegend, SourceHanSans, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.label ?? '', x, y + 1);
             ctx.globalAlpha = 1;
             continue;
           }

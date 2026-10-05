@@ -163,3 +163,10 @@ Program series-strip map scenes and CT/T side marks are Valve / Counter-Strike 2
 - 来源：https://github.com/google/fonts/tree/main/ofl/barlowcondensed 。
 - 用途：默认节目包的大比分、地图比分和统计数字；本地随包加载。
 - 原始字体与许可证：`apps/web/public/brand/fonts/barlow-condensed/`，构建后随 `dist/brand/fonts/` 发布。
+
+## 类ESL 展示资源
+
+- `apps/web/public/brand/fonts/esl/legend-{regular,bold,light}.woff2` 来源于 [ESL 官方网站](https://esl.com/wp-content/uploads/2019/01/legend-regular.woff2) 的公开字体资源；文件来源与 SHA-256 见同目录 `sources.json`。字体权利归 ESL/相应权利人，未发现独立的开放再分发许可，不能按 Mizar 的 AGPL 认定这些字体也使用 AGPL。
+- `SourceHanSansCN-Regular.woff2` 从 [Adobe Source Han Sans 官方仓库](https://github.com/adobe-fonts/source-han-sans) 的 CN Regular OTF 无损压缩为 WOFF2。Copyright 2014–2021 Adobe，使用 SIL Open Font License 1.1；原文随包保留为 `SourceHanSans-LICENSE.txt`。
+- `playerBg.png`、`shootFire.png` 来自用户提供的 `HUD/overlay4.zip` 中 LexoRadar 展示资源，源文件未附独立许可证；权利属于原作者/相应权利人。仅复用方向与开火图案，未移植地图或数据适配实现。原件与哈希记录在 `packages/radar-view/assets/radar-reference/esl/`，Web 随包镜像位于 `apps/web/public/brand/hud/esl/`。
+- `texture.svg` 是本次新绘制的近似纹理，用来补足参考中缺失的 `text2.png`，并非该文件的原件。

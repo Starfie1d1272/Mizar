@@ -153,8 +153,8 @@ export function TopScoreBar({
       data-side-mapping={p.currentSideMapping}
       data-freeze={snapshot.payload.round?.phase === 'freezetime'}
     >
-      {design === 'iem' && (p.competitionName || p.stageName) ? (
-        <div className="iem-event-ribbon">
+      {(design === 'iem' || design === 'esl') && (p.competitionName || p.stageName) ? (
+        <div className="broadcast-event-ribbon">
           <span>{p.competitionName}</span>
           <svg aria-hidden="true" viewBox="0 0 24 24">
             <path d="M7 2h10v10a5 5 0 0 1-4 5v3h4v2H7v-2h4v-3a5 5 0 0 1-4-5zM5 4H2v4q0 5 5 5v-2Q4 11 4 8V6h1zM19 4h3v4q0 5-5 5v-2q3 0 3-3V6h-1z" />

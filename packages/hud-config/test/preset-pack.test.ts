@@ -28,7 +28,7 @@ function packFor(style = 'perfectworld') {
 }
 
 describe('portable HUD preset packs', () => {
-  it.each(['mizar-default', 'ewc', 'iem', 'perfectworld'])(
+  it.each(['mizar-default', 'ewc', 'iem', 'perfectworld', 'esl'])(
     'round trips %s with fresh resource identities and the same presentation',
     (style) => {
       const pack = readHudPresetPack(JSON.stringify(packFor(style), null, 2));

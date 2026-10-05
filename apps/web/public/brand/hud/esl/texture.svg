@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- Original approximation: the reference's text2.png was not supplied. -->
+  <filter id="grain"><feTurbulence baseFrequency=".18" numOctaves="3" seed="4"/><feColorMatrix type="saturate" values="0"/></filter>
+  <rect width="96" height="96" fill="#111"/>
+  <path d="M-20 80 80-20M0 110 110 0M-30 35 35-30M40 125 125 40" stroke="#606060" stroke-width="9" opacity=".14"/>
+  <rect width="96" height="96" filter="url(#grain)" opacity=".12"/>
+</svg>

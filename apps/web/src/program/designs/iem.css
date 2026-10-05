@@ -18,7 +18,7 @@
   top: 78px;
   height: 3px;
 }
-/* IEM hierarchy adapted to square Steam avatars at the outside edge. */
+/* Straight-edge broadcast cards adapted to square Steam avatars at the outside edge. */
 .hud-widget-design[data-hud-design='iem'] .player-rail {
   width: 360px;
 }
@@ -230,7 +230,7 @@
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__name {
   color: var(--mizar-hud-text-primary);
 }
-.hud-widget-design[data-hud-design='iem'] .iem-event-ribbon {
+.hud-widget-design[data-hud-design='iem'] .broadcast-event-ribbon {
   position: absolute;
   left: 0;
   right: 0;
@@ -246,11 +246,11 @@
   font-weight: 600;
   line-height: 1;
 }
-.iem-event-ribbon > span {
+.broadcast-event-ribbon > span {
   overflow: hidden;
   white-space: nowrap;
 }
-.iem-event-ribbon svg {
+.broadcast-event-ribbon svg {
   width: 18px;
   height: 18px;
   fill: var(--mizar-hud-text-primary);

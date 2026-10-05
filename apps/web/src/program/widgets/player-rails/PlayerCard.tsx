@@ -309,7 +309,7 @@ function PlayerBody({
   ].some((weapon) => weapon?.item?.kind === 'firearm' && weapon.item.family !== 'pistol');
   return (
     <div className="player-rail__body" data-card-part="body" data-dead={dead}>
-      {dead && (design === 'ewc' || design === 'iem') ? (
+      {dead && (design === 'ewc' || design === 'iem' || design === 'esl') ? (
         <svg className="player-rail__death-watermark" aria-hidden="true" viewBox="3 2 10 12">
           <path
             fillRule="evenodd"
@@ -438,7 +438,13 @@ function PlayerBody({
           {(!dead || options.deadInformation === 'stats') &&
           player.roundKills !== null &&
           player.roundKills > 0 ? (
-            <RoundKillBadge key={player.roundKills} kills={player.roundKills} />
+            design === 'esl' ? (
+              <span aria-label={`Round kills ${player.roundKills}`}>
+                {'★'.repeat(Math.min(5, player.roundKills))}
+              </span>
+            ) : (
+              <RoundKillBadge key={player.roundKills} kills={player.roundKills} />
+            )
           ) : null}
         </span>
       </div>

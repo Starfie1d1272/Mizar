@@ -98,7 +98,7 @@ Public-match real-derived capture 保留原始 Steam64、GSI player display name
 
 ### 2026-10-04：赛事预设的暂停编排
 
-EWC / IEM / Perfect World 的已保存比分方案决定固定 1920×1080 画布内的暂停组合；这是一种预先预算的 Gameplay presentation mode，不写回 Layout、不发起 OBS Take。普通组件与紧凑暂停组合共用现有 Program presentation joins，原版保持现有 envelope。左右暂停附加信息按 entrant A/B 映射；映射不可证明时保持中性，不能把 CT 固定当左队。暂停使用竖向历史，冻结使用横向历史；两者复用已证明的历史数据并表达未知原因、历史空缺和加时分组。五秒展示窗口只属于 presentation 生命周期，倒计时仍直接消费 accepted clock；seek/revision 与 source/map boundary 使窗口重置。
+EWC / IEM / Perfect World / ESL 的已保存比分方案决定固定 1920×1080 画布内的暂停组合；这是一种预先预算的 Gameplay presentation mode，不写回 Layout、不发起 OBS Take。普通组件与紧凑暂停组合共用现有 Program presentation joins，原版保持现有 envelope。左右暂停附加信息按 entrant A/B 映射；映射不可证明时保持中性，不能把 CT 固定当左队。暂停使用竖向历史，冻结使用横向历史；两者复用已证明的历史数据并表达未知原因、历史空缺和加时分组。五秒展示窗口只属于 presentation 生命周期，倒计时仍直接消费 accepted clock；seek/revision 与 source/map boundary 使窗口重置。
 
 后续美术设计可以大幅调整视觉语言，而不需要重新讨论 Runtime、Program truth、entrant mapping、Radar calibration 或 fixture provenance。
 

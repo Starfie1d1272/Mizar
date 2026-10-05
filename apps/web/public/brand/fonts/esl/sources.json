@@ -1,0 +1,30 @@
+[
+  {
+    "file": "legend-regular.woff2",
+    "sha256": "6db77dd0e6e8fb981f77d082478f4ec39804dc41808cfc92860d6e917ebe715b",
+    "source": "https://esl.com/wp-content/uploads/2019/01/legend-regular.woff2",
+    "license": "ESL / respective rights holders; no open redistribution license identified",
+    "retrieved": "2026-10-04"
+  },
+  {
+    "file": "legend-bold.woff2",
+    "sha256": "bc3eaaa804673f5b864de1deac7be0178249d0f7a5a9b8f4bb7d797f685ddc61",
+    "source": "https://esl.com/wp-content/uploads/2019/01/legend-bold.woff2",
+    "license": "ESL / respective rights holders; no open redistribution license identified",
+    "retrieved": "2026-10-04"
+  },
+  {
+    "file": "legend-light.woff2",
+    "sha256": "eed4d2a3ef2db7704e7ed5684d6370b97681e727fe63ef8e3d19819c8418f12c",
+    "source": "https://esl.com/wp-content/uploads/2019/01/legend-light.woff2",
+    "license": "ESL / respective rights holders; no open redistribution license identified",
+    "retrieved": "2026-10-04"
+  },
+  {
+    "file": "SourceHanSansCN-Regular.woff2",
+    "sha256": "fa7b3bc7bdbe103793bcd31d3ad3b8fc78c34a8be55fdba0fd45821a8aa743dc",
+    "source": "https://github.com/adobe-fonts/source-han-sans/blob/release/SubsetOTF/CN/SourceHanSansCN-Regular.otf",
+    "license": "OFL-1.1; converted losslessly from OTF to WOFF2",
+    "retrieved": "2026-10-04"
+  }
+]

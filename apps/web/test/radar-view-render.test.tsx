@@ -60,6 +60,27 @@ function frame(sequence = 1, x = 0.5): RadarViewFrame {
 const canvas = () => container.querySelector('canvas')!;
 
 describe('shared radar surface lifecycle', () => {
+  it('renders ESL labels through the shared accepted-frame lifecycle and clears an unavailable frame', () => {
+    const { step } = setup();
+    act(() =>
+      root!.render(
+        <RadarView
+          snapshot={frame()}
+          appearance="esl"
+          assetBaseUrl="/vendor/radar"
+          reducedMotion
+        />,
+      ),
+    );
+    step(0);
+    expect(canvas().dataset.radarAppearance).toBe('esl');
+    expect(canvas().dataset.radarPlayers).toBe('1');
+    act(() =>
+      root!.render(<RadarView snapshot={null} appearance="esl" assetBaseUrl="/vendor/radar" />),
+    );
+    step(100);
+    expect(canvas().dataset.radarPlayers).toBe('0');
+  });
   it('mounts without a baseline, renders recovery, freezes stale motion and clears unavailable', () => {
     const { step } = setup();
     act(() => root!.render(<RadarView snapshot={null} assetBaseUrl="/vendor/radar" />));

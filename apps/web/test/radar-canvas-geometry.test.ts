@@ -12,6 +12,12 @@ describe('Radar shared overview canvas', () => {
     expect(radarCanvasPoint({ x: 0.5, y: 0.5 })).toEqual({ x: 500, y: 500 });
   });
 
+  it('uses the full canonical artwork for ESL without detaching or recalibrating floors', () => {
+    for (const map of ['de_ancient', 'de_nuke', 'de_vertigo']) {
+      expect(radarBroadcastPlacement(map, 'upper', 'esl')).toBeNull();
+      expect(radarBroadcastPlacement(map, 'lower', 'esl')).toBeNull();
+    }
+  });
   it('scales radii against the same artwork extent', () => {
     expect(radarCanvasRadius(0.025)).toBe(24.5);
   });

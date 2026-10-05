@@ -89,4 +89,6 @@ ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消�
 
 ### Gameplay HUD 播出预设
 
-HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World 四个内置预设，复用同一真实回合、组件和状态机。组件造型由已保存 variant 决定，颜色由 Theme recipe 决定；选择和另存不自动启用。适配范围、C4 动效、几何测量与缺失参考状态见 [播出预设说明](hud-broadcast-presets.md)。
+HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World、类ESL 五个内置预设，复用同一真实回合、组件和状态机。组件造型由已保存 variant 决定，颜色由 Theme recipe 决定；选择和另存不自动启用。适配范围、C4 动效、几何测量与缺失参考状态见 [播出预设说明](hud-broadcast-presets.md)。
+
+类ESL 的字体、近似纹理与雷达图案只在 `esl` 展示方案生效。字体来源、缺失素材和视觉复核见 [ESL 复核](reviews/esl.md)，不改动产品界面字体或公共设计变量。

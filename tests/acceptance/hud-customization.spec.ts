@@ -143,7 +143,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
   }
 });
 
-test('three broadcast presets save, activate and reload through the shared Program renderer', async ({
+test('four broadcast presets save, activate and reload through the shared Program renderer', async ({
   page,
   context,
 }) => {
@@ -190,7 +190,7 @@ test('three broadcast presets save, activate and reload through the shared Progr
       programSocket = socket;
       socket.send(JSON.stringify(snapshot));
     });
-    for (const style of ['ewc', 'iem', 'perfectworld']) {
+    for (const style of ['ewc', 'iem', 'perfectworld', 'esl']) {
       await page.goto('/operator/hud?hud-config=companion');
       await page
         .locator('select:has(option[value="builtin:ewc-preset"])')
@@ -265,13 +265,20 @@ test('three broadcast presets save, activate and reload through the shared Progr
             remaining: x('[data-pause-countdown-part="remaining"]'),
             leftEdge: parseFloat(css.borderLeftWidth),
             rightEdge: parseFloat(css.borderRightWidth),
+            bottomEdge: parseFloat(css.borderBottomWidth),
             transform: css.transform,
           };
         });
         expect(geometry.transform).toBe('none');
         expect(geometry.label < geometry.team).toBe(side === 'left');
         expect(geometry.clock < geometry.remaining).toBe(side === 'left');
-        expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
+        if (style === 'esl') {
+          expect(geometry.leftEdge).toBe(0);
+          expect(geometry.rightEdge).toBe(0);
+          expect(geometry.bottomEdge).toBe(3);
+        } else {
+          expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
+        }
         await assertBroadcastAssetFacing(program, true);
         const columns = await program.locator('.broadcast-pause__roster').evaluateAll((elements) =>
           elements.map((rail) => {

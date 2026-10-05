@@ -41,7 +41,7 @@ export const HUD_PANEL_STYLES = ['solid', 'standard', 'light'] as const;
 export const HUD_CORNER_STYLES = ['square', 'soft', 'rounded'] as const;
 
 export const BUILTIN_PRESET_ID = 'builtin:mizar-default-preset' as const;
-export const HUD_BROADCAST_STYLES = ['ewc', 'iem', 'perfectworld'] as const;
+export const HUD_BROADCAST_STYLES = ['ewc', 'iem', 'perfectworld', 'esl'] as const;
 export const BUILTIN_PRESET_IDS = [
   BUILTIN_PRESET_ID,
   ...HUD_BROADCAST_STYLES.map((style) => `builtin:${style}-preset` as const),
