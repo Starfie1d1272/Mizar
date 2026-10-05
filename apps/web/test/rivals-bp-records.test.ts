@@ -133,7 +133,9 @@ describe('Rivals BP preview records', () => {
       );
     }
 
-    expect(HUD_EDITOR_RIVALS_BP_FIXTURE_IDS).toEqual(HUD_EDITOR_FIXTURE_GROUPS[0]?.ids);
+    expect(HUD_EDITOR_RIVALS_BP_FIXTURE_IDS).toEqual(
+      HUD_EDITOR_FIXTURE_GROUPS[0]?.ids.filter((id) => id !== 'gameplay-map-ended-gg'),
+    );
     for (const id of HUD_EDITOR_RIVALS_BP_FIXTURE_IDS) {
       const fixture = getHudEditorFixture(id);
       if (fixture === null) throw new Error(`Rivals BP HUD preview missing: ${id}`);

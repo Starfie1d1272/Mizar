@@ -276,7 +276,16 @@ async function writeShaSums(bundleDir) {
 async function createArchive(bundleDir, outputRoot, bundleName) {
   const archivePath = join(outputRoot, `${bundleName}.zip`);
   if (process.platform === 'win32') {
-    await runCommand('tar', ['-a', '-c', '-f', archivePath, '-C', outputRoot, bundleName]);
+    await runCommand('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-File',
+      join(scriptDir, 'create-windows-archive.ps1'),
+      '-BundleRoot',
+      bundleDir,
+      '-ArchivePath',
+      archivePath,
+    ]);
   } else {
     await runCommand('zip', ['-q', '-r', archivePath, bundleName], { cwd: outputRoot });
   }
