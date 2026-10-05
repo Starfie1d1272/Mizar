@@ -1,153 +1,52 @@
-name: Release Qualification
-
+name: Publish qualified RC0 (one-off transfer)
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref/SHA to build and soak'
-        required: true
-        type: string
-      label:
-        description: 'Portable artifact label (e.g. RC0)'
-        required: true
-        default: RC0
-        type: string
-
 permissions:
-  contents: read
-
+  contents: write
+  actions: read
 jobs:
-  release_qualification:
-    name: release_qualification
-    runs-on: windows-2025
-    timeout-minutes: 30
+  publish:
+    runs-on: ubuntu-latest
     env:
-      RELEASE_LABEL: ${{ inputs.label }}
-      QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Starfie1d1272/Mizar
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
-
-      - name: Cache Cargo registry, git, and release target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-release-
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Restore committed lockfile after Windows install
-        shell: pwsh
-        run: git checkout -- pnpm-lock.yaml
-
-      - name: Build exact-SHA Windows qualification bundle
-        run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --label "$env:RELEASE_LABEL"
-
-      - name: Verify release desktop profile metadata
-        shell: pwsh
+      - name: Verify exact source checks and existing draft
         run: |
-          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
-          if ($null -eq $bundle) { throw '未生成 release qualification bundle 目录' }
-          $artifactPath = Join-Path $bundle.FullName 'resources/metadata/artifact.json'
-          $artifact = Get-Content -Raw -LiteralPath $artifactPath | ConvertFrom-Json
-          if ($artifact.desktopBuildProfile -ne 'release') { throw "Release Qualification 使用了错误 profile：$($artifact.desktopBuildProfile)" }
-
-      - name: Extract portable bundle and smoke test
-        shell: pwsh
-        timeout-minutes: 5
+          set -euo pipefail
+          for run in 37293574203 37293601817; do
+            gh run view "$run" --json headSha,conclusion > "run-$run.json"
+          done
+          gh release view v1.0.0-rc.0 --json isDraft,isPrerelease,targetCommitish > draft.json
+          python3 - <<'PY'
+          import json
+          sha='26605da1c200b31384ae6b6951fc0bf83ff4ce22'
+          for run in [37293574203,37293601817]:
+              d=json.load(open(f'run-{run}.json'));assert d['headSha']==sha and d['conclusion']=='success'
+          d=json.load(open('draft.json'));assert d['isDraft'] and d['isPrerelease'] and d['targetCommitish']==sha
+          PY
+      - name: Download original qualified product and evidence
         run: |
-          $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
-          if ($null -eq $archive) { throw '未生成 qualification ZIP' }
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-          tar -xf $archive.FullName -C $extractRoot
-          $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
-          Push-Location $bundleRoot.FullName
-          try {
-            foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
-              if (!(Test-Path -LiteralPath (Join-Path $bundleRoot.FullName $name))) { throw "缺少许可文件：$name" }
-            }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
-            if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-smoke.log')
-            if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
-          } finally {
-            Pop-Location
-          }
-
-      - name: Run 3-map exact-artifact synthetic lifecycle soak
-        shell: pwsh
+          set -euo pipefail
+          gh run download 37293601817 -n release-portable-product -D product
+          gh run download 37293601817 -n release-qualification-evidence -D evidence
+      - name: Verify identity and publish unchanged assets
         run: |
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $bundleRoot = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未找到解压后的便携产品包' }
-          $reportPath = Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json'
-          node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
-          if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
-
-      - name: Upload qualified portable product
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-portable-product
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
-          if-no-files-found: error
-
-      - name: Collect qualification evidence
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log')) {
-            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
-            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
-          }
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractedRoot) {
-            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-            if ($null -ne $bundle) {
-              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
-              $statePath = Join-Path $bundle.FullName 'state'
-              if (Test-Path -LiteralPath $statePath) {
-                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
-                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
-                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
-                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-                  Copy-Item -LiteralPath $_.FullName -Destination $target
-                }
-              }
-            }
-          }
-          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-evidence.zip'
-          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
-
-      - name: Upload release qualification evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-qualification-evidence
-          path: ${{ runner.temp }}/Mizar-*-evidence.zip
-          if-no-files-found: error
+          set -euo pipefail
+          cd product
+          sha256sum -c Mizar-RC0-win-x64-portable-26605da.zip.sha256
+          python3 - <<'PY'
+          import json,hashlib,zipfile
+          m=json.load(open('release-manifest.json'))
+          assert m['gitSha']=='26605da1c200b31384ae6b6951fc0bf83ff4ce22'
+          assert m['archive']=='Mizar-RC0-win-x64-portable-26605da.zip'
+          assert m['archiveSha256']=='95836d8cf33ec2133cc676827f37c00ae0c87e4e405b2ed53454de8516fc51bc'
+          assert m['desktopBuildProfile']=='release' and not m['developmentOnly']
+          assert hashlib.sha256(open(m['archive'],'rb').read()).hexdigest()==m['archiveSha256']
+          with zipfile.ZipFile('../evidence/Mizar-RC0-evidence.zip') as z:
+              assert json.loads(z.read('release-manifest.json'))==m
+              assert json.loads(z.read('desktop-smoke.json'))['result']=='PASS'
+          PY
+          gh release upload v1.0.0-rc.0 Mizar-RC0-win-x64-portable-26605da.zip Mizar-RC0-win-x64-portable-26605da.zip.sha256 release-manifest.json ../evidence/Mizar-RC0-evidence.zip
+          gh release edit v1.0.0-rc.0 --draft=false --prerelease --latest=false
+          gh release view v1.0.0-rc.0 --json url,isDraft,isPrerelease,assets
