@@ -4,6 +4,13 @@
   font-family: var(--mizar-hud-font-family), var(--mizar-type-family-body);
 }
 
+.match-header__gg {
+  font-size: calc(var(--mizar-type-size-title) * 2.4);
+  font-weight: var(--mizar-type-weight-strong);
+  line-height: 1;
+  color: var(--mizar-hud-text-primary);
+}
+
 .match-header *,
 .match-header *::before,
 .match-header *::after {

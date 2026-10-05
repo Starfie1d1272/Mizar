@@ -1131,6 +1131,7 @@ export function HudConsolePage() {
               showGrid={workspace === 'layout' && showGrid}
               showSafeArea={workspace === 'layout' && showSafeArea}
               snapshot={activeSnapshot}
+              gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
             />
             <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
           </div>

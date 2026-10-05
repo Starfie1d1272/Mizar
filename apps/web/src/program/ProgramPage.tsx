@@ -15,6 +15,7 @@ export interface ProgramPageProps {
   readonly snapshot?: ProgramSnapshot | null;
   readonly connectionState?: LocalChannelConnectionState;
   readonly resolvedPreset?: HudResolvedPreset;
+  readonly gg?: boolean;
 }
 
 export function ProgramPage({
@@ -23,6 +24,7 @@ export function ProgramPage({
   resolvedPreset,
   radarClient,
   radarSnapshot,
+  gg = false,
 }: ProgramPageProps = {}) {
   if (snapshot === undefined && connectionState === undefined && resolvedPreset === undefined) {
     return <ProgramCanvas />;
@@ -43,6 +45,7 @@ export function ProgramPage({
         radarSnapshot={radarSnapshot}
         resolvedPreset={resolvedPreset ?? getBuiltinResolvedPreset()}
         snapshot={presentationSnapshot}
+        gg={gg}
       />
     </ProgramCanvas>
   );

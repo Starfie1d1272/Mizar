@@ -548,7 +548,15 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
         ) : sceneId === 'map_result' ? (
           <MapResult data={data} />
         ) : sceneId === 'gameplay' ? (
-          <GameplayHud snapshot={snapshot ?? null} resolvedPreset={hud.current} />
+          <GameplayHud
+            snapshot={snapshot ?? null}
+            resolvedPreset={hud.current}
+            gg={
+              scenes?.active === 'gameplay' &&
+              (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
+              scenes.director?.gg?.mapEpoch === snapshot?.cursor.mapEpoch
+            }
+          />
         ) : sceneId === 'matchup' ? (
           <>
             <div
@@ -598,6 +606,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
         )
       ) : sceneId === 'waiting' ? (
         <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
+      ) : sceneId === 'gameplay' ? (
+        <GameplayHud snapshot={snapshot ?? null} resolvedPreset={hud.current} />
       ) : null}
     </ProgramCanvas>
   );

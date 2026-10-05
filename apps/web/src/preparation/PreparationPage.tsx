@@ -634,6 +634,7 @@ export function PreparationPage() {
               >
                 恢复默认
               </Button>
+              <SpectatorHudCommands />
             </Panel>
           )
         ) : (
@@ -657,3 +658,4 @@ function CurrentServerMatchEntry() {
     </Button>
   ) : null;
 }
+import { SpectatorHudCommands } from './SpectatorHudCommands';

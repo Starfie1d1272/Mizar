@@ -23,6 +23,7 @@ extern "system" {
     fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
     fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
+    fn SetThreadDpiAwarenessContext(context: isize) -> isize;
     fn AdjustWindowRectExForDpi(rect: *mut WinRect, style: u32, menu: i32, ex_style: u32, dpi: u32) -> i32;
     fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, width: i32, height: i32, flags: u32) -> i32;
     fn GetForegroundWindow() -> Hwnd;
@@ -42,6 +43,18 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+
+// The tracker runs both on the Host worker and command dispatcher. Win32
+// otherwise virtualizes coordinates differently from Tauri's physical pixels.
+struct PhysicalCoordinates(isize);
+impl PhysicalCoordinates {
+    fn enter() -> Self { Self(unsafe { SetThreadDpiAwarenessContext(-4) }) }
+}
+impl Drop for PhysicalCoordinates {
+    fn drop(&mut self) {
+        if self.0 != 0 { unsafe { SetThreadDpiAwarenessContext(self.0); } }
+    }
+}
 
 fn rect(value: WinRect) -> Rect {
     Rect { x: value.left, y: value.top, width: value.right - value.left, height: value.bottom - value.top }
@@ -152,6 +165,8 @@ pub struct GameTracker {
     last_client: Option<Rect>,
     last_work_area: Option<Rect>,
     last_dpi: u32,
+    alignment_retries: u8,
+    last_alignment: Option<std::time::Instant>,
 }
 
 impl GameTracker {
@@ -162,6 +177,8 @@ impl GameTracker {
         self.managed = false;
         self.last_client = None;
         self.last_dpi = 0;
+        self.alignment_retries = 30;
+        self.last_alignment = None;
         true
     }
     fn observe_target(&mut self, found: Option<Cs2Window>, monitor: Monitor) -> bool {
@@ -175,7 +192,9 @@ impl GameTracker {
         self.observe_target(found, choose_monitor(found))
     }
     pub fn restore_layout(&mut self) -> Option<Layout> {
+        let _coordinates = PhysicalCoordinates::enter();
         self.refresh_target();
+        self.alignment_retries = 30;
         self.apply_locked_layout()
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
@@ -183,11 +202,14 @@ impl GameTracker {
         self.last_work_area = Some(work);
         let layout = workspace_layout(work);
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
+        self.alignment_retries = self.alignment_retries.saturating_sub(1);
+        self.last_alignment = Some(std::time::Instant::now());
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
         self.last_dpi = self.window.map_or(0, |window| unsafe { GetDpiForWindow(window.hwnd) });
         Some(layout)
     }
     pub fn tick(&mut self) -> Option<Layout> {
+        let _coordinates = PhysicalCoordinates::enter();
         let changed = self.refresh_target();
         let work = monitor_work_area(self.monitor);
         if self.monitor == 0 || work.is_none() {
@@ -196,6 +218,11 @@ impl GameTracker {
         if work != self.last_work_area { return self.apply_locked_layout(); }
         if changed { return self.apply_locked_layout(); }
         let Some(window) = self.window else { return None; };
+        // CS2 can reject an early resize while constructing its render window.
+        // Retry on a bounded cadence; do not continuously fight user settings.
+        if !self.managed && self.alignment_retries > 0 && self.last_alignment.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1)) {
+            return self.apply_locked_layout();
+        }
         let client = client_rect(window.hwnd);
         let dpi = unsafe { GetDpiForWindow(window.hwnd) };
         if client != self.last_client || dpi != self.last_dpi {
@@ -210,6 +237,7 @@ impl GameTracker {
         None
     }
     pub fn overlay_rect(&self) -> Option<Rect> {
+        let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
         let mut foreground_pid = 0;

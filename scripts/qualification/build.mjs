@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
+import { readAppVersion } from './app-version.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
 const QUALIFICATION_SCHEMA_VERSION = qualificationContract.schemaVersion;
@@ -152,16 +153,9 @@ async function downloadNodeRuntime(runtimeDir, requestedVersion, temporaryDirect
   const version = await resolveNodeVersion(requestedVersion);
   const archiveName = `node-${version}-win-x64.zip`;
   const baseUrl = `https://nodejs.org/dist/${version}`;
-  const sumsResponse = await fetchResponse(`${baseUrl}/SHASUMS256.txt`);
-  const sums = await sumsResponse.text();
-  const sumLine = sums
-    .split(/\r?\n/)
-    .find(
-      (line) => line.trim().endsWith(` ${archiveName}`) || line.trim().endsWith(`*${archiveName}`),
-    );
-  const expectedHash = sumLine?.trim().split(/\s+/)[0];
+  const expectedHash = qualificationContract.nodeWinX64ArchiveSha256;
   if (expectedHash === undefined || !/^[a-f0-9]{64}$/.test(expectedHash))
-    throw new Error(`缺少 ${archiveName} 的官方 SHA-256`);
+    throw new Error(`缺少 ${archiveName} 的仓库固定 SHA-256`);
   const archivePath = join(temporaryDirectory, archiveName);
   const archiveResponse = await fetchResponse(`${baseUrl}/${archiveName}`);
   await pipeline(
@@ -257,22 +251,6 @@ async function createDeployWorkspace(workspaceDir) {
   }
 }
 
-async function pruneDependencyTestFiles(appDir) {
-  const developmentDirectories = new Set(['test', 'tests', '__tests__']);
-  async function visit(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const path = join(directory, entry.name);
-      if (developmentDirectories.has(entry.name)) {
-        await rm(path, { recursive: true, force: true });
-      } else {
-        await visit(path);
-      }
-    }
-  }
-  await visit(join(appDir, 'node_modules'));
-}
-
 async function restorePortableWorkspaceDependencySpecifiers(appDir) {
   const deployedManifestPath = join(appDir, 'package.json');
   const sourceManifestPath = join(rootDir, 'apps', 'companion', 'package.json');
@@ -355,7 +333,7 @@ async function main() {
       { cwd: deployWorkspaceDir },
     );
     await cp(deployedAppDir, appDir, { recursive: true, dereference: true });
-    await pruneDependencyTestFiles(appDir);
+    // Keep dependency test directories: package entry points may reference them.
     await pruneDevelopmentFiles(appDir);
     await rm(deployedAppDir, { recursive: true, force: true });
     await restorePortableWorkspaceDependencySpecifiers(appDir);
@@ -448,9 +426,15 @@ async function main() {
         '正式产品包需要在 Windows x64 构建 EXE；本机结构检查请使用 --skip-node-runtime',
       );
     }
+    const appVersion = await readAppVersion();
+    if (process.platform === 'win32' && !options.skipNodeRuntime) {
+      const compiledVersion = await commandOutput(join(stagingDir, 'Mizar.exe'), ['--app-version']);
+      if (compiledVersion !== appVersion) throw new Error('EXE 编译版本与配置版本不一致');
+    }
     const buildTimestamp = new Date().toISOString();
     const digest = await contentDigest(stagingDir);
     const artifact = {
+      appVersion,
       schemaVersion: 1,
       productSchemaVersion: 1,
       desktopHost: 'tauri2',
@@ -485,6 +469,7 @@ async function main() {
       `${JSON.stringify(
         {
           schemaVersion: 1,
+          appVersion: artifact.appVersion,
           label: options.label,
           archive: `${bundleName}.zip`,
           archiveSha256: archive.archiveSha256,

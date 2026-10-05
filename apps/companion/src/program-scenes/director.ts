@@ -12,6 +12,7 @@ export const DEFAULT_PROGRAM_TIMINGS = Object.freeze({
   hudLeadMs: 9_000,
   halftimeLeadMs: 5_000,
   mapResultMs: 12_000,
+  ggHoldMs: 3_000,
   warmupFinalMs: 2_000,
 });
 type DirectorView = NonNullable<ProgramSceneState['director']>;
@@ -41,6 +42,9 @@ export class ProgramDirector {
   private resultShown = false;
   private wasProduction = false;
   private generation = 0;
+  private observedLiveMap: string | null = null;
+  private ggStartedAt: number | null = null;
+  private ggConsumedMap: string | null = null;
   constructor(
     private readonly projections: ProjectionCoordinator,
     private readonly scenes: ProgramSceneController,
@@ -53,6 +57,8 @@ export class ProgramDirector {
     return { ...this.view, sceneElapsedMs: this.elapsed };
   }
   hold(): void {
+    this.ggStartedAt = null;
+    this.view.gg = null;
     this.manual = true;
     this.generation++;
     this.view = { ...this.view, mode: 'manual', next: null, reason: '手动保持，恢复自动后继续。' };
@@ -89,6 +95,7 @@ export class ProgramDirector {
     const delta = this.lastTime === null ? 0 : Math.min(1000, Math.max(0, time - this.lastTime));
     this.lastTime = time;
     const { program: p, operator } = this.projections.getCurrent();
+    this.view.gg = null;
     const production = this.production() && operator.matchContext.origin !== 'fixture';
     this.bp.setPaused(
       production &&
@@ -122,6 +129,8 @@ export class ProgramDirector {
       this.halftimeSeen = false;
       this.resultShown = false;
       this.elapsed = 0;
+      this.ggStartedAt = null;
+      this.view.gg = null;
     }
     const active = this.scenes.get().active;
     if (active !== this.scene) {
@@ -133,6 +142,8 @@ export class ProgramDirector {
       this.halftimeSeen = true;
     const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '');
     if (!this.safe(p)) {
+      this.ggStartedAt = null;
+      this.view.gg = null;
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
@@ -161,14 +172,31 @@ export class ProgramDirector {
     const remaining = seconds === null ? 0 : seconds * 1000;
     let target: ProgramSceneId | null = null;
     let finalBp = false;
+    const cueMap = `${matchKey}:${p.cursor.liveSessionId}:${p.cursor.mapEpoch}`;
+    if (p.map.phase === 'live') this.observedLiveMap = cueMap;
     if (
       p.map.phase === 'gameover' &&
       p.series?.maps.some(
         (map) => map.status === 'completed' && map.mapName === p.map.name && map.finalScore,
       )
     ) {
-      if (!this.resultShown) target = 'map_result';
-      else if (active === 'map_result') {
+      if (!this.resultShown) {
+        if (this.ggConsumedMap !== cueMap) {
+          this.ggConsumedMap = cueMap;
+          if (active === 'gameplay' && !this.manual && this.observedLiveMap === cueMap)
+            this.ggStartedAt = time;
+        }
+        const remainingMs =
+          this.ggStartedAt === null
+            ? 0
+            : Math.max(0, this.timings.ggHoldMs - (time - this.ggStartedAt));
+        this.view.gg =
+          remainingMs > 0 && active === 'gameplay' && !this.manual
+            ? { mapEpoch: p.cursor.mapEpoch, remainingMs }
+            : null;
+        this.view.next = 'map_result';
+        if (!this.view.gg) target = 'map_result';
+      } else if (active === 'map_result') {
         this.view.next = p.series.status === 'completed' ? 'match_result' : 'intermap';
         if (this.elapsed >= this.timings.mapResultMs) target = this.view.next;
       }

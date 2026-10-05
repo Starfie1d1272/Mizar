@@ -83,6 +83,39 @@ function rig() {
 }
 
 describe('automatic Program choreography', () => {
+  it('holds an observed trusted map end for 3s, never replays after recovery, and honors manual Take', async () => {
+    const r = rig();
+    await r.step();
+    await r.scenes.select('gameplay', r.scenes.get().revision);
+    r.scenes.resumeAutomatic(r.scenes.get().revision);
+    await r.step();
+    const cursor = r.program.cursor;
+    Object.assign(r.program, sample('real-gameover'));
+    r.program.cursor = cursor;
+    await r.step();
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.director.get().gg).toMatchObject({ remainingMs: 3000 });
+    await r.pass(2900);
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.director.get().gg?.remainingMs).toBe(100);
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+    await r.scenes.select('gameplay', r.scenes.get().revision);
+    await r.pass(4000);
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.director.get().gg).toBeNull();
+    r.scenes.resumeAutomatic(r.scenes.get().revision);
+    await r.step();
+    expect(r.director.get().gg).toBeNull();
+  });
+  it('keeps unbound demo auto choreography blocked even when manual Gameplay is available', async () => {
+    const r = rig();
+    r.program.series!.bindingState = 'unbound';
+    await r.step();
+    expect(r.director.get().mode).toBe('blocked');
+    expect(r.scenes.get().active).toBe('waiting');
+    expect(r.scenes.get().available).toContain('gameplay');
+  });
   it('reveals warmup only once and does not replay it on map two', async () => {
     const r = rig();
     r.program.map.phase = 'warmup';

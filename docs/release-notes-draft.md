@@ -48,3 +48,15 @@ RC6 补齐本机 HUD 的缩放容器：固定节目画布放在独立视口中�
 首次使用与诊断导出见[操作手册](quick-start.md)。发布时补充已验证的升级/恢复路径，未验证前不承诺旧配置迁移。保留旧包和数据备份，不混拷运行资源。
 
 反馈入口：[GitHub Issues](https://github.com/Starfie1d1272/Mizar/issues)。许可证与资源来源见[第三方说明](../THIRD-PARTY-NOTICES.md)。
+
+## RC7 候选修订（待 exact artifact 实测）
+
+- 支持新鲜 GSI demo 手动 Gameplay，自动赛事及结果门槛保留；见 ADR-0025。
+- 修正 Host 跟踪/命令线程的 DPI 坐标上下文，恢复布局失败有具体反馈。
+- 可信实时单图结束增加 Director 所有的 3 秒 GG cue，五套 HUD 共用行为，手动/恢复不补播历史。
+- Cargo 为应用版本权威，CI/build 校验 Tauri 镜像；artifact/manifest 记录 appVersion，打包核对 EXE 编译版本，晋级校验标签。
+- Node win-x64 ZIP digest 固定于仓库 contract；移除按目录名称删除依赖 test/tests/__tests__ 的裁剪。
+- Qualification 为成功 ZIP 生成 provenance；Promotion 下载已验证产物，校验包和二进制版本后发布，不重新构建、不覆盖不同身份的标签。
+
+本机未发现可用代码签名证书。1.0 分发暂采用 unsigned 例外，保留校验和与 provenance；Authenticode 另排 1.0.x，证书/发布主体确认后在 checksum 与 qualification 前签名，不事后替换已发布二进制。正式 v1.0.0 仍需 #35 实机门槛。
+- #132 手动回退：本机设置显示固定的原生 HUD 隐藏/恢复命令并提供复制反馈，尚未执行自动注入。

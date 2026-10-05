@@ -43,3 +43,13 @@
 - [ ] 下载链接、包身份、许可证和升级说明齐全，正式发布所需实机门槛满足后创建正式标签并发布。
 
 当前仅有浏览器预览的截图不作为实机证据；C4 依赖版本不作为 Mizar 应用版本。用户安装与诊断操作只维护在[操作手册](quick-start.md)。
+
+## 版本与已验产物晋级
+
+Cargo.toml 的 package.version 是应用版本权威；Tauri config 为镜像，`app-version.mjs` 在 CI 与构建时强制核对。修改版本同时更新镜像；产品 metadata/manifest 的 appVersion 及 EXE `--app-version` 必须一致。Node runtime 版本与 Windows x64 archive SHA-256 一并固定于 qualification contract，升级时经 PR 更新。
+
+Release Qualification 成功后使用 Release Promotion，输入成功 run ID 与精确应用版本标签。流程下载原始 product/evidence，验证 provenance、源码、ZIP、内容、EXE 版本及标签一致，创建 draft 并上传全部资产后发布。晋级不运行 build；已有不同身份的 tag/release 拒绝修改，同身份重复执行不变更。该流程同时支持 RC 和正式版本；正式发布的人工环境门槛仍需先满足。
+
+依赖 test/tests/__tests__ 目录按名称递归删除的策略已移除，以避免破坏包入口；声明、source map、构建缓存与 runtime npm/Corepack 仍按已有明确规则裁剪。大小与启动测量随 final candidate evidence 提供，不因理论优化修改全量 hash 策略。
+
+当前没有代码签名证书，unsigned 1.0 为明确发布例外；证书与发布主体另在 1.0.x 解决，见发布说明草案。GitHub public repository 支持 qualification provenance，验证使用 gh attestation verify；immutable release 在流程配置与实测后记录实际启用状态，不把 GitHub 支持误写成已启用。

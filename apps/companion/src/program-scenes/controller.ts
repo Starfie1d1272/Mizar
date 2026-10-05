@@ -49,6 +49,11 @@ export class ProgramSceneController {
     const bound = series?.bindingState === 'bound' || isRehearsal;
     const identitySafe = operator.identity.state !== 'mismatch';
     if (id === 'waiting') return null;
+    // A manual Gameplay Take can broadcast an observed demo without claiming
+    // that it belongs to the selected event. Automatic choreography still uses
+    // the Director's stricter context / binding / identity gate.
+    if (id === 'gameplay')
+      return fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
     if (id === 'bp') {
       return this.projections.getBpAssessment().readiness === 'ready' &&
         this.bpSession.get().projection !== null
@@ -57,8 +62,6 @@ export class ProgramSceneController {
     }
     if (!contextReady || !bound || !identitySafe) return '比赛绑定、地图归属或选手识别尚未确认。';
     if (id === 'matchup') return null;
-    if (id === 'gameplay')
-      return fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
     if (id === 'halftime')
       return (fresh && isRegulationHalftime(program)) || isRehearsal
         ? null

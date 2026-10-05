@@ -63,6 +63,19 @@ it('keeps the current Program Scene when identity, freshness or OBS switch fails
   expect(scene.get().active).toBe('gameplay');
 });
 
+it('allows a fresh demo Gameplay Take without event binding while retaining result gates', async () => {
+  const { scene, operator, program } = controller(async () => {});
+  operator.matchContext.freshness = 'missing';
+  operator.identity.state = 'mismatch';
+  program.series.bindingState = 'unbound';
+  expect(scene.get().available).toContain('gameplay');
+  expect(await scene.select('gameplay', scene.get().revision)).toMatchObject({ ok: true });
+  expect(scene.get().available).not.toContain('map_result');
+  expect(scene.get().available).not.toContain('matchup');
+  operator.runtime.telemetryFreshness = 'stale';
+  expect(scene.get().available).not.toContain('gameplay');
+});
+
 it('rechecks live truth after an OBS switch and restores the previous scene when it became stale', async () => {
   const switched: ProgramSceneId[] = [];
   const { scene, operator } = controller((id) => {

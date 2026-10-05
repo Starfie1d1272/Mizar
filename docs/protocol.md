@@ -136,3 +136,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 WebSocket 校验 Origin、子协议和消息大小，通道仅服务端向客户端发送；收到客户端业务消息以 `1008` 关闭。压缩关闭，心跳与缓冲区有界。浏览器按当前页面来源选择 `ws:` 或 `wss:`。
 
 令牌和底层密钥不进入浏览器返回值、公开输出或诊断导出。配置入口与实现见[本地服务源码](../apps/companion/src/)。
+
+### Gameplay 手动门槛与结束提示
+
+`program-scenes` 的 available.gameplay 由新鲜正式输入决定，手动选择不建立赛事绑定；自动编排和非 Gameplay 场景仍受既有可信证据门槛约束。Director 的可选 gg 为 `{ mapEpoch, remainingMs }` 或 null，表示当前自动 Gameplay 的可信单图结束过渡。消费者只在当前场景/执行匹配时显示 GG，不自行推导获胜事实或启动 3 秒倒计时。

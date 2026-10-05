@@ -55,6 +55,7 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
         ) : (
           <>
             <GameplayHud
+              gg={fixtureId === 'gameplay-map-ended-gg'}
               radarSnapshot={radarSnapshot}
               resolvedPreset={resolvedPreset}
               snapshot={snapshot}

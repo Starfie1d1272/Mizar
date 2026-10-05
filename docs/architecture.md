@@ -82,6 +82,8 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 ## 正式节目与观察辅助隔离
 
+新鲜正式输入允许手动选择 Gameplay，包括未绑定赛事的 demo；这只接管画面，不建立赛事归属或官方身份。自动编排及结果场景仍受可信绑定门槛约束，见 [ADR-0025](decisions/0025-demo-manual-gameplay.md)。
+
 正式节目消费观战客户端的 GSI；精确事件是可选增强。Lookahead 使用独立的较早时间轴，只能形成私有辅助信息。
 
 - Lookahead 不能作为正式节目备用源；任一链路故障不改变另一链路的角色。

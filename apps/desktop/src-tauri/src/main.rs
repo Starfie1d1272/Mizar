@@ -332,6 +332,13 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
         .ok_or_else(|| "无法读取显示器工作区。".to_string())?;
     apply_layout(&app, layout);
     update_overlay(&app, &state);
+    let tracker = state.tracker.lock().map_err(|_| "桌面窗口状态不可用。")?;
+    if tracker.window.is_none() {
+        return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
+    }
+    if !tracker.managed {
+        return Err("工作区已恢复，但 CS2 未接受窗口尺寸。请使用窗口模式后重试恢复布局。".into());
+    }
     Ok(())
 }
 
@@ -1176,6 +1183,10 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--app-version"] {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let headless = args.iter().any(|arg| arg == "--no-browser");
     if args
         .iter()

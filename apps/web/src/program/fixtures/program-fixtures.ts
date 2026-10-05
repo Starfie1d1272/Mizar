@@ -21,6 +21,7 @@ const aliases = {
   'series-timeout-a': 'real-timeout-ct',
   'series-timeout-b': 'real-timeout-t',
   'series-paused': 'real-paused',
+  'gameplay-map-ended-gg': 'real-gameover',
 } as const;
 export const programFixtures = {
   ...objectiveFocusedFixtures,
@@ -47,6 +48,7 @@ export const HUD_EDITOR_FIXTURE_GROUPS = [
       'real-timeout-ct',
       'real-halftime-after',
       'real-gameover',
+      'gameplay-map-ended-gg',
     ],
   },
   {
@@ -124,6 +126,7 @@ export const PROGRAM_FIXTURE_LABELS: Readonly<Record<ProgramFixtureId, string>> 
   'real-timeout-ct': '实战 · CT 暂停',
   'real-halftime-after': '实战 · 半场换边',
   'real-gameover': '实战 · 地图结束',
+  'gameplay-map-ended-gg': '单图结束 · GG 过渡预览',
   'player-rails-freezetime': '选手栏 · 回合切换前置边界',
   'awaiting-neutral': '等待初始状态',
   'live-neutral': '实时中 · 未绑定队伍',
