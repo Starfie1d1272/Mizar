@@ -36,7 +36,7 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 
 `build` 产生本包 `dist`；`typecheck` 编译器全部使用 `--noEmit`。类型检查通过显式 `^build` 任务先准备依赖的公开导出，不能把类型检查的副作用当构建入口。Radar 独立消费者示例通过 `consumer:typecheck → build` 检查实际发行声明，源代码类型检查仍不输出产物。
 
-`build:packages` 从 workspace manifest 展开共享包的依赖，供 lint、unit 和浏览器验收使用。样例命令选择 Companion 或 RivalHub 及其依赖；不会手写逐包编译顺序。所有定向构建必须带 `...` 与 `--fail-if-no-match`。包循环、未声明导入、跨 scope 识别、references、手写顺序和不安全定向构建由 architecture 门禁拒绝；实际 `--dry-run --json` 任务图也与 manifest 自动对照。
+`build:packages` 从 workspace manifest 展开共享包的依赖，供 lint、unit 和浏览器验收使用。样例的 TSX 入口只构建 Companion 的工作区依赖；读取 RivalHub 发行导出的同步工具构建 RivalHub 及其依赖，不手写逐包编译顺序。所有定向构建必须带 `...` 与 `--fail-if-no-match`。包循环、未声明导入、跨 scope 识别、references、手写顺序和不安全定向构建由 architecture 门禁拒绝；实际 `--dry-run --json` 任务图也与 manifest 自动对照。
 
 ```sh
 pnpm -r run --dry-run --json build
