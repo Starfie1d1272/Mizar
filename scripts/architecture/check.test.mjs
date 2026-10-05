@@ -48,15 +48,15 @@ describe('architecture checker', () => {
   });
 
   it('allows a declared dev-only testkit import and the protocol zod dependency', () => {
-    const coreManifest = packageManifest('packages/core/package.json');
-    coreManifest.devDependencies = {
+    const protocolManifest = packageManifest('packages/protocol/package.json');
+    protocolManifest.devDependencies = {
       '@mizar/testkit': 'workspace:*',
     };
 
     expect(
       withFiles({
-        'packages/core/package.json': JSON.stringify(coreManifest),
-        'packages/core/test/testkit-fixture.test.ts':
+        'packages/protocol/package.json': JSON.stringify(protocolManifest),
+        'packages/protocol/test/testkit-fixture.test.ts':
           "import { fixture } from '@mizar/testkit';\nvoid fixture;\n",
         'packages/protocol/src/zod-fixture.ts': "import { z } from 'zod';\nvoid z;\n",
       }),
@@ -148,9 +148,9 @@ describe('architecture checker', () => {
       fastify: '5.0.0',
       '@mizar/web': 'workspace:*',
     };
-    expect(withFiles({ 'packages/core/package.json': JSON.stringify(devOnlyManifest) })).toEqual(
-      [],
-    );
+    const findings = withFiles({ 'packages/core/package.json': JSON.stringify(devOnlyManifest) });
+    expect(findings.every((finding) => finding.ruleId === 'ARCH_WORKSPACE_CYCLE')).toBe(true);
+    expectRule(findings, 'ARCH_WORKSPACE_CYCLE');
   }, 15_000);
 
   it('checks static, export, dynamic, require, and type-only edges', () => {

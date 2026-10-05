@@ -3,7 +3,8 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+    "tsBuildInfoFile": "./tsconfig.test.tsbuildinfo"
   },
   "include": ["src", "test"]
 }

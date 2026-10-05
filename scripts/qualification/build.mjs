@@ -29,6 +29,7 @@ function usage() {
   return [
     '用法：node scripts/qualification/build.mjs [options]',
     '  --output <directory>       输出目录（默认：.agent-tmp/qualification-build）',
+    '  --label <RC0|version>      可选发布名称，源码身份仍由完整 SHA 锁定',
     '  --skip-build               复用已有 dist 输出',
     '  --skip-node-runtime        仅做结构 smoke 的 bundle，不是现场验收 artifact',
     '  --desktop-profile <ci|release>  桌面 Host 构建 profile（默认：release）',
@@ -44,6 +45,7 @@ function parseArgs(argv) {
     skipNodeRuntime: false,
     desktopProfile: 'release',
     allowDirty: false,
+    label: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -58,6 +60,12 @@ function parseArgs(argv) {
       }
       options.desktopProfile = value;
       index += 1;
+    } else if (argument === '--label') {
+      const value = argv[++index];
+      if (!value || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,39}$/.test(value)) {
+        throw new Error('发布名称只能包含字母、数字、点和连字符，最多 40 字符');
+      }
+      options.label = value;
     } else if (argument === '--output') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`参数 ${argument} 缺少值`);
@@ -301,7 +309,9 @@ async function main() {
   await ensureCleanCheckout(options.allowDirty);
   const gitSha = await commandOutput('git', ['rev-parse', 'HEAD']);
   const shortSha = gitSha.slice(0, 7);
-  const bundleName = `mizar-${shortSha}-win-x64`;
+  const bundleName = options.label
+    ? `Mizar-${options.label}-win-x64-portable-${shortSha}`
+    : `mizar-${shortSha}-win-x64`;
   await mkdir(options.output, { recursive: true });
   const bundleDir = join(options.output, bundleName);
   const archivePath = join(options.output, `${bundleName}.zip`);
@@ -314,6 +324,10 @@ async function main() {
     }
   }
   if (!options.skipBuild) await runCommand('pnpm', ['build']);
+  await runCommand(process.execPath, [
+    join(scriptDir, 'verify-web-resources.mjs'),
+    join(rootDir, 'apps/web/dist'),
+  ]);
   await access(join(rootDir, 'apps', 'companion', 'dist', 'server.js'));
 
   const stagingParent = await mkdtemp(join(options.output, '.staging-'));
@@ -330,6 +344,9 @@ async function main() {
     await mkdir(join(resourcesDir, 'metadata'), { recursive: true });
     for (const name of ['data', 'logs', 'evidence'])
       await mkdir(join(stagingDir, 'state', name), { recursive: true });
+    for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
+      await cp(join(rootDir, name), join(stagingDir, name));
+    }
     await createDeployWorkspace(deployWorkspaceDir);
     await runCommand(
       'pnpm',
@@ -457,6 +474,29 @@ async function main() {
     await rm(stagingParent, { recursive: true, force: true });
     await rm(downloadDir, { recursive: true, force: true });
     const archive = await createArchive(bundleDir, options.output, bundleName);
+    await writeFile(
+      `${archive.archivePath}.sha256`,
+      `${archive.archiveSha256}  ${bundleName}.zip\n`,
+    );
+    await writeFile(
+      join(options.output, 'release-manifest.json'),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          label: options.label,
+          archive: `${bundleName}.zip`,
+          archiveSha256: archive.archiveSha256,
+          gitSha,
+          contentDigest: digest,
+          nodeVersion,
+          desktopBuildProfile: artifact.desktopBuildProfile,
+          buildTimestamp,
+          developmentOnly,
+        },
+        null,
+        2,
+      )}\n`,
+    );
     console.log(
       JSON.stringify({
         bundleDir,

@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
+    inputs:
+      benchmark_desktop:
+        description: 'A/B benchmark CI-only Cargo profiles after the normal bundle smoke'
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
@@ -99,7 +104,6 @@ jobs:
       - name: Verify generated assets and real-derived fixtures
         if: ${{ matrix.lane == 'fixtures' }}
         run: |
-          pnpm --filter @mizar/companion... build
           pnpm cs2-assets:verify
           pnpm fixtures:program:verify
           pnpm fixtures:radar:verify
@@ -274,14 +278,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Cache Cargo registry, git, and CI target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
+          key: cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
+            cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-
             cargo-${{ runner.os }}-ci-
 
       - name: Set up Node.js 24 and pnpm 12
@@ -365,6 +371,31 @@ jobs:
             Pop-Location
           }
 
+      - name: Benchmark CI desktop profiles
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_desktop }}
+        run: node scripts/ci/benchmark-desktop.mjs
+
+      - name: Build and smoke benchmark candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_desktop }}
+        shell: pwsh
+        env:
+          CARGO_PROFILE_CI_OPT_LEVEL: '0'
+          CARGO_PROFILE_CI_INCREMENTAL: 'true'
+          CARGO_PROFILE_CI_CODEGEN_UNITS: '256'
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'cargo-profile-candidate'
+          node scripts/qualification/build.mjs --skip-build --desktop-profile ci --output $output
+          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate build failed' }
+          $archive = Get-ChildItem -LiteralPath $output -Filter '*.zip' -File | Select-Object -First 1
+          $extract = Join-Path $env:RUNNER_TEMP 'candidate extracted path'
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          tar -xf $archive.FullName -C $extract
+          $bundle = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
+          node scripts/qualification/product-smoke.mjs $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate portable smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $bundle.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'candidate-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate GUI smoke failed' }
+
       - name: Show Desktop and Companion diagnostics on smoke failure
         if: ${{ failure() }}
         shell: pwsh
@@ -389,6 +420,8 @@ jobs:
           name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/cargo-benchmark.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/candidate-desktop-smoke.json
             ${{ runner.temp }}/qualification extracted path/**/state/desktop-smoke-*/*/logs/desktop*.ndjson
             ${{ runner.temp }}/qualification extracted path/**/state/**/logs/supervisor*.ndjson*
             ${{ runner.temp }}/qualification extracted path/**/state/**/logs/companion*.log*
@@ -402,6 +435,16 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
           if-no-files-found: error
+
+      - name: Save reusable main Cargo cache
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   qualification_offline:
     name: qualification / offline / ${{ matrix.name }}

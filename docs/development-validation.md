@@ -30,6 +30,22 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 
 桌面左右区和底栏由 Host 管理。浏览器预览不证明 Windows 窗口捕获、DPI 或 OBS 正式输出。
 
+## 工作区构建图
+
+各包 `package.json` 的 workspace 依赖是唯一跨包构建图。pnpm 12 原生 `tasks` 调度 `build → ^build`，独立包按默认并发运行；不使用额外编排器或实验性 pipeline。TypeScript 不维护第二套跨包 references，每个 `tsc -p` 只编译本包，普通构建保留增量信息而不用 `--force`。
+
+`build` 产生本包 `dist`；`typecheck` 编译器全部使用 `--noEmit`。类型检查通过显式 `^build` 任务先准备依赖的公开导出，不能把类型检查的副作用当构建入口。Radar 独立消费者示例通过 `consumer:typecheck → build` 检查实际发行声明，源代码类型检查仍不输出产物。
+
+`build:packages` 从 workspace manifest 展开共享包的依赖，供 lint、unit 和浏览器验收使用。样例的 TSX 入口只构建 Companion 的工作区依赖；读取 RivalHub 发行导出的同步工具构建 RivalHub 及其依赖，不手写逐包编译顺序。所有定向构建必须带 `...` 与 `--fail-if-no-match`。包循环、未声明导入、跨 scope 识别、references、手写顺序和不安全定向构建由 architecture 门禁拒绝；实际 `--dry-run --json` 任务图也与 manifest 自动对照。
+
+```sh
+pnpm -r run --dry-run --json build
+pnpm --filter @mizar/rivalhub... --fail-if-no-match run build
+pnpm --filter @mizar/companion... --fail-if-no-match run build
+```
+
+首次执行的验证必须在独立工作树中冻结安装，每个入口前清空所有 `dist` 和 `.tsbuildinfo`，分别运行构建、类型、lint、unit、样例与验收准备，不能先全量构建再声称其它入口独立成功。
+
 ## 验证层次
 
 | 层次 | 证明什么 | 常用入口 |
@@ -56,7 +72,7 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 - quality 分成 static、unit、fixtures、typecheck/build 四个并行 lane；所有选中 lane 成功才算 quality 成功。
 - 浏览器验收按文件分成四个独立 job，每个保持一个 worker 和原串行语义；所有 shard 成功才算 acceptance 成功，失败报告按 shard 独立保留。
 - Windows/macOS 验证 production build、文件系统/进程/传输与 production host smoke；完整 JS unit suite 在 Ubuntu 执行一次，Windows 包另有 Rust 与 GUI smoke。
-- main push、定时或手工验证运行完整检查并包含离线验收；选择性 PR 检查不保证生成 Windows 包。
+- 普通 main push 与 PR 按差异选择；main 的未知/工具链差异完整验证并包含离线验收。定时和显式手工验证始终完整；Desktop、打包或 GSI 配置差异需要 Windows qualification。RC 使用独立 Release Qualification 和 release profile。
 
 不要为了避免检查改变分类或恢复旧锁文件。执行过的检查如实写入 PR，未执行的不得记为通过。
 
@@ -79,7 +95,9 @@ Rivals 排练的赛事资料来自公开赛程，局内遥测来自独立真实�
 
 ## 便携包自动化
 
-常规 Windows CI 可以使用专用 `ci` 构建配置；正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
+Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。正式 Web 保留 Ancient 编辑器回放，排除开发专用 Nuke 回放；每次产品构建校验资源边界。
+
+常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo target cache 仅由 main 写入，PR 读取共享缓存。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
 - `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。

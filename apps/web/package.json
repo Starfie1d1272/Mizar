@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter @mizar/testkit build && pnpm --filter @mizar/design-tokens build",
-    "build": "vite build",
+    "predev": "pnpm -w build:packages",
+    "build": "vite build && node ../../scripts/qualification/verify-web-resources.mjs dist",
     "dev": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "storybook": "storybook dev --host 127.0.0.1 --port 6006 --no-open --disable-telemetry",

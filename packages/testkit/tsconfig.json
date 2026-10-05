@@ -5,6 +5,5 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "references": [{ "path": "../replay" }, { "path": "../telemetry-gsi" }],
   "include": ["src"]
 }

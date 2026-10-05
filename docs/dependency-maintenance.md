@@ -8,6 +8,8 @@
 
 验证安装稳定性：保存锁文件 SHA-256，连续执行冻结安装与日常 `pnpm exec` / `pnpm run`，确认哈希不变。需要新增、移除或升级依赖时重新生成锁文件；冻结安装不承担版本更新。
 
+工作区编译顺序由 manifest 与 pnpm 原生任务图推导，禁止手写跨包 prerequisite；规则见[开发验证](development-validation.md#工作区构建图)。
+
 TypeScript 7 用于原生编译/类型检查。TypeScript 6 的最新稳定 API 包通过 `typescript` alias 供旧编译器 API 消费方使用（架构检查、ESLint，RivalHub 还包括 Next.js 配置/构建检查）；这不是应用运行时依赖。迁移这些工具需要明确验证新的 API 和检查覆盖，不能直接替换导致检查失效。
 
 桌面 Rust 依赖由 `Cargo.toml` / `Cargo.lock` 声明，使用 `cargo update` 生成锁文件，`cargo test --locked --profile ci` 验证。桌面 Host 当前使用 Windows 专属 API，实际 Rust 构建和测试以 Windows CI 为准；Linux 安装 Rust 工具链不等于支持运行 Windows Host。Windows/CS2/OBS 验收仍在真实目标平台执行。

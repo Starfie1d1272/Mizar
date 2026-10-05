@@ -46,6 +46,11 @@ function webCommands(path, source) {
 }
 
 describe('Desktop capability contract', () => {
+  it('serves Web assets from Companion without embedding a second copy', async () => {
+    const config = JSON.parse(await readFile(join(desktopRoot, 'tauri.conf.json'), 'utf8'));
+    expect(config.build.frontendDist).toBe('http://127.0.0.1:3000');
+  });
+
   it('keeps build registration, handlers, frontend calls and scoped grants in sync', async () => {
     const [build, main, config, capability] = await Promise.all([
       readFile(join(desktopRoot, 'build.rs'), 'utf8'),

@@ -36,8 +36,9 @@
   ],
   "scripts": {
     "build": "node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs",
-    "typecheck": "tsc -p tsconfig.json && tsc -p examples/tsconfig.json --noEmit",
-    "prepack": "node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs",
+    "consumer:typecheck": "tsc -p examples/tsconfig.json --noEmit"
   },
   "peerDependencies": {
     "react": "^19.0.0"

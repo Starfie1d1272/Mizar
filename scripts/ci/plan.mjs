@@ -18,11 +18,13 @@ const PLATFORM_PREFIXES = [
   'packages/telemetry-gsi/',
   'packages/telemetry-cstv/',
 ];
-const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/bundle/', 'apps/desktop/'];
+const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
   return (
     PORTABLE_SMOKE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path === 'packages/telemetry-gsi/src/production-config.json' ||
+    path === 'apps/companion/src/qualification/contract.json' ||
     path === 'scripts/qualification/build.mjs' ||
     path === 'scripts/qualification/product-runtime.mjs' ||
     path === 'scripts/qualification/product-smoke.mjs' ||
@@ -190,7 +192,8 @@ export function parseGitDiffNameStatus(output) {
  */
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
-  if (eventName !== 'pull_request') return fullPlan(`forced full for ${eventName}`, true);
+  if (!['pull_request', 'push'].includes(eventName))
+    return fullPlan(`forced full for ${eventName}`, true);
   const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>
