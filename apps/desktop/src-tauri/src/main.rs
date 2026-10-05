@@ -426,18 +426,24 @@ fn hide_workspace(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
-    let path = path.unwrap_or_else(|| "/".into());
-    if ![
+fn main_path_allowed(path: &str) -> bool {
+    [
         "/",
         "/matches",
         "/matches?tab=roster",
         "/picture",
+        "/picture?tab=overlay",
         "/settings",
+        "/settings?tab=gsi",
+        "/settings?tab=obs",
     ]
-    .contains(&path.as_str())
-    {
+    .contains(&path)
+}
+
+#[tauri::command]
+fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    let path = path.unwrap_or_else(|| "/".into());
+    if !main_path_allowed(&path) {
         return Err("页面无法识别。".into());
     }
     if let Some(window) = app.get_webview_window("main") {
@@ -1229,6 +1235,16 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn live_settings_open_only_known_preparation_sections() {
+        for path in ["/settings?tab=obs", "/settings?tab=gsi", "/picture?tab=overlay"] {
+            assert!(main_path_allowed(path));
+        }
+        for path in ["https://example.test", "//example.test", "/settings?tab=obs&redirect=https://example.test", "/program", "/../settings", "javascript:alert(1)"] {
+            assert!(!main_path_allowed(path));
+        }
+    }
 
     #[test]
     fn workbench_path_is_limited_to_one_match() {
