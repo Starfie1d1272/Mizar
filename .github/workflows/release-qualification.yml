@@ -85,9 +85,9 @@ jobs:
             foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
               if (!(Test-Path -LiteralPath (Join-Path $bundleRoot.FullName $name))) { throw "缺少许可文件：$name" }
             }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app')
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
             if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-smoke.log')
             if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
             if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
@@ -121,7 +121,7 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }
