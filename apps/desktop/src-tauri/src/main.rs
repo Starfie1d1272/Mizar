@@ -462,12 +462,12 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
         let state = app.state::<HostState>();
-        if let Some(layout) = state
+        let layout = state
             .tracker
             .lock()
             .ok()
-            .and_then(|mut tracker| tracker.restore_layout())
-        {
+            .and_then(|mut tracker| tracker.restore_layout());
+        if let Some(layout) = layout {
             apply_layout(&app, layout);
         }
         show_workspace(&app);
@@ -500,7 +500,8 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .title("Mizar · 工作区")
                 .decorations(false)
                 .resizable(false)
-                .visible(false)
+                .content_protected(true)
+                .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
@@ -510,7 +511,8 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .title("Mizar · 现场控制")
                 .decorations(false)
                 .resizable(false)
-                .visible(false)
+                .content_protected(true)
+                .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
