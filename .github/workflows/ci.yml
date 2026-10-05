@@ -99,6 +99,7 @@ jobs:
       - name: Verify generated assets and real-derived fixtures
         if: ${{ matrix.lane == 'fixtures' }}
         run: |
+          pnpm --filter @mizar/companion... build
           pnpm cs2-assets:verify
           pnpm fixtures:program:verify
           pnpm fixtures:radar:verify
