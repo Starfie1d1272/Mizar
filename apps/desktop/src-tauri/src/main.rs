@@ -495,23 +495,21 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let log = app.state::<DesktopLog>();
     let result = (|| {
-        let left = log.step("workspace_left", || {
+        log.step("workspace_left", || {
             WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
                 .title("Mizar · 工作区")
                 .decorations(false)
                 .resizable(false)
-                .content_protected(true)
                 .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
-        let dock = log.step("workspace_dock", || {
+        log.step("workspace_dock", || {
             WebviewWindowBuilder::new(app, "workspace-dock", local_url("/workspace/dock"))
                 .title("Mizar · 现场控制")
                 .decorations(false)
                 .resizable(false)
-                .content_protected(true)
                 .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
@@ -533,9 +531,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
         })?;
         log.step("content_protection", || -> tauri::Result<()> {
             overlay.set_ignore_cursor_events(true)?;
-            overlay.set_content_protected(true)?;
-            left.set_content_protected(true)?;
-            dock.set_content_protected(true)
+            overlay.set_content_protected(true)
         })?;
         Ok(())
     })();

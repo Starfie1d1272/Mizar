@@ -23,6 +23,7 @@ public static class MizarDesktopProbe {
         public string className;
         public int width;
         public int height;
+        public uint? captureAffinity;
     }
     public class ConsoleResult {
         public uint pid;
@@ -42,6 +43,8 @@ public static class MizarDesktopProbe {
     static extern int GetClassName(IntPtr hwnd, StringBuilder text, int count);
     [DllImport("user32.dll")]
     static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")]
+    static extern bool GetWindowDisplayAffinity(IntPtr hwnd, out uint affinity);
     [DllImport("user32.dll")]
     static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -63,9 +66,11 @@ public static class MizarDesktopProbe {
             GetClassName(hwnd, className, className.Capacity);
             Rect rect;
             GetClientRect(hwnd, out rect);
+            uint affinity;
+            uint? captureAffinity = GetWindowDisplayAffinity(hwnd, out affinity) ? (uint?)affinity : null;
             result.Add(new Window { hwnd = hwnd.ToInt64(), title = title.ToString(),
                 className = className.ToString(), width = rect.Right - rect.Left,
-                height = rect.Bottom - rect.Top });
+                height = rect.Bottom - rect.Top, captureAffinity = captureAffinity });
             return true;
         }, IntPtr.Zero);
         return result.ToArray();

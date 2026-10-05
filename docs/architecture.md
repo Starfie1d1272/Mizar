@@ -87,6 +87,7 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 - Lookahead 不能作为正式节目备用源；任一链路故障不改变另一链路的角色。
 - 未来字段不能先进入公开数据，再依靠 CSS、窗口或 OBS 裁剪隐藏。
 - 安全边界由投影、类型和协议结构保证，窗口捕获策略是额外防线。
+- 制作工作区和控制栏允许远程捕获；正式 OBS 输出使用独立的游戏捕获与播出 Browser Source，不依赖制作窗口的捕获排除。策略理由见 [ADR-0022](decisions/0022-remote-workspace-capture.md)。
 - Lookahead 重连后旧时间轴对齐立即失效。
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
