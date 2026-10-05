@@ -14,7 +14,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
   try {
     await app.ready();
     await context.route(
-      /\/(?:local\/v1\/(?:tournament|match-document)|operator\/local-match\/(?:create|save))$/,
+      /\/(?:local\/v1\/(?:tournament|match-document)|operator\/local-match\/(?:create|save)|operator\/local-event\/save)$/,
       async (route) => {
         const request = route.request();
         const response = await app.inject({
@@ -39,6 +39,15 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
       '甲队 vs 乙队',
     );
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
+    await page.getByLabel('阶段名称').fill('决赛');
+    await page.getByRole('button', { name: '保存比赛资料' }).click();
+    await expect(page.getByRole('status')).toContainText('比赛资料已保存。');
+    await page.getByLabel('赛事名称').fill('验收赛事');
+    await page.getByRole('button', { name: '保存赛事资料' }).click();
+    await expect(page.getByRole('status')).toContainText('赛事资料已保存。');
+    await page.reload();
+    await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
+    await expect(page.getByLabel('赛事名称')).toHaveValue('验收赛事');
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');
   } finally {

@@ -408,7 +408,9 @@ fn show_workspace(app: &tauri::AppHandle) {
     state.visible.store(true, Ordering::Relaxed);
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
+            let _ = window.unminimize();
             let _ = window.show();
+            let _ = window.set_focus();
         }
     }
     update_overlay(app, &state);
@@ -446,6 +448,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
                     .map_err(|_| "页面无法识别。")?,
             )
             .map_err(|_| "无法打开 Mizar。")?;
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -789,6 +792,8 @@ fn run_desktop(
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
 ) -> Result<(), String> {
+    let activation = windows_startup::ActivationSignal::new()
+        .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
     let running = Arc::new(AtomicBool::new(true));
@@ -932,6 +937,7 @@ fn run_desktop(
                         break;
                     }
                     if !pending.swap(true, Ordering::Relaxed) {
+                        let activate = activation.requested();
                         let tick_host = host.clone();
                         let tick_running = worker_running.clone();
                         let tick_pending = pending.clone();
@@ -948,6 +954,9 @@ fn run_desktop(
                                         tick_running.store(false, Ordering::Relaxed);
                                         tick_host.exit(0);
                                     } else {
+                                        if activate {
+                                            let _ = open_main(tick_host.clone(), None);
+                                        }
                                         if tick_host
                                             .state::<HostState>()
                                             .visible
@@ -1173,7 +1182,10 @@ fn main() {
     }
     let _mutex = match DesktopMutex::acquire() {
         Ok(Some(mutex)) => mutex,
-        Ok(None) => return,
+        Ok(None) => {
+            windows_startup::ActivationSignal::notify();
+            return;
+        }
         Err(error) => {
             failure_dialog(&format!("桌面工作区锁不可用：{error}"), None);
             std::process::exit(1);
@@ -1214,6 +1226,24 @@ mod startup_tests {
         for path in ["/admin/rivals", "/admin/rivals/matches/", "/admin/rivals/matches/a/extra", "/admin/rivals/matches/%2f", "/integrations/mizar/connect"] {
             assert!(!valid_workbench_path(path));
         }
+    }
+
+    #[test]
+    fn background_gsi_scripts_emit_utf8_without_a_console() {
+        let common = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../scripts/qualification/bundle/common.ps1");
+        let common = common.to_string_lossy().replace('\'', "''");
+        let command = format!(
+            ". '{common}'; Write-Output ([string]::Concat([char]0x539f,[char]0x914d,[char]0x7f6e))"
+        );
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+            .stdin(Stdio::null())
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "原配置");
     }
 
     #[test]

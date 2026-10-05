@@ -1,5 +1,7 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# The desktop reads pipes as UTF-8 even when PowerShell has no console.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $script:BundleRoot = Split-Path -Parent $PSScriptRoot
 $script:ProductRoot = Split-Path -Parent $script:BundleRoot

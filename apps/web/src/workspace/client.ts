@@ -62,7 +62,17 @@ declare global {
   }
 }
 
-export function desktopInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+export async function desktopInvoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
-  return window.__TAURI_INTERNALS__.invoke<T>(command, args);
+  try {
+    return await window.__TAURI_INTERNALS__.invoke<T>(command, args);
+  } catch (error) {
+    // Tauri commands returning Result<T, String> reject with a string.
+    throw error instanceof Error
+      ? error
+      : new Error(typeof error === 'string' && error.trim() ? error : '桌面操作失败，请重试。');
+  }
 }
