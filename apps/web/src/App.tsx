@@ -233,15 +233,17 @@ function ProgramRoute() {
     </ProgramCueRendererBridge>
   );
   return window.__TAURI_INTERNALS__ ? (
-    <div
-      style={{
-        transform: `scale(${desktopWidth / 1920})`,
-        transformOrigin: 'top left',
-        width: 1920,
-        height: 1080,
-      }}
-    >
-      {program}
+    <div className="program-desktop-viewport">
+      <div
+        style={{
+          transform: `scale(${desktopWidth / 1920})`,
+          transformOrigin: 'top left',
+          width: 1920,
+          height: 1080,
+        }}
+      >
+        {program}
+      </div>
     </div>
   ) : (
     program

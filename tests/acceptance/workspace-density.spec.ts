@@ -1,6 +1,39 @@
 import { expect, test } from './companion-isolation.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 
+test('Desktop HUD scales inside its viewport without native scrollbars', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: { invoke: () => Promise.resolve(undefined) },
+    });
+  });
+  await page.setViewportSize({ width: 1216, height: 684 });
+  await page.goto('/program?host=desktop');
+  await expect(page.locator('.program-desktop-viewport')).toBeVisible();
+  for (const size of [
+    { width: 1216, height: 684 },
+    { width: 800, height: 450 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await page.setViewportSize(size);
+    await expect
+      .poll(() =>
+        page.locator('.program-canvas').evaluate((canvas) => ({
+          width: Math.round(canvas.getBoundingClientRect().width),
+          height: Math.round(canvas.getBoundingClientRect().height),
+          scrollWidth: document.documentElement.scrollWidth,
+          scrollHeight: document.documentElement.scrollHeight,
+        })),
+      )
+      .toEqual({
+        width: size.width,
+        height: size.height,
+        scrollWidth: size.width,
+        scrollHeight: size.height,
+      });
+  }
+});
+
 for (const [width, height] of [
   [1920, 1080],
   [2560, 1440],
