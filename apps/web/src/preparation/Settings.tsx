@@ -252,6 +252,7 @@ export function Settings({ tab }: { tab: string }) {
                   void action(async () => {
                     await desktopInvoke('configure_gsi', { restore: true, choose: false });
                     await refreshGsi();
+                    setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
                   })
                 }
               >
