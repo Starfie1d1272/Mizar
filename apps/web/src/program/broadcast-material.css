@@ -10,10 +10,10 @@
 .bp-canvas .bp-scene {
   background: linear-gradient(
     120deg,
-    var(--mizar-broadcast-bg-canvas),
-    color-mix(in srgb, var(--mizar-broadcast-brand-depth) 22%, var(--mizar-broadcast-bg-canvas))
+    var(--mizar-broadcast-pulse-canvas),
+    color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 6%, var(--mizar-broadcast-pulse-canvas))
   );
-  background-color: var(--mizar-broadcast-bg-canvas);
+  background-color: var(--mizar-broadcast-pulse-canvas);
 }
 .broadcast-arc,
 .bp-canvas .bp-scene > .broadcast-arc {
@@ -24,22 +24,28 @@
   z-index: 0;
   pointer-events: none;
 }
+.program-scene--waiting > .broadcast-arc {
+  opacity: 0.14;
+}
+.intro-art > .broadcast-arc {
+  opacity: 0.1;
+}
 .broadcast-arc__depth {
-  fill: var(--mizar-broadcast-brand-depth);
+  fill: var(--mizar-broadcast-pulse-raised);
 }
 .broadcast-arc__face {
-  fill: var(--mizar-broadcast-brand-primary);
+  fill: var(--mizar-broadcast-pulse-blue);
 }
 .broadcast-arc__front {
-  fill: var(--mizar-broadcast-brand-front);
+  fill: var(--mizar-broadcast-pulse-highlight);
 }
 .broadcast-arc__companion {
-  fill: var(--mizar-broadcast-brand-companion);
+  fill: var(--mizar-broadcast-pulse-gold);
 }
 .program-scene:not(.program-scene--waiting) > .broadcast-arc,
 .bp-canvas .bp-scene > .broadcast-arc {
   transform: translate(160px, 200px);
-  opacity: 0.18;
+  opacity: 0.06;
 }
 .program-scene:not(.program-scene--waiting) .broadcast-arc__companion,
 .bp-canvas .broadcast-arc__companion {

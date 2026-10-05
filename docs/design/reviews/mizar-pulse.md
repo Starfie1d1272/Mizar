@@ -1,5 +1,7 @@
 # Mizar Pulse 实际渲染复核
 
+本页记录 Gameplay 首轮改稿。最新全场景调整与本轮截图见 [全场景复核](mizar-pulse-scenes.md)，其中包含去重队名、下移 Team Summary 与已用暂停格边框。
+
 本轮按用户提供的定稿评审重做现有默认 Gameplay；前版基准是 PR #124 的 `b2b739b`，而非最初的 `7b2896d`。图 1–4 按四套内置视觉 EWC、IEM、Perfect World、ESL 对照；用户粘贴文件未含四张图片原文件，因此这里重新渲染仓库已有四套 renderer，不宣称复原了外部原图。
 
 ## 核对条件与证据

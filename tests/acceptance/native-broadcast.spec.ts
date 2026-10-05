@@ -80,6 +80,12 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     const right = page.locator('.player-rail--right .player-rail__card');
     await expect(left).toHaveCount(5);
     await expect(right).toHaveCount(5);
+    await expect(page.locator('.player-rail__header').first()).toBeHidden();
+    for (const rail of await page.locator('.player-rail').all()) {
+      const summary = (await rail.locator('.player-rail__summary-slot').boundingBox())!;
+      const first = (await rail.locator('.player-rail__card').first().boundingBox())!;
+      expect(first.y - summary.y - summary.height).toBe(8);
+    }
     for (let index = 0; index < 5; index++) {
       const a = (await left.nth(index).boundingBox())!;
       const b = (await right.nth(index).boundingBox())!;
@@ -179,6 +185,18 @@ test('native pause reuses factual owner, five rows and settings; stale Program d
     await expect(page.locator('[data-pause-player]')).toHaveCount(10);
     const bottom = await page.locator('.broadcast-pause__roster').first().boundingBox();
     expect(bottom!.y + bottom!.height).toBe(970);
+    for (const used of await page
+      .locator('.broadcast-pause__timeout-slots i[data-timeout-available="false"]')
+      .all()) {
+      const paint = await used.evaluate((el) => ({
+        border: getComputedStyle(el).borderTopColor,
+        background: getComputedStyle(el).backgroundColor,
+        width: getComputedStyle(el).borderTopWidth,
+      }));
+      expect(paint.border).toBe('rgb(154, 168, 183)');
+      expect(paint.background).toBe('rgba(0, 0, 0, 0)');
+      expect(paint.width).toBe('1px');
+    }
   }
   preset.widgets['top-score-bar'].settings.showTimeout = false;
   await feed(page, 'real-timeout-ct');

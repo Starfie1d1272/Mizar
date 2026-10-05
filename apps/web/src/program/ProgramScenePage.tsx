@@ -216,11 +216,27 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
       </div>
       {data.series ? (
         <footer className="summary-footer">
-          <strong>{data.series.entrants.a.name}</strong>
+          <strong
+            data-winner={
+              data.series.status === 'completed' &&
+              data.series.score.a >= data.series.requiredWins &&
+              data.series.score.a > data.series.score.b
+            }
+          >
+            {data.series.entrants.a.name}
+          </strong>
           <span>
             {data.series.score.a} : {data.series.score.b}
           </span>
-          <strong>{data.series.entrants.b.name}</strong>
+          <strong
+            data-winner={
+              data.series.status === 'completed' &&
+              data.series.score.b >= data.series.requiredWins &&
+              data.series.score.b > data.series.score.a
+            }
+          >
+            {data.series.entrants.b.name}
+          </strong>
         </footer>
       ) : null}
     </>

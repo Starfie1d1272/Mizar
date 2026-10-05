@@ -48,6 +48,50 @@
     box-shadow: inset 0 2px var(--mizar-broadcast-pulse-blue);
   }
 
+  .match-header__alive-matchup,
+  .match-header__timeout-panel,
+  .shanghai-series-detail {
+    background: var(--mizar-hud-surface-strong);
+    border-radius: 4px;
+    box-shadow: inset 0 2px var(--mizar-broadcast-pulse-blue);
+  }
+  .shanghai-series-detail {
+    grid-template-columns: 80px 60px 96px 80px;
+    gap: 8px;
+    font-family: var(--mizar-type-family-body);
+  }
+  .shanghai-series-detail--heading {
+    background: var(--mizar-hud-surface-primary);
+    color: var(--mizar-hud-text-muted);
+  }
+  .shanghai-series-detail__map strong {
+    background: var(--mizar-hud-surface-primary);
+    font-family: var(--mizar-type-family-display);
+    font-size: 14px;
+  }
+  .shanghai-series-detail > strong,
+  .shanghai-series-detail > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .match-header__series-map--completed.match-header__series-map--pick-win
+    .match-header__series-map-status {
+    background: color-mix(
+      in srgb,
+      var(--mizar-hud-state-success) 12%,
+      var(--mizar-hud-surface-strong)
+    );
+  }
+  .match-header__series-map--completed.match-header__series-map--pick-loss
+    .match-header__series-map-status {
+    background: color-mix(
+      in srgb,
+      var(--mizar-hud-state-danger) 12%,
+      var(--mizar-hud-surface-strong)
+    );
+  }
+
   .match-header__top-score {
     width: 100%;
   }
@@ -716,8 +760,14 @@
     outline: none;
   }
   .player-rail__summary-slot {
+    /* Replace the repeated team-name band without moving any player row. */
+    margin-top: 16px;
+    margin-bottom: 8px;
     height: 42px;
     flex-basis: 42px;
+  }
+  .player-rail__header {
+    display: none;
   }
   .player-rail__summary {
     height: 42px;

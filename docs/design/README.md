@@ -6,7 +6,7 @@
 | --- | --- |
 | [brand.md](brand.md) | Mizar / Alcor 品牌、标志、图标、品牌动效，以及桌面入口与播出画面的品牌归属 |
 | [ui-system.md](ui-system.md) | 三类界面、视觉基础、颜色语义、共享组件、无障碍要求 |
-| [mizar-pulse.md](mizar-pulse.md) | 默认 Gameplay HUD 的固定颜色、材质、读数层级和状态动效 |
+| [mizar-pulse.md](mizar-pulse.md) | 默认节目包装与 HUD 的固定颜色、材质、读数层级和状态动效 |
 | [product-language.md](product-language.md) | 用户能看到的标题、字段、提示、状态、错误与操作文案 |
 | [术语文档](../terminology.md) | 机器契约与开发者术语、字段和状态的准确含义 |
 | [验证文档](../development-validation.md) | 自动检查、视觉审查与真实环境验收 |

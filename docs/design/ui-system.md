@@ -93,8 +93,8 @@ HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World、类ESL 五�
 
 类ESL 的字体、近似纹理与雷达图案只在 `esl` 展示方案生效。字体来源、缺失素材和视觉复核见 [ESL 复核](reviews/esl.md)，不改动产品界面字体或公共设计变量。
 
-### 默认 Gameplay：Mizar Pulse
+### 默认节目包：Mizar Pulse
 
-默认 Gameplay 采用深黑蓝硬壳、冷白核心读数、品牌蓝能量边、少量暖金节点与短促脉冲；浅色战斗底板方案被本规则替代。颜色和组件规格见 [Mizar Pulse](mizar-pulse.md)，实际渲染与四套对照见 [视觉复核](reviews/mizar-pulse.md)。这是现有默认预设的呈现升级，不新增主题入口或第六套预设；其他节目页保留现有组织与弧面。
+默认 Gameplay 采用深黑蓝硬壳、冷白核心读数、品牌蓝能量边、少量暖金节点与短促脉冲；浅色战斗底板方案被本规则替代。颜色和组件规格见 [Mizar Pulse](mizar-pulse.md)，实际渲染与四套对照见 [视觉复核](reviews/mizar-pulse.md)。这是现有默认预设和八个默认节目场景的呈现升级，不新增主题入口或第六套预设；其他节目页保留现有组织，弧面降为低透明度背景。全场景复核见 [截图与记录](reviews/mizar-pulse-scenes.md)。
 
 静态播出美术通过 `color.pulse → brand.pulse → broadcast.pulse` 统一管理，不替换产品交互色。Gameplay 已有 Theme recipe 继续承载文字、壳体、阵营和状态颜色；两处入口按 Pulse 规范校准，不新增动态颜色通道。CT/T 强调随事实换边，不按物理左右硬编码；暖金装饰不表示胜负。昵称 Inter / 中文回退，HP 与比分 Barlow Condensed。小圆角 4–6px，死亡只收可见底板，不移动五人行位。

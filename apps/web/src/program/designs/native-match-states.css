@@ -53,8 +53,8 @@
     font-size: 30px;
   }
   .broadcast-pause__timeout-slots i {
-    border-color: color-mix(in srgb, var(--mizar-hud-surface-strong) 32%, transparent);
-    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 7%, transparent);
+    border-color: var(--mizar-hud-text-muted);
+    background: transparent;
   }
   .broadcast-pause__player {
     position: relative;
@@ -110,7 +110,7 @@
     mask: none;
     background: linear-gradient(
       125deg,
-      var(--mizar-broadcast-pulse-blue),
+      color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 36%, var(--mizar-hud-surface-strong)),
       var(--mizar-hud-surface-strong) 75%
     );
   }

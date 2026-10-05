@@ -202,3 +202,22 @@ test('live intro mounts after delayed presentation and polls do not repeatedly s
     )
     .toBe('running');
 });
+
+test('Pulse scene shells keep arcs subordinate and result headers clear of map tabs', async ({
+  page,
+}) => {
+  for (const scene of ['waiting', 'halftime', 'intermap', 'map-result', 'match-result']) {
+    await page.goto(`/program/${scene}?preview=1`);
+    const arc = page.locator('.program-scene > .broadcast-arc');
+    await expect(arc).toBeVisible();
+    expect(await arc.evaluate((el) => Number(getComputedStyle(el).opacity))).toBeLessThanOrEqual(
+      0.14,
+    );
+    if (scene === 'halftime' || scene === 'intermap' || scene === 'match-result') {
+      const footer = (await page.locator('.summary-footer').boundingBox())!;
+      const tab = (await page.locator('.summary-map-tab').first().boundingBox())!;
+      expect(footer.y + footer.height).toBeLessThanOrEqual(tab.y);
+      await expect(page.locator('.summary-footer [data-winner="true"]')).toHaveCount(0);
+    }
+  }
+});
