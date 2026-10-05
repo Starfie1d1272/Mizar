@@ -211,6 +211,8 @@ describe('changed-surface CI planner', () => {
   it.each([
     ['desktop Cargo profile', 'apps/desktop/src-tauri/Cargo.toml'],
     ['qualification builder', 'scripts/qualification/build.mjs'],
+    ['bundled GSI settings', 'packages/telemetry-gsi/src/production-config.json'],
+    ['artifact contract', 'apps/companion/src/qualification/contract.json'],
   ])('requires Windows qualification for %s changes on main push', (_name, path) => {
     const plan = createCiPlan({
       eventName: 'push',

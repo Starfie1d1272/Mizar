@@ -23,6 +23,8 @@ const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 export function isPortableSmokePath(path) {
   return (
     PORTABLE_SMOKE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path === 'packages/telemetry-gsi/src/production-config.json' ||
+    path === 'apps/companion/src/qualification/contract.json' ||
     path === 'scripts/qualification/build.mjs' ||
     path === 'scripts/qualification/product-runtime.mjs' ||
     path === 'scripts/qualification/product-smoke.mjs' ||
