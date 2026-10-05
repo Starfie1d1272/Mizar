@@ -87,7 +87,12 @@ it('pairs via browser authorization, persists only in Companion, and claims with
     players,
   } as LiveSnapshotV1;
 
+  expect(restored.reliableAuthorityScope()).toBeNull();
   await restored.claim(snapshot, 'revision', false);
+  const firstClaimScope = restored.reliableAuthorityScope();
+  expect(firstClaimScope).not.toBeNull();
+  await restored.claim(snapshot, 'revision', false);
+  expect(restored.reliableAuthorityScope()).not.toBe(firstClaimScope);
   const claim = requests.find((request) => request.url.endsWith('/claim'))!;
   expect(JSON.parse(claim.init.body as string)).toMatchObject({
     matchId: 'match',
@@ -107,6 +112,7 @@ it('pairs via browser authorization, persists only in Companion, and claims with
     liveSessionId: 'session',
   });
   expect(restored.view().activeSourceMatchId).toBeNull();
+  expect(restored.reliableAuthorityScope()).toBeNull();
 });
 
 it('does not discard reliable events while an online match is waiting for a source claim', async () => {

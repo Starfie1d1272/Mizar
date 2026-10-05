@@ -25,6 +25,7 @@ export interface OutputServiceOptions {
   readonly restoreContinuity?: (continuity: DeliveryContinuity) => ProjectionBundle | undefined;
   readonly liveSink?: LiveSnapshotConsumer;
   readonly now?: () => Date;
+  readonly authorityScope?: () => string | null;
   readonly onDiagnostic?: (code: string) => void;
 }
 
@@ -40,7 +41,11 @@ export class OutputService {
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
-  private startedMapEpoch: number | undefined;
+  private mapStartScope: string | undefined;
+  private mapStartRevision = 0;
+  private publishedMapStart: { revision: number; key: string } | undefined;
+  private pendingMapStart: { revision: number; key: string } | undefined;
+  private lastMapObservation: ReliableEventV1['cursor'] | undefined;
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private retryPending = false;
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
@@ -65,7 +70,7 @@ export class OutputService {
       if (restored !== undefined) {
         this.recoveredCursor = continuity.cursor;
         this.setCurrent(restored, this.binding);
-        this.startedMapEpoch = restored.program.cursor.mapEpoch;
+        // A continuity checkpoint is not proof that a start was durably published.
       }
     }
     if (this.options.liveSink !== undefined) {
@@ -103,11 +108,85 @@ export class OutputService {
     this.bundle = bundle;
     this.lastBundleAt = this.now().getTime();
     this.binding = binding;
+    this.updateMapStartScope(bundle, binding);
     const producedAt = this.now().toISOString();
     for (const [consumer, includeRadar] of this.consumers) {
       const snapshot = this.safeProject(bundle, binding, producedAt, includeRadar);
       if (snapshot !== null) consumer.offer(snapshot);
     }
+  }
+
+  private updateMapStartScope(
+    bundle: ProjectionBundle,
+    binding: MatchContextBinding | undefined,
+  ): void {
+    const { program, operator } = bundle;
+    const players = program.players.filter((player) => player.lineupEvidence === 'current');
+    const scope =
+      binding !== undefined &&
+      binding.origin !== 'fixture' &&
+      binding.freshness === 'fresh' &&
+      program.status.context === 'fresh' &&
+      program.match?.matchId === binding.context.matchId &&
+      program.status.telemetry === 'fresh' &&
+      program.status.identity === 'matched' &&
+      program.map.phase === 'live' &&
+      program.map.name !== null &&
+      program.cursor.mapEpoch > 0 &&
+      players.length === 10 &&
+      operator.activeLineup.ctCount === 5 &&
+      operator.activeLineup.tCount === 5
+        ? JSON.stringify([
+            binding.context.matchId,
+            binding.manifest.revision,
+            binding.origin,
+            program.cursor.producerInstanceId,
+            program.cursor.liveSessionId,
+            program.cursor.programSourceGeneration,
+            program.cursor.mapEpoch,
+            program.map.name,
+            program.series?.currentMapOrder ?? null,
+            players.map((player) => [player.sourcePlayerId, player.canonicalPlayerId]).sort(),
+            this.options.authorityScope?.() ?? null,
+          ])
+        : undefined;
+    if (scope !== this.mapStartScope) {
+      this.mapStartScope = scope;
+      this.mapStartRevision += 1;
+      this.publishedMapStart = undefined;
+    }
+  }
+
+  private newMapObservation(result: RuntimeReduceResult, bundle: ProjectionBundle): boolean {
+    if (
+      result.disposition.kind !== 'accepted' ||
+      !['baseline', 'contiguous', 'gap-resync', 'stale-recovery'].includes(
+        result.disposition.reason,
+      )
+    )
+      return false;
+    const cursor = bundle.program.cursor;
+    const received = result.state.programSource.lastAccepted;
+    if (
+      received === undefined ||
+      received.generation !== cursor.programSourceGeneration ||
+      received.sequence !== cursor.programReceiveSequence
+    )
+      return false;
+    const prior = this.lastMapObservation;
+    if (
+      prior !== undefined &&
+      prior.producerInstanceId === cursor.producerInstanceId &&
+      prior.liveSessionId === cursor.liveSessionId &&
+      (cursor.runtimeSeq <= prior.runtimeSeq ||
+        cursor.programSourceGeneration < prior.programSourceGeneration ||
+        (cursor.programSourceGeneration === prior.programSourceGeneration &&
+          (cursor.programReceiveSequence === null ||
+            cursor.programReceiveSequence <= (prior.programReceiveSequence ?? 0))))
+    )
+      return false;
+    this.lastMapObservation = cursor;
+    return true;
   }
 
   beforeRuntimeMutation(): void {
@@ -190,6 +269,7 @@ export class OutputService {
       void this.outbox
         ?.updateContinuity(continuity)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
+    const newMapObservation = this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
     try {
       candidates = [...transitionReliableEventsV1({ result, bundle, binding })];
@@ -222,6 +302,7 @@ export class OutputService {
         return;
       }
       if (candidate !== null) candidates.push(candidate);
+      return candidate;
     };
     if (result.disposition.reason === 'source-generation-advanced')
       add(
@@ -237,17 +318,15 @@ export class OutputService {
     )
       add('match_started', 'series-progress');
     if (
-      result.state.programTelemetry !== undefined &&
-      bundle.program.cursor.mapEpoch > 0 &&
-      this.startedMapEpoch !== bundle.program.cursor.mapEpoch &&
-      bundle.program.map.name !== null &&
-      bundle.program.map.phase === 'live' &&
-      binding?.freshness === 'fresh' &&
-      bundle.program.status.telemetry === 'fresh' &&
-      bundle.program.status.identity === 'matched'
+      newMapObservation &&
+      this.mapStartScope !== undefined &&
+      this.publishedMapStart?.revision !== this.mapStartRevision &&
+      this.pendingMapStart?.revision !== this.mapStartRevision &&
+      this.outbox !== undefined
     ) {
-      add('map_started', 'runtime-transition');
-      this.startedMapEpoch = bundle.program.cursor.mapEpoch;
+      const event = add('map_started', 'runtime-transition');
+      if (event)
+        this.pendingMapStart = { revision: this.mapStartRevision, key: event.idempotencyKey };
     }
     if (
       previous?.program.series?.status !== 'completed' &&
@@ -265,9 +344,18 @@ export class OutputService {
     )
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
     for (const event of candidates) {
+      const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
       void this.outbox
         ?.enqueue(event, this.now(), continuity)
-        .catch(() => this.onDiagnostic?.('outbox_enqueue_failed'));
+        .then(() => {
+          if (start !== undefined && start.revision === this.mapStartRevision)
+            this.publishedMapStart = start;
+        })
+        .catch(() => this.onDiagnostic?.('outbox_enqueue_failed'))
+        .finally(() => {
+          if (start !== undefined && this.pendingMapStart === start)
+            this.pendingMapStart = undefined;
+        });
     }
   }
 
@@ -280,6 +368,7 @@ export class OutputService {
     ) {
       return;
     }
+    if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
     this.retryPending = true;
     try {
       if (this.sink === undefined)
@@ -306,6 +395,13 @@ export class OutputService {
     const bundle = this.bundle;
     const binding = this.binding;
     if (bundle === undefined || binding === undefined) return true;
+    if (
+      event.kind === 'map_started' &&
+      ![this.publishedMapStart, this.pendingMapStart].some(
+        (start) => start?.revision === this.mapStartRevision && start.key === event.idempotencyKey,
+      )
+    )
+      return false;
     const recovered = this.recoveredCursor;
     const recoveredEvent =
       recovered !== undefined &&

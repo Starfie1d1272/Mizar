@@ -62,6 +62,20 @@ export class RivalHubConnection {
   private pendingPairing: PendingPairing | null = null;
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
+  private claimRevision = 0;
+
+  /** Local delivery identity only; never includes installation credentials. */
+  reliableAuthorityScope(): string | null {
+    return this.source === null
+      ? null
+      : JSON.stringify([
+          this.source.matchId,
+          this.source.authorityRevision,
+          this.source.producerInstanceId,
+          this.source.liveSessionId,
+          this.claimRevision,
+        ]);
+  }
 
   constructor(
     private readonly path: string,
@@ -302,6 +316,7 @@ export class RivalHubConnection {
       activeDeviceName?: string;
     };
     if (result.claimed) {
+      this.claimRevision += 1;
       this.source = {
         matchId: snapshot.matchId,
         authorityRevision: result.authorityRevision,

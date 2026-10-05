@@ -12,6 +12,7 @@ import { projectLiveSnapshotV1, transitionReliableEventsV1 } from '../src/output
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { configuredHttpOutputs } from '../src/output/http-sink.js';
 import { OutputService } from '../src/output/service.js';
+import * as outputProjector from '../src/output/projector.js';
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
@@ -961,3 +962,407 @@ it('production HTTP liveSink includes Radar by default, drops failed delivery, a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function recoveryFixture() {
+  let binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-start-recovery-'));
+  const runtime = createProgramRuntime('start-recovery');
+  let time = 0;
+  let authority: string | null = null;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const outbox = new ReliableOutbox(join(directory, 'outbox.json'));
+  const diagnostics: string[] = [];
+  const service = new OutputService({
+    outbox,
+    authorityScope: () => authority,
+    now: () => new Date('2026-09-28T00:00:00.000Z'),
+    onDiagnostic: (code) => diagnostics.push(code),
+  });
+  await service.start();
+  service.setCurrent(coordinator.getCurrent(), binding);
+  const apply = (
+    sequence: number,
+    transform?: (frame: TelemetryObservation) => TelemetryObservation,
+  ) => {
+    time = sequence * 1000;
+    service.beforeRuntimeMutation();
+    const frame = observation(binding.manifest, sequence, 'live');
+    const result = runtime.acceptObservation(transform?.(frame) ?? frame);
+    const bundle = coordinator.afterRuntimeMutation(result);
+    service.afterRuntimeMutation(result, bundle, binding);
+    return { result, bundle };
+  };
+  const settle = async () => {
+    await outbox.flushPending();
+    await new Promise<void>((done) => setImmediate(done));
+  };
+  return {
+    directory,
+    runtime,
+    coordinator,
+    outbox,
+    service,
+    diagnostics,
+    apply,
+    settle,
+    starts: () => outbox.getRecords().filter((record) => record.event.kind === 'map_started'),
+    authority: (value: string | null) => {
+      authority = value;
+    },
+    binding: () => binding,
+    context: (next: MatchContextBinding) => {
+      binding = next;
+      service.setBinding(binding);
+      coordinator.setMatchContextBinding(binding);
+      service.setCurrent(coordinator.refresh(), binding);
+    },
+    advanceGeneration: () => {
+      service.beforeRuntimeMutation();
+      const result = runtime.advanceProgramSourceGeneration({
+        monotonicMs: time,
+        utc: '2026-09-28T00:00:00.000Z',
+      });
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+    },
+    close: async () => {
+      await service.close();
+      await coordinator.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+it('revalidates one same-epoch generation recovery with a new cursor/key, while normal frames and old cursors stay bounded', async () => {
+  const f = await recoveryFixture();
+  try {
+    const first = f.apply(1);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.advanceGeneration();
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.apply(2);
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    const [before, after] = f.starts().map((record) => record.event);
+    expect(after!.cursor.mapEpoch).toBe(before!.cursor.mapEpoch);
+    expect(after!.cursor.programSourceGeneration).toBe(before!.cursor.programSourceGeneration + 1);
+    expect(after!.cursor.runtimeSeq).toBeGreaterThan(before!.cursor.runtimeSeq);
+    expect(after!.idempotencyKey).not.toBe(before!.idempotencyKey);
+    // Duplicate/out-of-order telemetry is rejected by the production runtime.
+    f.apply(2);
+    for (let sequence = 3; sequence < 25; sequence++) f.apply(sequence);
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    f.service.afterRuntimeMutation(first.result, first.bundle, f.binding());
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
+
+it('waits for current ten-player identity after wrong-room/lineup repair and never starts from retained evidence', async () => {
+  const f = await recoveryFixture();
+  try {
+    const wrong = (frame: TelemetryObservation): TelemetryObservation => ({
+      ...frame,
+      telemetry: {
+        ...frame.telemetry,
+        allPlayers: frame.telemetry.allPlayers!.map((player, index) =>
+          index === 0 ? { ...player, sourcePlayerId: '76561190000009999' } : player,
+        ),
+      },
+    });
+    f.apply(1, wrong);
+    await f.settle();
+    expect(f.starts()).toHaveLength(0);
+    f.apply(2);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.apply(3, wrong);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.apply(4);
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    f.apply(5, (frame) => ({
+      ...frame,
+      coverage: { ...frame.coverage, allPlayers: 'absent' },
+      telemetry: {
+        map: frame.telemetry.map!,
+        round: frame.telemetry.round!,
+        player: frame.telemetry.player!,
+      },
+    }));
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    f.apply(6);
+    await f.settle();
+    expect(f.starts()).toHaveLength(3);
+  } finally {
+    await f.close();
+  }
+});
+
+it('context freshness/revision and authority reclaim need a new accepted frame before a same-epoch proof', async () => {
+  const f = await recoveryFixture();
+  try {
+    f.apply(1);
+    await f.settle();
+    const epoch = f.starts()[0]!.event.cursor.mapEpoch;
+    f.context({ ...f.binding(), freshness: 'stale' });
+    f.apply(2);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.context({
+      ...f.binding(),
+      freshness: 'fresh',
+      manifest: { ...f.binding().manifest, revision: 'new-context' },
+    });
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.apply(3);
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    expect(f.starts()[1]!.event.contextRevision).toBe('new-context');
+    f.authority('authority-1');
+    f.service.setCurrent(f.coordinator.getCurrent(), f.binding());
+    await f.service.retry();
+    await f.settle();
+    expect(f.starts()).toHaveLength(2);
+    f.apply(4);
+    await f.settle();
+    f.authority('authority-2');
+    f.apply(5);
+    await f.settle();
+    expect(f.starts()).toHaveLength(4);
+    expect(f.starts().every((record) => record.event.cursor.mapEpoch === epoch)).toBe(true);
+    f.apply(6);
+    await f.settle();
+    expect(f.starts()).toHaveLength(4);
+  } finally {
+    await f.close();
+  }
+});
+
+it('reopens late attachment after a fresh context without inventing a map epoch', async () => {
+  const f = await recoveryFixture();
+  try {
+    const active = f.binding();
+    f.context({ ...active, freshness: 'stale' });
+    f.apply(10);
+    await f.settle();
+    expect(f.starts()).toHaveLength(0);
+    f.context(active);
+    await f.settle();
+    expect(f.starts()).toHaveLength(0);
+    f.apply(11);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    expect(f.starts()[0]!.event.cursor.mapEpoch).toBe(1);
+  } finally {
+    await f.close();
+  }
+});
+
+it('does not consume map start publication after a failed durable enqueue', async () => {
+  const f = await recoveryFixture();
+  const enqueue = f.outbox.enqueue.bind(f.outbox);
+  let fail = true;
+  vi.spyOn(f.outbox, 'enqueue').mockImplementation((event, now, continuity) => {
+    if (event.kind === 'map_started' && fail) {
+      fail = false;
+      return Promise.reject(new Error('disk-unavailable'));
+    }
+    return enqueue(event, now, continuity);
+  });
+  try {
+    f.apply(1);
+    await f.settle();
+    expect(f.starts()).toHaveLength(0);
+    expect(f.diagnostics).toContain('outbox_enqueue_failed');
+    f.apply(2);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+    f.apply(3);
+    await f.settle();
+    expect(f.starts()).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+it('bounds in-flight persistence and ignores a late old-scope publication after recovery', async () => {
+  const f = await recoveryFixture();
+  const enqueue = f.outbox.enqueue.bind(f.outbox);
+  let release!: () => void;
+  const pending = new Promise<void>((done) => {
+    release = done;
+  });
+  let startEnqueues = 0;
+  vi.spyOn(f.outbox, 'enqueue').mockImplementation(async (event, now, continuity) => {
+    if (event.kind === 'map_started') {
+      startEnqueues++;
+      await pending;
+    }
+    return enqueue(event, now, continuity);
+  });
+  try {
+    f.apply(1);
+    for (let sequence = 2; sequence < 30; sequence++) f.apply(sequence);
+    expect(startEnqueues).toBe(1);
+    f.advanceGeneration();
+    f.apply(30);
+    expect(startEnqueues).toBe(2);
+    release();
+    await new Promise<void>((done) => setImmediate(done));
+    await f.settle();
+    f.apply(31);
+    await f.settle();
+    expect(startEnqueues).toBe(2);
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    f.apply(32);
+    await f.settle();
+    expect(startEnqueues).toBe(2);
+  } finally {
+    release();
+    await f.close();
+  }
+});
+
+it('ordinary map-start delivery retries keep the exact durable event and key', async () => {
+  const f = await recoveryFixture();
+  try {
+    f.apply(1);
+    await f.settle();
+    const event = f.starts()[0]!.event;
+    const sent: unknown[] = [];
+    const sink = {
+      send: (candidate: typeof event) => {
+        sent.push(candidate);
+        return Promise.resolve('retry' as const);
+      },
+    };
+    await f.outbox.flush({
+      sink,
+      isCurrent: () => true,
+      now: new Date('2026-09-28T00:00:01.000Z'),
+    });
+    await f.outbox.flush({
+      sink,
+      isCurrent: () => true,
+      now: new Date('2026-09-28T00:01:00.000Z'),
+    });
+    expect(sent.filter((item) => (item as typeof event).kind === 'map_started')).toEqual([
+      event,
+      event,
+    ]);
+    expect(f.starts()[0]!.event.idempotencyKey).toBe(event.idempotencyKey);
+  } finally {
+    await f.close();
+  }
+});
+
+it.each(['null', 'throw'] as const)(
+  'keeps a new-frame start opportunity after %s event projection failure',
+  async (mode) => {
+    const f = await recoveryFixture();
+    const build = outputProjector.buildReliableEventV1;
+    let fail = true;
+    const spy = vi.spyOn(outputProjector, 'buildReliableEventV1').mockImplementation((input) => {
+      if (input.kind === 'map_started' && fail) {
+        fail = false;
+        if (mode === 'throw') throw new Error('invalid-projection');
+        return null;
+      }
+      return build(input);
+    });
+    try {
+      f.apply(1);
+      await f.settle();
+      expect(f.starts()).toHaveLength(0);
+      f.apply(2);
+      await f.settle();
+      expect(f.starts()).toHaveLength(1);
+      f.apply(3);
+      await f.settle();
+      expect(f.starts()).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      await f.close();
+    }
+  },
+);
+
+it.each(['durable', 'failed'] as const)(
+  'restart treats %s start/checkpoint as continuity, then publishes a new producer proof',
+  async (publication) => {
+    const f = await recoveryFixture();
+    const enqueue = f.outbox.enqueue.bind(f.outbox);
+    if (publication === 'failed')
+      vi.spyOn(f.outbox, 'enqueue').mockImplementation((event, now, continuity) =>
+        event.kind === 'map_started'
+          ? Promise.reject(new Error('disk-failed'))
+          : enqueue(event, now, continuity),
+      );
+    let restarted: OutputService | undefined;
+    let coordinatorB: ReturnType<typeof createProjectionCoordinator> | undefined;
+    try {
+      f.apply(1);
+      await f.settle();
+      const checkpoint = f.outbox.getContinuity()!;
+      await f.service.close();
+      const runtimeB = createProgramRuntime('restarted-producer');
+      coordinatorB = createProjectionCoordinator({
+        programRuntime: runtimeB,
+        cstvSources: createCstvSourceManagers({}),
+        matchContextBinding: f.binding(),
+        nowMonotonicMs: () => 2000,
+      });
+      const outboxB = new ReliableOutbox(join(f.directory, 'outbox.json'));
+      restarted = new OutputService({
+        outbox: outboxB,
+        now: () => new Date('2026-09-28T00:00:02.000Z'),
+        restoreContinuity: (saved) => {
+          runtimeB.restoreDeliveryContinuity({ ...saved.cursor, mapName: saved.mapName });
+          return coordinatorB!.refresh();
+        },
+      });
+      restarted.setCurrent(coordinatorB.getCurrent(), f.binding());
+      await restarted.start();
+      expect(
+        outboxB
+          .getRecords()
+          .filter((record) => record.event.kind === 'map_started' && record.status === 'pending'),
+      ).toHaveLength(0);
+      restarted.beforeRuntimeMutation();
+      const result = runtimeB.acceptObservation(observation(f.binding().manifest, 2, 'live'));
+      restarted.afterRuntimeMutation(
+        result,
+        coordinatorB.afterRuntimeMutation(result),
+        f.binding(),
+      );
+      await outboxB.flushPending();
+      const current = outboxB
+        .getRecords()
+        .filter((record) => record.event.kind === 'map_started' && record.status === 'pending');
+      expect(current).toHaveLength(1);
+      expect(current[0]!.event.cursor).toMatchObject({
+        producerInstanceId: 'restarted-producer',
+        liveSessionId: checkpoint.cursor.liveSessionId,
+        mapEpoch: checkpoint.cursor.mapEpoch,
+      });
+      expect(current[0]!.event.cursor.programReceiveSequence).toBe(2);
+    } finally {
+      await restarted?.close();
+      await coordinatorB?.close();
+      await f.close();
+    }
+  },
+);
