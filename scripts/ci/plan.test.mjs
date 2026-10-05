@@ -98,7 +98,7 @@ describe('changed-surface CI planner', () => {
         runQuality: true,
         runAcceptance: false,
         runPlatform: false,
-        runQualification: false,
+        runQualification: true,
       },
     ],
     [

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkArchitecture } from './check.mjs';
@@ -7,7 +7,19 @@ import { workspacePackageName, workspacePathForPackage } from './policy.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const manifest = (path) => JSON.parse(readFileSync(resolve(root, path), 'utf8'));
-const check = (files) => checkArchitecture({ rootDir: root, files });
+const baseManifests = Object.fromEntries(
+  ['apps', 'packages'].flatMap((group) =>
+    readdirSync(resolve(root, group))
+      .map((name) => `${group}/${name}/package.json`)
+      .filter((path) => existsSync(resolve(root, path)))
+      .map((path) => [path, readFileSync(resolve(root, path), 'utf8')]),
+  ),
+);
+const check = (files) =>
+  checkArchitecture({
+    rootDir: resolve(root, '__build_graph_virtual_root__'),
+    files: { ...baseManifests, ...files },
+  });
 
 describe('workspace build graph', () => {
   it('discovers scopes and paths from manifests', () => {

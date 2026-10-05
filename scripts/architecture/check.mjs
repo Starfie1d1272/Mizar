@@ -386,7 +386,17 @@ function checkWorkspaceDependencyDeclarations(workspaces, report) {
       if (!dependencies || typeof dependencies !== 'object') continue;
 
       for (const [dependency, version] of Object.entries(dependencies)) {
-        if (!workspacePackageName(dependency, workspaces)) continue;
+        if (!workspacePackageName(dependency, workspaces)) {
+          if (typeof version === 'string' && version.startsWith('workspace:')) {
+            report({
+              ruleId: 'ARCH_WORKSPACE_MISSING',
+              file: info.manifestPath,
+              target: dependency,
+              message: 'A workspace dependency must resolve to a discovered workspace manifest.',
+            });
+          }
+          continue;
+        }
         if (typeof version !== 'string' || !version.startsWith('workspace:')) {
           report({
             ruleId: 'ARCH_WORKSPACE_PROTOCOL',

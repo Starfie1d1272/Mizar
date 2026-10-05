@@ -18,6 +18,17 @@ export function checkBuildSystem(repository, workspaces, report) {
       ? Object.values(JSON.parse(source).scripts ?? {})
       : [source];
     for (const command of commands) {
+      for (const entry of command.split(/&&|\n/)) {
+        if (
+          /pnpm\s+--filter\s+\S+\s+(?:run\s+)?build\b/.test(entry) &&
+          !entry.includes('--fail-if-no-match')
+        ) {
+          fail(
+            file,
+            'Filtered build must explicitly reject unmatched workspaces with --fail-if-no-match.',
+          );
+        }
+      }
       if (/--filter\s+\S+\s+(?:run\s+)?build\s*&&\s*pnpm\s+--filter/.test(command)) {
         fail(
           file,
