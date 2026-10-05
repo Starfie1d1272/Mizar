@@ -6,6 +6,7 @@ fn main() {
             "set_program_overlay_enabled",
             "cs2_host_status",
             "select_obs_executable",
+            "launch_obs",
             "open_main",
             "present_production",
             "open_tool",

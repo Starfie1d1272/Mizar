@@ -51,7 +51,7 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
-  for (const action of ['check', 'repair', 'open'] as const) {
+  for (const action of ['check', 'repair', 'open', 'launch-target'] as const) {
     app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
@@ -65,11 +65,14 @@ export function registerObsRoutes(
           await options.adapter.open();
           return { ok: true };
         }
+        if (action === 'launch-target') {
+          return { ok: true, executablePath: await options.adapter.launchTarget() };
+        }
       } catch (error: unknown) {
         const message =
           error instanceof Error &&
           (error.message.startsWith('OBS 正在输出') ||
-            (action === 'open' &&
+            ((action === 'open' || action === 'launch-target') &&
               ['未找到 OBS，请在设置中选择 obs64.exe。', 'OBS 程序未能打开。'].includes(
                 error.message,
               )))

@@ -112,7 +112,7 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 `ProgramPresentationStore` 在地图结束时冻结已确认比分与当帧选手摘要，最多保留五图，跨图保留、换比赛清除。静态画面的进入资格与已播连续性分开，不恢复旧游戏时钟。
 
-OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。
+OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS；理由见 [ADR-0024](decisions/0024-independent-obs-process.md)。
 
 制作提示从现有状态生成；B 站查询有缓存、超时和并发上限，只服务本机状态提示，不进入公开输出或节目切换门禁。实现见 [ADR-0019](decisions/0019-production-guidance-and-platform-status.md)。
 

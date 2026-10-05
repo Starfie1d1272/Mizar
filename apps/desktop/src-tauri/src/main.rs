@@ -399,6 +399,34 @@ fn local_url(path: &str) -> WebviewUrl {
     WebviewUrl::External(format!("{BASE}{path}").parse().expect("fixed local URL"))
 }
 
+fn obs_executable_allowed(path: &Path) -> bool {
+    path.is_absolute()
+        && path.file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
+}
+
+#[tauri::command]
+async fn launch_obs(executable_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&executable_path);
+        if !obs_executable_allowed(path) || !path.is_file() {
+            return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
+        }
+        // Host is outside the runtime Job. Independent OBS must not inherit
+        // Companion's rollback/shutdown ownership.
+        Command::new(path)
+            .current_dir(path.parent().ok_or("OBS 程序未能打开。")?)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "OBS 程序未能打开。".to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "OBS 程序未能打开。".to_string())?
+}
+
 fn trusted_navigation(url: &tauri::Url) -> bool {
     url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3000)
 }
@@ -836,6 +864,7 @@ fn run_desktop(
             set_program_overlay_enabled,
             cs2_host_status,
             select_obs_executable,
+            launch_obs,
             open_main,
             present_production,
             open_tool,
@@ -1235,6 +1264,14 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn obs_launch_accepts_only_an_absolute_obs_executable() {
+        assert!(obs_executable_allowed(Path::new(r"D:\OBS Studio\bin\64bit\obs64.exe")));
+        for path in ["obs64.exe", r"D:\OBS Studio\obs64.exe --argument", r"D:\OBS Studio\other.exe", "https://example.test/obs64.exe"] {
+            assert!(!obs_executable_allowed(Path::new(path)));
+        }
+    }
 
     #[test]
     fn live_settings_open_only_known_preparation_sections() {

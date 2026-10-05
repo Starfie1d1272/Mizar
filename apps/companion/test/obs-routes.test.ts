@@ -6,6 +6,38 @@ import { buildApp } from '../src/app.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 import { ObsAdapter } from '../src/obs/adapter.js';
 
+it('resolves a native OBS launch target only for the local operator without launching it', async () => {
+  const target = vi
+    .spyOn(ObsAdapter.prototype, 'launchTarget')
+    .mockResolvedValue('D:\\OBS\\obs64.exe');
+  const open = vi.spyOn(ObsAdapter.prototype, 'open');
+  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-target-'));
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
+  try {
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/operator/obs/launch-target',
+      headers: { origin: 'https://example.test' },
+      payload: {},
+    });
+    expect(forbidden.statusCode).toBe(403);
+    expect(target).not.toHaveBeenCalled();
+    const result = await app.inject({
+      method: 'POST',
+      url: '/operator/obs/launch-target',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
+    expect(result.json()).toEqual({ ok: true, executablePath: 'D:\\OBS\\obs64.exe' });
+    expect(open).not.toHaveBeenCalled();
+  } finally {
+    await app.close();
+    target.mockRestore();
+    open.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it.each([
   ['未找到 OBS，请在设置中选择 obs64.exe。', '未找到 OBS，请在设置中选择 obs64.exe。'],
   ['OBS 程序未能打开。', 'OBS 程序未能打开。'],

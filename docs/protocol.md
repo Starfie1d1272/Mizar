@@ -92,6 +92,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 | `POST /operator/local-match/capture`、`create-from-server` | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表 |
 | `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目 |
 | `GET /local/v1/obs/confidence` | 当前场景缩略图；请求期间切场则返回空 |
+| `POST /operator/obs/launch-target` | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程 |
 | `GET /local/v1/program-scenes` | 当前场景、修订号、候选、阻断与编排状态 |
 | `POST /operator/program-scene` | 有修订号校验的人工切场 |
 | `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动 |

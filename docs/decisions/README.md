@@ -39,6 +39,7 @@ ADR-0003 对 ADR-0002 第 5 节的通用事件表述和第 6 节的跨仓职责�
 
 - [ADR-0021：地图执行开始证据与恢复重核验](0021-map-start-revalidation.md)
 - [ADR-0022：远程制作窗口的捕获策略](0022-remote-workspace-capture.md)
+- [ADR-0024：OBS 独立进程与桌面启动职责](0024-independent-obs-process.md)
 
 ## 历史澄清
 
