@@ -265,13 +265,20 @@ test('four broadcast presets save, activate and reload through the shared Progra
             remaining: x('[data-pause-countdown-part="remaining"]'),
             leftEdge: parseFloat(css.borderLeftWidth),
             rightEdge: parseFloat(css.borderRightWidth),
+            bottomEdge: parseFloat(css.borderBottomWidth),
             transform: css.transform,
           };
         });
         expect(geometry.transform).toBe('none');
         expect(geometry.label < geometry.team).toBe(side === 'left');
         expect(geometry.clock < geometry.remaining).toBe(side === 'left');
-        expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
+        if (style === 'esl') {
+          expect(geometry.leftEdge).toBe(0);
+          expect(geometry.rightEdge).toBe(0);
+          expect(geometry.bottomEdge).toBe(3);
+        } else {
+          expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
+        }
         await assertBroadcastAssetFacing(program, true);
         const columns = await program.locator('.broadcast-pause__roster').evaluateAll((elements) =>
           elements.map((rail) => {

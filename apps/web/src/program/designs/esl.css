@@ -1,4 +1,5 @@
 @import './esl-effects.css';
+@import './esl-match-states.css';
 
 /* overlay4 presentation using local reference artwork and fonts. Gameplay facts and clocks stay in existing owners. */
 .hud-widget-design[data-hud-design='esl'] .match-header__top-score {

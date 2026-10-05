@@ -107,6 +107,7 @@ function widgetContract(id: HudWidgetId) {
     'team-t-rail',
     'focused-player',
     'series-strip',
+    'series-overview',
     'round-history',
   ].includes(id);
   const variants = [
@@ -148,9 +149,7 @@ function widgetContract(id: HudWidgetId) {
                       ['showSeriesWins', 'showAliveMatchup'].includes(path)) ||
                     ((id === 'team-ct-rail' || id === 'team-t-rail') && path === 'showTeamName')
                   ? variants.filter((variant) => variant !== 'perfectworld')
-                  : (id === 'focused-player' && path === 'showReserveAmmo') ||
-                      ((id === 'team-ct-rail' || id === 'team-t-rail') &&
-                        path === 'showTeamSummary')
+                  : id === 'focused-player' && path === 'showReserveAmmo'
                     ? variants.filter((variant) => variant !== 'esl')
                     : variants,
           },
@@ -159,9 +158,6 @@ function widgetContract(id: HudWidgetId) {
     default: (value) => schema.parse(value),
   };
   const defaultSettingsByVariant: Record<string, Record<string, unknown>> = { default: defaults };
-  if (id === 'team-ct-rail' || id === 'team-t-rail') {
-    defaultSettingsByVariant.esl = { ...defaultSettingsByVariant.esl, showTeamSummary: false };
-  }
   if (id === 'focused-player') {
     settingsSchemaByVariant.minimal = (value) => minimalFocusedPlayerSettingsSchema.parse(value);
     defaultSettingsByVariant.minimal = minimalFocusedPlayerSettingsSchema.parse({});
