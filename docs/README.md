@@ -1,73 +1,38 @@
-# 文档索引
+# 文档
 
-本目录记录 Mizar 的长期产品、架构、协议、数据语义和验证规则。当前态文档只描述**当前有效的事实与约束**；单次实现过程、短期排期、某个 PR 的完成情况和一次性调试记录留在 Issue / PR / Project。Accepted ADR 例外：它们同时承担历史决策记录，不能为了获得“干净当前态”而静默删除原始 rationale。
+按需要阅读，无需从头读完。
 
-仓库一手文档默认使用中文。用户界面、开发者文档与机器契约采用不同的本地化边界，见 [`terminology.md`](terminology.md)。
-
-## 一手文档
-
-| 文档 | 负责回答 |
+| 我要做什么 | 入口 |
 | --- | --- |
-| [`product.md`](product.md) | 产品是什么、服务谁、哪些能力属于产品边界 |
-| [`architecture.md`](architecture.md) | 当前系统如何分层、谁拥有什么、哪些依赖方向不可破坏 |
-| [`protocol.md`](protocol.md) | RivalHub 只读赛事上下文与 Local Protocol |
-| [`telemetry.md`](telemetry.md) | GSI / CSTV 输入如何解释、normalization 和 validation |
-| [`development-validation.md`](development-validation.md) | 开发、CI、视觉回归和真实环境验收如何分责 |
-| [`roadmap.md`](roadmap.md) | 能力之间的依赖顺序和阶段边界 |
-| [`references.md`](references.md) | 参考项目能借鉴什么、哪些实现和许可证不能直接继承 |
-| [`design/README.md`](design/README.md) | 唯一设计系统入口、品牌、界面类别、设计变量、用户文案与贡献规则 |
-| [`terminology.md`](terminology.md) | 中文优先与开发者术语的使用边界 |
+| 了解产品与适用范围 | [产品定位](product.md) · [数据源能力与限制](data-source-capabilities.md) |
+| 安装、准备比赛、现场制播、处理故障 | [快速开始与操作手册](quick-start.md) |
+| 看当前画面 | [预览图集](screenshots/README.md) |
+| 参与开发 | [贡献指南](../CONTRIBUTING.md) · [开发与验证](development-validation.md) |
+| 理解系统 | [架构](architecture.md) · [接口协议](protocol.md) · [游戏数据语义](telemetry.md) |
+| 修改视觉或文案 | [设计系统](design/README.md) · [中文与术语](terminology.md) |
+| 准备 RC、实机验收与发布 | [发布流程](release-readiness.md) · [发布说明草案](release-notes-draft.md) |
+| 查看未来方向和决策理由 | [路线图](roadmap.md) · [架构决策](decisions/README.md) · [研究提案](rfcs/README.md) |
+| 核对来源与维护依赖 | [参考项目](references.md) · [第三方说明](../THIRD-PARTY-NOTICES.md) · [依赖维护](dependency-maintenance.md) |
 
-## 决策与研究
+## 内容归属
 
-- [`decisions/`](decisions/)：已经接受、需要长期约束实现的架构决策及其历史理由。
-- [`rfcs/`](rfcs/)：仍存在重要开放问题的专项设计研究。
+一条规则只有一个当前权威出处。其他文档写必要摘要并链接，不复制完整步骤、字段表或限制清单。
 
-ADR 负责记录“为什么采用某项决策以及它如何演进”，`architecture.md` 负责给出**当前架构的干净视图**。当二者表达不一致时：
+- 产品文档维护用户、价值与能力边界；操作手册维护使用步骤。
+- 架构维护职责与依赖；协议维护交互契约；遥测文档维护输入解释。
+- 设计系统维护视觉与文案；代码维护精确版本、默认值、字段和资源清单。
+- 开发验证维护验证方法；发布流程维护 RC 到正式发布的顺序；具体执行状态与报告放 Issue / PR。
+- ADR 保存决策理由与演变。当前文档给出有效规则，历史 ADR 通过替代关系解释旧规则。
+- [历史设计审查](archive/design/README.md)和[历史证据](evidence/)用于追溯，不作为当前规范。
 
-- 如果当前实现/产品方向真正改变了 Accepted 决策，新增 ADR 并明确 supersede 的范围；
-- 如果只是非语义澄清，在 ADR 索引或对应 ADR 中显式记录 clarification；
-- 如果只是当前态文档漂移，修正 `architecture.md` 等当前态文档，不重写 ADR 历史。
+## 写作与维护
 
-具体 ADR 治理规则见 [`decisions/README.md`](decisions/README.md)。
+1. 中文优先，具体边界见[术语规范](terminology.md)。
+2. 每篇文档服务明确读者，章节按任务或概念组织，不以工作单编号命名。
+3. 修改行为时更新原章节，删除旧说法，不在末尾追加同一功能的补丁说明。
+4. 当前说明用现在时；未来计划进路线图，单次实施经过留在 Issue / PR。
+5. 精确值优先引用代码来源；需要可复制示例时只保留一份，并检查与解析器一致。
+6. 改变已接受决策时新增 ADR 说明替代范围；非语义勘误显式记录，不抹去历史理由。
+7. 改名、移动或删文档时同步内部链接、工具引用与索引。新增文档先说明现有入口为何无法承载。
 
-## 文档权威关系
-
-```text
-product.md
-  当前产品目标、用户、能力边界
-        ↓
-architecture.md + Accepted ADR
-  当前 ownership / dependency direction
-  + 决策历史 / rationale
-        ↓
-protocol.md / telemetry.md
-  具体 contract 与 source semantics
-        ↓
-development-validation.md
-  validation / acceptance rules
-
-roadmap.md
-  只描述能力依赖和演进顺序，不承担当前实施状态
-
-Issue / PR / Project
-  当前工作规格、短期状态、一次性调查与交付 evidence
-```
-
-`references.md` 和 RFC 提供设计 evidence，但不能覆盖 Accepted ADR 或当前一手文档。
-
-## 维护规则
-
-当前态长期文档应满足：
-
-- 使用现在时描述当前有效行为；
-- 不写“即将”“随后由某 Issue 完成”“某 PR 已经实现”等执行状态；
-- 不把 Issue 编号当成架构或协议名称；
-- 不复制已经由代码常量、`package.json` 或 lockfile 精确维护的易变版本信息；
-- 协议示例必须与当前 schema 一致；
-- 用户或制作人员可见的运行方式发生变化时同步更新；
-- 已被实现取代的一次性设计过程从 README / product / architecture / protocol 等当前态文档移除。
-
-Accepted ADR 不适用最后一条“删除历史过程”的规则。ADR 的背景、理由、代价、被否决方案和 supersede 关系属于长期历史记录，按 ADR 治理规则维护。
-
-如果代码改变了本文档描述的长期事实，修改代码的同一 PR 必须同步更新相应当前态文档；如果改变的是 Accepted 决策本身，则同时通过新的 ADR 记录决策演进。
+精简的标准是读者能更快完成任务，必要的操作、恢复办法、接口语义和来源信息不能丢失。

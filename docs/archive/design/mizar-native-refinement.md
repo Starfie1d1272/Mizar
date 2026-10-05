@@ -1,5 +1,7 @@
 # 默认 HUD 精修复核
 
+> 历史设计审查记录，保留原始结论与证据；当前规范见[设计系统](../../design/README.md)。
+
 基于已合并 ESL 的 main `78e7d9c`，在现有默认节目包继续精修。旧版对照为 PR #124 的 `7b2896d`；预设仍为五套。所有图使用同一 Program 样本、Steam 头像、1920×1080 画布、Ancient 静态缩略图和缩放比例。参考方案保留各自已保存的布局、字形与头像处理，不把 ESL 的宽图像槽当成素材优势。背景不是 CS2/OBS 实机画面；Radar 只作固定的 rich-live 对照背景，不宣称各状态的同期回放。
 
 ## 最终取舍
@@ -14,27 +16,27 @@
 
 ## 同资料前后
 
-![选手卡细节](mizar-native/refinement/current-cards.webp)
+![选手卡细节](../../design/reviews/mizar-native/refinement/current-cards.webp)
 
-![Live 前后](mizar-native/refinement/compare-live.webp)
-![死亡前后](mizar-native/refinement/compare-death.webp)
-![暂停前后](mizar-native/refinement/compare-pause.webp)
-![冻结历史前后](mizar-native/refinement/compare-freeze.webp)
+![Live 前后](../../design/reviews/mizar-native/refinement/compare-live.webp)
+![死亡前后](../../design/reviews/mizar-native/refinement/compare-death.webp)
+![暂停前后](../../design/reviews/mizar-native/refinement/compare-pause.webp)
+![冻结历史前后](../../design/reviews/mizar-native/refinement/compare-freeze.webp)
 
 ## 五套同状态实图
 
 每列均按相同比例缩小；顺序为 Mizar / EWC / IEM / Perfect World / ESL。原图分别以 `current/ewc/iem/perfectworld/esl-状态.webp` 保存在同目录。
 
-![五套 Live](mizar-native/refinement/five-live.webp)
-![五套死亡](mizar-native/refinement/five-death.webp)
-![五套冻结](mizar-native/refinement/five-freeze.webp)
-![五套暂停](mizar-native/refinement/five-pause.webp)
+![五套 Live](../../design/reviews/mizar-native/refinement/five-live.webp)
+![五套死亡](../../design/reviews/mizar-native/refinement/five-death.webp)
+![五套冻结](../../design/reviews/mizar-native/refinement/five-freeze.webp)
+![五套暂停](../../design/reviews/mizar-native/refinement/five-pause.webp)
 
 真实样本为 `real-live-rich`、`real-exploded`、`real-post-explosion-freezetime`、`real-timeout-ct`、`real-paused`。满装备使用既有 `player-rails-freezetime`，长名使用 `stress-long-labels`，两者明确为合成展示边界，不冒充真实比赛。
 
-![满装备](mizar-native/refinement/current-full-equipment.webp)
-![双语长名](mizar-native/refinement/current-long-names.webp)
-![技术暂停](mizar-native/refinement/current-technical.webp)
+![满装备](../../design/reviews/mizar-native/refinement/current-full-equipment.webp)
+![双语长名](../../design/reviews/mizar-native/refinement/current-long-names.webp)
+![技术暂停](../../design/reviews/mizar-native/refinement/current-technical.webp)
 
 ## 验证与边界
 
