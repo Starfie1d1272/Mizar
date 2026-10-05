@@ -1,0 +1,109 @@
+/* Adapt the mature broadcast cloud and status layers to ESL's portrait geometry. */
+.hud-widget-design[data-hud-design='esl'] .player-rail__card .player-status-effects {
+  --esl-effect-origin-x: 40%;
+  z-index: 2;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__card[data-physical-side='right']
+  .player-status-effects {
+  --esl-effect-origin-x: 60%;
+}
+.hud-widget-design[data-hud-design='esl'] .broadcast-smoke .player-status-effects__smoke {
+  left: 12px;
+  bottom: -10px;
+  width: 72%;
+  height: 96%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.8);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--mizar-hud-text-primary) 16%, transparent),
+    color-mix(in srgb, var(--mizar-hud-text-muted) 76%, transparent) 48%,
+    color-mix(in srgb, var(--mizar-hud-text-primary) 64%, transparent)
+  );
+  filter: blur(1.6px);
+}
+.hud-widget-design[data-hud-design='esl']
+  .broadcast-smoke[data-anchor='right']
+  .player-status-effects__smoke {
+  left: auto;
+  right: 12px;
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__flash {
+  opacity: calc(var(--rh-player-status-flashed, 0) * 0.82);
+  background:
+    radial-gradient(
+      ellipse 28% 90% at var(--esl-effect-origin-x) 46%,
+      var(--mizar-hud-text-primary),
+      color-mix(in srgb, var(--mizar-hud-text-primary) 68%, transparent) 32%,
+      transparent 82%
+    ),
+    linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--mizar-hud-text-primary) 12%, transparent),
+      transparent 70%
+    );
+  box-shadow: none;
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__flash::before {
+  width: 36%;
+  background: linear-gradient(90deg, var(--mizar-hud-text-primary), transparent);
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-status-effects[data-anchor='right']
+  .player-status-effects__flash::before {
+  background: linear-gradient(270deg, var(--mizar-hud-text-primary), transparent);
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__flash::after {
+  opacity: 0.45;
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__fire {
+  opacity: calc(var(--rh-player-status-burning, 0) * 0.7);
+  background:
+    radial-gradient(
+      ellipse 29% 66% at var(--esl-effect-origin-x) 112%,
+      color-mix(in srgb, var(--mizar-hud-state-warning) 45%, var(--mizar-hud-text-primary)),
+      color-mix(in srgb, var(--mizar-hud-state-warning) 74%, transparent) 31%,
+      color-mix(in srgb, var(--mizar-hud-state-danger) 38%, transparent) 61%,
+      transparent 79%
+    ),
+    linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--mizar-hud-state-warning) 20%, transparent),
+      transparent 58%
+    );
+}
+/* On the focus card, effects belong to the image, above its base and below its identity. */
+.hud-widget-design[data-hud-design='esl'] .focused-player__face > .broadcast-smoke,
+.hud-widget-design[data-hud-design='esl'] .focused-player__face > .player-status-effects {
+  --esl-effect-origin-x: 50%;
+  inset: 0 auto auto 28px;
+  width: 240px;
+  height: 240px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .focused-player
+  .broadcast-smoke
+  .player-status-effects__smoke {
+  left: -6%;
+  bottom: -8%;
+  width: 112%;
+  height: 68%;
+  filter: blur(2.6px);
+}
+
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__flash::before,
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__flash::after {
+  left: var(--esl-effect-origin-x);
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-status-effects[data-anchor='right']
+  .player-status-effects__flash::before {
+  left: auto;
+  right: calc(100% - var(--esl-effect-origin-x));
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__fire::before {
+  left: calc(var(--esl-effect-origin-x) - 13%);
+}
+.hud-widget-design[data-hud-design='esl'] .player-status-effects__fire::after {
+  left: calc(var(--esl-effect-origin-x) + 1%);
+}
