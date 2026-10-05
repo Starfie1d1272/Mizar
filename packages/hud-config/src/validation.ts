@@ -1,3 +1,4 @@
+import { WIDGET_DIMENSIONS } from './widget-dimensions.js';
 import { validateHudVariantLayout } from './variant-layout.js';
 import { HUD_WIDGET_IDS } from './constants.js';
 import { hudLayoutSchema, hudPresetSchema, hudResolvedPresetSchema } from './schemas.js';
@@ -19,7 +20,7 @@ export function parseHudLayout(value: unknown): HudLayout {
       if (placement.scale !== undefined) throw new Error(`组件 ${id} 不允许持久化 scale`);
       if (
         size !== undefined &&
-        !Object.values(descriptor.dimensionsByVariant).some(
+        ![WIDGET_DIMENSIONS[id], ...Object.values(descriptor.dimensionsByVariant)].some(
           (dimensions) => dimensions.width === size.width && dimensions.height === size.height,
         )
       )

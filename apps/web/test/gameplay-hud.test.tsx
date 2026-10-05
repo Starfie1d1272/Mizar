@@ -90,7 +90,7 @@ describe('GameplayHud shared renderer boundary', () => {
 
     expect(program).toMatchObject({ props: { 'data-gameplay-hud': 'true' } });
     expect(childrenOf(program)).toHaveLength(10);
-    expect(childrenOf(program).filter((child) => child !== null)).toHaveLength(5);
+    expect(childrenOf(program).filter((child) => child !== null)).toHaveLength(6);
     expect(editor).toMatchObject({ props: { 'data-hud-editor-overlay': 'true' } });
     expect(childrenOf(editor)).toHaveLength(10);
     const preview = HudEditorOverlay({
@@ -117,7 +117,7 @@ describe('GameplayHud shared renderer boundary', () => {
     for (const mode of ['layout', 'preview'] as const) {
       const editor = HudEditorOverlay({ resolvedPreset, selectedWidgetId: null, mode });
       const children = childrenOf(editor);
-      expect(children[7]).toBeNull();
+      expect(children[9]).toBeNull();
       expect(children[8]).toBeNull();
       if (mode === 'preview') expect(children.every((child) => child === null)).toBe(true);
     }
@@ -154,16 +154,16 @@ describe('GameplayHud shared renderer boundary', () => {
   it('adapts every resolved semantic field into theme-owned variables', () => {
     const style = themeStyle(getBuiltinResolvedPreset().theme) as Record<string, string | number>;
     expect(style).toMatchObject({
-      '--mizar-event-accent': '#c8ef78',
-      '--mizar-hud-text-primary': '#f3f6fa',
-      '--mizar-hud-text-muted': '#aab4c0',
-      '--mizar-side-ct': '#6aa8ff',
-      '--mizar-side-t': '#f2bd4f',
-      '--mizar-hud-state-danger': '#f06f6f',
-      '--mizar-hud-state-warning': '#f3bd68',
+      '--mizar-event-accent': '#2d7ff9',
+      '--mizar-hud-text-primary': '#f4f8fd',
+      '--mizar-hud-text-muted': '#9aa8b7',
+      '--mizar-side-ct': '#2d7ff9',
+      '--mizar-side-t': '#f0b84b',
+      '--mizar-hud-state-danger': '#f16c6c',
+      '--mizar-hud-state-warning': '#f0b84b',
       '--mizar-hud-state-success': '#c8ef78',
       '--mizar-hud-state-unknown': '#8d9aaa',
-      '--mizar-hud-objective-bomb': '#f06f6f',
+      '--mizar-hud-objective-bomb': '#f16c6c',
       '--mizar-hud-objective-defuse': '#83d8e8',
       '--mizar-hud-surface-opacity': 0.88,
       '--mizar-hud-border-opacity': 0.16,

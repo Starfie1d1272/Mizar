@@ -160,7 +160,15 @@ async function hideBp(
   clock: ManualBpClock,
   surfaces: readonly (Page | FrameLocator)[],
 ) {
-  await operator.getByRole('button', { name: '收起 BP', exact: true }).click();
+  const [response] = await Promise.all([
+    operator.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/operator/bp-command' &&
+        response.request().method() === 'POST',
+    ),
+    operator.getByRole('button', { name: '收起 BP', exact: true }).click(),
+  ]);
+  expect(response.ok()).toBe(true);
   const hiding = JSON.parse((await app.inject('/local/v1/bp')).body) as { state: string };
   expect(hiding.state).toBe('hiding');
   clock.advanceBy(360);
@@ -219,6 +227,21 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         page.frameLocator('iframe[title="节目预览"]'),
       ]);
       await expect(program.locator('.bp-card')).toHaveCount(7);
+      for (const logo of await program.locator('.bp-team img').all()) {
+        await expect(logo).toHaveCSS('visibility', 'hidden');
+      }
+      for (const image of await program
+        .locator(
+          '.bp-card[data-kind="pick"] .bp-map-art, .bp-card[data-kind="decider"] .bp-map-art',
+        )
+        .all()) {
+        await expect(image).toHaveCSS('filter', 'none');
+        await expect(image).toHaveCSS('opacity', '1');
+      }
+      await expect(program.locator('.bp-card[data-kind="ban"] .bp-map-art').first()).toHaveCSS(
+        'filter',
+        'grayscale(1)',
+      );
       await expect(program.locator('.bp-card[data-kind="ban"]')).toHaveCount(
         format === 'bo1' ? 6 : format === 'bo3' ? 4 : 2,
       );
@@ -433,7 +456,7 @@ for (const key of ['semifinalA', 'final'] as const) {
       const sceneBounds = await program.locator('.bp-scene').boundingBox();
       expect(sceneBounds?.width).toBe(1920);
       expect(sceneBounds?.height).toBe(1080);
-      await expect(program.locator('.bp-scene')).toHaveCSS('background-color', 'rgb(8, 13, 22)');
+      await expect(program.locator('.bp-scene')).toHaveCSS('background-color', 'rgb(14, 19, 26)');
 
       await program.reload();
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');

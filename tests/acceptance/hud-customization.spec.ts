@@ -61,6 +61,8 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await page
       .getByRole('combobox', { name: '配置组件', exact: true })
       .selectOption('focused-player');
+    await expect(page.locator('.focused-player__metrics')).toHaveCount(0);
+    await page.getByRole('checkbox', { name: '显示 K/A/D/ADR', exact: true }).check();
     await expect(page.locator('.focused-player__metrics')).toBeVisible();
     const originalEtag = store.getState().etag;
     await page.getByRole('checkbox', { name: '显示 K/A/D/ADR', exact: true }).uncheck();

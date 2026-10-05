@@ -32,7 +32,9 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
-  window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+  window.matchMedia = vi
+    .fn()
+    .mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() });
   mockChannelState.state = 'closed';
   mockChannelState.current = null;
 });

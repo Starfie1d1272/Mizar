@@ -1,8 +1,22 @@
-import type { CSSProperties } from 'react';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { getMapThumbnail } from '@mizar/cs2-assets';
+import { useState } from 'react';
 import { ProgramCanvas } from '../program/ProgramCanvas';
 import './bp.css';
+import '../program/broadcast-material.css';
+import { BroadcastArc } from '../program/BroadcastArc';
+
+function TeamLogo({ src, name }: { readonly src: string; readonly name: string }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  return (
+    <img
+      src={src}
+      alt={`${name} 队标`}
+      style={{ visibility: failedSrc === src ? 'hidden' : undefined }}
+      onError={() => setFailedSrc(src)}
+    />
+  );
+}
 
 export function BpPresentation({
   snapshot,
@@ -25,6 +39,7 @@ export function BpPresentation({
           data-format={projection.format}
           data-revealed-count={effectiveRevealedCount}
         >
+          <BroadcastArc />
           <div className="bp-kicker">
             <strong>{projection.competition}</strong>
             <span>
@@ -40,15 +55,7 @@ export function BpPresentation({
               const team = projection.entrants[key];
               return (
                 <div className="bp-team" data-entrant={key} key={key}>
-                  {team.logoUrl ? (
-                    <img
-                      src={team.logoUrl}
-                      alt={`${team.name} 队标`}
-                      onError={(event) => {
-                        event.currentTarget.style.visibility = 'hidden';
-                      }}
-                    />
-                  ) : null}
+                  {team.logoUrl ? <TeamLogo src={team.logoUrl} name={team.name} /> : null}
                   <strong>{team.name}</strong>
                 </div>
               );
@@ -72,16 +79,6 @@ export function BpPresentation({
                   data-visible={shown}
                   aria-hidden={!shown}
                   data-entrant={card.entrant ?? 'none'}
-                  style={
-                    {
-                      '--bp-accent':
-                        card.entrant === 'a'
-                          ? 'var(--bp-a)'
-                          : card.entrant === 'b'
-                            ? 'var(--bp-b)'
-                            : '#d5d9db',
-                    } as CSSProperties
-                  }
                 >
                   {image ? <img className="bp-map-art" src={image.outputPath} alt="" /> : null}
                   <div className="bp-shade" />

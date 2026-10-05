@@ -1,4 +1,4 @@
-import { DEFAULT_THEME_RECIPE } from './default-theme.js';
+import { DEFAULT_THEME_RECIPE, REFERENCE_THEME_COLORS } from './default-theme.js';
 import type { HudBroadcastStyleDefinition } from '../types.js';
 
 export const PERFECTWORLD_STYLE = {
@@ -14,7 +14,7 @@ export const PERFECTWORLD_STYLE = {
     ...DEFAULT_THEME_RECIPE,
     id: 'perfectworld',
     colors: {
-      ...DEFAULT_THEME_RECIPE.colors,
+      ...REFERENCE_THEME_COLORS,
       sideCt: '#478af0',
       sideT: '#e6a91d',
       stateSuccess: '#5dde74',

@@ -24,7 +24,7 @@ export function BroadcastPause({
 }: {
   readonly snapshot: ProgramSnapshot;
   readonly resolvedPreset: HudResolvedPreset;
-  readonly design: Exclude<HudDesign, 'current'>;
+  readonly design: HudDesign;
   readonly branding?: BroadcastBranding | undefined;
 }) {
   const p = buildMatchHeaderPresentation(snapshot.payload);

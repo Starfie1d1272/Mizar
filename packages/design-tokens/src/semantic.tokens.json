@@ -177,5 +177,49 @@
     "disabled-opacity": {
       "$value": "{opacity.disabled}"
     }
+  },
+  "brand": {
+    "$type": "color",
+    "primary": {
+      "$value": "{color.brand.cobalt}"
+    },
+    "front": {
+      "$value": "{color.brand.ice}"
+    },
+    "companion": {
+      "$value": "{color.brand.gold}"
+    },
+    "depth": {
+      "$value": "{color.brand.depth}"
+    },
+    "pulse": {
+      "canvas": {
+        "$value": "{color.pulse.canvas}"
+      },
+      "shell": {
+        "$value": "{color.pulse.shell}"
+      },
+      "raised": {
+        "$value": "{color.pulse.raised}"
+      },
+      "blue": {
+        "$value": "{color.pulse.blue}"
+      },
+      "highlight": {
+        "$value": "{color.pulse.highlight}"
+      },
+      "white": {
+        "$value": "{color.pulse.white}"
+      },
+      "muted": {
+        "$value": "{color.pulse.muted}"
+      },
+      "gold": {
+        "$value": "{color.pulse.gold}"
+      },
+      "danger": {
+        "$value": "{color.pulse.danger}"
+      }
+    }
   }
 }

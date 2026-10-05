@@ -11,21 +11,21 @@ import type {
 export const DEFAULT_THEME_RECIPE: HudThemeRecipe = deepFreeze({
   id: 'mizar-default',
   colors: {
-    textPrimary: '#f3f6fa',
-    textMuted: '#aab4c0',
-    sideCt: '#6aa8ff',
-    sideT: '#f2bd4f',
-    stateDanger: '#f06f6f',
-    stateWarning: '#f3bd68',
+    textPrimary: '#f4f8fd',
+    textMuted: '#9aa8b7',
+    sideCt: '#2d7ff9',
+    sideT: '#f0b84b',
+    stateDanger: '#f16c6c',
+    stateWarning: '#f0b84b',
     stateSuccess: '#c8ef78',
     stateUnknown: '#8d9aaa',
-    objectiveBomb: '#f06f6f',
+    objectiveBomb: '#f16c6c',
     objectiveDefuse: '#83d8e8',
   } satisfies HudSemanticColors,
   surfaces: {
-    solid: { primary: '#10151d', strong: '#080c12', opacity: 0.98, borderOpacity: 0.28 },
-    standard: { primary: '#111923', strong: '#0b1119', opacity: 0.88, borderOpacity: 0.16 },
-    light: { primary: '#17222d', strong: '#111a22', opacity: 0.7, borderOpacity: 0.14 },
+    solid: { primary: '#1b2531', strong: '#141b24', opacity: 0.98, borderOpacity: 0.28 },
+    standard: { primary: '#1b2531', strong: '#141b24', opacity: 0.88, borderOpacity: 0.16 },
+    light: { primary: '#1b2531', strong: '#141b24', opacity: 0.7, borderOpacity: 0.14 },
   } satisfies Record<HudPanelStyle, HudSemanticSurface>,
   radii: {
     square: { sm: 0, md: 0, lg: 0 },
@@ -34,3 +34,17 @@ export const DEFAULT_THEME_RECIPE: HudThemeRecipe = deepFreeze({
   } satisfies Record<HudCornerStyle, HudSemanticRadius>,
   fontFamily: 'Inter',
 });
+
+// Freeze reference text/state colours: changing the native recipe must not recolour tournament presets.
+export const REFERENCE_THEME_COLORS = deepFreeze({
+  textPrimary: '#f3f6fa',
+  textMuted: '#aab4c0',
+  sideCt: '#6aa8ff',
+  sideT: '#f2bd4f',
+  stateDanger: '#f06f6f',
+  stateWarning: '#f3bd68',
+  stateSuccess: '#c8ef78',
+  stateUnknown: '#8d9aaa',
+  objectiveBomb: '#f06f6f',
+  objectiveDefuse: '#83d8e8',
+} satisfies HudSemanticColors);

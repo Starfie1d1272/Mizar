@@ -1,5 +1,4 @@
 import type { CSSProperties } from 'react';
-import type { HudDesign } from '../../hud-design';
 import './broadcast-smoke.css';
 
 import type { PlayerStatusEffectState } from './presentation';
@@ -13,11 +12,9 @@ function effectStrength(value: number | null): number {
 export function PlayerStatusEffects({
   state,
   anchor = 'left',
-  design = 'current',
 }: {
   readonly state: PlayerStatusEffectState;
   readonly anchor?: 'left' | 'right';
-  readonly design?: HudDesign;
 }) {
   const smoke = effectStrength(state.smoked);
   const burning = effectStrength(state.burning);
@@ -31,17 +28,15 @@ export function PlayerStatusEffects({
 
   return (
     <>
-      {design !== 'current' ? (
-        <div
-          className="broadcast-smoke"
-          data-smoked={smoke > 0}
-          data-anchor={anchor}
-          style={style}
-          aria-hidden="true"
-        >
-          <span className="player-status-effects__smoke" />
-        </div>
-      ) : null}
+      <div
+        className="broadcast-smoke"
+        data-smoked={smoke > 0}
+        data-anchor={anchor}
+        style={style}
+        aria-hidden="true"
+      >
+        <span className="player-status-effects__smoke" />
+      </div>
       <div
         aria-hidden="true"
         className="player-status-effects"
@@ -51,7 +46,6 @@ export function PlayerStatusEffects({
         data-smoked={smoke > 0}
         style={style}
       >
-        {design === 'current' ? <span className="player-status-effects__smoke" /> : null}
         <span className="player-status-effects__fire" />
         <span className="player-status-effects__flash" />
       </div>
