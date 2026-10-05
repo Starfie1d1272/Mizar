@@ -18,7 +18,7 @@ const roots = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
-async function fixture() {
+async function fixture({ extraFiles = [] } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'broadcast portable '));
   roots.push(root);
   const files = [
@@ -28,6 +28,7 @@ async function fixture() {
     'resources/web/dist/index.html',
     'resources/scripts/product-runtime.mjs',
     'resources/scripts/product-logs.mjs',
+    ...extraFiles,
   ];
   for (const name of files) {
     await mkdir(join(root, name, '..'), { recursive: true });
@@ -64,9 +65,36 @@ describe('portable payload', () => {
     const { root, artifact } = await fixture();
     await mkdir(join(root, 'state'), { recursive: true });
     await writeFile(join(root, 'state', 'settings'), 'mutable');
-    expect(await verifyPayload(root)).toEqual(artifact);
+    const progress = [];
+    expect(await verifyPayload(root, { onProgress: (entry) => progress.push(entry) })).toEqual(
+      artifact,
+    );
+    expect(progress[0]).toEqual({ completed: 0, total: 7 });
+    expect(progress.at(-1)).toEqual({ completed: 7, total: 7 });
     await writeFile(join(root, 'resources/web/dist/index.html'), 'corrupt');
     await expect(verifyPayload(root)).rejects.toThrow('校验失败');
+  });
+  it('checks every batch and preserves the sorted content digest', async () => {
+    const extraFiles = Array.from(
+      { length: 20 },
+      (_, index) => `resources/app/dist/extra-${index}.js`,
+    );
+    const { root, artifact } = await fixture({ extraFiles });
+    const progress = [];
+    expect(await verifyPayload(root, { onProgress: (entry) => progress.push(entry) })).toEqual(
+      artifact,
+    );
+    expect(progress.at(-1)).toEqual({ completed: 27, total: 27 });
+    await writeFile(join(root, 'resources/web/dist/index.html'), 'corrupt last batch');
+    await expect(verifyPayload(root)).rejects.toThrow('resources/web/dist/index.html');
+  });
+  it('explains an incomplete extraction and preserves the missing-file cause', async () => {
+    const { root } = await fixture();
+    await rm(join(root, 'resources/app/dist/server.js'));
+    const error = await verifyPayload(root).catch((failure) => failure);
+    expect(error.message).toContain('程序包缺少文件：resources/app/dist/server.js');
+    expect(error.message).toContain('解压');
+    expect(error.cause.code).toBe('ENOENT');
   });
   it('rejects development artifacts and path traversal', async () => {
     expect(() => validateArtifact({ developmentOnly: true })).toThrow('开发结构包');

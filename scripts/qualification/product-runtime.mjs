@@ -37,7 +37,7 @@ async function sha256(path) {
   return hash.digest('hex');
 }
 
-export async function verifyPayload(root) {
+export async function verifyPayload(root, { onProgress = () => {} } = {}) {
   const manifestPath = join(root, 'resources/metadata/artifact.json');
   const artifact = JSON.parse(await readFile(manifestPath, 'utf8'));
   if (
@@ -54,6 +54,7 @@ export async function verifyPayload(root) {
   const sums = await readFile(join(root, 'resources/metadata/SHA256SUMS'), 'utf8');
   const paths = new Set();
   const digest = createHash('sha256');
+  const entries = [];
   for (const line of sums
     .trim()
     .split(/\r?\n/)
@@ -70,9 +71,35 @@ export async function verifyPayload(root) {
     )
       throw new Error('程序校验路径无效');
     paths.add(name);
-    if ((await sha256(join(root, name))) !== match[1])
-      throw new Error(`程序文件校验失败：${name}。请重新解压产品包。`);
-    if (name !== 'resources/metadata/artifact.json') digest.update(`${name}\0${match[1]}\n`);
+    entries.push({ name, expected: match[1] });
+  }
+  onProgress({ completed: 0, total: entries.length });
+  let lastProgress = performance.now();
+  // Bound open files and stream buffers, while avoiding one-at-a-time disk reads.
+  for (let offset = 0; offset < entries.length; offset += 8) {
+    const batch = entries.slice(offset, offset + 8);
+    await Promise.all(
+      batch.map(async ({ name, expected }) => {
+        let actual;
+        try {
+          actual = await sha256(join(root, name));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          throw new Error(`程序包缺少文件：${name}。请等待解压完成后启动，或重新解压完整产品包。`, {
+            cause: error,
+          });
+        }
+        if (actual !== expected) throw new Error(`程序文件校验失败：${name}。请重新解压产品包。`);
+      }),
+    );
+    for (const { name, expected } of batch) {
+      if (name !== 'resources/metadata/artifact.json') digest.update(`${name}\0${expected}\n`);
+    }
+    const completed = offset + batch.length;
+    if (completed === entries.length || performance.now() - lastProgress >= 1000) {
+      onProgress({ completed, total: entries.length });
+      lastProgress = performance.now();
+    }
   }
   for (const name of [
     'Mizar.exe',
@@ -325,7 +352,9 @@ async function main() {
     if (process.platform !== 'win32' || process.arch !== 'x64')
       throw new Error('此产品包需要 64 位 Windows');
     log('artifact_verify_begin');
-    const artifact = await verifyPayload(bundleRoot);
+    const artifact = await verifyPayload(bundleRoot, {
+      onProgress: (progress) => log('artifact_verify_progress', progress),
+    });
     log('artifact_verified', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
     if (args.has('--stop')) {
       log('product_stop_begin');
