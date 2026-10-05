@@ -130,3 +130,7 @@ IEM Focus 默认不显示统计；手动启用 K/A/D/ADR 时使用同一 176px e
 上海安放/拆弹附加面板只在同类动作剩余时间有限且大于零时显示；完成、计时失效、状态切换或取消时同帧撤掉，不显示占位时间，也不等待退出计时器。语义 C4 图标仍由 Program bomb 状态控制，后端未启动导致的数据缺失不作为图标资源 bug 处理。
 
 `node scripts/hud-reference/build-perfectworld.mjs` 从实际 renderer 生成离线展示 ZIP，包含预览、DOM 样本、展示数据、样式、源码、素材和许可。用途是给 Vue 项目参考移植；它不建立公共 SDK、插件协议或第二个 Runtime。说明见 [参考包 README](../../scripts/hud-reference/README.md)。
+
+## 默认 Gameplay 的现行规则
+
+[Mizar Pulse](mizar-pulse.md) 替代此前默认 Gameplay 的冰白比分块和连续浅色战斗带；历史精修记录仅说明前一轮实现，不作为现行组件规范。默认版仍是原有 `current` variant / `mizar-default` recipe，不新增用户预设。四套赛事 recipe 的文字与状态色冻结，不随默认配色变化。复核见 [Pulse 实际渲染](reviews/mizar-pulse.md)。

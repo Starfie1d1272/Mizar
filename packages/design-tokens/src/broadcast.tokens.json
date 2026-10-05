@@ -35,6 +35,36 @@
       "depth": {
         "$value": "{brand.depth}"
       }
+    },
+    "pulse": {
+      "$type": "color",
+      "canvas": {
+        "$value": "{brand.pulse.canvas}"
+      },
+      "shell": {
+        "$value": "{brand.pulse.shell}"
+      },
+      "raised": {
+        "$value": "{brand.pulse.raised}"
+      },
+      "blue": {
+        "$value": "{brand.pulse.blue}"
+      },
+      "highlight": {
+        "$value": "{brand.pulse.highlight}"
+      },
+      "white": {
+        "$value": "{brand.pulse.white}"
+      },
+      "muted": {
+        "$value": "{brand.pulse.muted}"
+      },
+      "gold": {
+        "$value": "{brand.pulse.gold}"
+      },
+      "danger": {
+        "$value": "{brand.pulse.danger}"
+      }
     }
   }
 }

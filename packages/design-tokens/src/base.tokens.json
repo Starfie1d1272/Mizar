@@ -197,6 +197,80 @@
           "alpha": 1
         }
       }
+    },
+    "pulse": {
+      "canvas": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.054902, 0.07451, 0.101961],
+          "alpha": 1
+        }
+      },
+      "shell": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.078431, 0.105882, 0.141176],
+          "alpha": 1
+        }
+      },
+      "raised": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.105882, 0.145098, 0.192157],
+          "alpha": 1
+        }
+      },
+      "blue": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.176471, 0.498039, 0.976471],
+          "alpha": 1
+        }
+      },
+      "highlight": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.34902, 0.658824, 1.0],
+          "alpha": 1
+        }
+      },
+      "white": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.956863, 0.972549, 0.992157],
+          "alpha": 1
+        }
+      },
+      "muted": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.603922, 0.658824, 0.717647],
+          "alpha": 1
+        }
+      },
+      "gold": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.941176, 0.721569, 0.294118],
+          "alpha": 1
+        }
+      },
+      "danger": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.945098, 0.423529, 0.423529],
+          "alpha": 1
+        }
+      }
     }
   },
   "space": {

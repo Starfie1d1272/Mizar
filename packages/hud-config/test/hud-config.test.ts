@@ -143,7 +143,7 @@ describe('hud-config schema and framework contract', () => {
     expect(preset.id).toBe(BUILTIN_PRESET_ID);
     expect(layout.id).toBe(BUILTIN_LAYOUT_ID);
     expect(Object.keys(layout.widgets).sort()).toEqual([...HUD_WIDGET_IDS].sort());
-    expect(layout.widgets.radar.size).toEqual({ width: 400, height: 400 });
+    expect(layout.widgets.radar.size).toEqual({ width: 368, height: 368 });
     expect(placementToBox('top-score-bar', layout.widgets['top-score-bar'])).toMatchObject({
       left: 560,
       top: 24,
@@ -279,10 +279,10 @@ describe('hud-config schema and framework contract', () => {
       cornerStyle: 'rounded',
     });
 
-    expect(standard.semantic.colors.sideCt).toBe('#6aa8ff');
-    expect(light.semantic.colors.sideT).toBe('#f2bd4f');
-    expect(light.semantic.colors.stateDanger).toBe('#f06f6f');
-    expect(light.semantic.colors.objectiveBomb).toBe('#f06f6f');
+    expect(standard.semantic.colors.sideCt).toBe('#2d7ff9');
+    expect(light.semantic.colors.sideT).toBe('#f0b84b');
+    expect(light.semantic.colors.stateDanger).toBe('#f16c6c');
+    expect(light.semantic.colors.objectiveBomb).toBe('#f16c6c');
     expect(light.brandColor).toBe('#ff00aa');
     expect(light.semantic.surface.opacity).toBeLessThan(1);
     expect(light.semantic.radius.lg).toBeGreaterThan(0);
@@ -354,7 +354,7 @@ describe('hud-config schema and framework contract', () => {
     expect(resolveActiveHudPreset(parsed).theme.semantic.colors.textPrimary).toBe('#ffffff');
     expect(resolveActiveHudPreset(parsed).theme.semantic.surface.opacity).toBe(0.61);
     expect(resolveHudPreset(preset, layout, theme).theme.semantic.colors.textPrimary).toBe(
-      '#f3f6fa',
+      '#f4f8fd',
     );
   });
 
@@ -465,7 +465,7 @@ describe('hud-config logical geometry', () => {
   it('allows only square radar resize and snaps to the 10px grid', () => {
     const resized = resizeRadarPlacement(getBuiltinLayout().widgets.radar, 77);
     expect(resized.size?.width).toBe(resized.size?.height);
-    expect(resized.size?.width).toBe(480);
+    expect(resized.size?.width).toBe(450);
     expect(snapToGrid(24)).toBe(20);
     expect(() => resizeRadarPlacement(getBuiltinLayout().widgets['top-score-bar'], 20)).toThrow();
     expect(resizeRadarPlacement(getBuiltinLayout().widgets.radar, 10_000).size?.width).toBe(

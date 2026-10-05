@@ -119,9 +119,19 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     for (const bar of await page.locator('[data-health-bar]').all())
       expect((await bar.boundingBox())!.height).toBe(7);
     const focus = page.locator('.focused-player');
-    if (await focus.count()) expect((await focus.boundingBox())!.height).toBe(96);
+    if (await focus.count()) expect((await focus.boundingBox())!.height).toBe(72);
     if (id === 'real-live-rich') {
       // A light ammo surface must explicitly override inherited white / muted text.
+      const focusBox = (await focus.boundingBox())!;
+      const ammoBox = (await page.locator('.focused-player__ammo').boundingBox())!;
+      expect(ammoBox.width).toBeGreaterThanOrEqual(72);
+      for (const text of await page
+        .locator('.focused-player__ammo > strong, .focused-player__ammo > span')
+        .all()) {
+        const bounds = (await text.boundingBox())!;
+        expect(bounds.y).toBeGreaterThanOrEqual(focusBox.y + 8);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(focusBox.y + focusBox.height - 8);
+      }
       const ratios = await focus.evaluate((el) => {
         const context = document.createElement('canvas').getContext('2d')!;
         const luminance = (color: string) => {
@@ -133,7 +143,7 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
           });
           return rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722;
         };
-        const surface = luminance(getComputedStyle(el, '::after').backgroundColor);
+        const surface = luminance(getComputedStyle(el).backgroundColor);
         return [
           ...el.querySelectorAll('.focused-player__ammo > strong, .focused-player__ammo > span'),
         ].map((text) => {
@@ -312,7 +322,7 @@ test('native C4 prediction uses real replay damage and remains distinct from hea
   await expect(page.locator('.focused-player__metrics')).toBeVisible();
   const focus = (await page.locator('.focused-player').boundingBox())!;
   expect(focus.width).toBe(360);
-  expect(focus.height).toBe(120);
+  expect(focus.height).toBe(96);
   for (const part of [
     '.focused-player__vitals',
     '.focused-player__active',
@@ -482,4 +492,51 @@ test('native smoke uses the shared cloud below combat information and clears at 
   snapshot = sample('real-post-explosion-freezetime');
   await page.reload();
   await expect(page.locator('.broadcast-smoke[data-smoked="true"]')).toHaveCount(0);
+});
+
+test('Pulse objective flash follows factual mode and reduced motion stops decorative animation', async ({
+  page,
+}) => {
+  await page.route('**/local/v1/hud-config', (route) =>
+    route.fulfill({
+      json: { resolved: getBuiltinResolvedPreset(), etag: 'pulse', activeRevision: 'pulse' },
+    }),
+  );
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await feed(page, 'real-defusing');
+  const shell = page.locator('.match-header__score-shell');
+  await expect(shell).toHaveCSS('animation-name', 'mizar-pulse-defusing');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(shell).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.objective-center')).toHaveAttribute(
+    'data-objective-mode',
+    'defusing',
+  );
+  const observed = page.locator('.player-rail__card[data-observed="true"]').first();
+  await expect(observed).toHaveCSS('animation-name', 'none');
+});
+
+test('native radar envelope clears both economy and utility rows in live and freeze', async ({
+  page,
+}) => {
+  await page.route('**/local/v1/hud-config', (route) =>
+    route.fulfill({
+      json: {
+        resolved: getBuiltinResolvedPreset(),
+        etag: 'pulse-position',
+        activeRevision: 'pulse-position',
+      },
+    }),
+  );
+  for (const id of ['real-live-rich', 'real-post-explosion-freezetime']) {
+    await feed(page, id);
+    const radar = (await page.locator('[data-hud-widget="radar"]').boundingBox())!;
+    const summary = (await page
+      .locator('.player-rail--left .player-rail__summary-slot')
+      .boundingBox())!;
+    const strip = (await page.locator('[data-hud-widget="series-strip"]').boundingBox())!;
+    expect(radar.width).toBe(radar.height);
+    expect(radar.y).toBeGreaterThanOrEqual(strip.y + strip.height + 8);
+    expect(radar.y + radar.height + 8).toBeLessThanOrEqual(summary.y);
+  }
 });

@@ -90,6 +90,8 @@ const BUILTIN_LAYOUT: HudLayout = deepFreeze({
       offsetY: 24,
       size: NATIVE_WIDGET_DIMENSIONS['top-score-bar']!,
     },
+    // Leave 8px before the rail's freeze economy row without moving the five player rows.
+    radar: { ...cloneJson(DEFAULT_PLACEMENTS.radar), size: { width: 368, height: 368 } },
     'team-ct-rail': { visible: true, anchor: 'top-left', offsetX: 20, offsetY: 492 },
     'team-t-rail': { visible: true, anchor: 'top-right', offsetX: -20, offsetY: 492 },
     'round-history': {
@@ -114,7 +116,7 @@ const BUILTIN_THEME: HudTheme = deepFreeze({
   id: BUILTIN_THEME_ID,
   name: 'Mizar 默认外观',
   recipe: 'mizar-default',
-  brandColor: '#38bdf8',
+  brandColor: '#2d7ff9',
   panelStyle: 'standard',
   cornerStyle: 'square',
 });

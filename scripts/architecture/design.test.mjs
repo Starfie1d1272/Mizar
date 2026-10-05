@@ -26,7 +26,18 @@ describe('Design System architecture guard', () => {
       ),
     );
     const unscoped = [];
+    sheet.walkAtRules('keyframes', (rule) => {
+      expect([
+        'mizar-pulse-enter',
+        'mizar-pulse-observed',
+        'mizar-pulse-planted',
+        'mizar-pulse-defusing',
+        'mizar-pulse-resolved',
+        'mizar-pulse-scan',
+      ]).toContain(rule.params);
+    });
     sheet.walkRules((rule) => {
+      if (rule.parent.type === 'atrule' && rule.parent.name === 'keyframes') return;
       let scoped = false;
       for (let node = rule; node; node = node.parent) {
         if (

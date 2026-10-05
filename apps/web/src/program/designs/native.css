@@ -1,9 +1,52 @@
 @import './native-match-states.css';
 
 /* Mizar native broadcast. Existing default variants only; tournament recipes stay isolated.
- * Straight combat grids share the program palette; arc surfaces stay outside critical numbers. No gameplay clock is owned here. */
+ * Mizar Pulse: dark shells, cold-white reads and blue energy edges. No gameplay clock is owned here. */
 .hud-widget-design[data-hud-design='current'] {
   container-type: inline-size;
+
+  .match-header__score-shell,
+  .focused-player,
+  .match-header__series-map {
+    background-color: var(--mizar-hud-surface-strong);
+    background-image: repeating-linear-gradient(
+      125deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--mizar-hud-text-primary) 2%, transparent) 5px 6px
+    );
+    box-shadow:
+      inset 0 2px var(--mizar-broadcast-pulse-blue),
+      0 5px 14px color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 32%, transparent);
+  }
+  .match-header__score-shell {
+    box-shadow: inset 0 2px var(--mizar-broadcast-pulse-blue);
+    animation: mizar-pulse-enter 220ms ease-out both;
+  }
+  .match-header__score-shell:has([data-objective-mode='planted']) {
+    animation-name: mizar-pulse-planted;
+  }
+  .match-header__score-shell:has([data-objective-mode='defusing']) {
+    animation-name: mizar-pulse-defusing;
+  }
+  .match-header__score-shell:has([data-round-over='true']),
+  .match-header__score-shell:has([data-objective-mode='defused']),
+  .match-header__score-shell:has([data-objective-mode='exploded']) {
+    animation-name: mizar-pulse-resolved;
+  }
+  /* Separate names restart the same short flash when factual objective mode changes. */
+
+  .player-rail__card--freezetime,
+  .focused-player {
+    animation: mizar-pulse-enter 220ms ease-out both;
+  }
+  .match-header__series-map--current .match-header__series-map-status {
+    color: var(--mizar-broadcast-pulse-highlight);
+  }
+  .radar {
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 72%, transparent);
+    box-shadow: inset 0 2px var(--mizar-broadcast-pulse-blue);
+  }
 
   .match-header__top-score {
     width: 100%;
@@ -18,6 +61,24 @@
     gap: 0;
     background: var(--mizar-hud-surface-strong);
     border-radius: 6px;
+  }
+  .match-header__score-shell::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 3px;
+    border-radius: 6px 6px 0 0;
+    background: linear-gradient(
+      90deg,
+      var(--mizar-broadcast-pulse-blue),
+      var(--mizar-broadcast-pulse-highlight) 48%,
+      var(--mizar-broadcast-pulse-blue) 94%,
+      var(--mizar-broadcast-pulse-gold) 94%
+    );
+    pointer-events: none;
+    z-index: 8;
+    background-size: 200% 100%;
+    animation: mizar-pulse-scan 220ms ease-out both;
   }
   .match-header__score-zone,
   .match-header__center {
@@ -77,17 +138,17 @@
   }
   .match-header__score-zone--score {
     padding-bottom: 8px;
-    height: 72px;
-    margin: 4px 5px;
+    height: 80px;
+    margin: 0;
     align-self: center;
     border-radius: 4px;
-    background: var(--mizar-broadcast-brand-front);
-    color: var(--mizar-hud-surface-strong);
+    background: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
   }
   .match-header__map-score {
     font-family: var(--mizar-type-family-display);
-    color: var(--mizar-hud-surface-strong);
-    font-size: 64px;
+    color: var(--mizar-hud-text-primary);
+    font-size: 68px;
     line-height: 64px;
     font-weight: 700;
   }
@@ -98,7 +159,7 @@
   .match-header__win-slots span {
     width: 12px;
     height: 3px;
-    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
+    background: var(--mizar-hud-surface-primary);
   }
   .match-header__center {
     grid-area: clock;
@@ -107,7 +168,7 @@
     background: var(--mizar-hud-surface-strong);
   }
   .match-header__win-slots span[data-series-win-slot='won'] {
-    background: var(--mizar-hud-surface-strong);
+    background: var(--mizar-broadcast-pulse-gold);
   }
   .match-header__clock-value {
     font-family: var(--mizar-type-family-display);
@@ -238,17 +299,17 @@
     background: var(--mizar-hud-surface-primary);
   }
   .player-rail__avatar img {
-    width: 64px;
-    height: 64px;
-    margin: 6px;
-    border-radius: 3px;
+    width: 76px;
+    height: 76px;
+    margin: 0;
+    border-radius: 0;
   }
   .player-rail__avatar::after {
     display: none;
   }
   .player-rail__equipment .player-rail__icon,
   .player-rail__utility-icons .player-rail__icon {
-    background-color: var(--mizar-hud-surface-strong);
+    background-color: var(--mizar-hud-text-primary);
     opacity: 0.65;
   }
   .player-rail__card[data-avatar='false'] .player-rail__avatar {
@@ -263,13 +324,22 @@
     height: 76px;
     background: linear-gradient(
       var(--mizar-hud-surface-primary) 0 32px,
-      var(--mizar-broadcast-brand-front) 32px
+      var(--mizar-hud-surface-strong) 32px
     );
     border-radius: 0 4px 4px 0;
     box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
   }
   .player-rail--right .player-rail__body {
     border-radius: 4px 0 0 4px;
+  }
+  .player-rail__body {
+    background-image:
+      repeating-linear-gradient(
+        125deg,
+        transparent 0 5px,
+        color-mix(in srgb, var(--mizar-hud-text-primary) 2%, transparent) 5px 6px
+      ),
+      linear-gradient(var(--mizar-hud-surface-primary) 0 32px, var(--mizar-hud-surface-strong) 32px);
   }
   .player-rail__body::after {
     display: none;
@@ -294,7 +364,7 @@
     text-shadow: none;
   }
   .player-rail__health-value {
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
     position: absolute;
     right: 0;
     top: 27px;
@@ -377,7 +447,7 @@
     height: 18px;
   }
   .player-rail__weapons .player-rail__icon {
-    background-color: var(--mizar-hud-surface-strong);
+    background-color: var(--mizar-hud-text-primary);
   }
   .player-rail__icon[data-weapon-active='false'] {
     opacity: 0.5;
@@ -406,7 +476,7 @@
     bottom: 10px;
     font-size: 16px;
     font-weight: 600;
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
     opacity: 1;
     z-index: 3;
   }
@@ -458,7 +528,7 @@
     left: 78px;
     bottom: 9px;
     font-size: 12px;
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
     opacity: 0.6;
   }
   .player-rail--right .player-rail__spent {
@@ -494,10 +564,28 @@
     color: var(--mizar-hud-surface-strong);
   }
   .player-rail__card::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 2px;
+    background: linear-gradient(90deg, var(--mizar-side-ct), transparent 90%);
+    pointer-events: none;
+    z-index: 5;
+    background-size: 200% 100%;
+    animation: mizar-pulse-scan 220ms ease-out both;
+  }
+  .player-rail__card[data-side='T']::after {
+    background: linear-gradient(90deg, var(--mizar-side-t), transparent 90%);
+  }
+  .player-rail--right .player-rail__card::after {
+    transform: scaleX(-1);
+  }
+  .player-rail__card--dead::after {
     display: none;
   }
   .player-rail__card[data-observed='true'] {
-    outline: 1px solid var(--mizar-hud-text-primary);
+    outline: 1px solid var(--mizar-broadcast-pulse-highlight);
+    animation: mizar-pulse-observed 2.4s ease-in-out infinite;
     outline-offset: -1px;
   }
   .player-rail__round-kill-slot {
@@ -646,30 +734,15 @@
 
   .focused-player {
     width: 100%;
-    margin-top: 80px;
-    height: 96px;
+    margin-top: 104px;
+    height: 72px;
     border-radius: 6px;
     background: var(--mizar-hud-surface-strong);
     overflow: hidden;
   }
-  .focused-player::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    top: 32px;
-    width: 86px;
-    height: 64px;
-    background: var(--mizar-broadcast-brand-front);
-    mask: url('./arc-cut.svg') right center / 86px 64px no-repeat;
-    pointer-events: none;
-  }
-  .focused-player:has(.focused-player__face[data-dead='true'])::after,
-  .focused-player:not(:has(.focused-player__ammo > strong))::after {
-    display: none;
-  }
   .focused-player[data-show-metrics='true'] {
-    margin-top: 56px;
-    height: 120px;
+    margin-top: 80px;
+    height: 96px;
   }
   .focused-player__face {
     display: block;
@@ -679,7 +752,7 @@
     position: absolute;
     left: 80px;
     top: 0;
-    right: 0;
+    right: 84px;
     width: auto;
     height: 32px;
     padding: 0 12px;
@@ -694,7 +767,7 @@
   }
   .focused-player__metrics {
     position: absolute;
-    top: 99px;
+    top: 75px;
     left: 12px;
     right: 12px;
     justify-content: flex-end;
@@ -706,19 +779,20 @@
     position: absolute;
     inset: 0;
     width: 100%;
-    height: 96px;
+    height: 72px;
     padding: 0;
   }
   .focused-player__media,
   .focused-player__media img {
     position: absolute;
-    top: 8px;
-    left: 0;
-    width: 80px;
-    height: 80px;
+    top: 4px;
+    left: 4px;
+    width: 64px;
+    height: 64px;
   }
   .focused-player__media img {
     top: 0;
+    left: 0;
   }
   .focused-player__face[data-media-unavailable='true'] {
     .focused-player__media {
@@ -749,35 +823,40 @@
     top: 36px;
     left: 48%;
     width: 28%;
-    height: 54px;
+    height: 34px;
   }
   .focused-player__active .focused-player__icon {
     max-width: 120px;
   }
   .focused-player__ammo {
     z-index: 2;
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
     position: absolute;
-    top: 34px;
-    right: 10px;
-    width: 50px;
-    height: 54px;
+    top: 10px;
+    right: 8px;
+    width: 72px;
+    height: 52px;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-left: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent);
   }
   .focused-player__ammo > strong {
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-primary);
     font-family: var(--mizar-type-family-display);
-    font-size: 38px;
-    line-height: 38px;
+    font-size: 34px;
+    line-height: 34px;
   }
   .focused-player__ammo > span {
-    color: var(--mizar-hud-surface-strong);
+    color: var(--mizar-hud-text-muted);
+    line-height: 14px;
   }
   .focused-player__vitals {
     position: absolute;
     top: 34px;
     left: 92px;
     width: 115px;
-    height: 56px;
+    height: 34px;
     padding: 0;
   }
   .focused-player__vitals-values {
@@ -785,8 +864,8 @@
   }
   .focused-player__hp {
     font-family: var(--mizar-type-family-display);
-    font-size: 38px;
-    line-height: 38px;
+    font-size: 30px;
+    line-height: 30px;
   }
   .focused-player__health-track {
     width: 60px;
@@ -836,7 +915,8 @@
     font-size: 9px;
   }
   .match-header__series-map--current {
-    border-bottom: 2px solid var(--mizar-broadcast-brand-primary);
+    border-bottom: 2px solid var(--mizar-broadcast-pulse-blue);
+    box-shadow: inset 0 2px var(--mizar-broadcast-pulse-highlight);
   }
   .match-header__series-map-art-image {
     opacity: 0.65;
@@ -956,7 +1036,7 @@
     }
     .focused-player__ammo {
       right: 8px;
-      width: 64px;
+      width: 72px;
     }
     .focused-player__active .focused-player__icon {
       max-width: 92px;
@@ -965,5 +1045,64 @@
       left: 172px;
       width: 140px;
     }
+  }
+}
+
+@keyframes mizar-pulse-enter {
+  from {
+    filter: brightness(1.28);
+  }
+  to {
+    filter: brightness(1);
+  }
+}
+@keyframes mizar-pulse-observed {
+  0%,
+  100% {
+    outline-color: var(--mizar-broadcast-pulse-blue);
+  }
+  50% {
+    outline-color: var(--mizar-broadcast-pulse-highlight);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-widget-design[data-hud-design='current'] *,
+  .hud-widget-design[data-hud-design='current'] *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes mizar-pulse-planted {
+  from {
+    filter: brightness(1.28);
+  }
+  to {
+    filter: brightness(1);
+  }
+}
+@keyframes mizar-pulse-defusing {
+  from {
+    filter: brightness(1.28);
+  }
+  to {
+    filter: brightness(1);
+  }
+}
+@keyframes mizar-pulse-resolved {
+  from {
+    filter: brightness(1.28);
+  }
+  to {
+    filter: brightness(1);
+  }
+}
+
+@keyframes mizar-pulse-scan {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
   }
 }

@@ -1,4 +1,4 @@
-import { DEFAULT_THEME_RECIPE } from './default-theme.js';
+import { DEFAULT_THEME_RECIPE, REFERENCE_THEME_COLORS } from './default-theme.js';
 import type { HudBroadcastStyleDefinition } from '../types.js';
 
 export const IEM_STYLE = {
@@ -15,7 +15,7 @@ export const IEM_STYLE = {
   recipe: {
     ...DEFAULT_THEME_RECIPE,
     id: 'iem',
-    colors: { ...DEFAULT_THEME_RECIPE.colors, sideCt: '#203995', sideT: '#a9911c' },
+    colors: { ...REFERENCE_THEME_COLORS, sideCt: '#203995', sideT: '#a9911c' },
     surfaces: {
       solid: { primary: '#071658', strong: '#02082c', opacity: 0.98, borderOpacity: 0.28 },
       standard: { primary: '#071658', strong: '#02082c', opacity: 0.88, borderOpacity: 0.16 },
