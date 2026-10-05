@@ -10,7 +10,7 @@ export const CI_JOB_IDS = Object.freeze([
   'qualification_windows',
 ]);
 
-const DOCS_ONLY_PATTERN = /^(?:docs\/.*|.*\.(?:md|mdx))$/;
+const DOCS_ONLY_PATTERN = /^(?:docs\/.*|.*\.(?:md|mdx))$/s;
 const WEB_BEHAVIOR_SOURCE_PATTERN = /\.(?:ts|tsx|js|jsx|html)$/;
 const KNOWN_QUALITY_PREFIXES = ['apps/', 'packages/', 'tests/', 'scripts/'];
 const PLATFORM_PREFIXES = [
@@ -100,7 +100,7 @@ function isQualificationPath(path) {
 }
 
 function isUnsafeChangeStatus(status) {
-  return !/^[AM]$/.test(status ?? '');
+  return !/^(?:[AMD]|R(?:100|0[0-9]{2}|[0-9]{1,2}))$/.test(status ?? '');
 }
 
 function fullPlan(reason, includeOfflineQualification = false) {
@@ -148,25 +148,39 @@ function selectivePlan(changedFiles, eventName) {
 /** @typedef {{ path: string, status?: string }} ChangedFile */
 
 /**
- * Parse `git diff --name-status --find-renames` output without treating a
- * rename as a safe content-preserving change. The caller can therefore fail
- * closed before trying to classify either side of the rename.
+ * Parse name-status records. Deleted paths and both sides of a rename retain
+ * their classification; malformed records fail closed. CI uses -z so Unicode,
+ * whitespace and quoted Git paths are never mistaken for unknown paths.
  *
  * @param {string} output
  * @returns {ChangedFile[]}
  */
 export function parseGitDiffNameStatus(output) {
   const changedFiles = [];
-  for (const line of output.split(/\r?\n/)) {
-    if (line.trim() === '') continue;
-    const fields = line.split('\t');
-    const status = fields[0] ?? '';
-    const paths = fields.slice(1).filter((path) => path !== '');
-    if (paths.length === 0) {
-      changedFiles.push({ path: '', status });
-      continue;
+  const add = (status, paths) => {
+    const expected = status.startsWith('R') ? 2 : 1;
+    if (isUnsafeChangeStatus(status) || paths.length !== expected || paths.some((p) => !p)) {
+      changedFiles.push({ path: '', status: 'X' });
+      return;
     }
     for (const path of paths) changedFiles.push({ path: normalizePath(path), status });
+  };
+  if (output.includes('\0')) {
+    const fields = output.split('\0');
+    if (fields.pop() !== '') return [{ path: '', status: 'X' }];
+    for (let i = 0; i < fields.length;) {
+      const status = fields[i++];
+      const count = status.startsWith('R') ? 2 : 1;
+      add(status, fields.slice(i, i + count));
+      i += count;
+    }
+  } else {
+    for (const line of output.split(/\r?\n/)) {
+      if (line === '') continue;
+      const [status, ...paths] = line.split('\t');
+      // Non-NUL Git output may C-quote paths. Never classify such an escape.
+      add(status, paths.some((path) => path.startsWith('"')) ? [] : paths);
+    }
   }
   return changedFiles;
 }
@@ -176,8 +190,7 @@ export function parseGitDiffNameStatus(output) {
  */
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
-  if (eventName !== 'pull_request' && eventName !== 'push')
-    return fullPlan(`forced full for ${eventName}`, true);
+  if (eventName !== 'pull_request') return fullPlan(`forced full for ${eventName}`, true);
   const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>

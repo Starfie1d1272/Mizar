@@ -44,7 +44,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "push" ]; then
             if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
               printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
-            elif git diff --name-status --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.tsv"; then
+            elif git diff --name-status -z --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.tsv"; then
               :
             else
               printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
@@ -60,10 +60,14 @@ jobs:
           CHANGED_FILES_FILE: ${{ runner.temp }}/changed-files.tsv
 
   quality:
-    name: quality
+    name: quality / ${{ matrix.lane }}
     if: ${{ needs.plan.outputs.run_quality == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [static, unit, fixtures, build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,43 +85,40 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check formatting
-        run: pnpm format:check
+      - name: Static checks
+        if: ${{ matrix.lane == 'static' }}
+        run: |
+          pnpm format:check
+          pnpm lint
+          pnpm architecture:check
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Check architecture
-        run: pnpm architecture:check
-
-      - name: Verify checked-in CS2 assets
-        run: pnpm cs2-assets:verify
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Verify real-derived Program fixtures
-        run: pnpm fixtures:program:verify
-
-      - name: Verify real-derived Radar fixtures
-        run: pnpm fixtures:radar:verify
-
-      - name: Verify replay acceptance artifacts
-        run: pnpm fixtures:replay:verify
-
-      - name: Test
+      - name: Unit and contract tests
+        if: ${{ matrix.lane == 'unit' }}
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
+      - name: Verify generated assets and real-derived fixtures
+        if: ${{ matrix.lane == 'fixtures' }}
+        run: |
+          pnpm --filter @mizar/companion... build
+          pnpm cs2-assets:verify
+          pnpm fixtures:program:verify
+          pnpm fixtures:radar:verify
+          pnpm fixtures:replay:verify
 
-      - name: Verify Radar release guards
-        run: pnpm exec vitest run scripts/radar-view/release.test.mjs
+      - name: Typecheck and build
+        if: ${{ matrix.lane == 'build' }}
+        run: |
+          pnpm typecheck
+          pnpm build
 
-      - name: Verify standalone Radar package consumer
-        run: node scripts/radar-view/consumer-smoke.mjs
+      - name: Verify Radar release guards and standalone consumer
+        if: ${{ matrix.lane == 'build' }}
+        run: |
+          pnpm exec vitest run scripts/radar-view/release.test.mjs
+          node scripts/radar-view/consumer-smoke.mjs
 
       - name: Upload verified Radar npm artifact
+        if: ${{ matrix.lane == 'build' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: radar-view-${{ github.event.pull_request.head.sha || github.sha }}
@@ -126,6 +127,7 @@ jobs:
           retention-days: 30
 
       - name: Production Web host smoke
+        if: ${{ matrix.lane == 'build' }}
         timeout-minutes: 2
         run: pnpm local-web:production-smoke
 
@@ -166,11 +168,15 @@ jobs:
         run: pnpm design:components:test
 
   acceptance:
-    name: acceptance
+    name: acceptance / ${{ matrix.shard }} of 4
     if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -190,13 +196,13 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run HUD Replay browser acceptance
-        run: pnpm acceptance:test
+        run: pnpm acceptance:test --shard=${{ matrix.shard }}/4
 
       - name: Upload browser acceptance diagnostics
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-acceptance-diagnostics
+          name: playwright-acceptance-diagnostics-${{ matrix.shard }}
           path: |
             playwright-acceptance-report/**
             test-results/**
@@ -230,17 +236,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check architecture
-        run: pnpm architecture:check
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
+      - name: Build production packages
         run: pnpm build
+
+      - name: Test OS-sensitive filesystem, process and transport behavior
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts
+          packages/telemetry-gsi
+          packages/telemetry-cstv
+          scripts/qualification/product-runtime.test.mjs
+          scripts/qualification/product-logs.test.mjs
+          scripts/qualification/supervisor.test.mjs
+          scripts/qualification/offline.test.mjs
+          apps/companion/test/capture-recorder.test.ts
+          apps/companion/test/gsi-capture.integration.test.ts
+          apps/companion/test/local-web-host.integration.test.ts
+          apps/companion/test/local-websocket-transport.test.ts
+          apps/companion/test/local-tournament-store.test.ts
+          apps/companion/test/hud-config-store.test.ts
+          apps/companion/test/reliable-outbox.test.ts
+          apps/companion/test/support-export.test.ts
 
       - name: Production Web host smoke
         timeout-minutes: 2

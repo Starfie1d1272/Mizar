@@ -157,26 +157,55 @@ describe('changed-surface CI planner', () => {
     ['workflow', ['.github/workflows/ci.yml']],
     ['planner self-change', ['scripts/ci/plan.mjs']],
     ['unknown path', ['fixtures/custom-input.json']],
-    ['rename', [{ path: 'packages/core/src/old.ts', status: 'R100' }]],
-    ['delete', [{ path: 'packages/core/src/old.ts', status: 'D' }]],
     ['type change', [{ path: 'packages/core/src/old.ts', status: 'T' }]],
   ])('%s fails closed to full CI', (_name, changedFiles) => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);
   });
 
-  it('selects only matching evidence for an ordinary main push', () => {
-    const plan = createCiPlan({
-      eventName: 'push',
-      changedFiles: ['apps/web/src/program/widgets/player-rails/PlayerCard.tsx'],
-    });
-    expect(plan).toMatchObject({
-      runQuality: true,
-      runAcceptance: true,
-      runPlatform: false,
-      runQualification: false,
-    });
-    expect(plan.requiredJobs).toEqual(['quality', 'acceptance']);
-    expect(plan.runOfflineQualification).toBe(false);
+  it('runs full validation on main pushes', () => {
+    const plan = createCiPlan({ eventName: 'push', changedFiles: ['README.md'] });
+    expect(plan).toMatchObject(full);
+    expect(plan.runOfflineQualification).toBe(true);
+  });
+
+  it.each([
+    ['D\tdocs/old.md\n', []],
+    ['R100\tdocs/old.md\tdocs/archive/new.md\n', []],
+    ['R096\tdocs/design/old.md\tdocs/archive/old.md\n', ['design']],
+    ['R80\tdocs/old.md\tapps/web/src/new.ts\n', ['quality', 'acceptance']],
+    [
+      'R100\tapps/desktop/src-tauri/src/old.rs\tdocs/archive/old.md\n',
+      ['quality', 'qualification_windows'],
+    ],
+    ['D\tapps/companion/src/output/service.ts\n', ['quality', 'platform']],
+  ])('classifies delete/rename risk union: %s', (diff, requiredJobs) => {
+    expect(createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) }).requiredJobs).toEqual(
+      requiredJobs,
+    );
+  });
+
+  it('parses Unicode and whitespace paths from NUL-delimited Git output', () => {
+    expect(
+      createCiPlan({
+        changedFiles: parseGitDiffNameStatus(
+          'R100\0docs/旧 文件.md\0docs/archive/新\n文件.md\0D\0docs/old.png\0',
+        ),
+      }).requiredJobs,
+    ).toEqual([]);
+  });
+
+  it.each([
+    'R100\tdocs/old.md\n',
+    'R101\tdocs/old.md\tdocs/new.md\n',
+    'M\tdocs/a.md\tdocs/b.md\n',
+    'D\0',
+    'M\0docs/a.md',
+    'M\t"docs/quoted.md"\n',
+    'T\tdocs/a.md\n',
+    'R100\tdocs/a.md\tunknown.file\n',
+    'R100\t.github/workflows/ci.yml\tdocs/archive/ci.md\n',
+  ])('fails closed for malformed, unknown or high-risk diff: %s', (diff) => {
+    expect(createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) })).toMatchObject(full);
   });
 
   it.each([

@@ -51,8 +51,12 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 
 - 普通文档只运行计划器和汇总检查；`docs/design/**` 另运行设计检查。
 - 代码运行基础质量检查，Web 语义与验收路径增加浏览器验收，平台相关路径增加对应平台检查。
-- 未知路径、无法确定的差异、重命名/删除、工作流、锁文件、工具链或计划器改动默认完整验证。
-- 定时或手工完整验证包含离线验收；选择性 PR 检查不保证生成 Windows 包。
+- 未知路径、无法确定的差异、工作流、锁文件、工具链或计划器改动默认完整验证。
+- 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
+- quality 分成 static、unit、fixtures、typecheck/build 四个并行 lane；所有选中 lane 成功才算 quality 成功。
+- 浏览器验收按文件分成四个独立 job，每个保持一个 worker 和原串行语义；所有 shard 成功才算 acceptance 成功，失败报告按 shard 独立保留。
+- Windows/macOS 验证 production build、文件系统/进程/传输与 production host smoke；完整 JS unit suite 在 Ubuntu 执行一次，Windows 包另有 Rust 与 GUI smoke。
+- main push、定时或手工验证运行完整检查并包含离线验收；选择性 PR 检查不保证生成 Windows 包。
 
 不要为了避免检查改变分类或恢复旧锁文件。执行过的检查如实写入 PR，未执行的不得记为通过。
 
