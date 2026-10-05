@@ -4,7 +4,7 @@ import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 for (const [width, height] of [
   [1920, 1080],
   [2560, 1440],
-]) {
+] as const) {
   for (const scale of [1, 1.25, 1.5]) {
     test(`Workspace controls fit ${width}×${height} at ${scale * 100}% without scrolling or clipping`, async ({
       page,
