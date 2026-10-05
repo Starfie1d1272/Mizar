@@ -1,3 +1,5 @@
+@import './native-match-states.css';
+
 /* Mizar native broadcast. Existing default variants only; tournament recipes stay isolated.
  * Straight combat grids share the program palette; arc surfaces stay outside critical numbers. No gameplay clock is owned here. */
 .hud-widget-design[data-hud-design='current'] {
@@ -14,7 +16,8 @@
     grid-template-columns: minmax(0, 1fr) 84px 120px 84px minmax(0, 1fr);
     grid-template-areas: 'team-a score-a clock score-b team-b';
     gap: 0;
-    background: transparent;
+    background: var(--mizar-hud-surface-strong);
+    border-radius: 6px;
   }
   .match-header__score-zone,
   .match-header__center {
@@ -39,9 +42,11 @@
   }
   .match-header__score-zone--logo-a {
     grid-area: team-a;
+    border-radius: 6px 0 0 6px;
   }
   .match-header__score-zone--logo-b {
     grid-area: team-b;
+    border-radius: 0 6px 6px 0;
     flex-direction: row-reverse;
     text-align: right;
   }
@@ -72,13 +77,18 @@
   }
   .match-header__score-zone--score {
     padding-bottom: 8px;
-    color: var(--mizar-hud-text-primary);
+    height: 72px;
+    margin: 4px 5px;
+    align-self: center;
+    border-radius: 4px;
+    background: var(--mizar-broadcast-brand-front);
+    color: var(--mizar-hud-surface-strong);
   }
   .match-header__map-score {
     font-family: var(--mizar-type-family-display);
-    color: var(--mizar-hud-text-primary);
-    font-size: 58px;
-    line-height: 60px;
+    color: var(--mizar-hud-surface-strong);
+    font-size: 64px;
+    line-height: 64px;
     font-weight: 700;
   }
   .match-header__win-slots {
@@ -88,20 +98,20 @@
   .match-header__win-slots span {
     width: 12px;
     height: 3px;
-    background: color-mix(in srgb, var(--mizar-hud-text-primary) 22%, transparent);
+    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
   }
   .match-header__center {
     grid-area: clock;
     overflow: visible;
-    color: var(--mizar-hud-surface-strong);
-    background: var(--mizar-broadcast-brand-front);
+    color: var(--mizar-hud-text-primary);
+    background: var(--mizar-hud-surface-strong);
   }
   .match-header__win-slots span[data-series-win-slot='won'] {
-    background: var(--mizar-hud-text-primary);
+    background: var(--mizar-hud-surface-strong);
   }
   .match-header__clock-value {
     font-family: var(--mizar-type-family-display);
-    font-size: 34px;
+    font-size: 30px;
     font-weight: 700;
     color: inherit;
   }
@@ -130,26 +140,26 @@
   .objective-center__icon,
   .objective-center[data-objective-mode='defusing'] .objective-center__icon,
   .objective-center__code i {
-    background: var(--mizar-hud-surface-strong);
+    background: var(--mizar-hud-text-primary);
   }
   .objective-center[data-objective-mode='planted'] .objective-center__icon,
   .objective-center[data-objective-mode='planted'] .objective-center__code i {
     background: var(--mizar-hud-state-danger);
   }
   .objective-center__caption {
-    color: var(--mizar-hud-surface-primary);
+    color: var(--mizar-hud-text-muted);
   }
   .objective-center__ring-track {
-    stroke: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
+    stroke: color-mix(in srgb, var(--mizar-hud-text-primary) 22%, transparent);
   }
   .objective-center__ring-fill {
-    stroke: var(--mizar-hud-surface-strong);
+    stroke: var(--mizar-hud-text-primary);
   }
   .objective-center__plant-progress {
-    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 22%, transparent);
+    background: color-mix(in srgb, var(--mizar-hud-text-primary) 22%, transparent);
   }
   .objective-center__plant-progress span {
-    background: var(--mizar-hud-surface-strong);
+    background: var(--mizar-hud-text-primary);
   }
   .objective-center__fuse {
     top: 88px;
@@ -218,7 +228,11 @@
     flex-basis: 76px;
   }
   .player-rail__avatar {
+    border-radius: 4px 0 0 4px;
     background: var(--mizar-hud-surface-strong);
+  }
+  .player-rail--right .player-rail__avatar {
+    border-radius: 0 4px 4px 0;
   }
   .player-rail__card[data-avatar='false'] .player-rail__avatar {
     width: 20px;
@@ -234,7 +248,27 @@
       var(--mizar-hud-surface-primary) 0 30px,
       color-mix(in srgb, var(--mizar-hud-surface-strong) 94%, transparent) 30px
     );
+    border-radius: 0 4px 4px 0;
     box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
+  }
+  .player-rail--right .player-rail__body {
+    border-radius: 4px 0 0 4px;
+  }
+  .player-rail__body::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 30px;
+    width: 180px;
+    height: 39px;
+    border-radius: 4px 0 0 0;
+    background: var(--mizar-broadcast-brand-front);
+    pointer-events: none;
+  }
+  .player-rail--right .player-rail__body::after {
+    right: auto;
+    left: 0;
+    border-radius: 0 4px 0 0;
   }
   .player-rail__body::before {
     display: none;
@@ -248,18 +282,21 @@
   }
   .player-rail__name {
     max-width: calc(100% - 94px);
-    font-size: 19px;
-    font-weight: 650;
-    letter-spacing: 0;
+    font-family: var(--mizar-type-family-display), var(--mizar-type-family-body);
+    color: var(--mizar-hud-text-primary);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
     text-shadow: none;
   }
   .player-rail__health-value {
+    color: var(--mizar-hud-surface-strong);
     position: absolute;
     right: 0;
     top: 27px;
     width: 52px;
     font-family: var(--mizar-type-family-display);
-    font-size: 34px;
+    font-size: 38px;
     line-height: 36px;
     text-shadow: none;
   }
@@ -335,6 +372,9 @@
     max-width: 24px;
     height: 18px;
   }
+  .player-rail__weapons .player-rail__icon {
+    background-color: var(--mizar-hud-surface-strong);
+  }
   .player-rail__icon[data-weapon-active='false'] {
     opacity: 0.5;
   }
@@ -348,7 +388,8 @@
     left: auto;
     width: 58px;
     margin: 0;
-    font-size: 11px;
+    font-size: 14px;
+    color: var(--mizar-hud-text-muted);
     z-index: 3;
   }
   .player-rail--right .player-rail__combat .player-rail__kd {
@@ -358,8 +399,8 @@
   .player-rail__money {
     position: absolute;
     left: 10px;
-    bottom: 11px;
-    font-size: 14px;
+    bottom: 10px;
+    font-size: 16px;
     font-weight: 600;
     color: var(--mizar-hud-text-primary);
     z-index: 3;
@@ -371,7 +412,7 @@
   .player-rail__equipment {
     position: absolute;
     left: 10px;
-    top: 29px;
+    top: 31px;
     width: 64px;
     height: 17px;
     justify-content: flex-start;
@@ -411,7 +452,7 @@
     position: absolute;
     left: 78px;
     bottom: 9px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--mizar-hud-text-muted);
   }
   .player-rail--right .player-rail__spent {
@@ -419,7 +460,8 @@
     right: 78px;
   }
   .player-rail__card--freezetime .player-rail__utility-icons {
-    top: 22px;
+    top: 31px;
+    height: 18px;
   }
   .player-rail__endcap {
     left: 0;
@@ -453,6 +495,7 @@
     outline-offset: -1px;
   }
   .player-rail__round-kill-slot {
+    color: var(--mizar-hud-text-primary);
     position: absolute;
     right: 74px;
     left: auto;
@@ -471,39 +514,111 @@
     height: 18px;
   }
   .player-rail__card--dead .player-rail__body {
-    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 58%, transparent);
+    background: transparent;
+    box-shadow: none;
+  }
+  .player-rail__card--dead .player-rail__body::after {
+    display: none;
+  }
+  .player-rail__card--dead .player-rail__body::before {
+    display: block;
+    inset: 0 auto auto 0;
+    width: 272px;
+    height: 56px;
+    border-radius: 0 4px 4px 0;
+    background: color-mix(in srgb, var(--mizar-hud-surface-strong) 88%, transparent);
+    opacity: 1;
+    transform: none;
+  }
+  .player-rail--right .player-rail__card--dead .player-rail__body::before {
+    inset: 0 0 auto auto;
+    border-radius: 4px 0 0 4px;
   }
   .player-rail__card--dead .player-rail__avatar {
-    opacity: 0.45;
+    clip-path: inset(0 0 20px);
+    opacity: 0.55;
+  }
+  .player-rail__card--dead .player-rail__name {
+    max-width: 202px;
+    color: var(--mizar-hud-text-primary);
+  }
+  .player-rail__card--dead .player-rail__combat .player-rail__kd {
+    left: 10px;
+    right: auto;
+    top: 33px;
+    width: 68px;
+    color: var(--mizar-hud-text-muted);
+    justify-content: flex-start;
+  }
+  .player-rail--right .player-rail__card--dead .player-rail__combat .player-rail__kd {
+    left: auto;
+    right: 10px;
+    justify-content: flex-end;
+  }
+  .player-rail__card--dead .player-rail__money {
+    left: 82px;
+    right: auto;
+    bottom: auto;
+    top: 33px;
+    font-size: 14px;
+    color: var(--mizar-hud-text-muted);
+  }
+  .player-rail--right .player-rail__card--dead .player-rail__money {
+    left: auto;
+    right: 82px;
   }
   .player-rail__life-state {
     position: absolute;
-    right: 0;
-    top: 29px;
-    font-size: 11px;
+    left: 226px;
+    right: auto;
+    top: 2px;
+    font-family: var(--mizar-type-family-display);
+    font-size: 14px;
     color: var(--mizar-hud-text-muted);
   }
   .player-rail--right .player-rail__life-state {
-    left: 0;
-    right: auto;
+    left: auto;
+    right: 226px;
   }
   .player-rail__dead-stats {
     position: absolute;
-    right: 56px;
-    bottom: 13px;
-    left: auto;
+    left: 160px;
+    right: auto;
+    top: 30px;
+    bottom: auto;
     display: flex;
-    gap: 14px;
-    width: auto;
+    gap: 8px;
+    width: 106px;
     padding: 0;
   }
   .player-rail--right .player-rail__dead-stats {
-    right: auto;
-    left: 56px;
+    right: 160px;
+    left: auto;
+  }
+  .player-rail__dead-stats > span {
+    min-width: 0;
+    gap: 3px;
   }
   .player-rail__dead-stats b {
-    font-size: 15px;
+    font-family: var(--mizar-type-family-display);
+    font-size: 16px;
     line-height: 18px;
+  }
+  .player-rail__card--dead .player-rail__round-kill-slot {
+    left: 210px;
+    right: auto;
+    top: 7px;
+    color: var(--mizar-hud-text-muted);
+  }
+  .player-rail--right .player-rail__card--dead .player-rail__round-kill-slot {
+    right: 210px;
+    left: auto;
+  }
+  .player-rail__card--dead .player-rail__health-spacer {
+    visibility: hidden;
+  }
+  .player-rail__card--dead[data-observed='true'] {
+    outline: none;
   }
   .player-rail__summary-slot {
     height: 42px;
@@ -526,6 +641,7 @@
     width: 100%;
     margin-top: 80px;
     height: 96px;
+    border-radius: 6px;
     background: var(--mizar-hud-surface-strong);
     overflow: hidden;
   }
@@ -537,7 +653,7 @@
     width: 86px;
     height: 64px;
     background: var(--mizar-broadcast-brand-front);
-    mask: url('./arc-cut.svg') center / 100% 100% no-repeat;
+    mask: url('./arc-cut.svg') right center / 86px 64px no-repeat;
     pointer-events: none;
   }
   .focused-player:has(.focused-player__face[data-dead='true'])::after,
@@ -564,8 +680,10 @@
     box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
   }
   .focused-player__name {
-    font-size: 20px;
-    font-weight: 650;
+    font-family: var(--mizar-type-family-display), var(--mizar-type-family-body);
+    color: var(--mizar-hud-text-primary);
+    font-size: 24px;
+    font-weight: 700;
   }
   .focused-player__metrics {
     position: absolute;
@@ -691,6 +809,15 @@
   .match-header__series-map {
     height: 60px;
     grid-template-rows: 28px 19px 13px;
+    border-radius: 4px;
+  }
+  .match-header__series-map-picker {
+    top: 3px;
+    width: 22px;
+    height: 22px;
+  }
+  .match-header__series-map-start-side {
+    top: 4px;
   }
   .match-header__series-map-name {
     font-family: var(--mizar-type-family-display);
@@ -706,25 +833,6 @@
   }
   .match-header__series-map-art-image {
     opacity: 0.65;
-  }
-
-  .broadcast-pause__bar {
-    border-bottom-width: 1px;
-  }
-  .broadcast-pause__score {
-    background: var(--mizar-hud-surface-strong);
-    color: var(--mizar-hud-text-primary);
-  }
-  .broadcast-pause__score > b {
-    font-family: var(--mizar-type-family-display);
-    font-size: 48px;
-  }
-  .broadcast-pause__brand {
-    background: var(--mizar-hud-surface-strong);
-  }
-  .broadcast-pause__economy strong {
-    font-family: var(--mizar-type-family-display);
-    font-size: 28px;
   }
 
   .player-rail__economy {
@@ -772,29 +880,6 @@
   }
   .player-rail__identity {
     z-index: 4;
-  }
-  .broadcast-pause__score {
-    color: var(--mizar-hud-text-primary);
-    background: var(--mizar-hud-surface-strong);
-  }
-  .broadcast-pause__score > b {
-    color: var(--mizar-hud-surface-strong);
-    background: var(--mizar-hud-text-primary);
-  }
-  .broadcast-pause__money {
-    color: var(--mizar-hud-text-primary);
-  }
-  .broadcast-pause__player-name {
-    font-family: var(--mizar-type-family-body);
-    font-size: 17px;
-    font-weight: 600;
-  }
-  .broadcast-pause__brand::before {
-    inset: 0 0 0 auto;
-    width: 28px;
-    opacity: 1;
-    background: var(--mizar-broadcast-brand-primary);
-    mask: url('./arc-cut.svg') center / 100% 100% no-repeat;
   }
 }
 /* The same renderer also fits already-saved default envelopes without changing their layout. */

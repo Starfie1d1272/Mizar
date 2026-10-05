@@ -70,6 +70,12 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
       if (await alive.count())
         expect((await alive.boundingBox())!.y).toBeGreaterThan(track.y + track.height);
     }
+    for (const logo of await page.locator('.match-header__series-map-picker').all()) {
+      const bounds = (await logo.boundingBox())!;
+      const art = (await logo.locator('..').boundingBox())!;
+      expect(bounds.y).toBeGreaterThanOrEqual(art.y);
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(art.y + art.height);
+    }
     const left = page.locator('.player-rail--left .player-rail__card');
     const right = page.locator('.player-rail--right .player-rail__card');
     await expect(left).toHaveCount(5);
@@ -81,6 +87,26 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
       expect(b.y).toBe(a.y);
       expect(a.height).toBe(76);
       expect(b.width).toBe(a.width);
+    }
+    for (const card of await page.locator('.player-rail__card--dead').all()) {
+      const paint = await card.evaluate((el) => {
+        const body = el.querySelector('.player-rail__body')!;
+        const plate = getComputedStyle(body, '::before');
+        const nickname = el.querySelector('.player-rail__name')!.getBoundingClientRect();
+        const state = el.querySelector('.player-rail__life-state')!.getBoundingClientRect();
+        const kill = el.querySelector('.player-rail__round-kill-slot')!.getBoundingClientRect();
+        const box = body.getBoundingClientRect();
+        const width = parseFloat(plate.width);
+        const left =
+          el.getAttribute('data-physical-side') === 'left' ? box.left : box.right - width;
+        return {
+          lighter: width < box.width && parseFloat(plate.height) < box.height,
+          nameFits: nickname.left >= left && nickname.right <= left + width,
+          markFits: state.left >= left && state.right <= left + width,
+          markSeparate: kill.right <= state.left || state.right <= kill.left,
+        };
+      });
+      expect(paint).toEqual({ lighter: true, nameFits: true, markFits: true, markSeparate: true });
     }
     const names = await page.locator('.player-rail__name').evaluateAll((nodes) =>
       nodes.map((n) => ({

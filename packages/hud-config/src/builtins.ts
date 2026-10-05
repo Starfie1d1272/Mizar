@@ -72,7 +72,7 @@ export function getBuiltinThemes(): HudTheme[] {
       id: `builtin:${style}-theme`,
       name: label,
       recipe: style,
-      ...(brandColor === undefined ? {} : { brandColor }),
+      brandColor: brandColor ?? '#c8ef78',
     })),
   ];
 }

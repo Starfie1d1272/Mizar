@@ -95,6 +95,12 @@ describe('hud-config schema and framework contract', () => {
       }),
     ).toThrow();
   });
+  it('keeps tournament accents independent of the native default brand', () => {
+    for (const style of ['ewc', 'iem', 'perfectworld']) {
+      expect(getBuiltinResolvedPreset(`builtin:${style}-preset`).theme.brandColor).toBe('#c8ef78');
+    }
+    expect(getBuiltinResolvedPreset('builtin:esl-preset').theme.brandColor).toBe('#0bf201');
+  });
   it('retains ESL identity, accent and variant envelopes in a frozen custom snapshot', () => {
     const builtin = getBuiltinResolvedPreset('builtin:esl-preset');
     expect(builtin.preset.name).toBe('类ESL');

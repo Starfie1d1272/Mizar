@@ -92,3 +92,7 @@ ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消�
 HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World、类ESL 五个内置预设，复用同一真实回合、组件和状态机。组件造型由已保存 variant 决定，颜色由 Theme recipe 决定；选择和另存不自动启用。适配范围、C4 动效、几何测量与缺失参考状态见 [播出预设说明](hud-broadcast-presets.md)。
 
 类ESL 的字体、近似纹理与雷达图案只在 `esl` 展示方案生效。字体来源、缺失素材和视觉复核见 [ESL 复核](reviews/esl.md)，不改动产品界面字体或公共设计变量。
+
+### 默认 HUD 的冰白读数层
+
+默认 Gameplay 的冰白不仅用于时间与装饰，也承担比分、选手武器/HP 战斗模块、暂停经济/比分/倒计时/装备模块和已完成历史回合。深色用于队伍身份翼、选手身份/装备/经济与死亡统计；数字与昵称复用 Barlow Condensed，中文用既有回退。采用 4–6px 小圆角，外框和固定行位保持稳定，死亡只减少可见底板与头像面积。品牌色来自既有 `broadcast.brand.front/primary`，没有新增动态颜色或产品主题。端部弧形按实际使用尺寸绘制，保持比例后裁切。复核见 [默认 HUD 精修](reviews/mizar-native-refinement.md)。
