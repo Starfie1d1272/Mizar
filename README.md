@@ -6,9 +6,9 @@
 
 <p align="center">
   <a href="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml"><img src="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI 检查状态" /></a>
-  <a href="docs/quick-start.md"><img src="https://img.shields.io/badge/平台-Windows-0078D4" alt="桌面平台：Windows" /></a>
-  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/badge/版本-开发预览-E9A23B" alt="版本状态：开发预览" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-AGPL--3.0--only-2563EB" alt="许可证：AGPL-3.0-only" /></a>
+  <a href="docs/quick-start.md"><img src="https://img.shields.io/badge/Windows-0078D4" alt="桌面平台：Windows" /></a>
+  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/badge/Preview-E9A23B" alt="版本状态：开发预览" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0--only-2563EB" alt="许可证：AGPL-3.0-only" /></a>
 </p>
 
 <p align="center">
