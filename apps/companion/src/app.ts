@@ -190,6 +190,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         }),
     ...(options.rivalhubConnection !== undefined
       ? {
+          authorityScope: () => options.rivalhubConnection!.reliableAuthorityScope(),
           sink: {
             send: (event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0]) =>
               options.rivalhubConnection!.view().paired &&
