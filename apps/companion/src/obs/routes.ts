@@ -67,7 +67,12 @@ export function registerObsRoutes(
         }
       } catch (error: unknown) {
         const message =
-          error instanceof Error && error.message.startsWith('OBS 正在输出')
+          error instanceof Error &&
+          (error.message.startsWith('OBS 正在输出') ||
+            (action === 'open' &&
+              ['未找到 OBS，请在设置中选择 obs64.exe。', 'OBS 程序未能打开。'].includes(
+                error.message,
+              )))
             ? error.message
             : 'OBS 操作未完成，请检查连接与配置。';
         return reply.code(409).send({ error: 'obs_action_failed', message });

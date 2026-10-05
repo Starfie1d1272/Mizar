@@ -160,6 +160,10 @@ export function Settings({ tab }: { tab: string }) {
           <section aria-label="OBS 连接引导">
             <h3>1. 在 OBS 中开启连接服务</h3>
             <p>
+              如果「打开 OBS」未找到程序，点击「更改 OBS 路径」选择安装目录中的
+              obs64.exe，然后重新打开。
+            </p>
+            <p>
               打开 OBS「工具 → WebSocket
               服务器设置」，启用服务器。查看端口；若已启用身份验证，复制该页面提供的密码。
             </p>
@@ -232,6 +236,16 @@ export function Settings({ tab }: { tab: string }) {
             <p>
               连接成功后点击「检查配置」。如有缺失，停止推流与录制后「修复 Mizar
               场景」，确认检查通过，再点击「进入现场」。
+            </p>
+            <p>
+              游戏捕获还需要核对实际画面。先打开
+              CS2，再检查或修复，使来源匹配实际窗口；国际服和国服均按 cs2.exe
+              匹配。连接与场景检查通过不代表已经捕获到游戏。
+            </p>
+            <p>
+              若 CS2 有画面而 OBS 游戏捕获黑屏，检查 Steam 启动选项
+              -allow_third_party_software，并重启游戏。该选项允许第三方软件与游戏交互，可能影响信任系数；Mizar
+              不会自动修改你的启动选项。国服／国际服选择保持你的设置。
             </p>
           </section>
         </Panel>
