@@ -3,6 +3,7 @@ import { basename, dirname, extname, join, posix, relative, resolve } from 'node
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { checkDesign } from './design.mjs';
+import { checkBuildSystem } from './build-system.mjs';
 
 import {
   ARCHITECTURE_SOURCE_EXTENSIONS,
@@ -12,7 +13,6 @@ import {
   PACKAGE_BOUNDARIES,
   RUNTIME_DEPENDENCY_FIELDS,
   WORKSPACE_DEPENDENCY_FIELDS,
-  WORKSPACE_PACKAGE_PREFIX,
   isNodeBuiltin,
   matchesPolicyTarget,
   workspacePackageName,
@@ -26,6 +26,7 @@ const BOUNDARY_RULE_IDS = Object.freeze({
   'telemetry-cstv': 'ARCH_TELEMETRY_CSTV_BOUNDARY',
   web: 'ARCH_WEB_BOUNDARY',
   rivalhub: 'ARCH_RIVALHUB_BOUNDARY',
+  'radar-view': 'ARCH_RADAR_VIEW_BOUNDARY',
 });
 
 const CONTRACT_WORKSPACE_ROOTS = ['apps', 'packages'];
@@ -64,6 +65,7 @@ export function checkArchitecture(options = {}) {
   checkCstvParserImportOwnership(records, report);
   checkProgramProjectionImportOwnership(records, repository, report);
   checkWorkspaceCycles(workspaces, report);
+  checkBuildSystem(repository, workspaces, report);
   checkDesign(repository, records, report);
 
   return violations.sort((left, right) => {
@@ -100,6 +102,16 @@ function createRepository(rootDir, overlay = undefined) {
 }
 
 function collectContractFiles(rootDir, files) {
+  for (const path of ['package.json', 'pnpm-workspace.yaml']) {
+    if (existsSync(join(rootDir, path))) files.set(path, readFileSync(join(rootDir, path), 'utf8'));
+  }
+  const workflows = join(rootDir, '.github/workflows');
+  if (existsSync(workflows)) {
+    for (const name of readdirSync(workflows)) {
+      if (/\.ya?ml$/.test(name))
+        files.set(`.github/workflows/${name}`, readFileSync(join(workflows, name), 'utf8'));
+    }
+  }
   for (const workspaceRoot of CONTRACT_WORKSPACE_ROOTS) {
     const absoluteRoot = join(rootDir, workspaceRoot);
     if (!existsSync(absoluteRoot)) continue;
@@ -374,7 +386,7 @@ function checkWorkspaceDependencyDeclarations(workspaces, report) {
       if (!dependencies || typeof dependencies !== 'object') continue;
 
       for (const [dependency, version] of Object.entries(dependencies)) {
-        if (!workspacePackageName(dependency)) continue;
+        if (!workspacePackageName(dependency, workspaces)) continue;
         if (typeof version !== 'string' || !version.startsWith('workspace:')) {
           report({
             ruleId: 'ARCH_WORKSPACE_PROTOCOL',
@@ -415,7 +427,7 @@ function checkManifestBoundaryDependencies(workspaces, report) {
       if (!dependencies || typeof dependencies !== 'object') continue;
 
       for (const dependency of Object.keys(dependencies)) {
-        const targetName = workspacePackageName(dependency) ?? dependency;
+        const targetName = workspacePackageName(dependency, workspaces) ?? dependency;
         if (!matchesBoundaryPolicy(policy, dependency, targetName)) continue;
 
         report({
@@ -573,7 +585,7 @@ function isRuntimeExport(statement) {
 function checkImportEdges(records, repository, workspaces, report) {
   for (const record of records.values()) {
     for (const edge of record.allEdges) {
-      const workspaceSpecifier = workspacePackageName(edge.specifier);
+      const workspaceSpecifier = workspacePackageName(edge.specifier, workspaces);
       const workspaceTarget = workspaceSpecifier ? workspaces.get(workspaceSpecifier) : undefined;
       const resolvedPath = resolveRelativeModule(record.path, edge.specifier, repository);
       const relativeWorkspaceTarget = relativeWorkspacePackage(
@@ -695,7 +707,7 @@ function isCstvParserSpecifier(specifier) {
 }
 
 function checkCrossPackageSourceImport(record, edge, target, workspaces, report) {
-  const packageSpecifier = workspacePackageName(edge.specifier);
+  const packageSpecifier = workspacePackageName(edge.specifier, workspaces);
   const packageTarget = packageSpecifier ? workspaces.get(packageSpecifier) : undefined;
   const normalizedSpecifier = edge.specifier.replaceAll('\\', '/');
   const packageSubpath = packageTarget
@@ -750,7 +762,7 @@ function checkPackageBoundary(record, edge, resolvedPath, target, report) {
 }
 
 function boundaryRuleIdFor(packageName) {
-  return BOUNDARY_RULE_IDS[packageName.slice(`${WORKSPACE_PACKAGE_PREFIX.length}`)];
+  return BOUNDARY_RULE_IDS[packageName.split('/').at(-1)];
 }
 
 function matchesBoundaryPolicy(policy, specifier, targetName) {
@@ -838,7 +850,7 @@ function checkWorkspaceCycles(workspaces, report) {
   const graph = new Map();
   for (const info of workspaces.values()) {
     const dependencies = new Set();
-    for (const field of RUNTIME_DEPENDENCY_FIELDS) {
+    for (const field of WORKSPACE_DEPENDENCY_FIELDS) {
       const values = info.manifest[field];
       if (!values || typeof values !== 'object') continue;
       for (const dependency of Object.keys(values)) {
@@ -876,7 +888,7 @@ function checkWorkspaceCycles(workspaces, report) {
           file: firstWorkspace?.manifestPath ?? `${canonical[0]}/package.json`,
           target: [...canonical, canonical[0]].join(' -> '),
           message:
-            'Production workspace dependencies must form an acyclic graph; split the ownership boundary instead of adding a runtime cycle.',
+            'All workspace dependencies must form an acyclic graph; split the ownership boundary instead of adding a runtime cycle.',
         });
       }
     }

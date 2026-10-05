@@ -162,10 +162,10 @@ describe('changed-surface CI planner', () => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);
   });
 
-  it('runs full validation on main pushes', () => {
+  it('keeps docs-only main pushes selective', () => {
     const plan = createCiPlan({ eventName: 'push', changedFiles: ['README.md'] });
-    expect(plan).toMatchObject(full);
-    expect(plan.runOfflineQualification).toBe(true);
+    expect(plan.requiredJobs).toEqual([]);
+    expect(plan.runOfflineQualification).toBe(false);
   });
 
   it.each([
@@ -223,14 +223,22 @@ describe('changed-surface CI planner', () => {
   it.each([
     ['branch creation with an empty diff', []],
     ['all-zero before sentinel', [{ path: '', status: 'X' }]],
-    ['rename', [{ path: 'apps/web/src/old.ts', status: 'R100' }]],
-    ['delete', [{ path: 'apps/desktop/src-tauri/src/old.rs', status: 'D' }]],
   ])('main push %s fails closed to full CI', (_name, changedFiles) => {
     const plan = createCiPlan({ eventName: 'push', changedFiles });
     expect(plan).toMatchObject(full);
     expect(plan.requiredJobs).toContain('qualification_offline');
     expect(plan.runOfflineQualification).toBe(true);
   });
+
+  it.each(['apps/web/src/hud.tsx', 'packages/hud-config/src/layout.ts'])(
+    'keeps ordinary main %s out of exact Windows packaging',
+    (path) => {
+      const plan = createCiPlan({ eventName: 'push', changedFiles: [path] });
+      expect(plan.runQuality).toBe(true);
+      expect(plan.runQualification).toBe(false);
+      expect(plan.runOfflineQualification).toBe(false);
+    },
+  );
 
   it.each(['schedule', 'workflow_dispatch'])('%s forces full CI', (eventName) => {
     const plan = createCiPlan({ eventName, changedFiles: ['docs/product.md'] });

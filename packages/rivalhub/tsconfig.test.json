@@ -4,6 +4,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "references": [{ "path": "./tsconfig.json" }],
   "include": ["src", "test"]
 }

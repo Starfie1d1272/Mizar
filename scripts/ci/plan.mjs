@@ -190,7 +190,8 @@ export function parseGitDiffNameStatus(output) {
  */
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
-  if (eventName !== 'pull_request') return fullPlan(`forced full for ${eventName}`, true);
+  if (!['pull_request', 'push'].includes(eventName))
+    return fullPlan(`forced full for ${eventName}`, true);
   const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>

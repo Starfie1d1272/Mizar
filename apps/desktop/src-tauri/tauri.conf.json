@@ -1,12 +1,19 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mizar",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.0",
   "identifier": "top.starfie1d.mizar",
-  "build": { "frontendDist": "../../web/dist" },
+  "build": {
+    "frontendDist": "http://127.0.0.1:3000"
+  },
   "app": {
     "windows": [],
-    "security": { "capabilities": ["workspace"] }
+    "security": {
+      "capabilities": ["workspace"]
+    }
   },
-  "bundle": { "active": false, "icon": ["icons/icon.ico", "icons/icon.png"] }
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  }
 }

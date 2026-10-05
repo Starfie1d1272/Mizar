@@ -1,6 +1,18 @@
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 
-export const WORKSPACE_PACKAGE_PREFIX = '@mizar/';
+const repositoryRoot = resolve(import.meta.dirname, '../..');
+const workspacePaths = new Map();
+for (const root of ['apps', 'packages']) {
+  for (const entry of readdirSync(resolve(repositoryRoot, root), { withFileTypes: true })) {
+    const path = `${root}/${entry.name}`;
+    const manifestPath = resolve(repositoryRoot, path, 'package.json');
+    if (entry.isDirectory() && existsSync(manifestPath)) {
+      workspacePaths.set(JSON.parse(readFileSync(manifestPath, 'utf8')).name, path);
+    }
+  }
+}
 
 export const WORKSPACE_DEPENDENCY_FIELDS = [
   'dependencies',
@@ -226,11 +238,10 @@ export const ARCHITECTURE_SOURCE_EXTENSIONS = new Set([
   '.cjs',
 ]);
 
-export function workspacePackageName(specifier) {
-  if (!specifier.startsWith(WORKSPACE_PACKAGE_PREFIX)) return undefined;
-  const [scope, name] = specifier.split('/');
-  if (!scope || !name) return undefined;
-  return `${scope}/${name}`;
+export function workspacePackageName(specifier, workspaces = workspacePaths) {
+  const segments = specifier.split('/');
+  const name = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+  return workspaces.has(name) ? name : undefined;
 }
 
 export function isWorkspacePackageSpecifier(specifier) {
@@ -254,7 +265,7 @@ export function matchesPolicyTarget(policy, specifier) {
 
 export function architectureEslintConfigs() {
   const deepSourcePattern = {
-    group: [`${WORKSPACE_PACKAGE_PREFIX}*/src/**`],
+    group: [...workspacePaths.keys()].map((name) => `${name}/src/**`),
     message:
       "Cross-package imports must use the package name and its public exports, never another package's src directory.",
   };
@@ -306,6 +317,7 @@ export function architectureEslintConfigs() {
 }
 
 export function workspacePathForPackage(packageName) {
-  const shortName = packageName.slice(WORKSPACE_PACKAGE_PREFIX.length);
-  return ['web', 'companion'].includes(shortName) ? `apps/${shortName}` : `packages/${shortName}`;
+  const path = workspacePaths.get(packageName);
+  if (!path) throw new Error(`Unknown workspace package: ${packageName}`);
+  return path;
 }

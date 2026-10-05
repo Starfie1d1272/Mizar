@@ -17,10 +17,12 @@
 
 - [ ] 操作入口、默认视觉、随包说明与拟发布功能一致。
 - [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的适用 CI。
-- [ ] 用 Release Qualification workflow 指定 SHA，或在 Windows x64 执行 `node scripts/qualification/build.mjs`，正式 RC 使用默认 `release` 桌面构建配置。
+- [ ] 用 Release Qualification workflow 指定 SHA，或在 Windows x64 执行 `node scripts/qualification/build.mjs`，正式 RC 使用默认 `release` 桌面构建配置，并指定发布名称（如 `--label RC0`）。
 - [ ] 包含桌面 EXE、Node、Web、脚本、配置、素材与许可；核对解压启动及适用自动化报告。
-- [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，另计算 ZIP 的 SHA-256；两种摘要含义不同。
+- [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，核对自动生成的外层 `.zip.sha256` 与 `release-manifest.json`；ZIP 摘要与包内内容摘要含义不同。
 - [ ] 在实际解压包执行 `node scripts/qualification/verify-c4-resources.mjs <bundle-root>/resources/app`，检查 C4 地图与许可完整性。
+
+产品 ZIP 与维护者 evidence ZIP 分开交付；公开预发布前统一 Desktop 的应用版本。用户完整解压产品 ZIP 到可写目录后运行 `Mizar.exe`。
 
 资源校验、GUI 启动检查和合成长时测试的证明范围见[开发验证](development-validation.md#便携包自动化)。检查通过后即可作为明确标记的 RC 移交，不填写尚未进行的实机结果。
 

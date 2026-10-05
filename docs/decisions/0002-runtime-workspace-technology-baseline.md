@@ -439,3 +439,7 @@ Patch 版本允许在初始化实施时采用同一 stable minor 中更新的安
 - OBS Browser Source 对当前 Web target 出现不可接受兼容问题；
 - shared package 开始对外发布并需要不同的 bundle/dual-package 策略；
 - 现有 lint/build 工具成为可量化的开发瓶颈。
+
+## 2026-10-05 实现说明：工作区构建图收口
+
+“不引入额外 monorepo orchestrator”的决策保持。跨包关系以 manifest 为唯一来源，由 pnpm 12 稳定任务图调度；移除不完整的 TypeScript references，包编译器仅负责本包。架构门禁验证任务图、依赖声明、循环和入口安全性，具体使用与首次验证由[开发验证](../development-validation.md#工作区构建图)维护。未引入 Turbo、Nx 或实验性 pipeline。

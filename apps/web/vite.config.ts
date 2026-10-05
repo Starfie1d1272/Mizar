@@ -163,6 +163,7 @@ function replayPublicAssets() {
         {
           recursive: true,
           force: true,
+          filter: (source) => !source.split(sep).includes('nuke-demo-round-01'),
         },
       );
     },

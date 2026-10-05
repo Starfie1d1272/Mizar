@@ -3,6 +3,5 @@
   "compilerOptions": {
     "rootDir": ".."
   },
-  "references": [{ "path": "../tsconfig.json" }],
   "include": ["**/*.ts"]
 }

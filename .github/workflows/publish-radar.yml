@@ -33,7 +33,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: npm install --global npm@12.2.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @mizar-hud/radar-view... build
+      - run: pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run build
       - run: pnpm exec vitest run scripts/radar-view/release.test.mjs
       - name: Install and verify the exact tarball to publish
         run: node scripts/radar-view/consumer-smoke.mjs

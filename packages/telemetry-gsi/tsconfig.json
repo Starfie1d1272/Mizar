@@ -5,6 +5,5 @@
     "rootDir": "src",
     "resolveJsonModule": true
   },
-  "references": [{ "path": "../core" }],
   "include": ["src", "src/production-config.json"]
 }
