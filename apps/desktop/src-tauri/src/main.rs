@@ -616,9 +616,20 @@ fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     }
 }
 
+fn background_powershell() -> Command {
+    let mut command = Command::new("powershell.exe");
+    // PowerShell 7's inherited module path hides Windows PowerShell's built-in
+    // modules (including Get-FileHash). Let the child initialize its own path.
+    command
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .creation_flags(0x08000000);
+    command
+}
+
 fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
     let bundle = bundle_root()?;
-    let mut command = Command::new("powershell.exe");
+    let mut command = background_powershell();
     command
         .args([
             "-NoProfile",
@@ -637,9 +648,7 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
     }
     command
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .creation_flags(0x08000000);
+        .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|_| "GSI 配置工具未能启动。")?;
     let deadline = Instant::now() + timeout;
     loop {
@@ -1237,16 +1246,17 @@ mod startup_tests {
             .join("../../../scripts/qualification/bundle/common.ps1");
         let common = common.to_string_lossy().replace('\'', "''");
         let command = format!(
-            ". '{common}'; Write-Output ([string]::Concat([char]0x539f,[char]0x914d,[char]0x7f6e))"
+            ". '{common}'; Write-Output ([string]::Concat([char]0x539f,[char]0x914d,[char]0x7f6e)); (Get-FileHash -LiteralPath '{common}' -Algorithm SHA256).Algorithm"
         );
-        let output = Command::new("powershell.exe")
+        let output = background_powershell()
             .args(["-NoProfile", "-NonInteractive", "-Command", &command])
-            .stdin(Stdio::null())
-            .creation_flags(0x08000000)
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "原配置");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().lines().collect::<Vec<_>>(),
+            ["原配置", "SHA256"]
+        );
     }
 
     #[test]
