@@ -95,4 +95,4 @@ HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World、类ESL 五�
 
 ### 默认 HUD 的冰白读数层
 
-默认 Gameplay 的冰白不仅用于时间与装饰，也承担比分、选手武器/HP 战斗模块、暂停经济/比分/倒计时/装备模块和已完成历史回合。深色用于队伍身份翼、选手身份/装备/经济与死亡统计；数字与昵称复用 Barlow Condensed，中文用既有回退。采用 4–6px 小圆角，外框和固定行位保持稳定，死亡只减少可见底板与头像面积。品牌色来自既有 `broadcast.brand.front/primary`，没有新增动态颜色或产品主题。端部弧形按实际使用尺寸绘制，保持比例后裁切。复核见 [默认 HUD 精修](reviews/mizar-native-refinement.md)。
+默认 Gameplay 的冰白不仅用于时间与装饰，也承担比分、选手武器/HP/装备/经济战斗带、暂停经济/比分/倒计时/装备模块和已完成历史回合。深色用于队伍身份翼、选手身份与死亡统计；数字复用 Barlow Condensed，昵称使用 Inter / 中文回退。采用 4–6px 小圆角，外框和固定行位保持稳定，死亡只减少可见底板与头像面积。品牌色来自既有 `broadcast.brand.front/primary`，没有新增动态颜色或产品主题。端部弧形按实际使用尺寸绘制，保持比例后裁切。复核见 [默认 HUD 精修](reviews/mizar-native-refinement.md)。

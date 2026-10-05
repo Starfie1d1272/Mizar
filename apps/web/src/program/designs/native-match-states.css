@@ -56,10 +56,10 @@
     inset: 0 0 0 auto;
   }
   .broadcast-pause__player-name {
-    font-family: var(--mizar-type-family-display), var(--mizar-type-family-body);
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-family: var(--mizar-type-family-body);
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: 0;
     color: var(--mizar-hud-text-primary);
   }
   .broadcast-pause__equipment {

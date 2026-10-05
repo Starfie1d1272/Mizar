@@ -234,6 +234,23 @@
   .player-rail--right .player-rail__avatar {
     border-radius: 0 4px 4px 0;
   }
+  .player-rail__card[data-side] .player-rail__avatar {
+    background: var(--mizar-hud-surface-primary);
+  }
+  .player-rail__avatar img {
+    width: 64px;
+    height: 64px;
+    margin: 6px;
+    border-radius: 3px;
+  }
+  .player-rail__avatar::after {
+    display: none;
+  }
+  .player-rail__equipment .player-rail__icon,
+  .player-rail__utility-icons .player-rail__icon {
+    background-color: var(--mizar-hud-surface-strong);
+    opacity: 0.65;
+  }
   .player-rail__card[data-avatar='false'] .player-rail__avatar {
     width: 20px;
     flex-basis: 20px;
@@ -245,8 +262,8 @@
     width: auto;
     height: 76px;
     background: linear-gradient(
-      var(--mizar-hud-surface-primary) 0 30px,
-      color-mix(in srgb, var(--mizar-hud-surface-strong) 94%, transparent) 30px
+      var(--mizar-hud-surface-primary) 0 32px,
+      var(--mizar-broadcast-brand-front) 32px
     );
     border-radius: 0 4px 4px 0;
     box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
@@ -255,20 +272,7 @@
     border-radius: 4px 0 0 4px;
   }
   .player-rail__body::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    top: 30px;
-    width: 180px;
-    height: 39px;
-    border-radius: 4px 0 0 0;
-    background: var(--mizar-broadcast-brand-front);
-    pointer-events: none;
-  }
-  .player-rail--right .player-rail__body::after {
-    right: auto;
-    left: 0;
-    border-radius: 0 4px 0 0;
+    display: none;
   }
   .player-rail__body::before {
     display: none;
@@ -282,11 +286,11 @@
   }
   .player-rail__name {
     max-width: calc(100% - 94px);
-    font-family: var(--mizar-type-family-display), var(--mizar-type-family-body);
+    font-family: var(--mizar-type-family-body);
     color: var(--mizar-hud-text-primary);
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: 0;
     text-shadow: none;
   }
   .player-rail__health-value {
@@ -396,16 +400,17 @@
     left: 10px;
     right: auto;
   }
-  .player-rail__money {
+  .player-rail__card .player-rail__money {
     position: absolute;
     left: 10px;
     bottom: 10px;
     font-size: 16px;
     font-weight: 600;
-    color: var(--mizar-hud-text-primary);
+    color: var(--mizar-hud-surface-strong);
+    opacity: 1;
     z-index: 3;
   }
-  .player-rail--right .player-rail__money {
+  .player-rail--right .player-rail__card .player-rail__money {
     left: auto;
     right: 10px;
   }
@@ -453,7 +458,8 @@
     left: 78px;
     bottom: 9px;
     font-size: 12px;
-    color: var(--mizar-hud-text-muted);
+    color: var(--mizar-hud-surface-strong);
+    opacity: 0.6;
   }
   .player-rail--right .player-rail__spent {
     left: auto;
@@ -464,9 +470,9 @@
     height: 18px;
   }
   .player-rail__endcap {
-    left: 0;
+    left: 6px;
     right: auto;
-    top: 0;
+    top: 6px;
     width: 18px;
     height: 20px;
     border: 0;
@@ -475,7 +481,7 @@
   }
   .player-rail__endcap--right {
     left: auto;
-    right: 0;
+    right: 6px;
   }
   .player-rail__endcap strong {
     color: var(--mizar-hud-text-primary);
@@ -540,6 +546,7 @@
   }
   .player-rail__card--dead .player-rail__name {
     max-width: 202px;
+    font-size: 19px;
     color: var(--mizar-hud-text-primary);
   }
   .player-rail__card--dead .player-rail__combat .player-rail__kd {
@@ -680,10 +687,10 @@
     box-shadow: inset 0 1px color-mix(in srgb, var(--mizar-broadcast-brand-front) 12%, transparent);
   }
   .focused-player__name {
-    font-family: var(--mizar-type-family-display), var(--mizar-type-family-body);
+    font-family: var(--mizar-type-family-body);
     color: var(--mizar-hud-text-primary);
-    font-size: 24px;
-    font-weight: 700;
+    font-size: 21px;
+    font-weight: 650;
   }
   .focused-player__metrics {
     position: absolute;
