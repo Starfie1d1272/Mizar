@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
+import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
 const QUALIFICATION_SCHEMA_VERSION = qualificationContract.schemaVersion;
@@ -180,7 +181,7 @@ async function downloadNodeRuntime(runtimeDir, requestedVersion, temporaryDirect
     });
   }
   const extractedRoot = join(extractDir, `node-${version}-win-x64`);
-  await cp(extractedRoot, runtimeDir, { recursive: true, force: true });
+  await copyNodeRuntime(extractedRoot, runtimeDir);
   await access(join(runtimeDir, 'node.exe'));
   return version;
 }
@@ -355,6 +356,7 @@ async function main() {
     );
     await cp(deployedAppDir, appDir, { recursive: true, dereference: true });
     await pruneDependencyTestFiles(appDir);
+    await pruneDevelopmentFiles(appDir);
     await rm(deployedAppDir, { recursive: true, force: true });
     await restorePortableWorkspaceDependencySpecifiers(appDir);
     await runCommand(process.execPath, [join(scriptDir, 'verify-c4-resources.mjs'), appDir]);

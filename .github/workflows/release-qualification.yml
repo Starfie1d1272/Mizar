@@ -10,7 +10,7 @@ on:
       label:
         description: 'Portable artifact label (e.g. RC0)'
         required: true
-        default: RC0
+        default: RC1
         type: string
 
 permissions:
@@ -59,6 +59,9 @@ jobs:
       - name: Build exact-SHA Windows qualification bundle
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --label "$env:RELEASE_LABEL"
 
+      - name: Test Windows desktop startup deadlines and diagnostics
+        run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+
       - name: Verify release desktop profile metadata
         shell: pwsh
         run: |
@@ -76,8 +79,7 @@ jobs:
           if ($null -eq $archive) { throw '未生成 qualification ZIP' }
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
           if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-          tar -xf $archive.FullName -C $extractRoot
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive $archive.FullName -Destination $extractRoot
           $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
           if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
           Push-Location $bundleRoot.FullName

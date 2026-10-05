@@ -2,6 +2,7 @@
 
 mod geometry;
 mod startup_log;
+mod startup_wait;
 mod support_export;
 mod windows_host;
 mod windows_startup;
@@ -164,11 +165,26 @@ fn health_matches(root: &Path) -> bool {
         && health["product"]["artifactSha256"] == artifact["artifactSha256"]
 }
 
-fn wait_for_runtime(root: &Path, child: &mut Child) -> Result<(), String> {
-    let until = Instant::now() + Duration::from_secs(35);
-    while Instant::now() < until {
+fn wait_for_runtime(
+    root: &Path,
+    child: &mut Child,
+    log: Option<&DesktopLog>,
+) -> Result<(), String> {
+    let mut wait = startup_wait::StartupWait::new(Instant::now());
+    loop {
         if health_matches(root) {
             return Ok(());
+        }
+        let progress = log
+            .map(|log| {
+                startup_wait::read_progress(
+                    &log.directory.join("supervisor.ndjson"),
+                    &log.session_id,
+                )
+            })
+            .unwrap_or_default();
+        if let Some(error) = &progress.error {
+            return Err(error.clone());
         }
         if let Some(status) = child
             .try_wait()
@@ -176,9 +192,12 @@ fn wait_for_runtime(root: &Path, child: &mut Child) -> Result<(), String> {
         {
             return Err(format!("制播服务未能启动（{status}）；请查看运行日志。"));
         }
+        wait.update(Instant::now(), &progress);
+        if wait.expired(Instant::now()) {
+            return Err(wait.timeout_message(&progress));
+        }
         thread::sleep(Duration::from_millis(200));
     }
-    Err("制播服务启动超时；请查看 state/logs。".into())
 }
 
 fn wait_child(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, String> {
@@ -1056,7 +1075,9 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
                 .ok_or_else(|| std::io::Error::other("supervisor startup pipe unavailable"))?
                 .write_all(b"MIZAR_DESKTOP_START\n")
         })?;
-        log.step("runtime_ready", || wait_for_runtime(root, &mut child))?;
+        log.step("runtime_ready", || {
+            wait_for_runtime(root, &mut child, Some(log))
+        })?;
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1132,7 +1153,7 @@ fn main() {
     // Automation does not initialize Tauri, acquire the GUI mutex or rotate desktop logs.
     if headless {
         let outcome = supervisor(&root, "--no-browser", None).and_then(|mut child| {
-            wait_for_runtime(&root, &mut child)?;
+            wait_for_runtime(&root, &mut child, None)?;
             child
                 .wait()
                 .map_err(|error| format!("制播服务进程异常：{error:?}"))
