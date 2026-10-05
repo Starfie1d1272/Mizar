@@ -56,6 +56,21 @@ describe('workspace build graph', () => {
     );
   });
 
+  it('rejects missing workspace manifests and a weakened task declaration', () => {
+    const owner = manifest('packages/replay/package.json');
+    owner.devDependencies['@another/missing'] = 'workspace:*';
+    expect(check({ 'packages/replay/package.json': JSON.stringify(owner) })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ruleId: 'ARCH_WORKSPACE_MISSING' })]),
+    );
+    const config = readFileSync(resolve(root, 'pnpm-workspace.yaml'), 'utf8').replace(
+      "dependsOn: ['^build']",
+      'dependsOn: []',
+    );
+    expect(check({ 'pnpm-workspace.yaml': config })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ruleId: 'ARCH_BUILD_GRAPH' })]),
+    );
+  });
+
   it('rejects cycles introduced by dev-only build dependencies', () => {
     const core = manifest('packages/core/package.json');
     core.devDependencies['@mizar/testkit'] = 'workspace:*';

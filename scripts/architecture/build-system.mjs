@@ -71,11 +71,20 @@ export function checkBuildSystem(repository, workspaces, report) {
       fail(info.manifestPath, 'TS workspace must declare typecheck.');
   }
   const config = repository.read('pnpm-workspace.yaml');
-  if (
-    config !== undefined &&
-    (!/disallowWorkspaceCycles:\s*true/.test(config) ||
-      !/tasks:[\s\S]*build:[\s\S]*dependsOn:.*\^build/.test(config))
-  ) {
-    fail('pnpm-workspace.yaml', 'Enable dependency build tasks, cycle rejection.');
+  if (config !== undefined) {
+    for (const [task, dependency] of [
+      ['build', '^build'],
+      ['typecheck', '^build'],
+      ['consumer:typecheck', 'build'],
+    ]) {
+      const pattern = new RegExp(
+        `^  ${task}:\\s*\\n    dependsOn: \\[.*['"]${dependency.replace('^', '\\^')}['"].*\\]`,
+        'm',
+      );
+      if (!pattern.test(config))
+        fail('pnpm-workspace.yaml', `Declare ${task} -> ${dependency} explicitly.`);
+    }
+    if (!/disallowWorkspaceCycles:\s*true/.test(config))
+      fail('pnpm-workspace.yaml', 'Reject workspace cycles.');
   }
 }
