@@ -529,9 +529,8 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
-        log.step("content_protection", || -> tauri::Result<()> {
-            overlay.set_ignore_cursor_events(true)?;
-            overlay.set_content_protected(true)
+        log.step("overlay_cursor_passthrough", || {
+            overlay.set_ignore_cursor_events(true)
         })?;
         Ok(())
     })();
