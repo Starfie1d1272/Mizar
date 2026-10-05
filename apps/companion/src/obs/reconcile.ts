@@ -38,6 +38,13 @@ function names(value: unknown, key: string): string[] {
     .filter((name): name is string => typeof name === 'string');
 }
 
+// OBS WebSocket returns collection names as strings, unlike scene/input lists.
+function collectionNames(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
 function ownedScene(name: string): boolean {
   return name.startsWith('Mizar · ');
 }
@@ -97,7 +104,7 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   const desired = obsDesiredScenes(baseUrl);
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
-  if (!names(collections.sceneCollections, 'sceneCollectionName').includes(OBS_COLLECTION)) {
+  if (!collectionNames(collections.sceneCollections).includes(OBS_COLLECTION)) {
     findings.push({ code: 'collection_missing', message: 'Mizar 场景集合尚未创建。' });
     return findings;
   }
@@ -226,9 +233,7 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
   const desired = obsDesiredScenes(baseUrl);
   if (await outputActive(obs)) throw new Error('OBS 正在输出；结束输出后可修复制播配置。');
   const collections = await obs.call('GetSceneCollectionList');
-  const exists = names(collections.sceneCollections, 'sceneCollectionName').includes(
-    OBS_COLLECTION,
-  );
+  const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
   if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
   else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });

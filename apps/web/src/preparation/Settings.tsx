@@ -128,7 +128,20 @@ export function Settings({ tab }: { tab: string }) {
             >
               检查配置
             </Button>
-            <Button disabled={busy} onClick={() => void action(() => obsCommand('repair'))}>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void action(async () => {
+                  const result = (await obsCommand('repair')) as {
+                    findings: { message: string }[];
+                  };
+                  setMessage(
+                    result.findings.map((item) => item.message).join('；') ||
+                      'Mizar 场景已修复，配置检查通过。',
+                  );
+                })
+              }
+            >
               修复 Mizar 场景
             </Button>
           </div>

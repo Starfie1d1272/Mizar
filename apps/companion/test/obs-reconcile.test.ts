@@ -40,11 +40,14 @@ class FakeObs implements ObsRpc {
     if (type === 'GetSceneCollectionList')
       return {
         currentSceneCollectionName: this.collection,
-        sceneCollections: [...this.collections].map((sceneCollectionName) => ({
-          sceneCollectionName,
-        })),
+        sceneCollections: [...this.collections],
       };
     if (type === 'CreateSceneCollection' || type === 'SetCurrentSceneCollection') {
+      if (
+        type === 'CreateSceneCollection' &&
+        this.collections.has(String(data.sceneCollectionName))
+      )
+        throw new Error('Scene collection already exists');
       this.collection = String(data.sceneCollectionName);
       this.collections.add(this.collection);
       return {};
