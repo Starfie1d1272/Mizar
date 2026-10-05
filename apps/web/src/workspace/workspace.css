@@ -307,6 +307,10 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.production-status--compact > strong[role='status'] {
+  white-space: normal;
+  font-size: var(--mizar-type-size-small);
+}
 .production-status--compact a {
   font-size: var(--mizar-type-size-small);
 }

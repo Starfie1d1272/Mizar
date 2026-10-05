@@ -48,7 +48,13 @@ export function ProductionStatus({
           Bilibili {platformText}
         </span>
       </div>
-      <strong>{guidance?.task ?? '正在读取制作状态'}</strong>
+      <strong role={compact && (reminder || guidance?.interMapReminder) ? 'status' : undefined}>
+        {compact && reminder
+          ? '比赛进行中，OBS 未推流，请检查 OBS。'
+          : compact && guidance?.interMapReminder
+            ? '图间已超过 10 分钟，请确认下一图准备情况。'
+            : (guidance?.task ?? '正在读取制作状态')}
+      </strong>
       {guidance && !compact ? (
         <>
           {guidance.result && ['map_end', 'match_end'].includes(guidance.phase) ? (
