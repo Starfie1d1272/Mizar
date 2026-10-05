@@ -88,7 +88,12 @@ export function Settings({ tab }: { tab: string }) {
         </Panel>
       ) : tab === 'obs' ? (
         <Panel>
-          <h2>OBS</h2>
+          <h2>
+            {new URLSearchParams(window.location.search).has('prepare')
+              ? '进入现场前，连接并检查 OBS'
+              : 'OBS 连接与配置'}
+          </h2>
+          <p>OBS 已打开后，还需要连接 WebSocket，Mizar 才能切换场景和获取画面。</p>
           <p>
             {obs?.connection === 'connected'
               ? '已连接'
@@ -103,8 +108,10 @@ export function Settings({ tab }: { tab: string }) {
             {obs?.sceneAligned === false ? ' · 场景需要核对' : ''}
           </p>
           <p>
-            推流 {obs?.streaming ? '进行中' : '未启动'} · 录制{' '}
-            {obs?.recording ? '进行中' : '未启动'}
+            推流{' '}
+            {obs?.connection !== 'connected' ? '无法确认' : obs.streaming ? '进行中' : '未启动'} ·
+            录制{' '}
+            {obs?.connection !== 'connected' ? '无法确认' : obs.recording ? '进行中' : '未启动'}
           </p>
           {obs?.video ? (
             <p>
@@ -150,10 +157,13 @@ export function Settings({ tab }: { tab: string }) {
               {finding.message}
             </StatusBanner>
           ))}
-          <details
-            open={obs?.connection === 'password_required' || obs?.connection === 'invalid_password'}
-          >
-            <summary>高级连接设置</summary>
+          <section aria-label="OBS 连接引导">
+            <h3>1. 在 OBS 中开启连接服务</h3>
+            <p>
+              打开 OBS「工具 → WebSocket
+              服务器设置」，启用服务器。查看端口；若已启用身份验证，复制该页面提供的密码。
+            </p>
+            <h3>2. 填写连接信息并测试</h3>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -218,7 +228,12 @@ export function Settings({ tab }: { tab: string }) {
                 清除已保存密码
               </Button>
             ) : null}
-          </details>
+            <h3>3. 检查播出场景</h3>
+            <p>
+              连接成功后点击「检查配置」。如有缺失，停止推流与录制后「修复 Mizar
+              场景」，确认检查通过，再点击「进入现场」。
+            </p>
+          </section>
         </Panel>
       ) : (
         <Panel>

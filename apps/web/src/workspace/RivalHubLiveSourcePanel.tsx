@@ -17,10 +17,12 @@ export function RivalHubLiveSourcePanel({
   action,
   onMessage,
   currentMatchTitle,
+  compact = false,
 }: {
   action: (run: () => Promise<unknown>) => Promise<void>;
   onMessage: (message: string) => void;
   currentMatchTitle?: string | null;
+  compact?: boolean;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
 
@@ -187,23 +189,33 @@ export function RivalHubLiveSourcePanel({
 
   return (
     <div className="workspace-rivalhub-source" aria-label="实时数据源状态">
-      <div className="workspace-rivalhub-source-status">
-        {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
-        <small>实时数据源</small>
-        {isCurrentSource ? (
-          <p>本机正在提供实时数据</p>
-        ) : connection.activeDeviceName ? (
-          <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
-        ) : (
-          <p>当前暂无数据源</p>
-        )}
-      </div>
+      {!compact ? (
+        <div className="workspace-rivalhub-source-status">
+          {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
+          <small>实时数据源</small>
+          {isCurrentSource ? (
+            <p>本机正在提供实时数据</p>
+          ) : connection.activeDeviceName ? (
+            <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
+          ) : (
+            <p>当前暂无数据源</p>
+          )}
+        </div>
+      ) : null}
       {isCurrentSource ? (
-        <Button variant="secondary" onClick={() => void handleRelease()}>
+        <Button
+          variant="secondary"
+          title="本机正在提供实时数据"
+          onClick={() => void handleRelease()}
+        >
           停止作为数据源
         </Button>
       ) : connection.activeDeviceName ? (
-        <Button variant="primary" onClick={() => void handleTakeover()}>
+        <Button
+          variant="primary"
+          title={`当前由 ${connection.activeDeviceName} 提供实时数据`}
+          onClick={() => void handleTakeover()}
+        >
           接管为本场数据源
         </Button>
       ) : (

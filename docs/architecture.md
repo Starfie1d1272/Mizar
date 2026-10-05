@@ -104,6 +104,8 @@ HUD 配置独立于比赛数据：组件内容、布局、外观和比赛投影�
 
 Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等同于比赛或 OBS 状态。进入现场需要比赛资料；结束制作先切等待场景、再释放平台数据源，失败保留现场状态供重试，不删除本地比赛。
 
+桌面和 Web 的进入现场入口先读取当前 OBS 连接与场景检查结果；未通过时打开连接引导，不提交制作命令。此准备门禁不复制生命周期状态，也不改变现场运行后的离线恢复能力；理由见 [ADR-0023](decisions/0023-workspace-preflight-and-density.md)。
+
 `ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](design/program-direction-v1.md)。
 
 `BpSession` 只维护播放状态；正式 BP 由比赛投影派生。本地补录不改写在线比赛身份，演示来源只在 BP 内存会话生效。命令与来源切换见[协议](protocol.md#bp-播放与补录)。

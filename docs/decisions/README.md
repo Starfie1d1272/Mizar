@@ -12,6 +12,8 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 
 ## 决策索引
 
+- [ADR-0023：现场工作台准备检查与固定布局](0023-workspace-preflight-and-density.md)
+
 - [ADR-0001：项目定位与权威边界](0001-project-positioning-and-authority.md)
 - [ADR-0002：运行时与工作台技术基线](0002-runtime-workspace-technology-baseline.md)
 - [ADR-0003：运行状态、身份与投递约束](0003-runtime-state-delivery-invariants.md)

@@ -24,15 +24,14 @@ test('Workspace preview shares the scene registry and sends a revisioned command
   await expect(page.getByText('CS2 游戏画面')).toBeVisible();
   await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).toBeVisible();
   await expect(page.getByRole('main', { name: '现场控制底栏' })).toBeVisible();
-  await page.getByRole('button', { name: '手动切换', exact: true }).click();
   for (const scene of PROGRAM_SCENES)
     await expect(page.getByRole('button', { name: scene.title, exact: true })).toBeVisible();
   await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect.poll(() => command).toEqual({ sceneId: 'matchup', expectedRevision: 'revision-1' });
 
   await page.goto('/settings?tab=obs');
-  await page.getByText('高级连接设置', { exact: true }).click();
   await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'OBS 连接引导' })).toBeVisible();
 });
 
 test('every Program Scene route renders without match data', async ({ page }) => {
@@ -47,7 +46,7 @@ test('every Program Scene route renders without match data', async ({ page }) =>
   }
 });
 
-test('automatic direction stays compact and manual takeover can resume', async ({ page }) => {
+test('all scene controls stay visible and manual takeover can resume', async ({ page }) => {
   let mode = 'auto';
   let revision = 'auto-1';
   const commands: unknown[] = [];
@@ -83,15 +82,14 @@ test('automatic direction stays compact and manual takeover can resume', async (
   });
   await page.goto('/workspace');
   await expect(page.getByText('自动编排', { exact: false })).toBeVisible();
-  await expect(page.getByRole('button', { name: '对阵', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '对阵', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'BP 控制', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'BP 工作台', exact: true })).toHaveCount(1);
-  await page.getByRole('button', { name: '手动切换', exact: true }).click();
   expect(commands).toEqual([]);
   await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect(page.getByText('手动保持', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '恢复自动', exact: true }).click();
-  await expect(page.getByRole('button', { name: '对阵', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '对阵', exact: true })).toBeVisible();
   expect(commands).toEqual([
     { sceneId: 'matchup', expectedRevision: 'auto-1' },
     { action: 'resume', expectedRevision: 'manual-2' },
