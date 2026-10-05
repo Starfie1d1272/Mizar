@@ -1,64 +1,43 @@
-# RC 与发布检查清单
+# RC 与发布流程
 
-本清单用于把一个确定版本交给真实 Windows + CS2 + OBS 验收。操作说明见 [快速开始](quick-start.md)，验证模型见 [开发验证](development-validation.md)。当前代码完成、某次 CI 成功、资源自洽和实机 PASS 是不同证据，不能相互替代。
+**先生成候选版本 RC，再把同一构建包交给 #35，在 Windows + CS2 + OBS 上实测。** RC 可以带有明确的待验收项；实机通过是正式发布的门槛，不是生成 RC 的前提。
 
-## 候选版本的准备顺序
+```text
+功能、默认视觉与操作说明收敛
+  → 选定源码 SHA，构建并移交 RC
+  → #35 Windows + CS2 + OBS 实机验收
+  → 修复问题，必要时构建新 RC 并重验
+  → 冻结已知限制、实机截图与发布说明
+  → 最终版本、检查、构建身份与正式发布
+```
 
-1. 完成拟发布的功能、美术与必要操作文档，合入候选主线。
-2. 从确定的完整 git SHA 构建 exact RC，核对该版本所需 CI 与资源证据。
-3. 用同一包完成真实 Windows + CS2 + OBS 验收，发现问题后修复并重验受影响场景。
-4. 根据实际结果冻结 README、已知限制和发布说明，再按发布流程统一版本、运行最终 CI、生成发布包与 tag。
+总体状态由 [Release Closure #90](https://github.com/Starfie1d1272/Mizar/issues/90) 维护，现场场景、结果和证据由 [Production Acceptance #35](https://github.com/Starfie1d1272/Mizar/issues/35) 维护；不在仓库再复制一份现场报告。
 
-文档初稿可以先完成。默认 HUD 或节目场景重绘后，先同步预览图、默认外观描述和实际改变的按钮／行为，再生成最终候选包。美术变更也需要检查 1080p / 1440p、OBS Browser Source、真实回放、长文本、缺失媒体、暂停、换边、C4、减少动效和场景转场；保留共享数据边界与预设保存／启用语义。
+## 构建 RC
 
-若已做过 RC 验收，后续重绘产生的新包须记录与前一包的差异，并重验相关画面与流程；不能把旧包 PASS 直接记到新 revision 上。
+- [ ] 操作入口、默认视觉、随包说明与拟发布功能一致。
+- [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的适用 CI。
+- [ ] 用 Release Qualification workflow 指定 SHA，或在 Windows x64 执行 `node scripts/qualification/build.mjs`，正式 RC 使用默认 `release` 桌面构建配置。
+- [ ] 包含桌面 EXE、Node、Web、脚本、配置、素材与许可；核对解压启动及适用自动化报告。
+- [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，另计算 ZIP 的 SHA-256；两种摘要含义不同。
+- [ ] 在实际解压包执行 `node scripts/qualification/verify-c4-resources.mjs <bundle-root>/resources/app`，检查 C4 地图与许可完整性。
 
-## 构建与资源核对
+资源校验、GUI 启动检查和合成长时测试的证明范围见[开发验证](development-validation.md#便携包自动化)。检查通过后即可作为明确标记的 RC 移交，不填写尚未进行的实机结果。
 
-- [ ] 从干净 checkout 的完整 SHA 构建，不使用 dirty 包或只做结构检查的包。
-- [ ] 核对该 SHA 的 CI 运行链接、各必要检查与结果；PR 的选择性 CI 不一定生成 Windows 包。
-- [ ] 通过现有 Release Qualification workflow 指定完整 SHA，或在 Windows x64 干净 checkout 使用 `node scripts/qualification/build.mjs`；正式候选使用默认 `release` desktop profile。
-- [ ] 核对 `resources/metadata/artifact.json`、`resources/metadata/SHA256SUMS` 和产品运行诊断中的版本身份与摘要；记录 ZIP 文件 SHA-256，并明确它与包内内容摘要不同。
-- [ ] 包含 `Mizar.exe`、bundled Node、Web、脚本与配置；从含空格的可写路径干净解压和启动。
-- [ ] 确认十张 C4 数值地图和上游 `LICENSE`、`NOTICE`、`CREDITS.md` 随实际包交付；核对 [第三方说明](../THIRD-PARTY-NOTICES.md)。
-- [ ] 复用现有验证器在**实际解压包**上执行：`node scripts/qualification/verify-c4-resources.mjs <bundle-root>/resources/app`。它需要仓库验证脚本和可用 Node，属于构建／验收人员步骤，不要求普通使用者执行。
-- [ ] 核对 portable smoke、GUI cold-start 与合成 soak 的证据。它们各有用途，均不表示真实 CS2 / OBS 已通过。
+## 移交与实测
 
-安装到开发 checkout 后执行验证器，只证明开发依赖可加载。十图校验也不证明真实伤害精度、全部地图 positive path 或未来 CS2 build 兼容。
+每个 RC 的记录至少包含：完整源码 SHA、包名与获取链接、ZIP 摘要、包内身份、桌面构建配置、自动化报告、已知问题和待验收范围。字段未生成就明确注明，不填推测值。
 
-## 交给实机验证者
+验证者在 #35 记录 Windows、WebView2、CS2、OBS 版本、分辨率/DPI/显示器、场景步骤、时间和结果。原故障机器启动复验关联 [#112](https://github.com/Starfie1d1272/Mizar/issues/112)；平台连接的适用恢复测试关联 [#121](https://github.com/Starfie1d1272/Mizar/issues/121)，不自动扩成纯独立模式的新门槛。
 
-用下表记录每次 RC；无法获得的字段填「待生成」或「不可用及原因」，不填写推测值。
+实测使用同一 RC，不用开发服务器或手工改过的包替代。修复或美术修改后形成新构建身份，记录差异并重验受影响场景；旧包通过不自动转移到新包。
 
-| 信息       | 记录内容                                                              |
-| ---------- | --------------------------------------------------------------------- |
-| 候选身份   | 完整 git SHA、包内 app/runtime 版本、desktop build profile            |
-| 包身份     | 文件名、下载／CI 链接、ZIP SHA-256、包内 artifact 摘要                |
-| 自动化证据 | 对应 SHA 的 CI、portable/GUI smoke、资源验证与合成 soak 报告          |
-| 实机环境   | Windows、WebView2、CS2 build、OBS 版本、分辨率、DPI、显示器和输入方式 |
-| 验收范围   | 独立模式必验；连接模式适用时另记接管／恢复及云端链路                  |
-| 限制       | 尚未完成场景、已知问题及其 issue；PASS / FAIL / INCONCLUSIVE 分开     |
-| 结果       | 场景步骤、发生时间、报告路径／完整性哈希、脱敏诊断包及复现说明        |
+## 截图与正式发布
 
-实机验证至少覆盖：
+- [ ] 按[截图来源与待补清单](screenshots/README.md)补 Windows 工作台、真实 CS2 与 OBS 画面；保留与 RC 的对应关系。
+- [ ] 用实际验收结果完成[发布说明草案](release-notes-draft.md)，明确适用场景和已知限制。
+- [ ] 核对 README、操作手册、包内说明和画面与最终交付一致。
+- [ ] 统一最终应用版本，运行最终修订的适用检查，记录与已验 RC 的差异和验证关系。
+- [ ] 下载链接、包身份、许可证和升级说明齐全，正式发布所需实机门槛满足后创建正式标签并发布。
 
-- [ ] 原故障 Windows 机器与正常机器的完整桌面 cold start；不能仅用 HTTP health 判断桌面就绪。
-- [ ] 准备中心 → 比赛 → GSI → OBS → 预览 → 进入现场 → 隐藏／恢复 → 结束制作 → 完整退出。
-- [ ] 真实 10 人 HUD、雷达、换边／换图、暂停／回合历史；默认与拟发布赛事预设的可读性、保存／启用／重载。
-- [ ] `.mizar-hud.json` 导入生成副本、导入不改变节目、启用与无效文件恢复。
-- [ ] C4 在至少一张支持地图的正向展示、开关持久化、最后十秒窗口，以及数据／地图／资源不可用的隐藏；记录所用 CS2 build，真实 HP 保持不变。
-- [ ] 自动节目流程、手动接管／恢复、OBS 失败后的恢复、BP 播放与收起。
-- [ ] Browser Source reload、Companion restart、CS2 restart、接近比赛时长的真实 soak，且 Workspace／Assist 私有信息不进入节目。
-- [ ] 原生诊断另存为、取消／失败重试、浏览器备用下载和启动失败日志路径。
-
-最终真实验收范围与判定由 [Production Acceptance #35](https://github.com/Starfie1d1272/Mizar/issues/35) 管理，原机启动复验关联 [#112](https://github.com/Starfie1d1272/Mizar/issues/112)。不在这里建立第二份现场报告体系。RivalHub 连接恢复的适用缺口另见 [#121](https://github.com/Starfie1d1272/Mizar/issues/121)。
-
-## 发布前冻结
-
-- [ ] 按实测结果完成 [发布说明草案](release-notes-draft.md)，列出限制和恢复步骤；功能表述与最终包一致。
-- [ ] README、快速开始、包内 README、按钮、默认外观与最终截图一致。
-- [ ] 审查自定义预设和旧 state 的适用格式，不承诺未实现的升级迁移；保留旧包和数据备份作为恢复资料。
-- [ ] 通过适用实机验收后统一最终 app 版本，运行最终 revision 的 CI 并记录与已验收 RC 的对应关系；不能把依赖 `cs2-c4-damage@0.1.0` 当作 Mizar app 版本。
-- [ ] 最终包名、完整 SHA、摘要、许可证和下载链接就绪后才创建正式 tag／发布。
-
-最终版本、tag 与发布由 [Release Closure #90](https://github.com/Starfie1d1272/Mizar/issues/90) 统一追踪。操作文档可以先移交；真实验收与最终发布文案须继续更新到实际交付状态。
+当前仅有浏览器预览的截图不作为实机证据；C4 依赖版本不作为 Mizar 应用版本。用户安装与诊断操作只维护在[操作手册](quick-start.md)。

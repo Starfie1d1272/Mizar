@@ -1,5 +1,7 @@
 # Mizar 原生转播包装 · 视觉复核
 
+> 历史设计审查记录，保留原始结论与证据；当前规范见[设计系统](../../design/README.md)。
+
 本轮基于 `origin/main` 的 `badbdbc8676b26239f8b2b72d1633f3bbf0fd123`，升级现有默认预设。实现与证据同一 PR；图片是人工视觉复核资料，不是新增整站像素基线。
 
 ## 方向与边界
@@ -22,38 +24,38 @@ EWC 的明暗主次与减重、IEM 的空间秩序、上海的身份与装备生
 
 图中左为上述 main 基线，右为本 PR。Gameplay 使用相同真实 GSI fixture、比赛身份与状态；底图仅为 Ancient 官方缩略图，**不是 CS2/OBS 实机录像**。
 
-![默认 Live 前后](mizar-native/compare-live.webp)
-![暂停前后](mizar-native/compare-pause.webp)
-![Waiting 前后](mizar-native/compare-waiting.webp)
+![默认 Live 前后](../../design/reviews/mizar-native/compare-live.webp)
+![暂停前后](../../design/reviews/mizar-native/compare-pause.webp)
+![Waiting 前后](../../design/reviews/mizar-native/compare-waiting.webp)
 
-![有双方队标的 Waiting 主形态](mizar-native/waiting-with-media.webp)
-![BP 前后](mizar-native/compare-bp.webp)
-![Match Result 保守统一](mizar-native/compare-result.webp)
+![有双方队标的 Waiting 主形态](../../design/reviews/mizar-native/waiting-with-media.webp)
+![BP 前后](../../design/reviews/mizar-native/compare-bp.webp)
+![Match Result 保守统一](../../design/reviews/mizar-native/compare-result.webp)
 
 ## 本次继续打磨
 
 与 `324060a` 的同资料对比：
 
-![本次 HUD 材质与烟雾调整](mizar-native/revision-live.webp)
-![本次有队标 Waiting 调整](mizar-native/revision-waiting.webp)
+![本次 HUD 材质与烟雾调整](../../design/reviews/mizar-native/revision-live.webp)
+![本次有队标 Waiting 调整](../../design/reviews/mizar-native/revision-waiting.webp)
 
-![Focus 与侧栏共用烟雾](mizar-native/smoke-focus.webp)
+![Focus 与侧栏共用烟雾](../../design/reviews/mizar-native/smoke-focus.webp)
 
-![长双语队名、有队标与计划时间组合](mizar-native/waiting-long-media.webp)
+![长双语队名、有队标与计划时间组合](../../design/reviews/mizar-native/waiting-long-media.webp)
 
 烟雾图保留 `real-live-rich` 的真实选手状态，只将观察目标切换至受烟雾影响的选手。长名 Waiting 图组合既有双语长名、冻结队标和计划时间样例。两者都是明确的展示边界，不宣称真实录像或真实对阵发生过这些组合。
 
 ## 连贯画面与动画
 
-- [默认节目包连续预览](mizar-native/program-reel.webm)：实际 `/preview` 播放演示，包含 Waiting、BP、Matchup、Gameplay、半场、单图结果、图间和整场结果。Waiting/BP 使用仓库 NJU Rivals 公开资料，游戏与统计页使用 FURIA/G2 真实回放衍生样本；这是一套视觉包装的演示，不宣称它们属于同一场比赛。
-- [完整 6 秒开场](mizar-native/intro-full.webm)、[短版 2 秒](mizar-native/intro-short.webm)、[缺队标交接](mizar-native/intro-no-media.webm)：Chromium 实际生产动画录制，剪去页面导航准备帧，保留完整动作和 0.6 秒交接后画面，未用生成图代替动画。静态地图底图只辅助观察透明叠加。
-- [1920×1080 Live](mizar-native/live.webp)、[冻结购买](mizar-native/freeze.webp)、[暂停](mizar-native/pause.webp)、[Waiting](mizar-native/waiting.webp)、[Match Result](mizar-native/match-result.webp)。
+- [默认节目包连续预览](../../design/reviews/mizar-native/program-reel.webm)：实际 `/preview` 播放演示，包含 Waiting、BP、Matchup、Gameplay、半场、单图结果、图间和整场结果。Waiting/BP 使用仓库 NJU Rivals 公开资料，游戏与统计页使用 FURIA/G2 真实回放衍生样本；这是一套视觉包装的演示，不宣称它们属于同一场比赛。
+- [完整 6 秒开场](../../design/reviews/mizar-native/intro-full.webm)、[短版 2 秒](../../design/reviews/mizar-native/intro-short.webm)、[缺队标交接](../../design/reviews/mizar-native/intro-no-media.webm)：Chromium 实际生产动画录制，剪去页面导航准备帧，保留完整动作和 0.6 秒交接后画面，未用生成图代替动画。静态地图底图只辅助观察透明叠加。
+- [1920×1080 Live](../../design/reviews/mizar-native/live.webp)、[冻结购买](../../design/reviews/mizar-native/freeze.webp)、[暂停](../../design/reviews/mizar-native/pause.webp)、[Waiting](../../design/reviews/mizar-native/waiting.webp)、[Match Result](../../design/reviews/mizar-native/match-result.webp)。
 
-![节目段与暂停整体复核](mizar-native/program-scenes.webp)
+![节目段与暂停整体复核](../../design/reviews/mizar-native/program-scenes.webp)
 
-![开场进入、停留、交接、完成](mizar-native/intro-stages.webp)
-![C4、死亡、预测、技术暂停与换边](mizar-native/states.webp)
-![长队名、BO5、缺媒体和满装备边界](mizar-native/edges.webp)
+![开场进入、停留、交接、完成](../../design/reviews/mizar-native/intro-stages.webp)
+![C4、死亡、预测、技术暂停与换边](../../design/reviews/mizar-native/states.webp)
+![长队名、BO5、缺媒体和满装备边界](../../design/reviews/mizar-native/edges.webp)
 
 ## 实际审查与修订
 
@@ -81,7 +83,7 @@ Waiting 的有媒体复核使用仓库已冻结的 FURIA / G2 队标和同场 Pr
 
 新增浏览器约束覆盖共享烟雾与信息层级、浅底弹药文字对比、减少动效解除身份裁切，以及默认固定行位、C4 条留白/厚度、存活人数居中、C4 对比/预测与开关、保存的窄 Focus、BO1/3/5、双语队名、缺媒体、战术/技术暂停、换边、stale、Waiting 收拢、结果板几何、实测 Intro 终点、短版及动态 reduced motion。已有回放/Program Director 验收继续覆盖 seek、过期、取消、快速切换、阻断/恢复、轮询不重复 seek；三套赛事预设继续走保存→启用→重载与共享 renderer。
 
-![三套赛事预设同帧回归](mizar-native/tournament-regression.webp)
+![三套赛事预设同帧回归](../../design/reviews/mizar-native/tournament-regression.webp)
 
 实施环境：Linux + Chromium。格式、lint、类型、架构、设计 token/contract/catalog/交互检查、构建及 fixtures 校验通过；单测 **1281 通过、2 项既有跳过**，设计 contract **100 通过**，组件交互 **13 通过**，完整浏览器验收 **58 通过**。独立 Radar consumer/release 与 production Web host smoke 通过。CI 最终状态以 PR 同 revision 的检查为准。未执行 Windows + CS2 + OBS 实机验收、真实 Game Capture 合成或 60fps 现场录像；这些仍需平台验收。
 

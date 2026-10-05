@@ -16,9 +16,9 @@
 
 | 层级 | 用途与例子 | 依赖规则 |
 | --- | --- | --- |
-| 原始值（Base） | `color.gray/blue/amber/...`、`space`、`radius`、`font.size/weight/family`、`motion.duration` | 只表示数值，页面不直接使用 |
-| 用途（Semantic） | `bg.canvas/surface/raised`、`fg.primary/secondary/muted`、`border.default/strong`、`accent.primary`、`status.*`、`focus.ring` | 引用原始值或同层变量，不直接写原始数值 |
-| 界面差异（Surface） | `product.*`、`broadcast.*`、`technical.*` | 引用用途层或同一界面变量，不另建调色板 |
+| 原始值 | `color.gray/blue/amber/...`、`space`、`radius`、`font.size/weight/family`、`motion.duration` | 只表示数值，页面不直接使用 |
+| 用途 | `bg.canvas/surface/raised`、`fg.primary/secondary/muted`、`border.default/strong`、`accent.primary`、`status.*`、`focus.ring` | 引用原始值或同层变量，不直接写原始数值 |
+| 界面差异 | `product.*`、`broadcast.*`、`technical.*` | 引用用途层或同一界面变量，不另建调色板 |
 | 组件与组合 | 稳定复用后才添加专用变量 | 不提前为每个页面建立变量 |
 
 间距、形状、字体和动效的用途入口分别是 `layout`、`shape`、`type`、`transition/easing`。CSS 名称由 `--mizar-` 加变量路径生成，`.` 转成 `-`；声明只来自设计变量包。
@@ -72,29 +72,11 @@ WCAG 2.2 基线包括：可见键盘焦点、不被浮层遮挡、键盘操作�
 
 每个共享组件覆盖默认状态，以及适用的悬停、可见焦点、禁用、加载、错误/警告/成功、键盘与减少动效状态。Storybook 组件样例在真实 Chromium 中运行，axe 检查名称、角色、对比度和点击区域等；交互断言补充焦点、对话框键盘与减少动效检查。真实产品的可用性仍需人工审查。
 
-### Gameplay resolved Theme 变量
+### HUD 已启用外观变量
 
-ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消费冻结值：`--mizar-hud-text-primary/muted`、`--mizar-hud-state-danger/warning/success/unknown`、`--mizar-hud-objective-bomb/defuse`、`--mizar-hud-surface-primary/strong/opacity`、`--mizar-hud-border-opacity`、`--mizar-hud-radius-sm/md/lg`、`--mizar-hud-font-family`。它们由 strict schema 验证并仅在 `GameplayHud` 根设置，不进入全局 token JSON，不开放给 Widget Settings。赛事色与 CT/T 继续使用已有通道。共同字体回退、动效时长使用 canonical `type.family.body`、`transition.fast/normal`；组件几何和剩余一次性画面美术留在 renderer。当前不开放外观工作区，圆角等未全面消费的字段仍不能宣称为用户可用 capability。
+ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消费冻结值：`--mizar-hud-text-primary/muted`、`--mizar-hud-state-danger/warning/success/unknown`、`--mizar-hud-objective-bomb/defuse`、`--mizar-hud-surface-primary/strong/opacity`、`--mizar-hud-border-opacity`、`--mizar-hud-radius-sm/md/lg`、`--mizar-hud-font-family`。它们由严格结构校验并仅在 `GameplayHud` 根设置，不进入全局设计变量 JSON，不开放给 组件设置。赛事色与 CT/T 继续使用已有通道。共同字体回退、动效时长使用统一的 `type.family.body`、`transition.fast/normal`；组件几何和剩余一次性画面美术留在渲染器。当前不开放外观工作区，圆角等未全面消费的字段仍不能宣称为用户可用能力。
 
-### 默认节目包与桌面工作台（Issue #107 视觉复查）
 
-- 单图结果保留大比分为主角。Barlow Condensed Bold 随包加载，消除系统 Impact 字体缺失时的宽体回退差异；数字使用 `type.family.display`，固定 1920×1080 构图。背景只使用已导入的本图地图缩略图，并弱化细节。
-- 队徽使用固定容器；宽标按自然宽高比适当加宽，方标保持相同光学高度。无素材显示队名缩写；不补造队徽。对阵开场继续透明叠加于真实游戏，预览背景仅供演示。
-- 半场、图间和整场数据页保留十人镜像表格。头像使用固定 120px 单元格和 96px 裁切，缺图时保留单元格；中间留出 K/D 轴，数字列保持稳定。高对比选图标签和中性隔行底色提高可读性。
-- 赛前等待以赛事、双队身份、开赛时间、前后场赛程构成四级信息，不根据计划时间生成倒计时。
-- 准备中心按资料密度设置宽度；预览和 HUD 编辑器扩大画布，属性面板保持固定宽度。工作区保留游戏区域，现场播出控制优先，连接详情和维护操作按需展开。工作区雷达默认完整地图，四周保留内边距；HUD 雷达默认也为完整地图，自动聚焦由用户显式选择。
-- 原有 Gameplay HUD 的组件、配色、信息量、布局与 Radar 均不在本轮重绘范围。
+## 播出视觉与工作台
 
-本轮字体、媒体单元格与结果底图属于 `ProgramScenePage` 的播出呈现；不新增 runtime 颜色或数据通道。复核见 `tests/acceptance/program-direction.spec.ts` 的长名称、缺失素材、多赛制、比分边界和动效交接检查。产品交互继续复用 Button / Panel / Select 和原生 details，状态来源与命令不变。
-
-### Gameplay HUD 播出预设
-
-HUD 编辑器提供原版、类 EWC、类 IEM、类 Perfect World、类ESL 五个内置预设，复用同一真实回合、组件和状态机。组件造型由已保存 variant 决定，颜色由 Theme recipe 决定；选择和另存不自动启用。适配范围、C4 动效、几何测量与缺失参考状态见 [播出预设说明](hud-broadcast-presets.md)。
-
-类ESL 的字体、近似纹理与雷达图案只在 `esl` 展示方案生效。字体来源、缺失素材和视觉复核见 [ESL 复核](reviews/esl.md)，不改动产品界面字体或公共设计变量。
-
-### 默认节目包：Mizar Pulse
-
-默认 Gameplay 采用深黑蓝硬壳、冷白核心读数、品牌蓝能量边、少量暖金节点与短促脉冲；浅色战斗底板方案被本规则替代。颜色和组件规格见 [Mizar Pulse](mizar-pulse.md)，实际渲染与四套对照见 [视觉复核](reviews/mizar-pulse.md)。这是现有默认预设和八个默认节目场景的呈现升级，不新增主题入口或第六套预设；其他节目页保留现有组织，弧面降为低透明度背景。全场景复核见 [截图与记录](reviews/mizar-pulse-scenes.md)。
-
-静态播出美术通过 `color.pulse → brand.pulse → broadcast.pulse` 统一管理，不替换产品交互色。Gameplay 已有 Theme recipe 继续承载文字、壳体、阵营和状态颜色；两处入口按 Pulse 规范校准，不新增动态颜色通道。CT/T 强调随事实换边，不按物理左右硬编码；暖金装饰不表示胜负。昵称 Inter / 中文回退，HP 与比分 Barlow Condensed。小圆角 4–6px，死亡只收可见底板，不移动五人行位。
+默认节目与 HUD 见 [Mizar Pulse](mizar-pulse.md)，其他 HUD 见[风格规范](hud-broadcast-presets.md)。具体组件几何与已保存快照由配置包和渲染器维护，不在本页重复。工作台保持游戏区域为主，制作控制与连接详情按任务组织；真实桌面布局在 RC 上验收。

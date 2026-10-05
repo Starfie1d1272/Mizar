@@ -1,34 +1,11 @@
-# Radar utility effect rendering
+# 雷达道具展示
 
-This note records the external implementation references used for the broadcast radar utility pass.
+本页维护道具视觉语义，坐标与运行时职责见[架构](../architecture.md#雷达与展示配置)，共享实现见[雷达包](../../packages/radar-view/README.md)。
 
-## References
+- 飞行道具使用既有官方图标和细轨迹，与已经生效的烟雾、燃烧区区分。
+- 烟雾采用柔和、不规则的中性覆盖，阵营只作轻微边缘提示。
+- 燃烧区合并真实火焰点形成连续热区，不将每个点的调试圆当最终画面。
+- 高爆与闪光分别用短冲击和星芒表达，动画不推导新的伤害或游戏事件。
+- 展示平滑与时间效果不改写地图校准、数据源语义或比赛事实，缺失时间不补造服务器寿命。
 
-- **Eon** (`mortenlein/eon`) — package metadata declares the project under the **ISC** license.
-  Its radar keeps projectile rendering separate from active smoke and inferno effects, and uses
-  team-aware smoke/inferno presentation. RivalHub reuses that presentation split as a design
-  reference, not source code.
-- **Lexogrine CS2 React HUD** (`lexogrine/cs2-react-hud`) — **MIT** licensed.
-  Its radar distinguishes airborne grenade icons from landed smoke / inferno presentation.
-  RivalHub reuses that state-model pattern as a design reference, not source assets or source code.
-- **Boltobserv** (`boltgolt/boltobserv`) — **GPL-3.0** licensed.
-  It was inspected for comparison only. No Boltobserv source or assets are copied into RivalHub.
-
-RivalHub itself is AGPL-3.0. The effect renderer in
-`apps/web/src/program/widgets/radar/Radar.tsx` is an original Canvas implementation.
-
-## Rendering contract
-
-- Airborne utility uses the existing Valve-derived official grenade assets and a thin team-colored
-  trajectory.
-- Active smoke is a deterministic irregular soft footprint. Ownership is represented by a subtle
-  CT/T outline while the cloud itself stays neutral.
-- Smoke lifetime remains presentation-only and uses the existing 20 s broadcast duration contract.
-- Active inferno consumes the real GSI flame positions and merges them visually into a continuous
-  heat footprint. Individual flame circles are not exposed as the final visual language.
-- HE detonation is a short shock pulse.
-- Flash detonation is a short starburst.
-- No protocol, telemetry, map calibration, or domain truth is inferred by this renderer.
-
-The intent is to preserve calibrated spatial truth while replacing the previous debug-like
-"circle per effect point" presentation with a broadcast-oriented visual grammar.
+设计参考包括 Eon 与 Lexogrine CS2 React HUD 的飞行/生效状态区分；Boltobserv 仅作产品对照。这里记录设计参考，不声明包含其源码或素材。来源与许可分别由[参考项目](../references.md)和[第三方说明](../../THIRD-PARTY-NOTICES.md)维护。

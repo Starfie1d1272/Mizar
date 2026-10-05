@@ -1,5 +1,7 @@
 # Mizar Pulse 实际渲染复核
 
+> 历史设计审查记录，保留原始结论与证据；当前规范见[设计系统](../../design/README.md)。
+
 本页记录 Gameplay 首轮改稿。最新全场景调整与本轮截图见 [全场景复核](mizar-pulse-scenes.md)，其中包含去重队名、下移 Team Summary 与已用暂停格边框。
 
 本轮按用户提供的定稿评审重做现有默认 Gameplay；前版基准是 PR #124 的 `b2b739b`，而非最初的 `7b2896d`。图 1–4 按四套内置视觉 EWC、IEM、Perfect World、ESL 对照；用户粘贴文件未含四张图片原文件，因此这里重新渲染仓库已有四套 renderer，不宣称复原了外部原图。
@@ -10,12 +12,12 @@
 
 | 画面 | 新版 | 上一版与新版 | 五套同条件 |
 | --- | --- | --- | --- |
-| Live | [原尺寸](mizar-native/pulse/current-live.webp) | [前后](mizar-native/pulse/compare-live.webp) | [五套](mizar-native/pulse/five-live.webp) |
-| Freeze | [原尺寸](mizar-native/pulse/current-freeze.webp) | [前后](mizar-native/pulse/compare-freeze.webp) | [五套](mizar-native/pulse/five-freeze.webp) |
-| Pause | [原尺寸](mizar-native/pulse/current-pause.webp) | [前后](mizar-native/pulse/compare-pause.webp) | [五套](mizar-native/pulse/five-pause.webp) |
-| 多人死亡 | [原尺寸](mizar-native/pulse/current-death.webp) | [前后](mizar-native/pulse/compare-death.webp) | [五套](mizar-native/pulse/five-death.webp) |
+| Live | [原尺寸](../../design/reviews/mizar-native/pulse/current-live.webp) | [前后](../../design/reviews/mizar-native/pulse/compare-live.webp) | [五套](../../design/reviews/mizar-native/pulse/five-live.webp) |
+| Freeze | [原尺寸](../../design/reviews/mizar-native/pulse/current-freeze.webp) | [前后](../../design/reviews/mizar-native/pulse/compare-freeze.webp) | [五套](../../design/reviews/mizar-native/pulse/five-freeze.webp) |
+| Pause | [原尺寸](../../design/reviews/mizar-native/pulse/current-pause.webp) | [前后](../../design/reviews/mizar-native/pulse/compare-pause.webp) | [五套](../../design/reviews/mizar-native/pulse/five-pause.webp) |
+| 多人死亡 | [原尺寸](../../design/reviews/mizar-native/pulse/current-death.webp) | [前后](../../design/reviews/mizar-native/pulse/compare-death.webp) | [五套](../../design/reviews/mizar-native/pulse/five-death.webp) |
 
-另有 [Focus 裁切](mizar-native/pulse/current-focus.webp)、[满装备](mizar-native/pulse/current-full-equipment.webp)、[长英文](mizar-native/pulse/current-long-names.webp)、[长中文/中英文混合](mizar-native/pulse/current-long-zh.webp)、[技术暂停](mizar-native/pulse/current-technical.webp)、[左右选手卡原尺寸裁切](mizar-native/pulse/current-cards.webp)。参考单套原尺寸截图与上一版原尺寸截图保存在同目录。
+另有 [Focus 裁切](../../design/reviews/mizar-native/pulse/current-focus.webp)、[满装备](../../design/reviews/mizar-native/pulse/current-full-equipment.webp)、[长英文](../../design/reviews/mizar-native/pulse/current-long-names.webp)、[长中文/中英文混合](../../design/reviews/mizar-native/pulse/current-long-zh.webp)、[技术暂停](../../design/reviews/mizar-native/pulse/current-technical.webp)、[左右选手卡原尺寸裁切](../../design/reviews/mizar-native/pulse/current-cards.webp)。参考单套原尺寸截图与上一版原尺寸截图保存在同目录。
 
 ## 四套参考的取舍
 
@@ -32,7 +34,7 @@ Mizar 自身语言由连续深黑蓝壳、冷白读数、蓝能量前沿、暖�
 
 已查看 Live、暂停、多人死亡、长英文、中文混合及满装备截图。比赛数字、姓名和当前武器没有被纹理遮盖；地图队标保留完整 22px 槽；雷达默认外框调整为 368px 正方形，底部 y=484 距统计行 y=492 保留 8px，避免经济/道具统计被覆盖；Focus 弹药区增宽至 72px，两行数字上下至少 8px 留白；长昵称按既有策略省略，比分队名可换行。原五人行位、CT/T 事实换边、目标安全区和旧 Focus 外框仍由自动断言覆盖。静态对照可以核对造型与层级，不代替真实视频中扫读和动效的人工验收。
 
-[雷达与统计间距裁切](mizar-native/pulse/current-radar-spacing.webp) 与 [Focus 弹药留白裁切](mizar-native/pulse/current-focus.webp) 是本轮用户追评后的实际渲染。
+[雷达与统计间距裁切](../../design/reviews/mizar-native/pulse/current-radar-spacing.webp) 与 [Focus 弹药留白裁切](../../design/reviews/mizar-native/pulse/current-focus.webp) 是本轮用户追评后的实际渲染。
 
 ## 设计系统 PR 检查
 

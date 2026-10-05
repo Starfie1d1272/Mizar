@@ -1,5 +1,7 @@
 # Issue #107：视觉复查与页面任务
 
+> 历史设计审查记录，保留原始结论与证据；当前规范见[设计系统](../../design/README.md)。
+
 本轮依据四张用户提供的赛事画面、仓库 BP 参考和现有制作工作流调整。保留大比分、十人数据表和正式播出英文标签；产品操作使用简洁中文。Gameplay HUD 本体重绘另行开展。
 
 ## 参考图的有效设计
@@ -46,12 +48,12 @@
 
 左侧为本轮调整前（8ce560d），右侧为本轮调整后。工作区示例数据的时效状态可能随采集时间变化。
 
-![赛前等待](reviews/107/waiting.jpg)
-![单图结果](reviews/107/result.jpg)
-![选手数据](reviews/107/statistics.jpg)
-![节目预览](reviews/107/preview.jpg)
-![HUD 编辑器](reviews/107/editor.jpg)
-![现场工作区](reviews/107/workspace.jpg)
+![赛前等待](../../design/reviews/107/waiting.jpg)
+![单图结果](../../design/reviews/107/result.jpg)
+![选手数据](../../design/reviews/107/statistics.jpg)
+![节目预览](../../design/reviews/107/preview.jpg)
+![HUD 编辑器](../../design/reviews/107/editor.jpg)
+![现场工作区](../../design/reviews/107/workspace.jpg)
 
 ## 比赛资料与 BP 复核
 
@@ -70,11 +72,11 @@
 
 填写与维护按 owner 分工：本地比赛只保留当前有用途的输入；网站连接模式提供当前比赛的「在网站管理」入口。工作区的自动模式默认收起八个场景按钮，展开只影响显示，选择场景才进入手动保持；恢复自动会重新收起。BP 入口和进度统一在底栏比赛区。
 
-![比赛资料复查](reviews/107/match-details.jpg)
-![地图与 BP 复查](reviews/107/match-maps.jpg)
+![比赛资料复查](../../design/reviews/107/match-details.jpg)
+![地图与 BP 复查](../../design/reviews/107/match-maps.jpg)
 自动模式截图使用同一赛事快照与浏览器模拟的自动状态，用于检查控件收起布局；自动/手动命令流另由浏览器验收覆盖。比赛资料与地图截图使用完赛演练阶段，保留快照原始结果。
 
-![自动模式工作区](reviews/107/workspace-auto.jpg)
+![自动模式工作区](../../design/reviews/107/workspace-auto.jpg)
 
 ## 图间计时回归（2026-10-03）
 
@@ -82,8 +84,8 @@
 
 同一 store 先接收图 1 可信结束事件，一小时后图 2 Mirage 10:13 已完成但缺少可信结束时间，旧计时失效：
 
-![图 2 缺少可信结束时间，无超时提示](reviews/107/intermap-missing.png)
+![图 2 缺少可信结束时间，无超时提示](../../design/reviews/107/intermap-missing.png)
 
 随后补齐图 2 的可信 completedAt，时间经过十分钟后恢复提醒：
 
-![补齐可信结束时间后满十分钟](reviews/107/intermap-restored.png)
+![补齐可信结束时间后满十分钟](../../design/reviews/107/intermap-restored.png)

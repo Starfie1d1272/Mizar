@@ -1,5 +1,7 @@
 # 类ESL 视觉复核
 
+> 历史设计审查记录，保留原始结论与证据；当前规范见[设计系统](../../design/README.md)。
+
 参考为 Google Drive HUD 文件夹中的 overlay4.vue 与 overlay4.zip。BLAST 是作者之前复刻的残留。新增第五个内置预设，以 `esl` variant 与独立 recipe 保存，保留 Mizar 的 Program/Radar、目标状态、库存与预设持久化所有权。
 
 ## 展示与素材
