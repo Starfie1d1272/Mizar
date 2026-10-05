@@ -347,13 +347,24 @@
   height: 28px;
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__series-map {
+  grid-template-rows: 14px 14px;
   background: var(--mizar-hud-surface-primary);
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__series-map-art {
   display: none;
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__series-map-name {
+  grid-row: 1;
   font-size: 14px;
+  line-height: 14px;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__series-map-status {
+  grid-row: 2;
+  line-height: 14px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__media img {
+  object-fit: contain;
+  object-position: center;
 }
 .hud-widget-design[data-hud-design='esl'] .broadcast-pause__brand {
   border-top: 2px solid var(--mizar-event-accent);
@@ -371,8 +382,8 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail__avatar img {
   width: 160px;
   height: 76px;
-  object-fit: cover;
-  object-position: top;
+  object-fit: contain;
+  object-position: center;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__avatar {
   left: auto;
