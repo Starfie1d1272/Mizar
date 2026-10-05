@@ -1,11 +1,17 @@
 import { posix } from 'node:path';
+import ts from 'typescript';
 
 // pnpm owns cross-package ordering. TypeScript compiles/checks only its owner.
 export function checkBuildSystem(repository, workspaces, report) {
   const fail = (file, message) => report({ ruleId: 'ARCH_BUILD_GRAPH', file, message });
   for (const [file, source] of repository.files) {
     if (/tsconfig[^/]*\.json$/.test(file)) {
-      const config = JSON.parse(source);
+      const parsed = ts.parseConfigFileTextToJson(file, source);
+      if (parsed.error) {
+        fail(file, 'TypeScript config must be valid JSON/JSONC.');
+        continue;
+      }
+      const config = parsed.config;
       if (config.references?.length) {
         fail(
           file,
@@ -29,7 +35,11 @@ export function checkBuildSystem(repository, workspaces, report) {
           );
         }
       }
-      if (/--filter\s+\S+\s+(?:run\s+)?build\s*&&\s*pnpm\s+--filter/.test(command)) {
+      if (
+        /--filter\s+\S+\s+(?:--fail-if-no-match\s+)?(?:run\s+)?build\s*(?:&&|\r?\n)\s*pnpm\s+--filter\s+\S+\s+(?:--fail-if-no-match\s+)?(?:run\s+)?build\b/.test(
+          command,
+        )
+      ) {
         fail(
           file,
           'Do not enumerate workspace build order; use one dependency selector or build:packages.',
@@ -52,6 +62,13 @@ export function checkBuildSystem(repository, workspaces, report) {
   }
   for (const info of workspaces.values()) {
     const scripts = info.manifest.scripts ?? {};
+    if (/pnpm\s+.*(?:--filter|--recursive|\s-r\s)/.test(scripts.build ?? '')) {
+      fail(
+        info.manifestPath,
+        'Package build must not schedule another workspace; pnpm tasks own ordering.',
+      );
+    }
+
     if (/tsc\s+-b|--force/.test(scripts.build ?? '')) {
       fail(
         info.manifestPath,

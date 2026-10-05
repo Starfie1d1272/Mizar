@@ -278,14 +278,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Cache Cargo registry, git, and CI target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
+          key: cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
+            cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-
             cargo-${{ runner.os }}-ci-
 
       - name: Set up Node.js 24 and pnpm 12
@@ -433,6 +435,16 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
           if-no-files-found: error
+
+      - name: Save reusable main Cargo cache
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   qualification_offline:
     name: qualification / offline / ${{ matrix.name }}

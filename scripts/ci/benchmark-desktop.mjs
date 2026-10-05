@@ -38,7 +38,27 @@ async function measure(name, overrides) {
     throw result.error ?? new Error(`Benchmark failed: ${name}`);
 }
 try {
-  await measure('no-embed-opt1-host-rebuild', {});
+  const baseline = {
+    CARGO_PROFILE_CI_OPT_LEVEL: '1',
+    CARGO_PROFILE_CI_INCREMENTAL: 'false',
+    CARGO_PROFILE_CI_CODEGEN_UNITS: '16',
+  };
+  // Warm the explicit baseline even after the repository adopts the candidate profile.
+  const warmup = spawnSync(
+    'cargo',
+    [
+      'build',
+      '--locked',
+      '--profile',
+      'ci',
+      '--manifest-path',
+      'apps/desktop/src-tauri/Cargo.toml',
+    ],
+    { cwd: root, stdio: 'inherit', env: { ...process.env, ...baseline } },
+  );
+  if (warmup.error || warmup.status !== 0)
+    throw warmup.error ?? new Error('Baseline warmup failed');
+  await measure('no-embed-opt1-host-rebuild', baseline);
   const candidate = {
     CARGO_PROFILE_CI_OPT_LEVEL: '0',
     CARGO_PROFILE_CI_INCREMENTAL: 'true',

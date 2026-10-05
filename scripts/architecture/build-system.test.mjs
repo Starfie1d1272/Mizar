@@ -37,6 +37,18 @@ describe('workspace build graph', () => {
   });
 
   it.each([
+    {
+      'package.json': JSON.stringify({
+        scripts: {
+          bad: 'pnpm --filter @mizar/protocol... --fail-if-no-match run build && pnpm --filter @mizar/core... --fail-if-no-match run build',
+        },
+      }),
+    },
+    {
+      '.github/workflows/bad.yml':
+        'run: |\n  pnpm --filter @mizar/protocol... --fail-if-no-match run build\n  pnpm --filter @mizar/core... --fail-if-no-match run build',
+    },
+
     { 'packages/rivalhub/tsconfig.json': '{"references":[{"path":"../core"}]}' },
     {
       'package.json': JSON.stringify({
