@@ -12,6 +12,7 @@ pub const LAUNCH_ARGS: &[&str] = &[
     "-applaunch",
     "730",
     "-windowed",
+    "-noborder",
     "-w",
     crate::cs2_video::DISPLAY_WIDTH,
     "-h",
