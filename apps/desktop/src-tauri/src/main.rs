@@ -13,6 +13,7 @@ mod support_export;
 mod windows_host;
 mod windows_startup;
 mod workspace_shell;
+mod window_frame;
 
 use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
@@ -677,6 +678,11 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
         log.step("overlay_cursor_passthrough", || {
             overlay.set_ignore_cursor_events(true)
         })?;
+        for label in ["workspace-left", "workspace-dock", "program-overlay"] {
+            if let Some(hwnd) = app.get_webview_window(label).and_then(|window| window.hwnd().ok()) {
+                window_frame::square_window(hwnd.0 as isize);
+            }
+        }
         Ok(())
     })();
     if result.is_err() {
