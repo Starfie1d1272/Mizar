@@ -110,7 +110,9 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 桌面和 Web 的进入现场入口先读取当前 OBS 连接与场景检查结果；未通过时打开连接引导，不提交制作命令。此准备门禁不复制生命周期状态，也不改变现场运行后的离线恢复能力；理由见 [ADR-0023](decisions/0023-workspace-preflight-and-density.md)。
 
-桌面通过准备检查后，由 Host 启动或复用本次受管理 CS2，再提交进入现场。结束制作成功后正常关闭该游戏并恢复临时视频配置；隐藏现场不关闭。配置文件与进程身份、备份及重启恢复只由 Host 管理，网页发送固定意图。既有 75% 可用区域与 16:9 窗口排布保持；细节见 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md)。
+桌面通过准备检查后，由 Host 启动或复用本次受管理 CS2，再提交进入现场。结束制作成功后正常关闭该游戏并恢复临时视频配置；隐藏现场不关闭。配置文件与进程身份、备份及重启恢复只由 Host 管理，网页发送固定意图；细节见 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md)。
+
+现场窗口采用窗口级全屏 Shell 标记，让任务栏在现场处于活动状态时退到其后，不修改系统自动隐藏设置；隐藏、退出或更换游戏窗口撤销标记。标记成功后按完整显示器边界排布，失败沿用工作区。游戏保持 75% 上限与 16:9 客户区，左栏贴屏幕底部，左栏和底栏共同避让游戏原生外框；DPI 与窗口变化共用同一 Host 布局。决策及异常退出边界见 [ADR-0029](decisions/0029-workspace-fullscreen-shell.md)。
 
 `ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](design/program-direction-v1.md)。
 

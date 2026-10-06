@@ -1,4 +1,4 @@
-use crate::geometry::{overlap, overlay_visible, workspace_layout, Layout, Rect};
+use crate::geometry::{avoid_game_frame, overlap, overlay_visible, workspace_layout, Layout, Rect};
 
 type Hwnd = isize;
 type Monitor = isize;
@@ -20,6 +20,7 @@ extern "system" {
     fn IsIconic(hwnd: Hwnd) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
     fn GetClientRect(hwnd: Hwnd, rect: *mut WinRect) -> i32;
+    fn GetWindowRect(hwnd: Hwnd, rect: *mut WinRect) -> i32;
     fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
     fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
@@ -95,6 +96,10 @@ pub fn find_cs2() -> Option<Cs2Window> {
     windows.into_iter().next()
 }
 
+pub fn window_exists(hwnd: Hwnd) -> bool {
+    unsafe { IsWindow(hwnd) != 0 }
+}
+
 pub fn client_rect(hwnd: Hwnd) -> Option<Rect> {
     unsafe {
         if IsWindow(hwnd) == 0 { return None; }
@@ -106,10 +111,10 @@ pub fn client_rect(hwnd: Hwnd) -> Option<Rect> {
     }
 }
 
-fn monitor_work_area(monitor: Monitor) -> Option<Rect> {
+fn monitor_layout_area(monitor: Monitor, fullscreen: bool) -> Option<Rect> {
     unsafe {
         let mut info = MonitorInfo { size: std::mem::size_of::<MonitorInfo>() as u32, monitor: WinRect::default(), work: WinRect::default(), flags: 0 };
-        (monitor != 0 && GetMonitorInfoW(monitor, &mut info) != 0).then(|| rect(info.work))
+        (monitor != 0 && GetMonitorInfoW(monitor, &mut info) != 0).then(|| rect(if fullscreen { info.monitor } else { info.work }))
     }
 }
 
@@ -162,6 +167,7 @@ pub struct GameTracker {
     monitor: Monitor,
     pub managed: bool,
     pub overlay_enabled: bool,
+    pub fullscreen_layout: bool,
     last_client: Option<Rect>,
     last_work_area: Option<Rect>,
     last_dpi: u32,
@@ -198,10 +204,16 @@ impl GameTracker {
         self.apply_locked_layout()
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
-        let work = monitor_work_area(self.monitor)?;
+        let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
         self.last_work_area = Some(work);
-        let layout = workspace_layout(work);
+        let mut layout = workspace_layout(work);
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
+        if let Some(window) = self.window.filter(|_| self.managed) {
+            let mut outer = WinRect::default();
+            if unsafe { GetWindowRect(window.hwnd, &mut outer) } != 0 {
+                layout = avoid_game_frame(layout, rect(outer));
+            }
+        }
         self.alignment_retries = self.alignment_retries.saturating_sub(1);
         self.last_alignment = Some(std::time::Instant::now());
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
@@ -211,7 +223,7 @@ impl GameTracker {
     pub fn tick(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
         let changed = self.refresh_target();
-        let work = monitor_work_area(self.monitor);
+        let work = monitor_layout_area(self.monitor, self.fullscreen_layout);
         if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
         }
@@ -229,9 +241,7 @@ impl GameTracker {
             self.last_client = client;
             self.last_dpi = dpi;
             if self.managed {
-                let target = workspace_layout(work?).game;
-                self.managed = align_cs2(window, target);
-                self.last_client = client_rect(window.hwnd);
+                return self.apply_locked_layout();
             }
         }
         None

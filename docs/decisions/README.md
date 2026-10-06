@@ -12,6 +12,8 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 
 ## 决策索引
 
+- [ADR-0029：现场工作区的全屏 Shell 协作与窗口外框避让](0029-workspace-fullscreen-shell.md)
+
 - [ADR-0026：CS2 启动、临时视频配置与恢复](0026-managed-cs2-launch-and-restoration.md)
 
 - [ADR-0023：现场工作台准备检查与固定布局](0023-workspace-preflight-and-density.md)
