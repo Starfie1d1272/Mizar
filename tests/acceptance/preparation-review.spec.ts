@@ -1,7 +1,11 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validateBroadcastManifest, toMatchContext } from '../../packages/rivalhub/src/index.js';
+import {
+  validateBroadcastManifest,
+  toMatchContext,
+  toMatchDocumentV1,
+} from '../../packages/rivalhub/src/index.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
@@ -200,6 +204,14 @@ test('server quick create requires an explicit saved Team decision and sends onl
 test('Overview attention contains recovery actions rather than duplicating optional capability failures', async ({
   page,
 }) => {
+  const fixture: unknown = JSON.parse(
+    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
+  );
+  await page.route('**/local/v1/match-document', (route) =>
+    route.fulfill({
+      json: { document: toMatchDocumentV1(fixture), source: 'rivalhub', freshness: 'fresh' },
+    }),
+  );
   await page.route('**/local/v1/readiness', (route) =>
     route.fulfill({
       json: [
@@ -237,10 +249,13 @@ test('Overview attention contains recovery actions rather than duplicating optio
   await page.goto('/');
   const attention = page
     .locator('.mizar-panel')
-    .filter({ has: page.getByRole('heading', { name: '需要关注', exact: true }) });
-  await expect(attention.getByRole('link')).toHaveCount(1);
-  await expect(attention.getByRole('link')).toHaveText('检查 OBS 连接与配置 →');
-  await expect(attention.getByRole('link')).toHaveAttribute('href', '/settings?tab=obs');
+    .filter({ has: page.getByRole('heading', { name: '开播检查', exact: true }) });
+  const recovery = attention.locator('.preparation-readiness');
+  await expect(recovery).toHaveCount(1);
+  await expect(recovery).toHaveAccessibleName('检查 OBS 连接与配置');
+  await expect(recovery).toContainText('配置');
+  await expect(recovery).toHaveAttribute('href', '/settings?tab=obs');
+  await expect(attention.locator('.preparation-pending summary')).toHaveText('待确认 · 3 项');
   await expect(page.locator('.preparation-readiness').filter({ hasText: 'OBS' })).toContainText(
     '浏览器源地址需要修复',
   );

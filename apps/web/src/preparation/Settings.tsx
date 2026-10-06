@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Field, Panel, StatusBanner } from '../ui';
+import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { obsCommand, useObsStatus } from '../workspace/obs-client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
@@ -87,168 +87,187 @@ export function Settings({ tab }: { tab: string }) {
           </Button>
         </Panel>
       ) : tab === 'obs' ? (
-        <Panel>
-          <h2>
-            {new URLSearchParams(window.location.search).has('prepare')
-              ? '进入现场前，连接并检查 OBS'
-              : 'OBS 连接与配置'}
-          </h2>
-          <p>OBS 已打开后，还需要连接 WebSocket，Mizar 才能切换场景和获取画面。</p>
-          <p>
-            {obs?.connection === 'connected'
-              ? '已连接'
-              : obs?.connection === 'password_required'
-                ? '需要 WebSocket 密码'
+        <div className="obs-setup">
+          <header className="obs-setup__heading">
+            <h2>
+              {new URLSearchParams(window.location.search).has('prepare')
+                ? '进入现场前，连接并检查 OBS'
+                : 'OBS 连接与配置'}
+            </h2>
+            <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
+              {obs?.connection === 'connected'
+                ? '已连接'
                 : obs?.connection === 'invalid_password'
-                  ? '密码无效，请重新输入'
-                  : '尚未连接 OBS'}
-          </p>
-          <p>
-            {obs?.currentScene ?? '等待节目场景'}
-            {obs?.sceneAligned === false ? ' · 场景需要核对' : ''}
-          </p>
-          <p>
-            推流{' '}
-            {obs?.connection !== 'connected' ? '无法确认' : obs.streaming ? '进行中' : '未启动'} ·
-            录制{' '}
-            {obs?.connection !== 'connected' ? '无法确认' : obs.recording ? '进行中' : '未启动'}
-          </p>
-          {obs?.video ? (
-            <p>
-              画布 {obs.video.canvas} · 输出 {obs.video.output} · {obs.video.fps.toFixed(0)} fps
-            </p>
-          ) : null}
-          <div className="preparation-actions">
-            <Button disabled={busy} onClick={() => void action(() => obsCommand('open'))}>
-              打开 OBS
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void action(async () => {
-                  const result = (await obsCommand('check')) as { findings: { message: string }[] };
-                  setMessage(
-                    result.findings.map((item) => item.message).join('；') || '配置检查通过。',
-                  );
-                })
-              }
-            >
-              检查配置
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void action(async () => {
-                  const result = (await obsCommand('repair')) as {
-                    findings: { message: string }[];
-                  };
-                  setMessage(
-                    result.findings.map((item) => item.message).join('；') ||
-                      'Mizar 场景已修复，配置检查通过。',
-                  );
-                })
-              }
-            >
-              修复 Mizar 场景
-            </Button>
+                  ? '密码无效'
+                  : obs?.connection === 'password_required'
+                    ? '需要密码'
+                    : '未连接'}
+            </StatusPill>
+          </header>
+          <div className="obs-setup__cards">
+            <Panel>
+              <h3>打开 OBS</h3>
+              <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => void action(() => obsCommand('open'))}
+              >
+                打开 OBS
+              </Button>
+              {window.__TAURI_INTERNALS__ ? (
+                <details>
+                  <summary>OBS 路径</summary>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        const path = await desktopInvoke<string | null>('select_obs_executable');
+                        if (path) await obsCommand('configure', { executablePath: path });
+                      })
+                    }
+                  >
+                    更改 OBS 路径
+                  </Button>
+                </details>
+              ) : null}
+            </Panel>
+            <Panel>
+              <h3>连接控制</h3>
+              <p>填写 OBS 提供的端口与密码。</p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void action(async () => {
+                    await obsCommand('configure', {
+                      port,
+                      ...(password.length > 0 ? { password } : {}),
+                    });
+                    setPassword('');
+                    await obsCommand('check');
+                    setMessage(
+                      password.length > 0
+                        ? '已保存新密码并测试连接。'
+                        : '已保存端口并测试连接，原密码保持不变。',
+                    );
+                  });
+                }}
+              >
+                <Field
+                  label="WebSocket 端口"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={port}
+                  onChange={(e) => setPortOverride(Number(e.target.value))}
+                />
+                <Field
+                  label="WebSocket 密码"
+                  type="password"
+                  autoComplete="off"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
+                />
+                <Button type="submit" variant="primary" loading={busy}>
+                  保存并测试
+                </Button>
+              </form>
+              {obs?.passwordConfigured ? (
+                <details>
+                  <summary>已保存密码</summary>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        await obsCommand('configure', { port, password: '' });
+                        await obsCommand('check');
+                        setMessage('已清除 Mizar 保存的 OBS 密码。');
+                      })
+                    }
+                  >
+                    清除已保存密码
+                  </Button>
+                </details>
+              ) : null}
+            </Panel>
+            <Panel>
+              <h3>检查画面</h3>
+              <div className="obs-setup__signals">
+                <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
+                <span>
+                  推流 ·{' '}
+                  {obs?.connection !== 'connected'
+                    ? '无法确认'
+                    : obs.streaming
+                      ? '进行中'
+                      : '未启动'}
+                </span>
+                <span>
+                  录制 ·{' '}
+                  {obs?.connection !== 'connected'
+                    ? '无法确认'
+                    : obs.recording
+                      ? '进行中'
+                      : '未启动'}
+                </span>
+              </div>
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void action(async () => {
+                    const result = (await obsCommand('check')) as {
+                      findings: { message: string }[];
+                    };
+                    setMessage(
+                      result.findings.map((item) => item.message).join('；') || '配置检查通过。',
+                    );
+                  })
+                }
+              >
+                检查配置
+              </Button>
+              <Button
+                disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
+                onClick={() =>
+                  void action(async () => {
+                    const result = (await obsCommand('repair')) as {
+                      findings: { message: string }[];
+                    };
+                    setMessage(
+                      result.findings.map((item) => item.message).join('；') ||
+                        'Mizar 场景已修复，配置检查通过。',
+                    );
+                  })
+                }
+              >
+                修复 Mizar 场景
+              </Button>
+              <p>修复前停止推流与录制。检查通过后，在 OBS 中核对游戏画面。</p>
+              {obs?.video ? (
+                <small>
+                  画布 {obs.video.canvas} · 输出 {obs.video.output} · {obs.video.fps.toFixed(0)} fps
+                </small>
+              ) : null}
+            </Panel>
           </div>
           {obs?.findings.map((finding) => (
             <StatusBanner key={finding.code} tone="warning">
               {finding.message}
             </StatusBanner>
           ))}
-          <section aria-label="OBS 连接引导">
-            <h3>1. 在 OBS 中开启连接服务</h3>
+          <details className="obs-setup__help">
+            <summary>游戏捕获说明</summary>
             <p>
-              如果「打开 OBS」未找到程序，点击「更改 OBS 路径」选择安装目录中的
-              obs64.exe，然后重新打开。
+              先打开 CS2，再检查或修复场景。Mizar 按 cs2.exe 匹配实际窗口；配置检查通过后，仍需核对
+              OBS 的游戏画面。
             </p>
             <p>
-              打开 OBS「工具 → WebSocket
-              服务器设置」，启用服务器。查看端口；若已启用身份验证，复制该页面提供的密码。
+              若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software
+              并重启游戏。该选项可能影响信任系数；Mizar 不会自动修改启动选项。
             </p>
-            <h3>2. 填写连接信息并测试</h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void action(async () => {
-                  await obsCommand('configure', {
-                    port,
-                    ...(password.length > 0 ? { password } : {}),
-                  });
-                  setPassword('');
-                  await obsCommand('check');
-                  setMessage(
-                    password.length > 0
-                      ? '已保存新密码并测试连接。'
-                      : '已保存端口并测试连接，原密码保持不变。',
-                  );
-                });
-              }}
-            >
-              <Field
-                label="WebSocket 端口"
-                type="number"
-                min={1}
-                max={65535}
-                value={port}
-                onChange={(e) => setPortOverride(Number(e.target.value))}
-              />
-              <Field
-                label="WebSocket 密码"
-                type="password"
-                autoComplete="off"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <Button type="submit" loading={busy}>
-                保存并测试
-              </Button>
-            </form>
-            {window.__TAURI_INTERNALS__ ? (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void action(async () => {
-                    const path = await desktopInvoke<string | null>('select_obs_executable');
-                    if (path) await obsCommand('configure', { executablePath: path });
-                  })
-                }
-              >
-                更改 OBS 路径
-              </Button>
-            ) : null}
-            {obs?.passwordConfigured ? (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void action(async () => {
-                    await obsCommand('configure', { port, password: '' });
-                    await obsCommand('check');
-                    setMessage('已清除 Mizar 保存的 OBS 密码。');
-                  })
-                }
-              >
-                清除已保存密码
-              </Button>
-            ) : null}
-            <h3>3. 检查播出场景</h3>
-            <p>
-              连接成功后点击「检查配置」。如有缺失，停止推流与录制后「修复 Mizar
-              场景」，确认检查通过，再点击「进入现场」。
-            </p>
-            <p>
-              游戏捕获还需要核对实际画面。先打开
-              CS2，再检查或修复，使来源匹配实际窗口；国际服和国服均按 cs2.exe
-              匹配。连接与场景检查通过不代表已经捕获到游戏。
-            </p>
-            <p>
-              若 CS2 有画面而 OBS 游戏捕获黑屏，检查 Steam 启动选项
-              -allow_third_party_software，并重启游戏。该选项允许第三方软件与游戏交互，可能影响信任系数；Mizar
-              不会自动修改你的启动选项。国服／国际服选择保持你的设置。
-            </p>
-          </section>
-        </Panel>
+          </details>
+        </div>
       ) : (
         <Panel>
           <h2>CS2 与 GSI</h2>

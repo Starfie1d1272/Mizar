@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
-export function useLocalRead<T>(path: string | null, interval = 2000) {
+export function useLocalRead<T>(path: string | null, interval = 2000, refresh = 0) {
   const [value, setValue] = useState<T | null>(null);
   useEffect(() => {
     if (path === null) return;
@@ -27,7 +27,7 @@ export function useLocalRead<T>(path: string | null, interval = 2000) {
       active = false;
       clearTimeout(timer);
     };
-  }, [path, interval]);
+  }, [path, interval, refresh]);
   return value;
 }
 export async function command(path: string, body: unknown = {}) {

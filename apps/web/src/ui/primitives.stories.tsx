@@ -24,7 +24,7 @@ type Story = StoryObj<typeof meta>;
 function ButtonsExample() {
   const [count, setCount] = useState(0);
   return (
-    <Panel>
+    <Panel style={{ fontSize: 'var(--mizar-type-size-readable)' }}>
       <Button variant="primary" onClick={() => setCount(count + 1)}>
         确认
       </Button>{' '}
@@ -40,6 +40,7 @@ export const Buttons: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const confirm = canvas.getByRole('button', { name: '确认' });
+    await expect(getComputedStyle(confirm).fontSize).toBe('14px');
     await userEvent.hover(confirm);
     await userEvent.unhover(confirm);
     await userEvent.tab();

@@ -14,7 +14,7 @@
       "$value": "{color.gray.800}"
     },
     "selected": {
-      "$value": "{color.blue.800}"
+      "$value": "{color.blue.850}"
     }
   },
   "fg": {
@@ -23,19 +23,22 @@
       "$value": "{color.gray.50}"
     },
     "secondary": {
-      "$value": "{color.gray.300}"
+      "$value": "{color.gray.400}"
     },
     "muted": {
       "$value": "{color.gray.400}"
     },
     "on-accent": {
-      "$value": "{color.gray.950}"
+      "$value": "{color.gray.0}"
+    },
+    "link": {
+      "$value": "{color.blue.200}"
     }
   },
   "border": {
     "$type": "color",
     "default": {
-      "$value": "{color.gray.700}"
+      "$value": "{color.gray.750}"
     },
     "strong": {
       "$value": "{color.gray.500}"
@@ -44,10 +47,10 @@
   "accent": {
     "$type": "color",
     "primary": {
-      "$value": "{color.blue.400}"
+      "$value": "{color.blue.600}"
     },
     "hover": {
-      "$value": "{color.blue.300}"
+      "$value": "{color.blue.700}"
     }
   },
   "status": {
@@ -62,13 +65,13 @@
       "$value": "{color.red.300}"
     },
     "info": {
-      "$value": "{color.blue.300}"
+      "$value": "{fg.link}"
     }
   },
   "focus": {
     "$type": "color",
     "ring": {
-      "$value": "{color.blue.300}"
+      "$value": "{fg.link}"
     }
   },
   "layout": {

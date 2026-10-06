@@ -30,13 +30,15 @@
   justify-content: center;
   gap: var(--mizar-layout-compact);
   min-width: var(--mizar-layout-target);
-  min-height: var(--mizar-layout-target);
-  padding: var(--mizar-layout-compact) var(--mizar-layout-gap);
+  min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact) / 2);
+  padding: calc(var(--mizar-layout-compact) * 0.75) var(--mizar-layout-gap);
   border: var(--mizar-line-border) solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-control);
   color: var(--mizar-fg-primary);
   background: var(--mizar-bg-raised);
+  font-size: var(--mizar-type-size-body);
   font-weight: var(--mizar-type-weight-strong);
+  line-height: var(--mizar-type-line-body);
   cursor: pointer;
   transition: background-color var(--mizar-transition-fast) var(--mizar-easing-standard);
 }
@@ -51,6 +53,7 @@
 }
 .mizar-button[data-variant='primary']:not(:disabled):hover {
   background: var(--mizar-accent-hover);
+  border-color: var(--mizar-accent-hover);
 }
 .mizar-surface :disabled {
   opacity: var(--mizar-state-disabled-opacity);
@@ -65,7 +68,7 @@
 }
 .mizar-field input,
 .mizar-field select {
-  min-height: var(--mizar-layout-target);
+  min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact));
   min-width: 0;
   width: 100%;
   border: var(--mizar-line-border) solid var(--mizar-border-default);
@@ -73,6 +76,7 @@
   color: var(--mizar-fg-primary);
   background: var(--mizar-bg-canvas);
   padding: var(--mizar-layout-compact);
+  font-size: var(--mizar-type-size-body);
 }
 .mizar-field input:hover,
 .mizar-field select:hover {
@@ -94,39 +98,67 @@
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }
+.mizar-field > label {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
 .mizar-panel {
   padding: var(--mizar-layout-padding);
   border: var(--mizar-line-border) solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-panel);
   background: var(--mizar-bg-surface);
 }
+.mizar-panel :where(h2, h3) {
+  font-weight: var(--mizar-type-weight-strong);
+}
 .mizar-divider {
   border: 0;
   border-top: var(--mizar-line-border) solid var(--mizar-border-default);
   margin-block: var(--mizar-layout-gap);
 }
-.mizar-status-pill,
-.mizar-status-banner {
-  color: var(--mizar-fg-primary);
-  background: var(--mizar-bg-surface);
-  border: var(--mizar-line-border) solid var(--mizar-status-info);
-  border-radius: var(--mizar-shape-control);
-  padding: var(--mizar-layout-compact);
-}
 .mizar-status-pill {
   display: inline-flex;
+  align-items: center;
+  gap: calc(var(--mizar-layout-compact) * 0.75);
+  color: var(--mizar-status-info);
+  font-size: var(--mizar-type-size-small);
+  font-weight: var(--mizar-type-weight-body);
+  line-height: var(--mizar-type-line-body);
+}
+.mizar-status-pill::before {
+  content: '';
+  width: calc(var(--mizar-layout-compact) * 0.75);
+  height: calc(var(--mizar-layout-compact) * 0.75);
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+.mizar-status-pill[data-tone='success'] {
+  color: var(--mizar-status-success);
+}
+.mizar-status-pill[data-tone='warning'] {
+  color: var(--mizar-status-warning);
+}
+.mizar-status-pill[data-tone='danger'] {
+  color: var(--mizar-status-danger);
 }
 .mizar-status-banner {
-  border-left-width: var(--mizar-line-focus);
+  color: var(--mizar-fg-secondary);
+  background: var(--mizar-bg-raised);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-left: var(--mizar-line-focus) solid var(--mizar-status-info);
+  border-radius: var(--mizar-shape-control);
+  padding: var(--mizar-layout-gap) var(--mizar-layout-padding);
+  font-size: var(--mizar-type-size-body);
 }
-.mizar-surface [data-tone='success'] {
-  border-color: var(--mizar-status-success);
+.mizar-status-banner[data-tone='success'] {
+  border-left-color: var(--mizar-status-success);
 }
-.mizar-surface [data-tone='warning'] {
-  border-color: var(--mizar-status-warning);
+.mizar-status-banner[data-tone='warning'] {
+  border-left-color: var(--mizar-status-warning);
 }
-.mizar-surface [data-tone='danger'] {
-  border-color: var(--mizar-status-danger);
+.mizar-status-banner[data-tone='danger'] {
+  border-left-color: var(--mizar-status-danger);
 }
 .mizar-empty-state h2,
 .mizar-dialog h2 {
