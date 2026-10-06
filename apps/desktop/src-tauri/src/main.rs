@@ -730,6 +730,17 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_steam_api_key() -> Result<(), String> {
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = "https://steamcommunity.com/dev/apikey\0".encode_utf16().collect();
+    let result = unsafe {
+        ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
+    };
+    if result <= 32 { Err("浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。".into()) }
+    else { Ok(()) }
+}
+
+#[tauri::command]
 fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|_| "授权页面地址无效。")?;
     if parsed.scheme() != "https"
@@ -998,6 +1009,7 @@ fn run_desktop(
             present_production,
             open_tool,
             open_rivalhub_authorization,
+            open_steam_api_key,
             open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
