@@ -1,6 +1,6 @@
 # 快速开始与操作手册
 
-适用于 Windows 便携版。下载与发布状态见 [Releases](https://github.com/Starfie1d1272/Mizar/releases)；候选包由对应 RC 记录提供。功能适用范围见[数据源能力](data-source-capabilities.md)。
+适用于 Windows 便携版。首选[南大云盘下载完整包](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)；备用下载与发布状态见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。当前推荐 RC10 开发预览版（约 46.81 MB），候选包的验证记录见对应 Release。功能适用范围见[数据源能力](data-source-capabilities.md)。
 
 ## 第一次使用
 
