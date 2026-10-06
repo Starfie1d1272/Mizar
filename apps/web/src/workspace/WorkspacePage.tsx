@@ -12,6 +12,7 @@ import { workspaceCurrentPov, workspaceIssues } from './model';
 import { useObsStatus } from './obs-client';
 import {
   useLocalRead,
+  useLocalReadWithTime,
   openTool,
   productionAction,
   type Production,
@@ -73,20 +74,26 @@ function ContextPanel({
 }
 
 function ObsConfidence() {
-  const result = useLocalRead<{ preview: { scene: string; image: string } | null }>(
-    '/local/v1/obs/confidence',
-    2000,
-  );
+  const { value: result, updatedAt } = useLocalReadWithTime<{
+    preview: { scene: string; image: string } | null;
+  }>('/local/v1/obs/confidence', 2000);
   return (
     <section className="workspace-confidence" aria-label="OBS 画面确认">
       {result?.preview ? (
-        <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
+        <>
+          <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
+          <small className="workspace-confidence__time">
+            画面确认 ·{' '}
+            {updatedAt
+              ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })
+              : '更新中'}
+          </small>
+        </>
       ) : (
-        <div
-          className="workspace-confidence__empty"
-          role="img"
-          aria-label="OBS 预览暂不可用，请在制作工具中检查 OBS 连接"
-        />
+        <div className="workspace-confidence__empty">
+          <span>OBS 预览暂不可用</span>
+          <Button onClick={() => void openPreparation('/settings?tab=obs')}>检查连接</Button>
+        </div>
       )}
     </section>
   );
@@ -176,7 +183,13 @@ export function WorkspaceDock() {
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(''), 6000);
+    return () => clearTimeout(timer);
+  }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
   useEffect(() => {
     const hide = () => {
@@ -185,7 +198,7 @@ export function WorkspaceDock() {
         .then((current) =>
           command('/operator/production', { action: 'hide', expectedRevision: current.revision }),
         )
-        .catch(() => setMessage('工作区已隐藏，制作状态暂未同步。'));
+        .catch(() => setErrorMessage('工作区已隐藏，制作状态暂未同步。'));
     };
     window.addEventListener('mizar-hide', hide);
     return () => window.removeEventListener('mizar-hide', hide);
@@ -194,6 +207,7 @@ export function WorkspaceDock() {
     if (busy) return;
     setBusy(true);
     setMessage('');
+    setErrorMessage('');
     try {
       await run();
       if (restoreFocus && window.__TAURI_INTERNALS__) {
@@ -201,17 +215,14 @@ export function WorkspaceDock() {
         if (!focused) setMessage('操作已完成，未能将焦点交还 CS2。');
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作未完成。');
+      setErrorMessage(error instanceof Error ? error.message : '操作未完成。');
     } finally {
       setBusy(false);
     }
   }
   const mode = sceneState?.director?.mode;
   const connected = obs?.connection === 'connected';
-  const next =
-    mode === 'auto'
-      ? PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next)
-      : undefined;
+  const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
   const nextFrame = useMemo(
     () => (next ? { key: next.id, scene: next.id, src: next.path, immediate: true } : null),
     [next],
@@ -269,7 +280,7 @@ export function WorkspaceDock() {
         <div className="workspace-next-preview" aria-label="下一个场景预览">
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
-            <small>下一场景</small>
+            <small>{mode === 'manual' ? '恢复自动后建议进入' : '下一场景'}</small>
             <strong>{next?.title ?? '未安排'}</strong>
           </div>
         </div>
@@ -277,6 +288,9 @@ export function WorkspaceDock() {
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
           <small>观战 · 本机</small>
+          <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
+            BP 工作台
+          </Button>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>
               BP · {bp.revealedCount} / {bp.projection.steps.length}
@@ -286,9 +300,6 @@ export function WorkspaceDock() {
         <SpectatorHudCommands compact onMessage={setMessage} />
         <p className="workspace-command-help">复制后在 CS2 控制台执行</p>
         <LocalOverlayControls onMessage={setMessage} />
-        <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
-          BP 工作台
-        </Button>
       </section>
       <section className="workspace-production" aria-label="制作工具">
         <div className="workspace-section-heading">
@@ -335,18 +346,25 @@ export function WorkspaceDock() {
         </div>
       </section>
       <footer className="workspace-message" role="status">
-        <span>
-          {message || sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
-        </span>
+        <span>{sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}</span>
+        {errorMessage ? <span role="alert">{errorMessage}</span> : null}
+        {message ? (
+          <span className="workspace-feedback" role="status">
+            {message}
+          </span>
+        ) : null}
         <div className="workspace-footer-actions">
           {production?.mode === 'live' ? (
             <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
           ) : null}
+          <small className="workspace-exit-help">关闭游戏并恢复配置</small>
           <Button
+            className="workspace-exit"
             disabled={!production || busy}
+            aria-busy={busy}
             onClick={() => production && void action(() => productionAction('finish', production))}
           >
-            结束制作
+            退出工作台
           </Button>
         </div>
       </footer>

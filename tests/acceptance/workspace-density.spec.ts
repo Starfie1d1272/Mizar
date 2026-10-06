@@ -188,13 +188,13 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       return route.fulfill({ json: { ok: true } });
     });
     await page.goto('/');
-    await page.getByRole('button', { name: '进入现场', exact: true }).click();
+    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
     if (connection === 'connected') {
       await expect(page).toHaveURL(/\/workspace$/);
       expect(entered).toBe(1);
     } else {
       await expect(page).toHaveURL(/\/settings\?tab=obs&prepare=1$/);
-      await expect(page.getByRole('heading', { name: '进入现场前，连接并检查 OBS' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '启动游戏前，连接并检查 OBS' })).toBeVisible();
       await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
       expect(entered).toBe(0);
     }
@@ -220,7 +220,7 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '进入现场', exact: true }).click();
+  await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
   expect(entered).toBe(0);

@@ -8,6 +8,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub const LAUNCH_ARGS: &[&str] = &[
+    "-applaunch",
+    "730",
+    "-windowed",
+    "-w",
+    "1920",
+    "-h",
+    "1080",
+    "-console",
+    "-allow_third_party_software",
+    "-worldwide",
+];
+
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
 // Fixed scripts only: no paths supplied by the webview are interpolated as code.
@@ -228,6 +241,29 @@ fn owned_process(value: &Value) -> Result<Option<Process>, String> {
     }
     Ok(Some(process))
 }
+fn launched_process(value: &Value) -> Result<Option<(u32, u64)>, String> {
+    let launch_time = value["launchTime"]
+        .as_u64()
+        .ok_or("CS2 启动时间记录缺失。")?;
+    let executable = value["executable"]
+        .as_str()
+        .ok_or("CS2 程序路径记录缺失。")?;
+    let mut candidates = Vec::new();
+    for pid in cs2_pids()? {
+        if let Some(process) = open(pid)? {
+            let (created, actual) = identity(&process)?;
+            if created >= launch_time && actual.to_string_lossy().eq_ignore_ascii_case(executable) {
+                candidates.push((pid, created));
+            }
+        }
+    }
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [found] => Ok(Some(*found)),
+        _ => Err("CS2 启动身份不唯一，请退出游戏并取消 Steam 启动请求后恢复备份。".into()),
+    }
+}
+
 unsafe extern "system" fn close_window(window: isize, pid: isize) -> i32 {
     let mut found = 0;
     GetWindowThreadProcessId(window, &mut found);
@@ -257,18 +293,32 @@ impl ManagedCs2 {
             .flatten()
             .is_some();
         Ok(
-            json!({"preserveQuality": self.store.preferences()?, "pending":pending.is_some(), "running":running, "message":self.message}),
+            json!({"preserveQuality": self.store.preferences()?, "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(&mut self, preserve: bool) -> Result<(), String> {
         self.store.set_preferences(preserve)
     }
-    pub fn recover(&mut self) -> Result<(), String> {
-        let Some(value) = self.store.load()? else {
-            self.message = None;
+    pub fn recover(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        let Some(mut value) = self.store.load()? else {
             return Ok(());
         };
+        // A delayed Steam launch remains a transaction until its identity is
+        // known, or the operator explicitly cancels Steam's pending request.
+        if crate::cs2_session::unconfirmed_launch(&value) {
+            if let Some((pid, created)) = launched_process(&value)? {
+                value["pid"] = json!(pid);
+                value["created"] = json!(created);
+                self.store.save(&value)?;
+                self.message = None;
+            } else if !confirm_steam_cancelled {
+                return Err("Steam 启动结果待确认。若游戏稍后打开会继续跟踪；请先取消 Steam 中的启动请求，再手动恢复备份。".into());
+            }
+        }
         if owned_process(&value)?.is_some() {
+            if confirm_steam_cancelled {
+                return Err("CS2 正在运行，请先退出游戏再恢复备份。".into());
+            }
             return Ok(());
         }
         if any_cs2_running()? {
@@ -279,12 +329,16 @@ impl ManagedCs2 {
         if any_cs2_running()? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
+        if confirm_steam_cancelled && crate::cs2_session::unconfirmed_launch(&value) {
+            value["launchCancelled"] = json!(true);
+            self.store.save(&value)?;
+        }
         self.store.restore()?;
-        self.message = None;
+        self.message = Some("原设置已恢复。".into());
         Ok(())
     }
     pub fn poll(&mut self) {
-        if let Err(error) = self.recover() {
+        if let Err(error) = self.recover(false) {
             self.message = Some(error);
         }
     }
@@ -293,7 +347,7 @@ impl ManagedCs2 {
             if owned_process(&value)?.is_some() {
                 return Ok(false);
             }
-            self.recover()?;
+            self.recover(false)?;
         }
         if any_cs2_running()? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
@@ -302,6 +356,7 @@ impl ManagedCs2 {
         if any_cs2_running()? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
+        self.message = None;
         let mut journal = self.store.prepare(&video, &executable)?;
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
@@ -316,36 +371,24 @@ impl ManagedCs2 {
         let launch: Result<bool, String> = (|| {
             Command::new(&steam)
                 .current_dir(steam.parent().ok_or("Steam 程序目录无效。")?)
-                .args(["-applaunch", "730", "-windowed", "-w", "1920", "-h", "1080"])
+                .args(LAUNCH_ARGS)
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|_| "CS2 未能启动。")?;
+                .map_err(|_| {
+                    journal["launchAttempted"] = json!(false);
+                    let _ = self.store.save(&journal);
+                    "CS2 未能启动。"
+                })?;
             // Steam's launcher PID is not the game PID. Claim only one newly
             // created process from the resolved installation, after a no-game
             // precondition; keep ambiguous launches pending for manual recovery.
             let until = Instant::now() + Duration::from_secs(45);
             let (pid, created) = loop {
-                let mut candidates = Vec::new();
-                for pid in cs2_pids()? {
-                    if let Some(process) = open(pid)? {
-                        let (created, actual) = identity(&process)?;
-                        if created >= launch_time
-                            && actual
-                                .to_string_lossy()
-                                .eq_ignore_ascii_case(&executable.to_string_lossy())
-                        {
-                            candidates.push((pid, created));
-                        }
-                    }
-                }
-                if candidates.len() == 1 {
-                    break candidates[0];
-                }
-                if candidates.len() > 1 {
-                    return Err("CS2 启动身份不唯一，请退出游戏后重试恢复。".into());
+                if let Some(found) = launched_process(&journal)? {
+                    break found;
                 }
                 if Instant::now() >= until {
                     return Err(
@@ -364,11 +407,23 @@ impl ManagedCs2 {
         })();
         if let Err(error) = &launch {
             self.message = Some(error.clone());
-            let _ = self.recover();
+            let _ = self.recover(false);
         }
         launch
     }
+    pub fn backup_directory(&self) -> PathBuf {
+        self.store.backup_directory()
+    }
+    pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        let result = self.recover(confirm_steam_cancelled);
+        if let Err(error) = &result {
+            self.message = Some(error.clone());
+        }
+        result
+    }
     pub fn finish(&mut self) -> Result<(), String> {
+        // Poll once to adopt a uniquely identified late launch before closing it.
+        self.poll();
         if let Some(value) = self.store.load()? {
             if let Some(process) = owned_process(&value)? {
                 let pid = value["pid"].as_u64().ok_or("CS2 进程记录缺失。")?;
@@ -383,7 +438,7 @@ impl ManagedCs2 {
                 }
             }
         }
-        match self.recover() {
+        match self.recover(false) {
             Ok(()) => Ok(()),
             Err(error) => {
                 self.message = Some(error.clone());

@@ -874,3 +874,29 @@
 .obs-setup__cards .mizar-panel {
   min-height: calc(var(--mizar-layout-target) * 11);
 }
+
+.spectator-workflow ol {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+  padding-left: var(--mizar-layout-padding);
+}
+.spectator-workflow li > span {
+  display: block;
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
+.spectator-workflow a {
+  color: var(--mizar-fg-link);
+}
+.cs2-recovery p {
+  margin-block: var(--mizar-layout-compact);
+}
+
+.spectator-workflow {
+  grid-column: 1 / -1;
+  order: 1;
+}
+
+.preparation-tool-strip {
+  order: 2;
+}

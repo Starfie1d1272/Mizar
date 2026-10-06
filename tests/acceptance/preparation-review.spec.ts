@@ -40,7 +40,7 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
               status.pending = true;
               status.running = true;
             }
-            if (command === 'finish_managed_cs2') {
+            if (command === 'finish_managed_cs2' || command === 'restore_cs2_backup') {
               status.pending = false;
               status.running = false;
             }
@@ -49,6 +49,9 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
         },
       });
     });
+    await page.route('**/local/v1/obs', (route) =>
+      route.fulfill({ json: { connection: 'connected', findings: [] } }),
+    );
     await page.goto('/settings?tab=gsi');
     await expect(page.getByRole('heading', { name: 'CS2 启动设置' })).toBeVisible();
     const quality = page.getByRole('switch', { name: /保留原画质/ });
@@ -316,4 +319,69 @@ test('Overview attention contains recovery actions rather than duplicating optio
   await expect(page.locator('.preparation-readiness').filter({ hasText: 'OBS' })).toContainText(
     '浏览器源地址需要修复',
   );
+});
+
+test('uncertain Steam launch recovery stays visible after navigation and requires cancellation acknowledgement', async ({
+  page,
+}) => {
+  // Explicit IPC boundary fixture: this proves recovery UX, not Windows process handling.
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+          await Promise.resolve();
+          const restored = sessionStorage.getItem('test-cs2-restored') === 'yes';
+          if (command === 'restore_cs2_backup') {
+            if (args?.confirmSteamCancelled !== true) throw new Error('未确认取消 Steam 请求');
+            sessionStorage.setItem('test-cs2-restored', 'yes');
+          }
+          return (
+            command === 'cs2_config_status'
+              ? {
+                  pending: !restored,
+                  running: false,
+                  preserveQuality: true,
+                  busy: false,
+                  phase: restored ? 'idle' : 'uncertain',
+                  message: restored ? '原设置已恢复。' : 'Steam 启动结果待确认，备份仍保留。',
+                }
+              : {}
+          ) as T;
+        },
+      },
+    });
+  });
+  await page.route('**/local/v1/production', (route) =>
+    route.fulfill({ json: { mode: 'preparation', revision: 'recovery-1', canEnter: false } }),
+  );
+  await page.goto('/');
+  await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
+  await page.getByRole('link', { name: '游戏数据', exact: true }).click();
+  await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
+  await page.getByRole('checkbox', { name: '已取消 Steam 启动请求，并确认 CS2 已关闭' }).check();
+  await page.getByRole('button', { name: '恢复配置备份' }).click();
+  await expect(page.getByRole('button', { name: '恢复配置备份' })).toHaveCount(0);
+  await expect(page.getByText('原设置已恢复', { exact: true })).toBeVisible();
+});
+
+test('a starting operation reports progress while navigation remains usable', async ({ page }) => {
+  await page.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: <T>(command: string) =>
+          Promise.resolve(
+            (command === 'cs2_config_status' ? { busy: true, phase: 'starting' } : {}) as T,
+          ),
+      },
+    }),
+  );
+  await page.goto('/');
+  await expect(page.getByText('正在启动 CS2，等待 Steam…', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '游戏数据', exact: true }).click();
+  await expect(page.getByRole('button', { name: '启动 CS2', exact: true })).toBeDisabled();
+  await page.getByRole('link', { name: 'OBS 连接', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'OBS 连接与配置' })).toBeVisible();
 });

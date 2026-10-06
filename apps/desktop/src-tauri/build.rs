@@ -10,6 +10,8 @@ fn main() {
             "cs2_config_status",
             "start_managed_cs2",
             "finish_managed_cs2",
+            "restore_cs2_backup",
+            "open_cs2_backup",
             "set_cs2_preferences",
             "open_main",
             "present_production",

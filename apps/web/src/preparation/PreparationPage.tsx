@@ -20,6 +20,8 @@ import { RosterCapture, type RosterCandidate } from './RosterCapture';
 import { Settings } from './Settings';
 import { ProgramPreview } from './ProgramPreview';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
+import { Cs2Recovery } from './Cs2Recovery';
+import { SpectatorWorkflow } from './SpectatorWorkflow';
 import './preparation.css';
 
 const tabs = {
@@ -198,10 +200,15 @@ export function PreparationPage() {
             disabled={busy || !production?.canEnter}
             onClick={() => production && void action(() => productionAction('enter', production))}
           >
-            {production?.mode === 'hidden' || production?.mode === 'live' ? '恢复现场' : '进入现场'}
+            {production?.mode === 'hidden' || production?.mode === 'live'
+              ? '打开直播工作台'
+              : window.__TAURI_INTERNALS__
+                ? '启动游戏并打开工作台'
+                : '打开直播工作台'}
           </Button>
         </header>
 
+        {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
         {options && path !== '/settings' ? (
           <nav className="preparation-tabs" aria-label="页面分区">
@@ -369,6 +376,7 @@ export function PreparationPage() {
               </Panel>
             )}
 
+            <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match ? (
               <div className="preparation-overview">
                 <Panel>

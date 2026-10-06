@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod geometry;
-mod cs2_video;
+mod cs2_activity;
 mod cs2_session;
+mod cs2_video;
+mod geometry;
 mod managed_cs2;
 mod startup_log;
 mod startup_wait;
@@ -411,7 +412,9 @@ fn local_url(path: &str) -> WebviewUrl {
 
 fn obs_executable_allowed(path: &Path) -> bool {
     path.is_absolute()
-        && path.file_name().and_then(|name| name.to_str())
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
             .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
 }
 
@@ -438,29 +441,97 @@ async fn launch_obs(executable_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.status()
+async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let result = match state.try_lock() {
+            Ok(cs2) => cs2.status(),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(serde_json::json!({
+                "busy": true, "phase": app.state::<cs2_activity::Activity>().phase()
+            })),
+            Err(_) => Err("CS2 配置状态不可用。".into()),
+        };
+        result
+    })
+    .await
+    .map_err(|_| "CS2 配置状态不可用。".to_string())?
 }
 
 #[tauri::command]
 async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.start()
-    }).await.map_err(|_| "CS2 启动未完成。".to_string())?
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(1);
+        cs2.start()
+    })
+    .await
+    .map_err(|_| "CS2 启动未完成。".to_string())?
 }
 
 #[tauri::command]
 async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.finish()
-    }).await.map_err(|_| "CS2 原配置恢复未完成。".to_string())?
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(2);
+        cs2.finish()
+    })
+    .await
+    .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
 }
 
 #[tauri::command]
 async fn set_cs2_preferences(app: tauri::AppHandle, preserve_quality: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.preferences(preserve_quality)
-    }).await.map_err(|_| "CS2 画质设置未保存。".to_string())?
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(3);
+        cs2.preferences(preserve_quality)
+    })
+    .await
+    .map_err(|_| "CS2 画质设置未保存。".to_string())?
+}
+
+#[tauri::command]
+async fn restore_cs2_backup(
+    app: tauri::AppHandle,
+    confirm_steam_cancelled: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(2);
+        cs2.restore_backup(confirm_steam_cancelled)
+    })
+    .await
+    .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn open_cs2_backup(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = app
+            .state::<Mutex<managed_cs2::ManagedCs2>>()
+            .lock()
+            .map_err(|_| "CS2 配置状态不可用。")?
+            .backup_directory();
+        fs::create_dir_all(&path).map_err(|_| "备份目录无法打开。")?;
+        let executable =
+            PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?)
+                .join("explorer.exe");
+        Command::new(executable)
+            .arg(path)
+            .spawn()
+            .map_err(|_| "备份目录无法打开。")?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "备份目录无法打开。".to_string())?
 }
 
 fn trusted_navigation(url: &tauri::Url) -> bool {
@@ -545,8 +616,8 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
             let _ = main.hide();
         }
     } else {
+        open_main(app.clone(), None)?;
         hide_workspace(&app);
-        let _ = open_main(app, None);
     }
     Ok(())
 }
@@ -714,9 +785,7 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
     if let Some(path) = root {
         command.arg("-Cs2Root").arg(path);
     }
-    command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|_| "GSI 配置工具未能启动。")?;
     let deadline = Instant::now() + timeout;
     loop {
@@ -894,7 +963,10 @@ fn run_desktop(
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(log.clone())
-        .manage(Mutex::new(managed_cs2::ManagedCs2::new(log.state_root.clone())))
+        .manage(Mutex::new(managed_cs2::ManagedCs2::new(
+            log.state_root.clone(),
+        )))
+        .manage(cs2_activity::Activity::default())
         .invoke_handler(tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
@@ -905,6 +977,8 @@ fn run_desktop(
             cs2_config_status,
             start_managed_cs2,
             finish_managed_cs2,
+            restore_cs2_backup,
+            open_cs2_backup,
             set_cs2_preferences,
             open_main,
             present_production,
@@ -1007,7 +1081,11 @@ fn run_desktop(
                 let mut cs2_check = Instant::now() - Duration::from_secs(2);
                 while worker_running.load(Ordering::Relaxed) {
                     if cs2_check.elapsed() >= Duration::from_secs(2) {
-                        if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
+                        if let Ok(mut cs2) =
+                            host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
+                        {
+                            let activity = host.state::<cs2_activity::Activity>();
+                            let _activity = activity.begin(3);
                             cs2.poll();
                         }
                         cs2_check = Instant::now();
@@ -1127,6 +1205,8 @@ fn run_desktop(
     };
     let ready_error = Arc::new(Mutex::new(None));
     let callback_error = ready_error.clone();
+    let exit_cleanup_started = AtomicBool::new(false);
+    let exit_cleanup_done = Arc::new(AtomicBool::new(false));
     let exit_code = application.run_return(move |app, event| match event {
         tauri::RunEvent::Ready => {
             match log.step("runtime_startup_committed", || job.kill_on_close(false)) {
@@ -1138,6 +1218,26 @@ fn run_desktop(
                     app.exit(1);
                 }
             }
+        }
+        tauri::RunEvent::ExitRequested { api, code, .. }
+            if !exit_cleanup_done.load(Ordering::Acquire) =>
+        {
+            api.prevent_exit();
+            if exit_cleanup_started.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let done = exit_cleanup_done.clone();
+            let host = app.clone();
+            // Serialize with an in-flight launch; keep the UI loop responsive.
+            tauri::async_runtime::spawn(async move {
+                let result = finish_managed_cs2(host.clone()).await;
+                if let Err(error) = result {
+                    host.state::<DesktopLog>()
+                        .event("cs2_exit_recovery", "failure", Some(&error));
+                }
+                done.store(true, Ordering::Release);
+                host.exit(code.unwrap_or(0));
+            });
         }
         tauri::RunEvent::Exit => {
             DesktopWorker {
@@ -1319,18 +1419,36 @@ mod startup_tests {
 
     #[test]
     fn obs_launch_accepts_only_an_absolute_obs_executable() {
-        assert!(obs_executable_allowed(Path::new(r"D:\OBS Studio\bin\64bit\obs64.exe")));
-        for path in ["obs64.exe", r"D:\OBS Studio\obs64.exe --argument", r"D:\OBS Studio\other.exe", "https://example.test/obs64.exe"] {
+        assert!(obs_executable_allowed(Path::new(
+            r"D:\OBS Studio\bin\64bit\obs64.exe"
+        )));
+        for path in [
+            "obs64.exe",
+            r"D:\OBS Studio\obs64.exe --argument",
+            r"D:\OBS Studio\other.exe",
+            "https://example.test/obs64.exe",
+        ] {
             assert!(!obs_executable_allowed(Path::new(path)));
         }
     }
 
     #[test]
     fn live_settings_open_only_known_preparation_sections() {
-        for path in ["/settings?tab=obs", "/settings?tab=gsi", "/picture?tab=overlay"] {
+        for path in [
+            "/settings?tab=obs",
+            "/settings?tab=gsi",
+            "/picture?tab=overlay",
+        ] {
             assert!(main_path_allowed(path));
         }
-        for path in ["https://example.test", "//example.test", "/settings?tab=obs&redirect=https://example.test", "/program", "/../settings", "javascript:alert(1)"] {
+        for path in [
+            "https://example.test",
+            "//example.test",
+            "/settings?tab=obs&redirect=https://example.test",
+            "/program",
+            "/../settings",
+            "javascript:alert(1)",
+        ] {
             assert!(!main_path_allowed(path));
         }
     }
@@ -1338,7 +1456,13 @@ mod startup_tests {
     #[test]
     fn workbench_path_is_limited_to_one_match() {
         assert!(valid_workbench_path("/admin/rivals-2026/matches/match_1"));
-        for path in ["/admin/rivals", "/admin/rivals/matches/", "/admin/rivals/matches/a/extra", "/admin/rivals/matches/%2f", "/integrations/mizar/connect"] {
+        for path in [
+            "/admin/rivals",
+            "/admin/rivals/matches/",
+            "/admin/rivals/matches/a/extra",
+            "/admin/rivals/matches/%2f",
+            "/integrations/mizar/connect",
+        ] {
             assert!(!valid_workbench_path(path));
         }
     }
@@ -1357,7 +1481,10 @@ mod startup_tests {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap().lines().collect::<Vec<_>>(),
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
             ["原配置", "SHA256"]
         );
     }

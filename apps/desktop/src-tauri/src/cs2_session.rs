@@ -8,6 +8,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Missing game identity after a submitted Steam request is not proof of exit.
+pub fn unconfirmed_launch(value: &Value) -> bool {
+    value["launchAttempted"] == true
+        && value["launchCancelled"] != true
+        && (value["pid"].as_u64().is_none() || value["created"].as_u64().is_none())
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("配置路径无效。")?;
     fs::create_dir_all(parent).map_err(|_| "无法创建配置目录。")?;
@@ -67,6 +74,9 @@ impl SessionStore {
         Self {
             root: root.join("data/cs2-session"),
         }
+    }
+    pub fn backup_directory(&self) -> PathBuf {
+        self.root.clone()
     }
     fn journal_path(&self) -> PathBuf {
         self.root.join("pending.json")
@@ -139,6 +149,9 @@ impl SessionStore {
         let Some(value) = self.load()? else {
             return Ok(());
         };
+        if unconfirmed_launch(&value) {
+            return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
+        }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
         if path.file_name().and_then(|n| n.to_str()) != Some("cs2_video.txt") || !path.is_absolute()
         {
@@ -186,6 +199,30 @@ mod tests {
         fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
         let store = SessionStore::new(root.clone());
         (root, video, store)
+    }
+    #[test]
+    fn a_timed_out_steam_request_survives_restart_until_confirmed() {
+        let (root, video, store) = setup();
+        let mut journal = store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        journal["launchAttempted"] = json!(true);
+        journal["launchTime"] = json!(42);
+        store.save(&journal).unwrap();
+        let applied = fs::read(&video).unwrap();
+        let restarted = SessionStore::new(root.clone());
+        assert!(unconfirmed_launch(&restarted.load().unwrap().unwrap()));
+        assert!(restarted.restore().is_err());
+        assert_eq!(fs::read(&video).unwrap(), applied);
+        assert!(restarted.load().unwrap().is_some());
+        // An explicit cancelled-request acknowledgement is durable too.
+        journal["launchCancelled"] = json!(true);
+        restarted.save(&journal).unwrap();
+        restarted.restore().unwrap();
+        assert_eq!(
+            fs::read_to_string(&video).unwrap(),
+            journal["original"].as_str().unwrap()
+        );
+        assert!(restarted.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn durable_restart_recovery_does_not_overwrite_pending_backup() {

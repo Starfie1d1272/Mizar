@@ -125,3 +125,5 @@ OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录�
 本地监听、Origin 校验和凭据分离见[协议安全](protocol.md#本地访问与安全)。采集写盘不能阻塞 GSI 接收，重放必须经过生产适配器，规则见[遥测语义](telemetry.md#采集重放与时间)。
 
 新增数据源优先增加适配器，新增画面优先复用已有投影，新增可靠输出不改变高频快照语义。第二个真实消费者、提供方或独立发行需求出现前，不建设通用插件框架。
+
+Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md) 和 [ADR-0027](decisions/0027-cs2-launch-recovery-workflow.md)。状态查询不等待启动或退出操作锁；Steam 请求待确认时保留持久记录，正常退出尝试关闭受管理游戏，异常退出后的恢复状态跨窗口可见。启动项只传给本次 Steam 调用，不修改持久启动项。

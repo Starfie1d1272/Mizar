@@ -92,7 +92,7 @@ export function Settings({ tab }: { tab: string }) {
           <header className="obs-setup__heading">
             <h2>
               {new URLSearchParams(window.location.search).has('prepare')
-                ? '进入现场前，连接并检查 OBS'
+                ? '启动游戏前，连接并检查 OBS'
                 : 'OBS 连接与配置'}
             </h2>
             <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
@@ -264,21 +264,20 @@ export function Settings({ tab }: { tab: string }) {
               OBS 的游戏画面。
             </p>
             <p>
-              若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software
-              并重启游戏。该选项可能影响信任系数；Mizar 不会自动修改启动选项。
+              若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software 。由 Mizar
+              启动时已临时添加该选项；它可能影响信任系数。
             </p>
           </details>
         </div>
       ) : (
         <>
-          <Cs2LaunchSettings />
           <Panel>
             <h2>CS2 与 GSI</h2>
             <p>
               {cs2?.found
                 ? cs2.managed
                   ? 'CS2 窗口已就绪'
-                  : '已检测到 CS2，进入现场后安排窗口'
+                  : '已检测到 CS2，打开工作台后安排窗口'
                 : '等待 CS2 窗口'}
             </p>
             <p>
@@ -342,6 +341,7 @@ export function Settings({ tab }: { tab: string }) {
               <p>{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
             </details>
           </Panel>
+          <Cs2LaunchSettings />
         </>
       )}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
