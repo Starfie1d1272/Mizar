@@ -23,7 +23,13 @@ function setup(
       return Promise.reject(new Error('等待 CS2 退出后恢复'));
     if (failure === 'presentation' && command === 'present_production')
       return Promise.reject(new Error('窗口未打开'));
-    return Promise.resolve(command === 'start_managed_cs2' ? newlyStarted : undefined);
+    return Promise.resolve(
+      command === 'gsi_status'
+        ? { installed: true, conflict: false }
+        : command === 'start_managed_cs2'
+          ? newlyStarted
+          : undefined,
+    );
   });
   window.__TAURI_INTERNALS__ = {
     invoke: async <T>(command: string) => (await invoke(command)) as T,
@@ -53,6 +59,7 @@ describe('managed CS2 production entry and cleanup', () => {
     const calls = setup();
     await productionAction('enter', preparation);
     expect(calls).toEqual([
+      'gsi_status',
       '/local/v1/obs',
       'start_managed_cs2',
       '/operator/production',
@@ -62,7 +69,7 @@ describe('managed CS2 production entry and cleanup', () => {
   it('does not enter production when the game cannot start', async () => {
     const calls = setup('launch');
     await expect(productionAction('enter', preparation)).rejects.toThrow('请先退出');
-    expect(calls).toEqual(['/local/v1/obs', 'start_managed_cs2']);
+    expect(calls).toEqual(['gsi_status', '/local/v1/obs', 'start_managed_cs2']);
   });
   it('hides the workspace without closing the game', async () => {
     const calls = setup();

@@ -44,7 +44,15 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   if (!status?.pending && !phase && !feedback && !status?.message) return null;
   const uncertain = status?.phase === 'uncertain';
   return (
-    <StatusBanner tone={status?.pending || phase ? 'warning' : 'success'}>
+    <StatusBanner
+      tone={
+        status?.pending && (!status.running || Boolean(status.message))
+          ? 'warning'
+          : phase || status?.running
+            ? 'info'
+            : 'success'
+      }
+    >
       <div className="cs2-recovery" aria-label="CS2 配置恢复">
         <strong>
           {phase

@@ -69,6 +69,14 @@ export interface Production {
   canEnter: boolean;
 }
 export async function checkObsBeforeLaunch() {
+  // Installation is checkable before launch; fresh telemetry is not.
+  if (window.__TAURI_INTERNALS__) {
+    const gsi = await desktopInvoke<{ installed: boolean; conflict: boolean }>('gsi_status');
+    if (!gsi.installed || gsi.conflict) {
+      window.location.assign('/settings?tab=gsi&prepare=1');
+      return false;
+    }
+  }
   // A fresh UI readiness check; Companion still owns the production lifecycle.
   const obs = await fetch('/local/v1/obs', {
     cache: 'no-store',

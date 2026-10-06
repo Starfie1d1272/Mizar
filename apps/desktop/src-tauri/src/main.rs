@@ -5,6 +5,7 @@ mod cs2_session;
 mod cs2_video;
 mod geometry;
 mod managed_cs2;
+mod production_exit;
 mod startup_log;
 mod startup_wait;
 mod support_export;
@@ -464,6 +465,7 @@ async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(1);
+        app.state::<production_exit::ExitGate>().check()?;
         cs2.start()
     })
     .await
@@ -599,6 +601,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
 #[tauri::command]
 async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
+        app.state::<production_exit::ExitGate>().check()?;
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
@@ -967,6 +970,7 @@ fn run_desktop(
             log.state_root.clone(),
         )))
         .manage(cs2_activity::Activity::default())
+        .manage(production_exit::ExitGate::default())
         .invoke_handler(tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
@@ -1205,7 +1209,6 @@ fn run_desktop(
     };
     let ready_error = Arc::new(Mutex::new(None));
     let callback_error = ready_error.clone();
-    let exit_cleanup_started = AtomicBool::new(false);
     let exit_cleanup_done = Arc::new(AtomicBool::new(false));
     let exit_code = application.run_return(move |app, event| match event {
         tauri::RunEvent::Ready => {
@@ -1220,20 +1223,42 @@ fn run_desktop(
             }
         }
         tauri::RunEvent::ExitRequested { api, code, .. }
-            if !exit_cleanup_done.load(Ordering::Acquire) =>
+            if code.unwrap_or(0) == 0 && !exit_cleanup_done.load(Ordering::Acquire) =>
         {
             api.prevent_exit();
-            if exit_cleanup_started.swap(true, Ordering::AcqRel) {
+            if !app.state::<production_exit::ExitGate>().begin() {
                 return;
             }
             let done = exit_cleanup_done.clone();
             let host = app.clone();
             // Serialize with an in-flight launch; keep the UI loop responsive.
             tauri::async_runtime::spawn(async move {
-                let result = finish_managed_cs2(host.clone()).await;
+                let cleanup_host = host.clone();
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    // The gate is already closed; wait for an accepted launch,
+                    // then keep its lock through safe production and game cleanup.
+                    let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
+                    let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+                    let activity = cleanup_host.state::<cs2_activity::Activity>();
+                    let _activity = activity.begin(2);
+                    production_exit::finish_then_restore(production_exit::finish_companion, || {
+                        cs2.finish()
+                    })
+                })
+                .await
+                .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
                 if let Err(error) = result {
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
+                    host.state::<production_exit::ExitGate>().cancel();
+                    let _ = open_main(host.clone(), Some("/".into()));
+                    host.dialog()
+                        .message(format!(
+                            "退出 Mizar 未完成，待恢复记录仍保留。\n{error}\n请修复后重试退出。"
+                        ))
+                        .title("Mizar 退出未完成")
+                        .show(|_| {});
+                    return;
                 }
                 done.store(true, Ordering::Release);
                 host.exit(code.unwrap_or(0));

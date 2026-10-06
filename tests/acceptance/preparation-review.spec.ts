@@ -34,6 +34,8 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
       Object.assign(window, {
         __TAURI_INTERNALS__: {
           invoke: <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+            if (command === 'gsi_status')
+              return Promise.resolve({ installed: true, conflict: false } as T);
             if (command === 'set_cs2_preferences')
               status.preserveQuality = args?.preserveQuality === true;
             if (command === 'start_managed_cs2') {

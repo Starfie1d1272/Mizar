@@ -18,7 +18,7 @@ import {
   type Production,
   command,
 } from '../preparation/client';
-import { Button, StatusPill } from '../ui';
+import { Button, StatusPill, Dialog } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
@@ -184,6 +184,7 @@ export function WorkspaceDock() {
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!message) return;
@@ -346,8 +347,19 @@ export function WorkspaceDock() {
         </div>
       </section>
       <footer className="workspace-message" role="status">
-        <span>{sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}</span>
-        {errorMessage ? <span role="alert">{errorMessage}</span> : null}
+        <span title={sceneState?.director?.reason ?? undefined}>
+          {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
+        </span>
+        {errorMessage ? (
+          <button
+            className="workspace-error"
+            onClick={() => setDetailsOpen(true)}
+            title={errorMessage}
+            aria-label="查看错误详情"
+          >
+            <span role="alert">{errorMessage}</span>
+          </button>
+        ) : null}
         {message ? (
           <span className="workspace-feedback" role="status">
             {message}
@@ -368,6 +380,11 @@ export function WorkspaceDock() {
           </Button>
         </div>
       </footer>
+      <Dialog open={detailsOpen} title="操作未完成" onClose={() => setDetailsOpen(false)}>
+        <p>{errorMessage}</p>
+        <p>{sceneState?.director?.reason}</p>
+        <Button onClick={() => setDetailsOpen(false)}>关闭详情</Button>
+      </Dialog>
     </main>
   );
 }

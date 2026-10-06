@@ -1,6 +1,9 @@
 //! Lossless edits of the flat video.cfg object. Unknown fields and comments survive.
 use std::collections::BTreeMap;
 
+pub const DISPLAY_WIDTH: &str = "1920";
+pub const DISPLAY_HEIGHT: &str = "1080";
+
 #[derive(Debug)]
 struct Token {
     value: String,
@@ -91,8 +94,8 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
 pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for (key, value) in [
-        ("defaultres", "1920"),
-        ("defaultresheight", "1080"),
+        ("defaultres", DISPLAY_WIDTH),
+        ("defaultresheight", DISPLAY_HEIGHT),
         ("aspectratiomode", "1"),
         ("fullscreen", "0"),
         ("coop_fullscreen", "0"),

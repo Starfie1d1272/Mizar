@@ -87,7 +87,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 | 入口 | 语义 |
 | --- | --- |
 | `GET /local/v1/readiness` | 汇总数据、场景和 OBS 的当前就绪情况 |
-| `GET /local/v1/production`、`POST /operator/production` | 制作生命周期及带预期修订号的 `enter / hide / finish` |
+| `GET /local/v1/production`、`POST /operator/production` | 制作生命周期及带预期修订号的 `enter / hide / finish / shutdown`（Host 正常退出复用安全收尾；成功后拒绝新进入，允许退出重试） |
 | `GET /local/v1/roster-candidate` | 当前可信首发候选 |
 | `POST /operator/local-match/capture`、`create-from-server` | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表 |
 | `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目 |

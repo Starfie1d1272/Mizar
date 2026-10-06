@@ -192,6 +192,22 @@
           "components": [0.988235, 0.647059, 0.647059],
           "alpha": 1
         }
+      },
+      "700": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.72549, 0.109804, 0.109804],
+          "alpha": 1
+        }
+      },
+      "800": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.6, 0.105882, 0.105882],
+          "alpha": 1
+        }
       }
     },
     "cyan": {
@@ -423,7 +439,14 @@
     "family": {
       "sans": {
         "$type": "fontFamily",
-        "$value": ["Inter", "PingFang SC", "Microsoft YaHei", "sans-serif"]
+        "$value": [
+          "Inter",
+          "Microsoft YaHei UI",
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          "sans-serif"
+        ]
       },
       "mono": {
         "$type": "fontFamily",
@@ -467,6 +490,13 @@
         "$type": "dimension",
         "$value": {
           "value": 28,
+          "unit": "px"
+        }
+      },
+      "36": {
+        "$type": "dimension",
+        "$value": {
+          "value": 36,
           "unit": "px"
         }
       }

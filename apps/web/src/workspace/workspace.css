@@ -221,7 +221,8 @@
   background: var(--mizar-bg-surface);
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1.05fr) minmax(0, 1.05fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) var(--mizar-layout-target);
+  position: relative;
   min-height: 0;
   min-width: 0;
   height: 100dvh;
@@ -347,8 +348,7 @@
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .workspace-footer-actions {
   display: flex;
@@ -420,17 +420,55 @@
 }
 
 .workspace-exit.mizar-button {
-  color: var(--mizar-bg-canvas);
-  background: var(--mizar-status-danger);
-  border-color: var(--mizar-status-danger);
+  color: var(--mizar-fg-on-accent);
+  background: var(--mizar-action-danger);
+  border-color: var(--mizar-action-danger);
 }
 .workspace-exit.mizar-button:hover:not(:disabled) {
-  background: var(--mizar-status-danger);
-  border-color: var(--mizar-fg-primary);
+  background: var(--mizar-action-danger-hover);
+  border-color: var(--mizar-action-danger-hover);
 }
 .workspace-feedback {
   color: var(--mizar-status-info);
 }
 .workspace-next-preview > div:last-child {
   flex-wrap: wrap;
+}
+
+.workspace-message > .workspace-feedback {
+  position: absolute;
+  bottom: calc(var(--mizar-layout-target) + var(--mizar-layout-compact) / 2);
+  left: var(--mizar-layout-compact);
+  max-width: 45%;
+  height: calc(var(--mizar-layout-target) - var(--mizar-layout-compact));
+  display: flex;
+  align-items: center;
+  background: var(--mizar-bg-raised);
+  padding-inline: var(--mizar-layout-compact);
+  border: var(--mizar-line-border) solid var(--mizar-border-strong);
+  border-radius: var(--mizar-shape-control);
+  pointer-events: none;
+}
+.workspace-error {
+  min-height: var(--mizar-layout-target);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--mizar-status-danger);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.workspace-error span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: inherit;
+}
+.workspace-error:focus-visible {
+  outline: var(--mizar-line-focus) solid var(--mizar-focus-ring);
 }
