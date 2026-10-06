@@ -4,6 +4,7 @@ import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import {
   checkObsConfiguration,
   repairObsConfiguration,
+  refreshObsBrowserSources,
   switchObsScene,
   type ObsRpc,
 } from '../src/obs/reconcile.js';
@@ -132,6 +133,7 @@ class FakeObs implements ObsRpc {
       return {};
     }
     if (type === 'GetCurrentProgramScene') return { currentProgramSceneName: this.currentScene };
+    if (type === 'PressInputPropertiesButton') return {};
     if (type === 'GetCurrentSceneTransitionCursor') return { transitionCursor: 1 };
     if (type === 'SetCurrentProgramScene') {
       this.currentScene = name;
@@ -148,6 +150,38 @@ class FakeObs implements ObsRpc {
 }
 
 const baseUrl = 'http://127.0.0.1:3000';
+
+it('refreshes exact owned program URLs once without changing collection, scene, or non-Mizar inputs', async () => {
+  const obs = new FakeObs();
+  const refreshed = new Set<string>();
+  expect(await refreshObsBrowserSources(obs, baseUrl, refreshed)).toBe(false);
+  expect(obs.calls).not.toContain('PressInputPropertiesButton');
+  await repairObsConfiguration(obs, baseUrl);
+  obs.inputs.set('User Browser', {
+    kind: 'browser_source',
+    settings: { url: 'https://example.test' },
+  });
+  const expected = obsDesiredScenes(baseUrl);
+  const conflicting = expected[0]!;
+  obs.inputs.get(conflicting.browserInput)!.settings.url = 'https://example.test';
+  obs.calls = [];
+  expect(await refreshObsBrowserSources(obs, baseUrl, refreshed)).toBe(false);
+  expect(refreshed.size).toBe(expected.length - 1);
+  expect(refreshed.has(conflicting.browserInput)).toBe(false);
+  expect(refreshed.has('User Browser')).toBe(false);
+  const firstRefreshCount = obs.calls.filter(
+    (call) => call === 'PressInputPropertiesButton',
+  ).length;
+  await refreshObsBrowserSources(obs, baseUrl, refreshed);
+  expect(obs.calls.filter((call) => call === 'PressInputPropertiesButton')).toHaveLength(
+    firstRefreshCount,
+  );
+  obs.inputs.get(conflicting.browserInput)!.settings.url = conflicting.browserUrl;
+  expect(await refreshObsBrowserSources(obs, baseUrl, refreshed)).toBe(true);
+  expect(obs.calls).not.toContain('SetCurrentSceneCollection');
+  expect(obs.calls).not.toContain('SetCurrentProgramScene');
+  expect(obs.inputs.get('User Browser')!.settings).toEqual({ url: 'https://example.test' });
+});
 
 it('derives all OBS scenes and URLs from the shared registry', () => {
   const desired = obsDesiredScenes(baseUrl);

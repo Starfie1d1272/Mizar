@@ -19,13 +19,23 @@ export class BombDamageWorkerClient {
   private context = '';
   private notification: ReturnType<typeof setImmediate> | undefined;
   private settling = 0;
+  private predictionCount = 0;
+  private batchScheduled = false;
+  private readonly batches = new Map<
+    string,
+    {
+      mapName: string;
+      context: string;
+      entries: { input: StandingC4Input; complete: (value: StandingC4Outcome) => void }[];
+    }
+  >();
   constructor(private readonly changed: () => void) {}
 
   setContext(context: string): void {
     this.context = context;
   }
 
-  private request(mapName: string, input?: StandingC4Input): Promise<unknown> {
+  private request(mapName: string, inputs?: readonly StandingC4Input[]): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('worker-closed'));
     if (!this.worker) {
       const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js';
@@ -52,7 +62,7 @@ export class BombDamageWorkerClient {
       const timer = setTimeout(() => this.fail(), 15_000);
       timer.unref();
       this.pending.set(id, { resolve, reject, timer });
-      this.worker!.postMessage({ id, mapName, ...(input ? { input } : {}) });
+      this.worker!.postMessage({ id, mapName, ...(inputs ? { inputs } : {}) });
     });
     this.tasks.add(task);
     void task.then(
@@ -79,32 +89,65 @@ export class BombDamageWorkerClient {
           cache.set(key, result);
           return result;
         }
-        if (!this.closed && !loading.has(key) && this.pending.size < 10) {
+        if (!loading.has(key) && this.predictionCount < 10) {
           loading.add(key);
-          void this.request(mapName, input)
-            .then((value) => {
+          this.predictionCount++;
+          const batchKey = JSON.stringify([mapName, context]);
+          let batch = this.batches.get(batchKey);
+          if (!batch) {
+            batch = { mapName, context, entries: [] };
+            this.batches.set(batchKey, batch);
+          }
+          batch.entries.push({
+            input,
+            complete: (value) => {
               loading.delete(key);
               // Completion reprojects current state; never publishes a saved frame.
               if (this.closed || this.context !== context) return;
-              cache.set(key, value as StandingC4Outcome);
+              cache.set(key, value);
               while (cache.size > 32) cache.delete(cache.keys().next().value!);
-              if (this.pending.size === 0 && !this.notification && this.settling === 0)
-                this.notification = setImmediate(() => {
-                  this.notification = undefined;
-                  if (!this.closed) this.changed();
-                });
-            })
-            .catch(() => {
-              loading.delete(key);
-              if (!this.closed && this.context === context) {
-                cache.set(key, { status: 'unavailable', reason: 'model-unavailable' });
-                while (cache.size > 32) cache.delete(cache.keys().next().value!);
-              }
-            });
+            },
+          });
+          if (!this.batchScheduled) {
+            this.batchScheduled = true;
+            queueMicrotask(() => this.flushBatches());
+          }
         }
         return { status: 'unavailable', reason: 'prediction-loading' };
       },
     };
+  }
+
+  private flushBatches(): void {
+    this.batchScheduled = false;
+    for (const batch of this.batches.values()) {
+      const complete = (values: readonly StandingC4Outcome[]) => {
+        this.predictionCount -= batch.entries.length;
+        for (const [index, entry] of batch.entries.entries())
+          entry.complete(values[index] ?? { status: 'unavailable', reason: 'model-unavailable' });
+        if (
+          !this.closed &&
+          this.context === batch.context &&
+          this.pending.size === 0 &&
+          !this.notification &&
+          this.settling === 0
+        )
+          this.notification = setImmediate(() => {
+            this.notification = undefined;
+            if (!this.closed) this.changed();
+          });
+      };
+      if (this.closed || this.context !== batch.context) complete([]);
+      else
+        void this.request(
+          batch.mapName,
+          batch.entries.map((entry) => entry.input),
+        ).then(
+          (values) => complete(values as StandingC4Outcome[]),
+          () => complete([]),
+        );
+    }
+    this.batches.clear();
   }
 
   evict(mapName: string): void {
@@ -112,10 +155,11 @@ export class BombDamageWorkerClient {
   }
 
   async settle(): Promise<boolean> {
-    const hadTasks = this.tasks.size > 0;
     // Replay owns the refresh after draining. Suppress completion callbacks for
     // the whole drain, including between worker messages on different platforms.
     this.settling++;
+    this.flushBatches();
+    const hadTasks = this.tasks.size > 0;
     if (this.notification) clearImmediate(this.notification);
     this.notification = undefined;
     try {

@@ -51,6 +51,11 @@
   gap: var(--mizar-layout-compact);
   min-width: 0;
 }
+.workspace-score-detail {
+  color: var(--mizar-fg-muted);
+  display: block;
+  font-size: var(--mizar-type-size-small);
+}
 .workspace-section-heading > span {
   overflow: hidden;
   text-overflow: ellipsis;

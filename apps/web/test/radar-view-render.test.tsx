@@ -60,6 +60,27 @@ function frame(sequence = 1, x = 0.5): RadarViewFrame {
 const canvas = () => container.querySelector('canvas')!;
 
 describe('shared radar surface lifecycle', () => {
+  it('reuses surface styles between frames and invalidates them on theme changes and resize', async () => {
+    const { step } = setup();
+    const styles = vi.spyOn(globalThis, 'getComputedStyle');
+    act(() => root!.render(<RadarView snapshot={frame()} assetBaseUrl="/radar" />));
+    step(0);
+    step(8);
+    step(16);
+    step(24);
+    expect(styles).toHaveBeenCalledOnce();
+    await act(async () => {
+      container.style.setProperty('--mizar-side-ct', 'var(--mizar-side-t)');
+      await Promise.resolve();
+    });
+    step(32);
+    expect(styles).toHaveBeenCalledTimes(2);
+    Object.defineProperty(canvas(), 'clientWidth', { value: 400, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    step(40);
+    expect(styles).toHaveBeenCalledTimes(3);
+    expect(canvas().width).toBe(400);
+  });
   it('renders ESL labels through the shared accepted-frame lifecycle and clears an unavailable frame', () => {
     const { step } = setup();
     act(() =>

@@ -601,7 +601,12 @@ function projectBomb(
         kind: 'defuse',
         sourcePlayerId,
         remainingSeconds,
-        durationSeconds: hasDefuseKit === true ? 5 : hasDefuseKit === false ? 10 : null,
+        durationSeconds:
+          hasDefuseKit === true
+            ? 5
+            : hasDefuseKit === false
+              ? 10
+              : runtime.objectiveTiming.defuseActionDurationSeconds,
         hasDefuseKit,
       };
       break;

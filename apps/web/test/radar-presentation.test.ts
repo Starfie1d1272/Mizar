@@ -379,6 +379,42 @@ describe('Radar renderer local lifecycle', () => {
     });
   });
 
+  it('does not replay entry or lose T ownership on RC14 seq 2913→2914 sub-tick jitter after owner drift', () => {
+    // Real anonymous RC14 smoke-excerpt.jsonl.gz, evidence commit a23d71e.
+    // Entity 95 changes owner to "397" after death; lifetime 10.374→10.364.
+    const before = single();
+    const owner = before.payload.players[0]!.sourcePlayerId;
+    before.payload.players[0]!.side = 'T';
+    before.payload.grenades = [
+      {
+        ...before.payload.grenades[0]!,
+        sourceEntityId: '95',
+        kind: 'smoke',
+        ownerSourceId: owner,
+        position: { x: 677.9, y: -1526.7, z: -413.5 },
+        velocity: { x: 0, y: 0, z: 0 },
+        lifetimeSeconds: 10.3,
+        effectTimeSeconds: 8.672,
+      },
+    ];
+    const model = new RadarPresentation();
+    model.accept(before, 0);
+    const phaseStartedAt = model.grenades.get('95')!.phaseStartedAt;
+    const drift = next(before);
+    drift.payload.players[0]!.health = 0;
+    drift.payload.players[0]!.lifeState = 'dead';
+    drift.payload.grenades[0]!.ownerSourceId = '397';
+    drift.payload.grenades[0]!.lifetimeSeconds = 10.374;
+    drift.payload.grenades[0]!.effectTimeSeconds = 8.75;
+    model.accept(drift, 40);
+    const jitter = next(drift);
+    jitter.payload.grenades[0]!.lifetimeSeconds = 10.364;
+    jitter.payload.grenades[0]!.effectTimeSeconds = 8.734;
+    model.accept(jitter, 50);
+    expect(model.grenades.get('95')).toMatchObject({ phase: 'effect', side: 'T', phaseStartedAt });
+    expect(model.exits.size).toBe(0);
+  });
+
   it('starts a fresh smoke lifecycle when the same entity id is reused after lifetime rewind', () => {
     const before = single();
     before.payload.grenades = [

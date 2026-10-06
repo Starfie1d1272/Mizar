@@ -94,11 +94,13 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
 
-C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。等待或故障时预测不可用，不回放旧帧；见 [ADR-0029](decisions/0029-c4-worker-isolation.md)。
+C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。同一投影的十人预测合并为一次 Worker 消息，整批写入精确输入缓存后通知刷新。普通实战帧的等待发布最多合并十六毫秒，既有完整快照保留原游标；完成时重投影最新状态，超时公开等待，不把旧估算拼接到新帧。新鲜度、代际、地图、身份、回合或比分边界立即发布。见 [ADR-0029](decisions/0029-c4-worker-isolation.md)与 [ADR-0035](decisions/0035-bounded-c4-publish-coalescing.md)。
 
 ## 雷达与展示配置
 
 雷达领域完成世界坐标到地图坐标的转换；共享展示包负责插值、平滑、跳变重置和自动聚焦动画。外部网站消费已经校准的公共坐标，不复制地图校准。[包说明](../packages/radar-view/README.md)维护集成方法。
+
+共享雷达展示缓存底图滤镜、烟雾纹理、火焰模糊及 C4 着色，缓存按表面大小、样式和地图边界失效，有界保留，不改变地图校准与插值。烟雾生命周期容忍一 tick 的寿命回跳，明显回退或位置断裂仍重建；同生命周期已知阵营不因死亡后的 owner 变化而丢失。
 
 HUD 配置独立于比赛数据：组件内容、布局、外观和比赛投影分别拥有自己的职责。描述符维护组件方案、设置和尺寸，编辑器与播出使用同一解析结果和渲染器。Companion 持久化配置，浏览器缓存不是权威来源。保存、启用、版本校验与文件交换规则见[协议](protocol.md#hud-配置)。
 
@@ -120,7 +122,7 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 `ProgramPresentationStore` 在地图结束时冻结已确认比分与当帧选手摘要，最多保留五图，跨图保留、换比赛清除。静态画面的进入资格与已播连续性分开，不恢复旧游戏时钟。
 
-OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS；理由见 [ADR-0024](decisions/0024-independent-obs-process.md)。
+OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS。HTTP 服务就绪后，Companion 有界串行重试刷新当前 Mizar 集合内名称、类型与本机节目 URL 都匹配的 Browser Source，每个源每次服务启动最多成功刷新一次；不切换集合、场景或输出设置，关闭时取消重试。此刷新可恢复 OBS 先启动及服务重启时加载失败的页面，不能替代实际画面核对；理由见 [ADR-0024](decisions/0024-independent-obs-process.md)。
 
 制作提示从现有状态生成；B 站查询有缓存、超时和并发上限，只服务本机状态提示，不进入公开输出或节目切换门禁。实现见 [ADR-0019](decisions/0019-production-guidance-and-platform-status.md)。
 

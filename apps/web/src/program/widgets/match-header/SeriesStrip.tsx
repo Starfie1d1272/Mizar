@@ -2,21 +2,12 @@ import { getMapThumbnail, getSideLogo } from '@mizar/cs2-assets';
 import type { CSSProperties } from 'react';
 
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
-import { buildMatchHeaderPresentation } from './presentation';
+import { buildMatchHeaderPresentation, hasSeriesMapStrip } from './presentation';
 
 export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererProps) {
   const presentation = buildMatchHeaderPresentation(snapshot.payload);
   const maps = presentation.seriesMaps;
-  if (
-    maps === null ||
-    !(
-      snapshot.payload.series?.veto.length ||
-      snapshot.payload.series?.maps.some(
-        (map) => map.selection.kind === 'pick' || map.selection.kind === 'decider',
-      )
-    )
-  )
-    return null;
+  if (maps === null || !hasSeriesMapStrip(snapshot.payload)) return null;
 
   return (
     <section

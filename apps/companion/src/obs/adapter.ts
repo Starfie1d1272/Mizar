@@ -6,6 +6,7 @@ import { ObsConfigStore, discoverObsExecutable } from './config.js';
 import {
   checkObsConfiguration,
   repairObsConfiguration,
+  refreshObsBrowserSources,
   switchObsScene,
   type ObsFinding,
   type ObsRpc,
@@ -30,10 +31,48 @@ export class ObsAdapter {
   private findings: ObsFinding[] = [
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
   ];
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryClosed = false;
+  private recoveryComplete = false;
+  private recoveryTask: Promise<void> | undefined;
+  private readonly refreshedBrowserSources = new Set<string>();
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
   ) {}
+
+  startBrowserRecovery(): void {
+    if (this.recoveryClosed || this.recoveryComplete || this.recoveryTask || this.recoveryTimer)
+      return;
+    const attempt = () => {
+      if (this.recoveryClosed) return;
+      this.recoveryTimer = undefined;
+      this.recoveryTask = this.serial(() =>
+        this.withObs((obs) =>
+          refreshObsBrowserSources(obs, this.browserBaseUrl, this.refreshedBrowserSources),
+        ),
+      )
+        .then((complete) => {
+          this.recoveryComplete = complete;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.recoveryTask = undefined;
+          if (!this.recoveryClosed && !this.recoveryComplete) {
+            this.recoveryTimer = setTimeout(attempt, 5000);
+            this.recoveryTimer.unref();
+          }
+        });
+    };
+    attempt();
+  }
+
+  async close(): Promise<void> {
+    this.recoveryClosed = true;
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    await this.recoveryTask;
+  }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.queue.then(operation, operation);

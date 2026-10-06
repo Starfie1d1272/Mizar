@@ -10,17 +10,20 @@ async function handle(message: {
   evict?: string;
   id: number;
   mapName: string;
-  input?: StandingC4Input;
+  inputs?: readonly StandingC4Input[];
 }) {
   if (message.evict) {
     maps.delete(message.evict);
     return;
   }
   try {
-    if (message.input) {
+    if (message.inputs) {
       const prepared = maps.get(message.mapName);
       if (!prepared) throw new Error('resource-not-ready');
-      parentPort!.postMessage({ id: message.id, result: prepared.predict(message.input) });
+      parentPort!.postMessage({
+        id: message.id,
+        result: message.inputs.map((input) => prepared.predict(input)),
+      });
       return;
     }
     const entry = findBundledMap(message.mapName);

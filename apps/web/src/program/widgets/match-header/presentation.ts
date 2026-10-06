@@ -394,6 +394,15 @@ function clockPresentation(
  * The only entrant-oriented join for the Match Header. Renderers consume this
  * model and must not re-bind side facts, map state, or round history.
  */
+export function hasSeriesMapStrip(payload: ProgramPayload): boolean {
+  return Boolean(
+    payload.series?.veto.length ||
+    payload.series?.maps.some(
+      (map) => map.selection.kind === 'pick' || map.selection.kind === 'decider',
+    ),
+  );
+}
+
 export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHeaderPresentation {
   const series = payload.series;
   const sideMapping = resolveSideMapping(payload);

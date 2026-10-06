@@ -395,6 +395,41 @@ describe('objective timing normalization', () => {
   });
 });
 
+describe('defuse clocks with absent equipment fields', () => {
+  it('retains proven ten-second duration after the countdown passes five, and resets on abort/actor change', () => {
+    let s = createInitialRuntimeState('unknown-kit');
+    s = accept(
+      s,
+      observation(1, 0, { bombState: 'defusing', countdownSeconds: 9.999, sourcePlayerId: 'a' }),
+    );
+    expect(project(s, 0).bomb?.action).toMatchObject({ durationSeconds: 10, hasDefuseKit: null });
+    s = accept(
+      s,
+      observation(2, 100, { bombState: 'defusing', countdownSeconds: 4.9, sourcePlayerId: 'a' }),
+    );
+    expect(project(s, 100).bomb?.action?.durationSeconds).toBe(10);
+    s = accept(
+      s,
+      observation(3, 200, { bombState: 'defusing', countdownSeconds: 2, sourcePlayerId: 'b' }),
+    );
+    expect(project(s, 200).bomb?.action?.durationSeconds).toBeNull();
+    s = accept(s, observation(4, 300, { bombState: 'planted', countdownSeconds: 25 }));
+    s = accept(
+      s,
+      observation(5, 350, { bombState: 'defusing', countdownSeconds: 4.99, sourcePlayerId: 'a' }),
+    );
+    expect(project(s, 350).bomb?.action).toMatchObject({ durationSeconds: 5, hasDefuseKit: null });
+  });
+  it('does not turn a late two-second countdown or a sequence gap into a five/ten-second claim', () => {
+    let s = createInitialRuntimeState('late-kit');
+    s = accept(s, observation(1, 0, { bombState: 'defusing', countdownSeconds: 2 }));
+    expect(project(s, 0).bomb?.action?.durationSeconds).toBeNull();
+    s = accept(s, observation(2, 100, { bombState: 'planted', countdownSeconds: 20 }));
+    s = accept(s, observation(4, 150, { bombState: 'defusing', countdownSeconds: 4.999 }));
+    expect(project(s, 150).bomb?.action?.durationSeconds).toBeNull();
+  });
+});
+
 describe('witnessed objective progress denominators', () => {
   function planted() {
     let s = createInitialRuntimeState('duration');

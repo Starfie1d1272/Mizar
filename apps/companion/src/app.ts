@@ -429,6 +429,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     controller: sceneController,
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
+    // Browser sources that opened before HTTP readiness otherwise stay on
+    // Chromium's connection-error page and never run the WebSocket retry code.
+    app.addHook('onListen', () => {
+      obsAdapter.startBrowserRecovery();
+      return Promise.resolve();
+    });
     registerObsRoutes(app, {
       originPolicy: localWebTransport.getOriginPolicy(),
       configStore: obsConfigStore,
@@ -898,6 +904,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     clearInterval(directorTimer);
     presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();
+    await obsAdapter?.close();
     await Promise.all([
       cstvSources.program.stop(),
       cstvSources.lookahead.stop(),
