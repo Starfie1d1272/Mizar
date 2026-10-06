@@ -55,7 +55,7 @@
   visibility: hidden;
 }
 
-.focused-player::before {
+.focused-player__face::before {
   position: absolute;
   z-index: 2;
   top: 0;
@@ -67,7 +67,7 @@
   pointer-events: none;
 }
 
-.focused-player[data-side='T']::before {
+.focused-player__face[data-side='T']::before {
   background: var(--mizar-side-t);
 }
 
@@ -249,7 +249,7 @@
 
 .focused-player__item-layer[data-item-kind='grenade'] .focused-player__icon {
   width: 72px;
-  height: 40px;
+  height: 32px;
 }
 
 .focused-player__item-layer[data-item-kind='objective'] .focused-player__icon {
@@ -418,7 +418,7 @@
   background: #252c34;
 }
 
-.focused-player[data-dead='true']::before {
+.focused-player__face[data-dead='true']::before {
   background: rgba(170, 180, 192, 0.7);
 }
 

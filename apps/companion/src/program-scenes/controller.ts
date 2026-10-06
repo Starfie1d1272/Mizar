@@ -40,7 +40,7 @@ export class ProgramSceneController {
     ) => Promise<void>,
   ) {}
 
-  private blockedReason(id: ProgramSceneId): string | null {
+  private blockedReason(id: ProgramSceneId, automatic = false): string | null {
     const { operator, program } = this.projections.getCurrent();
     const series = program.series;
     const fresh = operator.runtime.telemetryFreshness === 'fresh';
@@ -60,8 +60,13 @@ export class ProgramSceneController {
         ? null
         : 'BP 数据尚未就绪，请先在 BP 制作中检查。';
     }
-    if (!contextReady || !bound || !identitySafe) return '比赛绑定、地图归属或选手识别尚未确认。';
+    if (!contextReady) return '请先选择并保存比赛资料；资料过期时请刷新。';
+    if (!identitySafe) return '当前游戏选手与所选比赛不一致，请切换比赛或核对名单。';
+    if (!bound) return '当前游戏尚未对应到比赛地图，请在比赛资料中核对地图和双方名单。';
     if (id === 'matchup') return null;
+    // Manual scene selection is presentation control, never result confirmation.
+    // Missing snapshots render an explicit pending board; automatic cues keep their gates.
+    if (!automatic) return null;
     if (id === 'halftime')
       return (fresh && isRegulationHalftime(program)) || isRehearsal
         ? null
@@ -131,7 +136,7 @@ export class ProgramSceneController {
     if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
     if (expectedRevision !== this.revision)
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
-    const reason = this.blockedReason(id);
+    const reason = this.blockedReason(id, automaticValid !== undefined);
     if (reason !== null) return { ok: false as const, message: reason };
     if (this.active !== id) {
       const abort = new AbortController();
@@ -167,9 +172,11 @@ export class ProgramSceneController {
           transition: programTransition(previous, id, !automaticValid || urgent),
           signal: abort.signal,
           valid: () =>
-            valid() && expectedRevision === this.revision && this.blockedReason(id) === null,
+            valid() &&
+            expectedRevision === this.revision &&
+            this.blockedReason(id, automaticValid !== undefined) === null,
         });
-        const stillBlocked = this.blockedReason(id);
+        const stillBlocked = this.blockedReason(id, automaticValid !== undefined);
         if (
           stillBlocked !== null ||
           !valid() ||

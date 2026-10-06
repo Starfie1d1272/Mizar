@@ -10,6 +10,7 @@ import {
   type IdentityState,
 } from '../identity/index.js';
 import type { MatchContext, MatchFormat, MatchVetoActionType } from '../match-context/index.js';
+import { safeAbsoluteRoundWins } from '../series-progress/index.js';
 import type {
   SeriesMapProgress,
   SeriesMapSelection,
@@ -221,6 +222,13 @@ export interface ProgramProjection {
   };
   readonly series: ProgramSeriesProjection | null;
   readonly map: {
+    readonly roundHistory?:
+      | undefined
+      | null
+      | {
+          readonly completeness: 'complete' | 'partial' | 'unavailable';
+          readonly rounds: readonly ProgramRoundHistoryItem[];
+        };
     readonly name: string | null;
     readonly mode: string | null;
     readonly phase: MapPhase | null;
@@ -257,6 +265,7 @@ export interface ProgramProjection {
 }
 
 export interface ProgramProjectionInput {
+  readonly presentationRole?: 'gameplay';
   readonly bombDamageResource?: BombDamageResource;
   readonly runtime: ProgramSafeRuntimeView;
   readonly context?: MatchContext;
@@ -617,6 +626,11 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
   const map = telemetry?.telemetry.map;
   const round = telemetry?.telemetry.round;
   const countdown = telemetry?.telemetry.phaseCountdowns;
+  const unboundGameplay =
+    input.presentationRole === 'gameplay' &&
+    telemetryFreshness === 'fresh' &&
+    map?.name !== undefined &&
+    (input.seriesProgress?.bindingState !== 'bound' || input.identity.state === 'mismatch');
   const activeLineup = input.activeLineup;
   const activeLineupIsCurrent =
     activeLineup.sourceGeneration === input.runtime.cursor.programSourceGeneration &&
@@ -636,7 +650,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
       identity: getProjectionIdentityState(input.runtime, input.identity),
     },
     match:
-      input.context === undefined
+      input.context === undefined || unboundGameplay
         ? null
         : {
             matchId: input.context.matchId,
@@ -647,9 +661,25 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
             format: input.context.format,
             stage: input.context.stageLabel ?? input.context.stage,
           },
-    teams: canonicalTeams(input.context, input.seriesProgress, input.identity, identityIsCurrent),
-    series: projectSeries(input.context, input.seriesProgress),
+    teams: canonicalTeams(
+      unboundGameplay ? undefined : input.context,
+      input.seriesProgress,
+      input.identity,
+      identityIsCurrent,
+    ),
+    series: unboundGameplay ? null : projectSeries(input.context, input.seriesProgress),
     map: {
+      roundHistory:
+        telemetryFreshness === 'fresh' &&
+        safeAbsoluteRoundWins({
+          roundWins: map?.roundWins ?? [],
+          score: { ct: nullable(map?.sides?.ct?.score), t: nullable(map?.sides?.t?.score) },
+        })
+          ? {
+              completeness: 'complete',
+              rounds: (map?.roundWins ?? []).map((win) => ({ ...win, winnerEntryId: null })),
+            }
+          : null,
       name: nullable(map?.name),
       mode: nullable(map?.mode),
       phase: nullable(map?.phase),
@@ -677,7 +707,12 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         : { phase: nullable(countdown.phase), endsInSeconds: nullable(countdown.endsInSeconds) },
     observedPlayerSourceId: telemetry?.telemetry.player?.sourcePlayerId ?? null,
     players: players.map((player) =>
-      projectPlayer(player, input.identity, identityIsCurrent, input.runtime.playerStats),
+      projectPlayer(
+        player,
+        input.identity,
+        identityIsCurrent && !unboundGameplay,
+        input.runtime.playerStats,
+      ),
     ),
     bomb: projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy),
     coverage: {

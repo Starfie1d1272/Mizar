@@ -315,13 +315,23 @@ describe('automatic Program choreography', () => {
 });
 
 describe('bounded presentation snapshots', () => {
+  it('captures the final map after the reducer clears currentMapOrder', () => {
+    const store = new ProgramPresentationStore();
+    const p = sample('real-gameover');
+    p.series!.currentMapOrder = null;
+    store.update(p, 'revision');
+    expect(store.get().completed).toHaveLength(1);
+    expect(store.get().completed[0]?.score).toEqual(
+      p.series!.maps.find((map) => map.status === 'completed')!.finalScore,
+    );
+  });
   it('keeps at most five maps and returns an isolated public projection', () => {
     const store = new ProgramPresentationStore();
     const p = sample('real-gameover');
     const base = p.series!.maps.find((map) => map.status === 'completed')!;
+    p.series!.maps = Array.from({ length: 8 }, (_, index) => ({ ...base, mapOrder: index + 1 }));
     for (let order = 1; order <= 8; order++) {
       p.series!.currentMapOrder = order;
-      p.series!.maps = [{ ...base, mapOrder: order }];
       store.update(p, 'revision');
     }
     const first = store.get();
@@ -329,7 +339,7 @@ describe('bounded presentation snapshots', () => {
     first.completed.splice(0);
     expect(store.get().completed).toHaveLength(5);
     store.update(p, 'different-context');
-    expect(store.get().completed).toHaveLength(1);
+    expect(store.get().completed).toHaveLength(5);
   });
   it('captures map-end KAD once, retains through map reset/stale, and clears a different match', () => {
     const store = new ProgramPresentationStore();

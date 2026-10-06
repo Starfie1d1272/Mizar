@@ -5,6 +5,11 @@
 }
 
 .match-header__gg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: 'Barlow Condensed', var(--mizar-type-family-display);
   font-size: calc(var(--mizar-type-size-title) * 2.4);
   font-weight: var(--mizar-type-weight-strong);
   line-height: 1;

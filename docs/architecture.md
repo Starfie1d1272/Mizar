@@ -58,7 +58,7 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 `SeriesProgress` 由 Core 定义、Companion 的唯一运行时组合持有，消费 `RuntimeTransition`、比赛资料与已证明的阵营映射。它维护计划地图与实际执行的绑定、有限回合历史、已冻结地图结果和系列比分。
 
-首次建立时可使用比赛资料中的已完成结果；运行后普通资料刷新不能回写已运行或冻结的赛果。后续推进来自运行时转换、系列赛归约器与明确人工证据。实际地图与计划不符时保留局内数据，系列绑定进入 `needs_operator`，等待确认。
+尚未绑定任何地图执行、回合或赛果的准备状态允许更新地图计划；首次建立时可使用比赛资料中的已完成结果；运行后普通资料刷新不能回写已运行或冻结的赛果。后续推进来自运行时转换、系列赛归约器与明确人工证据。实际地图与计划不符时保留局内数据，系列绑定进入 `needs_operator`，等待确认。
 
 回合结束转换是回合历史的首要来源；`map_round_wins` 仅恢复缺失、补充未知胜因或校验，不覆盖已冻结获胜方。冲突保留原事实、标记 `partial` 并报告诊断。
 
@@ -82,7 +82,7 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 ## 正式节目与观察辅助隔离
 
-新鲜正式输入允许手动选择 Gameplay，包括未绑定赛事的 demo；这只接管画面，不建立赛事归属或官方身份。自动编排及结果场景仍受可信绑定门槛约束，见 [ADR-0025](decisions/0025-demo-manual-gameplay.md)。
+新鲜正式输入允许手动选择 Gameplay，包括未绑定赛事的 demo；这只接管画面，不建立赛事归属或官方身份。Core 的 Gameplay 展示投影在地图未绑定或身份不符时使用中立身份，制作控制保留后台选择与系列事实。手动摘要展示不确认赛果，自动编排仍受严格绑定与阶段门槛约束，见 [ADR-0032](decisions/0032-manual-summary-and-demo-presentation.md)。
 
 正式节目消费观战客户端的 GSI；精确事件是可选增强。Lookahead 使用独立的较早时间轴，只能形成私有辅助信息。
 
@@ -94,7 +94,7 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
 
-C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。等待或故障时预测不可用，不回放旧帧；见 [ADR-0030](decisions/0029-c4-worker-isolation.md)。
+C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。等待或故障时预测不可用，不回放旧帧；见 [ADR-0029](decisions/0029-c4-worker-isolation.md)。
 
 ## 雷达与展示配置
 
@@ -130,4 +130,6 @@ OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录�
 
 新增数据源优先增加适配器，新增画面优先复用已有投影，新增可靠输出不改变高频快照语义。第二个真实消费者、提供方或独立发行需求出现前，不建设通用插件框架。
 
-Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md) 和 [ADR-0027](decisions/0027-cs2-launch-recovery-workflow.md)。状态查询不等待启动或退出操作锁；Steam 请求待确认时保留持久记录，正常退出先请求 Companion 安全切场与释放数据源，再关闭受管理游戏；收尾失败保留 Host，退出期间拒绝新启动与工作台进入，异常退出后的恢复状态跨窗口可见。启动项只传给本次 Steam 调用，不修改持久启动项。
+Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md) 和 [ADR-0027](decisions/0027-cs2-launch-recovery-workflow.md)。状态查询不等待启动或退出操作锁；Steam 请求待确认时保留持久记录，正常退出（含 `--stop`）先由 Host 请求 Companion 安全切场与释放数据源，再关闭受管理游戏、恢复配置，成功后才停止服务；收尾失败保留 Host，退出期间拒绝新启动与工作台进入，异常退出后的恢复状态跨窗口可见。启动项只传给本次 Steam 调用，不修改持久启动项。退出请求与失败重试见 [ADR-0033](decisions/0033-host-first-exit-request.md)。
+
+可选 Steam 头像由 Companion 的本机媒体缓存提供，赛事头像优先；不修改身份或比赛文档。密钥与缓存独立于采集、预设和支持包，见 [ADR-0034](decisions/0034-local-steam-avatar-fallback.md)。

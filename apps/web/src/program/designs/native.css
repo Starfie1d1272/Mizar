@@ -627,11 +627,6 @@
   .player-rail__card--dead::after {
     display: none;
   }
-  .player-rail__card[data-observed='true'] {
-    outline: 1px solid var(--mizar-broadcast-pulse-highlight);
-    animation: mizar-pulse-observed 2.4s ease-in-out infinite;
-    outline-offset: -1px;
-  }
   .player-rail__round-kill-slot {
     color: var(--mizar-hud-text-primary);
     position: absolute;
@@ -1104,15 +1099,6 @@
   }
   to {
     filter: brightness(1);
-  }
-}
-@keyframes mizar-pulse-observed {
-  0%,
-  100% {
-    outline-color: var(--mizar-broadcast-pulse-blue);
-  }
-  50% {
-    outline-color: var(--mizar-broadcast-pulse-highlight);
   }
 }
 @media (prefers-reduced-motion: reduce) {

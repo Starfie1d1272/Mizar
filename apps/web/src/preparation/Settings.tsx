@@ -5,6 +5,7 @@ import { obsCommand, useObsStatus } from '../workspace/obs-client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
+import { SteamAvatarSettings } from './SteamAvatarSettings';
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
@@ -342,6 +343,7 @@ export function Settings({ tab }: { tab: string }) {
             </details>
           </Panel>
           <Cs2LaunchSettings />
+          <SteamAvatarSettings />
         </>
       )}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}

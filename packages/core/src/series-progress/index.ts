@@ -4,6 +4,7 @@ export {
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   syncSeriesProgress,
+  safeAbsoluteRoundWins,
 } from './reducer.js';
 export type {
   BindCurrentMapExecutionToSeriesMapCommand,

@@ -7,7 +7,16 @@ import { buildMatchHeaderPresentation } from './presentation';
 export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererProps) {
   const presentation = buildMatchHeaderPresentation(snapshot.payload);
   const maps = presentation.seriesMaps;
-  if (maps === null) return null;
+  if (
+    maps === null ||
+    !(
+      snapshot.payload.series?.veto.length ||
+      snapshot.payload.series?.maps.some(
+        (map) => map.selection.kind === 'pick' || map.selection.kind === 'decider',
+      )
+    )
+  )
+    return null;
 
   return (
     <section

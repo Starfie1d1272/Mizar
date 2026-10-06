@@ -1,4 +1,5 @@
 import { BilibiliStatus } from './platform/bilibili.js';
+import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avatars.js';
 import { ProductionGuidanceStore } from './program-scenes/guidance.js';
 import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
@@ -87,6 +88,7 @@ import {
 } from './local-web/websocket-transport.js';
 
 export interface CompanionAppOptions {
+  readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
   readonly productRuntime?: {
     readonly artifactSha256: string;
@@ -320,6 +322,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
+      ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
       cstvSources,
       ...(options.matchContextBinding === undefined
@@ -407,6 +410,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     bpSession,
     obsAdapter === undefined ? undefined : (id, options) => obsAdapter.switchScene(id, options),
   );
+  if (options.steamAvatars) {
+    options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
+    registerSteamAvatarRoutes(app, options.steamAvatars, localWebTransport.getOriginPolicy());
+    app.addHook('onClose', () => {
+      options.steamAvatars?.close();
+      return Promise.resolve();
+    });
+  }
   app.get('/local/v1/readiness', async (_request, reply) => {
     const obs = await obsAdapter?.status();
     return reply

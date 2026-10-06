@@ -544,6 +544,11 @@
 .player-rail--right .player-rail__bomb-prediction {
   transform: scaleX(-1);
 }
+.hud-widget-design .player-rail__bomb-prediction--pending {
+  background: color-mix(in srgb, var(--mizar-hud-text-primary) 24%, transparent);
+  opacity: 0.6;
+  height: 2px;
+}
 /* Match the reference's bright held weapon and subdued holstered inventory. */
 .hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='false'] {
   opacity: 0.45;

@@ -166,7 +166,8 @@ function MapStrip({ data }: { data: ProgramPresentation }) {
   );
 }
 function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: ProgramSceneId }) {
-  const summary = scene === 'halftime' ? data.halftime : data.completed.at(-1);
+  const summary = summaryForScene(data, scene);
+  const hasPlayers = Boolean(summary && (summary.players.a.length || summary.players.b.length));
   return (
     <>
       <MapStrip data={data} />
@@ -175,21 +176,27 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
           {scene === 'halftime'
             ? 'HALFTIME'
             : scene === 'match_result'
-              ? 'MATCH COMPLETE'
+              ? data.series?.status === 'completed'
+                ? 'MATCH COMPLETE'
+                : 'MATCH RESULT PENDING'
               : 'BETWEEN MAPS'}
         </span>
         <strong>
           {summary
             ? `${mapName(summary.mapName)} · ${number(summary.score.a)} : ${number(summary.score.b)}`
-            : 'STATS UNAVAILABLE'}
+            : scene === 'halftime'
+              ? 'HALFTIME DATA PENDING'
+              : 'MAP DATA PENDING'}
         </strong>
         <span>{scene === 'match_result' ? 'FINAL MAP STATS' : 'MAP STATS'}</span>
       </div>
-      <div className="summary-stat-axis" aria-hidden="true">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <span key={i}>K/D</span>
-        ))}
-      </div>
+      {hasPlayers ? (
+        <div className="summary-stat-axis" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i}>K/D</span>
+          ))}
+        </div>
+      ) : null}
       <div className="summary-players">
         {(['a', 'b'] as const).map((side) => (
           <div className={`summary-side summary-side--${side}`} key={side}>
@@ -208,7 +215,7 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
                 </div>
               </div>
             ))}
-            {summary && summary.players[side].length === 0 ? (
+            {!summary || summary.players[side].length === 0 ? (
               <p className="summary-unavailable">STATS UNAVAILABLE</p>
             ) : null}
           </div>
@@ -303,7 +310,7 @@ function Waiting({ data }: { data: ProgramPresentation }) {
   );
 }
 function MapResult({ data }: { data: ProgramPresentation }) {
-  const summary = data.completed.at(-1);
+  const summary = summaryForScene(data, 'map_result');
   const series = data.series;
   return summary && series ? (
     <main className="result-sting">
@@ -339,7 +346,27 @@ function MapResult({ data }: { data: ProgramPresentation }) {
         </div>
       ))}
     </main>
-  ) : null;
+  ) : (
+    <main className="waiting-layout">
+      <h1 className="waiting-neutral">MAP RESULT PENDING</h1>
+    </main>
+  );
+}
+function summaryForScene(data: ProgramPresentation, scene: ProgramSceneId) {
+  if (scene === 'halftime') return data.halftime;
+  const snapshot = data.completed.at(-1);
+  if (snapshot) return snapshot;
+  const completed = data.series?.maps
+    .filter((map) => map.status === 'completed' && map.finalScore)
+    .at(-1);
+  return completed?.finalScore
+    ? {
+        mapName: completed.mapName,
+        mapOrder: completed.mapOrder,
+        score: completed.finalScore,
+        players: { a: [], b: [] },
+      }
+    : null;
 }
 export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId }) {
   const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);

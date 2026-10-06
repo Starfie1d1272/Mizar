@@ -233,6 +233,13 @@ export const programPayloadSchema = z.object({
   teams: z.object({ ct: teamSchema, t: teamSchema }),
   series: seriesProjectionSchema.nullable(),
   map: z.object({
+    roundHistory: z
+      .object({
+        completeness: z.enum(['complete', 'partial', 'unavailable']),
+        rounds: z.array(seriesRoundSchema).max(256),
+      })
+      .nullable()
+      .optional(),
     name: nullableString,
     mode: nullableString,
     phase: z.enum(['warmup', 'live', 'intermission', 'gameover', 'unknown']).nullable(),

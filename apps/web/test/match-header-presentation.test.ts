@@ -13,6 +13,29 @@ function presentation(fixtureId: string) {
 }
 
 describe('Match Header presentation selector', () => {
+  it('shows source-side history for a demo without series identity', () => {
+    const base = getProgramFixture('real-live-rich')!.payload;
+    const value = buildMatchHeaderPresentation({
+      ...base,
+      series: null,
+      match: null,
+      map: {
+        ...base.map,
+        roundHistory: {
+          completeness: 'complete',
+          rounds: [
+            { roundNumber: 1, winnerSide: 'CT', winnerEntryId: null, winCondition: 'defuse' },
+          ],
+        },
+      },
+    });
+    expect(value.roundHistory?.rounds[0]).toMatchObject({
+      winner: 'unknown',
+      winnerSide: 'CT',
+      winCondition: 'defuse',
+    });
+    expect(value.teamA.name).toBe('CT');
+  });
   it('maps BO3 and BO5 victory slots to stable entrant series wins', () => {
     const base = getProgramFixture('real-live-rich')!.payload;
     const p = buildMatchHeaderPresentation({

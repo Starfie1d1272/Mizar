@@ -57,9 +57,9 @@ export function PlayerRail({
             prediction={
               showPrediction
                 ? snapshot.payload.bombDamage.players.find(
-                    (entry): entry is Extract<typeof entry, { status: 'predicted' }> =>
+                    (entry) =>
                       entry.sourcePlayerId === player.sourcePlayerId &&
-                      entry.status === 'predicted',
+                      (entry.status === 'predicted' || entry.reason === 'prediction-loading'),
                   )
                 : undefined
             }

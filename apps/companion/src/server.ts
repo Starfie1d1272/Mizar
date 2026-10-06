@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { version as osVersion } from 'node:os';
@@ -152,6 +153,8 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     join(captureDir, '..', 'rivalhub-connection.json'),
   );
   await rivalhubConnection.load();
+  const steamAvatars = new SteamAvatars(join(captureDir, '..', 'steam-avatars'));
+  await steamAvatars.load();
   const hudConfigStore = new HudConfigStore({
     filePath: hudConfigPath,
     onDiagnostic: (code) => console.warn(`HUD 配置诊断：${code}`),
@@ -181,6 +184,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
   const app = buildApp({
+    steamAvatars,
     ...(productInstance === undefined
       ? {}
       : { supportLogsDirectory: resolve(captureDir, '../../logs') }),

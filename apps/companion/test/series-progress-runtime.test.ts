@@ -57,6 +57,15 @@ function contextFixture(): MatchContext {
   };
 }
 
+it('accepts a map plan edited before any execution or result has been bound', () => {
+  const runtime = createProgramRuntime('pristine-plan');
+  const context = contextFixture();
+  runtime.synchronizeSeriesProgress({ ...context, maps: [] }, null, 'local');
+  const next = runtime.synchronizeSeriesProgress(context, null, 'local');
+  expect(next?.maps).toHaveLength(3);
+  expect(next?.issues.some((issue) => issue.code === 'context_result_conflict')).toBe(false);
+});
+
 function frame(
   sequence: number,
   phase: 'live' | 'gameover',

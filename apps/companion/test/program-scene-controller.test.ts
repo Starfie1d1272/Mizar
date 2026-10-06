@@ -50,7 +50,7 @@ it('keeps the current Program Scene when identity, freshness or OBS switch fails
 
   operator.identity.state = 'matched';
   operator.runtime.telemetryFreshness = 'stale';
-  const stale = await scene.select('halftime', scene.get().revision);
+  const stale = await scene.selectAutomatic('halftime', scene.get().revision, () => true);
   expect(stale.ok).toBe(false);
   operator.runtime.telemetryFreshness = 'fresh';
   switchObs.mockRejectedValueOnce(new Error('OBS disconnected'));
@@ -105,26 +105,28 @@ it('真实比赛不会绕过 Program safety gate', async () => {
   // 2. When telemetry is fresh but phase is not intermission, halftime is blocked
   operator.runtime.telemetryFreshness = 'fresh';
   program.map.phase = 'live';
-  expect(scene.get().blocked.halftime).toBe('尚无可信的半场阶段信息。');
-  const res2 = await scene.select('halftime', scene.get().revision);
+  expect(scene.get().available).toContain('halftime');
+  const res2 = await scene.selectAutomatic('halftime', scene.get().revision, () => true);
   expect(res2.ok).toBe(false);
 
   // 3. When identity is mismatch, non-waiting scenes are blocked
   operator.identity.state = 'mismatch';
-  expect(scene.get().blocked.matchup).toBe('比赛绑定、地图归属或选手识别尚未确认。');
+  expect(scene.get().blocked.matchup).toBe('当前游戏选手与所选比赛不一致，请切换比赛或核对名单。');
   const res3 = await scene.select('matchup', scene.get().revision);
   expect(res3.ok).toBe(false);
 
   // 4. When series is not completed, match_result is blocked
   operator.identity.state = 'matched';
   program.series.status = 'live';
-  expect(scene.get().blocked.match_result).toBe('整场结果尚未确认。');
-  const res4 = await scene.select('match_result', scene.get().revision);
+  expect(scene.get().available).toContain('match_result');
+  const res4 = await scene.selectAutomatic('match_result', scene.get().revision, () => true);
   expect(res4.ok).toBe(false);
 
   // 5. When series is not bound, bound scenes are blocked
   program.series.bindingState = 'unbound';
-  expect(scene.get().blocked.matchup).toBe('比赛绑定、地图归属或选手识别尚未确认。');
+  expect(scene.get().blocked.matchup).toBe(
+    '当前游戏尚未对应到比赛地图，请在比赛资料中核对地图和双方名单。',
+  );
   const res5 = await scene.select('matchup', scene.get().revision);
   expect(res5.ok).toBe(false);
 });

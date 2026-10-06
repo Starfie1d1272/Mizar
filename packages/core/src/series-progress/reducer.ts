@@ -581,9 +581,11 @@ function applyOperatorBind(
   );
 }
 
-function safeAbsoluteRoundWins(observation: SeriesMapObservation): boolean {
+export function safeAbsoluteRoundWins(
+  observation: Pick<SeriesMapObservation, 'roundWins' | 'score'>,
+): boolean {
   const wins = observation.roundWins;
-  if (wins.length === 0) return false;
+  if (wins.length === 0 || wins.length > SERIES_ROUND_HISTORY_MAX) return false;
   const scoreTotal =
     observation.score.ct !== null && observation.score.t !== null
       ? observation.score.ct + observation.score.t

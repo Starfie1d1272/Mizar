@@ -191,6 +191,28 @@ function resolvedLineup(
 }
 
 describe('Program-safe projections', () => {
+  it('keeps selected match facts for control while projecting neutral unbound demo branding', () => {
+    const context = contextFixture();
+    const frame = observation(true);
+    const state = acceptedState(frame);
+    const identity = matchedIdentity(context, frame);
+    const input = {
+      runtime: selectProgramSafeRuntimeView(state),
+      context,
+      identity,
+      activeLineup: resolvedLineup(state, frame, identity, context),
+      seriesProgress: { ...createSeriesProgress(context), bindingState: 'needs_operator' as const },
+      nowMonotonicMs: 7,
+      continuityPolicy: POLICY,
+    };
+    expect(projectProgram(input).match?.matchId).toBe(context.matchId);
+    const gameplay = projectProgram({ ...input, presentationRole: 'gameplay' });
+    expect(gameplay.match).toBeNull();
+    expect(gameplay.series).toBeNull();
+    expect(gameplay.teams.ct).toMatchObject({ mode: 'neutral', name: 'CT', logoUrl: null });
+    expect(gameplay.players.every((player) => player.canonicalPlayerId === null)).toBe(true);
+    expect(gameplay.map.score).toEqual(projectProgram(input).map.score);
+  });
   it('projects deterministic canonical Program data without mutating RuntimeState', () => {
     const context = contextFixture();
     const input = observation(true);

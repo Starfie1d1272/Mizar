@@ -158,6 +158,60 @@ impl Drop for EventHandle {
 #[derive(Clone)]
 pub struct ExitSignal(Arc<EventHandle>);
 
+/// A request to the live Host, consumed once so failed restoration can be retried.
+pub struct ExitRequest(EventHandle);
+impl ExitRequest {
+    fn name(scope: &str) -> Vec<u16> {
+        format!("Global\\MizarDesktopExitRequest-{scope}\0")
+            .encode_utf16()
+            .collect()
+    }
+    pub fn new(scope: &str) -> io::Result<Self> {
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, Self::name(scope).as_ptr()) };
+        if handle == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self(EventHandle(handle)))
+        }
+    }
+    pub fn requested(&self) -> bool {
+        unsafe { WaitForSingleObject(self.0 .0, 0) == 0 }
+    }
+    pub fn notify(scope: &str) -> io::Result<bool> {
+        let handle = unsafe { OpenEventW(0x0002, 0, Self::name(scope).as_ptr()) };
+        if handle == 0 {
+            return if unsafe { GetLastError() } == 2 {
+                Ok(false)
+            } else {
+                Err(io::Error::last_os_error())
+            };
+        }
+        let result = unsafe { SetEvent(handle) };
+        unsafe {
+            CloseHandle(handle);
+        }
+        if result == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(true)
+        }
+    }
+    pub fn exists(scope: &str) -> io::Result<bool> {
+        let handle = unsafe { OpenEventW(0x00100000, 0, Self::name(scope).as_ptr()) };
+        if handle == 0 {
+            return if unsafe { GetLastError() } == 2 {
+                Ok(false)
+            } else {
+                Err(io::Error::last_os_error())
+            };
+        }
+        unsafe {
+            CloseHandle(handle);
+        }
+        Ok(true)
+    }
+}
+
 /// Coalesce repeated launches and reopen the existing preparation window.
 pub struct ActivationSignal(EventHandle);
 impl ActivationSignal {
@@ -165,17 +219,23 @@ impl ActivationSignal {
     pub fn new() -> io::Result<Self> {
         let name: Vec<u16> = Self::NAME.encode_utf16().collect();
         let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
-        if handle == 0 { Err(io::Error::last_os_error()) }
-        else { Ok(Self(EventHandle(handle))) }
+        if handle == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self(EventHandle(handle)))
+        }
     }
     pub fn requested(&self) -> bool {
-        unsafe { WaitForSingleObject(self.0.0, 0) == 0 }
+        unsafe { WaitForSingleObject(self.0 .0, 0) == 0 }
     }
     pub fn notify() {
         let name: Vec<u16> = Self::NAME.encode_utf16().collect();
         let handle = unsafe { OpenEventW(0x0002, 0, name.as_ptr()) };
         if handle != 0 {
-            unsafe { SetEvent(handle); CloseHandle(handle); }
+            unsafe {
+                SetEvent(handle);
+                CloseHandle(handle);
+            }
         }
     }
 }
@@ -293,6 +353,24 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn exit_requests_are_scoped_consumed_once_and_removed_with_the_host() {
+        let scope = format!(
+            "test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        assert!(!ExitRequest::notify(&scope).unwrap());
+        let request = ExitRequest::new(&scope).unwrap();
+        assert!(ExitRequest::exists(&scope).unwrap());
+        assert!(!request.requested());
+        assert!(ExitRequest::notify(&scope).unwrap());
+        assert!(request.requested());
+        assert!(!request.requested());
+        assert!(!ExitRequest::notify(&format!("{scope}-other")).unwrap());
+        drop(request);
+        assert!(!ExitRequest::exists(&scope).unwrap());
+    }
     fn owned_child(job: &RuntimeJob) -> Child {
         let child = Command::new("cmd.exe")
             .args(["/D", "/Q", "/K"])
