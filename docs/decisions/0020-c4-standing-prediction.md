@@ -9,3 +9,7 @@ Companion 按当前地图加载并校验内置 field，缓存最多两张地图�
 只允许 fresh、当前 accepted sequence / generation / mapEpoch、当前活人和完整位置/朝向/HP/炸弹输入。异步资源返回只触发当前上下文重新投影，不保存旧快照预测。换图、回合结束、断流、重连时当前投影立即不可用。预测包括 availability/reason、逐人 eligibility、站立估算、模型与资源身份；不覆盖 observed HP，不提前宣告死亡。
 
 Program schema 升为 8；配色和开关仍由 HUD 配置 owner 管理。预测默认开启，独立纹理覆盖当前血量，支持关闭、保存和重载。内置 maps 与 NOTICE/CREDITS 通过普通生产依赖进入 portable app，安装后逐图加载验证。Windows/CS2/OBS 实机验收归 #35。
+
+## 版本补充（2026-10-06）
+
+随主线依赖更新消费 `cs2-c4-damage@0.1.1`，原始接受记录的 `0.1.0` 保留用于追溯。资格与隔离决定不变；当前投影报告实际消费版本，本地读取器继续接受历史 `0.1.0` 样例。

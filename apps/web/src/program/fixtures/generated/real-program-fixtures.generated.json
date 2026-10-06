@@ -4253,7 +4253,7 @@
             "status": "available",
             "reason": null,
             "model": {
-              "packageVersion": "0.1.0",
+              "packageVersion": "0.1.1",
               "mapName": "de_ancient",
               "modelRevision": "cs2-win64-2026-10-02-static-v2",
               "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"
@@ -5174,7 +5174,7 @@
             "status": "available",
             "reason": null,
             "model": {
-              "packageVersion": "0.1.0",
+              "packageVersion": "0.1.1",
               "mapName": "de_ancient",
               "modelRevision": "cs2-win64-2026-10-02-static-v2",
               "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"

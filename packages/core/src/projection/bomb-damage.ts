@@ -32,7 +32,7 @@ export interface BombDamageProjection {
   readonly status: 'available' | 'unavailable';
   readonly reason: string | null;
   readonly model: {
-    readonly packageVersion: '0.1.0';
+    readonly packageVersion: '0.1.0' | '0.1.1';
     readonly mapName: string;
     readonly modelRevision: string;
     readonly resourceSha256: string;
@@ -134,7 +134,7 @@ export function projectBombDamage(input: ProgramProjectionInput): BombDamageProj
     status: 'available',
     reason: null,
     model: {
-      packageVersion: '0.1.0',
+      packageVersion: '0.1.1',
       mapName: prepared.mapName,
       modelRevision: prepared.modelRevision,
       resourceSha256: prepared.resourceSha256,
