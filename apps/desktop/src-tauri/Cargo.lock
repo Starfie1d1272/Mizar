@@ -1791,7 +1791,7 @@ dependencies = [
 
 [[package]]
 name = "mizar-desktop"
-version = "1.0.0-rc.11"
+version = "1.0.0-rc.12"
 dependencies = [
  "chrono",
  "serde_json",
@@ -1802,6 +1802,7 @@ dependencies = [
  "tauri-runtime",
  "tauri-runtime-wry",
  "tauri-utils",
+ "windows",
 ]
 
 [[package]]

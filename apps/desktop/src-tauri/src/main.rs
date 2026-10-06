@@ -12,6 +12,7 @@ mod startup_wait;
 mod support_export;
 mod windows_host;
 mod windows_startup;
+mod workspace_shell;
 
 use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
@@ -61,6 +62,7 @@ struct HostState {
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
     tray_available: AtomicBool,
+    fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
 }
 
 fn bundle_root() -> Result<PathBuf, String> {
@@ -271,6 +273,26 @@ fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
     if let Some(dock) = app.get_webview_window("workspace-dock") {
         placement(&dock, layout.dock);
     }
+}
+
+fn sync_workspace_shell(app: &tauri::AppHandle) {
+    let state = app.state::<HostState>();
+    let visible = state.visible.load(Ordering::Relaxed);
+    let mut windows = Vec::new();
+    if visible {
+        for label in ["workspace-left", "workspace-dock"] {
+            if let Some(hwnd) = app.get_webview_window(label).and_then(|window| window.hwnd().ok()) {
+                windows.push(hwnd.0 as isize);
+            }
+        }
+        if let Ok(tracker) = state.tracker.lock() {
+            if let Some(game) = tracker.window { windows.push(game.hwnd); }
+        }
+    }
+    let marked = state.fullscreen_scope.lock().is_ok_and(|mut scope| scope.synchronize(&windows));
+    if let Ok(mut tracker) = state.tracker.lock() {
+        tracker.fullscreen_layout = visible && marked;
+    };
 }
 
 fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
@@ -514,6 +536,10 @@ fn trusted_navigation(url: &tauri::Url) -> bool {
 fn show_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
     state.visible.store(true, Ordering::Relaxed);
+    sync_workspace_shell(app);
+    if let Ok(mut tracker) = state.tracker.lock() {
+        if let Some(layout) = tracker.restore_layout() { apply_layout(app, layout); }
+    }
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
@@ -527,6 +553,7 @@ fn show_workspace(app: &tauri::AppHandle) {
 fn hide_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
     state.visible.store(false, Ordering::Relaxed);
+    sync_workspace_shell(app);
     for label in ["workspace-left", "workspace-dock", "program-overlay"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
@@ -930,6 +957,7 @@ fn run_desktop(
         running: running.clone(),
         live_window_lock: Mutex::new(()),
         tray_available: AtomicBool::new(false),
+        fullscreen_scope: Mutex::new(workspace_shell::FullscreenScope::default()),
     };
     log.event("tauri_begin", "begin", None);
     let setup_log = log.clone();
@@ -1115,6 +1143,7 @@ fn run_desktop(
                                             .visible
                                             .load(Ordering::Relaxed)
                                         {
+                                            sync_workspace_shell(&tick_host);
                                             if let Some(layout) = layout {
                                                 apply_layout(&tick_host, layout);
                                             }

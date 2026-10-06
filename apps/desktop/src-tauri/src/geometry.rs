@@ -38,6 +38,15 @@ pub fn overlap(a: Rect, b: Rect) -> i64 {
     width * height
 }
 
+/// CS2's non-client borders extend beyond its aligned client viewport.
+pub fn avoid_game_frame(mut layout: Layout, outer: Rect) -> Layout {
+    let bottom = layout.dock.bottom();
+    layout.left.width = (outer.x.min(layout.game.x) - layout.left.x).max(0);
+    layout.dock.y = outer.bottom().max(layout.game.bottom()).min(bottom);
+    layout.dock.height = bottom - layout.dock.y;
+    layout
+}
+
 pub fn overlay_visible(valid: bool, minimized: bool, client: Rect, foreground_owned: bool) -> bool {
     valid && !minimized && client.width > 0 && client.height > 0 && foreground_owned
 }
@@ -77,5 +86,19 @@ mod tests {
         assert!(!overlay_visible(true, true, area, true));
         assert!(!overlay_visible(true, false, area, false));
         assert!(!overlay_visible(false, false, area, true));
+    }
+    #[test]
+    fn game_borders_cannot_cover_the_left_panel_or_dock_at_any_scale() {
+        for border in [0, 8, 10, 12, 16] {
+            let layout = workspace_layout(Rect { x: -2560, y: 0, width: 2560, height: 1440 });
+            let outer = Rect { x: layout.game.x - border, y: -30, width: layout.game.width + border * 2, height: layout.game.height + 30 + border };
+            let safe = avoid_game_frame(layout, outer);
+            assert_eq!(safe.game, layout.game);
+            assert_eq!(safe.left.right(), outer.x);
+            assert_eq!(safe.dock.y, outer.bottom());
+            assert_eq!(safe.dock.bottom(), 1440);
+            assert_eq!(overlap(safe.left, outer), 0);
+            assert_eq!(overlap(safe.dock, outer), 0);
+        }
     }
 }
