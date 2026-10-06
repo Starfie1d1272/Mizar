@@ -68,8 +68,13 @@ function mapNameChanged(state: RuntimeState, mapName: string | undefined): boole
 
 function nextMapState(
   state: RuntimeState,
-  mapName: string | undefined,
-): { readonly map: RuntimeState['map']; readonly changed: boolean } {
+  input: ProgramTelemetryInput,
+): {
+  readonly map: RuntimeState['map'];
+  readonly changed: boolean;
+  readonly reason?: 'observed-same-map-restart';
+} {
+  const mapName = knownMapName(input);
   if (state.map.epoch === 0 && mapName !== undefined) {
     return { map: { epoch: 1, name: mapName }, changed: false };
   }
@@ -78,6 +83,24 @@ function nextMapState(
     return {
       map: { epoch: state.map.epoch + 1, name: mapName },
       changed: true,
+    };
+  }
+
+  const map = input.observation.telemetry.map;
+  if (
+    mapName !== undefined &&
+    mapName === state.map.name &&
+    state.map.competitiveObserved === true &&
+    map?.phase === 'warmup' &&
+    map.roundNumber === 0 &&
+    map.sides?.ct?.score === 0 &&
+    map.sides.t?.score === 0 &&
+    map.roundWins?.length === 0
+  ) {
+    return {
+      map: { epoch: state.map.epoch + 1, name: mapName },
+      changed: true,
+      reason: 'observed-same-map-restart',
     };
   }
 
@@ -123,7 +146,14 @@ function reduceProgramTelemetry(
   if (continuity.kind === 'ignored') return ignored(state, continuity.reason);
 
   const currentGeneration = state.programSource.generation;
-  const mapResult = nextMapState(state, knownMapName(input));
+  const mapResult = nextMapState(state, input);
+  const currentMap = input.observation.telemetry.map;
+  const competitiveObserved =
+    input.observation.coverage.map === 'present' &&
+    knownMapName(input) === mapResult.map.name &&
+    (currentMap?.phase === 'live' ||
+      currentMap?.phase === 'intermission' ||
+      currentMap?.phase === 'gameover');
   const nextState: RuntimeState = {
     producerInstanceId: state.producerInstanceId,
     liveSession: state.liveSession,
@@ -138,7 +168,7 @@ function reduceProgramTelemetry(
         receivedMonotonicMs: input.observation.receive.receivedMonotonicMs,
       },
     },
-    map: mapResult.map,
+    map: competitiveObserved ? { ...mapResult.map, competitiveObserved: true } : mapResult.map,
     playerStats: reduceMapPlayerStats(state.playerStats, {
       mapEpoch: mapResult.map.epoch,
       observation: input.observation,
@@ -155,7 +185,7 @@ function reduceProgramTelemetry(
   };
 
   const transitions = mapResult.changed
-    ? [observedMapExecutionChangedTransition(state, nextState, input)]
+    ? [observedMapExecutionChangedTransition(state, nextState, input, mapResult.reason)]
     : buildTelemetryTransitions(
         state,
         nextState,

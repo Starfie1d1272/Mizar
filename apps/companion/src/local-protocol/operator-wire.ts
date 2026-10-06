@@ -58,6 +58,7 @@ function mapTransition(
     case 'map_execution_changed':
       switch (transition.reason) {
         case 'observed-map-name-change':
+        case 'observed-same-map-restart':
           return {
             ...transitionBase(transition),
             kind: transition.kind,

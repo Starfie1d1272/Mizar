@@ -171,7 +171,8 @@ function observedMapBoundaryPassed(
     if (
       !isRecord(candidate) ||
       candidate.kind !== 'map_execution_changed' ||
-      candidate.reason !== 'observed-map-name-change' ||
+      (candidate.reason !== 'observed-map-name-change' &&
+        candidate.reason !== 'observed-same-map-restart') ||
       !isRecord(candidate.at)
     )
       return false;
