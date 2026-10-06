@@ -1,0 +1,67 @@
+{
+  "exportFormat": "mizar.identity-redacted-evidence.v1",
+  "sourceCommit": "869d3a6fb4eeaf88c101b69d79ab85657d0219fc",
+  "artifactSha256": "5319878d1d2d4f0c665e7b337d9cfd69d6aee4a2a9a3fc0ff98cb3d2cfa88804",
+  "sourceCaptureId": "20261006160059865-8eeaee50",
+  "sourceFramesSha256": "e97be9919c2a3d755773e35740340f5ab4f7236f0a5a50238ea8188c9a202647",
+  "sourceFrameCount": 37487,
+  "files": [
+    {
+      "file": "telemetry-trace.jsonl.gz",
+      "frameCount": 37487,
+      "sha256": "1e66b82bb4ad5e6f983ddf10a074f78c78bcfb464a524dc613b6bb7cb40c38e8"
+    },
+    {
+      "file": "smoke-excerpt.jsonl.gz",
+      "frameCount": 781,
+      "sha256": "71c3b73fcc19821593537f10830658f0e4fa6d33f5915893319b21a7ec72aaff",
+      "firstSequence": 2397,
+      "lastSequence": 3177,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    },
+    {
+      "file": "defuse-excerpt.jsonl.gz",
+      "frameCount": 781,
+      "sha256": "d5b5d2f2b1ff7bb63667dc5cfc8421b5e838d6dfe72ea1afdd6ad0673f640292",
+      "firstSequence": 10556,
+      "lastSequence": 11336,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    },
+    {
+      "file": "second-half-pistol-excerpt.jsonl.gz",
+      "frameCount": 1591,
+      "sha256": "dc32e9509d070c5648914a4bcbd24f11d8334a453330a5d216cbcfda01c22b89",
+      "firstSequence": 25262,
+      "lastSequence": 26852,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    }
+  ],
+  "grenadeTypeFrameCounts": {
+    "smoke": 47702,
+    "decoy": 650,
+    "frag": 10557,
+    "flashbang": 2302,
+    "firebomb": 1789,
+    "inferno": 7358
+  },
+  "bombStateFrameCounts": {
+    "carried": 18611,
+    "dropped": 10922,
+    "planting": 556,
+    "planted": 5710,
+    "defusing": 657,
+    "defused": 502,
+    "exploded": 488
+  },
+  "score84FrameCount": 0,
+  "identityReplacement": "stable synthetic Steam64-shaped labels; not actual accounts; player/team names removed",
+  "missingEvidence": [
+    "actual WebView2/OBS radar rAF FPS and per-render p95",
+    "visual reproduction of reported 8:4 defuse-ring failure",
+    "confirmed smoke entity-handoff root cause"
+  ],
+  "timestamps": "source receivedAt retained in excerpts; trace elapsedUs is from original capture start"
+}
