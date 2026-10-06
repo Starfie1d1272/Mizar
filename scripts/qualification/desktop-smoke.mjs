@@ -15,9 +15,11 @@ export function assertNoNodeConsole(snapshot) {
     const console = snapshot.consoles.find((entry) => entry.pid === node.pid);
     assert.ok(console, `packaged Node ${node.pid} was not inspected for a console`);
     // ERROR_INVALID_HANDLE means no console; ERROR_INVALID_PARAMETER means the
-    // process exited between the process snapshot and AttachConsole.
+    // process exited between the process snapshot and AttachConsole. Access denied
+    // is acceptable only after a fresh PID + creation-time query proves exit.
     assert.ok(
-      [0, 6, 87].includes(console.attachError),
+      [0, 6, 87].includes(console.attachError) ||
+        (console.attachError === 5 && console.processExited === true),
       `cannot inspect Node ${node.pid} console: Win32 ${console.attachError}`,
     );
     assert.equal(console.visible, false, `packaged Node ${node.pid} has a visible console`);

@@ -36,6 +36,21 @@ describe('normal Desktop smoke evidence', () => {
     expect(() => assertNoNodeConsole(snapshot)).toThrow('Win32 5');
   });
 
+  it('accepts access denied only after the original process is confirmed exited', () => {
+    const snapshot = ready();
+    snapshot.consoles = [
+      { pid: 11, hwnd: 0, visible: false, attachError: 5, processExited: false },
+    ];
+    expect(() => assertNoNodeConsole(snapshot)).toThrow('Win32 5');
+    snapshot.consoles[0].processExited = true;
+    expect(() => assertNoNodeConsole(snapshot)).not.toThrow();
+    snapshot.consoles[0].visible = true;
+    expect(() => assertNoNodeConsole(snapshot)).toThrow('visible console');
+    snapshot.consoles[0].visible = false;
+    snapshot.consoles[0].attachError = 1;
+    expect(() => assertNoNodeConsole(snapshot)).toThrow('Win32 1');
+  });
+
   it('accepts the explicit tray-degraded main window without accepting error dialogs', () => {
     const snapshot = ready();
     snapshot.windows[0].title = 'Mizar · 托盘不可用，关闭主窗口将退出';
