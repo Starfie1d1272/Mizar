@@ -107,7 +107,7 @@ describe('Core RuntimeState through production adapter replay', () => {
       resolve(process.cwd(), 'fixtures/gsi/semantic/match/halftime-side-switch'),
     );
 
-    expect(capture.state.map).toEqual({ epoch: 1, name: 'de_ancient' });
+    expect(capture.state.map).toEqual({ epoch: 1, name: 'de_ancient', competitiveObserved: true });
     expect(capture.state.programTelemetry).toBeDefined();
     expect(capture.transitions.filter(({ kind }) => kind === 'map_execution_changed')).toEqual([]);
   });
@@ -117,7 +117,7 @@ describe('Core RuntimeState through production adapter replay', () => {
       resolve(process.cwd(), 'fixtures/gsi/semantic/match/gameover'),
     );
 
-    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient' });
+    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient', competitiveObserved: true });
     expect(replay.transitions.filter(({ kind }) => kind === 'map_ended')).toHaveLength(1);
     expect(replay.transitions.filter(({ kind }) => kind === 'map_execution_changed')).toEqual([]);
   });
@@ -127,7 +127,7 @@ describe('Core RuntimeState through production adapter replay', () => {
       resolve(process.cwd(), 'fixtures/gsi/semantic/match/regulation-to-overtime'),
     );
 
-    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient' });
+    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient', competitiveObserved: true });
     expect(replay.transitions.filter(({ kind }) => kind === 'map_execution_changed')).toEqual([]);
   });
 
@@ -136,7 +136,7 @@ describe('Core RuntimeState through production adapter replay', () => {
       resolve(process.cwd(), 'fixtures/gsi/semantic/match/overtime-side-switch'),
     );
 
-    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient' });
+    expect(replay.state.map).toEqual({ epoch: 1, name: 'de_ancient', competitiveObserved: true });
     expect(replay.transitions.filter(({ kind }) => kind === 'map_execution_changed')).toEqual([]);
   });
 
@@ -183,7 +183,7 @@ describe('Core RuntimeState through production adapter replay', () => {
         sourceGenerationBoundary: [{ beforeCaptureIndex: 2 }],
       });
 
-      expect(replay.state.map).toEqual({ epoch: 1, name: 'de_mirage' });
+      expect(replay.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
       expect(replay.state.programSource).toMatchObject({ generation: 1 });
       expect(replay.state.programTelemetry?.receive.sequence).toBe(4);
       expect(replay.dispositions).toEqual([
