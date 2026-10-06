@@ -92,6 +92,7 @@ export function createProductionReplayComposition(options: ProductionReplayCompo
     continuityPolicy: { staleAfterMs: 1_000_000_000 },
   });
   const coordinator = createProjectionCoordinator({
+    predictionPublishCoalescing: false,
     programRuntime: runtime,
     cstvSources: options.cstvSources,
     matchContextBinding: {
