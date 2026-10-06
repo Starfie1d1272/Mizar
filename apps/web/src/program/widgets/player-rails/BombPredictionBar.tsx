@@ -4,6 +4,7 @@ import type { ProgramPayload } from '@mizar/protocol/program';
 type Prediction = ProgramPayload['bombDamage']['players'][number];
 interface Echo {
   readonly scope: string;
+  readonly roundNumber: number;
   readonly health: number;
   readonly start: number;
   readonly lethal: boolean;
@@ -14,6 +15,7 @@ interface Sample {
   readonly explosionHandoff: boolean;
   readonly scope: string | null;
   readonly sequence: number | null;
+  readonly roundNumber: number | null;
 }
 
 /** A short visual handoff, never a current estimate or a predicted HP update. */
@@ -23,6 +25,7 @@ export function BombPredictionBar({
   explosionHandoff,
   scope,
   sequence,
+  roundNumber,
 }: Sample) {
   const [state, setState] = useState<{ sample: Sample | null; echo: Echo | null }>({
     sample: null,
@@ -36,9 +39,20 @@ export function BombPredictionBar({
     prior.health !== health ||
     prior.explosionHandoff !== explosionHandoff ||
     prior.scope !== scope ||
-    prior.sequence !== sequence
+    prior.sequence !== sequence ||
+    prior.roundNumber !== roundNumber
   ) {
-    if (!explosionHandoff || scope === null || echo?.scope !== scope || echo.health !== health)
+    if (
+      !explosionHandoff ||
+      scope === null ||
+      echo?.scope !== scope ||
+      echo.health !== health ||
+      echo.roundNumber !== roundNumber ||
+      prior === null ||
+      prior.sequence === null ||
+      sequence === null ||
+      (sequence !== prior.sequence && sequence !== prior.sequence + 1)
+    )
       echo = null;
     if (
       explosionHandoff &&
@@ -48,24 +62,32 @@ export function BombPredictionBar({
       !prior.explosionHandoff &&
       prior.scope === scope &&
       prior.health === health &&
+      prior.roundNumber !== null &&
+      roundNumber !== null &&
+      // GSI advances the counter in the explosion/round-over frame, before HP.
+      (roundNumber === prior.roundNumber || roundNumber === prior.roundNumber + 1) &&
       prior.sequence !== null &&
       sequence === prior.sequence + 1
     ) {
       echo = {
         scope,
+        roundNumber,
         health,
         start: Math.max(0, Math.min(100, prior.prediction.hpAfter)),
         lethal: prior.prediction.lethal,
       };
     }
     // Adjust this presentation state before children paint; no effect-driven second frame.
-    setState({ sample: { prediction, health, explosionHandoff, scope, sequence }, echo });
+    setState({
+      sample: { prediction, health, explosionHandoff, scope, sequence, roundNumber },
+      echo,
+    });
   }
   useEffect(() => {
     if (echo === null) return;
     const timer = window.setTimeout(
       () => setState((value) => (value.echo === echo ? { ...value, echo: null } : value)),
-      250,
+      500,
     );
     return () => window.clearTimeout(timer);
   }, [echo]);

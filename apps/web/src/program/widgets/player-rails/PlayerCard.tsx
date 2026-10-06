@@ -285,6 +285,7 @@ function PlayerBody({
   explosionHandoff,
   predictionScope,
   predictionSequence,
+  predictionRoundNumber,
   design,
   physicalSide,
   player,
@@ -304,6 +305,7 @@ function PlayerBody({
   readonly explosionHandoff: boolean;
   readonly predictionScope: string | null;
   readonly predictionSequence: number | null;
+  readonly predictionRoundNumber: number | null;
 }) {
   const healthStyle = { '--player-rail-health': `${player.healthPercent ?? 0}%` } as CSSProperties;
   const secondaryVisible = player.secondaryWeapon !== null;
@@ -350,6 +352,7 @@ function PlayerBody({
               explosionHandoff={explosionHandoff}
               scope={predictionScope}
               sequence={predictionSequence}
+              roundNumber={predictionRoundNumber}
             />
           ) : null}
           <DamageGhost state={damageGhost} />
@@ -458,6 +461,7 @@ export function PlayerCard({
   explosionHandoff = false,
   predictionScope = null,
   predictionSequence = null,
+  predictionRoundNumber = null,
   player,
   cursor = null,
   physicalSide = 'left',
@@ -469,6 +473,7 @@ export function PlayerCard({
   readonly explosionHandoff?: boolean;
   readonly predictionScope?: string | null;
   readonly predictionSequence?: number | null;
+  readonly predictionRoundNumber?: number | null;
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
@@ -504,6 +509,7 @@ export function PlayerCard({
       explosionHandoff={explosionHandoff}
       predictionScope={predictionScope}
       predictionSequence={predictionSequence}
+      predictionRoundNumber={predictionRoundNumber}
       options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}
