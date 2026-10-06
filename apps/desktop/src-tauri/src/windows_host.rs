@@ -44,6 +44,7 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_FRAMECHANGED: u32 = 0x0020;
 
 // The tracker runs both on the Host worker and command dispatcher. Win32
 // otherwise virtualizes coordinates differently from Tauri's physical pixels.
@@ -146,7 +147,7 @@ fn align_cs2(window: Cs2Window, target: Rect) -> bool {
         if AdjustWindowRectExForDpi(&mut border, style, 0, ex_style, dpi) == 0 { return false; }
         let frame = Rect { x: border.left, y: border.top, width: border.right - border.left - target.width, height: border.bottom - border.top - target.height };
         let outer = outer_from_client(target, frame);
-        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
+        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) == 0 { return false; }
         let Some(actual) = client_rect(window.hwnd) else { return false; };
         if actual == target { return true; }
         let correction = Rect {
@@ -155,7 +156,7 @@ fn align_cs2(window: Cs2Window, target: Rect) -> bool {
             width: outer.width + target.width - actual.width,
             height: outer.height + target.height - actual.height,
         };
-        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
+        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) == 0 { return false; }
         client_rect(window.hwnd).is_some_and(|measured| overlap(measured, target) == (target.width as i64 * target.height as i64) && measured.width == target.width && measured.height == target.height)
     }
 }
