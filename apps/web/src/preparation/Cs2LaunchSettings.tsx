@@ -28,7 +28,7 @@ export function Cs2LaunchSettings() {
   return (
     <Panel>
       <h2>CS2 启动设置</h2>
-      <p>窗口模式 · 启动分辨率 1920×1080 · {status?.preserveQuality ? '保留原画质' : '最高画质'}</p>
+      <p>窗口模式 · 分辨率适配工作台 · {status?.preserveQuality ? '保留原画质' : '最高画质'}</p>
       <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
       <p>本次启动使用国际服、开发者控制台与 OBS 游戏捕获兼容选项。</p>
       <details>
