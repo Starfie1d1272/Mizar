@@ -64,6 +64,10 @@ export const programSceneStateSchema = z.object({
       reason: z.string().nullable(),
       introDurationMs: z.number().nonnegative(),
       sceneElapsedMs: z.number().nonnegative(),
+      gg: z
+        .object({ mapEpoch: z.number().int().nonnegative(), remainingMs: z.number().nonnegative() })
+        .nullable()
+        .optional(),
     })
     .optional(),
   blocked: z.partialRecord(programSceneIdSchema, z.string()),

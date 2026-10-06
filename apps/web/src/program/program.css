@@ -1,3 +1,9 @@
+.program-desktop-viewport {
+  inset: 0;
+  overflow: hidden;
+  position: fixed;
+}
+
 .program-canvas {
   background: transparent;
   box-sizing: border-box;

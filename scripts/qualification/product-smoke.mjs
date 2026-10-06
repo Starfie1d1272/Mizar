@@ -59,7 +59,13 @@ async function start() {
   const deadline = performance.now() + 45000;
   while (performance.now() < deadline) {
     const current = await health();
-    if (current?.product?.artifactSha256 === artifact.artifactSha256) return current;
+    if (current?.product?.artifactSha256 === artifact.artifactSha256) {
+      // The service can answer before the EXE supervisor observes readiness.
+      // Settle every launch, including restart, before testing an explicit stop.
+      await delay(1000);
+      assert.equal(active.child.exitCode, null, 'launcher exited after readiness');
+      return current;
+    }
     if (active.child.exitCode !== null) {
       const stderrPath = join(stateRoot, 'logs/companion.stderr.log');
       const stderr = await readFile(stderrPath, 'utf8').catch((error) => String(error));
@@ -133,9 +139,6 @@ try {
     'reinstall changed original backup',
   );
   const first = await start();
-  // Give the EXE supervisor time to observe its own health probe before the smoke drives stop.
-  await delay(1000);
-  assert.equal(active.child.exitCode, null, 'launcher exited after readiness');
   assert.equal(
     await command(exe, ['--no-browser']).done,
     0,

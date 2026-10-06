@@ -26,7 +26,7 @@
     "format:check": "prettier --check \"package.json\" \"pnpm-workspace.yaml\" \"tsconfig*.json\" \"eslint.config.js\" \"vitest.config.ts\" \"playwright.acceptance.config.ts\" \".prettierrc.json\" \"apps/**/*.{ts,tsx,js,jsx,json,css,html}\" \"packages/**/*.{ts,tsx,js,jsx,mjs,json,css,html}\" \"tests/**/*.{ts,tsx,js,jsx,json,css,html}\" \"scripts/**/*.mjs\"",
     "lint": "pnpm build:packages && eslint . --max-warnings=0",
     "test": "pnpm build:packages && vitest run --config vitest.config.ts",
-    "typecheck": "pnpm -r run typecheck && pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run consumer:typecheck && tsc -p tsconfig.json --noEmit",
+    "typecheck": "node scripts/qualification/app-version.mjs && pnpm -r run typecheck && pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run consumer:typecheck && tsc -p tsconfig.json --noEmit",
     "qualification:build": "node scripts/qualification/build.mjs",
     "qualification:offline": "node scripts/qualification/offline.mjs",
     "qualification:verify": "node scripts/qualification/verify.mjs",

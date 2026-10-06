@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ObsConfigStore, discoverObsExecutable } from './config.js';
@@ -179,12 +180,22 @@ export class ObsAdapter {
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
   }
-  async open(): Promise<void> {
+  async launchTarget(): Promise<string> {
     const config = await this.configStore.read();
     const path = await discoverObsExecutable(config.executablePath);
     if (!path) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
+    return path;
+  }
+
+  async open(): Promise<void> {
+    const path = await this.launchTarget();
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(path, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      const child = spawn(path, [], {
+        cwd: dirname(path),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      });
       child.once('spawn', () => {
         child.unref();
         resolve();

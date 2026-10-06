@@ -12,6 +12,8 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 
 ## 决策索引
 
+- [ADR-0023：现场工作台准备检查与固定布局](0023-workspace-preflight-and-density.md)
+
 - [ADR-0001：项目定位与权威边界](0001-project-positioning-and-authority.md)
 - [ADR-0002：运行时与工作台技术基线](0002-runtime-workspace-technology-baseline.md)
 - [ADR-0003：运行状态、身份与投递约束](0003-runtime-state-delivery-invariants.md)
@@ -36,8 +38,12 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 ADR-0003 对 ADR-0002 第 5 节的通用事件表述和第 6 节的跨仓职责范围作出替代；原始理由与具体范围见对应正文。
 
 - [ADR-0021：地图执行开始证据与恢复重核验](0021-map-start-revalidation.md)
+- [ADR-0022：远程制作窗口的捕获策略](0022-remote-workspace-capture.md)
+- [ADR-0024：OBS 独立进程与桌面启动职责](0024-independent-obs-process.md)
 
 ## 历史澄清
+
+- [ADR-0025：未绑定赛事的 demo 支持手动游戏画面播出](0025-demo-manual-gameplay.md)
 
 ### 2026-09-17：雷达职责
 

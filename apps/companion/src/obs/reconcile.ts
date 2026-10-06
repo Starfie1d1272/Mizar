@@ -38,6 +38,37 @@ function names(value: unknown, key: string): string[] {
     .filter((name): name is string => typeof name === 'string');
 }
 
+const CS2_WINDOW_FALLBACK = 'Counter-Strike 2:SDL_app:cs2.exe';
+
+function isCs2Window(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parts = value.split(':');
+  return (
+    parts.length === 3 &&
+    parts[0] !== '' &&
+    parts[1] !== '' &&
+    parts[2]?.toLowerCase() === 'cs2.exe'
+  );
+}
+
+async function cs2CaptureWindow(obs: ObsRpc): Promise<string> {
+  const properties = await obs.call('GetInputPropertiesListPropertyItems', {
+    inputName: OBS_CAPTURE_INPUT,
+    propertyName: 'window',
+  });
+  const available = objects(properties.propertyItems).find(
+    (item) => item.itemEnabled !== false && isCs2Window(item.itemValue),
+  );
+  return typeof available?.itemValue === 'string' ? available.itemValue : CS2_WINDOW_FALLBACK;
+}
+
+// OBS WebSocket returns collection names as strings, unlike scene/input lists.
+function collectionNames(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
 function ownedScene(name: string): boolean {
   return name.startsWith('Mizar · ');
 }
@@ -97,7 +128,7 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   const desired = obsDesiredScenes(baseUrl);
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
-  if (!names(collections.sceneCollections, 'sceneCollectionName').includes(OBS_COLLECTION)) {
+  if (!collectionNames(collections.sceneCollections).includes(OBS_COLLECTION)) {
     findings.push({ code: 'collection_missing', message: 'Mizar 场景集合尚未创建。' });
     return findings;
   }
@@ -142,7 +173,11 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
     const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
     const settings = capture.inputSettings as Record<string, unknown> | undefined;
-    if (settings?.capture_mode !== 'window' || settings.window !== '::cs2.exe')
+    if (
+      settings?.capture_mode !== 'window' ||
+      !isCs2Window(settings.window) ||
+      settings.priority !== 2
+    )
       findings.push({ code: 'capture_drift', message: 'Mizar 游戏采集来源未指向 CS2。' });
   }
   for (const scene of desired) {
@@ -226,9 +261,7 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
   const desired = obsDesiredScenes(baseUrl);
   if (await outputActive(obs)) throw new Error('OBS 正在输出；结束输出后可修复制播配置。');
   const collections = await obs.call('GetSceneCollectionList');
-  const exists = names(collections.sceneCollections, 'sceneCollectionName').includes(
-    OBS_COLLECTION,
-  );
+  const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
   if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
   else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
@@ -252,7 +285,7 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
       inputName: OBS_CAPTURE_INPUT,
       inputSettings: {
         capture_mode: 'window',
-        window: '::cs2.exe',
+        window: await cs2CaptureWindow(obs),
         priority: 2,
         capture_cursor: false,
       },
@@ -270,13 +303,18 @@ export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Prom
         inputKind: 'game_capture',
         inputSettings: {
           capture_mode: 'window',
-          window: '::cs2.exe',
+          window: CS2_WINDOW_FALLBACK,
           priority: 2,
           capture_cursor: false,
         },
         sceneItemEnabled: true,
       });
       inputKinds.set(OBS_CAPTURE_INPUT, 'game_capture');
+      await obs.call('SetInputSettings', {
+        inputName: OBS_CAPTURE_INPUT,
+        inputSettings: { window: await cs2CaptureWindow(obs) },
+        overlay: true,
+      });
     }
     if (!inputKinds.has(scene.browserInput)) {
       await obs.call('CreateInput', {

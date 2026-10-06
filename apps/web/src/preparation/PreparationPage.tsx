@@ -200,6 +200,13 @@ export function PreparationPage() {
         </header>
 
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
+        {path === '/settings' &&
+        tab === 'obs' &&
+        new URLSearchParams(window.location.search).has('prepare') ? (
+          <StatusBanner tone="warning">
+            现场尚未打开。请先完成 OBS 连接与场景检查，再进入现场。
+          </StatusBanner>
+        ) : null}
 
         {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
@@ -627,6 +634,7 @@ export function PreparationPage() {
               >
                 恢复默认
               </Button>
+              <SpectatorHudCommands />
             </Panel>
           )
         ) : (
@@ -650,3 +658,4 @@ function CurrentServerMatchEntry() {
     </Button>
   ) : null;
 }
+import { SpectatorHudCommands } from './SpectatorHudCommands';

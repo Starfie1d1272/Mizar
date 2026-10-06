@@ -133,6 +133,7 @@ export function TopScoreBar({
   snapshot,
   settings,
   presentationRevision = 0,
+  gg = false,
 }: HudWidgetRendererProps) {
   const options = topScoreBarSettingsSchema.parse(settings.settings);
   const p = buildMatchHeaderPresentation(snapshot.payload);
@@ -168,7 +169,11 @@ export function TopScoreBar({
           className={`match-header__center match-header__center--${p.clockTone}`}
           data-clock-tone={p.clockTone}
         >
-          {p.clockTone === 'paused' ? (
+          {gg ? (
+            <strong className="match-header__gg" data-map-end-gg="true">
+              GG
+            </strong>
+          ) : p.clockTone === 'paused' ? (
             <div className="match-header__tech-pause" data-tech-pause="true">
               <svg aria-hidden="true" viewBox="0 0 18 18">
                 <path d="M4 3h3v12H4zM11 3h3v12h-3z" />

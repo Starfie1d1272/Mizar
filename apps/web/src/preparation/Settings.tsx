@@ -88,7 +88,12 @@ export function Settings({ tab }: { tab: string }) {
         </Panel>
       ) : tab === 'obs' ? (
         <Panel>
-          <h2>OBS</h2>
+          <h2>
+            {new URLSearchParams(window.location.search).has('prepare')
+              ? '进入现场前，连接并检查 OBS'
+              : 'OBS 连接与配置'}
+          </h2>
+          <p>OBS 已打开后，还需要连接 WebSocket，Mizar 才能切换场景和获取画面。</p>
           <p>
             {obs?.connection === 'connected'
               ? '已连接'
@@ -103,8 +108,10 @@ export function Settings({ tab }: { tab: string }) {
             {obs?.sceneAligned === false ? ' · 场景需要核对' : ''}
           </p>
           <p>
-            推流 {obs?.streaming ? '进行中' : '未启动'} · 录制{' '}
-            {obs?.recording ? '进行中' : '未启动'}
+            推流{' '}
+            {obs?.connection !== 'connected' ? '无法确认' : obs.streaming ? '进行中' : '未启动'} ·
+            录制{' '}
+            {obs?.connection !== 'connected' ? '无法确认' : obs.recording ? '进行中' : '未启动'}
           </p>
           {obs?.video ? (
             <p>
@@ -128,7 +135,20 @@ export function Settings({ tab }: { tab: string }) {
             >
               检查配置
             </Button>
-            <Button disabled={busy} onClick={() => void action(() => obsCommand('repair'))}>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void action(async () => {
+                  const result = (await obsCommand('repair')) as {
+                    findings: { message: string }[];
+                  };
+                  setMessage(
+                    result.findings.map((item) => item.message).join('；') ||
+                      'Mizar 场景已修复，配置检查通过。',
+                  );
+                })
+              }
+            >
               修复 Mizar 场景
             </Button>
           </div>
@@ -137,10 +157,17 @@ export function Settings({ tab }: { tab: string }) {
               {finding.message}
             </StatusBanner>
           ))}
-          <details
-            open={obs?.connection === 'password_required' || obs?.connection === 'invalid_password'}
-          >
-            <summary>高级连接设置</summary>
+          <section aria-label="OBS 连接引导">
+            <h3>1. 在 OBS 中开启连接服务</h3>
+            <p>
+              如果「打开 OBS」未找到程序，点击「更改 OBS 路径」选择安装目录中的
+              obs64.exe，然后重新打开。
+            </p>
+            <p>
+              打开 OBS「工具 → WebSocket
+              服务器设置」，启用服务器。查看端口；若已启用身份验证，复制该页面提供的密码。
+            </p>
+            <h3>2. 填写连接信息并测试</h3>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -205,7 +232,22 @@ export function Settings({ tab }: { tab: string }) {
                 清除已保存密码
               </Button>
             ) : null}
-          </details>
+            <h3>3. 检查播出场景</h3>
+            <p>
+              连接成功后点击「检查配置」。如有缺失，停止推流与录制后「修复 Mizar
+              场景」，确认检查通过，再点击「进入现场」。
+            </p>
+            <p>
+              游戏捕获还需要核对实际画面。先打开
+              CS2，再检查或修复，使来源匹配实际窗口；国际服和国服均按 cs2.exe
+              匹配。连接与场景检查通过不代表已经捕获到游戏。
+            </p>
+            <p>
+              若 CS2 有画面而 OBS 游戏捕获黑屏，检查 Steam 启动选项
+              -allow_third_party_software，并重启游戏。该选项允许第三方软件与游戏交互，可能影响信任系数；Mizar
+              不会自动修改你的启动选项。国服／国际服选择保持你的设置。
+            </p>
+          </section>
         </Panel>
       ) : (
         <Panel>
@@ -252,6 +294,7 @@ export function Settings({ tab }: { tab: string }) {
                   void action(async () => {
                     await desktopInvoke('configure_gsi', { restore: true, choose: false });
                     await refreshGsi();
+                    setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
                   })
                 }
               >

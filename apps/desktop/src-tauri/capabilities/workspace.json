@@ -20,6 +20,7 @@
     "allow-set-program-overlay-enabled",
     "allow-cs2-host-status",
     "allow-select-obs-executable",
+    "allow-launch-obs",
     "allow-open-main",
     "allow-present-production",
     "allow-open-tool",

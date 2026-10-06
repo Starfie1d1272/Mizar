@@ -17,6 +17,7 @@ import type { LocalChannelConnectionState } from '../realtime';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 
 export interface HudCanvasPreviewProps {
+  readonly gg?: boolean;
   readonly mapBackground?: boolean;
   readonly radarClient?: RadarProps['client'];
   readonly radarSnapshot?: RadarProps['snapshot'];
@@ -39,6 +40,7 @@ export interface HudCanvasPreviewProps {
 }
 
 export function HudCanvasPreview({
+  gg = false,
   mapBackground = false,
   resolvedPreset,
   radarClient,
@@ -104,6 +106,7 @@ export function HudCanvasPreview({
           <div className="hud-console__guide hud-console__guide--safe" style={guideStyle} />
         ) : null}
         <GameplayHud
+          gg={gg}
           radarClient={radarClient}
           radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}

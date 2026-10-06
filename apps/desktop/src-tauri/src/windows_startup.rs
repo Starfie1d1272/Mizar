@@ -157,6 +157,28 @@ impl Drop for EventHandle {
 }
 #[derive(Clone)]
 pub struct ExitSignal(Arc<EventHandle>);
+
+/// Coalesce repeated launches and reopen the existing preparation window.
+pub struct ActivationSignal(EventHandle);
+impl ActivationSignal {
+    const NAME: &'static str = "Global\\MizarDesktopActivate\0";
+    pub fn new() -> io::Result<Self> {
+        let name: Vec<u16> = Self::NAME.encode_utf16().collect();
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+        if handle == 0 { Err(io::Error::last_os_error()) }
+        else { Ok(Self(EventHandle(handle))) }
+    }
+    pub fn requested(&self) -> bool {
+        unsafe { WaitForSingleObject(self.0.0, 0) == 0 }
+    }
+    pub fn notify() {
+        let name: Vec<u16> = Self::NAME.encode_utf16().collect();
+        let handle = unsafe { OpenEventW(0x0002, 0, name.as_ptr()) };
+        if handle != 0 {
+            unsafe { SetEvent(handle); CloseHandle(handle); }
+        }
+    }
+}
 fn exit_event_name(scope: &str) -> Vec<u16> {
     format!("Global\\MizarDesktopStop-{scope}\0")
         .encode_utf16()

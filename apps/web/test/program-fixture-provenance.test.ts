@@ -71,7 +71,9 @@ describe('Program fixture provenance policy', () => {
 
   it('keeps the operator preview limited to real replay and declared BP or media boundaries', () => {
     const ids = HUD_EDITOR_FIXTURE_GROUPS.flatMap((group) => group.ids);
-    expect(ids).toHaveLength(14);
+    expect(ids).toHaveLength(15);
+    expect(ids).toContain('gameplay-map-ended-gg');
+    expect(getProgramFixtureProvenance('gameplay-map-ended-gg')?.kind).toBe('real-derived');
     expect(new Set(ids).size).toBe(ids.length);
     expect(
       HUD_EDITOR_FIXTURE_GROUPS[0]?.ids.every(

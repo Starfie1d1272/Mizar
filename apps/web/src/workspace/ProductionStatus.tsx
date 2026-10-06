@@ -5,7 +5,13 @@ import { useObsStatus } from './obs-client';
 import { useState } from 'react';
 import './workspace.css';
 
-export function ProductionStatus({ matchId }: { matchId?: string | null }) {
+export function ProductionStatus({
+  matchId,
+  compact = false,
+}: {
+  matchId?: string | null;
+  compact?: boolean;
+}) {
   const response = useLocalRead<ProductionGuidance>('/local/v1/production-guidance', 5000);
   const production = useLocalRead<Production>('/local/v1/production');
   const obs = useObsStatus();
@@ -32,15 +38,24 @@ export function ProductionStatus({ matchId }: { matchId?: string | null }) {
     connected &&
     obs?.streaming === false;
   return (
-    <section className="production-status" aria-label="当前任务与直播状态">
+    <section
+      className={`production-status${compact ? ' production-status--compact' : ''}`}
+      aria-label="当前任务与直播状态"
+    >
       <div className="production-status__signals" aria-label="直播状态">
         <span data-tone={obsText === '正常' ? 'success' : 'muted'}>OBS {obsText}</span>
         <span data-tone={platformText === '正常' ? 'success' : 'muted'}>
           Bilibili {platformText}
         </span>
       </div>
-      <strong>{guidance?.task ?? '正在读取制作状态'}</strong>
-      {guidance ? (
+      <strong role={compact && (reminder || guidance?.interMapReminder) ? 'status' : undefined}>
+        {compact && reminder
+          ? '比赛进行中，OBS 未推流，请检查 OBS。'
+          : compact && guidance?.interMapReminder
+            ? '图间已超过 10 分钟，请确认下一图准备情况。'
+            : (guidance?.task ?? '正在读取制作状态')}
+      </strong>
+      {guidance && !compact ? (
         <>
           {guidance.result && ['map_end', 'match_end'].includes(guidance.phase) ? (
             <p>{guidance.result}</p>
@@ -72,6 +87,20 @@ export function ProductionStatus({ matchId }: { matchId?: string | null }) {
             </a>
           ) : null}
         </>
+      ) : null}
+      {compact ? (
+        <a
+          href="/"
+          onClick={(event) => {
+            if (!window.__TAURI_INTERNALS__) return;
+            event.preventDefault();
+            void desktopInvoke('open_main', { path: '/' }).catch(() =>
+              setError('打开制作中心失败，请重试。'),
+            );
+          }}
+        >
+          制作任务与详情 →
+        </a>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
     </section>

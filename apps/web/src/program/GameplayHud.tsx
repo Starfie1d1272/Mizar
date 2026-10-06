@@ -35,6 +35,7 @@ export interface GameplayHudProps {
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
   readonly presentationRevision?: number;
+  readonly gg?: boolean;
   readonly resolvedPreset: HudResolvedPreset;
   readonly broadcastBranding?: BroadcastBranding;
   /** Test-only injection keeps the production registry closed while exercising the React seam. */
@@ -71,6 +72,7 @@ export function GameplayHud({
   radarSnapshot,
   resolvedPreset,
   presentationRevision = 0,
+  gg = false,
   rendererRegistry = HUD_RENDERER_REGISTRY,
   broadcastBranding,
 }: GameplayHudProps) {
@@ -86,6 +88,7 @@ export function GameplayHud({
     snapshot &&
     resolvedPreset.layout.widgets['top-score-bar'].visible &&
     topScoreBarSettingsSchema.parse(score.settings).showTimeout &&
+    !gg &&
     (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')
   ) {
     return (
@@ -133,6 +136,7 @@ export function GameplayHud({
               settings={resolvedPreset.widgets[descriptor.id]}
               snapshot={snapshot}
               presentationRevision={presentationRevision}
+              gg={gg}
               widgetId={descriptor.id}
             />
           );

@@ -18,6 +18,7 @@ class FakeObs implements ObsRpc {
   inputs = new Map<string, { kind: string; settings: Record<string, unknown> }>();
   transforms = new Map<number, Record<string, unknown>>();
   outputActive = false;
+  captureWindows: { itemValue: string; itemEnabled: boolean }[] = [];
   calls: string[] = [];
   currentScene = '';
   overrides = new Map<string, Record<string, unknown>>();
@@ -40,11 +41,14 @@ class FakeObs implements ObsRpc {
     if (type === 'GetSceneCollectionList')
       return {
         currentSceneCollectionName: this.collection,
-        sceneCollections: [...this.collections].map((sceneCollectionName) => ({
-          sceneCollectionName,
-        })),
+        sceneCollections: [...this.collections],
       };
     if (type === 'CreateSceneCollection' || type === 'SetCurrentSceneCollection') {
+      if (
+        type === 'CreateSceneCollection' &&
+        this.collections.has(String(data.sceneCollectionName))
+      )
+        throw new Error('Scene collection already exists');
       this.collection = String(data.sceneCollectionName);
       this.collections.add(this.collection);
       return {};
@@ -93,6 +97,8 @@ class FakeObs implements ObsRpc {
     }
     if (type === 'GetInputSettings')
       return { inputSettings: this.inputs.get(String(data.inputName))!.settings };
+    if (type === 'GetInputPropertiesListPropertyItems')
+      return { propertyItems: this.captureWindows };
     if (type === 'GetSceneItemList')
       return { sceneItems: this.scenes.get(name)?.map((item) => ({ ...item })) ?? [] };
     if (type === 'CreateSceneItem') {
@@ -199,6 +205,29 @@ it('repairs only Mizar collection, browser sources and order, then is idempotent
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   await switchObsScene(obs, 'gameplay');
   expect(obs.calls.at(-1)).toBe('GetCurrentProgramScene');
+});
+
+it('replaces the null-window target and follows actual CS2 windows across server titles', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const capture = obs.inputs.get('Mizar · CS2 Game Capture')!;
+  expect(capture.settings).toMatchObject({
+    window: 'Counter-Strike 2:SDL_app:cs2.exe',
+    priority: 2,
+  });
+  capture.settings.window = '::cs2.exe';
+  expect((await checkObsConfiguration(obs, baseUrl)).map((item) => item.code)).toContain(
+    'capture_drift',
+  );
+  for (const window of ['Counter-Strike 2:SDL_app:cs2.exe', '反恐精英2:SDL_app:cs2.exe']) {
+    obs.captureWindows = [
+      { itemValue: 'Other game:SDL_app:other.exe', itemEnabled: true },
+      { itemValue: 'Old CS2:SDL_app:cs2.exe', itemEnabled: false },
+      { itemValue: window, itemEnabled: true },
+    ];
+    expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
+    expect(capture.settings.window).toBe(window);
+  }
 });
 
 it('refuses collection mutations during output and protects user source names', async () => {

@@ -63,6 +63,26 @@ export interface Production {
   canEnter: boolean;
 }
 export async function productionAction(action: 'enter' | 'hide' | 'finish', state: Production) {
+  if (action === 'enter') {
+    // A fresh UI readiness check; Companion still owns the production lifecycle.
+    const obs = await fetch('/local/v1/obs', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(6000),
+    })
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as {
+              connection: string;
+              findings: readonly unknown[];
+            })
+          : null,
+      )
+      .catch(() => null);
+    if (obs?.connection !== 'connected' || obs.findings.length > 0) {
+      window.location.assign('/settings?tab=obs&prepare=1');
+      return;
+    }
+  }
   await command('/operator/production', { action, expectedRevision: state.revision });
   if (window.__TAURI_INTERNALS__)
     await desktopInvoke('present_production', { live: action === 'enter' });

@@ -82,11 +82,14 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 ## 正式节目与观察辅助隔离
 
+新鲜正式输入允许手动选择 Gameplay，包括未绑定赛事的 demo；这只接管画面，不建立赛事归属或官方身份。自动编排及结果场景仍受可信绑定门槛约束，见 [ADR-0025](decisions/0025-demo-manual-gameplay.md)。
+
 正式节目消费观战客户端的 GSI；精确事件是可选增强。Lookahead 使用独立的较早时间轴，只能形成私有辅助信息。
 
 - Lookahead 不能作为正式节目备用源；任一链路故障不改变另一链路的角色。
 - 未来字段不能先进入公开数据，再依靠 CSS、窗口或 OBS 裁剪隐藏。
 - 安全边界由投影、类型和协议结构保证，窗口捕获策略是额外防线。
+- 制作工作区、控制栏和本机 HUD 覆盖允许远程捕获；正式 OBS 输出使用独立的游戏捕获与播出 Browser Source，不依赖制作窗口的捕获排除。策略理由见 [ADR-0022](decisions/0022-remote-workspace-capture.md)。
 - Lookahead 重连后旧时间轴对齐立即失效。
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
@@ -103,13 +106,15 @@ HUD 配置独立于比赛数据：组件内容、布局、外观和比赛投影�
 
 Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等同于比赛或 OBS 状态。进入现场需要比赛资料；结束制作先切等待场景、再释放平台数据源，失败保留现场状态供重试，不删除本地比赛。
 
+桌面和 Web 的进入现场入口先读取当前 OBS 连接与场景检查结果；未通过时打开连接引导，不提交制作命令。此准备门禁不复制生命周期状态，也不改变现场运行后的离线恢复能力；理由见 [ADR-0023](decisions/0023-workspace-preflight-and-density.md)。
+
 `ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](design/program-direction-v1.md)。
 
 `BpSession` 只维护播放状态；正式 BP 由比赛投影派生。本地补录不改写在线比赛身份，演示来源只在 BP 内存会话生效。命令与来源切换见[协议](protocol.md#bp-播放与补录)。
 
 `ProgramPresentationStore` 在地图结束时冻结已确认比分与当帧选手摘要，最多保留五图，跨图保留、换比赛清除。静态画面的进入资格与已播连续性分开，不恢复旧游戏时钟。
 
-OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。
+OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS；理由见 [ADR-0024](decisions/0024-independent-obs-process.md)。
 
 制作提示从现有状态生成；B 站查询有缓存、超时和并发上限，只服务本机状态提示，不进入公开输出或节目切换门禁。实现见 [ADR-0019](decisions/0019-production-guidance-and-platform-status.md)。
 

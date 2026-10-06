@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from '../ui';
+import { Button, StatusBanner } from '../ui';
 import { LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 
@@ -91,6 +91,7 @@ export function LocalTournamentEditor({
   const [eventName, setEventName] = useState(event?.name ?? '');
   const [eventLogo, setEventLogo] = useState<string | null>(event?.logoUrl ?? null);
   const [eventPool, setEventPool] = useState<readonly string[]>(event?.mapPool ?? []);
+  const [savedMessage, setSavedMessage] = useState('');
   if (draft === null || event === undefined || view?.activeLocalMatchId !== draft.matchId)
     return null;
 
@@ -108,16 +109,19 @@ export function LocalTournamentEditor({
     );
   return (
     <div className="preparation-editor">
+      {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
       {section !== 'maps' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            setSavedMessage('');
             void action(async () => {
               await command('/operator/local-match/save', {
                 expectedContextRevision: view.contextRevision,
                 document: draft,
               });
               await refresh();
+              setSavedMessage('比赛资料已保存。');
             });
           }}
         >
@@ -299,6 +303,7 @@ export function LocalTournamentEditor({
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            setSavedMessage('');
             void action(async () => {
               await command('/operator/local-event/save', {
                 eventId: event.eventId,
@@ -308,6 +313,7 @@ export function LocalTournamentEditor({
                 mapPool: eventPool,
               });
               await refresh();
+              setSavedMessage('赛事资料已保存。');
             });
           }}
         >

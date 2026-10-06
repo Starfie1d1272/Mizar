@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "maxMarkers": 128,
   "nodeRuntimeVersion": "v24.21.0",
+  "nodeWinX64ArchiveSha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
   "markerKinds": [
     "demo-a-live",
     "cs2-closed",

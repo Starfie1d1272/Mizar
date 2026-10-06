@@ -332,6 +332,13 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
         .ok_or_else(|| "无法读取显示器工作区。".to_string())?;
     apply_layout(&app, layout);
     update_overlay(&app, &state);
+    let tracker = state.tracker.lock().map_err(|_| "桌面窗口状态不可用。")?;
+    if tracker.window.is_none() {
+        return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
+    }
+    if !tracker.managed {
+        return Err("工作区已恢复，但 CS2 未接受窗口尺寸。请使用窗口模式后重试恢复布局。".into());
+    }
     Ok(())
 }
 
@@ -399,6 +406,34 @@ fn local_url(path: &str) -> WebviewUrl {
     WebviewUrl::External(format!("{BASE}{path}").parse().expect("fixed local URL"))
 }
 
+fn obs_executable_allowed(path: &Path) -> bool {
+    path.is_absolute()
+        && path.file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
+}
+
+#[tauri::command]
+async fn launch_obs(executable_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&executable_path);
+        if !obs_executable_allowed(path) || !path.is_file() {
+            return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
+        }
+        // Host is outside the runtime Job. Independent OBS must not inherit
+        // Companion's rollback/shutdown ownership.
+        Command::new(path)
+            .current_dir(path.parent().ok_or("OBS 程序未能打开。")?)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "OBS 程序未能打开。".to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "OBS 程序未能打开。".to_string())?
+}
+
 fn trusted_navigation(url: &tauri::Url) -> bool {
     url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3000)
 }
@@ -408,7 +443,9 @@ fn show_workspace(app: &tauri::AppHandle) {
     state.visible.store(true, Ordering::Relaxed);
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
+            let _ = window.unminimize();
             let _ = window.show();
+            let _ = window.set_focus();
         }
     }
     update_overlay(app, &state);
@@ -424,18 +461,24 @@ fn hide_workspace(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
-    let path = path.unwrap_or_else(|| "/".into());
-    if ![
+fn main_path_allowed(path: &str) -> bool {
+    [
         "/",
         "/matches",
         "/matches?tab=roster",
         "/picture",
+        "/picture?tab=overlay",
         "/settings",
+        "/settings?tab=gsi",
+        "/settings?tab=obs",
     ]
-    .contains(&path.as_str())
-    {
+    .contains(&path)
+}
+
+#[tauri::command]
+fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    let path = path.unwrap_or_else(|| "/".into());
+    if !main_path_allowed(&path) {
         return Err("页面无法识别。".into());
     }
     if let Some(window) = app.get_webview_window("main") {
@@ -446,6 +489,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
                     .map_err(|_| "页面无法识别。")?,
             )
             .map_err(|_| "无法打开 Mizar。")?;
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -459,12 +503,12 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
         let state = app.state::<HostState>();
-        if let Some(layout) = state
+        let layout = state
             .tracker
             .lock()
             .ok()
-            .and_then(|mut tracker| tracker.restore_layout())
-        {
+            .and_then(|mut tracker| tracker.restore_layout());
+        if let Some(layout) = layout {
             apply_layout(&app, layout);
         }
         show_workspace(&app);
@@ -492,22 +536,24 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let log = app.state::<DesktopLog>();
     let result = (|| {
-        let left = log.step("workspace_left", || {
+        log.step("workspace_left", || {
             WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
                 .title("Mizar · 工作区")
                 .decorations(false)
+                .shadow(false)
                 .resizable(false)
-                .visible(false)
+                .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
-        let dock = log.step("workspace_dock", || {
+        log.step("workspace_dock", || {
             WebviewWindowBuilder::new(app, "workspace-dock", local_url("/workspace/dock"))
                 .title("Mizar · 现场控制")
                 .decorations(false)
+                .shadow(false)
                 .resizable(false)
-                .visible(false)
+                .visible(true)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
@@ -516,6 +562,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
             WebviewWindowBuilder::new(app, "program-overlay", local_url("/program?host=desktop"))
                 .title("Mizar · Program HUD")
                 .decorations(false)
+                .shadow(false)
                 .resizable(false)
                 .transparent(true)
                 .always_on_top(true)
@@ -526,11 +573,8 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
-        log.step("content_protection", || -> tauri::Result<()> {
-            overlay.set_ignore_cursor_events(true)?;
-            overlay.set_content_protected(true)?;
-            left.set_content_protected(true)?;
-            dock.set_content_protected(true)
+        log.step("overlay_cursor_passthrough", || {
+            overlay.set_ignore_cursor_events(true)
         })?;
         Ok(())
     })();
@@ -548,7 +592,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
+async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),
@@ -565,6 +609,7 @@ fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
             )
             .map_err(|_| "工具窗口未能恢复。")?;
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
@@ -610,9 +655,20 @@ fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     }
 }
 
+fn background_powershell() -> Command {
+    let mut command = Command::new("powershell.exe");
+    // PowerShell 7's inherited module path hides Windows PowerShell's built-in
+    // modules (including Get-FileHash). Let the child initialize its own path.
+    command
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .creation_flags(0x08000000);
+    command
+}
+
 fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
     let bundle = bundle_root()?;
-    let mut command = Command::new("powershell.exe");
+    let mut command = background_powershell();
     command
         .args([
             "-NoProfile",
@@ -631,9 +687,7 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
     }
     command
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .creation_flags(0x08000000);
+        .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|_| "GSI 配置工具未能启动。")?;
     let deadline = Instant::now() + timeout;
     loop {
@@ -789,6 +843,8 @@ fn run_desktop(
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
 ) -> Result<(), String> {
+    let activation = windows_startup::ActivationSignal::new()
+        .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
     let running = Arc::new(AtomicBool::new(true));
@@ -815,6 +871,7 @@ fn run_desktop(
             set_program_overlay_enabled,
             cs2_host_status,
             select_obs_executable,
+            launch_obs,
             open_main,
             present_production,
             open_tool,
@@ -932,6 +989,7 @@ fn run_desktop(
                         break;
                     }
                     if !pending.swap(true, Ordering::Relaxed) {
+                        let activate = activation.requested();
                         let tick_host = host.clone();
                         let tick_running = worker_running.clone();
                         let tick_pending = pending.clone();
@@ -948,6 +1006,9 @@ fn run_desktop(
                                         tick_running.store(false, Ordering::Relaxed);
                                         tick_host.exit(0);
                                     } else {
+                                        if activate {
+                                            let _ = open_main(tick_host.clone(), None);
+                                        }
                                         if tick_host
                                             .state::<HostState>()
                                             .visible
@@ -1122,6 +1183,10 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--app-version"] {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let headless = args.iter().any(|arg| arg == "--no-browser");
     if args
         .iter()
@@ -1173,7 +1238,10 @@ fn main() {
     }
     let _mutex = match DesktopMutex::acquire() {
         Ok(Some(mutex)) => mutex,
-        Ok(None) => return,
+        Ok(None) => {
+            windows_startup::ActivationSignal::notify();
+            return;
+        }
         Err(error) => {
             failure_dialog(&format!("桌面工作区锁不可用：{error}"), None);
             std::process::exit(1);
@@ -1209,11 +1277,48 @@ mod startup_tests {
     use super::*;
 
     #[test]
+    fn obs_launch_accepts_only_an_absolute_obs_executable() {
+        assert!(obs_executable_allowed(Path::new(r"D:\OBS Studio\bin\64bit\obs64.exe")));
+        for path in ["obs64.exe", r"D:\OBS Studio\obs64.exe --argument", r"D:\OBS Studio\other.exe", "https://example.test/obs64.exe"] {
+            assert!(!obs_executable_allowed(Path::new(path)));
+        }
+    }
+
+    #[test]
+    fn live_settings_open_only_known_preparation_sections() {
+        for path in ["/settings?tab=obs", "/settings?tab=gsi", "/picture?tab=overlay"] {
+            assert!(main_path_allowed(path));
+        }
+        for path in ["https://example.test", "//example.test", "/settings?tab=obs&redirect=https://example.test", "/program", "/../settings", "javascript:alert(1)"] {
+            assert!(!main_path_allowed(path));
+        }
+    }
+
+    #[test]
     fn workbench_path_is_limited_to_one_match() {
         assert!(valid_workbench_path("/admin/rivals-2026/matches/match_1"));
         for path in ["/admin/rivals", "/admin/rivals/matches/", "/admin/rivals/matches/a/extra", "/admin/rivals/matches/%2f", "/integrations/mizar/connect"] {
             assert!(!valid_workbench_path(path));
         }
+    }
+
+    #[test]
+    fn background_gsi_scripts_emit_utf8_without_a_console() {
+        let common = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../scripts/qualification/bundle/common.ps1");
+        let common = common.to_string_lossy().replace('\'', "''");
+        let command = format!(
+            ". '{common}'; Write-Output ([string]::Concat([char]0x539f,[char]0x914d,[char]0x7f6e)); (Get-FileHash -LiteralPath '{common}' -Algorithm SHA256).Algorithm"
+        );
+        let output = background_powershell()
+            .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().lines().collect::<Vec<_>>(),
+            ["原配置", "SHA256"]
+        );
     }
 
     #[test]

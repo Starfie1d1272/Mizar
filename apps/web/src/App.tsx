@@ -25,6 +25,7 @@ import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fi
 import { ProgramScenePage } from './program/ProgramScenePage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
+import { useProgramScenes } from './workspace/client';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
 import {
@@ -143,6 +144,7 @@ function SurfaceConnectionMarker({ channel }: { readonly channel: LocalSnapshotC
 }
 
 function ProgramRoute() {
+  const scenes = useProgramScenes();
   const [desktopWidth, setDesktopWidth] = useState(window.innerWidth);
   useEffect(() => {
     const resize = () => setDesktopWidth(window.innerWidth);
@@ -229,19 +231,26 @@ function ProgramRoute() {
         connectionState={programConnection.state}
         resolvedPreset={resolved}
         snapshot={activeSnapshot}
+        gg={
+          scenes?.active === 'gameplay' &&
+          (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
+          scenes.director?.gg?.mapEpoch === activeSnapshot?.cursor.mapEpoch
+        }
       />
     </ProgramCueRendererBridge>
   );
   return window.__TAURI_INTERNALS__ ? (
-    <div
-      style={{
-        transform: `scale(${desktopWidth / 1920})`,
-        transformOrigin: 'top left',
-        width: 1920,
-        height: 1080,
-      }}
-    >
-      {program}
+    <div className="program-desktop-viewport">
+      <div
+        style={{
+          transform: `scale(${desktopWidth / 1920})`,
+          transformOrigin: 'top left',
+          width: 1920,
+          height: 1080,
+        }}
+      >
+        {program}
+      </div>
     </div>
   ) : (
     program
