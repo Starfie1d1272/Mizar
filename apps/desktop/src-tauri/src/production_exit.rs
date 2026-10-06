@@ -5,6 +5,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
+pub struct VerifiedStop(AtomicBool);
+impl VerifiedStop {
+    pub fn mark(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+    pub fn complete(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Default)]
 pub struct ExitGate {
     closing: AtomicBool,
     active: AtomicBool,
@@ -114,6 +125,28 @@ pub fn finish_companion() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_verified_stop_skips_an_already_completed_production_request() {
+        let stop = VerifiedStop::default();
+        assert!(!stop.complete());
+        stop.mark();
+        assert!(stop.complete());
+        let calls = std::cell::RefCell::new(Vec::new());
+        finish_then_restore(
+            || {
+                if !stop.complete() {
+                    calls.borrow_mut().push("http");
+                }
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("game-close-and-restore");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*calls.borrow(), vec!["game-close-and-restore"]);
+    }
     #[test]
     fn safe_finish_precedes_game_close_and_failure_keeps_game() {
         let calls = std::cell::RefCell::new(Vec::new());

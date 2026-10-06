@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setImmediate } from 'node:timers/promises';
 import type { FastifyInstance } from 'fastify';
+import type { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import { buildApp } from '../src/app.js';
 
 describe('portable runtime management', () => {
@@ -47,6 +48,50 @@ describe('portable runtime management', () => {
     ).toBe(202);
     await setImmediate();
     expect(stop).toHaveBeenCalledOnce();
+  });
+  it('verified CLI stop waits for source release and refuses to stop on failure', async () => {
+    const calls: string[] = [];
+    const release = vi.fn((): Promise<void> => {
+      calls.push('release');
+      return Promise.reject(new Error('release failed'));
+    });
+    const stop = vi.fn(() => {
+      calls.push('stop');
+    });
+    app = buildApp({
+      rivalhubConnection: {
+        release,
+        view: () => ({ paired: false }),
+        reliableAuthorityScope: () => undefined,
+      } as unknown as RivalHubConnection,
+      productRuntime: {
+        artifactSha256: 'a'.repeat(64),
+        gitSha: 'b'.repeat(40),
+        instanceId: 'instance',
+        controlToken: 'secret',
+        stop,
+      },
+    });
+    const send = () =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/runtime/stop',
+        headers: { 'x-runtime-token': 'secret' },
+      });
+    expect((await send()).statusCode).toBe(409);
+    await setImmediate();
+    expect(stop).not.toHaveBeenCalled();
+    release.mockImplementationOnce(() => {
+      calls.push('release');
+      return Promise.resolve();
+    });
+    expect((await send()).statusCode).toBe(202);
+    await setImmediate();
+    expect(calls).toEqual(['release', 'release', 'stop']);
+    expect((await app.inject('/local/v1/production')).json()).toMatchObject({
+      mode: 'preparation',
+      canEnter: false,
+    });
   });
   it('does not register runtime management in ordinary development or qualification', async () => {
     app = buildApp();

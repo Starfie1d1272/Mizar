@@ -971,6 +971,7 @@ fn run_desktop(
         )))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
+        .manage(production_exit::VerifiedStop::default())
         .invoke_handler(tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
@@ -1126,6 +1127,7 @@ fn run_desktop(
                                             "success",
                                             Some("Explicit verified stop completed."),
                                         );
+                                        tick_host.state::<production_exit::VerifiedStop>().mark();
                                         tick_running.store(false, Ordering::Relaxed);
                                         tick_host.exit(0);
                                     } else {
@@ -1241,9 +1243,21 @@ fn run_desktop(
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(2);
-                    production_exit::finish_then_restore(production_exit::finish_companion, || {
-                        cs2.finish()
-                    })
+                    production_exit::finish_then_restore(
+                        || {
+                            // --stop already completed the same safe transaction before
+                            // stopping the verified service; no HTTP request can follow it.
+                            if cleanup_host
+                                .state::<production_exit::VerifiedStop>()
+                                .complete()
+                            {
+                                Ok(())
+                            } else {
+                                production_exit::finish_companion()
+                            }
+                        },
+                        || cs2.finish(),
+                    )
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));

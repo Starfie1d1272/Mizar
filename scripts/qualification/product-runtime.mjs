@@ -163,7 +163,7 @@ export async function stopProduct(
   const response = await globalThis.fetch(`http://127.0.0.1:${port}/operator/runtime/stop`, {
     method: 'POST',
     headers: { 'x-runtime-token': state.controlToken },
-    signal: globalThis.AbortSignal.timeout(5000),
+    signal: globalThis.AbortSignal.timeout(15000),
   });
   if (!response.ok) throw new Error('停止请求未被接受，请检查运行日志');
   const deadline = performance.now() + 35000;

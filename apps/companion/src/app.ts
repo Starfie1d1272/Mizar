@@ -710,7 +710,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   if (options.productRuntime !== undefined) {
     const product = options.productRuntime;
-    app.post('/operator/runtime/stop', (request, reply) => {
+    app.post('/operator/runtime/stop', async (request, reply) => {
       const token = request.headers['x-runtime-token'];
       const expected = Buffer.from(product.controlToken);
       const supplied = Buffer.from(typeof token === 'string' ? token : '');
@@ -723,6 +723,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ) {
         return reply.code(403).send({ error: 'runtime-control-denied' });
       }
+      // The capability-verified CLI stop uses the same transaction as both UIs.
+      const result = await production.shutdown();
+      if (result.code !== 200) return reply.code(result.code).send(result.value);
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
     });
