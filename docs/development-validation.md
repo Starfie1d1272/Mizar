@@ -95,6 +95,8 @@ Rivals 排练的赛事资料来自公开赛程，局内遥测来自独立真实�
 
 ## 便携包自动化
 
+离线验收与构建器共用应用版本和发布包命名函数，检查同一版本的目录及 ZIP；不接受其他版本的归档替代本次产物。发布名称规范见[发布流程](release-readiness.md)。
+
 Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 保留 Ancient 编辑器回放，排除开发专用 Nuke 回放；每次产品构建校验资源边界。
 
 常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo target cache 仅由 main 写入，PR 读取共享缓存。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。

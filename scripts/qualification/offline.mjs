@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { readAppVersion, windowsBundleName } from './app-version.mjs';
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 function executable(command) {
@@ -88,13 +90,18 @@ export async function assertGsiScriptContract(scriptsDir) {
     throw new Error('qualification GSI 安装缺少 endpoint 冲突检查');
 }
 
-async function assertBundleSmoke(outputRoot) {
+export async function findBundleDirectory(outputRoot, appVersion) {
   const entries = await readdir(outputRoot, { withFileTypes: true });
-  const bundle = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('mizar-'));
-  const archive = entries.find((entry) => entry.isFile() && entry.name.endsWith('.zip'));
+  const bundleName = windowsBundleName(appVersion);
+  const bundle = entries.find((entry) => entry.isDirectory() && entry.name === bundleName);
+  const archive = entries.find((entry) => entry.isFile() && entry.name === `${bundleName}.zip`);
   if (bundle === undefined || archive === undefined)
     throw new Error('qualification build 未生成一个 bundle 目录和一个 ZIP');
-  const bundleDir = join(outputRoot, bundle.name);
+  return join(outputRoot, bundle.name);
+}
+
+async function assertBundleSmoke(outputRoot) {
+  const bundleDir = await findBundleDirectory(outputRoot, await readAppVersion());
   for (const relativePath of [
     'app/package.json',
     'app/dist/server.js',
