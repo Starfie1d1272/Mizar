@@ -335,6 +335,12 @@ async function main() {
     for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
       await cp(join(rootDir, name), join(stagingDir, name));
     }
+    if (process.platform === 'win32' && !options.skipNodeRuntime) {
+      await cp(
+        join(process.env.ProgramFiles, '7-Zip', 'License.txt'),
+        join(stagingDir, '7zip-LICENSE.txt'),
+      );
+    }
     await createDeployWorkspace(deployWorkspaceDir);
     await runCommand(
       'pnpm',

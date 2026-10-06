@@ -35,6 +35,17 @@ $manifest = Get-Content -Raw -LiteralPath (Join-Path $output 'release-manifest.j
 $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
 $archiveName = Split-Path $archive -Leaf
 Set-Content -LiteralPath ($archive + '.sha256') -Value "$digest  $archiveName" -Encoding utf8NoBOM
+$toolVersion = (Get-Item -LiteralPath $sevenZip).VersionInfo.FileVersion
+if ($toolVersion -notmatch '^(\d+)\.(\d+)') { throw 'Cannot resolve exact 7-Zip source version' }
+$sourceArchiveName = '7z' + ([int]$Matches[1]).ToString('D2') + ([int]$Matches[2]).ToString('D2') + '-src.7z'
+$sourceUrl = 'https://www.7-zip.org/a/' + $sourceArchiveName
+$sourceArchive = Join-Path $output $sourceArchiveName
+Invoke-WebRequest -Uri $sourceUrl -OutFile $sourceArchive
+& $sevenZip t $sourceArchive
+if ($LASTEXITCODE -ne 0) { throw '7-Zip source archive verification failed' }
+$licensePath = Join-Path $source '7zip-LICENSE.txt'
+$licenseName = '7zip-LICENSE.txt'
+Copy-Item -LiteralPath $licensePath -Destination (Join-Path $output $licenseName)
 $distribution = [ordered]@{
   schemaVersion = 1
   gitSha = $manifest.gitSha
@@ -46,7 +57,12 @@ $distribution = [ordered]@{
   archiveBytes = (Get-Item -LiteralPath $archive).Length
   originalArchiveBytes = (Get-Item -LiteralPath (Join-Path $output $manifest.archive)).Length
   format = '7zip-gui-sfx-lzma2-solid'
-  sevenZipVersion = (Get-Item -LiteralPath $sevenZip).VersionInfo.FileVersion
+  sevenZipVersion = $toolVersion
+  extractorLicense = $licenseName
+  extractorLicenseSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $licensePath).Hash.ToLowerInvariant()
+  extractorSourceArchive = $sourceArchiveName
+  extractorSourceUrl = $sourceUrl
+  extractorSourceSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceArchive).Hash.ToLowerInvariant()
   extractorStubSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $stub).Hash.ToLowerInvariant()
   verifiedFiles = $original.Count
 }

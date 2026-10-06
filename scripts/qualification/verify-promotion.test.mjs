@@ -84,7 +84,14 @@ it('rejects wrong source, tag, ZIP digest, payload and compiled version during p
       archiveSha256: hash('sfx fixture'),
       archiveBytes: Buffer.byteLength('sfx fixture'),
       format: '7zip-gui-sfx-lzma2-solid',
+      extractorLicense: '7zip-LICENSE.txt',
+      extractorLicenseSha256: hash('license fixture'),
+      extractorSourceArchive: '7z2501-src.7z',
+      extractorSourceSha256: hash('source fixture'),
+      extractorSourceUrl: 'https://www.7-zip.org/a/7z2501-src.7z',
     };
+    await writeFile(join(product, distribution.extractorLicense), 'license fixture');
+    await writeFile(join(product, distribution.extractorSourceArchive), 'source fixture');
     await writeFile(join(product, distribution.archive), 'sfx fixture');
     await writeFile(
       join(product, `${distribution.archive}.sha256`),

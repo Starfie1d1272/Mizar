@@ -33,6 +33,10 @@
 | `vitest`                                 |    5.0.3 | 单元与集成测试                   | MIT                                    |
 | `zod`                                    |    4.6.5 | Runtime schema validation        | MIT                                    |
 
+## 自解压分发工具
+
+Windows 自解压分发使用未修改的 7-Zip GUI SFX 模块（Igor Pavlov）。它只负责提取完整便携包，不属于 Mizar 的运行依赖。7-Zip 主要采用 GNU LGPL，部分代码为 BSD 3-Clause 或受 unRAR 限制；随包 `7zip-LICENSE.txt` 保留官方说明。精确版本、模块与许可摘要、对应官方源码地址及发布资产摘要记录于 `distribution-manifest.json`；对应源码归档与完整许可随同一 Release 单独提供。压缩容器内的 Mizar 与第三方资源沿用各自原有许可证。
+
 ## C4 数值地图与上游说明
 
 固定依赖 [`cs2-c4-damage@0.1.0`](https://github.com/Starfie1d1272/cs2-c4-damage) 的项目代码使用 Apache-2.0。Mizar 生产依赖同时携带包内 `LICENSE`、`NOTICE`、`CREDITS.md` 和 `maps/manifest.json`；portable 构建使用现有资源验证器确认这些文件与十图资源可加载。

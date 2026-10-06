@@ -58,6 +58,22 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
       distribution.archive !== manifest.archive.replace(/\.zip$/, '-extract.exe')
     )
       throw new Error('自解压包身份与已验 ZIP 不一致');
+    if (
+      distribution.extractorLicense !== '7zip-LICENSE.txt' ||
+      !/^7z\d{4}-src\.7z$/.test(distribution.extractorSourceArchive) ||
+      distribution.extractorSourceUrl !==
+        `https://www.7-zip.org/a/${distribution.extractorSourceArchive}`
+    )
+      throw new Error('自解压工具许可或源码身份无效');
+    for (const [name, expected] of [
+      [distribution.extractorLicense, distribution.extractorLicenseSha256],
+      [distribution.extractorSourceArchive, distribution.extractorSourceSha256],
+    ]) {
+      const actual = createHash('sha256')
+        .update(await readFile(join(product, name)))
+        .digest('hex');
+      if (actual !== expected) throw new Error('自解压工具许可或源码摘要不一致');
+    }
     const sfx = join(product, distribution.archive);
     const bytes = await readFile(sfx);
     const sfxDigest = createHash('sha256').update(bytes).digest('hex');

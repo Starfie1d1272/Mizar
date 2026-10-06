@@ -135,6 +135,8 @@ jobs:
           subject-path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*-extract.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
 
@@ -147,6 +149,8 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*-extract.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*-extract.exe.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
           if-no-files-found: error
