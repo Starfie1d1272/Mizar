@@ -242,7 +242,7 @@ export class ProgramRuntime {
         currentIdentity.mapPlanFingerprint !== contextIdentity.mapPlanFingerprint
       ) {
         const pristine =
-          this.seriesProgress.bindingState === 'unbound' &&
+          this.seriesProgress.currentMapOrder === null &&
           this.seriesProgress.score.a === 0 &&
           this.seriesProgress.score.b === 0 &&
           this.seriesProgress.maps.every(

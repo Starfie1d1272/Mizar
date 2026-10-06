@@ -26,6 +26,19 @@ function controller(switchObs: (id: ProgramSceneId) => Promise<void>) {
     projections,
   };
 }
+it('lets manual summaries review confirmed history without requiring the current demo identity', async () => {
+  const { scene, operator, program } = controller(async () => {});
+  operator.runtime.telemetryFreshness = 'stale';
+  operator.identity.state = 'mismatch';
+  program.series.bindingState = 'unbound';
+  Object.assign(program.series, { maps: [{ status: 'completed', finalScore: { a: 13, b: 5 } }] });
+  expect((await scene.select('map_result', scene.get().revision)).ok).toBe(true);
+  expect((await scene.selectAutomatic('map_result', scene.get().revision, () => true)).ok).toBe(
+    false,
+  );
+  operator.matchContext.freshness = 'missing';
+  expect(scene.get().available).not.toContain('map_result');
+});
 
 it('keeps the current Program Scene when identity, freshness or OBS switch fails', async () => {
   const switchObs = vi.fn<(id: ProgramSceneId) => Promise<void>>().mockResolvedValue(undefined);

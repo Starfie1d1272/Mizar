@@ -544,7 +544,8 @@
 .player-rail--right .player-rail__bomb-prediction {
   transform: scaleX(-1);
 }
-.hud-widget-design .player-rail__bomb-prediction--pending {
+.hud-widget-design[data-hud-design]
+  .player-rail__bomb-prediction.player-rail__bomb-prediction--pending {
   background: color-mix(in srgb, var(--mizar-hud-text-primary) 24%, transparent);
   opacity: 0.6;
   height: 2px;

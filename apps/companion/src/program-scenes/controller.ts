@@ -61,6 +61,12 @@ export class ProgramSceneController {
         : 'BP 数据尚未就绪，请先在 BP 制作中检查。';
     }
     if (!contextReady) return '请先选择并保存比赛资料；资料过期时请刷新。';
+    if (
+      !automatic &&
+      id !== 'matchup' &&
+      series?.maps.some((map) => map.status === 'completed' && map.finalScore !== null)
+    )
+      return null;
     if (!identitySafe) return '当前游戏选手与所选比赛不一致，请切换比赛或核对名单。';
     if (!bound) return '当前游戏尚未对应到比赛地图，请在比赛资料中核对地图和双方名单。';
     if (id === 'matchup') return null;
