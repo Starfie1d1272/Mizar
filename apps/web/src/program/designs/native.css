@@ -399,7 +399,7 @@
     z-index: 3;
   }
   .player-rail__name {
-    max-width: calc(100% - 94px);
+    max-width: calc(100% - 108px);
     font-family: var(--mizar-type-family-body);
     color: var(--mizar-hud-text-primary);
     font-size: 21px;
@@ -504,7 +504,7 @@
     right: 10px;
     top: 7px;
     left: auto;
-    width: 58px;
+    width: 68px;
     margin: 0;
     font-size: 14px;
     color: var(--mizar-hud-text-muted);
@@ -630,15 +630,15 @@
   .player-rail__round-kill-slot {
     color: var(--mizar-hud-text-primary);
     position: absolute;
-    right: 74px;
+    right: 82px;
     left: auto;
-    top: 7px;
+    top: 4px;
     width: 24px;
     height: 24px;
     z-index: 4;
   }
   .player-rail--right .player-rail__round-kill-slot {
-    left: 74px;
+    left: 82px;
     right: auto;
   }
   .player-rail__round-kill-badge,

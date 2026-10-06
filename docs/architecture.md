@@ -94,7 +94,7 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
 
-C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。同一投影的十人预测合并为一次 Worker 消息，整批写入精确输入缓存后通知刷新。普通实战帧的等待发布最多合并十六毫秒，既有完整快照保留原游标；完成时重投影最新状态，超时公开等待，不把旧估算拼接到新帧。新鲜度、代际、地图、身份、回合或比分边界立即发布。见 [ADR-0029](decisions/0029-c4-worker-isolation.md)与 [ADR-0035](decisions/0035-bounded-c4-publish-coalescing.md)。
+C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。同一投影的十人预测合并为一次 Worker 消息，整批写入精确输入缓存后通知刷新。普通实战帧的等待发布最多合并十六毫秒，既有完整快照保留原游标；未变化的不可用项（例如已阵亡选手）不阻止其余选手的等待合并，新出现的不可用原因立即发布。完成时重投影最新状态，超时公开等待，不把旧估算拼接到新帧。新鲜度、代际、地图、身份、回合或比分边界立即发布。见 [ADR-0029](decisions/0029-c4-worker-isolation.md)与 [ADR-0035](decisions/0035-bounded-c4-publish-coalescing.md)。
 
 ## 雷达与展示配置
 
@@ -114,7 +114,7 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 桌面通过准备检查后，由 Host 启动或复用本次受管理 CS2，再提交进入现场。结束制作成功后正常关闭该游戏并恢复临时视频配置；隐藏现场不关闭。配置文件与进程身份、备份及重启恢复只由 Host 管理，网页发送固定意图；细节见 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md)。
 
-现场窗口采用窗口级全屏 Shell 标记，让任务栏在现场处于活动状态时退到其后，不修改系统自动隐藏设置；隐藏、退出或更换游戏窗口撤销标记。标记成功后按完整显示器边界排布，失败沿用工作区。受管理 CS2 使用无边框窗口，保持 75% 上限与 16:9 客户区，左栏贴屏幕底部，与游戏、底栏连续平铺；游戏拒绝无边框时保留原生外框避让。DPI 与窗口变化共用同一 Host 布局。决策及异常退出边界见 [ADR-0030](decisions/0030-workspace-fullscreen-shell.md)与[ADR-0031](decisions/0031-borderless-workspace-game.md)。
+现场窗口采用窗口级全屏 Shell 标记，让任务栏在现场处于活动状态时退到其后，不修改系统自动隐藏设置；隐藏、退出或更换游戏窗口撤销标记。标记成功后按完整显示器边界排布，失败沿用工作区。受管理 CS2 使用无边框窗口，保持 75% 上限与 16:9 客户区，左栏贴屏幕底部，与游戏、底栏连续平铺；游戏拒绝无边框时保留原生外框避让。DPI 与窗口变化共用同一 Host 物理布局；现场 WebView 自身的缩放变化也通过既有工作线程合并重排，不依赖游戏窗口同时改变尺寸或 DPI，隐藏期间的变化在恢复现场时处理。决策及异常退出边界见 [ADR-0030](decisions/0030-workspace-fullscreen-shell.md)与[ADR-0031](decisions/0031-borderless-workspace-game.md)。
 
 `ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](design/program-direction-v1.md)。
 
