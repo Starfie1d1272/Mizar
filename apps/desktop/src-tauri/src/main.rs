@@ -369,7 +369,7 @@ fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
     match state.tracker.lock() {
         Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation })
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics() })
         }
         Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
     }

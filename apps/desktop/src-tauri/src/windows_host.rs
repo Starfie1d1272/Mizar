@@ -177,6 +177,26 @@ pub struct GameTracker {
 }
 
 impl GameTracker {
+    pub fn geometry_diagnostics(&self) -> serde_json::Value {
+        let _coordinates = PhysicalCoordinates::enter();
+        let Some(window) = self.window else { return serde_json::Value::Null; };
+        let mut size = WinRect::default();
+        let mut outer = WinRect::default();
+        let mut origin = Point::default();
+        unsafe {
+            if GetClientRect(window.hwnd, &mut size) == 0 || GetWindowRect(window.hwnd, &mut outer) == 0 || ClientToScreen(window.hwnd, &mut origin) == 0 { return serde_json::Value::Null; }
+            let mut end = Point { x: size.right, y: size.bottom };
+            let end_valid = ClientToScreen(window.hwnd, &mut end) != 0;
+            serde_json::json!({
+                "dpi": GetDpiForWindow(window.hwnd),
+                "clientSize": [size.right, size.bottom],
+                "screenOrigin": [origin.x, origin.y],
+                "screenEnd": end_valid.then_some([end.x, end.y]),
+                "outer": [outer.left, outer.top, outer.right, outer.bottom],
+                "alignmentRetries": self.alignment_retries
+            })
+        }
+    }
     pub fn observe(&mut self, found: Option<Cs2Window>) -> bool {
         if self.window == found { return false; }
         self.frame = None;
