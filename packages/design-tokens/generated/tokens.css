@@ -89,7 +89,7 @@
   --mizar-focus-ring: var(--mizar-fg-link);
   --mizar-font-family-display: 'Barlow Condensed', 'Arial Narrow', 'Microsoft YaHei', sans-serif;
   --mizar-font-family-mono: 'SFMono-Regular', 'Consolas', monospace;
-  --mizar-font-family-sans: 'Inter', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --mizar-font-family-sans: 'Inter', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --mizar-font-line-normal: 1.5;
   --mizar-font-size-12: 12px;
   --mizar-font-size-14: 14px;

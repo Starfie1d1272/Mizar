@@ -439,14 +439,7 @@
     "family": {
       "sans": {
         "$type": "fontFamily",
-        "$value": [
-          "Inter",
-          "Microsoft YaHei UI",
-          "Microsoft YaHei",
-          "PingFang SC",
-          "Noto Sans CJK SC",
-          "sans-serif"
-        ]
+        "$value": ["Inter", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "sans-serif"]
       },
       "mono": {
         "$type": "fontFamily",
