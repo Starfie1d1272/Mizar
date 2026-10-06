@@ -72,7 +72,12 @@ export class BombDamageWorkerClient {
         const context = this.context;
         const key = JSON.stringify([context, input]);
         const result = cache.get(key);
-        if (result) return result;
+        if (result) {
+          // Keep currently used exact inputs resident while moving players churn other keys.
+          cache.delete(key);
+          cache.set(key, result);
+          return result;
+        }
         if (!this.closed && !loading.has(key) && this.pending.size < 10) {
           loading.add(key);
           void this.request(mapName, input)

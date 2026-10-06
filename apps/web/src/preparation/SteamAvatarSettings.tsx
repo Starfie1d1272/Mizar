@@ -40,10 +40,10 @@ export function SteamAvatarSettings() {
   }
   return (
     <Panel>
-      <h2>Steam 头像</h2>
+      <h2>Steam 头像（可选）</h2>
       <p>
-        赛事提供的头像优先。填写 Steam Web API Key 后，可按当前选手的 Steam64
-        批量获取备用头像并缓存在本机。
+        推荐填写 Steam Web API Key。保存后自动按当前选手的 Steam64 获取 Steam
+        头像并缓存在本机，赛事提供的头像优先。不填写也能正常使用 HUD，显示已有头像或观察编号。
       </p>
       <p>
         {status?.configured ? '已配置密钥' : '尚未配置密钥'} · 本机缓存 {status?.cached ?? 0} 个头像
@@ -55,7 +55,7 @@ export function SteamAvatarSettings() {
         }}
       >
         <Field
-          label="Steam Web API Key"
+          label="Steam Web API Key（可选，推荐填写）"
           type="password"
           autoComplete="off"
           value={key}

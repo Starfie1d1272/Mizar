@@ -30,6 +30,13 @@ describe('C4 worker isolation', () => {
       });
       await worker.settle();
       expect(prepared.predict(input)).toEqual(direct.predict(input));
+      // Stationary players stay cached while other exact inputs churn past the cap.
+      for (let health = 1; health < 40; health++) {
+        expect(prepared.predict(input)).toEqual(direct.predict(input));
+        prepared.predict({ ...input, health });
+        await worker.settle();
+      }
+      expect(prepared.predict(input)).toEqual(direct.predict(input));
       for (let health = 60; health < 71; health++)
         expect(prepared.predict({ ...input, health }).status).toBe('unavailable');
       await worker.settle();
