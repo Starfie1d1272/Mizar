@@ -3,6 +3,7 @@
 mod cs2_activity;
 mod cs2_session;
 mod cs2_video;
+mod desktop_worker;
 mod geometry;
 mod managed_cs2;
 mod production_exit;
@@ -12,6 +13,7 @@ mod support_export;
 mod windows_host;
 mod windows_startup;
 
+use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
 use startup_log::DesktopLog;
 use std::{
@@ -59,37 +61,6 @@ struct HostState {
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
     tray_available: AtomicBool,
-}
-
-struct DesktopWorker {
-    running: Arc<AtomicBool>,
-    dispatch: Arc<Mutex<()>>,
-    handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
-}
-impl DesktopWorker {
-    fn stop(&self) {
-        if let Ok(_dispatch) = self.dispatch.lock() {
-            self.running.store(false, Ordering::Relaxed);
-        }
-        if let Ok(mut handle) = self.handle.lock() {
-            if let Some(handle) = handle.take() {
-                let until = Instant::now() + Duration::from_millis(300);
-                while !handle.is_finished() && Instant::now() < until {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                if handle.is_finished() {
-                    let _ = handle.join();
-                }
-                // A blocked CS2 native call may finish later. The dispatch gate
-                // prevents this detached worker from using Tauri after shutdown.
-            }
-        }
-    }
-}
-impl Drop for DesktopWorker {
-    fn drop(&mut self) {
-        self.stop();
-    }
 }
 
 fn bundle_root() -> Result<PathBuf, String> {
@@ -1057,8 +1028,7 @@ fn run_desktop(
                             let _ = open_main(app.clone(), None);
                         }
                         "exit" => {
-                            let state = app.state::<HostState>();
-                            state.running.store(false, Ordering::Relaxed);
+                            // ExitRequested can reject cleanup. Keep tracking until RunEvent::Exit.
                             app.exit(0);
                         }
                         _ => (),
@@ -1122,14 +1092,22 @@ fn run_desktop(
                             .run_on_main_thread(move || {
                                 if tick_running.load(Ordering::Relaxed) {
                                     if tick_signal.requested() {
-                                        tick_host.state::<DesktopLog>().event(
-                                            "runtime_stopped",
-                                            "success",
-                                            Some("Explicit verified stop completed."),
-                                        );
-                                        tick_host.state::<production_exit::VerifiedStop>().mark();
-                                        tick_running.store(false, Ordering::Relaxed);
-                                        tick_host.exit(0);
+                                        // A failed game restoration stays open for manual retry.
+                                        // Consume the verified signal once; do not reopen a dialog each tick.
+                                        if !tick_host
+                                            .state::<production_exit::VerifiedStop>()
+                                            .complete()
+                                        {
+                                            tick_host.state::<DesktopLog>().event(
+                                                "runtime_stopped",
+                                                "success",
+                                                Some("Explicit verified stop completed."),
+                                            );
+                                            tick_host
+                                                .state::<production_exit::VerifiedStop>()
+                                                .mark();
+                                            tick_host.exit(0);
+                                        }
                                     } else {
                                         if activate {
                                             let _ = open_main(tick_host.clone(), None);

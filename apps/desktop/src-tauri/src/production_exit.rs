@@ -17,16 +17,14 @@ impl VerifiedStop {
 
 #[derive(Default)]
 pub struct ExitGate {
-    closing: AtomicBool,
     active: AtomicBool,
 }
 impl ExitGate {
     pub fn begin(&self) -> bool {
-        self.closing.store(true, Ordering::Release);
         !self.active.swap(true, Ordering::AcqRel)
     }
     pub fn check(&self) -> Result<(), String> {
-        if self.closing.load(Ordering::Acquire) {
+        if self.active.load(Ordering::Acquire) {
             Err("Mizar 正在退出，请完成收尾后再启动。".into())
         } else {
             Ok(())
@@ -184,6 +182,7 @@ mod tests {
         assert!(!gate.begin());
         assert!(gate.check().is_err());
         gate.cancel();
+        assert!(gate.check().is_ok());
         assert!(gate.begin());
         assert!(gate.check().is_err());
     }

@@ -57,3 +57,5 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 
 - [ADR-0027：CS2 启动结果与跨窗口恢复流程](0027-cs2-launch-recovery-workflow.md)
 - [ADR-0028：Host 正常退出复用安全制作收尾](0028-safe-host-production-exit.md)
+
+- [ADR-0029：C4 解码、索引与预测的线程隔离](0029-c4-worker-isolation.md)

@@ -94,6 +94,8 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
 
+C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。等待或故障时预测不可用，不回放旧帧；见 [ADR-0029](decisions/0029-c4-worker-isolation.md)。
+
 ## 雷达与展示配置
 
 雷达领域完成世界坐标到地图坐标的转换；共享展示包负责插值、平滑、跳变重置和自动聚焦动画。外部网站消费已经校准的公共坐标，不复制地图校准。[包说明](../packages/radar-view/README.md)维护集成方法。

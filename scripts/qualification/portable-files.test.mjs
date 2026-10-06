@@ -41,10 +41,18 @@ describe('portable runtime files', () => {
         'app.js',
         'app.d.ts',
         'app.d.ts.map',
+        'app.d.mts',
+        'app.d.cts',
+        'app.d.mts.map',
+        'app.d.cts.map',
+        'app.mjs.map',
+        'app.cjs.map',
+        'app.css.map',
         'app.js.map',
         'app.tsbuildinfo',
         'data.json',
         'map.bin',
+        'world.map',
         'LICENSE',
       ]) {
         await writeFile(join(path, name), name);
@@ -57,6 +65,7 @@ describe('portable runtime files', () => {
         'app.js',
         'data.json',
         'map.bin',
+        'world.map',
       ]);
       expect(await readFile(join(root, directory, 'app.js'), 'utf8')).toBe('app.js');
     }

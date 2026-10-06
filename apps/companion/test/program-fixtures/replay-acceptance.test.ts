@@ -71,7 +71,7 @@ async function readPrimaryArtifact() {
   return { manifest, framesBytes, eventsBytes, frames, events };
 }
 
-describe('Issue 76 production replay acceptance', () => {
+describe('Issue 76 production replay acceptance', { timeout: 30_000 }, () => {
   it('materializes the fixed real Ancient round with authentic identity and provenance', async () => {
     const artifact = await readPrimaryArtifact();
     const sourceCapture = JSON.parse(

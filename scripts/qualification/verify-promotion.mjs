@@ -44,7 +44,34 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
       windowsHide: true,
     }).trim();
   if (version !== manifest.appVersion) throw new Error('EXE 编译版本与 manifest 不一致');
+  let distribution;
+  const productFiles = await readdir(product);
+  if (productFiles.includes('distribution-manifest.json')) {
+    distribution = JSON.parse(await readFile(join(product, 'distribution-manifest.json'), 'utf8'));
+    if (
+      distribution.schemaVersion !== 1 ||
+      distribution.gitSha !== manifest.gitSha ||
+      distribution.appVersion !== manifest.appVersion ||
+      distribution.contentDigest !== manifest.contentDigest ||
+      distribution.originalArchiveSha256 !== digest ||
+      distribution.format !== '7zip-gui-sfx-lzma2-solid' ||
+      distribution.archive !== manifest.archive.replace(/\.zip$/, '-extract.exe')
+    )
+      throw new Error('自解压包身份与已验 ZIP 不一致');
+    const sfx = join(product, distribution.archive);
+    const bytes = await readFile(sfx);
+    const sfxDigest = createHash('sha256').update(bytes).digest('hex');
+    if (
+      sfxDigest !== distribution.archiveSha256 ||
+      bytes.length !== distribution.archiveBytes ||
+      (await readFile(`${sfx}.sha256`, 'utf8')).trim() !== `${sfxDigest}  ${distribution.archive}`
+    )
+      throw new Error('自解压包摘要不一致');
+  } else if (productFiles.some((name) => name.endsWith('-extract.exe'))) {
+    throw new Error('自解压包缺少已验分发清单');
+  }
   return {
+    ...(distribution ? { distribution } : {}),
     tag,
     appVersion: version,
     gitSha: sourceSha,

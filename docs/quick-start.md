@@ -4,7 +4,7 @@
 
 ## 第一次使用
 
-1. 将完整 ZIP 解压到可写目录，不在压缩包内运行。安装 Microsoft Edge WebView2 Evergreen Runtime；包内已带 Node，无需开发工具。
+1. 将完整 ZIP 解压到可写目录，或运行同版本 `-extract.exe` 自解压包并选择新的可写目录，再打开目录内的 `Mizar.exe`。自解压入口只提取完整便携包，不安装服务或自动启动；不选择已有 Mizar 或 `state` 目录，不在压缩包内运行。安装 Microsoft Edge WebView2 Evergreen Runtime；包内已带 Node，无需开发工具。
 2. 双击 `Mizar.exe`，进入带左侧导航的准备中心。
 3. 创建或选择比赛，核对队伍、名单、地图与 BP；连接 RivalHub 时先授权，再选择比赛。
 4. 登录 Steam，先运行一次 CS2 生成账号配置后退出。在「游戏数据」自动检测或选择安装目录，安装 / 修复 GSI。

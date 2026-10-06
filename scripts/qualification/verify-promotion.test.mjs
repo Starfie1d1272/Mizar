@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { expect, it } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -73,6 +74,35 @@ it('rejects wrong source, tag, ZIP digest, payload and compiled version during p
     await expect(verifyPromotion({ ...options, binaryVersion: '1.0.0-rc.6' })).rejects.toThrow(
       'EXE',
     );
+    const distribution = {
+      schemaVersion: 1,
+      gitSha: artifact.gitSha,
+      appVersion: artifact.appVersion,
+      contentDigest,
+      originalArchiveSha256: manifest.archiveSha256,
+      archive: archive.replace('.zip', '-extract.exe'),
+      archiveSha256: hash('sfx fixture'),
+      archiveBytes: Buffer.byteLength('sfx fixture'),
+      format: '7zip-gui-sfx-lzma2-solid',
+    };
+    await writeFile(join(product, distribution.archive), 'sfx fixture');
+    await writeFile(
+      join(product, `${distribution.archive}.sha256`),
+      `${distribution.archiveSha256}  ${distribution.archive}\n`,
+    );
+    await writeFile(join(product, 'distribution-manifest.json'), JSON.stringify(distribution));
+    expect((await verifyPromotion(options)).distribution).toEqual(distribution);
+    await writeFile(join(product, distribution.archive), 'tampered');
+    await expect(verifyPromotion(options)).rejects.toThrow('自解压包摘要');
+    await writeFile(join(product, distribution.archive), 'sfx fixture');
+    await writeFile(
+      join(product, 'distribution-manifest.json'),
+      JSON.stringify({ ...distribution, contentDigest: 'b'.repeat(64) }),
+    );
+    await expect(verifyPromotion(options)).rejects.toThrow('自解压包身份');
+    await rm(join(product, 'distribution-manifest.json'));
+    await expect(verifyPromotion(options)).rejects.toThrow('缺少');
+    await rm(join(product, distribution.archive));
     await writeFile(join(product, archive), 'tampered');
     await expect(verifyPromotion(options)).rejects.toThrow('ZIP');
     await writeFile(join(product, archive), 'original zipped fixture bytes');

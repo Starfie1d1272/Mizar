@@ -17,7 +17,9 @@ export async function pruneDevelopmentFiles(appDir) {
         await visit(path);
       } else if (
         entry.isFile() &&
-        /(?:\.d\.ts(?:\.map)?|\.js\.map|\.tsbuildinfo)$/.test(entry.name)
+        /(?:\.d\.(?:ts|mts|cts)(?:\.map)?|\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|css)\.map|\.tsbuildinfo)$/.test(
+          entry.name,
+        )
       ) {
         await rm(path);
       }
