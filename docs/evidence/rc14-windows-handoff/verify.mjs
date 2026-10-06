@@ -1,6 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
+import { URL } from 'node:url';
+import console from 'node:console';
 
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('provenance.json', root), 'utf8'));
