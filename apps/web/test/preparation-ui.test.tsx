@@ -187,7 +187,7 @@ describe('PreparationPage: readiness and sample workflow', () => {
 
     // Development rehearsal controls are available on demand.
     const rehearsal = container.querySelector('.preparation-rehearsal-stage');
-    expect(rehearsal?.querySelector('summary')?.textContent).toBe('演练控制');
+    expect(rehearsal?.querySelector('summary')?.textContent).toBe('示例体验');
     expect(rehearsal?.hasAttribute('open')).toBe(false);
     expect(container.textContent).not.toContain('undefined');
 

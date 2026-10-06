@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, StatusBanner } from '../ui';
+import { Button, Checkbox, StatusBanner } from '../ui';
 import { LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 
@@ -339,12 +339,13 @@ export function LocalTournamentEditor({
             </>
           ) : null}
           {section === 'maps' ? (
-            <fieldset>
+            <fieldset className="preparation-map-pool">
               <legend>赛事地图池</legend>
-              {LOCAL_BP_MAP_CATALOG.map(({ mapName }) => (
-                <label key={mapName}>
-                  <input
-                    type="checkbox"
+              <div className="preparation-map-pool__choices">
+                {LOCAL_BP_MAP_CATALOG.map(({ mapName, label }) => (
+                  <Checkbox
+                    key={mapName}
+                    label={label}
                     checked={eventPool.includes(mapName)}
                     onChange={(change) =>
                       setEventPool(
@@ -354,9 +355,8 @@ export function LocalTournamentEditor({
                       )
                     }
                   />
-                  {mapName}
-                </label>
-              ))}
+                ))}
+              </div>
             </fieldset>
           ) : null}
           <Button type="submit">保存赛事资料</Button>

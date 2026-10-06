@@ -61,7 +61,7 @@
 }
 
 .hud-console__header-meta strong {
-  color: var(--mizar-accent-primary);
+  color: var(--mizar-fg-link);
 }
 
 .hud-console__nav,
@@ -284,7 +284,7 @@
 }
 
 .hud-console__source-status[data-connection-state='live'] {
-  color: var(--mizar-accent-primary);
+  color: var(--mizar-fg-link);
 }
 
 .hud-console__layout {
@@ -557,7 +557,7 @@
 }
 
 .hud-console__inspector-heading strong {
-  color: var(--mizar-accent-primary);
+  color: var(--mizar-fg-link);
   font-size: var(--mizar-type-size-body);
   font-weight: 500;
 }

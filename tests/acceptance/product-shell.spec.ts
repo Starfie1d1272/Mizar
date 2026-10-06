@@ -5,12 +5,15 @@ test('qualification help uses the preparation shell and development host diagnos
 }) => {
   await page.goto('/qualification');
 
-  const topbar = page.locator('.product-topbar');
+  const sidebar = page.locator('.product-sidebar');
   await expect(page.getByRole('heading', { name: '现场验收', exact: true })).toBeVisible();
-  await expect(topbar).toBeVisible();
-  const nav = topbar.getByRole('navigation', { name: '制作导航' });
+  await expect(sidebar).toBeVisible();
+  const nav = sidebar.getByRole('navigation', { name: '制作导航' });
   await expect(nav.getByRole('link', { name: '总览' })).toHaveAttribute('href', '/');
-  await expect(nav.getByRole('link', { name: '比赛' })).toHaveAttribute('href', '/matches');
+  await expect(nav.getByRole('link', { name: '比赛资料', exact: true })).toHaveAttribute(
+    'href',
+    '/matches',
+  );
   await expect(page.getByRole('link', { name: '返回准备中心' })).toHaveAttribute('href', '/');
 
   const response = await page.request.get('/debug/hosts');

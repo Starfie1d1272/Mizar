@@ -341,7 +341,7 @@ h1 {
 }
 
 .debug-state__mark {
-  color: var(--mizar-accent-primary);
+  color: var(--mizar-fg-link);
   font-family: var(--mizar-type-family-raw);
   font-size: 1.4rem;
 }

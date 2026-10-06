@@ -1,5 +1,5 @@
 import { useLocalRead } from './preparation/client';
-import type { OverlayPolicy } from './preparation/PreparationPage';
+import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';

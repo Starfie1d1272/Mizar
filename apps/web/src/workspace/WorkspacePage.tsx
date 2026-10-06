@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
@@ -20,7 +20,12 @@ import {
 import { Button, StatusPill } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
+import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
+import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
+import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import './workspace.css';
+
+const previewSettled = () => {};
 
 async function openPreparation(path: string) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_main', { path });
@@ -72,30 +77,17 @@ function ObsConfidence() {
     '/local/v1/obs/confidence',
     2000,
   );
-  const obs = useObsStatus();
   return (
     <section className="workspace-confidence" aria-label="OBS 画面确认">
-      <header className="workspace-section-heading">
-        <small>OBS 画面确认</small>
-        <span>{result?.preview?.scene ?? '等待画面'}</span>
-      </header>
-      <div className="workspace-confidence__picture">
-        {result?.preview ? (
-          <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
-        ) : (
-          <div className="workspace-empty">
-            <strong>
-              {obs?.connection === 'connected' ? '正在获取 OBS 画面' : 'OBS 控制未连接'}
-            </strong>
-            <p>
-              {obs?.connection === 'connected' ? '请检查 OBS 当前场景' : '连接 OBS 后显示播出画面'}
-            </p>
-            <Button onClick={() => void openPreparation('/settings?tab=obs')}>
-              OBS 连接与配置
-            </Button>
-          </div>
-        )}
-      </div>
+      {result?.preview ? (
+        <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
+      ) : (
+        <div
+          className="workspace-confidence__empty"
+          role="img"
+          aria-label="OBS 预览暂不可用，请在制作工具中检查 OBS 连接"
+        />
+      )}
     </section>
   );
 }
@@ -125,63 +117,61 @@ export function WorkspaceLeft() {
   const artwork = map ? getRadarArtwork(map)?.artwork.overview : null;
   return (
     <main className="workspace-left mizar-surface" aria-label="现场工作区">
-      <header className="workspace-section-heading workspace-brand">
-        <strong>现场工作区</strong>
-        <StatusPill tone={liveRadar ? 'success' : 'warning'}>
-          {liveRadar ? '比赛数据正常' : '等待比赛数据'}
-        </StatusPill>
-      </header>
-      <section className="workspace-radar" aria-label="比赛雷达">
-        <header className="workspace-section-heading">
-          <small>比赛雷达</small>
-          <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
+      <div className="workspace-left__top">
+        <header className="workspace-section-heading workspace-brand">
+          <div className="workspace-brand__name">
+            <img src="/brand/mizar-mark.svg" alt="" />
+            <strong>MIZAR</strong>
+          </div>
+          <StatusPill tone={liveRadar ? 'success' : 'warning'}>
+            {liveRadar ? '比赛数据正常' : '等待比赛数据'}
+          </StatusPill>
         </header>
-        <div className="workspace-radar__picture">
-          {liveRadar ? (
-            <Radar client={radar} zoomMode="full-map" />
-          ) : (
-            <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
-              {artwork ? (
-                <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
-              ) : (
-                <div className="workspace-radar-grid" aria-hidden="true">
-                  <i />
-                  <i />
+        <section className="workspace-radar" aria-label="比赛雷达">
+          <header className="workspace-section-heading">
+            <small>比赛雷达</small>
+            <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
+          </header>
+          <div className="workspace-radar__picture">
+            {liveRadar ? (
+              <Radar client={radar} zoomMode="full-map" />
+            ) : (
+              <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
+                {artwork ? (
+                  <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
+                ) : (
+                  <div className="workspace-radar-grid" aria-hidden="true">
+                    <i />
+                    <i />
+                  </div>
+                )}
+                <div className="workspace-empty">
+                  <strong>
+                    {payload?.identity.state === 'mismatch' ? '等待核对比赛名单' : '等待 GSI 数据'}
+                  </strong>
+                  <p>
+                    {artwork ? '地图底图 · 实时位置尚不可用' : '进入 CS2 观战后显示地图与选手位置'}
+                  </p>
+                  <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
+                    检查游戏连接
+                  </Button>
                 </div>
-              )}
-              <div className="workspace-empty">
-                <strong>
-                  {payload?.identity.state === 'mismatch' ? '等待核对比赛名单' : '等待 GSI 数据'}
-                </strong>
-                <p>
-                  {artwork ? '地图底图 · 实时位置尚不可用' : '进入 CS2 观战后显示地图与选手位置'}
-                </p>
-                <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
-                  检查游戏连接
-                </Button>
               </div>
-            </div>
-          )}
-        </div>
-      </section>
-      <ContextPanel
-        operator={payload}
-        program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
-      />
+            )}
+          </div>
+        </section>
+        <ContextPanel
+          operator={payload}
+          program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
+        />
+        <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
+      </div>
       <ObsConfidence />
-      <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
     </main>
   );
 }
 
 export function WorkspaceDock() {
-  const operator = useLocalChannelClient('operator');
-  const state = useSyncExternalStore(
-    operator.subscribe,
-    operator.getSnapshot,
-    operator.getSnapshot,
-  );
-  const payload = state.state === 'live' ? state.current?.payload : undefined;
   const sceneState = useProgramScenes();
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
@@ -218,6 +208,14 @@ export function WorkspaceDock() {
   }
   const mode = sceneState?.director?.mode;
   const connected = obs?.connection === 'connected';
+  const next =
+    mode === 'auto'
+      ? PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next)
+      : undefined;
+  const nextFrame = useMemo(
+    () => (next ? { key: next.id, scene: next.id, src: next.path, immediate: true } : null),
+    [next],
+  );
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
       <section className="workspace-direction" aria-label="节目控制">
@@ -268,58 +266,59 @@ export function WorkspaceDock() {
             </Button>
           ))}
         </div>
+        <div className="workspace-next-preview" aria-label="下一个场景预览">
+          {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
+          <div>
+            <small>下一场景</small>
+            <strong>{next?.title ?? '未安排'}</strong>
+          </div>
+        </div>
       </section>
-      <section aria-label="比赛控制">
+      <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
-          <small>比赛与 BP</small>
+          <small>观战 · 本机</small>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>
-              {bp.revealedCount} / {bp.projection.steps.length}
+              BP · {bp.revealedCount} / {bp.projection.steps.length}
             </span>
           ) : null}
         </div>
-        <strong>{payload?.runtime.mapName?.replace(/^de_/, '').toUpperCase() ?? '等待地图'}</strong>
+        <SpectatorHudCommands compact onMessage={setMessage} />
+        <p className="workspace-command-help">复制后在 CS2 控制台执行</p>
+        <LocalOverlayControls onMessage={setMessage} />
         <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
           BP 工作台
         </Button>
-        {production?.mode === 'live' ? (
-          <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-        ) : null}
       </section>
-      <section aria-label="OBS 控制连接">
-        <small>OBS 控制 · WebSocket</small>
-        <strong>
-          {connected
-            ? '控制已连接'
-            : obs?.connection === 'invalid_password'
-              ? '连接密码无效'
-              : obs?.connection === 'password_required'
-                ? '需要连接密码'
-                : '控制未连接'}
-        </strong>
-        <span>推流 · {connected ? (obs.streaming ? '进行中' : '未启动') : '无法确认'}</span>
-        <span>录制 · {connected ? (obs.recording ? '进行中' : '未启动') : '无法确认'}</span>
+      <section className="workspace-production" aria-label="制作工具">
+        <div className="workspace-section-heading">
+          <small>制作工具</small>
+          <span data-tone={connected ? 'success' : 'warning'}>
+            {connected
+              ? `OBS · ${obs.streaming ? '推流中' : '已连接'}`
+              : obs?.connection === 'invalid_password'
+                ? 'OBS · 密码无效'
+                : obs?.connection === 'password_required'
+                  ? 'OBS · 需要密码'
+                  : 'OBS · 未连接'}
+          </span>
+        </div>
         <Button
           disabled={busy}
           onClick={() => void action(() => openPreparation('/settings?tab=obs'))}
         >
-          OBS 连接与配置
+          OBS 配置
         </Button>
-      </section>
-      <section aria-label="制作工具">
-        <small>制作工具</small>
+        <p className="workspace-obs-live">
+          推流 · {connected ? (obs.streaming ? '进行中' : '未启动') : '无法确认'} · 录制 ·{' '}
+          {connected ? (obs.recording ? '进行中' : '未启动') : '无法确认'}
+        </p>
         <div className="workspace-tools">
           <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
             HUD 编辑器
           </Button>
           <Button disabled={busy} onClick={() => void action(() => openTool('diagnostics'))}>
             运行诊断
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() => void action(() => openPreparation('/picture?tab=overlay'))}
-          >
-            本机设置
           </Button>
           <Button
             disabled={busy || !window.__TAURI_INTERNALS__}
@@ -333,6 +332,16 @@ export function WorkspaceDock() {
           >
             隐藏工作区
           </Button>
+        </div>
+      </section>
+      <footer className="workspace-message" role="status">
+        <span>
+          {message || sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
+        </span>
+        <div className="workspace-footer-actions">
+          {production?.mode === 'live' ? (
+            <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
+          ) : null}
           <Button
             disabled={!production || busy}
             onClick={() => production && void action(() => productionAction('finish', production))}
@@ -340,14 +349,6 @@ export function WorkspaceDock() {
             结束制作
           </Button>
         </div>
-      </section>
-      <footer className="workspace-message" role="status">
-        <span>
-          {message ||
-            sceneState?.director?.reason ||
-            '点击场景将切换正式播出画面，并保持手动控制。'}
-        </span>
-        <Button onClick={() => void openTool('diagnostics')}>详情</Button>
       </footer>
     </main>
   );
