@@ -1,10 +1,10 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { windowsBundleName } from './app-version.mjs';
-import { assertGsiScriptContract, findBundleDirectory } from './offline.mjs';
+import { assertGsiScriptContract, assertPortableApp, findBundleDirectory } from './offline.mjs';
 
 const roots = [];
 afterEach(async () => {
@@ -51,6 +51,40 @@ describe('offline qualification bundle discovery', () => {
       );
     },
   );
+});
+
+describe('offline qualification portable app', () => {
+  it('retains dependency runtime directories and opaque map data', async () => {
+    const root = await bundleScripts();
+    const dependency = join(root, 'node_modules/dependency/test');
+    await mkdir(dependency, { recursive: true });
+    await writeFile(join(dependency, 'index.js'), 'module.exports = 1;');
+    await writeFile(join(dependency, 'world.map'), 'runtime map data');
+    await expect(assertPortableApp(root)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    'index.d.ts',
+    'index.d.mts',
+    'index.d.cts',
+    'index.js.map',
+    'style.css.map',
+    'app.tsbuildinfo',
+  ])('rejects nested development file %s', async (name) => {
+    const root = await bundleScripts();
+    const dependency = join(root, 'node_modules/dependency/dist');
+    await mkdir(dependency, { recursive: true });
+    await writeFile(join(dependency, name), '');
+    await expect(assertPortableApp(root)).rejects.toThrow('production 包仍包含开发文件');
+  });
+
+  it('rejects directory symlinks that make the app nonportable', async () => {
+    const root = await bundleScripts();
+    const target = join(root, 'target');
+    await mkdir(target);
+    await symlink(target, join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(assertPortableApp(root)).rejects.toThrow('qualification bundle 包含符号链接');
+  });
 });
 
 describe('offline qualification GSI scripts', () => {

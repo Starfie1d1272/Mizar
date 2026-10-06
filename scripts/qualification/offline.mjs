@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
+import { isDevelopmentFile } from './portable-files.mjs';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -36,11 +37,13 @@ async function assertFile(path, label) {
   }
 }
 
-async function assertNoSymlinks(directory) {
+export async function assertPortableApp(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error('qualification bundle 包含符号链接：' + path);
-    if (entry.isDirectory()) await assertNoSymlinks(path);
+    if (entry.isFile() && isDevelopmentFile(entry.name))
+      throw new Error('production 包仍包含开发文件：' + path);
+    if (entry.isDirectory()) await assertPortableApp(path);
   }
 }
 
@@ -146,15 +149,7 @@ async function assertBundleSmoke(outputRoot) {
     );
   for (const name of ['data', 'logs', 'evidence'])
     await assertFile(join(bundleDir, 'state', name), name);
-  await assertNoSymlinks(join(bundleDir, 'resources/app'));
-  let hasDependencyTests = false;
-  try {
-    await access(join(bundleDir, 'resources/app/node_modules/@fastify/send/test'));
-    hasDependencyTests = true;
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  if (hasDependencyTests) throw new Error('production 包仍包含依赖测试夹具目录');
+  await assertPortableApp(join(bundleDir, 'resources/app'));
   const artifact = JSON.parse(
     await readFile(join(bundleDir, 'resources/metadata/artifact.json'), 'utf8'),
   );
