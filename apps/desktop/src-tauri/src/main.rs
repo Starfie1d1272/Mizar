@@ -1059,8 +1059,6 @@ fn run_desktop(
                         if let Ok(mut cs2) =
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
-                            let activity = host.state::<cs2_activity::Activity>();
-                            let _activity = activity.begin(3);
                             cs2.poll();
                         }
                         cs2_check = Instant::now();

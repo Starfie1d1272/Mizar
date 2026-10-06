@@ -18,7 +18,22 @@
             }
         } catch { }
     }
-    return @($roots | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
+    return @(Get-UniqueSteamPaths -Paths $roots)
+}
+
+function Get-UniqueSteamPaths {
+    param([string[]]$Paths)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $Paths) {
+        if (-not $path) { continue }
+        try {
+            $canonical = [IO.Path]::GetFullPath($path.Replace('/', '\'))
+            if ($canonical -ne [IO.Path]::GetPathRoot($canonical)) {
+                $canonical = $canonical.TrimEnd([char]'\')
+            }
+            if ($seen.Add($canonical)) { $canonical }
+        } catch { }
+    }
 }
 
 function Convert-VdfPath {
@@ -44,7 +59,7 @@ function Get-SteamLibraryRoots {
             }
         } catch { }
     }
-    return @($libraries | Where-Object { $_ } | Select-Object -Unique)
+    return @(Get-UniqueSteamPaths -Paths $libraries)
 }
 
 function Resolve-CfgDirectory {
@@ -58,7 +73,7 @@ function Resolve-CfgDirectory {
             (Join-Path $resolved 'csgo\cfg'),
             (Join-Path $resolved 'cfg')
         )
-        $candidates = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -Unique)
+        $candidates = @(Get-UniqueSteamPaths -Paths @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container }))
         if ($candidates.Count -eq 1) { return [string]$candidates[0] }
         throw "无法从 -Cs2Root 解析唯一的 CS2 cfg 目录；请传入 game\csgo\cfg 或 CS2 安装根目录"
     }
@@ -66,7 +81,7 @@ function Resolve-CfgDirectory {
     $steamRoots = @(Get-SteamInstallRoots)
     $libraryRoots = @()
     foreach ($steamRoot in $steamRoots) { $libraryRoots += @(Get-SteamLibraryRoots -SteamRoot $steamRoot) }
-    $libraryRoots = @($libraryRoots | Where-Object { $_ } | Select-Object -Unique)
+    $libraryRoots = @(Get-UniqueSteamPaths -Paths $libraryRoots)
     $candidates = @()
     foreach ($libraryRoot in $libraryRoots) {
         foreach ($product in @('Counter-Strike 2', 'Counter-Strike Global Offensive')) {
@@ -76,7 +91,7 @@ function Resolve-CfgDirectory {
             }
         }
     }
-    $candidates = @($candidates | Select-Object -Unique)
+    $candidates = @(Get-UniqueSteamPaths -Paths $candidates)
     if ($candidates.Count -eq 1) { return [string]$candidates[0] }
     if ($candidates.Count -eq 0) { throw '未找到 CS2 cfg 目录；请传入 -Cs2Root <path>' }
     throw "找到多个 CS2 cfg 目录；请传入 -Cs2Root <path> 选择一个（候选数：$($candidates.Count)）"

@@ -26,7 +26,11 @@ export function useCs2Status() {
           // A busy response deliberately has no game/config facts: retain the
           // last snapshot, and display only its separate operation label.
           if (!next.busy) setStatus(next);
-          setPhase(next.busy ? (next.phase ?? 'checking') : undefined);
+          setPhase(
+            next.busy && ['starting', 'restoring', 'checking'].includes(next.phase ?? '')
+              ? next.phase
+              : undefined,
+          );
           setError('');
         }
       } catch (reason) {
