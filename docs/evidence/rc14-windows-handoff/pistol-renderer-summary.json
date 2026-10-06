@@ -1,0 +1,94 @@
+{
+  "classification": "actual Windows RC14 real demo + OBS output + same-run Program projection; not synthetic",
+  "bombStateSamples": {
+    "carried": 1345,
+    "planting": 238,
+    "planted": 2382,
+    "dropped": 951,
+    "defusing": 543,
+    "defused": 173
+  },
+  "defusingSamples": 543,
+  "firstDefusing": {
+    "time": "2026-10-06T17:19:32.408Z",
+    "channelSeq": 9027,
+    "receiveSequence": 7917,
+    "status": {
+      "telemetry": "fresh",
+      "context": "fresh",
+      "identity": "matched"
+    },
+    "map": {
+      "name": "de_nuke",
+      "roundNumber": 12
+    },
+    "round": {
+      "phase": "live",
+      "winnerSide": "unknown"
+    },
+    "clock": {
+      "phase": "defuse",
+      "endsInSeconds": 10
+    },
+    "bomb": {
+      "state": "defusing",
+      "sourcePlayerId": "ANON-ACTOR",
+      "explosion": {
+        "remainingSeconds": 32.387050900000034,
+        "durationSeconds": 40.024
+      },
+      "action": {
+        "kind": "defuse",
+        "sourcePlayerId": "ANON-ACTOR",
+        "remainingSeconds": 10.015587300000014,
+        "durationSeconds": null,
+        "hasDefuseKit": null
+      }
+    }
+  },
+  "lastDefusing": {
+    "time": "2026-10-06T17:21:02.425Z",
+    "channelSeq": 11977,
+    "receiveSequence": 10057,
+    "status": {
+      "telemetry": "fresh",
+      "context": "fresh",
+      "identity": "matched"
+    },
+    "map": {
+      "name": "de_nuke",
+      "roundNumber": 13
+    },
+    "round": {
+      "phase": "live",
+      "winnerSide": "unknown"
+    },
+    "clock": {
+      "phase": "defuse",
+      "endsInSeconds": 7
+    },
+    "bomb": {
+      "state": "defusing",
+      "sourcePlayerId": "ANON-ACTOR",
+      "explosion": {
+        "remainingSeconds": 13.152147400000018,
+        "durationSeconds": 40.033
+      },
+      "action": {
+        "kind": "defuse",
+        "sourcePlayerId": "ANON-ACTOR",
+        "remainingSeconds": 7.010388500000001,
+        "durationSeconds": null,
+        "hasDefuseKit": null
+      }
+    }
+  },
+  "missingDurationSamples": 543,
+  "missingKitSamples": 543,
+  "visualFinding": "OBS video shows defuse icon and background circle, without advancing colored progress during this second-half pistol defuse. Unknown kit and action denominator are present in the actual projection.",
+  "limits": [
+    "The first event-triggered screenshot precedes OBS browser rendering; use synchronized video for the visual verdict.",
+    "Unknown kit must not silently become no-kit; remediation must follow objective timing semantics.",
+    "Profiler covers one workspace canvas, not the OBS radar Browser Source."
+  ]
+}

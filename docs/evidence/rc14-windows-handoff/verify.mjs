@@ -26,4 +26,15 @@ for (const entry of manifest.files) {
   console.log(`${entry.file}: ${frames.length} consecutive frames verified`);
 }
 const files = await readdir(root);
+for (const entry of manifest.supplementalCollection?.files ?? []) {
+  const bytes = await readFile(new URL(entry.file, root));
+  if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256)
+    throw new Error(`Supplemental hash mismatch: ${entry.file}`);
+  if (entry.file.endsWith('.gz')) {
+    const text = gunzipSync(bytes).toString('utf8');
+    if (/[A-Za-z]:\\|Bearer |"(?:auth|token|password|cookie)"\s*:/i.test(text))
+      throw new Error(`Sensitive supplemental field: ${entry.file}`);
+  }
+  console.log(`${entry.file}: supplemental hash verified`);
+}
 console.log(`${files.length} files; identity-redacted reference evidence, not a gold fixture`);

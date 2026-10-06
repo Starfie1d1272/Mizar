@@ -59,9 +59,55 @@
   "score84FrameCount": 0,
   "identityReplacement": "stable synthetic Steam64-shaped labels; not actual accounts; player/team names removed",
   "missingEvidence": [
-    "actual WebView2/OBS radar rAF FPS and per-render p95",
-    "visual reproduction of reported 8:4 defuse-ring failure",
-    "confirmed smoke entity-handoff root cause"
+    "GPU completion timing and per-callback timing of the separate OBS radar Browser Source",
+    "confirmed smoke entity-handoff root cause",
+    "post-fix RC15 Windows revalidation"
   ],
-  "timestamps": "source receivedAt retained in excerpts; trace elapsedUs is from original capture start"
+  "timestamps": "source receivedAt retained in excerpts; trace elapsedUs is from original capture start",
+  "supplementalCollection": {
+    "sourceCommit": "869d3a6fb4eeaf88c101b69d79ab85657d0219fc",
+    "artifactSha256": "5319878d1d2d4f0c665e7b337d9cfd69d6aee4a2a9a3fc0ff98cb3d2cfa88804",
+    "start": "2026-10-06T17:18:03.487Z",
+    "end": "2026-10-06T17:21:04.576Z",
+    "scenario": "real Nuke demo, seek to tick 77000, second-half pistol 9:3 -> 9:4 and following rifle round",
+    "profiler": "actual WebView2 rAF callback wrapper restored after collection; first 20000 samples retained",
+    "videoPrivacy": "radar crop excludes names; objective crop masks center actor caption at x320 y86 w200 h18; both audio removed",
+    "files": [
+      {
+        "file": "radar-callback-samples.json.gz",
+        "sha256": "af6fbf51bee3c9b385a28026ad4545b8e2a0cfefc9e9cf3a0fca534bb401ee30"
+      },
+      {
+        "file": "radar-callback-summary.json",
+        "sha256": "aa2b1dfecde8466149834d11b0957799bcb6796976b89eba83ca6d17f8d41dd3"
+      },
+      {
+        "file": "windows-pistol-recording.json",
+        "sha256": "5f36dfd8adb3077e3b0e8f2f1fc31f621be12d42963194daa56041e4c382ed7f"
+      },
+      {
+        "file": "pistol-program-timing.jsonl.gz",
+        "sha256": "6b9253f5bf380c15add3ee51b820cf333f64d3848515f97f5f1675caaa7d2950"
+      },
+      {
+        "file": "pistol-renderer-summary.json",
+        "sha256": "d608ffe145c7d9503e6ece375f2acc9290200d1c172ed1fce34dd605229a5cc3"
+      },
+      {
+        "file": "pistol-defuse-ring.png",
+        "sha256": "8c52f3b7b406f78dca01832ceced3b2c70ec74a3134ad7f6c43662fbd2dac82e"
+      },
+      {
+        "file": "pistol-objective-only.mp4",
+        "sha256": "bac188c625e0f9e8cf006ff0b2294635f964b274ccaf509c7af5ce827f6652c9"
+      },
+      {
+        "file": "radar-pistol-and-rifle.mp4",
+        "sha256": "be0137acc6020495d300422123994adc1f823a71ba1ba5ad4b89f18629a935ce"
+      }
+    ],
+    "originalVideoSha256": "7c339d3a2c6ae799efa4628527151ba6987164c355ebc96e513b862339af291f",
+    "originalProgramEventsSha256": "7de6b932316a5a5c80cd8a17f1c0ad02f4b0615e163f72544787fed9e185ccab",
+    "originalProfilerSha256": "e6ac13ac87715673a57d698392ea1af5a5e4bc619504bc756a47496492fd6c8c"
+  }
 }

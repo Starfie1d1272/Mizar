@@ -1,0 +1,43 @@
+{
+  "start": "2026-10-06T17:18:03.487Z",
+  "end": "2026-10-06T17:21:04.576Z",
+  "defuseSeen": true,
+  "originalDirectoryRestored": true,
+  "obs": {
+    "activeFps": {
+      "count": 35,
+      "p50": 60.0000024000001,
+      "p95": 60.0000024000001,
+      "p99": 60.0000024000001,
+      "max": 60.0000024000001
+    },
+    "renderFramesDelta": 10204,
+    "renderSkippedDelta": 0,
+    "outputFrames": 10495,
+    "outputSkippedFrames": 0,
+    "averageRenderMs": {
+      "count": 35,
+      "p50": 0.421385,
+      "p95": 0.524811,
+      "p99": 0.528196,
+      "max": 0.536516
+    }
+  },
+  "videoDurationNote": "read media duration from ffprobe; stats omit the initial pre-reset output counter",
+  "restoration": {
+    "exit": {
+      "time": "2026-10-06T17:22:48.9773841Z",
+      "exitCode": 0
+    },
+    "video": {
+      "time": "2026-10-06T17:23:00.870Z",
+      "fieldCount": 17,
+      "mismatches": []
+    },
+    "configuration": {
+      "roundSenseRestored": true,
+      "mizarGsiRestored": true,
+      "ownedGameRunning": false
+    }
+  }
+}
