@@ -16,12 +16,12 @@ catalog:
   '@types/react': 19.3.0
   '@types/react-dom': 19.3.0
   '@typescript/native': npm:typescript@7.0.2
-  '@vitejs/plugin-react': 6.1.1
+  '@vitejs/plugin-react': 6.1.2
   cs2parser: 2.7.2
   eslint: 10.12.0
   eslint-plugin-react-hooks: 7.1.1
   fastify: 5.12.5
-  jsdom: 30.1.1
+  jsdom: 30.1.2
   prettier: 3.9.9
   react: 19.3.0
   react-dom: 19.3.0
@@ -34,7 +34,7 @@ catalog:
 frozenLockfile: true
 minimumReleaseAgeExclude:
   - '@fastify/websocket@11.3.3'
-  - cs2-c4-damage@0.1.0
+  - cs2-c4-damage@0.1.1
 verifyDepsBeforeRun: error
 
 disallowWorkspaceCycles: true
