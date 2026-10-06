@@ -70,3 +70,4 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0034：本机 Steam 头像备用媒体](0034-local-steam-avatar-fallback.md)
 
 - [ADR-0035：C4 预测的批量完成与有界发布合并](0035-bounded-c4-publish-coalescing.md)
+- [ADR-0036：受管理 CS2 按工作台尺寸启动](0036-workspace-sized-cs2-launch.md)

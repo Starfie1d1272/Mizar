@@ -337,7 +337,7 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
         return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
     }
     if !tracker.managed {
-        return Err("工作区已恢复，但 CS2 未接受窗口尺寸。请使用窗口模式后重试恢复布局。".into());
+        return Err("工作区已恢复，但 CS2 仍使用原来的游戏分辨率。请退出工作台后重新进入，让游戏按当前屏幕尺寸启动。".into());
     }
     Ok(())
 }

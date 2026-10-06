@@ -13,10 +13,6 @@ pub const LAUNCH_ARGS: &[&str] = &[
     "730",
     "-windowed",
     "-noborder",
-    "-w",
-    crate::cs2_video::DISPLAY_WIDTH,
-    "-h",
-    crate::cs2_video::DISPLAY_HEIGHT,
     "-console",
     "-allow_third_party_software",
     "-worldwide",
@@ -358,7 +354,8 @@ impl ManagedCs2 {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         self.message = None;
-        let mut journal = self.store.prepare(&video, &executable)?;
+        let size = crate::windows_host::launch_viewport()?;
+        let mut journal = self.store.prepare(&video, &executable, size)?;
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
         journal["launchAttempted"] = json!(true);
@@ -373,6 +370,12 @@ impl ManagedCs2 {
             Command::new(&steam)
                 .current_dir(steam.parent().ok_or("Steam 程序目录无效。")?)
                 .args(LAUNCH_ARGS)
+                .args([
+                    "-w",
+                    &size.width.to_string(),
+                    "-h",
+                    &size.height.to_string(),
+                ])
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())

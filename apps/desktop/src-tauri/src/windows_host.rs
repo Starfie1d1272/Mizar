@@ -44,7 +44,6 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
-const SWP_FRAMECHANGED: u32 = 0x0020;
 
 // The tracker runs both on the Host worker and command dispatcher. Win32
 // otherwise virtualizes coordinates differently from Tauri's physical pixels.
@@ -130,6 +129,13 @@ pub fn choose_monitor(cs2: Option<Cs2Window>) -> Monitor {
     }
 }
 
+pub fn launch_viewport() -> Result<crate::cs2_video::VideoSize, String> {
+    let _coordinates = PhysicalCoordinates::enter();
+    let area = monitor_layout_area(choose_monitor(None), true).ok_or("无法读取显示器尺寸，未修改游戏配置。")?;
+    let game = workspace_layout(area).game;
+    crate::cs2_video::VideoSize::new(game.width, game.height)
+}
+
 pub fn outer_from_client(client: Rect, frame: Rect) -> Rect {
     Rect { x: client.x + frame.x, y: client.y + frame.y, width: client.width + frame.width, height: client.height + frame.height }
 }
@@ -147,16 +153,20 @@ fn align_cs2(window: Cs2Window, target: Rect) -> bool {
         if AdjustWindowRectExForDpi(&mut border, style, 0, ex_style, dpi) == 0 { return false; }
         let frame = Rect { x: border.left, y: border.top, width: border.right - border.left - target.width, height: border.bottom - border.top - target.height };
         let outer = outer_from_client(target, frame);
-        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) == 0 { return false; }
+        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
         let Some(actual) = client_rect(window.hwnd) else { return false; };
         if actual == target { return true; }
+        // CS2 can keep its launch-time render client despite accepting the outer
+        // window resize. Shrinking a borderless outer a second time crops it;
+        // it cannot change the engine's video mode. Keep the intended viewport.
+        if frame.width == 0 && frame.height == 0 { return false; }
         let correction = Rect {
             x: outer.x + target.x - actual.x,
             y: outer.y + target.y - actual.y,
             width: outer.width + target.width - actual.width,
             height: outer.height + target.height - actual.height,
         };
-        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) == 0 { return false; }
+        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
         client_rect(window.hwnd).is_some_and(|measured| overlap(measured, target) == (target.width as i64 * target.height as i64) && measured.width == target.width && measured.height == target.height)
     }
 }
@@ -256,7 +266,7 @@ impl GameTracker {
         if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
         }
-        if work != self.last_work_area { return self.apply_locked_layout(); }
+        if work != self.last_work_area { return self.restore_layout(); }
         if changed { return self.apply_locked_layout(); }
         let Some(window) = self.window else { return None; };
         // CS2 can reject an early resize while constructing its render window.
