@@ -3,7 +3,7 @@ import { Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { checkObsBeforeLaunch, useLocalRead, type Production } from './client';
 
-import { useCs2Status, cs2OperationLabel } from './cs2-status';
+import { useCs2Status } from './cs2-status';
 import { Cs2Recovery } from './Cs2Recovery';
 
 export function Cs2LaunchSettings() {
@@ -68,7 +68,6 @@ export function Cs2LaunchSettings() {
       ) : (
         <p>请在 Mizar 桌面应用中设置并启动 CS2。</p>
       )}
-      {phase ? <p role="status">{cs2OperationLabel(phase)}</p> : null}
       <Cs2Recovery production={production} />
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
     </Panel>

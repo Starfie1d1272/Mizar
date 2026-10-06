@@ -13,7 +13,8 @@ impl Activity {
         match self.0.load(Ordering::Acquire) {
             1 => "starting",
             2 => "restoring",
-            _ => "checking",
+            3 => "checking",
+            _ => "idle",
         }
     }
 }
@@ -35,6 +36,16 @@ mod tests {
         assert!(operation.try_lock().is_err());
         assert_eq!(activity.phase(), "starting");
         drop(guard);
+        assert_eq!(activity.phase(), "idle");
+    }
+
+    #[test]
+    fn routine_lock_contention_is_not_an_operator_action() {
+        let activity = Activity::default();
+        assert_eq!(activity.phase(), "idle");
+        let guard = activity.begin(3);
         assert_eq!(activity.phase(), "checking");
+        drop(guard);
+        assert_eq!(activity.phase(), "idle");
     }
 }
