@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod geometry;
+mod cs2_video;
+mod cs2_session;
+mod managed_cs2;
 mod startup_log;
 mod startup_wait;
 mod support_export;
@@ -434,6 +437,32 @@ async fn launch_obs(executable_path: String) -> Result<(), String> {
     .map_err(|_| "OBS 程序未能打开。".to_string())?
 }
 
+#[tauri::command]
+fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.status()
+}
+
+#[tauri::command]
+async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.start()
+    }).await.map_err(|_| "CS2 启动未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.finish()
+    }).await.map_err(|_| "CS2 原配置恢复未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn set_cs2_preferences(app: tauri::AppHandle, preserve_quality: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Mutex<managed_cs2::ManagedCs2>>().lock().map_err(|_| "CS2 配置状态不可用。")?.preferences(preserve_quality)
+    }).await.map_err(|_| "CS2 画质设置未保存。".to_string())?
+}
+
 fn trusted_navigation(url: &tauri::Url) -> bool {
     url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3000)
 }
@@ -865,6 +894,7 @@ fn run_desktop(
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(log.clone())
+        .manage(Mutex::new(managed_cs2::ManagedCs2::new(log.state_root.clone())))
         .invoke_handler(tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
@@ -872,6 +902,10 @@ fn run_desktop(
             cs2_host_status,
             select_obs_executable,
             launch_obs,
+            cs2_config_status,
+            start_managed_cs2,
+            finish_managed_cs2,
+            set_cs2_preferences,
             open_main,
             present_production,
             open_tool,
@@ -970,7 +1004,14 @@ fn run_desktop(
             let worker_visible = host.state::<HostState>().visible.clone();
             let pending = Arc::new(AtomicBool::new(false));
             let worker = thread::spawn(move || {
+                let mut cs2_check = Instant::now() - Duration::from_secs(2);
                 while worker_running.load(Ordering::Relaxed) {
+                    if cs2_check.elapsed() >= Duration::from_secs(2) {
+                        if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
+                            cs2.poll();
+                        }
+                        cs2_check = Instant::now();
+                    }
                     // Cross-process CS2 calls stay off the Tauri main loop.
                     let (layout, rect) =
                         if worker_visible.load(Ordering::Relaxed) && !exit_signal.requested() {

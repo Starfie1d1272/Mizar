@@ -83,8 +83,12 @@ export async function productionAction(action: 'enter' | 'hide' | 'finish', stat
       return;
     }
   }
+  if (action === 'enter' && window.__TAURI_INTERNALS__) {
+    await desktopInvoke('start_managed_cs2');
+  }
   await command('/operator/production', { action, expectedRevision: state.revision });
-  if (window.__TAURI_INTERNALS__)
+  if (window.__TAURI_INTERNALS__) {
     await desktopInvoke('present_production', { live: action === 'enter' });
-  else window.location.assign(action === 'enter' ? '/workspace' : '/');
+    if (action === 'finish') await desktopInvoke('finish_managed_cs2');
+  } else window.location.assign(action === 'enter' ? '/workspace' : '/');
 }

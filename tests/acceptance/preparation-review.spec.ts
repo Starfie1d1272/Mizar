@@ -9,6 +9,63 @@ import {
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
+test('CS2 launch settings use desktop intents and expose pending recovery', async ({
+  page,
+  context,
+}) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-cs2-settings-'));
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    localTournamentPath: join(directory, 'tournament.json'),
+  });
+  await app.ready();
+  await context.route('**/local/v1/production', async (route) => {
+    const response = await app.inject('/local/v1/production');
+    await route.fulfill({
+      status: response.statusCode,
+      body: response.body,
+      contentType: 'application/json',
+    });
+  });
+  try {
+    // IPC fixture verifies browser interaction only, not Steam, Windows or CS2.
+    await page.addInitScript(() => {
+      const status = { preserveQuality: false, pending: false, running: false, message: null };
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          invoke: <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+            if (command === 'set_cs2_preferences')
+              status.preserveQuality = args?.preserveQuality === true;
+            if (command === 'start_managed_cs2') {
+              status.pending = true;
+              status.running = true;
+            }
+            if (command === 'finish_managed_cs2') {
+              status.pending = false;
+              status.running = false;
+            }
+            return Promise.resolve((command === 'cs2_config_status' ? { ...status } : {}) as T);
+          },
+        },
+      });
+    });
+    await page.goto('/settings?tab=gsi');
+    await expect(page.getByRole('heading', { name: 'CS2 启动设置' })).toBeVisible();
+    const quality = page.getByRole('switch', { name: /保留原画质/ });
+    await expect(quality).toHaveAttribute('aria-checked', 'false');
+    await quality.click();
+    await expect(quality).toHaveAttribute('aria-checked', 'true');
+    await page.getByRole('button', { name: '启动 CS2', exact: true }).click();
+    await expect(quality).toBeDisabled();
+    await page.getByRole('button', { name: '退出 CS2 并恢复设置' }).click();
+    await expect(quality).toBeEnabled();
+    await expect(page.getByRole('button', { name: '退出 CS2 并恢复设置' })).toHaveCount(0);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 for (const source of ['online', 'cache'] as const) {
   test(`Preparation displays the complete ${source} MatchDocument read-only`, async ({
     page,
