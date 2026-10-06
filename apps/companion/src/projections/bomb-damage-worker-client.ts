@@ -18,6 +18,7 @@ export class BombDamageWorkerClient {
   private closed = false;
   private context = '';
   private notification: ReturnType<typeof setImmediate> | undefined;
+  private settling = 0;
   constructor(private readonly changed: () => void) {}
 
   setContext(context: string): void {
@@ -87,7 +88,7 @@ export class BombDamageWorkerClient {
               if (this.closed || this.context !== context) return;
               cache.set(key, value as StandingC4Outcome);
               while (cache.size > 32) cache.delete(cache.keys().next().value!);
-              if (this.pending.size === 0 && !this.notification)
+              if (this.pending.size === 0 && !this.notification && this.settling === 0)
                 this.notification = setImmediate(() => {
                   this.notification = undefined;
                   if (!this.closed) this.changed();
@@ -112,10 +113,17 @@ export class BombDamageWorkerClient {
 
   async settle(): Promise<boolean> {
     const hadTasks = this.tasks.size > 0;
-    await Promise.allSettled([...this.tasks]);
+    // Replay owns the refresh after draining. Suppress completion callbacks for
+    // the whole drain, including between worker messages on different platforms.
+    this.settling++;
     if (this.notification) clearImmediate(this.notification);
     this.notification = undefined;
-    return hadTasks;
+    try {
+      await Promise.allSettled([...this.tasks]);
+      return hadTasks;
+    } finally {
+      this.settling--;
+    }
   }
 
   private fail(): void {

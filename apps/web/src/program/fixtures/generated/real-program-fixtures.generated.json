@@ -6112,7 +6112,7 @@
         "protocolVersion": 1,
         "channel": "program",
         "schemaVersion": 8,
-        "channelSeq": 47,
+        "channelSeq": 46,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
