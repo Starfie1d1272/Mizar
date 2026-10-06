@@ -99,7 +99,7 @@ pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
         ("aspectratiomode", "1"),
         ("fullscreen", "0"),
         ("coop_fullscreen", "0"),
-        ("nowindowborder", "0"),
+        ("nowindowborder", "1"),
     ] {
         values.insert(format!("setting.{key}"), value.into());
     }
@@ -203,6 +203,8 @@ mod tests {
         for preserve in [true, false] {
             let preset = preset(preserve);
             let applied = apply(ORIGINAL, &preset).unwrap();
+            assert_eq!(fields(&applied).unwrap().0["setting.fullscreen"].value, "0");
+            assert_eq!(fields(&applied).unwrap().0["setting.nowindowborder"].value, "1");
             assert!(applied.contains("\"1920\""));
             assert!(applied.contains("// user comment\r\n"));
             assert_eq!(

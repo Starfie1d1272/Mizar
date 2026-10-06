@@ -168,6 +168,7 @@ pub struct GameTracker {
     pub managed: bool,
     pub overlay_enabled: bool,
     pub fullscreen_layout: bool,
+    frame: Option<crate::window_frame::GameFrame>,
     last_client: Option<Rect>,
     last_work_area: Option<Rect>,
     last_dpi: u32,
@@ -178,6 +179,7 @@ pub struct GameTracker {
 impl GameTracker {
     pub fn observe(&mut self, found: Option<Cs2Window>) -> bool {
         if self.window == found { return false; }
+        self.frame = None;
         self.window = found;
         self.generation += 1;
         self.managed = false;
@@ -207,6 +209,12 @@ impl GameTracker {
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
         self.last_work_area = Some(work);
         let mut layout = workspace_layout(work);
+        if let Some(window) = self.window {
+            if self.frame.is_none() {
+                self.frame = crate::window_frame::GameFrame::capture(window.hwnd, window.pid);
+            }
+            if let Some(frame) = &self.frame { frame.apply(); }
+        }
         self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
         if let Some(window) = self.window.filter(|_| self.managed) {
             let mut outer = WinRect::default();

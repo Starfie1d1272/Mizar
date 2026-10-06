@@ -12,7 +12,8 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 
 ## 决策索引
 
-- [ADR-0029：现场工作区的全屏 Shell 协作与窗口外框避让](0029-workspace-fullscreen-shell.md)
+- [ADR-0030：现场工作区的全屏 Shell 协作与窗口外框避让](0030-workspace-fullscreen-shell.md)
+- [ADR-0031：工作台中的受管理 CS2 使用无边框窗口](0031-borderless-workspace-game.md)
 
 - [ADR-0026：CS2 启动、临时视频配置与恢复](0026-managed-cs2-launch-and-restoration.md)
 
@@ -56,6 +57,8 @@ ADR-0003 中早期的插值和自动缩放宽泛表述，已澄清为：雷达�
 ### 编号勘误
 
 C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引身份，不改变决定或表示重新决策。
+
+现场 Shell 决策曾与 C4 Worker 决策重复使用 0029，现编号 0030；只修正索引身份。
 
 - [ADR-0027：CS2 启动结果与跨窗口恢复流程](0027-cs2-launch-recovery-workflow.md)
 - [ADR-0028：Host 正常退出复用安全制作收尾](0028-safe-host-production-exit.md)
