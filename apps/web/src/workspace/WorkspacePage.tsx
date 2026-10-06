@@ -8,7 +8,7 @@ import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { toRadarViewFrame } from '../program/widgets/radar/adapter';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
-import { workspaceCurrentPov, workspaceIssues } from './model';
+import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './model';
 import { useObsStatus } from './obs-client';
 import {
   useLocalRead,
@@ -41,7 +41,7 @@ function ContextPanel({
   readonly program: ProgramPayload | null;
 }) {
   const match = operator?.matchContext.summary;
-  const series = operator?.seriesProgress;
+  const score = workspaceMatchScore(program);
   const pov = workspaceCurrentPov(program);
   const issues = workspaceIssues(operator);
   return (
@@ -53,12 +53,22 @@ function ContextPanel({
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
       </div>
       <div className="workspace-match-score">
-        <strong title={match?.entryAName}>{match?.entryAName ?? '队伍 A'}</strong>
-        <b>
-          {series?.score.a ?? '–'} : {series?.score.b ?? '–'}
+        <strong title={score?.teamA.name ?? match?.entryAName}>
+          {score?.teamA.name ?? match?.entryAName ?? '队伍 A'}
+        </strong>
+        <b aria-label="当前图回合比分">
+          {score?.teamA.mapScore ?? '–'} : {score?.teamB.mapScore ?? '–'}
         </b>
-        <strong title={match?.entryBName}>{match?.entryBName ?? '队伍 B'}</strong>
+        <strong title={score?.teamB.name ?? match?.entryBName}>
+          {score?.teamB.name ?? match?.entryBName ?? '队伍 B'}
+        </strong>
       </div>
+      {score === null ? null : (
+        <small className="workspace-score-detail">
+          当前图 · {score.currentMapName ?? '等待比赛数据'}
+          {score.seriesScoreText ? ` · 系列 ${score.seriesScoreText}` : ''}
+        </small>
+      )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
       {issues.length > 0 ? (
         <div className="workspace-attention">

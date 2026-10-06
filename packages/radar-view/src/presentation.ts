@@ -294,16 +294,25 @@ function transitionSmokePhase(
   return 'projectile';
 }
 
+// RC14 real captures contain 2–13 ms lifetime regressions within the same
+// entity/effect. One 64 Hz source tick is quantization jitter, not ID reuse.
+const SMOKE_LIFETIME_JITTER_SECONDS = 1 / 64;
+
+function lifetimeRestarted(previous: Grenade, source: Grenade): boolean {
+  return (
+    previous.lifetimeSeconds !== null &&
+    source.lifetimeSeconds !== null &&
+    previous.lifetimeSeconds - source.lifetimeSeconds >
+      (source.kind === 'smoke' ? SMOKE_LIFETIME_JITTER_SECONDS : 0)
+  );
+}
+
 function sameSmokeLifecycle(old: GrenadeMarker | undefined, source: Grenade): old is GrenadeMarker {
   return (
     source.kind === 'smoke' &&
     old?.source.kind === 'smoke' &&
     old.source.sourceEntityId === source.sourceEntityId &&
-    !(
-      old.source.lifetimeSeconds !== null &&
-      source.lifetimeSeconds !== null &&
-      source.lifetimeSeconds < old.source.lifetimeSeconds
-    )
+    !lifetimeRestarted(old.source, source)
   );
 }
 
@@ -613,11 +622,7 @@ export class RadarPresentation {
         old.source.ownerSourceId === source.ownerSourceId &&
         old.positionAvailable &&
         !discontinuous(old, world, point, now, geometry.unitRadius, sampleGapMs) &&
-        !(
-          old.source.lifetimeSeconds !== null &&
-          source.lifetimeSeconds !== null &&
-          source.lifetimeSeconds < old.source.lifetimeSeconds
-        );
+        !lifetimeRestarted(old.source, source);
       const stationarySampleCount =
         snapshot.payload.retainEffectAnchors &&
         source.kind === 'smoke' &&

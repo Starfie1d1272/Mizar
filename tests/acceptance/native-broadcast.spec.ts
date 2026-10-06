@@ -26,6 +26,61 @@ async function feed(page: Page, id: string) {
   await page.evaluate(() => document.fonts.ready);
 }
 
+test('default radar compacts its empty series slot and the enlarged kill badge fits its slot', async ({
+  page,
+}) => {
+  const snapshot = sample('real-live-rich');
+  // Controlled presentation edge: current map is available without a series plan.
+  snapshot.payload.series = null;
+  snapshot.payload.players.find(
+    (player) => player.lifeState === 'alive' && player.state !== null,
+  )!.state!.roundKills = 5;
+  await page.route('**/local/v1/hud-config', (route) =>
+    route.fulfill({
+      json: { resolved: getBuiltinResolvedPreset(), etag: 'native', activeRevision: 'native' },
+    }),
+  );
+  await page.routeWebSocket('**/local/v1/program', (socket) =>
+    socket.send(JSON.stringify(snapshot)),
+  );
+  await page.goto('/program?hud-config=companion');
+  await expect(page.locator('[data-gameplay-hud]')).toBeVisible();
+  await expect(page.locator('.match-header__series-strip')).toHaveCount(0);
+  expect((await page.locator('[data-hud-widget="radar"]').boundingBox())!.y).toBe(36);
+  const badge = page.locator('.player-rail__round-kill-badge[data-round-kills="5"]').first();
+  const bounds = (await badge.boundingBox())!;
+  const slot = (await badge.locator('..').boundingBox())!;
+  expect(bounds.width).toBe(24);
+  expect(bounds.height).toBe(24);
+  expect(bounds.x).toBeGreaterThanOrEqual(slot.x);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(slot.x + slot.width);
+});
+
+test('a ten-second action with unknown kit evidence paints a determinate defuse ring', async ({
+  page,
+}) => {
+  const snapshot = sample('real-defusing');
+  // Core's actual RC14 input regression proves this semantic action; this edge
+  // verifies the browser does not gate the ring on optional equipment evidence.
+  snapshot.payload.bomb!.action = {
+    kind: 'defuse',
+    sourcePlayerId: snapshot.payload.bomb!.sourcePlayerId,
+    remainingSeconds: 9,
+    durationSeconds: 10,
+    hasDefuseKit: null,
+  };
+  await page.routeWebSocket('**/local/v1/program', (socket) =>
+    socket.send(JSON.stringify(snapshot)),
+  );
+  await page.goto('/program');
+  const ring = page.locator('.objective-center__ring');
+  await expect(ring).toHaveAttribute('data-progress', 'determinate');
+  await expect(ring.locator('.objective-center__ring-fill')).toHaveAttribute(
+    'stroke-dashoffset',
+    '0.9',
+  );
+});
+
 test('native default keeps fixed combat geometry through real freeze, damage, death and objective states', async ({
   page,
 }) => {

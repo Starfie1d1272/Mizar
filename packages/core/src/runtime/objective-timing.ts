@@ -21,10 +21,13 @@ export interface RuntimeObjectiveTimingState {
   readonly sourceGeneration: number;
   readonly mapEpoch: number;
   readonly lastAcceptedReceiveSequence: number | null;
+  readonly lastAcceptedMonotonicMs: number | null;
   readonly explosionAnchor: RuntimeObjectiveTimingAnchor | null;
   readonly lastBombState: BombState | null;
   readonly explosionDurationSeconds: number | null;
   readonly plantActionDurationSeconds: number | null;
+  readonly defuseActionDurationSeconds: number | null;
+  readonly defuseActionSourcePlayerId: string | null;
 }
 
 export function createObjectiveTimingState(
@@ -35,10 +38,13 @@ export function createObjectiveTimingState(
     sourceGeneration,
     mapEpoch,
     lastAcceptedReceiveSequence: null,
+    lastAcceptedMonotonicMs: null,
     explosionAnchor: null,
     lastBombState: null,
     explosionDurationSeconds: null,
     plantActionDurationSeconds: null,
+    defuseActionDurationSeconds: null,
+    defuseActionSourcePlayerId: null,
   };
 }
 
@@ -106,6 +112,38 @@ export function reduceObjectiveTiming(
   const denominator = countdown !== undefined && countdown >= 0 ? countdown : null;
   let explosionDurationSeconds: number | null = null;
   let plantActionDurationSeconds: number | null = null;
+  let defuseActionDurationSeconds: number | null = null;
+  const defuseActionSourcePlayerId = state === 'defusing' ? (bomb?.sourcePlayerId ?? null) : null;
+  if (state === 'defusing') {
+    // More than five seconds proves a ten-second action even on late join.
+    // Otherwise only a witnessed start supplies a denominator; it does not
+    // invent equipment evidence for a player whose kit field is absent.
+    const tickSeconds = 1 / 64;
+    const elapsedSeconds =
+      previous.lastAcceptedMonotonicMs === null
+        ? null
+        : (observation.receive.receivedMonotonicMs - previous.lastAcceptedMonotonicMs) / 1000;
+    if (denominator !== null && denominator > 5 + tickSeconds && denominator <= 10 + tickSeconds)
+      defuseActionDurationSeconds = 10;
+    else if (
+      contiguous &&
+      previous.lastBombState === 'planted' &&
+      denominator !== null &&
+      denominator > 0 &&
+      denominator <= 5 + tickSeconds &&
+      elapsedSeconds !== null &&
+      elapsedSeconds >= 0 &&
+      elapsedSeconds <= DEFAULT_OBJECTIVE_CLOCK_LEASE_MS / 1000 &&
+      denominator + elapsedSeconds >= 5 - tickSeconds
+    )
+      defuseActionDurationSeconds = 5;
+    else if (
+      contiguous &&
+      previous.lastBombState === 'defusing' &&
+      previous.defuseActionSourcePlayerId === defuseActionSourcePlayerId
+    )
+      defuseActionDurationSeconds = previous.defuseActionDurationSeconds;
+  }
   if (contiguous) {
     if (state === 'planting') {
       plantActionDurationSeconds =
@@ -129,7 +167,10 @@ export function reduceObjectiveTiming(
     lastBombState: state,
     explosionDurationSeconds,
     plantActionDurationSeconds,
+    defuseActionDurationSeconds,
+    defuseActionSourcePlayerId,
     lastAcceptedReceiveSequence: observation.receive.sequence,
+    lastAcceptedMonotonicMs: observation.receive.receivedMonotonicMs,
     explosionAnchor,
   };
 }

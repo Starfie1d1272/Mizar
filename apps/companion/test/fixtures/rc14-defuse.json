@@ -1,0 +1,509 @@
+{
+  "classification": "Minimal white-list fields from anonymous real RC14 frames; not a gold fixture or production acceptance report",
+  "evidenceCommit": "a23d71e9083c317a020f1d209e44aaf5a6221cb2",
+  "defuse": {
+    "source": "second-half-pistol-excerpt.jsonl.gz",
+    "sha256": "dc32e9509d070c5648914a4bcbd24f11d8334a453330a5d216cbcfda01c22b89",
+    "frames": [
+      {
+        "version": 1,
+        "sequence": 26456,
+        "elapsedUs": 1448417081,
+        "receivedAt": "2026-10-06T16:25:08.284Z",
+        "payload": {
+          "provider": {
+            "name": "ANON",
+            "appid": 730,
+            "version": 14189,
+            "steamid": "76561190000000001",
+            "timestamp": 1791303908
+          },
+          "map": {
+            "mode": "competitive",
+            "name": "de_nuke",
+            "phase": "live",
+            "round": 12,
+            "team_ct": {
+              "score": 3,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "team_t": {
+              "score": 9,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "num_matches_to_win_series": 0,
+            "round_wins": {
+              "1": "t_win_elimination",
+              "2": "t_win_elimination",
+              "3": "t_win_elimination",
+              "4": "ct_win_elimination",
+              "5": "ct_win_defuse",
+              "6": "ct_win_elimination",
+              "7": "ct_win_defuse",
+              "8": "ct_win_elimination",
+              "9": "ct_win_elimination",
+              "10": "ct_win_elimination",
+              "11": "ct_win_defuse",
+              "12": "ct_win_elimination"
+            }
+          },
+          "round": {
+            "phase": "live",
+            "bomb": "planted"
+          },
+          "bomb": {
+            "state": "planted",
+            "position": "671.3, -765.0, -416.0",
+            "countdown": "32.417"
+          },
+          "phase_countdowns": {
+            "phase": "bomb",
+            "phase_ends_in": "32.4"
+          },
+          "allplayers": {
+            "76561190000000006": {
+              "name": "ANON",
+              "team": "CT",
+              "state": {
+                "health": 100,
+                "armor": 100,
+                "helmet": false,
+                "flashed": 0,
+                "smoked": 0,
+                "burning": 0,
+                "money": 750,
+                "round_kills": 2,
+                "round_killhs": 2,
+                "round_totaldmg": 185,
+                "equip_value": 850
+              },
+              "position": "666.2, -818.2, -415.5",
+              "forward": "0.081, 0.784, -0.616"
+            }
+          },
+          "player": {
+            "steamid": "76561190000000006",
+            "team": "CT",
+            "state": {
+              "health": 100,
+              "armor": 100,
+              "helmet": false,
+              "flashed": 0,
+              "smoked": 0,
+              "burning": 0,
+              "money": 750,
+              "round_kills": 2,
+              "round_killhs": 2,
+              "round_totaldmg": 185,
+              "equip_value": 850
+            }
+          }
+        }
+      },
+      {
+        "version": 1,
+        "sequence": 26457,
+        "elapsedUs": 1448465016,
+        "receivedAt": "2026-10-06T16:25:08.332Z",
+        "payload": {
+          "provider": {
+            "name": "ANON",
+            "appid": 730,
+            "version": 14189,
+            "steamid": "76561190000000001",
+            "timestamp": 1791303908
+          },
+          "map": {
+            "mode": "competitive",
+            "name": "de_nuke",
+            "phase": "live",
+            "round": 12,
+            "team_ct": {
+              "score": 3,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "team_t": {
+              "score": 9,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "num_matches_to_win_series": 0,
+            "round_wins": {
+              "1": "t_win_elimination",
+              "2": "t_win_elimination",
+              "3": "t_win_elimination",
+              "4": "ct_win_elimination",
+              "5": "ct_win_defuse",
+              "6": "ct_win_elimination",
+              "7": "ct_win_defuse",
+              "8": "ct_win_elimination",
+              "9": "ct_win_elimination",
+              "10": "ct_win_elimination",
+              "11": "ct_win_defuse",
+              "12": "ct_win_elimination"
+            }
+          },
+          "round": {
+            "phase": "live",
+            "bomb": "planted"
+          },
+          "bomb": {
+            "state": "defusing",
+            "position": "671.3, -765.0, -416.0",
+            "countdown": "9.999",
+            "player": "76561190000000006"
+          },
+          "phase_countdowns": {
+            "phase": "defuse",
+            "phase_ends_in": "10.0"
+          },
+          "allplayers": {
+            "76561190000000006": {
+              "name": "ANON",
+              "team": "CT",
+              "state": {
+                "health": 100,
+                "armor": 100,
+                "helmet": false,
+                "flashed": 0,
+                "smoked": 0,
+                "burning": 0,
+                "money": 750,
+                "round_kills": 2,
+                "round_killhs": 2,
+                "round_totaldmg": 185,
+                "equip_value": 850
+              },
+              "position": "666.3, -817.8, -416.0",
+              "forward": "0.074, 0.760, -0.646"
+            }
+          },
+          "player": {
+            "steamid": "76561190000000006",
+            "team": "CT",
+            "state": {
+              "health": 100,
+              "armor": 100,
+              "helmet": false,
+              "flashed": 0,
+              "smoked": 0,
+              "burning": 0,
+              "money": 750,
+              "round_kills": 2,
+              "round_killhs": 2,
+              "round_totaldmg": 185,
+              "equip_value": 850
+            }
+          }
+        }
+      },
+      {
+        "version": 1,
+        "sequence": 26458,
+        "elapsedUs": 1448510460,
+        "receivedAt": "2026-10-06T16:25:08.377Z",
+        "payload": {
+          "provider": {
+            "name": "ANON",
+            "appid": 730,
+            "version": 14189,
+            "steamid": "76561190000000001",
+            "timestamp": 1791303908
+          },
+          "map": {
+            "mode": "competitive",
+            "name": "de_nuke",
+            "phase": "live",
+            "round": 12,
+            "team_ct": {
+              "score": 3,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "team_t": {
+              "score": 9,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "num_matches_to_win_series": 0,
+            "round_wins": {
+              "1": "t_win_elimination",
+              "2": "t_win_elimination",
+              "3": "t_win_elimination",
+              "4": "ct_win_elimination",
+              "5": "ct_win_defuse",
+              "6": "ct_win_elimination",
+              "7": "ct_win_defuse",
+              "8": "ct_win_elimination",
+              "9": "ct_win_elimination",
+              "10": "ct_win_elimination",
+              "11": "ct_win_defuse",
+              "12": "ct_win_elimination"
+            }
+          },
+          "round": {
+            "phase": "live",
+            "bomb": "planted"
+          },
+          "bomb": {
+            "state": "defusing",
+            "position": "671.3, -765.0, -416.0",
+            "countdown": "9.949",
+            "player": "76561190000000006"
+          },
+          "phase_countdowns": {
+            "phase": "defuse",
+            "phase_ends_in": "9.9"
+          },
+          "allplayers": {
+            "76561190000000006": {
+              "name": "ANON",
+              "team": "CT",
+              "state": {
+                "health": 100,
+                "armor": 100,
+                "helmet": false,
+                "flashed": 0,
+                "smoked": 0,
+                "burning": 0,
+                "money": 750,
+                "round_kills": 2,
+                "round_killhs": 2,
+                "round_totaldmg": 185,
+                "equip_value": 850
+              },
+              "position": "666.3, -817.8, -416.0",
+              "forward": "0.056, 0.729, -0.682"
+            }
+          },
+          "player": {
+            "steamid": "76561190000000006",
+            "team": "CT",
+            "state": {
+              "health": 100,
+              "armor": 100,
+              "helmet": false,
+              "flashed": 0,
+              "smoked": 0,
+              "burning": 0,
+              "money": 750,
+              "round_kills": 2,
+              "round_killhs": 2,
+              "round_totaldmg": 185,
+              "equip_value": 850
+            }
+          }
+        }
+      },
+      {
+        "version": 1,
+        "sequence": 26459,
+        "elapsedUs": 1448555599,
+        "receivedAt": "2026-10-06T16:25:08.423Z",
+        "payload": {
+          "provider": {
+            "name": "ANON",
+            "appid": 730,
+            "version": 14189,
+            "steamid": "76561190000000001",
+            "timestamp": 1791303908
+          },
+          "map": {
+            "mode": "competitive",
+            "name": "de_nuke",
+            "phase": "live",
+            "round": 12,
+            "team_ct": {
+              "score": 3,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "team_t": {
+              "score": 9,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "num_matches_to_win_series": 0,
+            "round_wins": {
+              "1": "t_win_elimination",
+              "2": "t_win_elimination",
+              "3": "t_win_elimination",
+              "4": "ct_win_elimination",
+              "5": "ct_win_defuse",
+              "6": "ct_win_elimination",
+              "7": "ct_win_defuse",
+              "8": "ct_win_elimination",
+              "9": "ct_win_elimination",
+              "10": "ct_win_elimination",
+              "11": "ct_win_defuse",
+              "12": "ct_win_elimination"
+            }
+          },
+          "round": {
+            "phase": "live",
+            "bomb": "planted"
+          },
+          "bomb": {
+            "state": "defusing",
+            "position": "671.3, -765.0, -416.0",
+            "countdown": "9.903",
+            "player": "76561190000000006"
+          },
+          "phase_countdowns": {
+            "phase": "defuse",
+            "phase_ends_in": "9.9"
+          },
+          "allplayers": {
+            "76561190000000006": {
+              "name": "ANON",
+              "team": "CT",
+              "state": {
+                "health": 100,
+                "armor": 100,
+                "helmet": false,
+                "flashed": 0,
+                "smoked": 0,
+                "burning": 0,
+                "money": 750,
+                "round_kills": 2,
+                "round_killhs": 2,
+                "round_totaldmg": 185,
+                "equip_value": 850
+              },
+              "position": "666.3, -817.8, -416.0",
+              "forward": "0.046, 0.715, -0.697"
+            }
+          },
+          "player": {
+            "steamid": "76561190000000006",
+            "team": "CT",
+            "state": {
+              "health": 100,
+              "armor": 100,
+              "helmet": false,
+              "flashed": 0,
+              "smoked": 0,
+              "burning": 0,
+              "money": 750,
+              "round_kills": 2,
+              "round_killhs": 2,
+              "round_totaldmg": 185,
+              "equip_value": 850
+            }
+          }
+        }
+      },
+      {
+        "version": 1,
+        "sequence": 26460,
+        "elapsedUs": 1448597630,
+        "receivedAt": "2026-10-06T16:25:08.465Z",
+        "payload": {
+          "provider": {
+            "name": "ANON",
+            "appid": 730,
+            "version": 14189,
+            "steamid": "76561190000000001",
+            "timestamp": 1791303908
+          },
+          "map": {
+            "mode": "competitive",
+            "name": "de_nuke",
+            "phase": "live",
+            "round": 12,
+            "team_ct": {
+              "score": 3,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "team_t": {
+              "score": 9,
+              "consecutive_round_losses": 1,
+              "timeouts_remaining": 3,
+              "matches_won_this_series": 0
+            },
+            "num_matches_to_win_series": 0,
+            "round_wins": {
+              "1": "t_win_elimination",
+              "2": "t_win_elimination",
+              "3": "t_win_elimination",
+              "4": "ct_win_elimination",
+              "5": "ct_win_defuse",
+              "6": "ct_win_elimination",
+              "7": "ct_win_defuse",
+              "8": "ct_win_elimination",
+              "9": "ct_win_elimination",
+              "10": "ct_win_elimination",
+              "11": "ct_win_defuse",
+              "12": "ct_win_elimination"
+            }
+          },
+          "round": {
+            "phase": "live",
+            "bomb": "planted"
+          },
+          "bomb": {
+            "state": "defusing",
+            "position": "671.3, -765.0, -416.0",
+            "countdown": "9.847",
+            "player": "76561190000000006"
+          },
+          "phase_countdowns": {
+            "phase": "defuse",
+            "phase_ends_in": "9.8"
+          },
+          "allplayers": {
+            "76561190000000006": {
+              "name": "ANON",
+              "team": "CT",
+              "state": {
+                "health": 100,
+                "armor": 100,
+                "helmet": false,
+                "flashed": 0,
+                "smoked": 0,
+                "burning": 0,
+                "money": 750,
+                "round_kills": 2,
+                "round_killhs": 2,
+                "round_totaldmg": 185,
+                "equip_value": 850
+              },
+              "position": "666.3, -817.8, -416.0",
+              "forward": "0.028, 0.703, -0.711"
+            }
+          },
+          "player": {
+            "steamid": "76561190000000006",
+            "team": "CT",
+            "state": {
+              "health": 100,
+              "armor": 100,
+              "helmet": false,
+              "flashed": 0,
+              "smoked": 0,
+              "burning": 0,
+              "money": 750,
+              "round_kills": 2,
+              "round_killhs": 2,
+              "round_totaldmg": 185,
+              "equip_value": 850
+            }
+          }
+        }
+      }
+    ]
+  }
+}

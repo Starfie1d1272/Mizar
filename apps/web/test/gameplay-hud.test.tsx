@@ -53,6 +53,42 @@ function fakeRadarSnapshot(): RadarSnapshot {
 }
 
 describe('GameplayHud shared renderer boundary', () => {
+  it('compacts the default radar only without map-strip content and preserves explicit editor placement', () => {
+    const resolvedPreset = getBuiltinResolvedPreset();
+    const snapshot = structuredClone(getProgramFixture('live-canonical')!);
+    snapshot.payload.series!.veto = [];
+    snapshot.payload.series!.maps.forEach((map) => {
+      map.selection = { kind: 'unknown' };
+    });
+    const top = (preset = resolvedPreset) => {
+      const hud = GameplayHud({
+        snapshot,
+        resolvedPreset: preset,
+        radarSnapshot: fakeRadarSnapshot(),
+      });
+      const children = childrenOf(hud) as (ReactElement<{
+        'data-hud-widget': string;
+        style: { top: string };
+      }> | null)[];
+      return children.find((child) => child?.props['data-hud-widget'] === 'radar')!.props.style.top;
+    };
+    expect(top()).toBe('36px');
+    snapshot.payload.series!.maps[0]!.selection = { kind: 'decider' };
+    expect(top()).toBe('116px');
+    snapshot.payload.series!.maps[0]!.selection = { kind: 'unknown' };
+    expect(
+      top({
+        ...resolvedPreset,
+        layout: {
+          ...resolvedPreset.layout,
+          widgets: {
+            ...resolvedPreset.layout.widgets,
+            radar: { ...resolvedPreset.layout.widgets.radar, offsetY: 300 },
+          },
+        },
+      }),
+    ).toBe('300px');
+  });
   let root: Root | undefined;
 
   afterEach(() => {

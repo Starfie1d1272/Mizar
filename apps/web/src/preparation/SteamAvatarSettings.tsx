@@ -65,15 +65,18 @@ export function SteamAvatarSettings() {
           获取 Steam Web API Key（Steam 官方）
         </a>
       </p>
-      <ol>
-        <li>在浏览器中登录 Steam，按官方页面提示申请或查看已有 Key。</li>
-        <li>
-          申请页的域名（Domain Name）建议填写 <code>localhost</code>
-          ，表示在本机使用，不需要购买或配置域名。
-        </li>
-        <li>复制 32 位 Key 到下方输入框并保存，当前选手的备用头像会自动加载。</li>
-      </ol>
-      <p>若 Steam 提示账号暂不能申请，可跳过此项，不影响 HUD 使用。</p>
+      <details>
+        <summary>申请与填写说明</summary>
+        <ol>
+          <li>在浏览器中登录 Steam，按官方页面提示申请或查看已有 Key。</li>
+          <li>
+            申请页的域名（Domain Name）建议填写 <code>localhost</code>
+            ，表示在本机使用，不需要购买或配置域名。
+          </li>
+          <li>复制 32 位 Key 到下方输入框并保存，当前选手的备用头像会自动加载。</li>
+        </ol>
+        <p>若 Steam 提示账号暂不能申请，可跳过此项，不影响 HUD 使用。</p>
+      </details>
       <form
         onSubmit={(event) => {
           event.preventDefault();

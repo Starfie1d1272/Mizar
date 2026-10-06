@@ -4,6 +4,7 @@ import type { CSSProperties, ReactElement } from 'react';
 
 import {
   HUD_WIDGET_REGISTRY,
+  DEFAULT_PLACEMENTS,
   placementToBox,
   topScoreBarSettingsSchema,
   type HudResolvedPreset,
@@ -28,6 +29,7 @@ import './designs/perfectworld.css';
 import './designs/native.css';
 import { hudDesignForVariant } from './hud-design';
 import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause';
+import { hasSeriesMapStrip } from './widgets/match-header/presentation';
 import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand';
 
 export interface GameplayHudProps {
@@ -121,7 +123,21 @@ export function GameplayHud({
         const rendererEntry = getHudRendererEntry(descriptor.id, rendererRegistry);
         if (rendererEntry.renderer === null) return null;
 
-        const box = placementToBox(descriptor.id, placement);
+        let box = placementToBox(descriptor.id, placement);
+        if (
+          descriptor.id === 'radar' &&
+          hudDesignForVariant(resolvedPreset.widgets.radar.variant) === 'current' &&
+          placement.anchor === DEFAULT_PLACEMENTS.radar.anchor &&
+          placement.offsetX === DEFAULT_PLACEMENTS.radar.offsetX &&
+          placement.offsetY === DEFAULT_PLACEMENTS.radar.offsetY &&
+          (!programFresh ||
+            !snapshot ||
+            !resolvedPreset.layout.widgets['series-strip'].visible ||
+            !hasSeriesMapStrip(snapshot.payload))
+        ) {
+          // Only compact the standard slot. Explicit editor placements remain authoritative.
+          box = { ...box, top: DEFAULT_PLACEMENTS['series-strip'].offsetY };
+        }
         const design = hudDesignForVariant(resolvedPreset.widgets[descriptor.id].variant);
         let content: ReactElement;
         if (rendererEntry.source === 'program') {

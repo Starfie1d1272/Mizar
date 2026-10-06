@@ -1,5 +1,11 @@
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
+import { buildMatchHeaderPresentation } from '../program/widgets/match-header/presentation';
+
+export function workspaceMatchScore(program: ProgramPayload | null) {
+  if (program?.status.telemetry !== 'fresh') return null;
+  return buildMatchHeaderPresentation(program);
+}
 
 export function workspaceCurrentPov(program: ProgramPayload | null): string | null {
   if (

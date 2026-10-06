@@ -73,6 +73,38 @@ function ownedScene(name: string): boolean {
   return name.startsWith('Mizar · ');
 }
 
+/** Reload only exact Mizar program URLs, without changing scenes or user settings. */
+export async function refreshObsBrowserSources(
+  obs: ObsRpc,
+  baseUrl: string,
+  refreshed: Set<string>,
+): Promise<boolean> {
+  const collections = await obs.call('GetSceneCollectionList');
+  if (collections.currentSceneCollectionName !== OBS_COLLECTION) return false;
+  const inputs = objects((await obs.call('GetInputList')).inputs);
+  for (const scene of obsDesiredScenes(baseUrl)) {
+    if (
+      refreshed.has(scene.browserInput) ||
+      !inputs.some(
+        (input) => input.inputName === scene.browserInput && input.inputKind === 'browser_source',
+      )
+    )
+      continue;
+    const result = await obs.call('GetInputSettings', { inputName: scene.browserInput });
+    const settings = result.inputSettings as Record<string, unknown> | undefined;
+    if (settings?.url !== scene.browserUrl) continue;
+    // Recheck ownership after reading settings: an operator may switch collections.
+    const current = await obs.call('GetSceneCollectionList');
+    if (current.currentSceneCollectionName !== OBS_COLLECTION) return false;
+    await obs.call('PressInputPropertiesButton', {
+      inputName: scene.browserInput,
+      propertyName: 'refreshnocache',
+    });
+    refreshed.add(scene.browserInput);
+  }
+  return obsDesiredScenes(baseUrl).every((scene) => refreshed.has(scene.browserInput));
+}
+
 const BROWSER_TRANSFORM = {
   positionX: 0,
   positionY: 0,

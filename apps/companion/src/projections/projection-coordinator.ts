@@ -173,6 +173,8 @@ export class ProjectionCoordinator {
   private lastIdentityEvidence:
     { readonly sourceGeneration: number; readonly receiveSequence: number } | undefined;
   private current: ProjectionBundle;
+  private lastPublishedProgram: ProgramProjection | undefined;
+  private predictionPublishTimer: unknown;
   private activeLineup: ActiveLineupResolution;
   private staleTimer: unknown;
   private staleTimerKey:
@@ -261,7 +263,7 @@ export class ProjectionCoordinator {
     return this.refresh();
   }
 
-  refresh(): ProjectionBundle {
+  refresh(publishWaiting = false): ProjectionBundle {
     if (this.closed || this.refreshing) return this.current;
     this.refreshing = true;
     try {
@@ -326,6 +328,52 @@ export class ProjectionCoordinator {
       });
       const assist = projectObserverAssist(runtimeView);
       this.current = { program, radar, operator, assist, identity };
+      this.scheduleStaleDeadline(
+        runtimeView,
+        program,
+        nowMonotonicMs,
+        runtimeSnapshot.continuityPolicy,
+      );
+      const prior = this.lastPublishedProgram;
+      const cursor = gameplay.cursor;
+      const coalescePredictionWait =
+        !publishWaiting &&
+        prior !== undefined &&
+        prior.status.telemetry === 'fresh' &&
+        gameplay.status.telemetry === 'fresh' &&
+        gameplay.status.context === prior.status.context &&
+        gameplay.status.identity === prior.status.identity &&
+        gameplay.match?.matchId === prior.match?.matchId &&
+        cursor.producerInstanceId === prior.cursor.producerInstanceId &&
+        cursor.liveSessionId === prior.cursor.liveSessionId &&
+        cursor.programSourceGeneration === prior.cursor.programSourceGeneration &&
+        cursor.mapEpoch === prior.cursor.mapEpoch &&
+        gameplay.round?.phase === 'live' &&
+        gameplay.map?.roundNumber === prior.map?.roundNumber &&
+        gameplay.map?.score.ct === prior.map?.score.ct &&
+        gameplay.map?.score.t === prior.map?.score.t &&
+        gameplay.clock?.phase === prior.clock?.phase &&
+        gameplay.bomb?.state === prior.bomb?.state &&
+        gameplay.bombDamage.players.some(
+          (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
+        ) &&
+        gameplay.bombDamage.players.every(
+          (player) => player.status === 'predicted' || player.reason === 'prediction-loading',
+        );
+      if (coalescePredictionWait) {
+        // Keep the existing WHOLE published snapshot and its original cursor.
+        // A completion reprojects latest state; never attach old estimates to a
+        // new input. A slow worker still exposes waiting after one display frame.
+        this.predictionPublishTimer ??= this.scheduler.setTimeout(() => {
+          this.predictionPublishTimer = undefined;
+          this.refresh(true);
+        }, 16);
+        return this.current;
+      }
+      if (this.predictionPublishTimer !== undefined) {
+        this.scheduler.clearTimeout(this.predictionPublishTimer);
+        this.predictionPublishTimer = undefined;
+      }
       for (const listener of this.presentationListeners) {
         try {
           listener(this.current);
@@ -334,17 +382,12 @@ export class ProjectionCoordinator {
         }
       }
       this.publish(gameplay, radar, operator, assist);
+      this.lastPublishedProgram = gameplay;
       try {
         this.onProjection?.(this.current);
       } catch {
         report(this.onDiagnostic, 'output-projection-failed');
       }
-      this.scheduleStaleDeadline(
-        runtimeView,
-        program,
-        nowMonotonicMs,
-        runtimeSnapshot.continuityPolicy,
-      );
       return this.current;
     } finally {
       this.refreshing = false;
@@ -433,6 +476,8 @@ export class ProjectionCoordinator {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.predictionPublishTimer !== undefined)
+      this.scheduler.clearTimeout(this.predictionPublishTimer);
     this.bombDamageResources.close();
     this.cancelStaleTimer();
     for (const unsubscribe of this.sourceUnsubscribers) unsubscribe();
