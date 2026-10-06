@@ -22,7 +22,7 @@
 - [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，核对自动生成的外层 `.zip.sha256` 与 `release-manifest.json`；ZIP 摘要与包内内容摘要含义不同。
 - [ ] 在实际解压包执行 `node scripts/qualification/verify-c4-resources.mjs <bundle-root>/resources/app`，检查 C4 地图与许可完整性。
 
-Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64.exe`，便携 ZIP 使用相同名称和 `.zip` 后缀。RC 保留版本中的 `-rc.N`，正式版本不带 RC 标记；文件名不附加提交 SHA、`portable` 或 `extract`，完整源码身份和摘要仍记录在包内 metadata 与发布清单中。已发布的旧包保持原始名称、内容和验证记录；后续构建使用新规则。
+Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64.exe`，便携 ZIP 使用相同名称和 `.zip` 后缀。RC 保留版本中的 `-rc.N`，正式版本不带 RC 标记；文件名不附加提交 SHA、`portable` 或 `extract`，完整源码身份和摘要仍记录在包内 metadata 与发布清单中。GitHub 已发布的旧包保留原始名称、内容和验证记录；后续构建使用新规则。镜像可单独修改下载文件名，需核对文件大小与 SHA-256，确认内容与已验产物一致。
 
 产品 ZIP 与维护者 evidence ZIP 分开交付；Windows 资格构建另生成 LZMA2 solid 自解压包，运行实际提取器到带空格的新目录，逐文件核对路径和 SHA-256，并在该提取包执行产品与 GUI smoke。`distribution-manifest.json` 记录独立下载摘要、工具和提取器身份及与原始 ZIP 的内容关系；晋级核对身份、摘要和 provenance，不重新压缩。自解压只是分发形式，不减少安装后体积或替代实机验收。公开预发布前统一 Desktop 的应用版本。用户完整解压产品 ZIP 到可写目录后运行 `Mizar.exe`。
 
