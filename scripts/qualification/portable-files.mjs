@@ -9,18 +9,19 @@ export async function copyNodeRuntime(source, destination) {
   }
 }
 
+export function isDevelopmentFile(name) {
+  return /(?:\.d\.(?:ts|mts|cts)(?:\.map)?|\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|css)\.map|\.tsbuildinfo)$/.test(
+    name,
+  );
+}
+
 export async function pruneDevelopmentFiles(appDir) {
   async function visit(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(path);
-      } else if (
-        entry.isFile() &&
-        /(?:\.d\.(?:ts|mts|cts)(?:\.map)?|\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|css)\.map|\.tsbuildinfo)$/.test(
-          entry.name,
-        )
-      ) {
+      } else if (entry.isFile() && isDevelopmentFile(entry.name)) {
         await rm(path);
       }
     }

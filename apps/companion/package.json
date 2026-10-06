@@ -18,7 +18,7 @@
     "@mizar/rivalhub": "workspace:*",
     "@mizar/telemetry-cstv": "workspace:*",
     "@mizar/telemetry-gsi": "workspace:*",
-    "cs2-c4-damage": "0.1.0",
+    "cs2-c4-damage": "0.1.1",
     "fastify": "catalog:",
     "obs-websocket-js": "5.0.8"
   },

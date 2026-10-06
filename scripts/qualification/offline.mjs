@@ -3,6 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { readAppVersion, windowsBundleName } from './app-version.mjs';
+import { isDevelopmentFile } from './portable-files.mjs';
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 function executable(command) {
@@ -34,11 +37,13 @@ async function assertFile(path, label) {
   }
 }
 
-async function assertNoSymlinks(directory) {
+export async function assertPortableApp(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error('qualification bundle 包含符号链接：' + path);
-    if (entry.isDirectory()) await assertNoSymlinks(path);
+    if (entry.isFile() && isDevelopmentFile(entry.name))
+      throw new Error('production 包仍包含开发文件：' + path);
+    if (entry.isDirectory()) await assertPortableApp(path);
   }
 }
 
@@ -88,13 +93,18 @@ export async function assertGsiScriptContract(scriptsDir) {
     throw new Error('qualification GSI 安装缺少 endpoint 冲突检查');
 }
 
-async function assertBundleSmoke(outputRoot) {
+export async function findBundleDirectory(outputRoot, appVersion) {
   const entries = await readdir(outputRoot, { withFileTypes: true });
-  const bundle = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('mizar-'));
-  const archive = entries.find((entry) => entry.isFile() && entry.name.endsWith('.zip'));
+  const bundleName = windowsBundleName(appVersion);
+  const bundle = entries.find((entry) => entry.isDirectory() && entry.name === bundleName);
+  const archive = entries.find((entry) => entry.isFile() && entry.name === `${bundleName}.zip`);
   if (bundle === undefined || archive === undefined)
     throw new Error('qualification build 未生成一个 bundle 目录和一个 ZIP');
-  const bundleDir = join(outputRoot, bundle.name);
+  return join(outputRoot, bundle.name);
+}
+
+async function assertBundleSmoke(outputRoot) {
+  const bundleDir = await findBundleDirectory(outputRoot, await readAppVersion());
   for (const relativePath of [
     'app/package.json',
     'app/dist/server.js',
@@ -139,15 +149,7 @@ async function assertBundleSmoke(outputRoot) {
     );
   for (const name of ['data', 'logs', 'evidence'])
     await assertFile(join(bundleDir, 'state', name), name);
-  await assertNoSymlinks(join(bundleDir, 'resources/app'));
-  let hasDependencyTests = false;
-  try {
-    await access(join(bundleDir, 'resources/app/node_modules/@fastify/send/test'));
-    hasDependencyTests = true;
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  if (hasDependencyTests) throw new Error('production 包仍包含依赖测试夹具目录');
+  await assertPortableApp(join(bundleDir, 'resources/app'));
   const artifact = JSON.parse(
     await readFile(join(bundleDir, 'resources/metadata/artifact.json'), 'utf8'),
   );
