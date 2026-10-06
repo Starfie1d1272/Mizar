@@ -257,24 +257,24 @@ export function PreparationPage() {
                     >
                       新建本地比赛
                     </Button>
-                    {hasSampleCapability ? (
-                      <details className="preparation-sample-entry">
-                        <summary>开发示例</summary>
-                        <Button
-                          variant="secondary"
-                          disabled={busy}
-                          onClick={() =>
-                            void action(async () => {
-                              await command('/operator/rivals-rehearsal/load');
-                              window.location.reload();
-                            })
-                          }
-                        >
-                          加载 Rivals 示例
-                        </Button>
-                      </details>
-                    ) : null}
                   </div>
+                  {hasSampleCapability ? (
+                    <details className="preparation-sample-entry">
+                      <summary>体验示例</summary>
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                          void action(async () => {
+                            await command('/operator/rivals-rehearsal/load');
+                            window.location.reload();
+                          })
+                        }
+                      >
+                        加载示例比赛
+                      </Button>
+                    </details>
+                  ) : null}
                 </div>
                 <div className="preparation-task-art" aria-hidden="true">
                   <img src="/brand/mizar-mark.svg" alt="" />
@@ -288,7 +288,7 @@ export function PreparationPage() {
                   </span>
                   <StatusPill tone="info">
                     {envelope?.source === 'fixture'
-                      ? '开发示例'
+                      ? '示例比赛'
                       : envelope?.source === 'local'
                         ? '本地比赛'
                         : 'RivalHub'}
@@ -412,9 +412,19 @@ export function PreparationPage() {
                       href={href}
                       aria-label={nextAction ?? `检查 ${label}`}
                     >
-                      <span aria-hidden="true" className="preparation-check-icon">
-                        !
-                      </span>
+                      <svg
+                        aria-hidden="true"
+                        className="preparation-check-icon"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7v6" />
+                        <circle cx="12" cy="17" r="0.75" fill="currentColor" stroke="none" />
+                      </svg>
                       <div>
                         <strong>{label === '比赛上下文' ? '比赛资料' : label}</strong>
                         <p>{reason}</p>
@@ -445,13 +455,13 @@ export function PreparationPage() {
             ) : null}
             {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
               <details className="preparation-rehearsal-stage">
-                <summary>演练控制</summary>
+                <summary>示例体验</summary>
                 <div className="preparation-task-header">
                   <div>
                     {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
                       <p>当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}</p>
                     ) : (
-                      <p>当前为赛程前后比赛预览；切换回焦点比赛可继续推进 15 个示例阶段。</p>
+                      <p>返回初始示例比赛后，可切换阶段。</p>
                     )}
                   </div>
                 </div>
@@ -474,7 +484,7 @@ export function PreparationPage() {
                     >
                       {rehearsalSchedule.matches.map((m) => (
                         <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '★ [焦点比赛] ' : ''}
+                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
                           {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
                           {m.stageLabel ? ` (${m.stageLabel})` : ''}
                         </option>
@@ -533,7 +543,7 @@ export function PreparationPage() {
                     >
                       {rehearsalSchedule.matches.map((m) => (
                         <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '★ [焦点比赛] ' : ''}
+                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
                           {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
                           {m.stageLabel ? ` (${m.stageLabel})` : ''}
                         </option>
@@ -570,7 +580,7 @@ export function PreparationPage() {
                     {envelope?.source === 'local'
                       ? '正在读取本地编辑状态。'
                       : envelope?.source === 'fixture'
-                        ? 'RivalHub 赛事快照 · 演练中'
+                        ? 'RivalHub 赛事快照 · 示例比赛'
                         : 'RivalHub 比赛资料'}
                   </span>
                   {matchGuidance?.matchId === match.matchId &&
@@ -636,12 +646,18 @@ export function PreparationPage() {
               <Button onClick={() => void action(() => openTool('hud'))}>打开 HUD 编辑器</Button>
             </Panel>
           ) : (
-            <Panel>
-              <h2>本机 HUD</h2>
-              <p>仅影响本机显示，OBS 播出不变。其他 HUD 跟随当前预设。</p>
-              <LocalOverlayControls />
-              <SpectatorHudCommands />
-            </Panel>
+            <div className="preparation-overlay-workspace">
+              <Panel className="preparation-overlay-display">
+                <header>
+                  <h2>本机 HUD</h2>
+                  <p>仅影响本机显示，OBS 播出不变。其他 HUD 跟随当前预设。</p>
+                </header>
+                <LocalOverlayControls />
+              </Panel>
+              <Panel>
+                <SpectatorHudCommands />
+              </Panel>
+            </div>
           )
         ) : (
           <Settings tab={tab} />

@@ -173,7 +173,8 @@
   color: var(--mizar-status-warning);
 }
 .workspace-confidence {
-  width: 100%;
+  width: min(100%, calc(50dvh * 16 / 9));
+  justify-self: center;
   aspect-ratio: 16 / 9;
   background: var(--mizar-bg-canvas);
   overflow: hidden;

@@ -237,6 +237,45 @@
 .preparation .preparation-task-content h2 {
   font-size: calc(var(--mizar-type-size-heading) * 1.5);
 }
+.preparation-task-content {
+  display: grid;
+  justify-items: start;
+  gap: calc(var(--mizar-layout-padding) * 1.5);
+}
+.preparation-task-content .preparation-task-header > div {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.preparation .preparation-task-content :is(h2, p) {
+  margin: 0;
+}
+.preparation-overlay-workspace {
+  display: grid;
+  gap: calc(var(--mizar-layout-padding) * 1.5);
+}
+.preparation-overlay-display {
+  display: grid;
+}
+.preparation .mizar-panel.preparation-overlay-display {
+  gap: calc(var(--mizar-layout-padding) * 1.5);
+}
+.preparation-overlay-display .local-overlay-controls {
+  max-width: calc(var(--mizar-layout-target) * 20);
+}
+.preparation-overlay-display .local-overlay-controls__buttons {
+  gap: var(--mizar-layout-gap);
+}
+.preparation-overlay-display .mizar-button {
+  min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-gap));
+  padding-inline: var(--mizar-layout-padding);
+}
+.preparation-task-content > .preparation-actions {
+  gap: var(--mizar-layout-gap);
+}
+.preparation-task-content > .preparation-actions .mizar-button {
+  min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact));
+  padding-inline: var(--mizar-layout-padding);
+}
 .preparation-heading {
   padding-bottom: calc(var(--mizar-layout-padding) * 1.5);
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
@@ -307,12 +346,11 @@
   font-size: var(--mizar-type-size-small);
 }
 .preparation-check-icon {
-  display: grid;
-  place-items: center;
+  display: block;
+  align-self: start;
+  margin-top: calc(var(--mizar-layout-compact) / 2);
   width: calc(var(--mizar-layout-target) / 2);
   height: calc(var(--mizar-layout-target) / 2);
-  border: var(--mizar-line-border) solid currentColor;
-  border-radius: 50%;
   color: var(--mizar-status-warning);
   flex: none;
 }

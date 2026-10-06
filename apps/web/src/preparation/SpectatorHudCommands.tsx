@@ -56,20 +56,19 @@ export function SpectatorHudCommands({
         </div>
       ) : (
         <>
-          <h2>CS2 观战 HUD 命令</h2>
-          <p>
-            需先在 CS2 游戏设置中启用开发者控制台。显示 Mizar HUD 时，可隐藏原生
-            HUD，保留原生击杀提示；结束制作后使用恢复命令。
-          </p>
-          {commands.map((item) => (
-            <div key={item.command}>
-              <p>{item.label}</p>
-              <p>
+          <header>
+            <h2>CS2 原生 HUD</h2>
+            <p>在 CS2 设置中启用开发者控制台，复制命令后粘贴执行。</p>
+          </header>
+          <div className="spectator-hud-commands__items">
+            {commands.map((item) => (
+              <article key={item.command}>
+                <h3>{item.label}</h3>
                 <code>{item.command}</code>
-              </p>
-              <Button onClick={() => void copy(item.command)}>{item.copy}</Button>
-            </div>
-          ))}
+                <Button onClick={() => void copy(item.command)}>{item.copy}</Button>
+              </article>
+            ))}
+          </div>
         </>
       )}
       {message ? (

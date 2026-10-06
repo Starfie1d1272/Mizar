@@ -40,3 +40,33 @@
 .spectator-hud-commands code {
   font-family: var(--mizar-type-family-raw);
 }
+.spectator-hud-commands:not(.spectator-hud-commands--compact) {
+  display: grid;
+  gap: calc(var(--mizar-layout-padding) * 1.5);
+}
+.spectator-hud-commands__items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--mizar-layout-padding) * 2);
+}
+.spectator-hud-commands__items article {
+  display: grid;
+  justify-items: start;
+  gap: var(--mizar-layout-padding);
+  padding-top: var(--mizar-layout-padding);
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  min-width: 0;
+}
+.spectator-hud-commands__items h3 {
+  margin: 0;
+  font-size: var(--mizar-type-size-body);
+}
+.spectator-hud-commands__items code {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+@media (max-width: 800px) {
+  .spectator-hud-commands__items {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
