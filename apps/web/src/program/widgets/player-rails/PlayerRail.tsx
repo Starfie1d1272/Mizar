@@ -42,7 +42,6 @@ export function PlayerRail({
         cursor.programSourceGeneration,
         cursor.mapEpoch,
         snapshot.payload.match?.matchId,
-        snapshot.payload.map?.roundNumber,
         presentationRevision,
       ])
     : null;
@@ -74,6 +73,7 @@ export function PlayerRail({
             explosionHandoff={explosionHandoff}
             predictionScope={predictionScope}
             predictionSequence={cursor.programReceiveSequence ?? cursor.runtimeSeq}
+            predictionRoundNumber={snapshot.payload.map.roundNumber}
             prediction={
               showPrediction
                 ? snapshot.payload.bombDamage.players.find(

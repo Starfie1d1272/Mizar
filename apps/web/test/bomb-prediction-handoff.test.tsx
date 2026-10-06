@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BombPredictionBar } from '../src/program/widgets/player-rails/BombPredictionBar';
 
 describe('pre-explosion estimate visual handoff', () => {
-  it.each(['damage', 'timeout', 'scope', 'stale', 'defused', 'gap'] as const)(
+  it.each(['damage', 'timeout', 'scope', 'stale', 'defused', 'gap', 'round', 'later-gap'] as const)(
     'keeps the last painted area only until %s, without a current prediction',
     (boundary) => {
       vi.useFakeTimers();
@@ -28,6 +28,7 @@ describe('pre-explosion estimate visual handoff', () => {
         scope: string | null,
         explosionHandoff: boolean,
         active = false,
+        roundNumber = 1,
       ) =>
         act(() =>
           root.render(
@@ -37,6 +38,7 @@ describe('pre-explosion estimate visual handoff', () => {
               scope={scope}
               sequence={sequence}
               explosionHandoff={explosionHandoff}
+              roundNumber={roundNumber}
             />,
           ),
         );
@@ -58,9 +60,11 @@ describe('pre-explosion estimate visual handoff', () => {
         if (boundary === 'damage') render(4, 40, 'map1-round1', true);
         if (boundary === 'scope') render(4, 100, 'map2-round1', true);
         if (boundary === 'stale') render(4, 100, null, true);
+        if (boundary === 'round') render(4, 100, 'map1-round1', true, false, 2);
+        if (boundary === 'later-gap') render(5, 100, 'map1-round1', true);
         if (boundary === 'timeout')
           act(() => {
-            vi.advanceTimersByTime(50);
+            vi.advanceTimersByTime(300);
           });
         expect(node.querySelector('[data-bomb-estimate-echo]')).toBeNull();
       } finally {
