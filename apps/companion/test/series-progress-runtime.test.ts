@@ -57,6 +57,25 @@ function contextFixture(): MatchContext {
   };
 }
 
+it('accepts a map plan edited before any execution or result has been bound', () => {
+  const runtime = createProgramRuntime('pristine-plan');
+  const context = contextFixture();
+  runtime.synchronizeSeriesProgress({ ...context, maps: [] }, null, 'local');
+  const next = runtime.synchronizeSeriesProgress(context, null, 'local');
+  expect(next?.maps).toHaveLength(3);
+  expect(next?.issues.some((issue) => issue.code === 'context_result_conflict')).toBe(false);
+});
+it('accepts the first plan while telemetry is already live but no map execution was bound', () => {
+  const runtime = createProgramRuntime('live-pristine-plan');
+  const context = contextFixture();
+  runtime.synchronizeSeriesProgress({ ...context, maps: [] }, null, 'local');
+  runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+  runtime.synchronizeSeriesProgress({ ...context, maps: [] }, null, 'local');
+  const next = runtime.synchronizeSeriesProgress(context, null, 'local');
+  expect(next?.maps[0]?.mapName).toBe('de_mirage');
+  expect(next?.issues.some((issue) => issue.code === 'context_result_conflict')).toBe(false);
+});
+
 function frame(
   sequence: number,
   phase: 'live' | 'gameover',

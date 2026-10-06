@@ -241,13 +241,27 @@ export class ProgramRuntime {
         currentIdentity.entryBId !== contextIdentity.entryBId ||
         currentIdentity.mapPlanFingerprint !== contextIdentity.mapPlanFingerprint
       ) {
-        this.seriesProgress = addSeriesProgressIssue(this.seriesProgress, {
-          code: 'context_result_conflict',
-          severity: 'warning',
-          message: 'MatchContext 刷新与本地已冻结 SeriesProgress 冲突，保留本地事实。',
-          mapOrder: null,
-          mapEpoch: this.state.map.epoch,
-        });
+        const pristine =
+          this.seriesProgress.currentMapOrder === null &&
+          this.seriesProgress.score.a === 0 &&
+          this.seriesProgress.score.b === 0 &&
+          this.seriesProgress.maps.every(
+            (map) =>
+              map.executionMapEpoch === null &&
+              map.status === 'pending' &&
+              map.finalScore === null &&
+              map.roundHistory.rounds.length === 0,
+          );
+        if (pristine) {
+          this.seriesProgress = createSeriesProgress(context);
+        } else
+          this.seriesProgress = addSeriesProgressIssue(this.seriesProgress, {
+            code: 'context_result_conflict',
+            severity: 'warning',
+            message: 'MatchContext 刷新与本地已冻结 SeriesProgress 冲突，保留本地事实。',
+            mapOrder: null,
+            mapEpoch: this.state.map.epoch,
+          });
         shouldPersist = true;
       }
     }

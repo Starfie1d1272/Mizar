@@ -64,3 +64,7 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0028：Host 正常退出复用安全制作收尾](0028-safe-host-production-exit.md)
 
 - [ADR-0029：C4 解码、索引与预测的线程隔离](0029-c4-worker-isolation.md)
+
+- [ADR-0032：手动摘要展示与未绑定 demo 的播出投影](0032-manual-summary-and-demo-presentation.md)
+- [ADR-0033：桌面退出请求先恢复游戏再停止服务](0033-host-first-exit-request.md)
+- [ADR-0034：本机 Steam 头像备用媒体](0034-local-steam-avatar-fallback.md)

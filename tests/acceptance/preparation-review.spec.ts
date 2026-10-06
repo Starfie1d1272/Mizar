@@ -9,6 +9,45 @@ import {
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
+test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({
+  page,
+}) => {
+  await page.route('**/local/v1/steam-avatars', (route) =>
+    route.fulfill({ json: { configured: false, cached: 0, fetching: false } }),
+  );
+  await page.addInitScript(() => {
+    const commands: string[] = [];
+    Object.assign(window, {
+      steamKeyCommands: commands,
+      __TAURI_INTERNALS__: {
+        invoke: <T>(command: string): Promise<T> => {
+          commands.push(command);
+          return Promise.resolve({
+            detected: true,
+            installed: true,
+            conflict: false,
+            preserveQuality: false,
+            pending: false,
+            running: false,
+            message: null,
+          } as T);
+        },
+      },
+    });
+  });
+  await page.goto('/settings?tab=gsi');
+  await expect(page.getByRole('heading', { name: 'Steam 头像（可选）' })).toBeVisible();
+  await expect(page.getByText(/域名（Domain Name）建议填写/)).toContainText('localhost');
+  const link = page.getByRole('link', { name: '获取 Steam Web API Key（Steam 官方）' });
+  await expect(link).toHaveAttribute('href', 'https://steamcommunity.com/dev/apikey');
+  await link.click();
+  expect(await page.evaluate(() => Reflect.get(window, 'steamKeyCommands') as string[])).toContain(
+    'open_steam_api_key',
+  );
+  await expect(page).toHaveURL(/\/settings\?tab=gsi$/);
+  await expect(page.getByRole('button', { name: '保存密钥', exact: true })).toBeDisabled();
+});
+
 test('CS2 launch settings use desktop intents and expose pending recovery', async ({
   page,
   context,

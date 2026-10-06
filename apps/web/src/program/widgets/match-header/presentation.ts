@@ -264,14 +264,10 @@ function buildSeriesMaps(
 
 function buildRoundHistory(
   series: NonNullable<ProgramPayload['series']> | null,
+  observed?: ProgramPayload['map']['roundHistory'],
 ): MatchHeaderRoundHistoryPresentation | null {
-  const history = series?.roundHistory;
-  if (
-    series === null ||
-    history === null ||
-    history === undefined ||
-    history.completeness === 'unavailable'
-  )
+  const history = series?.roundHistory ?? observed;
+  if (history === null || history === undefined || history.completeness === 'unavailable')
     return null;
   if (history.rounds.length === 0) return null;
 
@@ -294,9 +290,9 @@ function buildRoundHistory(
       roundNumber,
       state: 'known',
       winner:
-        round.winnerEntryId === series.entrants.a.entryId
+        series && round.winnerEntryId === series.entrants.a.entryId
           ? 'a'
-          : round.winnerEntryId === series.entrants.b.entryId
+          : series && round.winnerEntryId === series.entrants.b.entryId
             ? 'b'
             : 'unknown',
       winnerSide:
@@ -429,7 +425,7 @@ export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHead
         : `ROUND ${payload.map.roundNumber}`,
     ...clock,
     seriesMaps: series === null ? null : buildSeriesMaps(series),
-    roundHistory: buildRoundHistory(series),
+    roundHistory: buildRoundHistory(series, payload.map.roundHistory),
   };
 }
 

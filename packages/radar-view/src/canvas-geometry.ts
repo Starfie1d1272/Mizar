@@ -53,7 +53,7 @@ const NUKE_LOWER_PLACEMENT: RadarCanvasPlacement = Object.freeze({
   rect: Object.freeze({ x: 90, y: 460, width: 280, height: 540 }),
 });
 
-export function radarBroadcastPlacement(
+function rawBroadcastPlacement(
   mapKey: string,
   layer: string,
   appearance: 'default' | 'shanghai' | 'esl' = 'default',
@@ -77,6 +77,29 @@ export function radarBroadcastPlacement(
         };
   }
   return layer === 'lower' ? NUKE_LOWER_PLACEMENT : NUKE_UPPER_PLACEMENT;
+}
+
+/** Fit the cropped overview without stretching world-space distances. */
+export function radarBroadcastPlacement(
+  mapKey: string,
+  layer: string,
+  appearance: 'default' | 'shanghai' | 'esl' = 'default',
+): RadarCanvasPlacement | null {
+  const placement = rawBroadcastPlacement(mapKey, layer, appearance);
+  if (placement === null) return null;
+  const { viewport, rect } = placement;
+  const scale = Math.min(rect.width / viewport.width, rect.height / viewport.height);
+  const width = viewport.width * scale;
+  const height = viewport.height * scale;
+  return {
+    viewport,
+    rect: {
+      x: rect.x + (rect.width - width) / 2,
+      y: rect.y + (rect.height - height) / 2,
+      width,
+      height,
+    },
+  };
 }
 
 export function radarCanvasArtworkRect(viewport: RadarCanvasViewport | null): RadarCanvasRect {

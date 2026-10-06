@@ -43,7 +43,16 @@ export function mapProgramProjection(projection: ProgramProjection): ProgramPayl
     match: projection.match,
     teams: projection.teams,
     series: mapSeries(projection.series),
-    map: projection.map,
+    map: {
+      ...projection.map,
+      roundHistory:
+        projection.map.roundHistory == null
+          ? null
+          : {
+              ...projection.map.roundHistory,
+              rounds: projection.map.roundHistory.rounds.map((round) => ({ ...round })),
+            },
+    },
     round: projection.round,
     clock: projection.clock,
     observedPlayerSourceId: projection.observedPlayerSourceId,

@@ -30,6 +30,13 @@ describe('C4 worker isolation', () => {
       });
       await worker.settle();
       expect(prepared.predict(input)).toEqual(direct.predict(input));
+      // Stationary players stay cached while other exact inputs churn past the cap.
+      for (let health = 1; health < 40; health++) {
+        expect(prepared.predict(input)).toEqual(direct.predict(input));
+        prepared.predict({ ...input, health });
+        await worker.settle();
+      }
+      expect(prepared.predict(input)).toEqual(direct.predict(input));
       for (let health = 60; health < 71; health++)
         expect(prepared.predict({ ...input, health }).status).toBe('unavailable');
       await worker.settle();
@@ -41,6 +48,7 @@ describe('C4 worker isolation', () => {
       expect(prepared.predict({ ...input, health: 70 })).toEqual(
         direct.predict({ ...input, health: 70 }),
       );
+      expect(changed).not.toHaveBeenCalled();
       expect(prepared.predict({ ...input, health: 50 }).status).toBe('unavailable');
       worker.setContext('generation-2:map-1');
       await worker.settle();
@@ -52,6 +60,9 @@ describe('C4 worker isolation', () => {
       expect(prepared.predict({ ...input, health: 50 })).toEqual(
         direct.predict({ ...input, health: 50 }),
       );
+      // Production reception remains asynchronous and still notifies its owner.
+      expect(prepared.predict({ ...input, health: 51 }).status).toBe('unavailable');
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
     } finally {
       worker.close();
     }

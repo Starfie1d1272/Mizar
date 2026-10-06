@@ -24,7 +24,7 @@ import {
   radarPointInsideViewport,
   type RadarCanvasPlacement,
 } from './canvas-geometry.js';
-import { smokeContour, smokeLobes } from './effect-geometry.js';
+import { smokeLobes } from './effect-geometry.js';
 
 export interface RadarViewProps {
   readonly appearance?: 'default' | 'shanghai' | 'esl';
@@ -189,24 +189,6 @@ export function RadarView({
           ctx.lineWidth = width;
           ctx.stroke();
         }
-      };
-      const smoothClosedPath = (points: readonly { readonly x: number; readonly y: number }[]) => {
-        if (points.length < 3) return;
-        const first = points[0]!;
-        const last = points.at(-1)!;
-        ctx.beginPath();
-        ctx.moveTo((last.x + first.x) / 2, (last.y + first.y) / 2);
-        for (let index = 0; index < points.length; index += 1) {
-          const current = points[index]!;
-          const next = points[(index + 1) % points.length]!;
-          ctx.quadraticCurveTo(
-            current.x,
-            current.y,
-            (current.x + next.x) / 2,
-            (current.y + next.y) / 2,
-          );
-        }
-        ctx.closePath();
       };
       const geometry = model.geometry;
       const payload = model.snapshot?.payload;
@@ -440,7 +422,7 @@ export function RadarView({
             if (!projected || projected.outOfBounds) continue;
             const point = pointAt(projected);
             if (point === null) continue;
-            const radius = Math.max(8, Math.min(18, radiusAt(worldRadius, projected.layer)));
+            const radius = radiusAt(worldRadius, projected.layer);
             const opacity = layerOpacity(projected, model.layer);
             totalX += point.x;
             totalY += point.y;
@@ -459,7 +441,7 @@ export function RadarView({
             if (!projected || projected.outOfBounds) continue;
             const point = pointAt(projected);
             if (point === null) continue;
-            const radius = Math.max(8, Math.min(18, radiusAt(worldRadius, projected.layer)));
+            const radius = radiusAt(worldRadius, projected.layer);
             const opacity = layerOpacity(projected, model.layer);
             ctx.globalAlpha = alpha * opacity * 0.58;
             circle(point.x, point.y, radius * 0.9, '#f49b3d');
@@ -511,16 +493,13 @@ export function RadarView({
             ctx.restore();
             return;
           }
-          const contour = smokeContour(marker.source.sourceEntityId, radius).map((offset) => ({
-            x: x + offset.x,
-            y: y + offset.y,
-          }));
-
           ctx.save();
           ctx.globalAlpha = opacity;
-          smoothClosedPath(contour);
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
           ctx.fillStyle = '#eef1f23d';
           ctx.fill();
+          ctx.clip();
 
           for (const lobe of smokeLobes(marker.source.sourceEntityId, radius)) {
             const lx = x + lobe.dx;
@@ -537,7 +516,8 @@ export function RadarView({
           }
 
           ctx.globalAlpha = opacity * 0.78;
-          smoothClosedPath(contour);
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
           ctx.strokeStyle = '#f7f8f8';
           ctx.lineWidth = 2;
           ctx.stroke();
@@ -710,33 +690,6 @@ export function RadarView({
         }
         const bomb = payload.bomb;
         const bombIcon = imageFor(bombIconPath);
-        if (
-          bomb &&
-          bomb.state !== 'carried' &&
-          bomb.state !== 'unknown' &&
-          !(bomb.state === 'planting' && bomb.sourcePlayerId !== null) &&
-          model.bombVisible(now)
-        ) {
-          const p = bomb.position;
-          if (p && !p.outOfBounds) {
-            const point = pointAt(p);
-            if (point !== null) {
-              const x = point.x;
-              const y = point.y;
-              ctx.globalAlpha = layerOpacity(p, model.layer);
-              if (appearance === 'esl' && (bomb.state === 'planted' || bomb.state === 'defusing')) {
-                // A local decorative pulse, independent of the accepted objective clock.
-                const phase = reduceMotion ? 0.5 : (now % 2000) / 2000;
-                ctx.save();
-                ctx.globalAlpha *= (1 - phase) * 0.5;
-                circle(x, y, (24 + phase * 80) / z.scale, '#ff0000');
-                ctx.restore();
-              }
-              if (bombIcon) ctx.drawImage(bombIcon, x - 18, y - 18, 36, 36);
-              ctx.globalAlpha = 1;
-            }
-          }
-        }
         for (const marker of model.players.values()) {
           const p = marker.source;
           const markerKind = radarPlayerMarkerKind(p.lifeState);
@@ -875,6 +828,32 @@ export function RadarView({
             ctx.restore();
           }
           ctx.globalAlpha = 1;
+        }
+        if (
+          bomb &&
+          (bomb.state === 'dropped' || bomb.state === 'planted' || bomb.state === 'defusing') &&
+          model.bombVisible(now)
+        ) {
+          const p = bomb.position;
+          if (p && !p.outOfBounds) {
+            const point = pointAt(p);
+            if (point !== null) {
+              const x = point.x;
+              const y = point.y;
+              ctx.globalAlpha = layerOpacity(p, model.layer);
+              if (appearance === 'esl' && (bomb.state === 'planted' || bomb.state === 'defusing')) {
+                // A local decorative pulse, independent of the accepted objective clock.
+                const phase = reduceMotion ? 0.5 : (now % 2000) / 2000;
+                ctx.save();
+                ctx.globalAlpha *= (1 - phase) * 0.5;
+                circle(x, y, (24 + phase * 80) / z.scale, '#ff0000');
+                ctx.restore();
+              }
+              circle(x, y, 22 / z.scale, bombCarrierColor, '#0b1119', 2 / z.scale);
+              if (bombIcon) drawContainedImage(ctx, bombIcon, x, y, 30 / z.scale, 30 / z.scale);
+              ctx.globalAlpha = 1;
+            }
+          }
         }
       }
       ctx.restore();

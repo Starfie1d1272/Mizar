@@ -27,11 +27,24 @@ describe('Radar shared overview canvas', () => {
       x: 275,
       y: 602.5,
     });
-    expect(radarBroadcastPlacement('de_nuke', 'lower')?.rect).toEqual({
-      x: 90,
-      y: 460,
-      width: 280,
-      height: 540,
-    });
+    const lower = radarBroadcastPlacement('de_nuke', 'lower')!;
+    expect(lower.rect.x + lower.rect.width / 2).toBeCloseTo(230);
+    expect(lower.rect.y + lower.rect.height / 2).toBeCloseTo(730);
   });
+  it.each(['de_ancient', 'de_vertigo', 'de_nuke'])(
+    'preserves a world-space circle in every %s crop',
+    (map) => {
+      for (const appearance of ['default', 'shanghai', 'esl'] as const) {
+        for (const layer of ['upper', 'lower']) {
+          const p = radarBroadcastPlacement(map, layer, appearance);
+          const origin = radarCanvasPoint({ x: 0.5, y: 0.5 }, p?.viewport, p?.rect);
+          const x = radarCanvasPoint({ x: 0.52, y: 0.5 }, p?.viewport, p?.rect);
+          const y = radarCanvasPoint({ x: 0.5, y: 0.52 }, p?.viewport, p?.rect);
+          const radius = radarCanvasRadius(0.02, p?.viewport, p?.rect);
+          expect(x.x - origin.x).toBeCloseTo(radius);
+          expect(y.y - origin.y).toBeCloseTo(radius);
+        }
+      }
+    },
+  );
 });

@@ -327,8 +327,12 @@ test('native C4 prediction uses real replay damage and remains distinct from hea
   const card = prediction.locator('xpath=ancestor::*[contains(@class,"player-rail__card")]');
   await expect(card.locator('.player-rail__health-value')).toHaveText('73');
   await expect(page.locator('.player-rail__card[data-observed="true"]')).toHaveCSS(
-    'outline-width',
-    '1px',
+    'outline-style',
+    'none',
+  );
+  await expect(page.locator('.player-rail__card[data-observed="true"]')).not.toHaveCSS(
+    'animation-name',
+    'mizar-pulse-observed',
   );
   preset.widgets['team-ct-rail'].settings.showBombPrediction = false;
   preset.widgets['team-t-rail'].settings.showBombPrediction = false;

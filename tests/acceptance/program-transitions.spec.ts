@@ -56,7 +56,7 @@ test('preview fades between ready scenes, keeps at most two layers and latest se
   release();
   await expect(
     page.frameLocator('iframe[title="节目预览"]').locator('.summary-caption'),
-  ).toContainText('MATCH COMPLETE');
+  ).toContainText('MATCH RESULT PENDING');
   await expect(page.locator('.preparation-program-preview iframe')).toHaveCount(1);
   expect(
     await page.evaluate(() => Math.max(...(Reflect.get(window, 'previewSamples') as number[]))),

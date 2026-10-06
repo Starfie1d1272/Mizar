@@ -62,6 +62,7 @@ export interface ProjectionPublishers {
 }
 
 export interface ProjectionCoordinatorOptions {
+  readonly avatars?: { get(id: string): string | null; request(ids: readonly string[]): void };
   readonly programRuntime: ProgramRuntime;
   readonly cstvSources: CstvSourceManagers;
   readonly identityResolver?: IdentityResolver;
@@ -144,6 +145,7 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly avatars: ProjectionCoordinatorOptions['avatars'];
   private readonly bombDamageResources = new BombDamageResources(() => this.refresh());
   private readonly presentationListeners = new Set<(bundle: ProjectionBundle) => void>();
 
@@ -183,6 +185,7 @@ export class ProjectionCoordinator {
   private closed = false;
 
   constructor(options: ProjectionCoordinatorOptions) {
+    this.avatars = options.avatars;
     this.programRuntime = options.programRuntime;
     this.cstvSources = options.cstvSources;
     this.identityResolver = options.identityResolver ?? createIdentityResolver();
@@ -274,7 +277,7 @@ export class ProjectionCoordinator {
         this.contextBinding?.origin,
       );
       const nowMonotonicMs = this.nowMonotonicMs();
-      const program = projectProgram({
+      const programInput = {
         runtime: runtimeView,
         bombDamageResource: this.bombDamageResources.get(
           runtimeView.telemetry?.telemetry.map?.name ?? null,
@@ -289,7 +292,24 @@ export class ProjectionCoordinator {
         seriesProgress,
         nowMonotonicMs,
         continuityPolicy: runtimeSnapshot.continuityPolicy,
+      };
+      const withAvatars = (p: ProgramProjection): ProgramProjection => ({
+        ...p,
+        players: p.players.map((player) => ({
+          ...player,
+          avatarUrl: player.avatarUrl ?? this.avatars?.get(player.sourcePlayerId) ?? null,
+        })),
       });
+      const baseProgram = projectProgram(programInput);
+      const program = withAvatars(baseProgram);
+      const gameplay = withAvatars(
+        projectProgram({ ...programInput, presentationRole: 'gameplay' }),
+      );
+      this.avatars?.request(
+        baseProgram.players
+          .filter((player) => player.avatarUrl === null)
+          .map((player) => player.sourcePlayerId),
+      );
       const radar = projectRadarFrame({
         runtime: runtimeView,
         identity,
@@ -313,7 +333,7 @@ export class ProjectionCoordinator {
           report(this.onDiagnostic, 'presentation-projection-failed');
         }
       }
-      this.publish(program, radar, operator, assist);
+      this.publish(gameplay, radar, operator, assist);
       try {
         this.onProjection?.(this.current);
       } catch {

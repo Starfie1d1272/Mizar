@@ -82,8 +82,18 @@ export class ProgramPresentationStore {
       next: null,
     };
   }
-  update(p: ProgramProjection, contextRevision: string): void {
-    const key = p.match ? `${p.match.matchId}:${contextRevision}` : null;
+  update(p: ProgramProjection, _contextRevision: string): void {
+    void _contextRevision; // Ordinary metadata refreshes do not discard frozen map summaries.
+    const key =
+      p.match && p.series
+        ? JSON.stringify([
+            p.match.matchId,
+            p.series.format,
+            p.series.entrants.a.entryId,
+            p.series.entrants.b.entryId,
+            p.series.maps.map((map) => [map.mapOrder, map.mapId, map.mapName]),
+          ])
+        : null;
     if (key !== this.key) {
       this.key = key;
       this.value = this.empty();
@@ -102,7 +112,7 @@ export class ProgramPresentationStore {
         map.status === 'completed' &&
         map.finalScore &&
         map.mapName === p.map.name &&
-        map.mapOrder === p.series?.currentMapOrder,
+        (p.series?.currentMapOrder === null || map.mapOrder === p.series?.currentMapOrder),
     );
     if (
       !completed?.finalScore ||

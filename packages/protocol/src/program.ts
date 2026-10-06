@@ -181,7 +181,7 @@ export const bombDamageSchema = z.object({
   reason: z.string().max(160).nullable(),
   model: z
     .object({
-      packageVersion: z.literal('0.1.0'),
+      packageVersion: z.enum(['0.1.0', '0.1.1']),
       mapName: z.string().max(64),
       modelRevision: z.string().max(128),
       resourceSha256: z.string().length(64),
@@ -233,6 +233,13 @@ export const programPayloadSchema = z.object({
   teams: z.object({ ct: teamSchema, t: teamSchema }),
   series: seriesProjectionSchema.nullable(),
   map: z.object({
+    roundHistory: z
+      .object({
+        completeness: z.enum(['complete', 'partial', 'unavailable']),
+        rounds: z.array(seriesRoundSchema).max(256),
+      })
+      .nullable()
+      .optional(),
     name: nullableString,
     mode: nullableString,
     phase: z.enum(['warmup', 'live', 'intermission', 'gameover', 'unknown']).nullable(),

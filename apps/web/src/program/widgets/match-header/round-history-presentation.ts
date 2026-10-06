@@ -38,7 +38,7 @@ export function roundHistorySegment(history: MatchHeaderRoundHistoryPresentation
 }
 
 export function freezeHistoryEligible(payload: ProgramPayload): boolean {
-  const history = payload.series?.roundHistory;
+  const history = payload.series?.roundHistory ?? payload.map.roundHistory;
   const last = history?.rounds.at(-1)?.roundNumber ?? 0;
   return (
     payload.status.telemetry === 'fresh' &&

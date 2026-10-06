@@ -40,7 +40,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 use windows_host::GameTracker;
-use windows_startup::{failure_dialog, DesktopMutex, ExitSignal, RuntimeJob};
+use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, RuntimeJob};
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
@@ -730,6 +730,17 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_steam_api_key() -> Result<(), String> {
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = "https://steamcommunity.com/dev/apikey\0".encode_utf16().collect();
+    let result = unsafe {
+        ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
+    };
+    if result <= 32 { Err("浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。".into()) }
+    else { Ok(()) }
+}
+
+#[tauri::command]
 fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|_| "授权页面地址无效。")?;
     if parsed.scheme() != "https"
@@ -948,6 +959,10 @@ fn run_desktop(
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
 ) -> Result<(), String> {
+    let exit_request = Arc::new(
+        ExitRequest::new(&shutdown_scope(&bundle_root()?)?)
+            .map_err(|error| error.to_string())?,
+    );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
     let mut tracker = GameTracker::default();
@@ -994,6 +1009,7 @@ fn run_desktop(
             present_production,
             open_tool,
             open_rivalhub_authorization,
+            open_steam_api_key,
             open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
@@ -1117,6 +1133,7 @@ fn run_desktop(
                     }
                     if !pending.swap(true, Ordering::Relaxed) {
                         let activate = activation.requested();
+                        let request_exit = exit_request.requested();
                         let tick_host = host.clone();
                         let tick_running = worker_running.clone();
                         let tick_pending = pending.clone();
@@ -1124,7 +1141,9 @@ fn run_desktop(
                         if host
                             .run_on_main_thread(move || {
                                 if tick_running.load(Ordering::Relaxed) {
-                                    if tick_signal.requested() {
+                                    if request_exit {
+                                        tick_host.exit(0);
+                                    } else if tick_signal.requested() {
                                         // A failed game restoration stays open for manual retry.
                                         // Consume the verified signal once; do not reopen a dialog each tick.
                                         if !tick_host
@@ -1277,7 +1296,16 @@ fn run_desktop(
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
                     host.state::<production_exit::ExitGate>().cancel();
-                    let _ = open_main(host.clone(), Some("/".into()));
+                    hide_workspace(&host);
+                    if host.state::<production_exit::VerifiedStop>().complete() {
+                        // Direct service-stop callers may already have removed HTTP.
+                        // Native recovery remains available through the tray, never a refused WebView.
+                        for window in host.webview_windows().values() {
+                            let _ = window.destroy();
+                        }
+                    } else {
+                        let _ = open_main(host.clone(), Some("/".into()));
+                    }
                     host.dialog()
                         .message(format!(
                             "退出 Mizar 未完成，待恢复记录仍保留。\n{error}\n请修复后重试退出。"
@@ -1401,6 +1429,37 @@ fn main() {
         }
     };
     if args.iter().any(|arg| arg == "--stop") {
+        let host_stop = (|| -> Result<bool, String> {
+            let scope = shutdown_scope(&root)?;
+            if !ExitRequest::exists(&scope).map_err(|error| error.to_string())? {
+                return Ok(false);
+            }
+            // Never stop the child before the Host has restored the managed game.
+            if !health_matches(&root) {
+                return Err("无法核对此目录的制播服务，未提交退出请求。".into());
+            }
+            if !ExitRequest::notify(&scope).map_err(|error| error.to_string())? {
+                return Ok(false);
+            }
+            let deadline = Instant::now() + Duration::from_secs(40);
+            while Instant::now() < deadline {
+                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())?
+                    && !health_matches(&root)
+                {
+                    return Ok(true);
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err("桌面退出尚未完成，请查看恢复提示并重试；制播服务仍保留。".into())
+        })();
+        match host_stop {
+            Ok(true) => return,
+            Ok(false) => (),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
         if let Err(error) = stop_runtime(&root, None) {
             eprintln!("{error}");
             std::process::exit(1);

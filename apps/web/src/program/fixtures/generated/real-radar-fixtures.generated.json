@@ -5949,7 +5949,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 31,
+            "channelSeq": 30,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -6128,7 +6128,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 33,
+            "channelSeq": 32,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -6307,7 +6307,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 35,
+            "channelSeq": 34,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -6486,7 +6486,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 37,
+            "channelSeq": 36,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -6665,7 +6665,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 39,
+            "channelSeq": 38,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -6844,7 +6844,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 41,
+            "channelSeq": 40,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -7019,7 +7019,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 43,
+            "channelSeq": 42,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -7198,7 +7198,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 45,
+            "channelSeq": 44,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -7377,7 +7377,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 46,
+            "channelSeq": 45,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,
@@ -7556,7 +7556,7 @@
             "protocolVersion": 1,
             "channel": "radar",
             "schemaVersion": 2,
-            "channelSeq": 47,
+            "channelSeq": 46,
             "cursor": {
               "producerInstanceId": "real-program-replay",
               "liveSessionId": null,

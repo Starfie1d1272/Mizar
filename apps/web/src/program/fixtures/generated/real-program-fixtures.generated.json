@@ -130,6 +130,7 @@
             "roundHistory": { "mapOrder": 1, "completeness": "unavailable", "rounds": [] }
           },
           "map": {
+            "roundHistory": null,
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "warmup",
@@ -1019,6 +1020,23 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -1996,6 +2014,7 @@
             "roundHistory": { "mapOrder": 1, "completeness": "unavailable", "rounds": [] }
           },
           "map": {
+            "roundHistory": null,
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -2683,6 +2702,23 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -3519,6 +3555,23 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -4200,7 +4253,7 @@
             "status": "available",
             "reason": null,
             "model": {
-              "packageVersion": "0.1.0",
+              "packageVersion": "0.1.1",
               "mapName": "de_ancient",
               "modelRevision": "cs2-win64-2026-10-02-static-v2",
               "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"
@@ -4479,6 +4532,23 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -5104,7 +5174,7 @@
             "status": "available",
             "reason": null,
             "model": {
-              "packageVersion": "0.1.0",
+              "packageVersion": "0.1.1",
               "mapName": "de_ancient",
               "modelRevision": "cs2-win64-2026-10-02-static-v2",
               "resourceSha256": "0eac4aaef0d2273afccdfca6b7a8392ca0ea24f91783061dc8791455452eb551"
@@ -5411,6 +5481,71 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -5977,7 +6112,7 @@
         "protocolVersion": 1,
         "channel": "program",
         "schemaVersion": 8,
-        "channelSeq": 47,
+        "channelSeq": 46,
         "cursor": {
           "producerInstanceId": "real-program-replay",
           "liveSessionId": null,
@@ -6169,6 +6304,77 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -6868,6 +7074,29 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -7572,6 +7801,29 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -8442,6 +8694,59 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -9384,6 +9689,41 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -10330,6 +10670,65 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -11504,6 +11903,83 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -12308,6 +12784,83 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -13184,6 +13737,155 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 13,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 14,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 15,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 16,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 17,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 18,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 19,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 20,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 21,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 22,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 23,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 24,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -14078,6 +14780,173 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 13,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 14,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 15,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 16,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 17,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 18,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 19,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 20,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 21,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 22,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 23,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 24,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 25,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 26,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 27,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -14972,6 +15841,173 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 13,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 14,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 15,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 16,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 17,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 18,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 19,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 20,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 21,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 22,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 23,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 24,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 25,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 26,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 27,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "live",
@@ -15878,6 +16914,191 @@
             }
           },
           "map": {
+            "roundHistory": {
+              "completeness": "complete",
+              "rounds": [
+                {
+                  "roundNumber": 1,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 2,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 3,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 4,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 5,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 6,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 7,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 8,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 9,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 10,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 11,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 12,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 13,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 14,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 15,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 16,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 17,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 18,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "bomb"
+                },
+                {
+                  "roundNumber": 19,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 20,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 21,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 22,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 23,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "time"
+                },
+                {
+                  "roundNumber": 24,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 25,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 26,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 27,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "defuse"
+                },
+                {
+                  "roundNumber": 28,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 29,
+                  "winnerSide": "CT",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 30,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
+                }
+              ]
+            },
             "name": "de_ancient",
             "mode": "competitive",
             "phase": "gameover",

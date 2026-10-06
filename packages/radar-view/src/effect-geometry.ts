@@ -47,10 +47,9 @@ export function smokeContour(
   const rotation = unit(seed, 90) * Math.PI * 2;
   return Array.from({ length: segments }, (_, index) => {
     const angle = rotation + (index / segments) * Math.PI * 2;
-    const variation = 0.9 + (unit(seed, 100 + index) - 0.5) * 0.18;
     return {
-      x: Math.cos(angle) * radius * variation,
-      y: Math.sin(angle) * radius * variation,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
     };
   });
 }

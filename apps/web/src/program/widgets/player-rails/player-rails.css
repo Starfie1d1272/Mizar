@@ -215,10 +215,6 @@
   transition: opacity 100ms ease-out;
 }
 
-.player-rail__card[data-observed='true']::after {
-  opacity: 1;
-}
-
 .player-rail__card[data-physical-side='left']::after {
   right: 0;
 }

@@ -277,10 +277,7 @@ function RoundKillBadge({ kills }: { readonly kills: number }) {
   );
 }
 
-type BombPrediction = Extract<
-  ProgramPayload['bombDamage']['players'][number],
-  { status: 'predicted' }
->;
+type BombPrediction = ProgramPayload['bombDamage']['players'][number];
 
 function PlayerBody({
   prediction,
@@ -339,7 +336,9 @@ function PlayerBody({
       ) : (
         <div className="player-rail__health-bar" data-health-bar="true">
           <span style={healthStyle} data-health-empty={!player.healthPercent} />
-          {options.showBombPrediction && prediction && prediction.damage > 0 ? (
+          {options.showBombPrediction &&
+          prediction?.status === 'predicted' &&
+          prediction.damage > 0 ? (
             <i
               className="player-rail__bomb-prediction"
               data-bomb-prediction={prediction.lethal ? 'lethal' : 'surviving'}
@@ -347,6 +346,21 @@ function PlayerBody({
               style={
                 {
                   '--prediction-start': `${Math.max(0, Math.min(100, prediction.hpAfter))}%`,
+                  '--prediction-end': `${player.healthPercent ?? 0}%`,
+                } as CSSProperties
+              }
+            />
+          ) : null}
+          {options.showBombPrediction &&
+          prediction?.status === 'unavailable' &&
+          prediction.reason === 'prediction-loading' ? (
+            <i
+              className="player-rail__bomb-prediction player-rail__bomb-prediction--pending"
+              data-bomb-prediction="updating"
+              aria-label="C4 estimate updating"
+              style={
+                {
+                  '--prediction-start': '0%',
                   '--prediction-end': `${player.healthPercent ?? 0}%`,
                 } as CSSProperties
               }
