@@ -129,7 +129,7 @@
   font-family: inherit;
   font-size: var(--mizar-type-size-heading);
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: normal;
   line-height: 1.3;
   margin: 0;
   max-width: none;

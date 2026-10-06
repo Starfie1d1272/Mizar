@@ -73,6 +73,20 @@ for (const [width, height] of [
           },
         }),
       );
+      await page.addInitScript(() => {
+        Object.assign(window, {
+          __TAURI_INTERNALS__: {
+            invoke: (command: string) => {
+              if (command === 'restore_layout')
+                return Promise.reject(
+                  new Error('工作区已恢复，但 CS2 未接受窗口尺寸。请使用窗口模式后重试恢复布局。'),
+                );
+              return Promise.resolve(true);
+            },
+          },
+        });
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => {} } });
+      });
       // Mirrors the Host's integer geometry and a 48-logical-pixel taskbar.
       const workHeight = height - 48 * scale;
       const units = Math.floor(
@@ -86,41 +100,68 @@ for (const [width, height] of [
       });
       await page.goto('/workspace/dock');
       await expect(page.getByRole('button', { name: '停止作为数据源' })).toBeVisible();
-      const dockOverflow = await page.locator('.workspace-dock').evaluate((root) => {
-        const bounds = root.getBoundingClientRect();
-        const clipped = Array.from(root.querySelectorAll('button'))
+      const measureDock = () =>
+        page.locator('.workspace-dock').evaluate((root) => {
+          const bounds = root.getBoundingClientRect();
+          const clipped = Array.from(root.querySelectorAll('button'))
+            .filter((button) => {
+              if (!button.getClientRects().length) return false;
+              const r = button.getBoundingClientRect();
+              const section = button.closest('section')?.getBoundingClientRect();
+              return (
+                r.left < bounds.left - 1 ||
+                r.right > bounds.right + 1 ||
+                r.top < bounds.top - 1 ||
+                r.bottom > bounds.bottom + 1 ||
+                (section !== undefined && r.bottom > section.bottom + 1) ||
+                r.height < 32 ||
+                button.scrollWidth > button.clientWidth + 1
+              );
+            })
+            .map((button) => button.textContent);
+          const overflow = Array.from(root.querySelectorAll('section'))
+            .filter(
+              (el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1,
+            )
+            .map((el) => ({
+              label: el.getAttribute('aria-label'),
+              width: el.clientWidth,
+              scrollWidth: el.scrollWidth,
+              height: el.clientHeight,
+              scrollHeight: el.scrollHeight,
+            }));
+          return {
+            clipped,
+            overflow,
+            documentScroll: document.documentElement.scrollHeight > innerHeight + 1,
+          };
+        });
+      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      await page.getByRole('button', { name: '恢复布局', exact: true }).click();
+      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
+      await page.getByRole('button', { name: '复制隐藏命令', exact: true }).click();
+      await expect(page.locator('.workspace-feedback')).toBeVisible();
+      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
+      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      const feedbackOverlap = await page.locator('.workspace-feedback').evaluate((toast) => {
+        const t = toast.getBoundingClientRect();
+        return Array.from(document.querySelectorAll('.workspace-dock > section button'))
           .filter((button) => {
-            const r = button.getBoundingClientRect();
-            const section = button.closest('section')?.getBoundingClientRect();
-            return (
-              r.left < bounds.left - 1 ||
-              r.right > bounds.right + 1 ||
-              r.top < bounds.top - 1 ||
-              r.bottom > bounds.bottom + 1 ||
-              (section !== undefined && r.bottom > section.bottom + 1) ||
-              r.height < 32 ||
-              button.scrollWidth > button.clientWidth + 1
-            );
+            const b = button.getBoundingClientRect();
+            return t.left < b.right && t.right > b.left && t.top < b.bottom && t.bottom > b.top;
           })
           .map((button) => button.textContent);
-        const overflow = Array.from(root.querySelectorAll('section'))
-          .filter(
-            (el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1,
-          )
-          .map((el) => ({
-            label: el.getAttribute('aria-label'),
-            width: el.clientWidth,
-            scrollWidth: el.scrollWidth,
-            height: el.clientHeight,
-            scrollHeight: el.scrollHeight,
-          }));
-        return {
-          clipped,
-          overflow,
-          documentScroll: document.documentElement.scrollHeight > innerHeight + 1,
-        };
       });
-      expect(dockOverflow).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      expect(feedbackOverlap).toEqual([]);
+      const footer = (await page.locator('.workspace-message').boundingBox())!;
+      for (const button of await page.locator('.workspace-dock > section button').all()) {
+        expect(
+          (await button.boundingBox())!.y + (await button.boundingBox())!.height,
+        ).toBeLessThanOrEqual(footer.y + 1);
+      }
+      await page.getByRole('button', { name: '查看错误详情' }).click();
+      await expect(page.getByRole('dialog')).toContainText('请使用窗口模式后重试恢复布局');
+      await page.getByRole('button', { name: '关闭详情' }).click();
       if (process.env.MIZAR_REVIEW_SCREENSHOTS === '1')
         await page.screenshot({ path: `.agent-tmp/rc5-dock-${width}-${scale}.png` });
       await page.setViewportSize({
@@ -188,13 +229,13 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       return route.fulfill({ json: { ok: true } });
     });
     await page.goto('/');
-    await page.getByRole('button', { name: '进入现场', exact: true }).click();
+    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
     if (connection === 'connected') {
       await expect(page).toHaveURL(/\/workspace$/);
       expect(entered).toBe(1);
     } else {
       await expect(page).toHaveURL(/\/settings\?tab=obs&prepare=1$/);
-      await expect(page.getByRole('heading', { name: '进入现场前，连接并检查 OBS' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '启动游戏前，连接并检查 OBS' })).toBeVisible();
       await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
       expect(entered).toBe(0);
     }
@@ -220,8 +261,36 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '进入现场', exact: true }).click();
+  await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
   expect(entered).toBe(0);
 });
+
+for (const gsi of [
+  { installed: false, conflict: false },
+  { installed: true, conflict: true },
+]) {
+  test(`Desktop entry requires installed conflict-free GSI: ${JSON.stringify(gsi)}`, async ({
+    page,
+  }) => {
+    await page.addInitScript((status) => {
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string) => {
+            if (command === 'start_managed_cs2') throw new Error('must not launch');
+            return Promise.resolve(
+              command === 'gsi_status' ? status : { pending: false, running: false },
+            );
+          },
+        },
+      });
+    }, gsi);
+    await page.route('**/local/v1/production', (route) =>
+      route.fulfill({ json: { mode: 'preparation', revision: 'preflight', canEnter: true } }),
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: '启动游戏并打开工作台', exact: true }).click();
+    await expect(page).toHaveURL(/settings\?tab=gsi&prepare=1$/);
+  });
+}

@@ -286,6 +286,7 @@ export async function replayRealProgram(options: {
           event.result.observation.telemetry.map?.name ?? null,
         );
       const snapshots = composition.accept(event);
+      if (snapshots !== null) await composition.coordinator.settleBombDamage();
       if (event.kind === 'frame' && snapshots !== null) {
         acceptedSequences.push(event.sourceFrame.sequence);
       }

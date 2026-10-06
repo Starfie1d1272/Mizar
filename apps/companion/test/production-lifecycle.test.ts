@@ -187,3 +187,80 @@ it.each(['live', 'hidden'] as const)(
     }
   },
 );
+
+it('normal Host shutdown uses safe waiting/release and refuses entry until process stops', async () => {
+  const calls: string[] = [];
+  const scenes = {
+    get: () => ({ revision: 'scene', active: 'waiting' }),
+    select: () => {
+      calls.push('waiting');
+      return Promise.resolve({ ok: true });
+    },
+  } as unknown as ProgramSceneController;
+  const app = Fastify();
+  const lifecycle = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes,
+    release: () => {
+      calls.push('release');
+      return Promise.resolve();
+    },
+  });
+  const send = (action: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action, expectedRevision: lifecycle.get().revision },
+    });
+  try {
+    await send('enter');
+    expect((await send('shutdown')).statusCode).toBe(200);
+    expect(calls).toEqual(['waiting', 'release']);
+    expect(lifecycle.get()).toMatchObject({ mode: 'preparation', canEnter: false });
+    expect((await send('enter')).statusCode).toBe(409);
+    // Game restoration can fail after safety committed; another exit retries.
+    expect((await send('shutdown')).statusCode).toBe(200);
+    expect(calls).toEqual(['waiting', 'release', 'release']);
+  } finally {
+    await app.close();
+  }
+});
+
+it('idle Host shutdown needs no OBS scene and failed safety keeps live cleanup retryable', async () => {
+  const select = vi.fn(() => Promise.resolve({ ok: false, message: 'OBS 未连接' }));
+  const release = vi.fn(() => Promise.resolve());
+  const app = Fastify();
+  const lifecycle = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes: {
+      get: () => ({ revision: 'scene', active: 'waiting' }),
+      select,
+    } as unknown as ProgramSceneController,
+    release,
+  });
+  const send = (action: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action, expectedRevision: lifecycle.get().revision },
+    });
+  try {
+    await send('enter');
+    expect((await send('shutdown')).statusCode).toBe(409);
+    expect(lifecycle.get()).toMatchObject({ mode: 'live', canEnter: true });
+    expect(release).not.toHaveBeenCalled();
+    select.mockResolvedValueOnce({ ok: true, message: '' });
+    expect((await send('finish')).statusCode).toBe(200);
+    select.mockClear();
+    release.mockClear();
+    expect((await send('shutdown')).statusCode).toBe(200);
+    expect(select).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  } finally {
+    await app.close();
+  }
+});

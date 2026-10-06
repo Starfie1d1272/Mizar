@@ -17,16 +17,16 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 
 开发网页为 `http://127.0.0.1:4173/`，Companion 为 `http://127.0.0.1:3000/`。生产构建由 Companion 同时提供网页和协议。
 
-| 路径 | 用途 |
-| --- | --- |
-| `/` | 准备中心 |
-| `/preview` | 节目预览；`?scene=bp` 打开 BP 工作台 |
-| `/operator/hud` | HUD 编辑器 |
-| `/workspace` | 浏览器工作台预览 |
-| `/operator` | 制作控制 |
-| `/program`、`/program/bp` | HUD 与 BP 播出 |
-| `/debug` | 运行诊断 |
-| `/operator/bp` | 兼容重定向到 BP 预览工作台 |
+| 路径                      | 用途                                 |
+| ------------------------- | ------------------------------------ |
+| `/`                       | 准备中心                             |
+| `/preview`                | 节目预览；`?scene=bp` 打开 BP 工作台 |
+| `/operator/hud`           | HUD 编辑器                           |
+| `/workspace`              | 浏览器工作台预览                     |
+| `/operator`               | 制作控制                             |
+| `/program`、`/program/bp` | HUD 与 BP 播出                       |
+| `/debug`                  | 运行诊断                             |
+| `/operator/bp`            | 兼容重定向到 BP 预览工作台           |
 
 桌面左右区和底栏由 Host 管理。浏览器预览不证明 Windows 窗口捕获、DPI 或 OBS 正式输出。
 
@@ -48,14 +48,14 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 验证层次
 
-| 层次 | 证明什么 | 常用入口 |
-| --- | --- | --- |
-| 领域与契约 | 状态、身份、时钟、恢复、投递、结构和依赖边界 | `pnpm test`、`pnpm architecture:check` |
-| 类型、样式与构建 | 类型一致性和可构建性 | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build` |
-| 浏览器 | 关键操作、布局结构、预览、配置与数据来源隔离 | `pnpm acceptance:test` |
-| 设计系统 | 变量、组件交互、无障碍与组件目录 | `pnpm design:check` |
-| 打包与启动 | 便携资源、脚本、服务与桌面启动 | `pnpm qualification:offline`、`pnpm local-web:production-smoke` |
-| 真实制播 | 指定包在 Windows + CS2 + OBS 的完整流程与长时运行 | [Production Acceptance #35](https://github.com/Starfie1d1272/Mizar/issues/35) |
+| 层次             | 证明什么                                          | 常用入口                                                                      |
+| ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 领域与契约       | 状态、身份、时钟、恢复、投递、结构和依赖边界      | `pnpm test`、`pnpm architecture:check`                                        |
+| 类型、样式与构建 | 类型一致性和可构建性                              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build`              |
+| 浏览器           | 关键操作、布局结构、预览、配置与数据来源隔离      | `pnpm acceptance:test`                                                        |
+| 设计系统         | 变量、组件交互、无障碍与组件目录                  | `pnpm design:check`                                                           |
+| 打包与启动       | 便携资源、脚本、服务与桌面启动                    | `pnpm qualification:offline`、`pnpm local-web:production-smoke`               |
+| 真实制播         | 指定包在 Windows + CS2 + OBS 的完整流程与长时运行 | [Production Acceptance #35](https://github.com/Starfie1d1272/Mizar/issues/35) |
 
 实时链路变更按影响覆盖：重放、慢消费者、重连、重复/乱序、代际与地图切换、错场与过期资料、正式节目与辅助隔离、队列/内存增长。界面还检查键盘、焦点、减少动效、缺失媒体与长文本。
 
@@ -95,13 +95,13 @@ Rivals 排练的赛事资料来自公开赛程，局内遥测来自独立真实�
 
 ## 便携包自动化
 
-Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明、JavaScript 源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 保留 Ancient 编辑器回放，排除开发专用 Nuke 回放；每次产品构建校验资源边界。
+Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 保留 Ancient 编辑器回放，排除开发专用 Nuke 回放；每次产品构建校验资源边界。
 
 常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo target cache 仅由 main 写入，PR 读取共享缓存。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
 - Windows 发布与 CI 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。
-- `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。
+- `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。 控制台采样遇到 Win32 5 时重新查询原 PID 与创建时间，只有确认原进程已退出才接受该采样；活进程检查失败与可见控制台仍判失败。
 - `product-soak.mjs` 在同一进程运行合成比赛流程，检查连续更新和有界投递，不冒充真实整场比赛。
 - 原生另存为、DPI、多显示器、真实 CS2 与 OBS 仍在 RC 上实测。
 

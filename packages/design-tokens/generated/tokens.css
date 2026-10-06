@@ -2,6 +2,8 @@
 :root {
   --mizar-accent-hover: var(--mizar-color-blue-700);
   --mizar-accent-primary: var(--mizar-color-blue-600);
+  --mizar-action-danger: var(--mizar-color-red-700);
+  --mizar-action-danger-hover: var(--mizar-color-red-800);
   --mizar-bg-canvas: var(--mizar-color-gray-950);
   --mizar-bg-hover: var(--mizar-color-gray-800);
   --mizar-bg-raised: var(--mizar-color-gray-850);
@@ -76,22 +78,26 @@
   --mizar-color-pulse-shell: rgb(20 27 36 / 1);
   --mizar-color-pulse-white: rgb(244 248 253 / 1);
   --mizar-color-red-300: rgb(252 165 165 / 1);
+  --mizar-color-red-700: rgb(185 28 28 / 1);
+  --mizar-color-red-800: rgb(153 27 27 / 1);
   --mizar-easing-standard: var(--mizar-motion-easing-standard);
   --mizar-fg-link: var(--mizar-color-blue-200);
   --mizar-fg-muted: var(--mizar-color-gray-400);
   --mizar-fg-on-accent: var(--mizar-color-gray-0);
   --mizar-fg-primary: var(--mizar-color-gray-50);
-  --mizar-fg-secondary: var(--mizar-color-gray-400);
+  --mizar-fg-secondary: var(--mizar-color-gray-300);
   --mizar-focus-ring: var(--mizar-fg-link);
   --mizar-font-family-display: 'Barlow Condensed', 'Arial Narrow', 'Microsoft YaHei', sans-serif;
   --mizar-font-family-mono: 'SFMono-Regular', 'Consolas', monospace;
-  --mizar-font-family-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mizar-font-family-sans:
+    'Inter', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --mizar-font-line-normal: 1.5;
   --mizar-font-size-12: 12px;
   --mizar-font-size-14: 14px;
   --mizar-font-size-16: 16px;
   --mizar-font-size-20: 20px;
   --mizar-font-size-28: 28px;
+  --mizar-font-size-36: 36px;
   --mizar-font-weight-normal: 400;
   --mizar-font-weight-strong: 600;
   --mizar-layout-compact: var(--mizar-space-8);
@@ -143,6 +149,7 @@
   --mizar-type-family-raw: var(--mizar-font-family-mono);
   --mizar-type-line-body: var(--mizar-font-line-normal);
   --mizar-type-size-body: var(--mizar-font-size-14);
+  --mizar-type-size-display: var(--mizar-font-size-36);
   --mizar-type-size-heading: var(--mizar-font-size-28);
   --mizar-type-size-readable: var(--mizar-font-size-16);
   --mizar-type-size-small: var(--mizar-font-size-12);

@@ -278,6 +278,7 @@ export class ProjectionCoordinator {
         runtime: runtimeView,
         bombDamageResource: this.bombDamageResources.get(
           runtimeView.telemetry?.telemetry.map?.name ?? null,
+          `${runtimeView.cursor.programSourceGeneration}:${runtimeView.cursor.mapEpoch}`,
         ),
         ...(context === undefined ? {} : { context }),
         ...(this.contextBinding === undefined
@@ -332,6 +333,13 @@ export class ProjectionCoordinator {
 
   async prepareBombDamageMap(mapName: string | null): Promise<void> {
     await this.bombDamageResources.prepare(mapName);
+  }
+
+  async settleBombDamage(): Promise<ProjectionBundle> {
+    // A full queue may initially contain the previous frame. Re-project and
+    // drain the current inputs as well; production reception never awaits this.
+    while (await this.bombDamageResources.settlePredictions()) this.refresh();
+    return this.current;
   }
 
   getBpProjection() {

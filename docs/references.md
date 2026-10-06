@@ -14,6 +14,7 @@ Mizar 借鉴开源社区的 HUD、雷达和制播经验。研究参考不等于�
 | SHUD、MulNX | 制作外壳与高级摄像机 | 公开资料或注入能力不能当作基础前提 |
 | Excel2OBS | BP 图卡展示 | 不增加 Excel 中间数据源 |
 | MatchZy / CounterStrikeSharp | 服务器事件 | 基础 HUD 不要求服务器插件 |
+| [CS2 Insight Agent](https://github.com/DrEAmSs59/CS2-insight-agent) | 启动前持久备份、异常恢复、读回核验与设置入口 | 独立实现；在线观战不照搬 Demo 录制的安全启动或全配置恢复策略 |
 | ValveResourceFormat | Source 2 资源处理 | 开发期提取，运行时不带完整工具 |
 
 ## 复用原则

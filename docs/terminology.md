@@ -17,7 +17,7 @@
 | 播出画面 | `Program` / `ProgramProjection` |
 | 制作控制 | `Operator` / `OperatorCommand` |
 | 观察辅助 | `Observer Assist` / `ObserverAssistProjection` |
-| 制播工作台（现场工作区） | `Workspace`，沿用现有界面“进入现场”等操作名 |
+| 制播工作台（现场工作区） | `Workspace`，具体操作名见产品文案 |
 | 运行状态 | `RuntimeState` |
 | 投影 | `Projection`；消费面需要的只读数据 |
 | 本地服务 | `Companion` |

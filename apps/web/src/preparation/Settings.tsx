@@ -4,6 +4,7 @@ import { desktopInvoke } from '../workspace/client';
 import { obsCommand, useObsStatus } from '../workspace/obs-client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
+import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
@@ -91,7 +92,7 @@ export function Settings({ tab }: { tab: string }) {
           <header className="obs-setup__heading">
             <h2>
               {new URLSearchParams(window.location.search).has('prepare')
-                ? '进入现场前，连接并检查 OBS'
+                ? '启动游戏前，连接并检查 OBS'
                 : 'OBS 连接与配置'}
             </h2>
             <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
@@ -263,82 +264,85 @@ export function Settings({ tab }: { tab: string }) {
               OBS 的游戏画面。
             </p>
             <p>
-              若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software
-              并重启游戏。该选项可能影响信任系数；Mizar 不会自动修改启动选项。
+              若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software 。由 Mizar
+              启动时已临时添加该选项；它可能影响信任系数。
             </p>
           </details>
         </div>
       ) : (
-        <Panel>
-          <h2>CS2 与 GSI</h2>
-          <p>
-            {cs2?.found
-              ? cs2.managed
-                ? 'CS2 窗口已就绪'
-                : '已检测到 CS2，进入现场后安排窗口'
-              : '等待 CS2 窗口'}
-          </p>
-          <p>
-            {gsi?.conflict
-              ? gsi.fileConflict
-                ? 'Mizar GSI 文件与安装记录不一致，请恢复原配置后重新安装'
-                : '发现其它 GSI 配置也在发送数据，可能产生重复采集'
-              : gsi?.installed
-                ? 'GSI 已安装'
-                : 'GSI 尚未安装'}
-          </p>
-          {!window.__TAURI_INTERNALS__ ? (
-            <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
-          ) : (
-            <div className="preparation-actions">
-              <Button disabled={busy} onClick={() => void action(refreshGsi)}>
-                自动检测 CS2
-              </Button>
-              <Button
-                disabled={busy}
-                variant="primary"
-                onClick={() =>
-                  void action(async () => {
-                    await desktopInvoke('configure_gsi', { restore: false, choose: false });
-                    await refreshGsi();
-                    setMessage('GSI 已安装，请重新启动 CS2 以加载配置。');
-                  })
-                }
-              >
-                安装 / 修复 GSI
-              </Button>
-              <Button
-                disabled={busy || (!gsi?.installed && !gsi?.conflict)}
-                onClick={() =>
-                  void action(async () => {
-                    await desktopInvoke('configure_gsi', { restore: true, choose: false });
-                    await refreshGsi();
-                    setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
-                  })
-                }
-              >
-                恢复原 GSI 配置
-              </Button>
-              {!gsi?.detected ? (
+        <>
+          <Panel>
+            <h2>CS2 与 GSI</h2>
+            <p>
+              {cs2?.found
+                ? cs2.managed
+                  ? 'CS2 窗口已就绪'
+                  : '已检测到 CS2，打开工作台后安排窗口'
+                : '等待 CS2 窗口'}
+            </p>
+            <p>
+              {gsi?.conflict
+                ? gsi.fileConflict
+                  ? 'Mizar GSI 文件与安装记录不一致，请恢复原配置后重新安装'
+                  : '发现其它 GSI 配置也在发送数据，可能产生重复采集'
+                : gsi?.installed
+                  ? 'GSI 已安装'
+                  : 'GSI 尚未安装'}
+            </p>
+            {!window.__TAURI_INTERNALS__ ? (
+              <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
+            ) : (
+              <div className="preparation-actions">
+                <Button disabled={busy} onClick={() => void action(refreshGsi)}>
+                  自动检测 CS2
+                </Button>
                 <Button
                   disabled={busy}
+                  variant="primary"
                   onClick={() =>
                     void action(async () => {
-                      await desktopInvoke('configure_gsi', { restore: false, choose: true });
+                      await desktopInvoke('configure_gsi', { restore: false, choose: false });
                       await refreshGsi();
+                      setMessage('GSI 已安装，请重新启动 CS2 以加载配置。');
                     })
                   }
                 >
-                  选择 CS2 安装目录
+                  安装 / 修复 GSI
                 </Button>
-              ) : null}
-            </div>
-          )}
-          <details>
-            <summary>详细信息</summary>
-            <p>{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
-          </details>
-        </Panel>
+                <Button
+                  disabled={busy || (!gsi?.installed && !gsi?.conflict)}
+                  onClick={() =>
+                    void action(async () => {
+                      await desktopInvoke('configure_gsi', { restore: true, choose: false });
+                      await refreshGsi();
+                      setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
+                    })
+                  }
+                >
+                  恢复原 GSI 配置
+                </Button>
+                {!gsi?.detected ? (
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        await desktopInvoke('configure_gsi', { restore: false, choose: true });
+                        await refreshGsi();
+                      })
+                    }
+                  >
+                    选择 CS2 安装目录
+                  </Button>
+                ) : null}
+              </div>
+            )}
+            <details>
+              <summary>详细信息</summary>
+              <p>{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
+            </details>
+          </Panel>
+          <Cs2LaunchSettings />
+        </>
       )}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
     </>

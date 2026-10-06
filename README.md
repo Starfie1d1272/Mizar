@@ -12,17 +12,22 @@
 </p>
 
 <p align="center">
+  <a href="https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/">下载 Windows 完整包</a> ·
   <a href="docs/quick-start.md">开始使用</a> ·
   <a href="docs/screenshots/README.md">画面预览</a> ·
   <a href="docs/README.md">使用文档</a> ·
   <a href="CONTRIBUTING.md">参与开发</a>
 </p>
 
+**[下载 Windows 完整包（南大云盘）](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)** · [GitHub 备用下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
+
+当前推荐 RC10 开发预览版，约 46.81 MB。运行下载的自解压包，选择新的可写目录，再打开目录内的 `Mizar.exe`；完整操作见[快速开始](docs/quick-start.md)。
+
 Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
 ![Mizar Pulse 半场数据画面](docs/screenshots/halftime.png)
 
-*浏览器示例画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。*
+_浏览器示例画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。_
 
 ## 比赛进行到哪里，节目就呈现到哪里
 

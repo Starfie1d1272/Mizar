@@ -179,7 +179,14 @@ export function compileTokens(documents) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, token]) => {
       const match = typeof token.value === 'string' && token.value.match(aliasPattern);
-      return `  ${token.cssName}: ${match ? `var(${tokens.get(match[1]).cssName})` : cssValue(token.type, resolved.get(name))};`;
+      const value = match
+        ? `var(${tokens.get(match[1]).cssName})`
+        : cssValue(token.type, resolved.get(name));
+      const declaration = `  ${token.cssName}: ${value};`;
+      // Match the repository's 100-column formatting for explicit font stacks.
+      return token.type === 'fontFamily' && declaration.length > 100
+        ? `  ${token.cssName}:\n    ${value};`
+        : declaration;
     });
   return {
     tokens,

@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       label:
-        description: 'Portable artifact label (e.g. RC0)'
+        description: 'Qualification report label (e.g. RC0); product names use the app version'
         required: true
         default: RC1
         type: string
@@ -99,6 +99,26 @@ jobs:
             Pop-Location
           }
 
+      - name: Build and verify same-content LZMA2 self-extracting distribution
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'sfx extracted path'
+          & ./scripts/qualification/create-windows-sfx.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
+          $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+          node scripts/qualification/product-smoke.mjs $extracted.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'SFX portable smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'sfx-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'SFX desktop GUI smoke failed' }
+
+      - name: Measure installed C4 worker responsiveness
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
+          & (Join-Path $bundle.FullName 'resources/runtime/node.exe') scripts/qualification/c4-worker-benchmark.mjs (Join-Path $bundle.FullName 'resources/app') (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-worker-benchmark.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed C4 worker probe failed' }
+
       - name: Run 3-map exact-artifact synthetic lifecycle soak
         shell: pwsh
         run: |
@@ -114,6 +134,10 @@ jobs:
         with:
           subject-path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
 
       - name: Upload qualified portable product
@@ -123,6 +147,11 @@ jobs:
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
           if-no-files-found: error
 
@@ -132,7 +161,7 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'sfx-desktop-smoke.json', 'c4-worker-benchmark.json')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }

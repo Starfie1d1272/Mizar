@@ -29,7 +29,7 @@ Companion 组装运行时、持久化和接口
 | 模块 | 负责 | 不负责 |
 | --- | --- | --- |
 | `apps/companion` | 组装运行时、HTTP/WebSocket、输入输出、持久化、节目与 OBS、采集 | 在传输层重新推导比赛事实 |
-| `apps/desktop` | 启动同包服务；CS2 窗口、布局、焦点、穿透、托盘与工具窗口 | 复制比赛、运行状态、场景或 OBS 状态 |
+| `apps/desktop` | 启动同包服务；受管理 CS2 启动、临时视频配置与恢复；窗口、布局、焦点、穿透、托盘与工具窗口 | 复制比赛、运行状态、场景或 OBS 状态 |
 | `apps/web` | 播出、工作台、准备中心、编辑器、诊断与交互 | 读取原始 GSI、整个运行状态或平台内部表 |
 | `packages/core` | 状态、转换、身份、连续性、统计、系列赛进展与投影 | React、网络实现、OBS、具体第三方解析器 |
 | `packages/protocol` | Mizar 接口结构、版本、场景注册表和接收校验 | 业务状态机 |
@@ -94,6 +94,8 @@ Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`�
 
 接入能力见[数据源矩阵](data-source-capabilities.md)，尚未交付的研究见 [RFC](rfcs/0001-lookahead-observer.md)。
 
+C4 资源的解压、解析、预测索引与计算由 Companion 的单个 Worker 承担，最多保留两张地图和十个在途预测。Core 继续校验当前数据资格；结果按地图、数据源代际、地图执行和完整预测输入匹配，只触发当前状态重新投影。等待或故障时预测不可用，不回放旧帧；见 [ADR-0029](decisions/0029-c4-worker-isolation.md)。
+
 ## 雷达与展示配置
 
 雷达领域完成世界坐标到地图坐标的转换；共享展示包负责插值、平滑、跳变重置和自动聚焦动画。外部网站消费已经校准的公共坐标，不复制地图校准。[包说明](../packages/radar-view/README.md)维护集成方法。
@@ -107,6 +109,8 @@ HUD 配置独立于比赛数据：组件内容、布局、外观和比赛投影�
 Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等同于比赛或 OBS 状态。进入现场需要比赛资料；结束制作先切等待场景、再释放平台数据源，失败保留现场状态供重试，不删除本地比赛。
 
 桌面和 Web 的进入现场入口先读取当前 OBS 连接与场景检查结果；未通过时打开连接引导，不提交制作命令。此准备门禁不复制生命周期状态，也不改变现场运行后的离线恢复能力；理由见 [ADR-0023](decisions/0023-workspace-preflight-and-density.md)。
+
+桌面通过准备检查后，由 Host 启动或复用本次受管理 CS2，再提交进入现场。结束制作成功后正常关闭该游戏并恢复临时视频配置；隐藏现场不关闭。配置文件与进程身份、备份及重启恢复只由 Host 管理，网页发送固定意图。既有 75% 可用区域与 16:9 窗口排布保持；细节见 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md)。
 
 `ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](design/program-direction-v1.md)。
 
@@ -123,3 +127,5 @@ OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录�
 本地监听、Origin 校验和凭据分离见[协议安全](protocol.md#本地访问与安全)。采集写盘不能阻塞 GSI 接收，重放必须经过生产适配器，规则见[遥测语义](telemetry.md#采集重放与时间)。
 
 新增数据源优先增加适配器，新增画面优先复用已有投影，新增可靠输出不改变高频快照语义。第二个真实消费者、提供方或独立发行需求出现前，不建设通用插件框架。
+
+Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md) 和 [ADR-0027](decisions/0027-cs2-launch-recovery-workflow.md)。状态查询不等待启动或退出操作锁；Steam 请求待确认时保留持久记录，正常退出先请求 Companion 安全切场与释放数据源，再关闭受管理游戏；收尾失败保留 Host，退出期间拒绝新启动与工作台进入，异常退出后的恢复状态跨窗口可见。启动项只传给本次 Steam 调用，不修改持久启动项。

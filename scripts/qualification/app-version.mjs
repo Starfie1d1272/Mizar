@@ -11,6 +11,10 @@ export async function readAppVersion(root = new URL('../../', import.meta.url)) 
   if (!appVersion || config.version !== appVersion) throw new Error('Cargo / Tauri 应用版本不一致');
   return appVersion;
 }
+export function windowsBundleName(appVersion) {
+  validateReleaseTag(`v${appVersion}`, appVersion);
+  return `Mizar-v${appVersion}-Windows-x64`;
+}
 export function validateReleaseTag(tag, appVersion) {
   if (!/^v\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(tag) || tag !== `v${appVersion}`)
     throw new Error('发布标签与应用版本不一致');

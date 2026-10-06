@@ -23,7 +23,7 @@
       "$value": "{color.gray.50}"
     },
     "secondary": {
-      "$value": "{color.gray.400}"
+      "$value": "{color.gray.300}"
     },
     "muted": {
       "$value": "{color.gray.400}"
@@ -139,6 +139,9 @@
       },
       "heading": {
         "$value": "{font.size.28}"
+      },
+      "display": {
+        "$value": "{font.size.36}"
       }
     },
     "weight": {
@@ -223,6 +226,15 @@
       "danger": {
         "$value": "{color.pulse.danger}"
       }
+    }
+  },
+  "action": {
+    "$type": "color",
+    "danger": {
+      "$value": "{color.red.700}"
+    },
+    "danger-hover": {
+      "$value": "{color.red.800}"
     }
   }
 }

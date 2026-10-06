@@ -30,6 +30,7 @@ public static class MizarDesktopProbe {
         public long hwnd;
         public bool visible;
         public int attachError;
+        public bool processExited;
     }
     [DllImport("user32.dll")]
     static extern bool EnumWindows(WindowCallback callback, IntPtr data);
@@ -155,12 +156,24 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         $_.CreationDate.ToUniversalTime().ToString('o') -eq $tracked[[uint32]$_.ProcessId]
     })
     $nodes = @($alive | Where-Object { $_.ExecutablePath -eq $NodePath })
+    $consoles = @($nodes | ForEach-Object {
+        $node = $_
+        $result = [MizarDesktopProbe]::Console($node.ProcessId)
+        if ($result.attachError -eq 5) {
+            # AttachConsole can report access denied while a process is exiting.
+            # Re-query the original PID + creation time; a live target must still
+            # fail inspection. Do not treat access denied alone as no console.
+            $current = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $node.ProcessId) -Property ProcessId, CreationDate
+            $result.processExited = $null -eq $current -or $current.CreationDate -ne $node.CreationDate
+        }
+        $result
+    })
     $snapshot = [ordered]@{
         processes = @($alive | ForEach-Object {
             [ordered]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; name = $_.Name; packagedNode = $_.ExecutablePath -eq $NodePath }
         })
         windows = @([MizarDesktopProbe]::Windows($rootProcessId))
-        consoles = @($nodes | ForEach-Object { [MizarDesktopProbe]::Console($_.ProcessId) })
+        consoles = $consoles
     }
     [Console]::Out.WriteLine(($snapshot | ConvertTo-Json -Depth 6 -Compress))
 }

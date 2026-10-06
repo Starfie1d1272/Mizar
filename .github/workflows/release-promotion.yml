@@ -67,6 +67,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP provenance verification failed' }
           gh attestation verify product/release-manifest.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
           if ($LASTEXITCODE -ne 0) { throw 'Qualified source/version manifest provenance verification failed' }
+      - name: Verify qualified self-extracting distribution provenance
+        shell: pwsh
+        run: |
+          $distributionPath = 'product/distribution-manifest.json'
+          if (Test-Path -LiteralPath $distributionPath) {
+            $distribution = Get-Content $distributionPath -Raw | ConvertFrom-Json
+            gh attestation verify "product/$($distribution.archive)" --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            if ($LASTEXITCODE -ne 0) { throw 'SFX provenance verification failed' }
+            gh attestation verify $distributionPath --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            if ($LASTEXITCODE -ne 0) { throw 'SFX manifest provenance verification failed' }
+          }
       - name: Publish exact qualified assets
         shell: pwsh
         run: |
