@@ -48,10 +48,15 @@ test('default radar compacts its empty series slot and the enlarged kill badge f
   await expect(page.locator('.match-header__series-strip')).toHaveCount(0);
   expect((await page.locator('[data-hud-widget="radar"]').boundingBox())!.y).toBe(36);
   const badge = page.locator('.player-rail__round-kill-badge[data-round-kills="5"]').first();
+  await badge.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
   const bounds = (await badge.boundingBox())!;
   const slot = (await badge.locator('..').boundingBox())!;
-  expect(bounds.width).toBe(24);
-  expect(bounds.height).toBe(24);
+  await expect(badge).toHaveCSS('width', '24px');
+  await expect(badge).toHaveCSS('height', '24px');
+  expect(bounds.width).toBeCloseTo(24, 2);
+  expect(bounds.height).toBeCloseTo(24, 2);
   expect(bounds.x).toBeGreaterThanOrEqual(slot.x);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(slot.x + slot.width);
 });

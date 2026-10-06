@@ -62,6 +62,8 @@ export interface ProjectionPublishers {
 }
 
 export interface ProjectionCoordinatorOptions {
+  /** Step replay publishes each cursor immediately, then explicitly drains predictions. */
+  readonly predictionPublishCoalescing?: boolean;
   readonly avatars?: { get(id: string): string | null; request(ids: readonly string[]): void };
   readonly programRuntime: ProgramRuntime;
   readonly cstvSources: CstvSourceManagers;
@@ -145,6 +147,7 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly predictionPublishCoalescing: boolean;
   private readonly avatars: ProjectionCoordinatorOptions['avatars'];
   private readonly bombDamageResources = new BombDamageResources(() => this.refresh());
   private readonly presentationListeners = new Set<(bundle: ProjectionBundle) => void>();
@@ -187,6 +190,7 @@ export class ProjectionCoordinator {
   private closed = false;
 
   constructor(options: ProjectionCoordinatorOptions) {
+    this.predictionPublishCoalescing = options.predictionPublishCoalescing ?? true;
     this.avatars = options.avatars;
     this.programRuntime = options.programRuntime;
     this.cstvSources = options.cstvSources;
@@ -337,6 +341,7 @@ export class ProjectionCoordinator {
       const prior = this.lastPublishedProgram;
       const cursor = gameplay.cursor;
       const coalescePredictionWait =
+        this.predictionPublishCoalescing &&
         !publishWaiting &&
         prior !== undefined &&
         prior.status.telemetry === 'fresh' &&
