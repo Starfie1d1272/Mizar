@@ -27,8 +27,25 @@ export function PlayerRail({
     snapshot.payload.clock?.phase !== 'paused' &&
     remaining != null &&
     Number.isFinite(remaining) &&
-    remaining > 0 &&
+    remaining >= 0 &&
     remaining <= 10;
+  const predictionFresh =
+    snapshot.payload.status.telemetry === 'fresh' &&
+    snapshot.payload.status.identity !== 'mismatch' &&
+    snapshot.payload.clock?.phase !== 'paused';
+  const explosionHandoff = predictionFresh && snapshot.payload.bomb?.state === 'exploded';
+  const cursor = snapshot.cursor;
+  const predictionScope = predictionFresh
+    ? JSON.stringify([
+        cursor.producerInstanceId,
+        cursor.liveSessionId,
+        cursor.programSourceGeneration,
+        cursor.mapEpoch,
+        snapshot.payload.match?.matchId,
+        snapshot.payload.map?.roundNumber,
+        presentationRevision,
+      ])
+    : null;
   return (
     <section
       aria-label={`${physicalSide === 'left' ? '左' : '右'}选手栏`}
@@ -54,6 +71,9 @@ export function PlayerRail({
       <div className="player-rail__players">
         {rail.players.slice(0, 5).map((player) => (
           <PlayerCard
+            explosionHandoff={explosionHandoff}
+            predictionScope={predictionScope}
+            predictionSequence={cursor.programReceiveSequence ?? cursor.runtimeSeq}
             prediction={
               showPrediction
                 ? snapshot.payload.bombDamage.players.find(

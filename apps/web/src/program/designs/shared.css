@@ -161,6 +161,11 @@
   display: none;
 }
 .hud-widget-design.hud-redraw .player-rail__kd {
+  display: grid;
+  grid-template-columns: 11px 2ch 11px 2ch;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
   position: absolute;
   left: 10px;
   bottom: 10px;
@@ -170,6 +175,10 @@
   font-weight: 600;
   gap: 3px;
   opacity: 0.8;
+}
+.hud-widget-design.hud-redraw .player-rail__kd .player-rail__stat-glyph + span {
+  min-width: 0;
+  text-align: right;
 }
 .hud-widget-design.hud-redraw .player-rail--right .player-rail__kd {
   left: auto;

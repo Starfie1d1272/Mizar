@@ -358,7 +358,15 @@ export class ProjectionCoordinator {
           (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
         ) &&
         gameplay.bombDamage.players.every(
-          (player) => player.status === 'predicted' || player.reason === 'prediction-loading',
+          (player) =>
+            player.status === 'predicted' ||
+            player.reason === 'prediction-loading' ||
+            prior.bombDamage.players.some(
+              (previous) =>
+                previous.sourcePlayerId === player.sourcePlayerId &&
+                previous.status === 'unavailable' &&
+                previous.reason === player.reason,
+            ),
         );
       if (coalescePredictionWait) {
         // Keep the existing WHOLE published snapshot and its original cursor.

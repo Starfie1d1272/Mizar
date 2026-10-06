@@ -189,104 +189,114 @@ function observableCstvSources(): {
 }
 
 describe('ProjectionCoordinator', () => {
-  it('coalesces short prediction waits with original cursors, bounds slow waits, and clears hard boundaries immediately', async () => {
-    let waiting = false;
-    let now = 0;
-    let flush: (() => void) | undefined;
-    const resources = vi.spyOn(BombDamageResources.prototype, 'get').mockReturnValue({
-      status: 'ready',
-      value: {
-        mapName: 'de_mirage',
-        modelRevision: 'synthetic-regression',
-        resourceSha256: 'a'.repeat(64),
-        predict: () =>
-          waiting
-            ? { status: 'unavailable', reason: 'prediction-loading' }
-            : {
-                status: 'predicted',
-                stance: 'standing',
-                damage: 10,
-                hpAfter: 90,
-                lethal: false,
-                modelRevision: 'synthetic-regression',
-                assumptions: [],
-                unknownInputs: [],
-              },
-      },
-    });
-    const runtime = createProgramRuntime('batch-regression');
-    const coordinator = createProjectionCoordinator({
-      programRuntime: runtime,
-      cstvSources: createCstvSourceManagers({}),
-      nowMonotonicMs: () => now,
-      scheduler: {
-        setTimeout(callback, delay) {
-          if (delay === 16) flush = callback;
-          return callback;
+  it.each([0, 7])(
+    'coalesces prediction waits with %i dead players, bounds slow waits, and clears hard boundaries',
+    async (deadCount) => {
+      let waiting = false;
+      let now = 0;
+      let flush: (() => void) | undefined;
+      const resources = vi.spyOn(BombDamageResources.prototype, 'get').mockReturnValue({
+        status: 'ready',
+        value: {
+          mapName: 'de_mirage',
+          modelRevision: 'synthetic-regression',
+          resourceSha256: 'a'.repeat(64),
+          predict: () =>
+            waiting
+              ? { status: 'unavailable', reason: 'prediction-loading' }
+              : {
+                  status: 'predicted',
+                  stance: 'standing',
+                  damage: 10,
+                  hpAfter: 90,
+                  lethal: false,
+                  modelRevision: 'synthetic-regression',
+                  assumptions: [],
+                  unknownInputs: [],
+                },
         },
-        clearTimeout(handle) {
-          if (flush === handle) flush = undefined;
+      });
+      const runtime = createProgramRuntime('batch-regression');
+      const coordinator = createProjectionCoordinator({
+        programRuntime: runtime,
+        cstvSources: createCstvSourceManagers({}),
+        nowMonotonicMs: () => now,
+        scheduler: {
+          setTimeout(callback, delay) {
+            if (delay === 16) flush = callback;
+            return callback;
+          },
+          clearTimeout(handle) {
+            if (flush === handle) flush = undefined;
+          },
         },
-      },
-    });
-    try {
-      const players = matchedObservation(await readManifest()).telemetry.allPlayers!.map((p) => ({
-        ...p,
-        position: { x: -1000, y: 0, z: 0 },
-        forward: { x: 1, y: 0, z: 0 },
-      }));
-      const send = (sequence: number) => {
-        now = sequence * 30;
-        const frame = objectiveObservation(sequence, now, 'planted', 8);
-        coordinator.afterRuntimeMutation(
-          runtime.acceptObservation({
-            ...frame,
-            coverage: { ...frame.coverage, allPlayers: 'present' },
-            telemetry: {
-              ...frame.telemetry,
-              allPlayers: players,
-              bomb: { ...frame.telemetry.bomb!, position: { x: 0, y: 0, z: 0 } },
-            },
+      });
+      try {
+        const players = matchedObservation(await readManifest()).telemetry.allPlayers!.map(
+          (p, index) => ({
+            ...p,
+            state: { ...p.state, health: index < deadCount ? 0 : 100 },
+            position: { x: -1000, y: 0, z: 0 },
+            forward: { x: 1, y: 0, z: 0 },
           }),
         );
-      };
-      const published = () => coordinator.getPublisher('program').getCurrent()!;
-      send(1);
-      expect(published().payload.bombDamage.players.every((p) => p.status === 'predicted')).toBe(
-        true,
-      );
-      waiting = true;
-      send(2);
-      expect(coordinator.getCurrent().program.cursor.programReceiveSequence).toBe(2);
-      expect(published().cursor.programReceiveSequence).toBe(1);
-      waiting = false;
-      coordinator.refresh();
-      expect(published().cursor.programReceiveSequence).toBe(2);
-      expect(flush).toBeUndefined();
-      waiting = true;
-      send(3);
-      expect(published().cursor.programReceiveSequence).toBe(2);
-      flush!();
-      expect(published().cursor.programReceiveSequence).toBe(3);
-      expect(published().payload.bombDamage.players.every((p) => p.status === 'unavailable')).toBe(
-        true,
-      );
-      send(4);
-      expect(flush).toBeDefined();
-      coordinator.afterRuntimeMutation(
-        runtime.advanceProgramSourceGeneration({
-          monotonicMs: now + 1,
-          utc: new Date(Date.parse('2026-09-16T00:00:00Z') + now + 1).toISOString(),
-        }),
-      );
-      expect(published().payload.bombDamage.status).toBe('unavailable');
-      expect(published().cursor.programSourceGeneration).toBe(1);
-      expect(flush).toBeUndefined();
-    } finally {
-      await coordinator.close();
-      resources.mockRestore();
-    }
-  });
+        const send = (sequence: number) => {
+          now = sequence * 30;
+          const frame = objectiveObservation(sequence, now, 'planted', 8);
+          coordinator.afterRuntimeMutation(
+            runtime.acceptObservation({
+              ...frame,
+              coverage: { ...frame.coverage, allPlayers: 'present' },
+              telemetry: {
+                ...frame.telemetry,
+                allPlayers: players,
+                bomb: { ...frame.telemetry.bomb!, position: { x: 0, y: 0, z: 0 } },
+              },
+            }),
+          );
+        };
+        const published = () => coordinator.getPublisher('program').getCurrent()!;
+        send(1);
+        expect(
+          published().payload.bombDamage.players.filter((p) => p.status === 'predicted'),
+        ).toHaveLength(10 - deadCount);
+        waiting = true;
+        send(2);
+        expect(coordinator.getCurrent().program.cursor.programReceiveSequence).toBe(2);
+        expect(published().cursor.programReceiveSequence).toBe(1);
+        waiting = false;
+        coordinator.refresh();
+        expect(published().cursor.programReceiveSequence).toBe(2);
+        expect(flush).toBeUndefined();
+        waiting = true;
+        send(3);
+        expect(published().cursor.programReceiveSequence).toBe(2);
+        flush!();
+        expect(published().cursor.programReceiveSequence).toBe(3);
+        expect(
+          published().payload.bombDamage.players.every((p) => p.status === 'unavailable'),
+        ).toBe(true);
+        send(4);
+        expect(flush).toBeDefined();
+        players[deadCount]!.state.health = 0;
+        send(5);
+        expect(published().cursor.programReceiveSequence).toBe(5);
+        expect(flush).toBeUndefined();
+        coordinator.afterRuntimeMutation(
+          runtime.advanceProgramSourceGeneration({
+            monotonicMs: now + 1,
+            utc: new Date(Date.parse('2026-09-16T00:00:00Z') + now + 1).toISOString(),
+          }),
+        );
+        expect(published().payload.bombDamage.status).toBe('unavailable');
+        expect(published().cursor.programSourceGeneration).toBe(1);
+        expect(flush).toBeUndefined();
+      } finally {
+        await coordinator.close();
+        resources.mockRestore();
+      }
+    },
+  );
   it('routes CSTV health changes to Operator without advancing other channel sequences', async () => {
     const { sources, emitLookahead } = observableCstvSources();
     const runtime = createProgramRuntime('coordinator-cstv-side-channel');

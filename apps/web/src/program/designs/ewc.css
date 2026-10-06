@@ -280,7 +280,10 @@
   );
 }
 .hud-widget-design[data-hud-design='ewc']
-  .player-rail__bomb-prediction[data-bomb-prediction='lethal'] {
+  .player-rail__bomb-prediction:is(
+    [data-bomb-prediction='lethal'],
+    [data-bomb-estimate-echo='lethal']
+  ) {
   clip-path: polygon(
     0 0,
     calc(var(--prediction-end) + var(--ewc-half-taper)) 0,

@@ -14,10 +14,12 @@ afterEach(() => {
 });
 
 describe('C4 prediction display window', () => {
-  it.each(['ewc', 'iem', 'perfectworld'] as const)(
+  it.each(['current', 'ewc', 'iem', 'perfectworld', 'esl'] as const)(
     '%s waits for the final ten explosion seconds, including during defuse',
     (design) => {
-      const preset = getBuiltinResolvedPreset(`builtin:${design}-preset`);
+      const preset = getBuiltinResolvedPreset(
+        design === 'current' ? 'builtin:mizar-default-preset' : `builtin:${design}-preset`,
+      );
       const node = document.createElement('div');
       root = createRoot(node);
       const widgetId = 'team-ct-rail';
@@ -58,7 +60,7 @@ describe('C4 prediction display window', () => {
           expect(
             node.querySelectorAll('[data-bomb-prediction]').length > 0,
             `${id}: ${seconds} explosion seconds`,
-          ).toBe(seconds !== null && seconds > 0 && seconds <= 10);
+          ).toBe(seconds !== null && seconds >= 0 && seconds <= 10);
           const visible = node.querySelector('[data-health-value]')?.textContent;
           for (const payload of [
             {
