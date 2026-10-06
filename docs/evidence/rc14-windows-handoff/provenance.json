@@ -1,0 +1,113 @@
+{
+  "exportFormat": "mizar.identity-redacted-evidence.v1",
+  "sourceCommit": "869d3a6fb4eeaf88c101b69d79ab85657d0219fc",
+  "artifactSha256": "5319878d1d2d4f0c665e7b337d9cfd69d6aee4a2a9a3fc0ff98cb3d2cfa88804",
+  "sourceCaptureId": "20261006160059865-8eeaee50",
+  "sourceFramesSha256": "e97be9919c2a3d755773e35740340f5ab4f7236f0a5a50238ea8188c9a202647",
+  "sourceFrameCount": 37487,
+  "files": [
+    {
+      "file": "telemetry-trace.jsonl.gz",
+      "frameCount": 37487,
+      "sha256": "1e66b82bb4ad5e6f983ddf10a074f78c78bcfb464a524dc613b6bb7cb40c38e8"
+    },
+    {
+      "file": "smoke-excerpt.jsonl.gz",
+      "frameCount": 781,
+      "sha256": "71c3b73fcc19821593537f10830658f0e4fa6d33f5915893319b21a7ec72aaff",
+      "firstSequence": 2397,
+      "lastSequence": 3177,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    },
+    {
+      "file": "defuse-excerpt.jsonl.gz",
+      "frameCount": 781,
+      "sha256": "d5b5d2f2b1ff7bb63667dc5cfc8421b5e838d6dfe72ea1afdd6ad0673f640292",
+      "firstSequence": 10556,
+      "lastSequence": 11336,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    },
+    {
+      "file": "second-half-pistol-excerpt.jsonl.gz",
+      "frameCount": 1591,
+      "sha256": "dc32e9509d070c5648914a4bcbd24f11d8334a453330a5d216cbcfda01c22b89",
+      "firstSequence": 25262,
+      "lastSequence": 26852,
+      "classification": "identity-redacted-real-derived-excerpt",
+      "lifecycleCoverage": "partial"
+    }
+  ],
+  "grenadeTypeFrameCounts": {
+    "smoke": 47702,
+    "decoy": 650,
+    "frag": 10557,
+    "flashbang": 2302,
+    "firebomb": 1789,
+    "inferno": 7358
+  },
+  "bombStateFrameCounts": {
+    "carried": 18611,
+    "dropped": 10922,
+    "planting": 556,
+    "planted": 5710,
+    "defusing": 657,
+    "defused": 502,
+    "exploded": 488
+  },
+  "score84FrameCount": 0,
+  "identityReplacement": "stable synthetic Steam64-shaped labels; not actual accounts; player/team names removed",
+  "missingEvidence": [
+    "GPU completion timing and per-callback timing of the separate OBS radar Browser Source",
+    "confirmed smoke entity-handoff root cause",
+    "post-fix RC15 Windows revalidation"
+  ],
+  "timestamps": "source receivedAt retained in excerpts; trace elapsedUs is from original capture start",
+  "supplementalCollection": {
+    "sourceCommit": "869d3a6fb4eeaf88c101b69d79ab85657d0219fc",
+    "artifactSha256": "5319878d1d2d4f0c665e7b337d9cfd69d6aee4a2a9a3fc0ff98cb3d2cfa88804",
+    "start": "2026-10-06T17:18:03.487Z",
+    "end": "2026-10-06T17:21:04.576Z",
+    "scenario": "real Nuke demo, seek to tick 77000, second-half pistol 9:3 -> 9:4 and following rifle round",
+    "profiler": "actual WebView2 rAF callback wrapper restored after collection; first 20000 samples retained",
+    "videoPrivacy": "radar crop excludes names; objective crop masks center actor caption at x320 y86 w200 h18; both audio removed",
+    "files": [
+      {
+        "file": "radar-callback-samples.json.gz",
+        "sha256": "af6fbf51bee3c9b385a28026ad4545b8e2a0cfefc9e9cf3a0fca534bb401ee30"
+      },
+      {
+        "file": "radar-callback-summary.json",
+        "sha256": "aa2b1dfecde8466149834d11b0957799bcb6796976b89eba83ca6d17f8d41dd3"
+      },
+      {
+        "file": "windows-pistol-recording.json",
+        "sha256": "5f36dfd8adb3077e3b0e8f2f1fc31f621be12d42963194daa56041e4c382ed7f"
+      },
+      {
+        "file": "pistol-program-timing.jsonl.gz",
+        "sha256": "6b9253f5bf380c15add3ee51b820cf333f64d3848515f97f5f1675caaa7d2950"
+      },
+      {
+        "file": "pistol-renderer-summary.json",
+        "sha256": "d608ffe145c7d9503e6ece375f2acc9290200d1c172ed1fce34dd605229a5cc3"
+      },
+      {
+        "file": "pistol-defuse-ring.png",
+        "sha256": "8c52f3b7b406f78dca01832ceced3b2c70ec74a3134ad7f6c43662fbd2dac82e"
+      },
+      {
+        "file": "pistol-objective-only.mp4",
+        "sha256": "bac188c625e0f9e8cf006ff0b2294635f964b274ccaf509c7af5ce827f6652c9"
+      },
+      {
+        "file": "radar-pistol-and-rifle.mp4",
+        "sha256": "be0137acc6020495d300422123994adc1f823a71ba1ba5ad4b89f18629a935ce"
+      }
+    ],
+    "originalVideoSha256": "7c339d3a2c6ae799efa4628527151ba6987164c355ebc96e513b862339af291f",
+    "originalProgramEventsSha256": "7de6b932316a5a5c80cd8a17f1c0ad02f4b0615e163f72544787fed9e185ccab",
+    "originalProfilerSha256": "e6ac13ac87715673a57d698392ea1af5a5e4bc619504bc756a47496492fd6c8c"
+  }
+}

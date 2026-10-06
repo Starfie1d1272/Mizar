@@ -1,0 +1,101 @@
+[
+  {
+    "sequence": 23368,
+    "time": "2026-10-06T16:22:45.069Z",
+    "ct": 8,
+    "t": 3,
+    "mapPhase": "live",
+    "roundPhase": "over",
+    "aSides": [
+      "CT"
+    ]
+  },
+  {
+    "sequence": 23487,
+    "time": "2026-10-06T16:22:52.037Z",
+    "ct": 8,
+    "t": 3,
+    "mapPhase": "live",
+    "roundPhase": "freezetime",
+    "aSides": [
+      "CT"
+    ]
+  },
+  {
+    "sequence": 23837,
+    "time": "2026-10-06T16:23:11.996Z",
+    "ct": 8,
+    "t": 3,
+    "mapPhase": "live",
+    "roundPhase": "live",
+    "aSides": [
+      "CT"
+    ]
+  },
+  {
+    "sequence": 25061,
+    "time": "2026-10-06T16:24:04.338Z",
+    "ct": 9,
+    "t": 3,
+    "mapPhase": "intermission",
+    "roundPhase": "over",
+    "aSides": [
+      "CT"
+    ]
+  },
+  {
+    "sequence": 25262,
+    "time": "2026-10-06T16:24:12.847Z",
+    "ct": 3,
+    "t": 9,
+    "mapPhase": "live",
+    "roundPhase": "freezetime",
+    "aSides": [
+      "T"
+    ]
+  },
+  {
+    "sequence": 25776,
+    "time": "2026-10-06T16:24:39.346Z",
+    "ct": 3,
+    "t": 9,
+    "mapPhase": "live",
+    "roundPhase": "live",
+    "aSides": [
+      "T"
+    ]
+  },
+  {
+    "sequence": 26688,
+    "time": "2026-10-06T16:25:18.308Z",
+    "ct": 4,
+    "t": 9,
+    "mapPhase": "live",
+    "roundPhase": "over",
+    "aSides": [
+      "T"
+    ]
+  },
+  {
+    "sequence": 26852,
+    "time": "2026-10-06T16:25:25.312Z",
+    "ct": 4,
+    "t": 9,
+    "mapPhase": "live",
+    "roundPhase": "freezetime",
+    "aSides": [
+      "T"
+    ]
+  },
+  {
+    "sequence": 27308,
+    "time": "2026-10-06T16:25:45.279Z",
+    "ct": 4,
+    "t": 9,
+    "mapPhase": "live",
+    "roundPhase": "live",
+    "aSides": [
+      "T"
+    ]
+  }
+]
