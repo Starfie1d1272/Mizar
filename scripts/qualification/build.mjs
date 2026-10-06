@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
-import { readAppVersion } from './app-version.mjs';
+import { readAppVersion, windowsBundleName } from './app-version.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
 const QUALIFICATION_SCHEMA_VERSION = qualificationContract.schemaVersion;
@@ -31,7 +31,7 @@ function usage() {
   return [
     '用法：node scripts/qualification/build.mjs [options]',
     '  --output <directory>       输出目录（默认：.agent-tmp/qualification-build）',
-    '  --label <RC0|version>      可选发布名称，源码身份仍由完整 SHA 锁定',
+    '  --label <RC0|version>      可选报告名称，产品文件名由应用版本生成',
     '  --skip-build               复用已有 dist 输出',
     '  --skip-node-runtime        仅做结构 smoke 的 bundle，不是现场验收 artifact',
     '  --desktop-profile <ci|release>  桌面 Host 构建 profile（默认：release）',
@@ -297,9 +297,8 @@ async function main() {
   await ensureCleanCheckout(options.allowDirty);
   const gitSha = await commandOutput('git', ['rev-parse', 'HEAD']);
   const shortSha = gitSha.slice(0, 7);
-  const bundleName = options.label
-    ? `Mizar-${options.label}-win-x64-portable-${shortSha}`
-    : `mizar-${shortSha}-win-x64`;
+  const appVersion = await readAppVersion();
+  const bundleName = windowsBundleName(appVersion);
   await mkdir(options.output, { recursive: true });
   const bundleDir = join(options.output, bundleName);
   const archivePath = join(options.output, `${bundleName}.zip`);
@@ -441,7 +440,6 @@ async function main() {
         '正式产品包需要在 Windows x64 构建 EXE；本机结构检查请使用 --skip-node-runtime',
       );
     }
-    const appVersion = await readAppVersion();
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
       const compiledVersion = await commandOutput(join(stagingDir, 'Mizar.exe'), ['--app-version']);
       if (compiledVersion !== appVersion) throw new Error('EXE 编译版本与配置版本不一致');

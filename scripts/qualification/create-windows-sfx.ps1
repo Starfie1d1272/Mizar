@@ -10,7 +10,7 @@ $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
 $stub = Join-Path $env:ProgramFiles '7-Zip/7z.sfx'
 if (!(Test-Path -LiteralPath $sevenZip) -or !(Test-Path -LiteralPath $stub)) { throw 'Missing 7-Zip GUI SFX tooling' }
 $output = [IO.Path]::GetFullPath($OutputRoot)
-$archive = Join-Path $output ($name + '-extract.exe')
+$archive = Join-Path $output ($name + '.exe')
 $extract = [IO.Path]::GetFullPath($ExtractRoot)
 if ((Test-Path -LiteralPath $archive) -or (Test-Path -LiteralPath $extract)) { throw 'SFX output/extraction already exists; refusing overwrite' }
 if ($extract.StartsWith($source + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Extraction must be outside the source bundle' }

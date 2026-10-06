@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { verifyPayload } from './product-runtime.mjs';
-import { validateReleaseTag } from './app-version.mjs';
+import { validateReleaseTag, windowsBundleName } from './app-version.mjs';
 
 export async function verifyPromotion({ product, extracted, tag, sourceSha, binaryVersion }) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
@@ -16,7 +16,12 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
     manifest.desktopBuildProfile !== 'release'
   )
     throw new Error('晋级来源必须是指定源码的 release 产品');
-  if (!/^Mizar-[A-Za-z0-9.-]+\.zip$/.test(manifest.archive)) throw new Error('非法产品文件名');
+  const currentArchive = `${windowsBundleName(manifest.appVersion)}.zip`;
+  const legacyArchive = /^Mizar-[A-Za-z0-9.-]+-win-x64-portable-[a-f0-9]{7}\.zip$/.test(
+    manifest.archive,
+  );
+  if (manifest.archive !== currentArchive && !legacyArchive) throw new Error('非法产品文件名');
+  const sfxName = manifest.archive.replace(/\.zip$/, legacyArchive ? '-extract.exe' : '.exe');
   const archive = join(product, manifest.archive);
   const digest = createHash('sha256')
     .update(await readFile(archive))
@@ -55,7 +60,7 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
       distribution.contentDigest !== manifest.contentDigest ||
       distribution.originalArchiveSha256 !== digest ||
       distribution.format !== '7zip-gui-sfx-lzma2-solid' ||
-      distribution.archive !== manifest.archive.replace(/\.zip$/, '-extract.exe')
+      distribution.archive !== sfxName
     )
       throw new Error('自解压包身份与已验 ZIP 不一致');
     if (
@@ -83,7 +88,7 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
       (await readFile(`${sfx}.sha256`, 'utf8')).trim() !== `${sfxDigest}  ${distribution.archive}`
     )
       throw new Error('自解压包摘要不一致');
-  } else if (productFiles.some((name) => name.endsWith('-extract.exe'))) {
+  } else if (productFiles.some((name) => /^Mizar-.*\.exe$/.test(name))) {
     throw new Error('自解压包缺少已验分发清单');
   }
   return {
