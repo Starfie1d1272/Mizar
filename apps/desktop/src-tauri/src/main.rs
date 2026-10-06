@@ -1001,6 +1001,7 @@ fn run_desktop(
                     .title("Mizar")
                     .inner_size(1280.0, 860.0)
                     .min_inner_size(720.0, 560.0)
+                    .maximized(true)
                     .visible(true)
                     .on_navigation(trusted_navigation)
                     .on_page_load(move |_window, payload| {
