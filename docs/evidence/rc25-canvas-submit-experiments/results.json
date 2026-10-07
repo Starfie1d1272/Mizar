@@ -45,7 +45,6 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 26,
-      "submittedDrawImages": 82355,
       "attemptedDrawImages": 82355,
       "cdpWsEvents": 4506,
       "maxCdpDeliveryGapMs": 73,
@@ -86,7 +85,8 @@
           ]
         }
       ],
-      "sourceAge": null
+      "sourceAge": null,
+      "forwardedDrawImageCalls": 82355
     },
     {
       "label": "B",
@@ -115,14 +115,14 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 0,
-      "submittedDrawImages": 0,
       "attemptedDrawImages": 138968,
       "cdpWsEvents": 4545,
       "maxCdpDeliveryGapMs": 75,
       "independentRadarSnapshots": 1522,
       "maxIndependentReceiverGapMs": 74,
       "longestEvent": [],
-      "sourceAge": null
+      "sourceAge": null,
+      "forwardedDrawImageCalls": 0
     },
     {
       "label": "A2",
@@ -151,7 +151,6 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 100,
-      "submittedDrawImages": 75848,
       "attemptedDrawImages": 75848,
       "cdpWsEvents": 4629,
       "maxCdpDeliveryGapMs": 84,
@@ -212,7 +211,8 @@
           ]
         }
       ],
-      "sourceAge": null
+      "sourceAge": null,
+      "forwardedDrawImageCalls": 75848
     },
     {
       "label": "HUDOFF",
@@ -241,8 +241,6 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 105,
-      "submittedFrames": 7945,
-      "submittedDrawImages": 77309,
       "attemptedDrawImages": 77309,
       "cdpWsEvents": 4650,
       "maxCdpDeliveryGapMs": 76,
@@ -273,7 +271,9 @@
           ]
         }
       ],
-      "sourceAge": null
+      "sourceAge": null,
+      "allowedDrawingCallbacks": 7945,
+      "forwardedDrawImageCalls": 77309
     },
     {
       "label": "C60",
@@ -302,8 +302,6 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 73,
-      "submittedFrames": 2648,
-      "submittedDrawImages": 27864,
       "attemptedDrawImages": 116432,
       "cdpWsEvents": 4602,
       "maxCdpDeliveryGapMs": 76,
@@ -354,7 +352,9 @@
           ]
         }
       ],
-      "sourceAge": null
+      "sourceAge": null,
+      "allowedDrawingCallbacks": 2648,
+      "forwardedDrawImageCalls": 27864
     },
     {
       "label": "A3",
@@ -383,8 +383,6 @@
       "tasks": 0,
       "maxLongTaskMs": 0,
       "loafs": 122,
-      "submittedFrames": 7301,
-      "submittedDrawImages": 71912,
       "attemptedDrawImages": 71912,
       "cdpWsEvents": 4659,
       "maxCdpDeliveryGapMs": 83,
@@ -435,7 +433,9 @@
           ]
         }
       ],
-      "sourceAge": null
+      "sourceAge": null,
+      "allowedDrawingCallbacks": 7301,
+      "forwardedDrawImageCalls": 71912
     }
   ],
   "limitations": [
@@ -449,5 +449,6 @@
     "B intentionally freezes target pixels and is not product usability PASS; method calls/model tick remain, but all target pixel submissions suppressed",
     "C60 records callback cadence; submitted image/frame counts distinguish skipped draws",
     "GPU trace is separate from light samples, event waits are not CPU work or GPU fence timings"
-  ]
+  ],
+  "metricDefinition": "Allowed drawing callbacks and forwarded drawImage calls are JavaScript-level counts, not compositor submissions or presented frames"
 }
