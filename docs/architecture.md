@@ -124,7 +124,7 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 `BpSession` 只维护播放状态；正式 BP 由比赛投影派生。本地补录不改写在线比赛身份，演示来源只在 BP 内存会话生效。命令与来源切换见[协议](protocol.md#bp-播放与补录)。
 
-`ProgramPresentationStore` 在地图结束时冻结已确认比分与当帧选手摘要，最多保留五图，跨图保留、换比赛清除。静态画面的进入资格与已播连续性分开，不恢复旧游戏时钟。
+`ProgramPresentationStore` 在地图结束时冻结已确认比分并捕获选手摘要，最多保留五图。相同生产实例、会话、来源代际和地图执行的后续新鲜 gameover 观测，只有阵营名单完全一致且比分不变时，才允许已观察到的 K/A/D 收敛；缺失字段不擦除已捕获值，不回写比分或回合历史。换执行、来源、比赛、断流或身份不符后保留已捕获摘要，跨图保留、换比赛清除。静态画面的进入资格与已播连续性分开，不恢复旧游戏时钟；见 [ADR-0039](decisions/0039-terminal-player-summary-settlement.md)。
 
 OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS。HTTP 服务就绪后，Companion 有界串行重试刷新当前 Mizar 集合内名称、类型与本机节目 URL 都匹配的 Browser Source，每个源每次服务启动最多成功刷新一次；不切换集合、场景或输出设置，关闭时取消重试。此刷新可恢复 OBS 先启动及服务重启时加载失败的页面，不能替代实际画面核对；理由见 [ADR-0024](decisions/0024-independent-obs-process.md)。
 
