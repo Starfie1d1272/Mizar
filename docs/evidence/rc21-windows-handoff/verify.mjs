@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import console from 'node:console';
+import { URL } from 'node:url';
 const root = new URL('./', import.meta.url);
 const sums = (await readFile(new URL('SHA256SUMS', root), 'utf8')).trim().split('\n');
 for (const line of sums) {

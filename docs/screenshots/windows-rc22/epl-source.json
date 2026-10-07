@@ -12,22 +12,22 @@
   "stakes": "胜者晋级淘汰赛",
   "eventLogoUrl": "https://img-cdn.hltv.org/eventlogo/PhVPy7kXO_J_nfTng7a87h.png?ixlib=java-2.1.0&w=400&s=c0aedfdc29d3c83494b063e81e987cf6",
   "veto": [
-    {"order": 1, "team": "Natus Vincere", "action": "ban", "map": "de_dust2"},
-    {"order": 2, "team": "Falcons", "action": "ban", "map": "de_cache"},
-    {"order": 3, "team": "Natus Vincere", "action": "pick", "map": "de_inferno"},
-    {"order": 4, "team": "Falcons", "action": "pick", "map": "de_anubis"},
-    {"order": 5, "team": "Natus Vincere", "action": "ban", "map": "de_ancient"},
-    {"order": 6, "team": "Falcons", "action": "ban", "map": "de_nuke"},
-    {"order": 7, "team": null, "action": "decider", "map": "de_mirage"}
+    { "order": 1, "team": "Natus Vincere", "action": "ban", "map": "de_dust2" },
+    { "order": 2, "team": "Falcons", "action": "ban", "map": "de_cache" },
+    { "order": 3, "team": "Natus Vincere", "action": "pick", "map": "de_inferno" },
+    { "order": 4, "team": "Falcons", "action": "pick", "map": "de_anubis" },
+    { "order": 5, "team": "Natus Vincere", "action": "ban", "map": "de_ancient" },
+    { "order": 6, "team": "Falcons", "action": "ban", "map": "de_nuke" },
+    { "order": 7, "team": null, "action": "decider", "map": "de_mirage" }
   ],
   "openingSides": [
-    {"map": "de_inferno", "falcons": "CT", "natusVincere": "T"},
-    {"map": "de_anubis", "falcons": "CT", "natusVincere": "T"},
-    {"map": "de_mirage", "falcons": "CT", "natusVincere": "T"}
+    { "map": "de_inferno", "falcons": "CT", "natusVincere": "T" },
+    { "map": "de_anubis", "falcons": "CT", "natusVincere": "T" },
+    { "map": "de_mirage", "falcons": "CT", "natusVincere": "T" }
   ],
   "sideChoices": [
-    {"map": "de_inferno", "chooser": "Falcons", "side": "CT"},
-    {"map": "de_anubis", "chooser": "Natus Vincere", "side": "T"}
+    { "map": "de_inferno", "chooser": "Falcons", "side": "CT" },
+    { "map": "de_anubis", "chooser": "Natus Vincere", "side": "T" }
   ],
   "sideChoiceRuleSource": "用户明确提供的 EPL 规则：选图对手选边；决胜图拼刀。选边结果依据实际 demo 开局阵营。",
   "deciderConfiguredSide": null,
