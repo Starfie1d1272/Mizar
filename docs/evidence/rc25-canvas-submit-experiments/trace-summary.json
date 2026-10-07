@@ -81,5 +81,6 @@
     "19,572 1882x399"
   ],
   "presentHasAlpha": true,
-  "attribution": "GPU wait observed; dirty rectangle resembles HUD extent but does not identify a specific target surface; hiding native overlay did not improve cadence"
+  "attribution": "GPU wait observed; dirty rectangle resembles HUD extent but does not identify a specific target surface; hiding native overlay did not improve cadence",
+  "traceCharacters": 21091288
 }
