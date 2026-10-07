@@ -72,13 +72,36 @@ export function adaptGsiPayload(
     ? parseGrenades(root.grenades, diagnostics, '$.grenades')
     : undefined;
 
+  // CS2 demo GSI can label a holstered, inventory-owned C4 as dropped.
+  // Reconcile only explicit ownership in this same, fully parsed observation.
+  const inventoryCarriers =
+    bomb?.value?.state === 'dropped' && !bomb.degraded && !allPlayers?.degraded
+      ? allPlayers?.value?.filter(
+          (candidate) =>
+            (candidate.state?.health ?? 0) > 0 &&
+            candidate.weapons?.some(
+              (weapon) =>
+                weapon.name === 'weapon_c4' &&
+                (weapon.state === 'active' || weapon.state === 'holstered'),
+            ),
+        )
+      : undefined;
+  const bombValue =
+    bomb?.value?.state === 'dropped' &&
+    !bomb.degraded &&
+    !allPlayers?.degraded &&
+    inventoryCarriers?.length === 1 &&
+    inventoryCarriers[0]?.sourcePlayerId === bomb.value.sourcePlayerId
+      ? { ...bomb.value, state: 'carried' as const }
+      : bomb?.value;
+
   const telemetry: ObservedTelemetry = {
     ...(map?.value === undefined ? {} : { map: map.value }),
     ...(round?.value === undefined ? {} : { round: round.value }),
     ...(phaseCountdowns?.value === undefined ? {} : { phaseCountdowns: phaseCountdowns.value }),
     ...(player?.value === undefined ? {} : { player: player.value }),
     ...(allPlayers?.value === undefined ? {} : { allPlayers: allPlayers.value }),
-    ...(bomb?.value === undefined ? {} : { bomb: bomb.value }),
+    ...(bombValue === undefined ? {} : { bomb: bombValue }),
     ...(grenades?.value === undefined ? {} : { grenades: grenades.value }),
   };
 
