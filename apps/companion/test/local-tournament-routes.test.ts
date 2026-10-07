@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
+import type { BpWorkspace } from '@mizar/protocol/bp';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
 import { toMatchContext, validateBroadcastManifest } from '@mizar/rivalhub';
 import { expect, it } from 'vitest';
@@ -16,6 +17,131 @@ interface TournamentView {
   readonly contextRevision: string;
   readonly matches: readonly MatchDocumentV1[];
 }
+
+it('inherits persisted event rules, preserves existing BP when defaults change, and restores after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-event-bp-rules-'));
+  const options = {
+    matchManifestPath: join(directory, 'context.json'),
+    localTournamentPath: join(directory, 'local.json'),
+  };
+  const headers = { origin: 'http://127.0.0.1:3000' };
+  const eplRules = { finalBanOrder: 'veto_a_first', deciderSideChoice: 'in_game' } as const;
+  const classicRules = { finalBanOrder: 'veto_b_first', deciderSideChoice: 'veto_b' } as const;
+  let app = buildApp(options);
+  try {
+    await app.ready();
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/create',
+          headers,
+          payload: { teamA: 'Falcons', teamB: 'NAVI', format: 'bo3' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const initial = (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>();
+    const eventId = initial.matches[0]!.competition.competitionId;
+    const event = {
+      eventId,
+      name: 'ESL Pro League Season 24',
+      logoUrl: null,
+      themeColor: null,
+      mapPool: [...DEFAULT_LOCAL_BP_MAP_POOL],
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-event/save',
+          headers,
+          payload: { ...event, bo3Rules: eplRules },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const workspace = (await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>();
+    expect(workspace.schemaVersion).toBe('mizar.bp-workspace.v5');
+    expect(workspace.authoringDraft!.bo3Rules).toEqual(eplRules);
+    const draft = {
+      ...workspace.authoringDraft!,
+      bo3Rules: undefined,
+      vetoA: 'b',
+      bans: ['de_dust2', 'de_cache', 'de_ancient', 'de_nuke'],
+      picks: [
+        { mapName: 'de_inferno', side: 'CT' },
+        { mapName: 'de_anubis', side: 'T' },
+      ],
+      deciderSide: null,
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/bp-local-save',
+          headers,
+          payload: { expectedContextRevision: workspace.contextRevision, draft },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const after = (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>();
+    expect(after.matches[0]!.veto).toHaveLength(9);
+    expect(after.matches[0]!.maps.map((map) => map.teamAStartSide)).toEqual(['CT', 'CT', null]);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-event/save',
+          headers,
+          payload: { ...event, bo3Rules: classicRules },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const unchanged = (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>();
+    expect(unchanged.matches[0]!.veto).toEqual(after.matches[0]!.veto);
+    const existing = (await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>();
+    expect(existing.authoringDraft!.bo3Rules).toEqual(eplRules);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/bp-local-save',
+          headers,
+          payload: {
+            expectedContextRevision: existing.contextRevision,
+            draft: existing.authoringDraft,
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const persisted = JSON.parse(await readFile(options.localTournamentPath, 'utf8')) as {
+      events: { bo3Rules: unknown }[];
+    };
+    expect(persisted.events[0]!.bo3Rules).toEqual(classicRules);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-event/save',
+          headers,
+          payload: { ...event, bo3Rules: { ...classicRules, deciderSideChoice: 'invalid' } },
+        })
+      ).statusCode,
+    ).toBe(400);
+    await app.close();
+    app = buildApp(options);
+    await app.ready();
+    const restored = (await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>();
+    expect(restored.readiness).toBe('ready');
+    expect(restored.authoringDraft!.bo3Rules).toEqual(eplRules);
+    const restoredMatches = (
+      await app.inject({ url: '/local/v1/tournament' })
+    ).json<TournamentView>();
+    expect(restoredMatches.matches[0]!.veto).toEqual(after.matches[0]!.veto);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 it('creates and restores a standalone local match before BP, with a persistent local image', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-local-routes-'));

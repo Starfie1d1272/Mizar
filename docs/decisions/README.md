@@ -74,3 +74,4 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0037：以完整热身证据识别同图重开](0037-witnessed-same-map-restart.md)
 - [ADR-0038：热身省略回合历史时的执行边界](0038-warmup-without-round-history.md)
 - [ADR-0039：同一地图结束执行的选手摘要收敛](0039-terminal-player-summary-settlement.md)
+- [ADR-0040：赛事 BO3 禁选规则与本场 BP 事实](0040-event-bo3-authoring-rules.md)

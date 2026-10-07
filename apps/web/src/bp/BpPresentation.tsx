@@ -99,7 +99,7 @@ export function BpPresentation({
                         aria-hidden={!sideShown}
                       >
                         <span>{projection.entrants[card.sideChoice.entrant].name}</span>
-                        <strong>{card.sideChoice.side} 开</strong>
+                        <strong>{card.sideChoice.side} 开局</strong>
                       </div>
                     ) : null}
                   </div>

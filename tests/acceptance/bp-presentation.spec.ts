@@ -566,6 +566,81 @@ test('local BP shows a bounded RivalHub candidate summary and sends both revisio
   }
 });
 
+test('event BO3 controls save EPL opponent side choices without a decider selection', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(60000);
+  const directory = await mkdtemp(join(tmpdir(), 'bp-epl-controls-'));
+  const clock = createManualBpClock();
+  const options = {
+    matchManifestPath: join(directory, 'match.json'),
+    localTournamentPath: join(directory, 'local.json'),
+  };
+  let app = buildAppWithManualBpClock(clock, options);
+  await routeCompanionApi(context, () => app);
+  try {
+    await page.goto('/preview?scene=bp');
+    await page.getByRole('button', { name: '本地填写 BP', exact: true }).click();
+    const editor = page.locator('.bp-local-editor');
+    await editor.getByRole('textbox', { name: '赛事名称 可选' }).fill('ESL Pro League Season 24');
+    await editor.locator('.bp-editor-team[data-entrant="a"] input').first().fill('Falcons');
+    await editor.locator('.bp-editor-team[data-entrant="b"] input').first().fill('Natus Vincere');
+    await editor.getByRole('combobox', { name: 'Veto A', exact: true }).selectOption('b');
+    const order = editor.getByRole('combobox', { name: 'BO3 最后两次禁图', exact: true });
+    const decider = editor.getByRole('combobox', { name: 'BO3 决胜图起始阵营', exact: true });
+    await order.selectOption('veto_a_first');
+    await order.focus();
+    await page.keyboard.press('Tab');
+    await expect(decider).toBeFocused();
+    expect(await decider.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+    await decider.selectOption('in_game');
+    const steps = editor.locator('.bp-sequence-step');
+    await expect(steps).toHaveCount(9);
+    const inputs = [
+      'de_dust2',
+      'de_cache',
+      'de_inferno',
+      'CT',
+      'de_anubis',
+      'T',
+      'de_ancient',
+      'de_nuke',
+    ];
+    for (const [index, value] of inputs.entries())
+      await steps.nth(index).locator('select').selectOption(value);
+    await expect(steps.nth(6).locator('.bp-sequence-actor')).toHaveText('Natus Vincere');
+    await expect(steps.nth(7).locator('.bp-sequence-actor')).toHaveText('Falcons');
+    await expect(steps.nth(8).locator('.bp-sequence-decider')).toHaveText('Mirage');
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+    }
+    const save = editor.getByRole('button', { name: '保存本地 BP', exact: true });
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(editor).not.toBeVisible();
+    const before = (await app.inject('/local/v1/bp')).json<{
+      projection: { cards: { sideChoice: unknown }[]; steps: unknown[] };
+    }>();
+    expect(before.projection.steps).toHaveLength(9);
+    expect(before.projection.cards[2]!.sideChoice).toEqual({ entrant: 'a', side: 'CT' });
+    expect(before.projection.cards[3]!.sideChoice).toEqual({ entrant: 'b', side: 'T' });
+    expect(before.projection.cards[6]!.sideChoice).toBeNull();
+    await app.close();
+    app = buildAppWithManualBpClock(clock, options);
+    await app.ready();
+    expect((await app.inject('/local/v1/bp')).json()).toMatchObject({
+      projection: before.projection,
+    });
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('local BP authoring compiles to MatchContext, survives restart, and stays responsive', async ({
   page,
   context,
@@ -580,7 +655,7 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await page.goto('/preview?scene=bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
     expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
-      schemaVersion: 'mizar.bp-workspace.v4',
+      schemaVersion: 'mizar.bp-workspace.v5',
       authoringMode: 'standalone',
     });
     await page.getByRole('button', { name: '本地填写 BP', exact: true }).click();

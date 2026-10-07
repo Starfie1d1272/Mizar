@@ -39,6 +39,124 @@ function draftFor(format: 'bo1' | 'bo3' | 'bo5') {
   };
 }
 
+describe('event-specific BO3 rules', () => {
+  it.each(['veto_a_first', 'veto_b_first'] as const)(
+    'supports each decider chooser with %s',
+    (finalBanOrder) => {
+      for (const vetoA of ['a', 'b'] as const)
+        for (const deciderSideChoice of ['veto_a', 'veto_b', 'in_game'] as const) {
+          const result = createLocalBpManifest({
+            ...draftFor('bo3'),
+            vetoA,
+            bo3Rules: { finalBanOrder, deciderSideChoice },
+            deciderSide: deciderSideChoice === 'in_game' ? null : 'CT',
+          });
+          expect(result.ok).toBe(true);
+          if (!result.ok) continue;
+          const manifest = result.manifest;
+          const firstId = manifest.entrants[vetoA].entryId;
+          const secondId = manifest.entrants[vetoA === 'a' ? 'b' : 'a'].entryId;
+          const bans = manifest.veto.filter((step) => step.actionType === 'ban');
+          expect(bans[2]!.entryId).toBe(finalBanOrder === 'veto_a_first' ? firstId : secondId);
+          expect(bans[3]!.entryId).toBe(finalBanOrder === 'veto_a_first' ? secondId : firstId);
+          const decider = manifest.maps.at(-1)!;
+          const side = manifest.veto.find(
+            (step) => step.actionType === 'side_pick' && step.mapName === decider.mapName,
+          );
+          if (deciderSideChoice === 'in_game') {
+            expect(side).toBeUndefined();
+            expect(decider.teamAStartSide).toBeNull();
+          } else {
+            expect(side?.entryId).toBe(deciderSideChoice === 'veto_a' ? firstId : secondId);
+            expect(decider.teamAStartSide).toBe(
+              side?.entryId === manifest.entrants.a.entryId ? 'ct' : 't',
+            );
+          }
+          expect(validateBroadcastManifest(manifest).ok).toBe(true);
+          expect(inspectBp(toMatchContext(manifest)).readiness).toBe('ready');
+        }
+    },
+  );
+
+  it('does not interpret an incomplete legacy decider as a new event rule', () => {
+    const compiled = createLocalBpManifest(draftFor('bo3'));
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    const manifest = {
+      ...compiled.manifest,
+      veto: compiled.manifest.veto.filter((step) => step.actionType !== 'side_pick'),
+    };
+    const draft = bpAuthoringDraftFromBinding(bindingFor(manifest, 'local'));
+    expect(draft.bo3Rules?.deciderSideChoice).toBe('veto_b');
+    expect(draft.deciderSide).toBeNull();
+    expect(createLocalBpManifest(draft, bindingFor(manifest, 'local'))).toMatchObject({
+      ok: false,
+      code: 'bp_draft_sides_incomplete',
+    });
+  });
+
+  it('round-trips the real EPL order, opponent side choices and unfilled knife decider', () => {
+    const draft = {
+      ...draftFor('bo3'),
+      competitionName: 'ESL Pro League Season 24',
+      entrants: {
+        a: { name: 'Falcons', logoUrl: null },
+        b: { name: 'Natus Vincere', logoUrl: null },
+      },
+      vetoA: 'b' as const,
+      bo3Rules: { finalBanOrder: 'veto_a_first' as const, deciderSideChoice: 'in_game' as const },
+      bans: ['de_dust2', 'de_cache', 'de_ancient', 'de_nuke'],
+      picks: [
+        { mapName: 'de_inferno', side: 'CT' as const },
+        { mapName: 'de_anubis', side: 'T' as const },
+      ],
+      deciderSide: null,
+    };
+    const result = createLocalBpManifest(draft);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const manifest = result.manifest;
+    expect(validateBroadcastManifest(manifest).ok).toBe(true);
+    expect(
+      manifest.veto.map((step) => ({
+        kind: step.actionType,
+        map: step.mapName,
+        actor:
+          step.entryId === manifest.entrants.a.entryId
+            ? 'Falcons'
+            : step.entryId === manifest.entrants.b.entryId
+              ? 'NAVI'
+              : null,
+        side: step.side,
+      })),
+    ).toEqual([
+      { kind: 'ban', map: 'de_dust2', actor: 'NAVI', side: null },
+      { kind: 'ban', map: 'de_cache', actor: 'Falcons', side: null },
+      { kind: 'pick', map: 'de_inferno', actor: 'NAVI', side: null },
+      { kind: 'side_pick', map: 'de_inferno', actor: 'Falcons', side: 'ct' },
+      { kind: 'pick', map: 'de_anubis', actor: 'Falcons', side: null },
+      { kind: 'side_pick', map: 'de_anubis', actor: 'NAVI', side: 't' },
+      { kind: 'ban', map: 'de_ancient', actor: 'NAVI', side: null },
+      { kind: 'ban', map: 'de_nuke', actor: 'Falcons', side: null },
+      { kind: 'decider', map: 'de_mirage', actor: null, side: null },
+    ]);
+    expect(manifest.maps.map((map) => map.teamAStartSide)).toEqual(['ct', 'ct', null]);
+    expect(inspectBp(toMatchContext(manifest)).readiness).toBe('ready');
+    const restored = bpAuthoringDraftFromBinding(bindingFor(manifest, 'local'));
+    expect(restored.bo3Rules).toEqual(draft.bo3Rules);
+    const savedAgain = createLocalBpManifest(restored, bindingFor(manifest, 'local'));
+    expect(savedAgain.ok).toBe(true);
+    if (savedAgain.ok) {
+      expect(savedAgain.manifest.veto).toEqual(manifest.veto);
+      expect(savedAgain.manifest.maps).toEqual(manifest.maps);
+    }
+    expect(createLocalBpManifest({ ...draft, deciderSide: 'CT' })).toMatchObject({
+      ok: false,
+      code: 'bp_draft_decider_in_game',
+    });
+  });
+});
+
 async function knownManifest(): Promise<BroadcastManifestV1> {
   const candidate: unknown = JSON.parse(
     await readFile(

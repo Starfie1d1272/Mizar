@@ -68,6 +68,7 @@ export interface MatchHeaderPresentation {
   readonly seriesScoreText: string | null;
   readonly competitionName: string | null;
   readonly stageName: string | null;
+  readonly roundNumber: number | null;
   readonly roundLabel: string | null;
   readonly phaseLabel: string;
   readonly clockText: string | null;
@@ -403,6 +404,21 @@ export function hasSeriesMapStrip(payload: ProgramPayload): boolean {
   );
 }
 
+/** GSI counts completed rounds between rounds; an active round is the next one. */
+export function displayRoundNumber(payload: ProgramPayload): number | null {
+  const count = payload.map.roundNumber;
+  if (count === null || !Number.isInteger(count) || count < 0 || payload.map.phase === 'warmup')
+    return null;
+  if (payload.map.phase === 'gameover' || payload.round?.phase === 'over') {
+    const { ct, t } = payload.map.score;
+    const completed = ct !== null && t !== null ? ct + t : count;
+    return completed > 0 ? completed : null;
+  }
+  return payload.round?.phase === 'live' || payload.round?.phase === 'freezetime'
+    ? count + 1
+    : null;
+}
+
 export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHeaderPresentation {
   const series = payload.series;
   const sideMapping = resolveSideMapping(payload);
@@ -413,6 +429,7 @@ export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHead
       ? undefined
       : series.maps.find((map) => map.mapOrder === series.currentMapOrder);
   const clock = clockPresentation(payload, sideMapping);
+  const roundNumber = displayRoundNumber(payload);
 
   return {
     objective: buildObjectiveCenterPresentation(payload, teamA, teamB),
@@ -426,12 +443,8 @@ export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHead
     seriesScoreText: series === null ? null : `${series.score.a}:${series.score.b}`,
     competitionName: payload.match?.competition.name ?? null,
     stageName: payload.match?.stage ?? null,
-    roundLabel:
-      payload.map.roundNumber === null ||
-      payload.map.roundNumber === undefined ||
-      payload.map.roundNumber <= 0
-        ? null
-        : `ROUND ${payload.map.roundNumber}`,
+    roundNumber,
+    roundLabel: roundNumber === null ? null : `ROUND ${roundNumber}`,
     ...clock,
     seriesMaps: series === null ? null : buildSeriesMaps(series),
     roundHistory: buildRoundHistory(series, payload.map.roundHistory),

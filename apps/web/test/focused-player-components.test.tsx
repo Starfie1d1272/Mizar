@@ -29,6 +29,48 @@ function host() {
   return container;
 }
 describe('Focused media and combat presentation lifecycle', () => {
+  it.each([
+    ['current', 'builtin:mizar-default-preset'],
+    ['ewc', 'builtin:ewc-preset'],
+    ['iem', 'builtin:iem-preset'],
+    ['esl', 'builtin:esl-preset'],
+    ['perfectworld', 'builtin:perfectworld-preset'],
+  ] as const)('shows the fourth freeze round consistently in %s', (design, presetId) => {
+    const container = host();
+    const preset = getBuiltinResolvedPreset(presetId);
+    const placement = preset.layout.widgets['top-score-bar'];
+    const snapshot = getProgramFixture('real-live-rich')!;
+    act(() =>
+      root!.render(
+        <TopScoreBar
+          design={design}
+          resolvedPreset={preset}
+          placement={placement}
+          box={placementToBox('top-score-bar', placement)}
+          widgetId="top-score-bar"
+          settings={preset.widgets['top-score-bar']}
+          snapshot={{
+            ...snapshot,
+            payload: {
+              ...snapshot.payload,
+              map: {
+                ...snapshot.payload.map,
+                phase: 'live',
+                roundNumber: 3,
+                score: { ct: 0, t: 3 },
+              },
+              round: { phase: 'freezetime', winnerSide: 'unknown' },
+              clock: { phase: 'freezetime', endsInSeconds: 16.1 },
+              bomb: null,
+            },
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain('ROUND 4');
+    expect(container.textContent).not.toContain('ROUND 3');
+  });
+
   it('loads optional media, hides failed image without retry, resets on player/URL/boundary', () => {
     const container = host();
     const player = {

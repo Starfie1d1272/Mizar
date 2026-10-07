@@ -7,6 +7,7 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 import type { MatchContextController } from './controller.js';
 import { LocalTournamentStore } from './local-tournament-store.js';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
+import { localBo3BpRulesSchema } from '@mizar/protocol/bp';
 
 function canMutate(policy: LocalWebOriginPolicy, origin: string | undefined): boolean {
   return policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -247,6 +248,10 @@ export function registerLocalTournamentRoutes(
       !body.mapPool.every((name) => typeof name === 'string')
     )
       return reply.code(400).send({ error: 'local_event_invalid' });
+    const rules =
+      body.bo3Rules === undefined ? undefined : localBo3BpRulesSchema.safeParse(body.bo3Rules);
+    if (rules !== undefined && !rules.success)
+      return reply.code(400).send({ error: 'local_event_invalid' });
     try {
       await store.saveEvent({
         eventId: body.eventId,
@@ -254,6 +259,7 @@ export function registerLocalTournamentRoutes(
         logoUrl: body.logoUrl,
         themeColor: body.themeColor,
         mapPool: body.mapPool,
+        ...(rules === undefined ? {} : { bo3Rules: rules.data }),
       });
       const selected = store
         .getSnapshot()

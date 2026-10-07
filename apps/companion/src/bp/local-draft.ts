@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import {
   DEFAULT_LOCAL_BP_MAP_POOL,
+  DEFAULT_BO3_BP_RULES,
   LOCAL_BP_MAP_CATALOG,
   localBpSequence,
   type BpSideChoice,
+  type Bo3BpRules,
 } from '@mizar/core/projection';
 import { localBpDraftSchema, type LocalBpDraft } from '@mizar/protocol/bp';
 import type { BroadcastManifestV1, BroadcastSide } from '@mizar/rivalhub';
@@ -140,6 +142,12 @@ export function createLocalBpManifest(
   const parsed = localBpDraftSchema.safeParse(input);
   if (!parsed.success) return invalid('bp_draft_invalid', '本地 BP 信息格式有误，请检查填写内容。');
   const draft = parsed.data;
+  const rules =
+    draft.bo3Rules ?? (baseBinding && existingBo3Rules(baseBinding)) ?? DEFAULT_BO3_BP_RULES;
+  const sequence = localBpSequence(draft.format, draft.vetoA, rules);
+  const deciderHasSidePick = sequence.some(
+    (action) => action.kind === 'side_pick' && action.target === 'decider',
+  );
   const baseManifest = baseBinding?.manifest;
   const editableStandalone =
     baseManifest === undefined || localAuthoringMode(baseBinding) === 'standalone';
@@ -197,7 +205,7 @@ export function createLocalBpManifest(
     return invalid('bp_draft_maps_incomplete', '请完成所有禁用地图和选择地图。');
   if (
     picks.some((pick) => pick.side === null) ||
-    (draft.format !== 'bo5' && draft.deciderSide === null)
+    (deciderHasSidePick && draft.deciderSide === null)
   )
     return invalid(
       'bp_draft_sides_incomplete',
@@ -205,6 +213,8 @@ export function createLocalBpManifest(
     );
   if (draft.format === 'bo5' && draft.deciderSide !== null)
     return invalid('bp_draft_decider_knife', 'BO5 决胜图使用 knife round，不填写起始边。');
+  if (draft.format === 'bo3' && !deciderHasSidePick && draft.deciderSide !== null)
+    return invalid('bp_draft_decider_in_game', '决胜图阵营由游戏内决定，不预填起始边。');
 
   const selected = [...bans, ...picks.map((pick) => pick.mapName)].filter(
     (name): name is string => name !== null,
@@ -223,7 +233,6 @@ export function createLocalBpManifest(
   const matchId = baseManifest?.match.matchId ?? randomUUID();
   const mapForPick = draft.picks.map((pick) => canonicalizeCs2MapName(pick.mapName)!);
   const deciderMap = remaining[0]!;
-  const sequence = localBpSequence(draft.format, draft.vetoA);
   const sideChoiceFor = (target: 'pick' | 'decider', index: number): 'CT' | 'T' | null =>
     target === 'pick' ? (draft.picks[index]?.side ?? null) : draft.deciderSide;
   const mapNameFor = (action: (typeof sequence)[number]): string => {
@@ -392,7 +401,50 @@ export function createLocalBpManifest(
   return { ok: true, manifest };
 }
 
-export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): LocalBpDraft {
+function existingBo3Rules(
+  binding: MatchContextBinding,
+  defaults: Bo3BpRules = DEFAULT_BO3_BP_RULES,
+): Bo3BpRules | undefined {
+  if (binding.context.format !== 'bo3') return undefined;
+  const steps = [...binding.context.veto].sort((a, b) => a.stepOrder - b.stepOrder);
+  const bans = steps.filter((step) => step.actionType === 'ban');
+  const deciders = steps.filter((step) => step.actionType === 'decider');
+  if (bans.length !== 4 || deciders.length !== 1 || !bans[0]?.entryId) return undefined;
+  const first = bans[0].entryId;
+  const other =
+    first === binding.context.entrants.a.entryId
+      ? binding.context.entrants.b.entryId
+      : binding.context.entrants.a.entryId;
+  if (!bans.every((step) => step.entryId === first || step.entryId === other)) return undefined;
+  const decider = deciders[0]!;
+  const side = steps.find(
+    (step) => step.actionType === 'side_pick' && step.mapName === decider.mapName,
+  );
+  const chooser = side?.entryId ?? (decider.side === null ? null : decider.entryId);
+  const explicitPickSides = steps.filter(
+    (step) =>
+      step.actionType === 'side_pick' &&
+      step.mapName !== decider.mapName &&
+      step.side !== null &&
+      step.entryId !== null,
+  );
+  return {
+    finalBanOrder: bans[2]?.entryId === first ? 'veto_a_first' : 'veto_b_first',
+    deciderSideChoice:
+      chooser === first
+        ? 'veto_a'
+        : chooser === other
+          ? 'veto_b'
+          : explicitPickSides.length === 2
+            ? 'in_game'
+            : defaults.deciderSideChoice,
+  };
+}
+
+export function bpAuthoringDraftFromBinding(
+  binding: MatchContextBinding,
+  eventRules?: Bo3BpRules,
+): LocalBpDraft {
   const manifest = binding.manifest;
   const firstBan = manifest.veto.find((step) => step.actionType === 'ban');
   const vetoA = firstBan?.entryId === manifest.entrants.b.entryId ? 'b' : 'a';
@@ -440,6 +492,7 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
       b: { name: manifest.entrants.b.name, logoUrl: manifest.entrants.b.logoUrl },
     },
     vetoA,
+    bo3Rules: existingBo3Rules(binding, eventRules) ?? eventRules ?? DEFAULT_BO3_BP_RULES,
     mapPool: [...mapPool],
     bans,
     picks,
@@ -447,8 +500,11 @@ export function bpAuthoringDraftFromBinding(binding: MatchContextBinding): Local
   };
 }
 
-export function localBpDraftFromBinding(binding: MatchContextBinding): LocalBpDraft | null {
-  return isLocalBinding(binding) ? bpAuthoringDraftFromBinding(binding) : null;
+export function localBpDraftFromBinding(
+  binding: MatchContextBinding,
+  eventRules?: Bo3BpRules,
+): LocalBpDraft | null {
+  return isLocalBinding(binding) ? bpAuthoringDraftFromBinding(binding, eventRules) : null;
 }
 
 export const localBpMapOptions = LOCAL_BP_MAP_CATALOG;

@@ -10,6 +10,7 @@ import {
 
 import { replaceDurableJson } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import type { LocalBo3BpRules } from '@mizar/protocol/bp';
 
 export const LOCAL_TOURNAMENT_STORE_VERSION = 'mizar.local-tournament-store.v1' as const;
 
@@ -19,6 +20,7 @@ export interface LocalEventV1 {
   readonly logoUrl: string | null;
   readonly themeColor: string | null;
   readonly mapPool: readonly string[];
+  readonly bo3Rules?: LocalBo3BpRules;
   readonly matchIds: readonly string[];
 }
 
@@ -95,7 +97,9 @@ function readState(input: unknown): LocalTournamentState {
     throw new Error('local_store_identity_invalid');
   return {
     version: LOCAL_TOURNAMENT_STORE_VERSION,
-    events,
+    events: events.map(({ bo3Rules, ...event }) =>
+      bo3Rules === undefined ? event : { ...event, bo3Rules },
+    ),
     teams,
     matches,
     selectedMatchId,
@@ -308,6 +312,7 @@ export class LocalTournamentStore {
     readonly logoUrl: string | null;
     readonly themeColor: string | null;
     readonly mapPool: readonly string[];
+    readonly bo3Rules?: LocalBo3BpRules;
   }): Promise<LocalEventV1> {
     return this.queue.run(async () => {
       const existing = this.state.events.find((item) => item.eventId === input.eventId);
@@ -325,6 +330,7 @@ export class LocalTournamentStore {
         logoUrl: input.logoUrl,
         themeColor: input.themeColor,
         mapPool: input.mapPool,
+        ...(input.bo3Rules === undefined ? {} : { bo3Rules: input.bo3Rules }),
       };
       const nextMatches = this.state.matches.map((match) =>
         match.competition.competitionId === input.eventId
@@ -355,7 +361,7 @@ export class LocalTournamentStore {
   }
 
   /** One-time import of a previously saved standalone BP match. */
-  async importLegacyMatch(input: unknown): Promise<MatchDocumentV1> {
+  async importLegacyMatch(input: unknown, bo3Rules?: LocalBo3BpRules): Promise<MatchDocumentV1> {
     const document = parseMatchDocumentV1(input);
     return this.queue.run(async () => {
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
@@ -366,6 +372,7 @@ export class LocalTournamentStore {
         logoUrl: document.competition.logoUrl ?? null,
         themeColor: document.competition.themeColor,
         mapPool: document.mapPool,
+        ...(bo3Rules === undefined ? {} : { bo3Rules }),
         matchIds: [document.matchId],
       };
       const team = (entrant: MatchDocumentV1['entrants']['a']): LocalTeamV1 => ({

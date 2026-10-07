@@ -23,6 +23,16 @@ export const DEFAULT_LOCAL_BP_MAP_POOL = [
   'de_cache',
 ] as const;
 
+export interface Bo3BpRules {
+  readonly finalBanOrder: 'veto_a_first' | 'veto_b_first';
+  readonly deciderSideChoice: 'veto_a' | 'veto_b' | 'in_game';
+}
+
+export const DEFAULT_BO3_BP_RULES: Bo3BpRules = {
+  finalBanOrder: 'veto_b_first',
+  deciderSideChoice: 'veto_b',
+};
+
 export type BpSequenceAction =
   | { readonly kind: 'ban'; readonly actor: 'a' | 'b'; readonly valueIndex: number }
   | { readonly kind: 'pick'; readonly actor: 'a' | 'b'; readonly valueIndex: number }
@@ -39,12 +49,13 @@ function other(entrant: 'a' | 'b'): 'a' | 'b' {
 }
 
 /**
- * RivalHub Veto sequence rules projected into fixed local authoring slots.
- * Operator input supplies only map/side values; action kind and actor stay fixed.
+ * Project the selected event rules into fixed authoring slots.
+ * Match A/B identity is independent of Veto A/B; defaults preserve RivalHub rules.
  */
 export function localBpSequence(
   format: MatchFormat,
   vetoA: 'a' | 'b',
+  bo3Rules: Bo3BpRules = DEFAULT_BO3_BP_RULES,
 ): readonly BpSequenceAction[] {
   const a = vetoA;
   const b = other(a);
@@ -61,6 +72,7 @@ export function localBpSequence(
     ];
   }
   if (format === 'bo3') {
+    const finalBanFirst = bo3Rules.finalBanOrder === 'veto_a_first' ? a : b;
     return [
       { kind: 'ban', actor: a, valueIndex: 0 },
       { kind: 'ban', actor: b, valueIndex: 1 },
@@ -68,10 +80,19 @@ export function localBpSequence(
       { kind: 'side_pick', actor: b, target: 'pick', targetIndex: 0 },
       { kind: 'pick', actor: b, valueIndex: 1 },
       { kind: 'side_pick', actor: a, target: 'pick', targetIndex: 1 },
-      { kind: 'ban', actor: b, valueIndex: 2 },
-      { kind: 'ban', actor: a, valueIndex: 3 },
+      { kind: 'ban', actor: finalBanFirst, valueIndex: 2 },
+      { kind: 'ban', actor: other(finalBanFirst), valueIndex: 3 },
       { kind: 'decider', actor: null },
-      { kind: 'side_pick', actor: b, target: 'decider', targetIndex: 0 },
+      ...(bo3Rules.deciderSideChoice === 'in_game'
+        ? []
+        : [
+            {
+              kind: 'side_pick' as const,
+              actor: bo3Rules.deciderSideChoice === 'veto_a' ? a : b,
+              target: 'decider' as const,
+              targetIndex: 0,
+            },
+          ]),
     ];
   }
   return [

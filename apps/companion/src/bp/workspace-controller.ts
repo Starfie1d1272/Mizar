@@ -36,6 +36,13 @@ export function registerBpWorkspaceRoutes(
   app.get('/local/v1/bp-workspace', (_request, reply) => {
     const binding = options.controller?.getActiveBinding();
     const pending = options.controller?.getPendingOnlineCandidate();
+    const eventRules =
+      binding === undefined
+        ? undefined
+        : options.localTournamentStore
+            ?.getSnapshot()
+            .events.find((event) => event.eventId === binding.context.competition.competitionId)
+            ?.bo3Rules;
     const publicSource =
       binding?.origin === 'online'
         ? 'online'
@@ -66,7 +73,7 @@ export function registerBpWorkspaceRoutes(
             },
           };
     const response = bpWorkspaceSchema.parse({
-      schemaVersion: 'mizar.bp-workspace.v4',
+      schemaVersion: 'mizar.bp-workspace.v5',
       demo: { active: options.demoState.getState() },
       source: publicSource,
       authoringMode: localAuthoringMode(binding) ?? 'standalone',
@@ -79,8 +86,9 @@ export function registerBpWorkspaceRoutes(
             ? 'missing'
             : assessment.readiness,
       match,
-      authoringDraft: binding === undefined ? null : bpAuthoringDraftFromBinding(binding),
-      localDraft: binding === undefined ? null : localBpDraftFromBinding(binding),
+      authoringDraft:
+        binding === undefined ? null : bpAuthoringDraftFromBinding(binding, eventRules),
+      localDraft: binding === undefined ? null : localBpDraftFromBinding(binding, eventRules),
       pendingRivalhub:
         pending === undefined
           ? null
@@ -122,7 +130,22 @@ export function registerBpWorkspaceRoutes(
         error: 'bp_context_conflict',
         message: '比赛上下文已更新，请核对后再保存。',
       });
-    const compiled = createLocalBpManifest(parsed.data, options.controller.getActiveBinding());
+    const activeBinding = options.controller.getActiveBinding();
+    const eventRules =
+      activeBinding === undefined
+        ? undefined
+        : options.localTournamentStore
+            ?.getSnapshot()
+            .events.find(
+              (event) => event.eventId === activeBinding.context.competition.competitionId,
+            )?.bo3Rules;
+    const draft = {
+      ...parsed.data,
+      bo3Rules:
+        parsed.data.bo3Rules ??
+        (activeBinding && bpAuthoringDraftFromBinding(activeBinding, eventRules).bo3Rules),
+    };
+    const compiled = createLocalBpManifest(draft, activeBinding);
     if (!compiled.ok)
       return reply.code(400).send({ error: compiled.code, message: compiled.message });
     const active = options.controller.getActiveBinding();
@@ -140,7 +163,8 @@ export function registerBpWorkspaceRoutes(
           matchLabel: prior?.matchLabel ?? null,
           stakesLabel: prior?.stakesLabel ?? null,
         };
-        if (active === undefined) await options.localTournamentStore.importLegacyMatch(document);
+        if (active === undefined)
+          await options.localTournamentStore.importLegacyMatch(document, draft.bo3Rules);
         else await options.localTournamentStore.saveMatch(document);
         options.controller.activateLocalDocument(document);
         return { ok: true, message: '本地 BP 已保存。' };
