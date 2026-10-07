@@ -1,0 +1,498 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "classification": "actual native callback gaps aligned to same-renderer performance.mark in complete streamed GPU/compositor trace; includes heavy diagnostic overhead; trace span union includes waits, not measured CPU busy time; uncovered time is not automatically GPU wait",
+  "events": 4365573,
+  "markerThread": "CrRendererMain",
+  "samples": 4603,
+  "gaps": [
+    {
+      "gapMs": 262.3999999994412,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 245.90000000037253,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 220.79999999981374,
+      "rendererTracedSpanMs": 220.412,
+      "gpuTracedSpanMs": 213.503,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 211.888,
+          "overlapMs": 209.2989999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 211.886,
+          "overlapMs": 209.29699999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 211.881,
+          "overlapMs": 209.2939999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 211.277,
+          "overlapMs": 208.8309999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 211.068,
+          "overlapMs": 208.6499999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 207.53,
+          "overlapMs": 207.53,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 204.566,
+          "overlapMs": 204.566,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 204.564,
+          "overlapMs": 204.564,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 204.29999999981374,
+      "rendererTracedSpanMs": 204.228,
+      "gpuTracedSpanMs": 200.533,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 203.681,
+          "overlapMs": 202.99999999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 203.677,
+          "overlapMs": 202.9959999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 203.673,
+          "overlapMs": 202.99399999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 202.724,
+          "overlapMs": 202.2469999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 202.598,
+          "overlapMs": 202.14899999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 200.355,
+          "overlapMs": 200.355,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 198.911,
+          "overlapMs": 198.911,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 198.907,
+          "overlapMs": 198.907,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 179.20000000018626,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 179.09999999962747,
+      "rendererTracedSpanMs": 178.473,
+      "gpuTracedSpanMs": 172.702,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 173.708,
+          "overlapMs": 169.39199999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 173.704,
+          "overlapMs": 169.3889999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 173.699,
+          "overlapMs": 169.3859999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 173.101,
+          "overlapMs": 168.9589999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 172.999,
+          "overlapMs": 168.87499999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 170.772,
+          "overlapMs": 168.5019999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 168.754,
+          "overlapMs": 168.4979999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 168.752,
+          "overlapMs": 168.4969999923706,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 166.80000000074506,
+      "rendererTracedSpanMs": 166.708,
+      "gpuTracedSpanMs": 164.3009999923706,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 168.993,
+          "overlapMs": 164.52999999237062,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 168.99,
+          "overlapMs": 164.5279999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 168.986,
+          "overlapMs": 164.5259999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 168.397,
+          "overlapMs": 164.0719999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 168.269,
+          "overlapMs": 163.9689999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 165.424,
+          "overlapMs": 163.5559999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 162.155,
+          "overlapMs": 162.155,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 162.153,
+          "overlapMs": 162.153,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 162.5,
+      "rendererTracedSpanMs": 162.458,
+      "gpuTracedSpanMs": 158.518,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 160.265,
+          "overlapMs": 158.5479999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 160.262,
+          "overlapMs": 158.5459999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 160.257,
+          "overlapMs": 158.5439999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 159.552,
+          "overlapMs": 158.0029999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 159.451,
+          "overlapMs": 157.9259999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 156.584,
+          "overlapMs": 156.584,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 155.32,
+          "overlapMs": 155.32,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 155.317,
+          "overlapMs": 155.317,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 121,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 120.8999999994412,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 116.70000000018626,
+      "rendererTracedSpanMs": 116.394,
+      "gpuTracedSpanMs": 107.82600000762939,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 111.868,
+          "overlapMs": 110.21899999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 111.866,
+          "overlapMs": 110.21799999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 111.861,
+          "overlapMs": 110.21499999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 111.177,
+          "overlapMs": 109.7409999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 111.044,
+          "overlapMs": 109.63499999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 108.504,
+          "overlapMs": 108.504,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 104.756,
+          "overlapMs": 104.756,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 104.754,
+          "overlapMs": 104.754,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 116.5,
+      "rendererTracedSpanMs": 116.074,
+      "gpuTracedSpanMs": 107.3529999923706,
+      "largest": [
+        {
+          "name": "ThreadControllerImpl::RunTask",
+          "category": "toplevel",
+          "durationMs": 110.084,
+          "overlapMs": 109.0529999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Edge_RunTask",
+          "category": "toplevel",
+          "durationMs": 110.081,
+          "overlapMs": 109.0509999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ProxyMain::BeginMainFrame",
+          "category": "cc,benchmark",
+          "durationMs": 110.078,
+          "overlapMs": 109.0499999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 109.502,
+          "overlapMs": 108.6489999923706,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "Paint",
+          "category": "devtools.timeline",
+          "durationMs": 109.366,
+          "overlapMs": 108.54899999237061,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "RasterImplementation::ReadbackImagePixels",
+          "category": "gpu",
+          "durationMs": 106.371,
+          "overlapMs": 106.371,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "ImplementationBase::WaitForCmd",
+          "category": "gpu",
+          "durationMs": 104.619,
+          "overlapMs": 104.619,
+          "thread": "CrRendererMain"
+        },
+        {
+          "name": "CommandBufferHelper::Finish",
+          "category": "gpu",
+          "durationMs": 104.616,
+          "overlapMs": 104.616,
+          "thread": "CrRendererMain"
+        }
+      ]
+    },
+    {
+      "gapMs": 112.5,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 108.40000000037253,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    },
+    {
+      "gapMs": 108.29999999981374,
+      "rendererTracedSpanMs": 0,
+      "gpuTracedSpanMs": 0,
+      "largest": []
+    }
+  ]
+}

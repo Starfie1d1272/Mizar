@@ -21,4 +21,6 @@ const defect = JSON.parse(await readFile(new URL('nuke-late-kad-defect.json', ro
 if (defect.defects.length !== 3 || defect.defects.some(p => p.terminalDeaths !== p.frozenDeaths + 1)) throw Error('Late deaths');
 const replay = JSON.parse(await readFile(new URL('rc22-terminal-kad-replay.json', root)));
 if (replay.mismatches.length || replay.players.length !== 10 || replay.score.a !== 13 || replay.score.b !== 5) throw Error('Offline replay');
+const actual = JSON.parse(await readFile(new URL('rc22-windows-terminal-result.json', root)));
+if (actual.source !== '6e84cd2eaa027ae322ad486b6b2ab31e18e2d486' || actual.rows.length !== 10 || actual.mismatches.length || actual.history !== 18 || actual.score.a !== 13 || actual.score.b !== 5 || actual.rows.some(p => p.deaths !== p.observedDeaths)) throw Error('RC22 targeted Windows result');
 console.log(`Verified ${sums.length} files and 301 terminal input frames`);

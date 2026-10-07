@@ -1,0 +1,90 @@
+{
+  "source": "6e84cd2eaa027ae322ad486b6b2ab31e18e2d486",
+  "version": "1.0.0-rc.22",
+  "classification": "actual final Windows package and user-provided professional CS2 Inferno demo; playback paused during real freezetime for framing, not tactical timeout; actual Steam avatars and HLTV team logos; no official series result or veto claim",
+  "matchSource": "https://www.hltv.org/matches/2398745/falcons-vs-natus-vincere-esl-pro-league-season-24",
+  "files": [
+    {
+      "file": "hud-default-epl-inferno-freeze.png",
+      "sha256": "97d88beb1f23be62a972f7007378e39b001c177b04360d351ab177c9ae3e1104",
+      "width": 1920,
+      "height": 1080,
+      "time": "2026-10-07T06:41:07.410Z",
+      "style": "default",
+      "map": "de_inferno",
+      "score": {
+        "ct": 0,
+        "t": 3
+      },
+      "sequence": 64498,
+      "pixelsModified": false
+    },
+    {
+      "file": "hud-esl-epl-inferno-freeze.png",
+      "sha256": "d9f42fbe5a2cc918c6127e02eba0cd049fa72428147a348b8fa8a0fc24ebdc34",
+      "width": 1920,
+      "height": 1080,
+      "time": "2026-10-07T06:41:20.102Z",
+      "style": "esl",
+      "map": "de_inferno",
+      "score": {
+        "ct": 0,
+        "t": 3
+      },
+      "sequence": 64499,
+      "pixelsModified": false
+    },
+    {
+      "file": "hud-ewc-epl-inferno-freeze.png",
+      "sha256": "53914c9abf7e14b34afdf9b973d436a10e7ad39293441f18e5e04a6dc2eb93b2",
+      "width": 1920,
+      "height": 1080,
+      "time": "2026-10-07T06:41:10.894Z",
+      "style": "ewc",
+      "map": "de_inferno",
+      "score": {
+        "ct": 0,
+        "t": 3
+      },
+      "sequence": 64498,
+      "pixelsModified": false
+    },
+    {
+      "file": "hud-iem-epl-inferno-freeze.png",
+      "sha256": "bfcb781aa57f7bbe10b6fb858ae2386b7c9c53d796c4de1e1e26c61bc42f1a31",
+      "width": 1920,
+      "height": 1080,
+      "time": "2026-10-07T06:41:13.899Z",
+      "style": "iem",
+      "map": "de_inferno",
+      "score": {
+        "ct": 0,
+        "t": 3
+      },
+      "sequence": 64498,
+      "pixelsModified": false
+    },
+    {
+      "file": "hud-perfectworld-epl-inferno-freeze.png",
+      "sha256": "b9a7540b738f9b72d7ceadafe53d762deeb658dc6796822db257765b01d0a7ed",
+      "width": 1920,
+      "height": 1080,
+      "time": "2026-10-07T06:41:16.897Z",
+      "style": "perfectworld",
+      "map": "de_inferno",
+      "score": {
+        "ct": 0,
+        "t": 3
+      },
+      "sequence": 64499,
+      "pixelsModified": false
+    },
+    {
+      "file": "workspace-epl-inferno-freeze.png",
+      "sha256": "26b046d980bf2005526231675cd0ee4b2834c1fdbf611584bdc806c2198b0dfb",
+      "width": 2560,
+      "height": 1440,
+      "pixelsModified": false
+    }
+  ]
+}
