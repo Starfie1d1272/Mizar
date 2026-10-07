@@ -8,6 +8,8 @@
 
 以完整 SHA `14b1268d3478a33ba5f8dcf2649b806c74183186` 运行 [Release Qualification](https://github.com/Starfie1d1272/Mizar/actions/runs/37670683831)，结果成功。候选使用 `release` 桌面配置，包内应用版本仍为 `1.0.0-rc.25`，但不是公开 RC25：内容摘要 `65a42a6c6c66fe4538e36641a0e2f6a511bf5fb9b1a47ae84b4e963a50116eea`，ZIP SHA-256 `4b9909c017469193cecbfa4fab268b5676b9c11d89b91ff1b77b36b94fc2aa1b`。下载后核对 ZIP，使用 Windows 解压器提取 3,586 文件，再以既有 `verifyPayload` 核对完整内容、源码和配置。
 
+另执行 `gh attestation verify` 对该 ZIP 核对仓库 provenance，首次网络 TLS 超时，重试退出码 0。发布包未晋级或替换。
+
 使用真实 EPL Falcons–Natus Vincere Inferno demo，1 倍速、tick 20000、开始时核对 b1t。原 RC25 做同会话 60 秒基线；正常退出后启动默认候选；默认失败后正常退出，仅启用 `MIZAR_RADAR_PROCESS_ISOLATION=1` 启动同一候选，测 120 秒。三段均是新页面/正常 Canvas 上下文，506×506、150% DPI、原 CSS 阴影、本机 HUD 与 OBS 原负载，MAA/MuMu/SteelSeries 保持运行。不重复无绘制、极简、阴影或限帧实验。
 
 通过游戏窗口截图定位和关闭控制台；目标 Canvas 不提前读像素。主采样内不截图、读回或切窗口。候选用自动分配的只读 CDP 端口，独立目录拥有独立端口；没有修改 GPU、后台节流或其它产品选项。观察原回调的进入/退出、序号、Long Task 和 LoAF，保留原数据、模型和全部绘图。
