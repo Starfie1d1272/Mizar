@@ -1,0 +1,72 @@
+{
+  "source": "6e84cd2eaa027ae322ad486b6b2ab31e18e2d486",
+  "classification": "actual final RC22 Windows package, normal real demo seek to tick112000 then1x natural terminal explosion; targeted KAD case, not complete map or full ADR acceptance",
+  "score": {
+    "a": 13,
+    "b": 5
+  },
+  "history": 18,
+  "rows": [
+    {
+      "name": "ALPHA 01",
+      "kills": 16,
+      "deaths": 11,
+      "observedDeaths": 11
+    },
+    {
+      "name": "ALPHA 02",
+      "kills": 19,
+      "deaths": 13,
+      "observedDeaths": 13
+    },
+    {
+      "name": "ALPHA 03",
+      "kills": 19,
+      "deaths": 13,
+      "observedDeaths": 13
+    },
+    {
+      "name": "ALPHA 04",
+      "kills": 12,
+      "deaths": 11,
+      "observedDeaths": 11
+    },
+    {
+      "name": "ALPHA 05",
+      "kills": 12,
+      "deaths": 13,
+      "observedDeaths": 13
+    },
+    {
+      "name": "BRAVO 01",
+      "kills": 5,
+      "deaths": 17,
+      "observedDeaths": 17
+    },
+    {
+      "name": "BRAVO 02",
+      "kills": 20,
+      "deaths": 13,
+      "observedDeaths": 13
+    },
+    {
+      "name": "BRAVO 03",
+      "kills": 13,
+      "deaths": 17,
+      "observedDeaths": 17
+    },
+    {
+      "name": "BRAVO 04",
+      "kills": 13,
+      "deaths": 17,
+      "observedDeaths": 17
+    },
+    {
+      "name": "BRAVO 05",
+      "kills": 8,
+      "deaths": 15,
+      "observedDeaths": 15
+    }
+  ],
+  "mismatches": []
+}

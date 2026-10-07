@@ -1,0 +1,31 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "classification": "temporary 60Hz presentation cadence experiment on real gameplay; instrumentation, includes overhead, not completed GPU frame or OBS renderer FPS; bounded at first 20000 callbacks",
+  "output": [
+    {
+      "surface": "/workspace/left",
+      "dpr": 1.5,
+      "samples": 5043,
+      "seconds": 119.97339999999991,
+      "callbacksPerSecond": 42.025982426104484,
+      "intervalMs": {
+        "p50": 20.799999999813735,
+        "p95": 45.8000000002794,
+        "max": 666.6000000000931
+      },
+      "callbackMs": {
+        "p50": 0.3999999985098839,
+        "p95": 0.7000000029802322,
+        "max": 5.299999997019768
+      },
+      "over33Ms": 632,
+      "over50Ms": 193,
+      "backingSizes": [
+        "506x506"
+      ],
+      "visibilityStates": [
+        "visible"
+      ]
+    }
+  ]
+}
