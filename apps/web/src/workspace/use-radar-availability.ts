@@ -2,7 +2,10 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { LocalChannelClient } from '../realtime';
 import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
 
-export type RadarAvailabilitySource = Pick<LocalChannelClient<'radar'>, 'subscribe' | 'getSnapshot'>;
+export type RadarAvailabilitySource = Pick<
+  LocalChannelClient<'radar'>,
+  'subscribe' | 'getSnapshot'
+>;
 
 /** React observes availability; Radar's imperative subscriber still receives every sample. */
 export function useRadarAvailability(client: RadarAvailabilitySource): boolean {
