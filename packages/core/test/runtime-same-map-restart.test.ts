@@ -119,7 +119,7 @@ describe('observed same-map restart', () => {
                       winCondition: 'defuse' as const,
                     },
                   ]
-                : map.roundWins,
+                : [],
             ...(kind === 'missing-score'
               ? {}
               : {
