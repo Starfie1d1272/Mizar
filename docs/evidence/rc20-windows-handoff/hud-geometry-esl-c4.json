@@ -1,0 +1,492 @@
+{
+  "time": "2026-10-07T02:24:14.594Z",
+  "classification": "read-only actual qualified desktop Program DOM geometry during real demo; no invented player stats",
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "dpr": 1.5,
+  "viewport": [
+    1280,
+    720
+  ],
+  "rows": [
+    {
+      "name": "ALPHA 03",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 10.666666984558105,
+        "y": 434.66668701171875,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 24,
+        "y": 454.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "14",
+          "box": {
+            "x": 33.333335876464844,
+            "y": 454.66668701171875,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 54.11805725097656,
+            "y": 454.66668701171875,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 01",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 10.666666984558105,
+        "y": 490.66668701171875,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 24,
+        "y": 510.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "13",
+          "box": {
+            "x": 33.333335876464844,
+            "y": 510.66668701171875,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "9",
+          "box": {
+            "x": 54.11805725097656,
+            "y": 510.66668701171875,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 05",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 10.666666984558105,
+        "y": 546.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 24,
+        "y": 566.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "12",
+          "box": {
+            "x": 33.333335876464844,
+            "y": 566.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 54.11805725097656,
+            "y": 566.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 02",
+      "design": "esl",
+      "dead": false,
+      "card": {
+        "x": 10.666666984558105,
+        "y": 602.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 24,
+        "y": 622.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "16",
+          "box": {
+            "x": 33.333335876464844,
+            "y": 622.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "10",
+          "box": {
+            "x": 54.11805725097656,
+            "y": 622.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 04",
+      "design": "esl",
+      "dead": false,
+      "card": {
+        "x": 10.666666984558105,
+        "y": 658.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 24,
+        "y": 678.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "11",
+          "box": {
+            "x": 33.333335876464844,
+            "y": 678.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "10",
+          "box": {
+            "x": 54.11805725097656,
+            "y": 678.6666870117188,
+            "width": 9.451391220092773,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 05",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 1064,
+        "y": 434.66668701171875,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1216.666748046875,
+        "y": 454.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "8",
+          "box": {
+            "x": 1225.763916015625,
+            "y": 454.66668701171875,
+            "width": 9.451416015625,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "12",
+          "box": {
+            "x": 1246.5487060546875,
+            "y": 454.66668701171875,
+            "width": 9.451334953308105,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 04",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 1064,
+        "y": 490.66668701171875,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1216.666748046875,
+        "y": 510.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "9",
+          "box": {
+            "x": 1225.763916015625,
+            "y": 510.66668701171875,
+            "width": 9.451416015625,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "15",
+          "box": {
+            "x": 1246.5487060546875,
+            "y": 510.66668701171875,
+            "width": 9.451334953308105,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 01",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 1064,
+        "y": 546.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1216.666748046875,
+        "y": 566.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "5",
+          "box": {
+            "x": 1225.763916015625,
+            "y": 566.6666870117188,
+            "width": 9.451416015625,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "14",
+          "box": {
+            "x": 1246.5487060546875,
+            "y": 566.6666870117188,
+            "width": 9.451334953308105,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 03",
+      "design": "esl",
+      "dead": true,
+      "card": {
+        "x": 1064,
+        "y": 602.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1216.666748046875,
+        "y": 622.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "11",
+          "box": {
+            "x": 1225.763916015625,
+            "y": 622.6666870117188,
+            "width": 9.451416015625,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "14",
+          "box": {
+            "x": 1246.5487060546875,
+            "y": 622.6666870117188,
+            "width": 9.451334953308105,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 02",
+      "design": "esl",
+      "dead": false,
+      "card": {
+        "x": 1064,
+        "y": 658.6666870117188,
+        "width": 205.33334350585938,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1216.666748046875,
+        "y": 678.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "ESLLegend, SourceHanSans, \"Barlow Condensed\", \"Arial Narrow\", \"Microsoft YaHei\", sans-serif, sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "18",
+          "box": {
+            "x": 1225.763916015625,
+            "y": 678.6666870117188,
+            "width": 9.451416015625,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 1246.5487060546875,
+            "y": 678.6666870117188,
+            "width": 9.451334953308105,
+            "height": 12
+          },
+          "client": 14,
+          "scroll": 14
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    }
+  ]
+}

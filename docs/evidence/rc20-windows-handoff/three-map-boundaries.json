@@ -1,0 +1,69 @@
+{
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "classification": "historical real RC20 continuous three-independent-demo BO3 rehearsal; score/series/output boundaries observed, final history fails; not final RC21 acceptance",
+  "results": [
+    {
+      "map": "de_nuke",
+      "seriesScore": {
+        "a": 1,
+        "b": 0
+      },
+      "mapResult": {
+        "mapOrder": 1,
+        "mapName": "de_nuke",
+        "status": "completed",
+        "executionMapEpoch": 11,
+        "finalScore": {
+          "a": 13,
+          "b": 5
+        },
+        "roundHistoryCompleteness": "complete"
+      },
+      "retainedHistoryRounds": 17,
+      "expectedScoreTotal": 18,
+      "historyVerdict": "FAIL"
+    },
+    {
+      "map": "de_mirage",
+      "seriesScore": {
+        "a": 1,
+        "b": 1
+      },
+      "mapResult": {
+        "mapOrder": 2,
+        "mapName": "de_mirage",
+        "status": "completed",
+        "executionMapEpoch": 12,
+        "finalScore": {
+          "a": 6,
+          "b": 13
+        },
+        "roundHistoryCompleteness": "complete"
+      },
+      "retainedHistoryRounds": 18,
+      "expectedScoreTotal": 19,
+      "historyVerdict": "FAIL"
+    },
+    {
+      "map": "de_ancient",
+      "seriesScore": {
+        "a": 1,
+        "b": 2
+      },
+      "mapResult": {
+        "mapOrder": 3,
+        "mapName": "de_ancient",
+        "status": "completed",
+        "executionMapEpoch": 13,
+        "finalScore": {
+          "a": 3,
+          "b": 13
+        },
+        "roundHistoryCompleteness": "complete"
+      },
+      "retainedHistoryRounds": 15,
+      "expectedScoreTotal": 16,
+      "historyVerdict": "FAIL"
+    }
+  ]
+}

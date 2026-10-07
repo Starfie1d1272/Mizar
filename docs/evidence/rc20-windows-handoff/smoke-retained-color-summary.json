@@ -1,0 +1,15 @@
+{
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "classification": "instrumented actual native Canvas stroke plus one-pixel raster sample, same-sequence actual Radar source; single smoke effect/ring only; no fabricated rendering, includes observer overhead; current source side is not a historical ownership oracle",
+  "samples": 387,
+  "deadOwnerSamples": 14,
+  "aliveOwnerSamples": 373,
+  "styles": [
+    "#f2bd4f",
+    "#6aa8ff"
+  ],
+  "deadStyles": [
+    "#f2bd4f"
+  ],
+  "imageCaptured": true
+}

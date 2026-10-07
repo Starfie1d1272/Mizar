@@ -1,0 +1,31 @@
+{
+  "time": "2026-10-07T03:50:14.176Z",
+  "sequence": 126832,
+  "map": "de_ancient",
+  "ownerLife": "dead",
+  "sourceOwnerSide": "T",
+  "knownOwnershipSide": "T",
+  "ownerEvidence": "retained-same-lifecycle",
+  "lifetime": 19.622,
+  "effect": 17.438,
+  "stroke": {
+    "sequence": 126832,
+    "style": "#f2bd4f",
+    "alpha": 0.8448,
+    "pixel": [
+      239,
+      194,
+      101,
+      254
+    ],
+    "px": 414,
+    "py": 151,
+    "arc": [
+      814.2013157894737,
+      310.06381578947367,
+      11.747368421052634,
+      -1.5707963267948966,
+      -0.7659202889451913
+    ]
+  }
+}

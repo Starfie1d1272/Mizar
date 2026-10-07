@@ -1,0 +1,174 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "classification": "offline production adapter and Companion Runtime/Projection composition replay of actual RC20 final input plus authored local match metadata; not RC21 Windows package acceptance",
+  "frames": 381,
+  "changes": [
+    {
+      "sequence": 71500,
+      "mapPhase": "live",
+      "mapHistory": 17,
+      "seriesHistory": 17,
+      "score": {
+        "a": 0,
+        "b": 0
+      }
+    },
+    {
+      "sequence": 71662,
+      "mapPhase": "gameover",
+      "mapHistory": 18,
+      "seriesHistory": 18,
+      "score": {
+        "a": 1,
+        "b": 0
+      }
+    },
+    {
+      "sequence": 71878,
+      "mapPhase": null,
+      "seriesHistory": 18,
+      "score": {
+        "a": 1,
+        "b": 0
+      }
+    }
+  ],
+  "history": {
+    "mapOrder": 1,
+    "completeness": "complete",
+    "rounds": [
+      {
+        "roundNumber": 1,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 2,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 3,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 4,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 5,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "defuse"
+      },
+      {
+        "roundNumber": 6,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 7,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "defuse"
+      },
+      {
+        "roundNumber": 8,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 9,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 10,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 11,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "defuse"
+      },
+      {
+        "roundNumber": 12,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 13,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "defuse"
+      },
+      {
+        "roundNumber": 14,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "bomb"
+      },
+      {
+        "roundNumber": 15,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "bomb"
+      },
+      {
+        "roundNumber": 16,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 17,
+        "winnerSide": "CT",
+        "winnerEntryId": null,
+        "winCondition": "elimination"
+      },
+      {
+        "roundNumber": 18,
+        "winnerSide": "T",
+        "winnerEntryId": null,
+        "winCondition": "bomb"
+      }
+    ]
+  },
+  "seriesScore": {
+    "a": 1,
+    "b": 0
+  },
+  "maps": [
+    {
+      "mapName": "de_nuke",
+      "status": "completed",
+      "finalScore": {
+        "a": 13,
+        "b": 5
+      }
+    },
+    {
+      "mapName": "de_mirage",
+      "status": "pending",
+      "finalScore": null
+    },
+    {
+      "mapName": "de_ancient",
+      "status": "pending",
+      "finalScore": null
+    }
+  ]
+}

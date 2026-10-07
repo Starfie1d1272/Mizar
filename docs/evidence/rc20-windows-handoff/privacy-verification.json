@@ -1,0 +1,7 @@
+{
+  "verdict": "PASS",
+  "textFilesChecked": 22,
+  "sourceIdentityCount": 24,
+  "sourceNameCount": 19,
+  "classification": "text scan against locally retained original identities and names; raster images separately visually reviewed"
+}

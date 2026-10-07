@@ -1,0 +1,52 @@
+{
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "artifact": "064c7b6c75de3d21983787bfadc016a190467eb51c8c70291b2e0ae6d6140616",
+  "selection": "last observed HP100/estimatedHP23 handoff for BRAVO 02 in each design; full DOM trace retained locally",
+  "windows": [
+    {
+      "design": "current",
+      "start": "2026-10-07T02:00:50.945Z",
+      "end": "2026-10-07T02:00:51.346Z",
+      "durationMs": 400.7,
+      "initialHp": 100,
+      "estimatedHp": 23,
+      "classification": "read-only actual native Program DOM during real demo seek; independent visual echo, not a current estimate; raw HP deduction separately retained in local capture"
+    },
+    {
+      "design": "ewc",
+      "start": "2026-10-07T02:07:14.034Z",
+      "end": "2026-10-07T02:07:14.411Z",
+      "durationMs": 377,
+      "initialHp": 100,
+      "estimatedHp": 23,
+      "classification": "read-only actual native Program DOM during real demo seek; independent visual echo, not a current estimate; raw HP deduction separately retained in local capture"
+    },
+    {
+      "design": "iem",
+      "start": "2026-10-07T02:17:02.461Z",
+      "end": "2026-10-07T02:17:02.801Z",
+      "durationMs": 339.3,
+      "initialHp": 100,
+      "estimatedHp": 23,
+      "classification": "read-only actual native Program DOM during real demo seek; independent visual echo, not a current estimate; raw HP deduction separately retained in local capture"
+    },
+    {
+      "design": "perfectworld",
+      "start": "2026-10-07T02:19:19.314Z",
+      "end": "2026-10-07T02:19:19.670Z",
+      "durationMs": 356.6,
+      "initialHp": 100,
+      "estimatedHp": 23,
+      "classification": "read-only actual native Program DOM during real demo seek; independent visual echo, not a current estimate; raw HP deduction separately retained in local capture"
+    },
+    {
+      "design": "esl",
+      "start": "2026-10-07T02:24:13.890Z",
+      "end": "2026-10-07T02:24:14.209Z",
+      "durationMs": 319.3,
+      "initialHp": 100,
+      "estimatedHp": 23,
+      "classification": "read-only actual native Program DOM during real demo seek; independent visual echo, not a current estimate; raw HP deduction separately retained in local capture"
+    }
+  ]
+}

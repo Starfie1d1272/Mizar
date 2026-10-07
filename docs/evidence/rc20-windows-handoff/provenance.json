@@ -1,0 +1,22 @@
+{
+  "sourceCommit": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "artifactSha256": "064c7b6c75de3d21983787bfadc016a190467eb51c8c70291b2e0ae6d6140616",
+  "captureId": "20261007015126122-0c44ebcc",
+  "sourceExcerpt": {
+    "firstSequence": 71500,
+    "lastSequence": 71880,
+    "frames": 381,
+    "rawPrivateExcerptSha256": "066b8f75b3ff7d69365be299ad97704bf37cb6968a79f0987331ff734a2c6a37"
+  },
+  "classification": "identity-redacted historical real RC20 Windows diagnosis evidence plus explicitly offline RC21 production replay; not promotional material or final RC21 Windows acceptance",
+  "offlineReplaySource": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "images": "actual OBS frames; ring diagnostic crops are 100x100 enlarged 6x nearest-neighbor; native Canvas image is an adjacent actual frame, exact source pairing belongs to recorded stroke/pixel sample, not the PNG",
+  "privacy": "configured ALPHA/BRAVO aliases in pictures; source identities/names removed from raw excerpt; no credentials, original capture, audio/video or unrelated desktop",
+  "closedCapture": {
+    "complete": true,
+    "frameCount": 140802,
+    "droppedFrames": 0,
+    "framesSha256": "30e71a85e885cdbfab7239139354b80bf352f50b26b6b93c074a789267b27da4",
+    "verification": "production verify-capture CLI PASS"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "artifact": "064c7b6c75de3d21983787bfadc016a190467eb51c8c70291b2e0ae6d6140616",
+  "classification": "read-only exact-sequence native radar Canvas phase dataset plus actual local radar projection; tests phase continuity, not GPU pixels or color",
+  "start": "2026-10-07T02:32:14.286Z",
+  "samples": 5626,
+  "matched": 5626,
+  "effects": 7095,
+  "deadOwnerEffects": 209,
+  "unknownOwnerSideEffects": 787,
+  "anomalies": [],
+  "end": "2026-10-07T02:42:14.351Z",
+  "entities": 39
+}

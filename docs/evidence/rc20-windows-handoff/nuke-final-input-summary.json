@@ -1,0 +1,43 @@
+{
+  "source": "4469d8d27aa68d3b26c65bb360e84b3727699484",
+  "frames": 381,
+  "classification": "actual capture excerpt; raw private, summary excludes source identities",
+  "states": [
+    {
+      "sequence": 71500,
+      "time": "2026-10-07T02:57:29.712Z",
+      "map": "de_nuke",
+      "mapPhase": "live",
+      "round": 17,
+      "roundPhase": "live",
+      "score": {
+        "ct": 5,
+        "t": 12
+      },
+      "historyPresent": true,
+      "historyLength": 17
+    },
+    {
+      "sequence": 71662,
+      "time": "2026-10-07T02:57:36.445Z",
+      "map": "de_nuke",
+      "mapPhase": "gameover",
+      "round": 18,
+      "roundPhase": "freezetime",
+      "winner": "T",
+      "score": {
+        "ct": 5,
+        "t": 13
+      },
+      "historyPresent": true,
+      "historyLength": 18
+    },
+    {
+      "sequence": 71878,
+      "time": "2026-10-07T02:57:56.644Z",
+      "score": {},
+      "historyPresent": false,
+      "historyLength": null
+    }
+  ]
+}
