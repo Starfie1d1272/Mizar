@@ -21,6 +21,7 @@ import {
   createSeriesProgress,
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
+  refreshSeriesProgressMetadata,
   seriesCheckpointIdentity,
   syncSeriesProgress as reduceSeriesProgress,
   type OperatorCommand,
@@ -266,6 +267,11 @@ export class ProgramRuntime {
       }
     }
 
+    const refreshed = refreshSeriesProgressMetadata(this.seriesProgress, context);
+    if (refreshed !== this.seriesProgress) {
+      this.seriesProgress = refreshed;
+      shouldPersist = true;
+    }
     this.seriesSideProof = sideProof;
     const before = this.seriesProgress;
     const events = this.pendingSeriesEvents.splice(0, this.pendingSeriesEvents.length);

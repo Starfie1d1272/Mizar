@@ -142,6 +142,82 @@ const sideProof: SeriesSideProof = {
 };
 
 describe('ProgramRuntime SeriesProgress composition', () => {
+  it('refreshes entrant names and logos without replacing a frozen result, and persists the refresh', () => {
+    const store = new MemoryCheckpointStore();
+    const runtime = createProgramRuntime('metadata-refresh', {
+      seriesProgressCheckpointStore: store,
+    });
+    const context = contextFixture();
+    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+    runtime.synchronizeSeriesProgress(context, sideProof, 'local');
+    runtime.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 9 }));
+    const frozen = runtime.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    const refreshed: MatchContext = {
+      ...context,
+      entrants: {
+        a: {
+          ...context.entrants.a,
+          name: 'Alpha updated',
+          logoUrl: 'https://example.com/alpha.png',
+        },
+        b: { ...context.entrants.b, name: 'Bravo updated', logoUrl: null },
+      },
+      maps: context.maps.map((map, index) =>
+        index === 0 ? { ...map, scoreA: 13, scoreB: 5 } : map,
+      ),
+    };
+    const next = runtime.synchronizeSeriesProgress(refreshed, sideProof, 'local')!;
+    expect(next.entrants.a).toMatchObject({
+      name: 'Alpha updated',
+      logoUrl: 'https://example.com/alpha.png',
+    });
+    expect(next.entrants.b.name).toBe('Bravo updated');
+    expect(next.maps).toEqual(frozen.maps);
+    expect(next.score).toEqual({ a: 1, b: 0 });
+    expect(next.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
+    expect(store.checkpoint?.progress.entrants).toEqual(next.entrants);
+
+    const restarted = createProgramRuntime('metadata-refresh-restarted', {
+      seriesProgressCheckpointStore: store,
+    });
+    const cleared = restarted.synchronizeSeriesProgress(
+      {
+        ...refreshed,
+        entrants: { ...refreshed.entrants, a: { ...refreshed.entrants.a, logoUrl: null } },
+      },
+      null,
+      'local',
+    )!;
+    expect(cleared.entrants.a.logoUrl).toBeNull();
+    expect(cleared.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
+    expect(store.checkpoint?.progress.entrants.a.logoUrl).toBeNull();
+  });
+
+  it('does not refresh presentation metadata from a conflicting bound entrant identity', () => {
+    const runtime = createProgramRuntime('metadata-conflict');
+    const context = contextFixture();
+    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+    const before = runtime.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    const next = runtime.synchronizeSeriesProgress(
+      {
+        ...context,
+        entrants: {
+          ...context.entrants,
+          a: {
+            ...context.entrants.a,
+            entryId: 'other-entry',
+            name: 'Other',
+            logoUrl: 'https://example.com/other.png',
+          },
+        },
+      },
+      sideProof,
+      'local',
+    )!;
+    expect(next.entrants).toEqual(before.entrants);
+    expect(next.issues.some((issue) => issue.code === 'context_result_conflict')).toBe(true);
+  });
+
   it.each(['empty', 'omitted'] as const)(
     'clears future frozen rounds after a witnessed same-map warmup with %s history',
     (history) => {
