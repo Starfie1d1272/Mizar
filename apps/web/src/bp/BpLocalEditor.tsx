@@ -248,7 +248,7 @@ export function BpLocalEditor({
       </div>
 
       {draft.format === 'bo3' ? (
-        <fieldset className="bp-editor-match-fields">
+        <fieldset className="bp-editor-match-fields bp-editor-rules">
           <legend>BO3 禁选规则</legend>
           <Select
             label="BO3 最后两次禁图"
@@ -366,7 +366,7 @@ export function BpLocalEditor({
             <span className="bp-workspace-eyebrow">CANONICAL VETO ORDER</span>
             <h3 id="bp-sequence-title">BP 顺序</h3>
           </div>
-          <p>操作方与步骤由赛制固定</p>
+          <p>操作方与步骤由赛制和所选规则确定</p>
         </div>
         <ol className="bp-sequence-list">
           {actions.map((action, index) => {
