@@ -309,9 +309,10 @@ export function validateBroadcastManifest(
   }
 
   const value = parsed.data;
+  const diagnostics = validateManifestSemantics(value);
   const resultIssue = matchResultIssue(value.match, value.maps);
   if (resultIssue)
-    return validationFailure([
+    diagnostics.push(
       makeContractDiagnostic(
         'semantic',
         'error',
@@ -319,8 +320,7 @@ export function validateBroadcastManifest(
         'match.resultDisposition',
         resultIssue,
       ),
-    ]);
-  const diagnostics = validateManifestSemantics(value);
+    );
   return hasBlockingDiagnostic(diagnostics)
     ? validationFailure(diagnostics)
     : validationSuccess(value, diagnostics);

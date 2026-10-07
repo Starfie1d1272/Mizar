@@ -161,3 +161,41 @@ it('retains unknown earlier maps when late evidence arrives out of order', () =>
   expect(progress.maps[1]?.status).toBe('pending');
   expect(projectSeries(context, progress)?.score).toEqual({ a: 2, b: 1 });
 });
+
+it('rejects one-sided map scores in directly imported local documents', () => {
+  const document = toMatchDocumentV1(independentFixture());
+  expect(() =>
+    parseMatchDocumentV1({
+      ...document,
+      maps: [{ ...document.maps[0], scoreA: 13, scoreB: null }],
+    }),
+  ).toThrow();
+});
+
+it('validates terminal v1 aggregate scores and evidence with the same result rules', () => {
+  const parsed = validateBroadcastManifest(
+    JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'packages/rivalhub/test/fixtures/rivalhub-provider-manifest-v1.json',
+        ),
+        'utf8',
+      ),
+    ),
+  );
+  if (!parsed.ok) throw new Error('Invalid provider fixture');
+  const event = {
+    ...parsed.value,
+    match: { ...parsed.value.match, status: 'finished', format: 'bo3', scoreA: 1, scoreB: 1 },
+    maps: [...parsed.value.maps],
+  };
+  expect(validateBroadcastManifest(event).ok).toBe(false);
+  event.match.scoreA = 0;
+  event.match.scoreB = 2;
+  event.maps = [{ ...event.maps[0]!, scoreA: 13, scoreB: 7 }];
+  expect(validateBroadcastManifest(event).ok).toBe(false);
+  event.match.scoreA = 2;
+  event.match.scoreB = 0;
+  expect(validateBroadcastManifest(event).ok).toBe(true);
+});

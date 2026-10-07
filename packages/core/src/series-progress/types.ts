@@ -3,7 +3,7 @@ import type { MatchContext, MatchFormat, MatchMapContext } from '../match-contex
 import type { ObservedRoundWin, RoundWinCondition, SourceSide } from '../telemetry/index.js';
 
 export const SERIES_ROUND_HISTORY_MAX = 256 as const;
-export const SERIES_PROGRESS_CHECKPOINT_VERSION = 'mizar.series-progress.v1' as const;
+export const SERIES_PROGRESS_CHECKPOINT_VERSION = 'mizar.series-progress.v2' as const;
 
 export type SeriesBindingState = 'bound' | 'unbound' | 'needs_operator';
 export type SeriesMapStatus = 'pending' | 'current' | 'completed' | 'not_played';
@@ -75,6 +75,12 @@ export interface SeriesProgress {
   readonly matchId: string;
   readonly format: MatchFormat;
   readonly requiredWins: 1 | 2 | 3;
+  /** Frozen source plan identity; observed slots never redefine it. */
+  readonly sourcePlan: {
+    readonly mode: 'planned' | 'unplanned';
+    readonly fingerprint: string;
+    readonly allowedMaps: readonly string[];
+  };
   readonly entrants: {
     readonly a: SeriesEntrant;
     readonly b: SeriesEntrant;
@@ -137,6 +143,8 @@ export type SeriesProgressEvent =
     };
 
 export interface SeriesProgressSyncInput {
+  /** Closed upstream execution cannot acquire new unplanned maps. Existing evidence is retained. */
+  readonly allowMapCreation?: boolean;
   readonly events: readonly SeriesProgressEvent[];
   readonly observation: SeriesMapObservation | null;
   readonly sideProof: SeriesSideProof | null;
@@ -196,9 +204,22 @@ export function isSeriesProgressCheckpoint(value: unknown): value is SeriesProgr
     isSeriesBindingState(progress.bindingState) &&
     (currentMapOrder === null || isPositiveInteger(currentMapOrder)) &&
     Array.isArray(maps) &&
-    maps.length > 0 &&
-    maps.length <= 5 &&
+    isRecord(progress.sourcePlan) &&
+    (progress.sourcePlan.mode === 'planned' || progress.sourcePlan.mode === 'unplanned') &&
+    progress.sourcePlan.fingerprint === identity.mapPlanFingerprint &&
+    Array.isArray(progress.sourcePlan.allowedMaps) &&
+    progress.sourcePlan.allowedMaps.length <= 16 &&
+    progress.sourcePlan.allowedMaps.every(isNonEmptyString) &&
+    (progress.sourcePlan.mode === 'unplanned' || maps.length > 0) &&
+    maps.length <= requiredSeriesWins(progress.format) * 2 - 1 &&
+    (maps.length > 0 ||
+      (currentMapOrder === null &&
+        score.a === 0 &&
+        score.b === 0 &&
+        progress.bindingState !== 'bound')) &&
     maps.every(isSeriesMapProgress) &&
+    new Set(maps.map((map) => map.mapOrder)).size === maps.length &&
+    (currentMapOrder === null || maps.some((map) => map.mapOrder === currentMapOrder)) &&
     Array.isArray(progress.issues) &&
     progress.issues.length <= 64 &&
     progress.issues.every(isSeriesProgressIssue)
@@ -348,32 +369,16 @@ function selectionForPlan(context: MatchContext, map: MatchMapContext): SeriesMa
 }
 
 export function seriesMapPlanFingerprint(context: MatchContext): string {
-  return JSON.stringify(
-    context.maps
+  return JSON.stringify({
+    mode: context.maps.length === 0 ? 'unplanned' : 'planned',
+    allowedMaps: [...new Set((context.mapPool ?? []).map(canonicalMapName))].sort(),
+    maps: context.maps
       .slice()
       .sort(
         (left, right) => left.mapOrder - right.mapOrder || left.mapId.localeCompare(right.mapId),
       )
       .map((map) => mapPlanEntry(map, selectionForPlan(context, map))),
-  );
-}
-
-export function seriesProgressMapPlanFingerprint(maps: readonly SeriesMapProgress[]): string {
-  return JSON.stringify(
-    maps
-      .slice()
-      .sort(
-        (left, right) =>
-          left.mapOrder - right.mapOrder || (left.mapId ?? '').localeCompare(right.mapId ?? ''),
-      )
-      .map((map) => ({
-        mapId: map.mapId,
-        mapOrder: map.mapOrder,
-        mapName: canonicalMapName(map.mapName),
-        selection: map.selection,
-        teamAStartSide: map.teamAStartSide,
-      })),
-  );
+  });
 }
 
 export function seriesCheckpointIdentity(

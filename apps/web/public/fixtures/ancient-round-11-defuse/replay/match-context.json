@@ -196,6 +196,7 @@
     "completedAt": null,
     "scoreA": null,
     "scoreB": null,
+    "resultDisposition": null,
     "isForfeit": false,
     "entrants": {
       "a": {
@@ -285,6 +286,7 @@
         ]
       }
     },
+    "mapPool": [],
     "maps": [
       {
         "mapId": "map-m2-01",

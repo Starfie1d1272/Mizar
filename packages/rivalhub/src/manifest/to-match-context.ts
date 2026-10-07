@@ -75,6 +75,7 @@ export function toMatchContext(input: unknown): MatchContext {
       a: toEntrant(manifest.entrants.a),
       b: toEntrant(manifest.entrants.b),
     },
+    mapPool: manifest.match.mapPool ?? [],
     maps: [...manifest.maps]
       .sort(
         (left, right) => left.mapOrder - right.mapOrder || left.mapId.localeCompare(right.mapId),

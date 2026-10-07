@@ -83,6 +83,7 @@ export interface MatchContext {
     readonly a: MatchEntrantContext;
     readonly b: MatchEntrantContext;
   };
+  readonly mapPool?: readonly string[];
   readonly maps: readonly MatchMapContext[];
   readonly veto: readonly MatchVetoStepContext[];
   readonly commentators: readonly MatchCommentatorContext[];

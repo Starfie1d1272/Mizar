@@ -12,7 +12,13 @@ export function matchResultIssue(
   match: ResultFacts,
   maps: readonly { mapOrder: number; scoreA: number | null; scoreB: number | null }[],
 ): string | null {
-  const disposition = match.resultDisposition;
+  if (maps.some((map) => (map.scoreA === null) !== (map.scoreB === null)))
+    return 'Map scores must be both present or both absent';
+  if ((match.scoreA === null) !== (match.scoreB === null))
+    return 'Series scores must be both present or both absent';
+  const disposition =
+    match.resultDisposition ??
+    (match.status === 'finished' ? (match.scoreA === null ? 'pending' : 'recorded') : null);
   if (disposition == null) return null;
   if (match.status !== 'finished') return 'A result conclusion requires finished execution';
   if (disposition !== 'recorded')

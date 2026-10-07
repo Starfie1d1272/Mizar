@@ -779,3 +779,77 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     expect(afterConflict?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
   });
 });
+
+it('persists empty and observed unplanned progress across restart and context refresh', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-unplanned-checkpoint-'));
+  const filePath = join(directory, 'series.json');
+  const diagnostics: string[] = [];
+  const store = () =>
+    new JsonSeriesProgressCheckpointStore({
+      filePath,
+      onDiagnostic: (code) => diagnostics.push(code),
+    });
+  const context: MatchContext = {
+    ...contextFixture(),
+    competition: null,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
+  };
+  try {
+    const initial = createProgramRuntime('empty-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    initial.synchronizeSeriesProgress(context, null, 'local');
+    await initial.flushSeriesProgressCheckpoint();
+    expect(store().load()?.progress.maps).toEqual([]);
+    const runtime = createProgramRuntime('observed-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    runtime.synchronizeSeriesProgress(context, null, 'local');
+    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+    const observed = runtime.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    expect(observed.maps).toHaveLength(1);
+    expect(observed.maps[0]).toMatchObject({
+      mapId: null,
+      mapName: 'de_mirage',
+      status: 'current',
+    });
+    await runtime.flushSeriesProgressCheckpoint();
+    const restarted = createProgramRuntime('restored-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    const restored = restarted.synchronizeSeriesProgress(context, null, 'local')!;
+    expect(restored.maps).toEqual(observed.maps);
+    restarted.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 9 }));
+    const completed = restarted.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    expect(completed.score).toEqual({ a: 1, b: 0 });
+    expect(
+      completed.issues.some(
+        (issue) =>
+          issue.code === 'context_result_conflict' || issue.code === 'checkpoint_incompatible',
+      ),
+    ).toBe(false);
+    await restarted.flushSeriesProgressCheckpoint();
+    expect(store().load()?.progress.score).toEqual({ a: 1, b: 0 });
+    expect(diagnostics).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('does not manufacture observed maps for a finished aggregate-only match', () => {
+  const runtime = createProgramRuntime('finished-unplanned');
+  runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+  const context: MatchContext = {
+    ...contextFixture(),
+    status: 'finished',
+    resultDisposition: 'recorded',
+    scoreA: 2,
+    scoreB: 1,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage'],
+  };
+  expect(runtime.synchronizeSeriesProgress(context, sideProof, 'local')?.maps).toEqual([]);
+});
