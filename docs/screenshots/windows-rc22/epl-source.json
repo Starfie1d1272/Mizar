@@ -12,29 +12,84 @@
   "stakes": "胜者晋级淘汰赛",
   "eventLogoUrl": "https://img-cdn.hltv.org/eventlogo/PhVPy7kXO_J_nfTng7a87h.png?ixlib=java-2.1.0&w=400&s=c0aedfdc29d3c83494b063e81e987cf6",
   "veto": [
-    { "order": 1, "team": "Natus Vincere", "action": "ban", "map": "de_dust2" },
-    { "order": 2, "team": "Falcons", "action": "ban", "map": "de_cache" },
-    { "order": 3, "team": "Natus Vincere", "action": "pick", "map": "de_inferno" },
-    { "order": 4, "team": "Falcons", "action": "pick", "map": "de_anubis" },
-    { "order": 5, "team": "Natus Vincere", "action": "ban", "map": "de_ancient" },
-    { "order": 6, "team": "Falcons", "action": "ban", "map": "de_nuke" },
-    { "order": 7, "team": null, "action": "decider", "map": "de_mirage" }
+    {
+      "order": 1,
+      "team": "Natus Vincere",
+      "action": "ban",
+      "map": "de_dust2"
+    },
+    {
+      "order": 2,
+      "team": "Falcons",
+      "action": "ban",
+      "map": "de_cache"
+    },
+    {
+      "order": 3,
+      "team": "Natus Vincere",
+      "action": "pick",
+      "map": "de_inferno"
+    },
+    {
+      "order": 4,
+      "team": "Falcons",
+      "action": "pick",
+      "map": "de_anubis"
+    },
+    {
+      "order": 5,
+      "team": "Natus Vincere",
+      "action": "ban",
+      "map": "de_ancient"
+    },
+    {
+      "order": 6,
+      "team": "Falcons",
+      "action": "ban",
+      "map": "de_nuke"
+    },
+    {
+      "order": 7,
+      "team": null,
+      "action": "decider",
+      "map": "de_mirage"
+    }
   ],
   "openingSides": [
-    { "map": "de_inferno", "falcons": "CT", "natusVincere": "T" },
-    { "map": "de_anubis", "falcons": "CT", "natusVincere": "T" },
-    { "map": "de_mirage", "falcons": "CT", "natusVincere": "T" }
+    {
+      "map": "de_inferno",
+      "falcons": "CT",
+      "natusVincere": "T"
+    },
+    {
+      "map": "de_anubis",
+      "falcons": "CT",
+      "natusVincere": "T"
+    },
+    {
+      "map": "de_mirage",
+      "falcons": "CT",
+      "natusVincere": "T"
+    }
   ],
   "sideChoices": [
-    { "map": "de_inferno", "chooser": "Falcons", "side": "CT" },
-    { "map": "de_anubis", "chooser": "Natus Vincere", "side": "T" }
+    {
+      "map": "de_inferno",
+      "chooser": "Falcons",
+      "side": "CT"
+    },
+    {
+      "map": "de_anubis",
+      "chooser": "Natus Vincere",
+      "side": "T"
+    }
   ],
   "sideChoiceRuleSource": "用户明确提供的 EPL 规则：选图对手选边；决胜图拼刀。选边结果依据实际 demo 开局阵营。",
   "deciderConfiguredSide": null,
   "savedVetoSteps": 9,
   "editorLimitation": "RC22 比赛资料及播出投影支持上述 9 步流程与决胜图不预填选边；BP 编辑器仍固定 RivalHub BO3 顺序并强制填写决胜图阵营，不能直接完整编制 EPL BO3。",
-  "openingSideEvidence": "用户提供的各图 demo，parse_ticks team_num，tick 1000 与 2000；Mirage 使用 p1，p2 为换边后的续录。尚未逐图重新进行游戏内 GSI 核验。",
+  "openingSideEvidence": "用户提供的各图demo，parse_ticks team_num，tick1000与2000；并逐图加载游戏核对实际GSI身份matched、Falcons CT与NAVI T。Mirage使用p1确认开局，p2为换边后的续录。",
   "configurationReadback": "已通过正常本机赛事及比赛保存接口写入，并在 RC22 比赛资料页核对地图、选图归属、开局阵营与 BP。随后按用户指示增加两个显式 side_pick，Mirage teamAStartSide 清空；保存后完整读回一致。",
-  "galleryStatus": "既有九张图仍是旧配置；真实赛事资料、Logo 与 BP 的宣传截图尚待重拍。",
+  "galleryStatus": "15张最终图已使用真实赛事资料重拍；等待、对阵、BP、半场、单图结果、图间和整场结果齐全；旧配置截图已替换。",
   "scorePolicy": "未手工填入 HLTV 最终比分，局内及赛后结果由真实 demo 游戏观测产生。"
 }
