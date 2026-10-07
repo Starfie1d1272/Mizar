@@ -1,6 +1,6 @@
 # RC18 Windows 实测证据交接
 
-此目录保存可删除的排查材料。当前验收与待办由 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 和 [#149](https://github.com/Starfie1d1272/Mizar/issues/149) 维护；这些文件不进入产品资源，也不是宣传截图或正式重放基准。RC19 修复后的结果须另行记录，不能沿用本包作为 RC19 通过证据。
+此目录保存可删除的排查材料，以 RC18 材料为主，并补充 RC19 同进程重播的失败输入。当前验收与待办由 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 和 [#149](https://github.com/Starfie1d1272/Mizar/issues/149) 维护；这些文件不进入产品资源，也不是宣传截图或正式重放基准。不能沿用本包作为 RC19 或 RC20 通过证据。
 
 源码与发布包身份见 `provenance.json`。材料来自 Windows 2560×1440、150% 缩放下的真实 CS2 demo、原生 WebView2 和 OBS 输出；截图中的 ALPHA/BRAVO 为本地演练别名。
 
@@ -11,7 +11,8 @@
 | `defuse-5s-*.png`、`defuse-10s-*.png`、`defuse-timing-summary.json` | 真实 5 秒拆弹与下半场手枪局 10 秒拆弹的进度弧随时间推进；10 秒样本的源钳状态为 null | diagnostic-crop 为 100×100 裁剪后最近邻放大 6 倍，只用于诊断；对应完整截图保留。时序为投影接收与录像时间，存在小幅启动偏移，不宣称精确到游戏 tick |
 | `radar-profile-summary.json` | 连续可见原生雷达的 20,000 次回调时序与回调耗时 | JavaScript/Canvas 提交探针，不是 GPU 完成时间，也不是独立 OBS 雷达源性能或同条件 A/B 对比 |
 | `native-smoke-phase-*.json*` | 十分钟、5,827 个同序号匹配样本中未发现连续 effect→projectile 倒退 | 死亡与未知 ownerSide 是输入/投影观察；不能单独证明像素颜色、入口动画是否重播 |
-| `same-map-restart-input.jsonl.gz`、`same-map-restart-history.json` | RC18 同进程同图重开后，真实输入已 warmup/0:0/空历史，后续半场投影仍残留旧 1–16 回合，判定 FAIL | 输入保留原序号与时间；仅 451 帧白名单片段，不是完整采集；未暴露的 mapEpoch 记为 null |
+| `same-map-restart-input.jsonl.gz`、`same-map-restart-history.json` | RC18 同进程同图重开后，真实输入为 warmup/0:0，历史字段省略，后续半场投影仍残留旧 1–16 回合，判定 FAIL | 更正此前“显式空历史”的错误摘要；源缺失不等于源发送空历史。仅 451 帧白名单片段；未暴露的 mapEpoch 记为 null |
+| `rc19-same-process-restart-*.json*` | RC19 实际同一 CS2 进程控制台重播，热身省略 `round_wins`，后续 live/round0/0:0 仍保留旧 1–15 回合，epoch 未推进，判定 FAIL | 81 帧原始白名单派生片段，身份一致匿名化；独立来源与原始采集摘要在 failure 文件中，不能套用 RC18 的 provenance。RC20 修改条件后仍需最终包重验 |
 | `mirage-halftime-5-7.png`、`authored-local-bp.png` | 实际自动半场画面与本地编排 BP 场景 | BP 元数据为演练编排，不代表 demo 携带赛事 BP；单帧不能证明完整转场 |
 | `video-after-exit.json` | RC18 正常退出后，17 项受管理视频字段与启动前基线一致 | 只覆盖该次退出与视频字段，不代表全部系统设置恢复 |
 | `soak-summary.json` | 约 64.3 分钟、1,925 次连续观察无服务不可用或采集丢帧，126 次进程内存采样 | 包含自然两图播放与操作；Nuke 历史有已知失败，不能计完整历史验收。内存范围不等于证明无泄漏，2 秒采样的 C4 状态不能排除短闪烁 |

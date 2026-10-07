@@ -19,8 +19,36 @@ for (const line of sums) {
   }
 }
 const frames = gunzipSync(await readFile(new URL('same-map-restart-input.jsonl.gz', root)))
-  .toString('utf8').trim().split('\n').map((row) => JSON.parse(row));
+  .toString('utf8')
+  .trim()
+  .split('\n')
+  .map((row) => JSON.parse(row));
 if (frames.length !== 451 || frames.some((frame, index) => frame.sequence !== 7400 + index)) {
   throw new Error('Restart excerpt sequence mismatch');
 }
-console.log(JSON.stringify({ directory: fileURLToPath(root), files: sums.length, excerptFrames: frames.length, result: 'PASS' }));
+const rc19 = gunzipSync(await readFile(new URL('rc19-same-process-restart-input.jsonl.gz', root)))
+  .toString('utf8')
+  .trim()
+  .split('\n')
+  .map((row) => JSON.parse(row));
+if (rc19.length !== 81 || rc19.some((frame, index) => frame.sequence !== 20630 + index)) {
+  throw new Error('RC19 restart excerpt sequence mismatch');
+}
+const warmup = rc19.find((frame) => frame.sequence === 20641).payload.map;
+if (
+  warmup.phase !== 'warmup' ||
+  warmup.round !== 0 ||
+  warmup.team_ct.score !== 0 ||
+  warmup.team_t.score !== 0 ||
+  Object.hasOwn(warmup, 'round_wins')
+) {
+  throw new Error('RC19 omitted-history warmup witness mismatch');
+}
+console.log(
+  JSON.stringify({
+    directory: fileURLToPath(root),
+    files: sums.length,
+    excerptFrames: frames.length,
+    result: 'PASS',
+  }),
+);

@@ -17,7 +17,8 @@
         "ct": 0,
         "t": 0
       },
-      "historyRounds": 0
+      "historyRounds": null,
+      "historyFieldPresent": false
     }
   },
   "laterProjection": {
@@ -48,5 +49,6 @@
       16
     ]
   },
-  "limitation": "score and raw K/D pictures are valid observations; contaminated Nuke history/accumulated statistics are not complete-map acceptance evidence; RC19 must reverify the corrected boundary"
+  "limitation": "score and raw K/D pictures are valid observations; contaminated Nuke history/accumulated statistics are not complete-map acceptance evidence; RC19 must reverify the corrected boundary",
+  "correction": "An earlier diagnosis summarized missing round_wins as length zero; this is source omission, not observed explicit empty history. RC19 required explicit empty history and also failed; RC20 revises the criterion under ADR-0038."
 }
