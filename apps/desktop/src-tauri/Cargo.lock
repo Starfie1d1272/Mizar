@@ -1791,7 +1791,7 @@ dependencies = [
 
 [[package]]
 name = "mizar-desktop"
-version = "1.0.0-rc.20"
+version = "1.0.0-rc.21"
 dependencies = [
  "chrono",
  "serde_json",

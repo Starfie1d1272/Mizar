@@ -835,6 +835,11 @@ export function syncSeriesProgress(
         next = addRound(next, event, input.sideProof);
         break;
       case 'map-ended':
+        // A gameover observation can contain the final round_wins without a
+        // round-ended transition. Consume that evidence while the map is current.
+        if (input.observation !== null) {
+          next = reconcileRoundWins(next, input.observation);
+        }
         next = endMap(next, event, input.sideProof);
         break;
       case 'operator-map-bind':
