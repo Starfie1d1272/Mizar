@@ -1,0 +1,499 @@
+{
+  "classification": "actual RC21 streamed Program observations at natural terminal state; independent of boundary-observer deduplication",
+  "count": 208,
+  "changes": 3,
+  "first": {
+    "time": "2026-10-07T04:44:39.723Z",
+    "sequence": 39710,
+    "map": {
+      "roundHistory": {
+        "completeness": "complete",
+        "rounds": [
+          {
+            "roundNumber": 1,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 2,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 3,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 4,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 5,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 6,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 7,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 8,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 9,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 10,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 11,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 12,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 13,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 14,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          },
+          {
+            "roundNumber": 15,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          },
+          {
+            "roundNumber": 16,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 17,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 18,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          }
+        ]
+      },
+      "name": "de_nuke",
+      "mode": "competitive",
+      "phase": "gameover",
+      "roundNumber": 18,
+      "score": {
+        "ct": 5,
+        "t": 13
+      },
+      "timeoutsRemaining": {
+        "ct": 3,
+        "t": 3
+      },
+      "consecutiveRoundLosses": {
+        "ct": 2,
+        "t": 0
+      }
+    },
+    "players": [
+      {
+        "name": "ALPHA 01",
+        "stats": {
+          "kills": 16,
+          "assists": 4,
+          "deaths": 10,
+          "mvps": 3,
+          "score": 43
+        },
+        "completedAdr": 82.5
+      },
+      {
+        "name": "BRAVO 01",
+        "stats": {
+          "kills": 5,
+          "assists": 1,
+          "deaths": 17,
+          "mvps": 0,
+          "score": 12
+        },
+        "completedAdr": 37.72222222222222
+      },
+      {
+        "name": "ALPHA 02",
+        "stats": {
+          "kills": 19,
+          "assists": 3,
+          "deaths": 13,
+          "mvps": 5,
+          "score": 44
+        },
+        "completedAdr": 101.83333333333333
+      },
+      {
+        "name": "ALPHA 03",
+        "stats": {
+          "kills": 19,
+          "assists": 9,
+          "deaths": 13,
+          "mvps": 2,
+          "score": 45
+        },
+        "completedAdr": 113.38888888888889
+      },
+      {
+        "name": "BRAVO 02",
+        "stats": {
+          "kills": 20,
+          "assists": 2,
+          "deaths": 13,
+          "mvps": 1,
+          "score": 47
+        },
+        "completedAdr": 101.5
+      },
+      {
+        "name": "ALPHA 04",
+        "stats": {
+          "kills": 12,
+          "assists": 3,
+          "deaths": 11,
+          "mvps": 1,
+          "score": 31
+        },
+        "completedAdr": 64.88888888888889
+      },
+      {
+        "name": "BRAVO 03",
+        "stats": {
+          "kills": 13,
+          "assists": 6,
+          "deaths": 16,
+          "mvps": 2,
+          "score": 38
+        },
+        "completedAdr": 75.55555555555556
+      },
+      {
+        "name": "ALPHA 05",
+        "stats": {
+          "kills": 12,
+          "assists": 5,
+          "deaths": 12,
+          "mvps": 2,
+          "score": 39
+        },
+        "completedAdr": 80.88888888888889
+      },
+      {
+        "name": "BRAVO 04",
+        "stats": {
+          "kills": 13,
+          "assists": 4,
+          "deaths": 17,
+          "mvps": 1,
+          "score": 28
+        },
+        "completedAdr": 82.22222222222223
+      },
+      {
+        "name": "BRAVO 05",
+        "stats": {
+          "kills": 8,
+          "assists": 4,
+          "deaths": 15,
+          "mvps": 1,
+          "score": 27
+        },
+        "completedAdr": 64.72222222222223
+      }
+    ]
+  },
+  "last": {
+    "time": "2026-10-07T04:44:59.696Z",
+    "sequence": 39917,
+    "map": {
+      "roundHistory": {
+        "completeness": "complete",
+        "rounds": [
+          {
+            "roundNumber": 1,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 2,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 3,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 4,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 5,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 6,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 7,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 8,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 9,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 10,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 11,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 12,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 13,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "defuse"
+          },
+          {
+            "roundNumber": 14,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          },
+          {
+            "roundNumber": 15,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          },
+          {
+            "roundNumber": 16,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 17,
+            "winnerSide": "CT",
+            "winnerEntryId": null,
+            "winCondition": "elimination"
+          },
+          {
+            "roundNumber": 18,
+            "winnerSide": "T",
+            "winnerEntryId": null,
+            "winCondition": "bomb"
+          }
+        ]
+      },
+      "name": "de_nuke",
+      "mode": "competitive",
+      "phase": "gameover",
+      "roundNumber": 18,
+      "score": {
+        "ct": 5,
+        "t": 13
+      },
+      "timeoutsRemaining": {
+        "ct": 3,
+        "t": 3
+      },
+      "consecutiveRoundLosses": {
+        "ct": 2,
+        "t": 0
+      }
+    },
+    "players": [
+      {
+        "name": "ALPHA 01",
+        "stats": {
+          "kills": 16,
+          "assists": 4,
+          "deaths": 11,
+          "mvps": 3,
+          "score": 43
+        },
+        "completedAdr": 82.5
+      },
+      {
+        "name": "BRAVO 01",
+        "stats": {
+          "kills": 5,
+          "assists": 1,
+          "deaths": 17,
+          "mvps": 0,
+          "score": 12
+        },
+        "completedAdr": 37.72222222222222
+      },
+      {
+        "name": "ALPHA 02",
+        "stats": {
+          "kills": 19,
+          "assists": 3,
+          "deaths": 13,
+          "mvps": 5,
+          "score": 44
+        },
+        "completedAdr": 101.83333333333333
+      },
+      {
+        "name": "ALPHA 03",
+        "stats": {
+          "kills": 19,
+          "assists": 9,
+          "deaths": 13,
+          "mvps": 2,
+          "score": 45
+        },
+        "completedAdr": 113.38888888888889
+      },
+      {
+        "name": "BRAVO 02",
+        "stats": {
+          "kills": 20,
+          "assists": 2,
+          "deaths": 13,
+          "mvps": 1,
+          "score": 47
+        },
+        "completedAdr": 101.5
+      },
+      {
+        "name": "ALPHA 04",
+        "stats": {
+          "kills": 12,
+          "assists": 3,
+          "deaths": 11,
+          "mvps": 1,
+          "score": 31
+        },
+        "completedAdr": 64.88888888888889
+      },
+      {
+        "name": "BRAVO 03",
+        "stats": {
+          "kills": 13,
+          "assists": 6,
+          "deaths": 17,
+          "mvps": 2,
+          "score": 36
+        },
+        "completedAdr": 75.55555555555556
+      },
+      {
+        "name": "ALPHA 05",
+        "stats": {
+          "kills": 12,
+          "assists": 5,
+          "deaths": 13,
+          "mvps": 2,
+          "score": 39
+        },
+        "completedAdr": 80.88888888888889
+      },
+      {
+        "name": "BRAVO 04",
+        "stats": {
+          "kills": 13,
+          "assists": 4,
+          "deaths": 17,
+          "mvps": 1,
+          "score": 28
+        },
+        "completedAdr": 82.22222222222223
+      },
+      {
+        "name": "BRAVO 05",
+        "stats": {
+          "kills": 8,
+          "assists": 4,
+          "deaths": 15,
+          "mvps": 1,
+          "score": 27
+        },
+        "completedAdr": 64.72222222222223
+      }
+    ]
+  }
+}

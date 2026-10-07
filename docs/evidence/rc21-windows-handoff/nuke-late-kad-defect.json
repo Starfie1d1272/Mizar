@@ -1,0 +1,24 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "score": {
+    "a": 13,
+    "b": 5
+  },
+  "defects": [
+    {
+      "name": "ALPHA 01",
+      "frozenDeaths": 10,
+      "terminalDeaths": 11
+    },
+    {
+      "name": "ALPHA 05",
+      "frozenDeaths": 12,
+      "terminalDeaths": 13
+    },
+    {
+      "name": "BRAVO 03",
+      "frozenDeaths": 16,
+      "terminalDeaths": 17
+    }
+  ]
+}

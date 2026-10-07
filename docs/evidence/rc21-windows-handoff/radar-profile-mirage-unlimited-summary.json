@@ -1,0 +1,31 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "classification": "steady gameplay; read-only native callback instrumentation, includes overhead, not completed GPU frame or OBS renderer FPS; bounded at first 20000 callbacks",
+  "output": [
+    {
+      "surface": "/workspace/left",
+      "dpr": 1.5,
+      "samples": 17836,
+      "seconds": 119.99420000000019,
+      "callbacksPerSecond": 148.63218388888774,
+      "intervalMs": {
+        "p50": 4.2000000001862645,
+        "p95": 20.799999999813735,
+        "max": 912.3999999999069
+      },
+      "callbackMs": {
+        "p50": 0.20000000298023224,
+        "p95": 0.6000000014901161,
+        "max": 4.800000004470348
+      },
+      "over33Ms": 298,
+      "over50Ms": 82,
+      "backingSizes": [
+        "506x506"
+      ],
+      "visibilityStates": [
+        "visible"
+      ]
+    }
+  ]
+}

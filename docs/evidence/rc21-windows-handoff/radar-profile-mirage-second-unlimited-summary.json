@@ -1,0 +1,31 @@
+{
+  "source": "b1a0f7ab7f59f2cbcbeea5e06a9e75d1ef4c4dae",
+  "classification": "Second unlimited gameplay timing window; fps_max60 was explicitly rejected by CS2, actual setting remained0. Not an FPS A/B test; native callback instrumentation includes overhead, not GPU completion timing.",
+  "output": [
+    {
+      "surface": "/workspace/left",
+      "dpr": 1.5,
+      "samples": 20000,
+      "seconds": 114.75239999999991,
+      "callbacksPerSecond": 174.27957933777435,
+      "intervalMs": {
+        "p50": 4.2000000001862645,
+        "p95": 12.600000000093132,
+        "max": 362.39999999990687
+      },
+      "callbackMs": {
+        "p50": 0.29999999701976776,
+        "p95": 0.6000000014901161,
+        "max": 5.700000002980232
+      },
+      "over33Ms": 134,
+      "over50Ms": 23,
+      "backingSizes": [
+        "506x506"
+      ],
+      "visibilityStates": [
+        "visible"
+      ]
+    }
+  ]
+}
