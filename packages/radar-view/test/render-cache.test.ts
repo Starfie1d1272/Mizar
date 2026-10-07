@@ -59,3 +59,32 @@ it('rasterizes static artwork/effects once and rebuilds for resolution, appearan
   expect(cache.smoke('actual-entity-95')).not.toBe(smoke);
   expect(radial).toHaveBeenCalledTimes(18);
 });
+
+it('keeps the hot map reusable and evicts cold fire rasters during compact-surface auto zoom', () => {
+  const draw = vi.fn();
+  const context = new Proxy({}, { get: () => draw, set: () => true }) as CanvasRenderingContext2D;
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+  const image = new Image();
+  image.src = '/map.png';
+  Object.defineProperties(image, { naturalWidth: { value: 1024 }, naturalHeight: { value: 1024 } });
+  const cache = new RadarRenderCache();
+  const map = cache.artwork(image, null, 256, 'default');
+  const firstBlur = (5 * 1024) / 256;
+  const firstFire = cache.glow(24, firstBlur);
+  let lastFire;
+  let lastBlur = firstBlur;
+  for (let frame = 0; frame < 240; frame++) {
+    const scale = 1 + (1.5 * frame) / 239;
+    expect(cache.artwork(image, null, 256, 'default')).toBe(map);
+    lastBlur = (5 * 1024) / (256 * scale);
+    lastFire = cache.glow(24, lastBlur);
+  }
+  // Compact surfaces span more blur buckets than the shared cache can retain.
+  // The hot map survives pressure; recent effects reuse, while cold masks leave.
+  expect(getContext.mock.calls.length).toBeGreaterThan(48);
+  expect(getContext.mock.calls.length).toBeLessThan(64);
+  expect(cache.artwork(image, null, 256, 'default')).toBe(map);
+  expect(cache.glow(24, lastBlur)).toBe(lastFire);
+  expect(cache.glow(24, firstBlur)).not.toBe(firstFire);
+  expect(cache.artwork(image, null, 256, 'default')).toBe(map);
+});
