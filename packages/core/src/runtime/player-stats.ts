@@ -223,6 +223,10 @@ export function reduceMapPlayerStats(
   const startsNewMap = previous.mapEpoch !== input.mapEpoch;
   const accumulator = startsNewMap ? createMapPlayerStatsAccumulator(input.mapEpoch) : previous;
   const phase = roundPhaseFromObservation(input.observation);
+  const mapEnded =
+    input.observation.coverage.map === 'present' &&
+    input.observation.telemetry.map?.phase === 'gameover';
+  const endsRound = phase === 'over' || mapEnded;
   const roundNumberHint = roundNumberHintFromObservation(input.observation);
   const healthyFrame =
     startsNewMap || input.continuity === 'baseline' || input.continuity === 'contiguous';
@@ -239,7 +243,7 @@ export function reduceMapPlayerStats(
       roundNumberHint !== null &&
       currentRound.roundNumberHint !== roundNumberHint;
 
-    if (phase === 'over') {
+    if (endsRound) {
       if (!acceptableRoundEndHint(currentRound, roundNumberHint)) {
         currentRound = invalidateCurrentRound(currentRound);
       }
@@ -294,7 +298,7 @@ export function reduceMapPlayerStats(
     startMoneyBySteam64,
   };
 
-  if (phase === 'over') {
+  if (endsRound) {
     if (currentRound.eligible && currentRound.hasCompleteEvidence && !currentRound.invalidated) {
       return addCompletedRound(accumulator, currentRound);
     }
