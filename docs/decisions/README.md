@@ -72,3 +72,4 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0035：C4 预测的批量完成与有界发布合并](0035-bounded-c4-publish-coalescing.md)
 - [ADR-0036：受管理 CS2 按工作台尺寸启动](0036-workspace-sized-cs2-launch.md)
 - [ADR-0037：以完整热身证据识别同图重开](0037-witnessed-same-map-restart.md)
+- [ADR-0038：热身省略回合历史时的执行边界](0038-warmup-without-round-history.md)

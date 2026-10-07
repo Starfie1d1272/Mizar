@@ -95,7 +95,9 @@ function nextMapState(
     map.roundNumber === 0 &&
     map.sides?.ct?.score === 0 &&
     map.sides.t?.score === 0 &&
-    map.roundWins?.length === 0
+    // CS2 omits round_wins during genuine warmup. Nonempty history conflicts
+    // with this explicit zero-round/zero-score baseline; absence does not.
+    (map.roundWins === undefined || map.roundWins.length === 0)
   ) {
     return {
       map: { epoch: state.map.epoch + 1, name: mapName },

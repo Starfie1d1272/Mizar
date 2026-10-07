@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createInitialRuntimeState, reduceRuntime } from '../src/runtime/index.js';
 import { observation, telemetryInput, TEST_POLICY } from './helpers.js';
 
-function warmup(sequence = 3) {
+function warmup(sequence = 3, history: 'empty' | 'omitted' = 'empty') {
   const frame = observation(sequence, sequence * 10, {
     mapName: 'de_nuke',
     mapPhase: 'warmup',
@@ -18,7 +18,7 @@ function warmup(sequence = 3) {
         phase: 'warmup' as const,
         roundNumber: 0,
         sides: { ct: { score: 0 }, t: { score: 0 } },
-        roundWins: [],
+        ...(history === 'empty' ? { roundWins: [] } : {}),
       },
     },
   };
@@ -70,7 +70,30 @@ describe('observed same-map restart', () => {
     expect(baseline.transitions).toEqual([]);
   });
 
-  it.each(['degraded', 'missing-history', 'nonempty-history', 'missing-score', 'nonzero-score'])(
+  it('recognizes real CS2 warmup that omits round history, without repeating the boundary', () => {
+    const omittedHistory = warmup(3, 'omitted');
+    const restarted = reduceRuntime(
+      priorExecution(),
+      telemetryInput(0, omittedHistory),
+      TEST_POLICY,
+    );
+    expect(restarted.state.map).toEqual({ epoch: 2, name: 'de_nuke' });
+    expect(restarted.transitions).toEqual([
+      expect.objectContaining({
+        kind: 'map_execution_changed',
+        reason: 'observed-same-map-restart',
+      }),
+    ]);
+    const repeated = reduceRuntime(
+      restarted.state,
+      telemetryInput(0, warmup(4, 'omitted')),
+      TEST_POLICY,
+    );
+    expect(repeated.state.map.epoch).toBe(2);
+    expect(repeated.transitions).toEqual([]);
+  });
+
+  it.each(['degraded', 'nonempty-history', 'missing-score', 'nonzero-score'])(
     'does not advance from insufficient %s evidence',
     (kind) => {
       const frame = warmup();
@@ -87,20 +110,16 @@ describe('observed same-map restart', () => {
             name: map.name,
             phase: map.phase,
             roundNumber: map.roundNumber,
-            ...(kind === 'missing-history'
-              ? {}
-              : {
-                  roundWins:
-                    kind === 'nonempty-history'
-                      ? [
-                          {
-                            roundNumber: 1,
-                            winnerSide: 'CT' as const,
-                            winCondition: 'defuse' as const,
-                          },
-                        ]
-                      : map.roundWins,
-                }),
+            roundWins:
+              kind === 'nonempty-history'
+                ? [
+                    {
+                      roundNumber: 1,
+                      winnerSide: 'CT' as const,
+                      winCondition: 'defuse' as const,
+                    },
+                  ]
+                : map.roundWins,
             ...(kind === 'missing-score'
               ? {}
               : {
