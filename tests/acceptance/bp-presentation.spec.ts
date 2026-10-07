@@ -612,11 +612,31 @@ test('event BO3 controls save EPL opponent side choices without a decider select
     await expect(steps.nth(6).locator('.bp-sequence-actor')).toHaveText('Natus Vincere');
     await expect(steps.nth(7).locator('.bp-sequence-actor')).toHaveText('Falcons');
     await expect(steps.nth(8).locator('.bp-sequence-decider')).toHaveText('Mirage');
-    for (const width of [390, 320]) {
+    // A wide preview still gives authoring only a 320px sidebar. Viewport-only
+    // breakpoints used to leave its controls clipped outside that sidebar.
+    for (const width of [1280, 1700, 390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         width,
       );
+      const bounds = await editor.evaluate((element) => {
+        const frame = element.getBoundingClientRect();
+        return [...element.querySelectorAll('.mizar-field select, .bp-sequence-step select')].map(
+          (control) => {
+            const rect = control.getBoundingClientRect();
+            return {
+              width: rect.width,
+              contained: rect.left >= frame.left && rect.right <= frame.right,
+            };
+          },
+        );
+      });
+      expect(bounds.length).toBeGreaterThanOrEqual(8);
+      const minimumControlWidth = width >= 900 ? 190 : 150;
+      expect(
+        bounds.every((control) => control.contained && control.width >= minimumControlWidth),
+        JSON.stringify({ width, bounds }),
+      ).toBe(true);
     }
     const save = editor.getByRole('button', { name: '保存本地 BP', exact: true });
     await expect(save).toBeEnabled();
