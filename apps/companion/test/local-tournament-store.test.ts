@@ -238,6 +238,7 @@ it('persists and reloads an independent match without fabricating an event or ro
       schemaVersion: 'rivalhub.broadcast-manifest.v2',
       match: {
         ...parsed.value.match,
+        resultDisposition: null,
         competition: null,
         stage: null,
         stageKey: null,

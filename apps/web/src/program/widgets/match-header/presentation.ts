@@ -186,7 +186,10 @@ function buildTeam(
     winSlots:
       series.requiredWins <= 1
         ? []
-        : Array.from({ length: series.requiredWins }, (_, index) => index < series.score[key]),
+        : Array.from(
+            { length: series.requiredWins },
+            (_, index) => series.score[key] !== null && index < series.score[key],
+          ),
     side,
     mapScore: sideScore(payload, side, 'score'),
     timeoutsRemaining: sideScore(payload, side, 'timeoutsRemaining'),
@@ -440,7 +443,7 @@ export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHead
     currentMapName: displayMapName(payload.map.name) ?? displayMapName(currentMap?.mapName) ?? null,
     bestOfLabel:
       series?.format === undefined ? null : (series.format.toUpperCase() as 'BO1' | 'BO3' | 'BO5'),
-    seriesScoreText: series === null ? null : `${series.score.a}:${series.score.b}`,
+    seriesScoreText: series === null ? null : `${series.score.a ?? '—'}:${series.score.b ?? '—'}`,
     competitionName: payload.match?.competition?.name ?? null,
     stageName: payload.match?.stage ?? null,
     roundNumber,

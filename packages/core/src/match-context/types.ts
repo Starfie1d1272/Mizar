@@ -77,6 +77,7 @@ export interface MatchContext {
   readonly completedAt: string | null;
   readonly scoreA: number | null;
   readonly scoreB: number | null;
+  readonly resultDisposition?: 'recorded' | 'pending' | 'omitted' | null;
   readonly isForfeit: boolean;
   readonly entrants: {
     readonly a: MatchEntrantContext;

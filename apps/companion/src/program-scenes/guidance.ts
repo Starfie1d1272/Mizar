@@ -156,7 +156,7 @@ export class ProductionGuidanceStore {
       nextMap: phase === 'match_end' ? null : (current?.mapName ?? next?.mapName ?? null),
       result:
         phase === 'match_end' && series
-          ? `${series.score.a} : ${series.score.b}`
+          ? `${series.score.a ?? '—'} : ${series.score.b ?? '—'}`
           : completed?.finalScore
             ? `${completed.mapName} · ${completed.finalScore.a} : ${completed.finalScore.b}`
             : null,

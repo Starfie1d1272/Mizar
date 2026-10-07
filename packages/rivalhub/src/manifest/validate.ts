@@ -1,3 +1,4 @@
+import { matchResultIssue } from '@mizar/protocol/context';
 import {
   hasBlockingDiagnostic,
   makeContractDiagnostic,
@@ -308,6 +309,17 @@ export function validateBroadcastManifest(
   }
 
   const value = parsed.data;
+  const resultIssue = matchResultIssue(value.match, value.maps);
+  if (resultIssue)
+    return validationFailure([
+      makeContractDiagnostic(
+        'semantic',
+        'error',
+        'invalid_field',
+        'match.resultDisposition',
+        resultIssue,
+      ),
+    ]);
   const diagnostics = validateManifestSemantics(value);
   return hasBlockingDiagnostic(diagnostics)
     ? validationFailure(diagnostics)

@@ -63,6 +63,13 @@ export function toMatchContext(input: unknown): MatchContext {
     completedAt: manifest.match.completedAt,
     scoreA: manifest.match.scoreA,
     scoreB: manifest.match.scoreB,
+    resultDisposition:
+      manifest.match.resultDisposition ??
+      (manifest.match.status === 'finished'
+        ? manifest.match.scoreA !== null && manifest.match.scoreB !== null
+          ? 'recorded'
+          : 'pending'
+        : null),
     isForfeit: manifest.match.isForfeit,
     entrants: {
       a: toEntrant(manifest.entrants.a),

@@ -43,6 +43,7 @@ export function localDocumentBindingManifest(input: unknown): BroadcastManifest 
       completedAt: document.completedAt,
       scoreA: document.scoreA,
       scoreB: document.scoreB,
+      resultDisposition: document.resultDisposition ?? null,
       isForfeit: document.isForfeit,
     },
     entrants: { a: entrant(document.entrants.a), b: entrant(document.entrants.b) },

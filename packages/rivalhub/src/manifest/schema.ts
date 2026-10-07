@@ -31,6 +31,7 @@ export const broadcastMatchSchema = z.object({
   completedAt: nullableStringSchema,
   scoreA: nullableNumberSchema,
   scoreB: nullableNumberSchema,
+  resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable().optional(),
   isForfeit: z.boolean(),
 });
 
@@ -107,6 +108,7 @@ export type BroadcastManifestSchemaOutput = z.infer<typeof broadcastManifestSche
 export const broadcastManifestV2Schema = broadcastManifestV1Schema.extend({
   schemaVersion: z.literal('rivalhub.broadcast-manifest.v2'),
   match: broadcastMatchSchema.extend({
+    resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable(),
     competition: broadcastCompetitionSchema.nullable(),
     stage: nullableStringSchema,
   }),

@@ -1,3 +1,4 @@
+import { matchResultIssue } from './match-result.js';
 import { z } from 'zod';
 import { localBo3BpRulesSchema } from './bp.js';
 
@@ -90,6 +91,7 @@ export const matchDocumentV1Schema = z
     completedAt: instant,
     scoreA: count,
     scoreB: count,
+    resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable().default(null),
     isForfeit: z.boolean(),
     entrants: z.strictObject({ a: entrant, b: entrant }),
     mapPool: z.array(label.min(1)).max(16),
@@ -107,6 +109,8 @@ export const matchDocumentV1Schema = z
       .max(16),
   })
   .superRefine((document, ctx) => {
+    const issue = matchResultIssue(document, document.maps);
+    if (issue) ctx.addIssue({ code: 'custom', message: issue, path: ['resultDisposition'] });
     if (document.entrants.a.entryId === document.entrants.b.entryId)
       ctx.addIssue({ code: 'custom', message: 'entrants must differ', path: ['entrants'] });
     if (new Set(document.mapPool).size !== document.mapPool.length)
@@ -202,3 +206,5 @@ export const localTournamentStateV1Schema = z.strictObject({
   selectedMatchId: id.nullable(),
   selectedAt: instant,
 });
+
+export { matchResultIssue } from './match-result.js';

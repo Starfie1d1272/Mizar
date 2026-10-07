@@ -49,7 +49,11 @@ const seriesProjectionSchema = z.object({
     a: z.object({ entryId: z.string().min(1), name: z.string(), logoUrl: nullableString }),
     b: z.object({ entryId: z.string().min(1), name: z.string(), logoUrl: nullableString }),
   }),
-  score: z.object({ a: z.number().int().nonnegative(), b: z.number().int().nonnegative() }),
+  score: z.object({
+    a: z.number().int().nonnegative().nullable(),
+    b: z.number().int().nonnegative().nullable(),
+  }),
+  resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable().optional(),
   status: z.enum(['planned', 'live', 'completed']),
   bindingState: z.enum(['bound', 'unbound', 'needs_operator']),
   currentMapOrder: z.number().int().positive().nullable(),

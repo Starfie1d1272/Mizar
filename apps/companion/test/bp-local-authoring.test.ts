@@ -901,6 +901,7 @@ it('preserves a complete BO3 BP without an event or predeclared players', () => 
     schemaVersion: 'rivalhub.broadcast-manifest.v2',
     match: {
       ...compiled.manifest.match,
+      resultDisposition: null,
       competition: null,
       stage: null,
       stageKey: null,

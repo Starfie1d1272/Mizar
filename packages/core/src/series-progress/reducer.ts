@@ -124,6 +124,12 @@ function applySeriesCompletion(progress: SeriesProgress): SeriesProgress {
   const complete =
     progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins;
   if (!complete) return progress;
+  const completedOrders = progress.maps
+    .filter((map) => map.status === 'completed')
+    .map((map) => map.mapOrder)
+    .sort((a, b) => a - b);
+  // Late evidence can skip an earlier map; unknown games are not "not played".
+  if (!completedOrders.every((order, index) => order === index + 1)) return progress;
   const maps = progress.maps.map((map) =>
     map.status === 'pending' || map.status === 'current'
       ? { ...map, status: 'not_played' as const }

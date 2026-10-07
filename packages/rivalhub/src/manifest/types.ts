@@ -25,7 +25,10 @@ export type BroadcastManifestV1 = ReadonlyDeep<BroadcastManifestV1SchemaOutput>;
 export type BroadcastManifest = ReadonlyDeep<
   Omit<BroadcastManifestSchemaOutput, 'schemaVersion' | 'match'> & {
     schemaVersion: BroadcastManifestSchemaOutput['schemaVersion'];
-    match: BroadcastManifestSchemaOutput['match'];
+    match: Omit<BroadcastMatchSchemaOutput, 'competition' | 'stage'> & {
+      competition: BroadcastCompetitionSchemaOutput | null;
+      stage: string | null;
+    };
   }
 >;
 export type BroadcastCompetitionV1 = ReadonlyDeep<BroadcastCompetitionSchemaOutput>;

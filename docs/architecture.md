@@ -55,6 +55,8 @@ Companion 组装运行时、持久化和接口
 
 ## 单一事实与独立投影
 
+`SeriesProgress` 只拥有已知地图及观测胜场，不把上游总比分塞回地图计数器。比赛文档的终局结论独立保留 `recorded / pending / omitted`：已结束时节目投影使用上游确认的总比分；待补或不提交结果仍是已结束，比分为空。该投影规则同时供系列摘要和具备身份映射的队伍比分使用，不补造地图。进行中的上游汇总比分不覆盖实时观测胜场。
+
 Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`、`OperatorProjection`、`ObserverAssistProjection` 和 `DebugProjection` 提供不同视图。
 
 - 渲染层只消费自己需要的投影，不重新解释生死、名单、伤害统计或游戏时钟。

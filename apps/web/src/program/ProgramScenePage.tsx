@@ -226,6 +226,8 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
           <strong
             data-winner={
               data.series.status === 'completed' &&
+              data.series.score.a !== null &&
+              data.series.score.b !== null &&
               data.series.score.a >= data.series.requiredWins &&
               data.series.score.a > data.series.score.b
             }
@@ -233,11 +235,13 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
             {data.series.entrants.a.name}
           </strong>
           <span>
-            {data.series.score.a} : {data.series.score.b}
+            {data.series.score.a ?? '—'} : {data.series.score.b ?? '—'}
           </span>
           <strong
             data-winner={
               data.series.status === 'completed' &&
+              data.series.score.a !== null &&
+              data.series.score.b !== null &&
               data.series.score.b >= data.series.requiredWins &&
               data.series.score.b > data.series.score.a
             }
@@ -341,7 +345,7 @@ function MapResult({ data }: { data: ProgramPresentation }) {
               fallback={teamInitials(series.entrants[side].name)}
             />
           </div>
-          <span className="result-series-score">{series.score[side]}</span>
+          <span className="result-series-score">{series.score[side] ?? '—'}</span>
           <strong className="result-team-name">{series.entrants[side].name}</strong>
         </div>
       ))}
@@ -623,7 +627,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
               <span className="intro-vs">VS</span>
               {(data.series?.currentMapOrder ?? 1) > 1 ? (
                 <p className="intro-series">
-                  {data.series?.score.a} : {data.series?.score.b}
+                  {data.series?.score.a ?? '—'} : {data.series?.score.b ?? '—'}
                 </p>
               ) : null}
             </div>

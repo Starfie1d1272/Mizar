@@ -77,3 +77,5 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0040：赛事 BO3 禁选规则与本场 BP 事实](0040-event-bo3-authoring-rules.md)
 
 - [ADR-0041：比赛上下文中的可选赛事](0041-optional-match-competition.md)
+
+- [ADR-0042：执行结束、确认结果与地图观测分离](0042-execution-end-and-result-conclusion.md)
