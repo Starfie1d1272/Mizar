@@ -1,0 +1,20 @@
+{
+  "gsi": "explicit bundled restore-gsi -Product after normal product --stop",
+  "roundsense": "14249F65A2903446D1063C5788FF2E056935815FCA9FB358B9911CACA2784F8C",
+  "mizarExited": true,
+  "pendingAbsent": true,
+  "cs2Exited": true,
+  "gsiHashMatches": true,
+  "roundsenseHashMatches": true,
+  "video": {
+    "owned": 17,
+    "changed": [],
+    "result": "PASS"
+  },
+  "probeAbsent": true,
+  "modeAbsent": true,
+  "targetCanvasMethodsNative": true,
+  "rafPrototypeIdentityCheck": false,
+  "rafCheckLimitation": "Window.prototype identity comparison is not a valid original-function identity assertion; per-session stop restores captured RAF reference, runtime then exited; no independent post-stop RAF identity PASS claimed",
+  "obs": "normal Alt+F4; exit verified separately"
+}
