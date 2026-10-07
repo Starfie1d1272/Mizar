@@ -1,0 +1,32 @@
+{
+  "map": {
+    "name": "de_inferno",
+    "phase": "live",
+    "round": 0
+  },
+  "round": {
+    "phase": "freezetime"
+  },
+  "bomb": {
+    "state": "dropped",
+    "position": "-1657.2, 419.6, -24.0",
+    "player": "76561198000000001"
+  },
+  "allplayers": {
+    "76561198000000001": {
+      "team": "T",
+      "state": {
+        "health": 100
+      },
+      "position": "-1657.2, 419.6, -64.0",
+      "weapons": {
+        "weapon_2": {
+          "name": "weapon_c4",
+          "paintkit": "default",
+          "type": "C4",
+          "state": "holstered"
+        }
+      }
+    }
+  }
+}
