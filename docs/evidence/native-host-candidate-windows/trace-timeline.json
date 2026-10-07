@@ -1,0 +1,472 @@
+{
+  "trace": {
+    "scope": "same 3s normal full radar target probe and browser trace; diagnostic overhead, not cadence A/B",
+    "dataLoss": false,
+    "traceBytes": 21719071,
+    "eventCount": 116256,
+    "targetPath": "/workspace/left",
+    "markerFrames": 0,
+    "restoration": {
+      "rafIdentity": true,
+      "contextIdentity": true,
+      "active": false
+    },
+    "marks": [
+      {
+        "name": "mizar-radar-trace-start",
+        "ts": 117492921613,
+        "pid": 42980,
+        "tid": 31528,
+        "ph": "I"
+      },
+      {
+        "name": "mizar-radar-gap",
+        "ts": 117493694000,
+        "pid": 42980,
+        "tid": 31528,
+        "ph": "I"
+      },
+      {
+        "name": "mizar-radar-trace-end",
+        "ts": 117495924343,
+        "pid": 42980,
+        "tid": 31528,
+        "ph": "I"
+      }
+    ],
+    "longIntervals": [
+      {
+        "gapStart": 474028,
+        "gapEnd": 474135.40000000596,
+        "intervalMs": 107.40000000596046,
+        "previousExit": 474028.5,
+        "currentExit": 474137.3000000119
+      }
+    ],
+    "schedulingEventCounts": [
+      {
+        "name": "ProxyImpl::DidReceiveCompositorFrameAckOnImplThread",
+        "count": 478
+      },
+      {
+        "name": "auto cc::SchedulerStateMachine::ShouldThrottleSendBeginMainFrame()::(lambda)::operator()(uint32_t) const",
+        "count": 1029
+      },
+      {
+        "name": "ProxyImpl::ScheduledActionSendBeginMainFrame",
+        "count": 478
+      },
+      {
+        "name": "SendBeginMainFrame",
+        "count": 1434
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "count": 1434
+      },
+      {
+        "name": "WidgetBase::WillBeginMainFrame",
+        "count": 478
+      },
+      {
+        "name": "auto cc::SchedulerStateMachine::SetNeedsBeginMainFrame(bool, bool)::(lambda)::operator()()::(lambda)::operator()(uint32_t) const",
+        "count": 478
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame::commit",
+        "count": 1434
+      },
+      {
+        "name": "Scheduler::NotifyBeginMainFrameStarted",
+        "count": 478
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "count": 478
+      },
+      {
+        "name": "WidgetBase::DidCommitAndDrawCompositorFrame",
+        "count": 478
+      },
+      {
+        "name": "Scheduler::BeginFrame",
+        "count": 551
+      },
+      {
+        "name": "DCompPresenter::Present",
+        "count": 477
+      },
+      {
+        "name": "DCompPresenter::CheckPendingFrames",
+        "count": 700
+      },
+      {
+        "name": "DidNotSubmitInLastFrame",
+        "count": 74
+      },
+      {
+        "name": "auto cc::Scheduler::SendDidNotProduceFrame(const viz::BeginFrameArgs &, FrameSkippedReason)::(lambda)::operator()()::(lambda)::operator()(uint32_t) const",
+        "count": 74
+      },
+      {
+        "name": "BeginImplFrameToSendBeginMainFrame",
+        "count": 2406
+      },
+      {
+        "name": "SendBeginMainFrameToCommit",
+        "count": 958
+      },
+      {
+        "name": "EndActivateToSubmitCompositorFrame",
+        "count": 1916
+      },
+      {
+        "name": "SubmitCompositorFrameToPresentationCompositorFrame",
+        "count": 1916
+      },
+      {
+        "name": "SubmitToReceiveCompositorFrame",
+        "count": 1916
+      },
+      {
+        "name": "ReceiveCompositorFrameToStartDraw",
+        "count": 1916
+      },
+      {
+        "name": "SwapEndToPresentationCompositorFrame",
+        "count": 1908
+      }
+    ],
+    "longSpans": [
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 105.783,
+        "ts": 117493586872,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 105.45,
+        "ts": 117493586993,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 96.984,
+        "ts": 117495804159,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 96.737,
+        "ts": 117495804272,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 96.584,
+        "ts": 117495689011,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 96.359,
+        "ts": 117495689143,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 89.75,
+        "ts": 117495591188,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 89.551,
+        "ts": 117495591301,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 85.668,
+        "ts": 117493699671,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 85.423,
+        "ts": 117493699845,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 63.458,
+        "ts": 117493520027,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 63.261,
+        "ts": 117493520134,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain"
+      }
+    ],
+    "limitations": [
+      "Cross-process spans share trace clock, but GPU events are not uniquely mapped to target surface",
+      "Name counts are not proof of each frame submit/ACK relation",
+      "No LongTask does not rule out short work; trace changes load",
+      "Gap marks emitted at actual callback entry; do not label Present span as DXGI syscall or GPU execution duration"
+    ]
+  },
+  "alignment": {
+    "scope": "one captured 107ms callback gap in isolated radar browser; overlap correlation, not driver root cause",
+    "mapping": "align mark emitted with startTime=current callback enter to trace timestamp; same browser trace clock",
+    "gap": {
+      "gapStart": 474028,
+      "gapEnd": 474135.40000000596,
+      "intervalMs": 107.40000000596046,
+      "previousExit": 474028.5,
+      "currentExit": 474137.3000000119
+    },
+    "traceGapStart": 117493586600,
+    "traceGapEnd": 117493694000,
+    "spans": [
+      {
+        "name": "Scheduler::RunTask",
+        "ms": 105.783,
+        "ts": 117493586872,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain",
+        "overlapMs": 105.783,
+        "endsBeforeCallbackMs": 1.345
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ms": 105.45,
+        "ts": 117493586993,
+        "pid": 45192,
+        "tid": 14832,
+        "thread": "CrGpuMain",
+        "overlapMs": 105.45,
+        "endsBeforeCallbackMs": 1.557
+      }
+    ],
+    "events": [
+      {
+        "name": "ProxyImpl::DidReceiveCompositorFrameAckOnImplThread",
+        "ts": 117493583658,
+        "dur": 37,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyImpl::ScheduledActionSendBeginMainFrame",
+        "ts": 117493583667,
+        "dur": 14,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493583749,
+        "dur": 1441,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "WidgetBase::WillBeginMainFrame",
+        "ts": 117493583761,
+        "dur": 4,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ts": 117493584976,
+        "dur": 1131,
+        "ph": "X",
+        "pid": 45192,
+        "tid": 14832
+      },
+      {
+        "name": "ProxyImpl::DidReceiveCompositorFrameAckOnImplThread",
+        "ts": 117493586264,
+        "dur": 21,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyImpl::ScheduledActionSendBeginMainFrame",
+        "ts": 117493586270,
+        "dur": 9,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493586538,
+        "dur": 759,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "WidgetBase::WillBeginMainFrame",
+        "ts": 117493586544,
+        "dur": 2,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ts": 117493586993,
+        "dur": 105450,
+        "ph": "X",
+        "pid": 45192,
+        "tid": 14832
+      },
+      {
+        "name": "ProxyImpl::DidReceiveCompositorFrameAckOnImplThread",
+        "ts": 117493692811,
+        "dur": 2,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyImpl::ScheduledActionSendBeginMainFrame",
+        "ts": 117493693918,
+        "dur": 14,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 41184
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493693950,
+        "dur": 2476,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "WidgetBase::WillBeginMainFrame",
+        "ts": 117493693962,
+        "dur": 4,
+        "ph": "X",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "mizar-radar-gap",
+        "ts": 117493694000,
+        "ph": "I",
+        "pid": 42980,
+        "tid": 31528
+      },
+      {
+        "name": "DXGISwapChainImageBacking::Present",
+        "ts": 117493694164,
+        "dur": 4409,
+        "ph": "X",
+        "pid": 45192,
+        "tid": 14832
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493583749,
+        "ph": "s",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2719
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493585174,
+        "ph": "f",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2719
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493586538,
+        "ph": "s",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2740
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493587284,
+        "ph": "f",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2740
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493693950,
+        "ph": "s",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2764
+      },
+      {
+        "name": "ProxyMain::BeginMainFrame",
+        "ts": 117493696306,
+        "ph": "f",
+        "pid": 42980,
+        "tid": 31528,
+        "id": 2764
+      }
+    ],
+    "markArgs": {
+      "data": {
+        "startTime": 474135.400000006,
+        "callTime": 117493695994,
+        "detail": {
+          "previousEnter": 474028,
+          "currentEnter": 474135.40000000596
+        }
+      }
+    },
+    "limitations": [
+      "No GPU fence or Present1-only duration",
+      "Frame acknowledgement events need frame-ID linkage before claiming causal back-pressure",
+      "Isolated browser contains only workspace-left but does not isolate physical GPU/DWM"
+    ]
+  }
+}
