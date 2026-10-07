@@ -6,7 +6,7 @@ import { getRadarArtwork } from '@mizar-hud/radar-view';
 import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
-import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
+import { useRadarAvailability } from './use-radar-availability';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
 import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './model';
 import { useObsStatus } from './obs-client';
@@ -123,9 +123,8 @@ export function WorkspaceLeft() {
     program.getSnapshot,
     program.getSnapshot,
   );
-  const radarState = useSyncExternalStore(radar.subscribe, radar.getSnapshot, radar.getSnapshot);
+  const liveRadar = useRadarAvailability(radar);
   const payload = state.state === 'live' ? (state.current?.payload ?? null) : null;
-  const liveRadar = hasRadarViewFrame(radarState.state === 'live' ? radarState.current : null);
   const plannedMap =
     payload?.seriesProgress?.maps.find((map) => map.status === 'current') ??
     payload?.seriesProgress?.maps.find((map) => map.status === 'pending');
