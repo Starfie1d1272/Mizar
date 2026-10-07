@@ -1,0 +1,53 @@
+{
+  "version": "1.0.0-rc.22",
+  "sourceCommit": "6e84cd2eaa027ae322ad486b6b2ab31e18e2d486",
+  "date": "2026-10-07",
+  "classification": "原始RC22 Windows包、真实EPL24 demo选景和实际OBS输出；包含跳转，不是无跳转全图或完整长时制播验收。",
+  "gallery": {
+    "directory": "docs/screenshots/windows-rc22",
+    "finalImageCount": 15,
+    "pages": ["waiting", "matchup", "bp", "halftime", "map_result", "intermap", "match_result"],
+    "hudPresets": ["default", "ewc", "iem", "perfectworld", "esl"],
+    "consoleHidden": true,
+    "demoBarHidden": true,
+    "pixelsModified": false
+  },
+  "results": {
+    "series": "Falcons 2:1 Natus Vincere",
+    "maps": ["Inferno 13:6", "Anubis 15:19", "Mirage 13:8"],
+    "source": "各图末局附近跳转后以1x自然结算的实际GSI，不手填网站比分",
+    "statisticsScope": "真实K/D；半场页为6:6，整场页统计区域为最后一图。未宣称完整ADR或三图累计选手统计。"
+  },
+  "capture": {
+    "complete": true,
+    "frameCount": 12567,
+    "droppedFrames": 0,
+    "framesSha256": "b99117762d643f8d94300d986744e829260dee49ef5b6e452f253b4027329edf",
+    "firstElapsedUs": 894505742,
+    "lastElapsedUs": 3038772063,
+    "verification": "生产testkit verify-capture通过，完整原始遥测仅留本机"
+  },
+  "restore": {
+    "managedCs2Closed": true,
+    "hostStoppedNormally": true,
+    "videoFieldCount": 17,
+    "videoMismatches": 0,
+    "mizarGsiMatchesOriginalBytes": true,
+    "roundSenseMatchesOriginalBytes": true,
+    "autoexecMatchesOriginalBytes": true,
+    "persistedNativeHudOverrides": 0,
+    "obsRecording": false,
+    "obsStreaming": false,
+    "obsTemporaryScenes": 0,
+    "obsTemporaryInputs": 0,
+    "obsScene": "Mizar · 赛前等待",
+    "recordDirectory": "用户Windows Videos默认目录",
+    "displayConfigurationChanged": false
+  },
+  "remaining": [
+    "同一最终候选包无跳转完整多图、长时与完整统计验收",
+    "原生雷达偶发长间隔",
+    "赛事BP规则配置见#156",
+    "显示与服务恢复矩阵"
+  ]
+}

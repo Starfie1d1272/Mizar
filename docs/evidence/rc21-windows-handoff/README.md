@@ -13,3 +13,5 @@
 - `rc22-final-session-summary.json`：最终RC22本轮混合定点验收和截图会话关闭后的74,781帧、零丢帧、完整性摘要，以及17项视频配置、GSI/RoundSense/autoexec和OBS退出恢复结果。会话包含跳转和资料变更，不能称为无跳转完整多图验收。
 
 原始完整GSI、身份映射、含声录像与用户设置仅留本机。`provenance.json` 区分实际包来源与离线修复源码；`privacy-verification.json` 记录针对本机原身份与名字的文本扫描。运行 `node docs/evidence/rc21-windows-handoff/verify.mjs` 检查摘要和源序列完整性。
+
+`rc22-epl-gallery-session.json`记录后续真实EPL24图集与三图末局结算：15张最终图、系列2:1、12,567帧零丢帧、正常退出与配置恢复。该会话包含选景跳转，不替代无跳转完整多图或全图统计验收。旧RC14临时视频与中间证据按用户要求从当前仓库移除，历史版本可由Git恢复；当前图集、必要回归输入和未解决雷达诊断保留。
