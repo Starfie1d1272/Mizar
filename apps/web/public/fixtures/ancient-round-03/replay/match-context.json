@@ -198,6 +198,7 @@
     "scoreB": null,
     "resultDisposition": null,
     "isForfeit": false,
+    "isTest": false,
     "entrants": {
       "a": {
         "entryId": "entry-m2-a",
