@@ -817,6 +817,47 @@ export function makeSeriesProgressCheckpoint(progress: SeriesProgress): SeriesPr
   };
 }
 
+/** Refresh display metadata only within the already-bound series identity and plan. */
+export function refreshSeriesProgressMetadata(
+  progress: SeriesProgress,
+  context: MatchContext,
+): SeriesProgress {
+  const before = makeSeriesProgressCheckpoint(progress).identity;
+  const after = seriesCheckpointIdentity(context);
+  if (
+    before.matchId !== after.matchId ||
+    before.format !== after.format ||
+    before.entryAId !== after.entryAId ||
+    before.entryBId !== after.entryBId ||
+    before.mapPlanFingerprint !== after.mapPlanFingerprint
+  )
+    return progress;
+  if (
+    (['a', 'b'] as const).every((side) => {
+      return (
+        progress.entrants[side].name === context.entrants[side].name &&
+        progress.entrants[side].logoUrl === context.entrants[side].logoUrl
+      );
+    })
+  )
+    return progress;
+  return {
+    ...progress,
+    entrants: {
+      a: {
+        ...progress.entrants.a,
+        name: context.entrants.a.name,
+        logoUrl: context.entrants.a.logoUrl,
+      },
+      b: {
+        ...progress.entrants.b,
+        name: context.entrants.b.name,
+        logoUrl: context.entrants.b.logoUrl,
+      },
+    },
+  };
+}
+
 export function syncSeriesProgress(
   progress: SeriesProgress,
   input: SeriesProgressSyncInput,

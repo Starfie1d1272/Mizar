@@ -4,6 +4,30 @@ import { RadarRenderCache } from '../src/render-cache.js';
 
 afterEach(() => vi.restoreAllMocks());
 
+it('reuses fire rasters during continuous auto zoom instead of allocating a canvas every frame', () => {
+  const draw = vi.fn();
+  const context = new Proxy({}, { get: () => draw, set: () => true }) as CanvasRenderingContext2D;
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+  const image = new Image();
+  image.src = '/map.png';
+  Object.defineProperties(image, { naturalWidth: { value: 1024 }, naturalHeight: { value: 1024 } });
+  const cache = new RadarRenderCache();
+  const map = cache.artwork(image, null, 506, 'default');
+  for (let frame = 0; frame < 240; frame++) {
+    const scale = 1 + (1.5 * frame) / 239;
+    expect(cache.artwork(image, null, 506, 'default')).toBe(map);
+    cache.glow(24, (5 * 1024) / (506 * scale));
+  }
+  // The renderer's normal 1→2.5 zoom must not make each frame a new raster.
+  expect(getContext.mock.calls.length).toBeLessThan(32);
+  const rasterCount = getContext.mock.calls.length;
+  for (let frame = 0; frame < 240; frame++) {
+    const scale = 1 + (1.5 * frame) / 239;
+    cache.glow(24, (5 * 1024) / (506 * scale));
+  }
+  expect(getContext.mock.calls.length).toBe(rasterCount);
+});
+
 it('rasterizes static artwork/effects once and rebuilds for resolution, appearance, tint and explicit invalidation', () => {
   const gradient = { addColorStop: vi.fn() };
   const radial = vi.fn(() => gradient);

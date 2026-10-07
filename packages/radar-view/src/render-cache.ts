@@ -116,9 +116,13 @@ export class RadarRenderCache {
   }
 
   glow(radius: number, blurRadius = 5): HTMLCanvasElement | null {
-    const extent = Math.ceil(radius * 1.45 + blurRadius * 3);
-    return this.get(`fire:${radius}:${blurRadius}`, extent * 2, extent * 2, (ctx) => {
-      ctx.filter = `blur(${blurRadius}px)`;
+    // Auto zoom changes the inverse screen-space blur every frame. Quantize
+    // raster precision, not world geometry or motion, to reuse near-identical
+    // masks (at most 1/8 logical pixel difference in the blur radius).
+    const blur = Math.round(blurRadius * 4) / 4;
+    const extent = Math.ceil(radius * 1.45 + blur * 3);
+    return this.get(`fire:${radius}:${blur}`, extent * 2, extent * 2, (ctx) => {
+      ctx.filter = `blur(${blur}px)`;
       ctx.fillStyle = '#e85f2f';
       ctx.beginPath();
       ctx.arc(extent, extent, radius * 1.45, 0, Math.PI * 2);

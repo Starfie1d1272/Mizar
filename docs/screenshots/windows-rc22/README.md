@@ -36,6 +36,8 @@
 
 ## 来源与范围
 
+2026-10-07 已从[赛事页面](https://www.hltv.org/events/8244/esl-pro-league-season-24)与比赛页面核对并保存真实赛事名称、EPL Logo、瑞士轮第4轮（2–1组）、晋级说明与完整7步禁选。按用户提供的EPL规则补充对手选边：Inferno由Falcons选CT，Anubis由NAVI选T；共9步，Mirage决胜图拼刀，不预填选边或开局阵营。实际demo开局另行记录，不能把实际开局冒充赛前选边。具体来源、RC22编辑器限制和核验范围见[赛事资料](epl-source.json)。上述九张截图仍为此前配置，尚待重拍，不能据此宣称图中已使用新资料。
+
 - 截取日期：2026-10-07。五套HUD由实际OBS节目源输出，1920×1080；逐套等待界面及OBS加载后截图。
 - demo由用户提供，比赛与队标核对来源：[Falcons vs. Natus Vincere / ESL Pro League Season 24](https://www.hltv.org/matches/2398745/falcons-vs-natus-vincere-esl-pro-league-season-24)。队标是赛事页面实际引用的HLTV素材，商标属于各队。
 - 本地比赛资料按demo名单配置，地图顺序Inferno→Anubis→Mirage。未录入官方BP或手工补官方赛果；截图为本地回放展示，不代表官方直播。
