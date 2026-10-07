@@ -4,6 +4,20 @@ use std::collections::BTreeMap;
 pub const DISPLAY_WIDTH: &str = "1920";
 pub const DISPLAY_HEIGHT: &str = "1080";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoSize {
+    pub width: i32,
+    pub height: i32,
+}
+impl VideoSize {
+    pub fn new(width: i32, height: i32) -> Result<Self, String> {
+        if width <= 0 || height <= 0 || i64::from(width) * 9 != i64::from(height) * 16 {
+            return Err("工作台游戏尺寸无效，未修改游戏配置。".into());
+        }
+        Ok(Self { width, height })
+    }
+}
+
 #[derive(Debug)]
 struct Token {
     value: String,
@@ -124,6 +138,26 @@ pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
     values
 }
 
+pub fn sized_preset(preserve_quality: bool, size: VideoSize) -> BTreeMap<String, String> {
+    let mut values = preset(preserve_quality);
+    values.insert("setting.defaultres".into(), size.width.to_string());
+    values.insert("setting.defaultresheight".into(), size.height.to_string());
+    values
+}
+
+pub fn supported_preset(values: &BTreeMap<String, String>) -> bool {
+    let size = (|| {
+        VideoSize::new(
+            values.get("setting.defaultres")?.parse().ok()?,
+            values.get("setting.defaultresheight")?.parse().ok()?,
+        )
+        .ok()
+    })();
+    size.is_some_and(|size| {
+        *values == sized_preset(true, size) || *values == sized_preset(false, size)
+    })
+}
+
 pub fn apply(text: &str, desired: &BTreeMap<String, String>) -> Result<String, String> {
     let (map, close) = fields(text)?;
     for required in [
@@ -204,7 +238,10 @@ mod tests {
             let preset = preset(preserve);
             let applied = apply(ORIGINAL, &preset).unwrap();
             assert_eq!(fields(&applied).unwrap().0["setting.fullscreen"].value, "0");
-            assert_eq!(fields(&applied).unwrap().0["setting.nowindowborder"].value, "1");
+            assert_eq!(
+                fields(&applied).unwrap().0["setting.nowindowborder"].value,
+                "1"
+            );
             assert!(applied.contains("\"1920\""));
             assert!(applied.contains("// user comment\r\n"));
             assert_eq!(

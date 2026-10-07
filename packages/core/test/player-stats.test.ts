@@ -80,6 +80,53 @@ function completeRound(
 }
 
 describe('map-scoped player stats accumulator', () => {
+  it('completes an eligible final round at gameover without an over phase, once', () => {
+    let state = createInitialRuntimeState('stats-gameover');
+    state = accept(state, frame(1, 1, 'freezetime', 17)).state;
+    state = accept(state, frame(2, 2, 'live', 17, 80)).state;
+    const final = frame(3, 3, 'freezetime', 18, 0);
+    const observation = {
+      ...final,
+      telemetry: {
+        ...final.telemetry,
+        map: { ...final.telemetry.map!, phase: 'gameover' as const },
+      },
+    };
+    state = accept(state, observation).state;
+    expect(state.playerStats.countedCompletedRounds).toBe(1);
+    expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBe(80);
+    state = accept(state, { ...observation, receive: frame(4, 4, 'freezetime', 18).receive }).state;
+    expect(state.playerStats.countedCompletedRounds).toBe(1);
+    expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBe(80);
+  });
+
+  it.each(['gap', 'missing-players', 'round-jump', 'mid-round-baseline'] as const)(
+    'does not promote incomplete final-round evidence at gameover: %s',
+    (kind) => {
+      let state = createInitialRuntimeState('stats-gameover-incomplete');
+      if (kind !== 'mid-round-baseline') state = accept(state, frame(1, 1, 'freezetime', 17)).state;
+      state = accept(state, frame(kind === 'mid-round-baseline' ? 1 : 2, 2, 'live', 17, 80)).state;
+      const final = frame(
+        kind === 'gap' ? 4 : kind === 'mid-round-baseline' ? 2 : 3,
+        3,
+        'freezetime',
+        kind === 'round-jump' ? 20 : 18,
+        0,
+        4200,
+        kind === 'missing-players' ? 'absent' : 'present',
+      );
+      state = accept(state, {
+        ...final,
+        telemetry: {
+          ...final.telemetry,
+          map: { ...final.telemetry.map!, phase: 'gameover' as const },
+        },
+      }).state;
+      expect(state.playerStats.countedCompletedRounds).toBe(0);
+      expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBeNull();
+    },
+  );
+
   it('starts counting from a complete freezetime → live round and includes current damage', () => {
     let state = createInitialRuntimeState('stats-test');
     state = accept(state, frame(1, 1, 'freezetime', 1)).state;

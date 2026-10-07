@@ -30,6 +30,8 @@ interface RuntimeProgramSourceState {
 interface RuntimeMapState {
   readonly epoch: number;
   readonly name?: string;
+  /** Continuity evidence only; never a claim about the current map phase. */
+  readonly competitiveObserved?: true;
 }
 
 export interface RuntimeState {
@@ -104,7 +106,7 @@ export interface MapExecutionChangedTransitionBase extends RuntimeTransitionBase
 }
 
 export interface ObservedMapExecutionChangedTransition extends MapExecutionChangedTransitionBase {
-  readonly reason: 'observed-map-name-change';
+  readonly reason: 'observed-map-name-change' | 'observed-same-map-restart';
   readonly sourceGeneration: number;
   readonly receiveSequence: number;
 }

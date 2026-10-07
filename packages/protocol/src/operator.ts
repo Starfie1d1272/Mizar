@@ -52,7 +52,7 @@ const runtimeTransitionSchema = z.union([
   }),
   runtimeTransitionBaseSchema.extend({
     kind: z.literal('map_execution_changed'),
-    reason: z.literal('observed-map-name-change'),
+    reason: z.enum(['observed-map-name-change', 'observed-same-map-restart']),
     sourceGeneration: z.number().int().nonnegative(),
     receiveSequence: z.number().int().nonnegative(),
     previousMapEpoch: z.number().int().nonnegative(),

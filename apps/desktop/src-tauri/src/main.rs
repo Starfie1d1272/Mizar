@@ -60,6 +60,7 @@ extern "system" {
 struct HostState {
     tracker: Arc<Mutex<GameTracker>>,
     visible: Arc<AtomicBool>,
+    layout_dirty: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
     tray_available: AtomicBool,
@@ -336,7 +337,7 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
         return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
     }
     if !tracker.managed {
-        return Err("工作区已恢复，但 CS2 未接受窗口尺寸。请使用窗口模式后重试恢复布局。".into());
+        return Err("工作区已恢复，但 CS2 仍使用原来的游戏分辨率。请退出工作台后重新进入，让游戏按当前屏幕尺寸启动。".into());
     }
     Ok(())
 }
@@ -368,7 +369,7 @@ fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
     match state.tracker.lock() {
         Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation })
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics() })
         }
         Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
     }
@@ -975,6 +976,7 @@ fn run_desktop(
     let state = HostState {
         tracker: Arc::new(Mutex::new(tracker)),
         visible: Arc::new(AtomicBool::new(false)),
+        layout_dirty: Arc::new(AtomicBool::new(false)),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
         tray_available: AtomicBool::new(false),
@@ -1102,6 +1104,7 @@ fn run_desktop(
             let worker_running = host.state::<HostState>().running.clone();
             let worker_tracker = host.state::<HostState>().tracker.clone();
             let worker_visible = host.state::<HostState>().visible.clone();
+            let worker_layout_dirty = host.state::<HostState>().layout_dirty.clone();
             let pending = Arc::new(AtomicBool::new(false));
             let worker = thread::spawn(move || {
                 let mut cs2_check = Instant::now() - Duration::from_secs(2);
@@ -1115,16 +1118,28 @@ fn run_desktop(
                         cs2_check = Instant::now();
                     }
                     // Cross-process CS2 calls stay off the Tauri main loop.
-                    let (layout, rect) =
-                        if worker_visible.load(Ordering::Relaxed) && !exit_signal.requested() {
-                            worker_tracker
-                                .lock()
-                                .ok()
-                                .map(|mut tracker| (tracker.tick(), tracker.overlay_rect()))
-                                .unwrap_or((None, None))
-                        } else {
-                            (None, None)
-                        };
+                    let (layout, rect) = if !pending.load(Ordering::Relaxed)
+                        && worker_visible.load(Ordering::Relaxed)
+                        && !exit_signal.requested()
+                    {
+                        worker_tracker
+                            .lock()
+                            .ok()
+                            .map(|mut tracker| {
+                                // A DPI change can resize a WebView without changing CS2's
+                                // physical client or DPI. Reapply the shared physical layout
+                                // after the native suggested-size handler has completed.
+                                let layout = if worker_layout_dirty.swap(false, Ordering::AcqRel) {
+                                    tracker.restore_layout()
+                                } else {
+                                    tracker.tick()
+                                };
+                                (layout, tracker.overlay_rect())
+                            })
+                            .unwrap_or((None, None))
+                    } else {
+                        (None, None)
+                    };
                     let Ok(_dispatch) = setup_dispatch.lock() else {
                         break;
                     };
@@ -1196,6 +1211,19 @@ fn run_desktop(
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. })
+                && matches!(
+                    window.label(),
+                    "workspace-left" | "workspace-dock" | "program-overlay"
+                )
+            {
+                // Coalesce all native-window notifications on the existing worker.
+                // Hidden workspaces keep this invalidation until they are shown.
+                window
+                    .state::<HostState>()
+                    .layout_dirty
+                    .store(true, Ordering::Release);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 match window.label() {

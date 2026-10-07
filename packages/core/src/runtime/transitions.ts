@@ -157,13 +157,14 @@ export function observedMapExecutionChangedTransition(
   state: RuntimeState,
   nextState: RuntimeState,
   input: ProgramTelemetryInput,
+  reason: ObservedMapExecutionChangedTransition['reason'] = 'observed-map-name-change',
 ): ObservedMapExecutionChangedTransition {
   return {
     ...mapExecutionChangedTransitionBase(state, nextState, {
       monotonicMs: input.observation.receive.receivedMonotonicMs,
       utc: input.observation.receive.receivedAt,
     }),
-    reason: 'observed-map-name-change',
+    reason,
     sourceGeneration: input.sourceGeneration,
     receiveSequence: input.observation.receive.sequence,
   };

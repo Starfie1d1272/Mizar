@@ -129,6 +129,13 @@ pub fn choose_monitor(cs2: Option<Cs2Window>) -> Monitor {
     }
 }
 
+pub fn launch_viewport() -> Result<crate::cs2_video::VideoSize, String> {
+    let _coordinates = PhysicalCoordinates::enter();
+    let area = monitor_layout_area(choose_monitor(None), true).ok_or("无法读取显示器尺寸，未修改游戏配置。")?;
+    let game = workspace_layout(area).game;
+    crate::cs2_video::VideoSize::new(game.width, game.height)
+}
+
 pub fn outer_from_client(client: Rect, frame: Rect) -> Rect {
     Rect { x: client.x + frame.x, y: client.y + frame.y, width: client.width + frame.width, height: client.height + frame.height }
 }
@@ -149,6 +156,10 @@ fn align_cs2(window: Cs2Window, target: Rect) -> bool {
         if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
         let Some(actual) = client_rect(window.hwnd) else { return false; };
         if actual == target { return true; }
+        // CS2 can keep its launch-time render client despite accepting the outer
+        // window resize. Shrinking a borderless outer a second time crops it;
+        // it cannot change the engine's video mode. Keep the intended viewport.
+        if frame.width == 0 && frame.height == 0 { return false; }
         let correction = Rect {
             x: outer.x + target.x - actual.x,
             y: outer.y + target.y - actual.y,
@@ -177,6 +188,26 @@ pub struct GameTracker {
 }
 
 impl GameTracker {
+    pub fn geometry_diagnostics(&self) -> serde_json::Value {
+        let _coordinates = PhysicalCoordinates::enter();
+        let Some(window) = self.window else { return serde_json::Value::Null; };
+        let mut size = WinRect::default();
+        let mut outer = WinRect::default();
+        let mut origin = Point::default();
+        unsafe {
+            if GetClientRect(window.hwnd, &mut size) == 0 || GetWindowRect(window.hwnd, &mut outer) == 0 || ClientToScreen(window.hwnd, &mut origin) == 0 { return serde_json::Value::Null; }
+            let mut end = Point { x: size.right, y: size.bottom };
+            let end_valid = ClientToScreen(window.hwnd, &mut end) != 0;
+            serde_json::json!({
+                "dpi": GetDpiForWindow(window.hwnd),
+                "clientSize": [size.right, size.bottom],
+                "screenOrigin": [origin.x, origin.y],
+                "screenEnd": end_valid.then_some([end.x, end.y]),
+                "outer": [outer.left, outer.top, outer.right, outer.bottom],
+                "alignmentRetries": self.alignment_retries
+            })
+        }
+    }
     pub fn observe(&mut self, found: Option<Cs2Window>) -> bool {
         if self.window == found { return false; }
         self.frame = None;
@@ -235,7 +266,7 @@ impl GameTracker {
         if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
         }
-        if work != self.last_work_area { return self.apply_locked_layout(); }
+        if work != self.last_work_area { return self.restore_layout(); }
         if changed { return self.apply_locked_layout(); }
         let Some(window) = self.window else { return None; };
         // CS2 can reject an early resize while constructing its render window.

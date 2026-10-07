@@ -315,6 +315,55 @@ describe('automatic Program choreography', () => {
 });
 
 describe('bounded presentation snapshots', () => {
+  it('settles delayed explosion KAD only within the same completed execution and player cohort', () => {
+    const store = new ProgramPresentationStore();
+    const p = sample('real-gameover');
+    store.update(p, 'revision');
+    const first = store.get().completed[0]!;
+    const player = p.players.find((item) => item.sourcePlayerId === first.players.a[0]?.id)!;
+    const deaths = player.matchStats!.deaths!;
+    p.cursor.programReceiveSequence = (p.cursor.programReceiveSequence ?? 0) + 1;
+    player.matchStats = { ...player.matchStats!, deaths: deaths + 1 };
+    store.update(p, 'revision');
+    const settled = store.get().completed[0]!;
+    expect(settled.players.a[0]?.deaths).toBe(deaths + 1);
+    expect(settled.score).toEqual(first.score);
+    p.cursor.mapEpoch++;
+    p.cursor.programReceiveSequence++;
+    player.matchStats = { ...player.matchStats, deaths: deaths + 2 };
+    store.update(p, 'revision');
+    expect(store.get().completed[0]).toEqual(settled);
+  });
+
+  it.each(['source', 'producer', 'stale', 'identity', 'cohort', 'score', 'older'])(
+    'retains the captured terminal summary after a %s boundary',
+    (boundary) => {
+      const store = new ProgramPresentationStore();
+      const p = sample('real-gameover');
+      store.update(p, 'revision');
+      const first = store.get().completed;
+      p.cursor.programReceiveSequence = (p.cursor.programReceiveSequence ?? 0) + 1;
+      p.players = p.players.map((player) => ({
+        ...player,
+        matchStats: player.matchStats
+          ? { ...player.matchStats, deaths: (player.matchStats.deaths ?? 0) + 1 }
+          : null,
+      }));
+      if (boundary === 'source') p.cursor.programSourceGeneration++;
+      if (boundary === 'producer') p.cursor.producerInstanceId = 'other-producer';
+      if (boundary === 'stale') p.status.telemetry = 'stale';
+      if (boundary === 'identity') p.status.identity = 'mismatch';
+      if (boundary === 'cohort') p.players = [];
+      if (boundary === 'score') {
+        const completed = p.series!.maps.find((map) => map.status === 'completed')!;
+        completed.finalScore = { a: 14, b: 10 };
+      }
+      if (boundary === 'older') p.cursor.programReceiveSequence--;
+      store.update(p, 'revision');
+      expect(store.get().completed).toEqual(first);
+    },
+  );
+
   it('captures the final map after the reducer clears currentMapOrder', () => {
     const store = new ProgramPresentationStore();
     const p = sample('real-gameover');

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { observerHotkeyLabel } from '../../observer-hotkey';
+import { BombPredictionBar } from './BombPredictionBar';
 import type { HudDesign } from '../../hud-design';
 import {
   CombatTransitionEffects,
@@ -281,6 +282,10 @@ type BombPrediction = ProgramPayload['bombDamage']['players'][number];
 
 function PlayerBody({
   prediction,
+  explosionHandoff,
+  predictionScope,
+  predictionSequence,
+  predictionRoundNumber,
   design,
   physicalSide,
   player,
@@ -297,6 +302,10 @@ function PlayerBody({
   readonly damageGhost: DamageGhostState | null;
   readonly options: PlayerRailSettings;
   readonly prediction?: BombPrediction | undefined;
+  readonly explosionHandoff: boolean;
+  readonly predictionScope: string | null;
+  readonly predictionSequence: number | null;
+  readonly predictionRoundNumber: number | null;
 }) {
   const healthStyle = { '--player-rail-health': `${player.healthPercent ?? 0}%` } as CSSProperties;
   const secondaryVisible = player.secondaryWeapon !== null;
@@ -336,34 +345,14 @@ function PlayerBody({
       ) : (
         <div className="player-rail__health-bar" data-health-bar="true">
           <span style={healthStyle} data-health-empty={!player.healthPercent} />
-          {options.showBombPrediction &&
-          prediction?.status === 'predicted' &&
-          prediction.damage > 0 ? (
-            <i
-              className="player-rail__bomb-prediction"
-              data-bomb-prediction={prediction.lethal ? 'lethal' : 'surviving'}
-              aria-label={`C4 standing estimate: ${prediction.damage} damage, ${prediction.hpAfter} HP remaining`}
-              style={
-                {
-                  '--prediction-start': `${Math.max(0, Math.min(100, prediction.hpAfter))}%`,
-                  '--prediction-end': `${player.healthPercent ?? 0}%`,
-                } as CSSProperties
-              }
-            />
-          ) : null}
-          {options.showBombPrediction &&
-          prediction?.status === 'unavailable' &&
-          prediction.reason === 'prediction-loading' ? (
-            <i
-              className="player-rail__bomb-prediction player-rail__bomb-prediction--pending"
-              data-bomb-prediction="updating"
-              aria-label="C4 estimate updating"
-              style={
-                {
-                  '--prediction-start': '0%',
-                  '--prediction-end': `${player.healthPercent ?? 0}%`,
-                } as CSSProperties
-              }
+          {options.showBombPrediction ? (
+            <BombPredictionBar
+              prediction={prediction}
+              health={player.healthPercent ?? 0}
+              explosionHandoff={explosionHandoff}
+              scope={predictionScope}
+              sequence={predictionSequence}
+              roundNumber={predictionRoundNumber}
             />
           ) : null}
           <DamageGhost state={damageGhost} />
@@ -469,6 +458,10 @@ function PlayerBody({
 export function PlayerCard({
   design = 'current',
   prediction,
+  explosionHandoff = false,
+  predictionScope = null,
+  predictionSequence = null,
+  predictionRoundNumber = null,
   player,
   cursor = null,
   physicalSide = 'left',
@@ -477,6 +470,10 @@ export function PlayerCard({
 }: {
   readonly design?: HudDesign;
   readonly prediction?: BombPrediction | undefined;
+  readonly explosionHandoff?: boolean;
+  readonly predictionScope?: string | null;
+  readonly predictionSequence?: number | null;
+  readonly predictionRoundNumber?: number | null;
   readonly player: PlayerCardPresentation;
   readonly cursor?: ProjectionCursor | null;
   readonly physicalSide?: 'left' | 'right';
@@ -509,6 +506,10 @@ export function PlayerCard({
       physicalSide={physicalSide}
       design={design}
       prediction={prediction}
+      explosionHandoff={explosionHandoff}
+      predictionScope={predictionScope}
+      predictionSequence={predictionSequence}
+      predictionRoundNumber={predictionRoundNumber}
       options={options}
       damageGhost={combatFeedback.damageGhost}
       dead={dead}

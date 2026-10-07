@@ -78,7 +78,7 @@ it('accepts the first plan while telemetry is already live but no map execution 
 
 function frame(
   sequence: number,
-  phase: 'live' | 'gameover',
+  phase: 'live' | 'gameover' | 'warmup',
   roundPhase: 'freezetime' | 'live' | 'over',
   score: { readonly ct: number; readonly t: number },
   winnerSide?: 'CT' | 'T',
@@ -142,6 +142,54 @@ const sideProof: SeriesSideProof = {
 };
 
 describe('ProgramRuntime SeriesProgress composition', () => {
+  it.each(['empty', 'omitted'] as const)(
+    'clears future frozen rounds after a witnessed same-map warmup with %s history',
+    (history) => {
+      const context = contextFixture();
+      const runtime = createProgramRuntime('same-map-restart-series');
+      const old = frame(1, 'live', 'freezetime', { ct: 11, t: 5 }, undefined, 16);
+      runtime.acceptObservation({
+        ...old,
+        telemetry: {
+          ...old.telemetry,
+          map: {
+            ...old.telemetry.map!,
+            roundWins: Array.from({ length: 16 }, (_, index) => ({
+              roundNumber: index + 1,
+              winnerSide: index < 11 ? ('CT' as const) : ('T' as const),
+              winCondition: 'elimination' as const,
+            })),
+          },
+        },
+      });
+      const before = runtime.synchronizeSeriesProgress(context, sideProof)!;
+      expect(before.maps[0]?.roundHistory.rounds).toHaveLength(16);
+      const menu = frame(2, 'live', 'freezetime', { ct: 11, t: 5 });
+      runtime.acceptObservation({
+        ...menu,
+        coverage: { ...menu.coverage, map: 'absent', round: 'absent' },
+        telemetry: {},
+      });
+      const warmup = frame(3, 'warmup', 'freezetime', { ct: 0, t: 0 }, undefined, 0);
+      runtime.acceptObservation({
+        ...warmup,
+        telemetry: {
+          ...warmup.telemetry,
+          map: { ...warmup.telemetry.map!, ...(history === 'empty' ? { roundWins: [] } : {}) },
+        },
+      });
+      const after = runtime.synchronizeSeriesProgress(context, { ...sideProof, mapEpoch: 2 })!;
+      expect(after.maps[0]).toMatchObject({
+        status: 'current',
+        executionMapEpoch: 2,
+        finalScore: null,
+        roundHistory: { rounds: [] },
+      });
+      expect(after.score).toEqual({ a: 0, b: 0 });
+      expect(before.maps[0]?.roundHistory.rounds).toHaveLength(16);
+    },
+  );
+
   it('feeds reliable transitions once and immediately freezes a local map result', () => {
     const context = contextFixture();
     const runtime = createProgramRuntime('series-runtime');

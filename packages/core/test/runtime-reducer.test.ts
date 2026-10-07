@@ -101,7 +101,7 @@ describe('RuntimeState reducer', () => {
 
     expect(result.state.programTelemetry).toEqual(second);
     expect(result.state.programTelemetry?.telemetry.round).toBeUndefined();
-    expect(result.state.map).toEqual({ epoch: 1, name: 'de_mirage' });
+    expect(result.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
   });
 
   it.each([
@@ -240,7 +240,7 @@ describe('RuntimeState reducer', () => {
     const first = reduceTelemetry(restarted, 42, 0, { roundPhase: 'freezetime' });
     expect(first.disposition).toEqual({ kind: 'accepted', reason: 'baseline' });
     expect(first.state.producerInstanceId).toBe('producer-2');
-    expect(first.state.map).toEqual({ epoch: 1, name: 'de_mirage' });
+    expect(first.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
   });
 
   it('does not reset the global receive sequence when the source generation advances', () => {
@@ -347,11 +347,11 @@ describe('RuntimeState reducer', () => {
     state = reduceTelemetry(state, 1, 0).state;
 
     const absent = reduceTelemetry(state, 2, 10, { mapCoverage: 'absent', mapName: 'de_nuke' });
-    expect(absent.state.map).toEqual({ epoch: 1, name: 'de_mirage' });
+    expect(absent.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
     expect(absent.transitions).toEqual([]);
 
     const changed = reduceTelemetry(state, 2, 10, { mapName: 'de_nuke' });
-    expect(changed.state.map).toEqual({ epoch: 2, name: 'de_nuke' });
+    expect(changed.state.map).toEqual({ epoch: 2, name: 'de_nuke', competitiveObserved: true });
     expect(changed.transitions).toEqual([
       expect.objectContaining({
         kind: 'map_execution_changed',

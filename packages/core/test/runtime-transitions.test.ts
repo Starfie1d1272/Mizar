@@ -86,7 +86,7 @@ describe('RuntimeTransition derivation', () => {
     state = apply(state, 1, 0, { mapPhase: 'live', roundPhase: 'freezetime' }).state;
     const gameover = apply(state, 2, 10, { mapPhase: 'gameover', roundPhase: 'freezetime' });
 
-    expect(gameover.state.map).toEqual({ epoch: 1, name: 'de_mirage' });
+    expect(gameover.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
     expect(gameover.transitions).toEqual([
       expect.objectContaining({
         kind: 'map_ended',
@@ -113,7 +113,7 @@ describe('RuntimeTransition derivation', () => {
       roundPhase: 'live',
     });
 
-    expect(result.state.map).toEqual({ epoch: 2, name: 'de_nuke' });
+    expect(result.state.map).toEqual({ epoch: 2, name: 'de_nuke', competitiveObserved: true });
     expect(result.transitions).toEqual([
       expect.objectContaining({
         kind: 'map_execution_changed',

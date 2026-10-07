@@ -123,7 +123,12 @@ impl SessionStore {
             &serde_json::to_vec(&json!({"preserveQuality": preserve})).unwrap(),
         )
     }
-    pub fn prepare(&self, video: &Path, executable: &Path) -> Result<Value, String> {
+    pub fn prepare(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
         if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
@@ -134,7 +139,7 @@ impl SessionStore {
         }
         let original =
             String::from_utf8(bytes).map_err(|_| "视频配置编码不支持，未修改游戏设置。")?;
-        let owned = cs2_video::preset(self.preferences()?);
+        let owned = cs2_video::sized_preset(self.preferences()?, size);
         let applied = cs2_video::apply(&original, &owned)?;
         let value = json!({"version":1,"video":video,"executable":executable,"original":original,"applied":applied,"owned":owned,"launchAttempted":false,"pid":null,"created":null});
         // The original is durable and read-back verified before touching the game.
@@ -161,7 +166,7 @@ impl SessionStore {
         let applied = value["applied"].as_str().ok_or("CS2 应用记录缺失。")?;
         let owned: BTreeMap<String, String> =
             serde_json::from_value(value["owned"].clone()).map_err(|_| "CS2 字段恢复记录损坏。")?;
-        if owned != cs2_video::preset(true) && owned != cs2_video::preset(false) {
+        if !cs2_video::supported_preset(&owned) {
             return Err("CS2 字段恢复记录不支持。".into());
         }
         if cs2_video::apply(original, &owned)? != applied {
@@ -204,9 +209,45 @@ mod tests {
         (root, video, store)
     }
     #[test]
+    fn sized_launch_restores_after_restart_and_rejects_extra_owned_fields() {
+        for (width, height) in [(1440, 810), (1920, 1080), (2880, 1620)] {
+            let (root, video, store) = setup();
+            let original = fs::read(&video).unwrap();
+            let size = cs2_video::VideoSize::new(width, height).unwrap();
+            let mut journal = store.prepare(&video, &root.join("cs2.exe"), size).unwrap();
+            assert_eq!(journal["owned"]["setting.defaultres"], width.to_string());
+            assert_eq!(
+                journal["owned"]["setting.defaultresheight"],
+                height.to_string()
+            );
+            journal["owned"]["unrelated"] = json!("modified");
+            store.save(&journal).unwrap();
+            let applied = fs::read(&video).unwrap();
+            assert!(store.restore().is_err());
+            assert_eq!(fs::read(&video).unwrap(), applied);
+            journal["owned"]
+                .as_object_mut()
+                .unwrap()
+                .remove("unrelated");
+            store.save(&journal).unwrap();
+            SessionStore::new(root.clone()).restore().unwrap();
+            assert_eq!(fs::read(&video).unwrap(), original);
+            fs::remove_dir_all(root).unwrap();
+        }
+        assert!(cs2_video::VideoSize::new(1920, 0).is_err());
+        assert!(cs2_video::VideoSize::new(1920, 1200).is_err());
+        assert!(cs2_video::VideoSize::new(-16, -9).is_err());
+    }
+    #[test]
     fn a_timed_out_steam_request_survives_restart_until_confirmed() {
         let (root, video, store) = setup();
-        let mut journal = store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        let mut journal = store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
         journal["launchAttempted"] = json!(true);
         journal["launchTime"] = json!(42);
         store.save(&journal).unwrap();
@@ -233,9 +274,21 @@ mod tests {
         let original = fs::read(&video).unwrap();
         store.set_preferences(true).unwrap();
         assert!(store.preferences().unwrap());
-        store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
         let backup = fs::read(store.journal_path()).unwrap();
-        assert!(store.prepare(&video, &root.join("cs2.exe")).is_err());
+        assert!(store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap()
+            )
+            .is_err());
         assert!(store.set_preferences(false).is_err());
         assert_eq!(fs::read(store.journal_path()).unwrap(), backup);
         let restarted = SessionStore::new(root.clone());
@@ -247,7 +300,13 @@ mod tests {
     #[test]
     fn invalid_formats_keep_original_and_pending_record() {
         let (root, video, store) = setup();
-        store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
         let current = "unknown format".to_string();
         fs::write(&video, &current).unwrap();
         assert!(store.restore().is_err());
@@ -256,7 +315,13 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         let (root, video, store) = setup();
         fs::write(&video, "unknown format").unwrap();
-        assert!(store.prepare(&video, &root.join("cs2.exe")).is_err());
+        assert!(store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap()
+            )
+            .is_err());
         assert!(store.load().unwrap().is_none());
         assert_eq!(fs::read_to_string(&video).unwrap(), "unknown format");
         fs::remove_dir_all(root).unwrap();
@@ -267,10 +332,22 @@ mod tests {
         let original = fs::read(&video).unwrap();
         fs::create_dir_all(root.join("data")).unwrap();
         fs::write(&store.root, "blocked directory").unwrap();
-        assert!(store.prepare(&video, &root.join("cs2.exe")).is_err());
+        assert!(store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap()
+            )
+            .is_err());
         assert_eq!(fs::read(&video).unwrap(), original);
         fs::remove_file(&store.root).unwrap();
-        store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
         fs::remove_file(&video).unwrap();
         assert!(store.restore().is_err());
         assert!(store.load().unwrap().is_some());
@@ -279,7 +356,13 @@ mod tests {
     #[test]
     fn completed_write_with_pending_journal_recovers_idempotently() {
         let (root, video, store) = setup();
-        let journal = store.prepare(&video, &root.join("cs2.exe")).unwrap();
+        let journal = store
+            .prepare(
+                &video,
+                &root.join("cs2.exe"),
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
         let current = fs::read_to_string(&video)
             .unwrap()
             .replace("\"1920\"", "\"1856\"")

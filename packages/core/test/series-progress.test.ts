@@ -112,6 +112,46 @@ function reduce(
 }
 
 describe('SeriesProgress', () => {
+  it('reconciles the final absolute round history before the same observation freezes the map', () => {
+    // Real RC20 Nuke: gameover arrives with round=18, score=5:13,
+    // round.phase=freezetime and all 18 round_wins; there is no round_ended transition.
+    const wins = Array.from({ length: 18 }, (_, index) => ({
+      roundNumber: index + 1,
+      winnerSide: index < 5 ? ('CT' as const) : ('T' as const),
+      winCondition: index === 17 ? ('bomb' as const) : ('elimination' as const),
+    }));
+    let progress = reduce(
+      createSeriesProgress(contextFixture()),
+      [],
+      observation('Mirage', 1, { ct: 5, t: 12 }, wins.slice(0, 17)),
+    );
+    progress = reduce(
+      progress,
+      [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 5, t: 13 } }],
+      observation('Mirage', 1, { ct: 5, t: 13 }, wins),
+    );
+    expect(progress.maps[0]).toMatchObject({ status: 'completed', finalScore: { a: 5, b: 13 } });
+    expect(progress.maps[0]?.roundHistory.rounds).toHaveLength(18);
+    expect(progress.maps[0]?.roundHistory.rounds[17]).toMatchObject({
+      roundNumber: 18,
+      winnerSide: 'T',
+      winCondition: 'bomb',
+    });
+    expect(progress.maps[0]?.roundHistory.completeness).toBe('complete');
+    const frozen = progress.maps[0];
+    progress = reduce(
+      progress,
+      [],
+      observation(
+        'Mirage',
+        1,
+        { ct: 13, t: 5 },
+        wins.map((win) => ({ ...win, winnerSide: 'CT' as const })),
+      ),
+    );
+    expect(progress.maps[0]).toEqual(frozen);
+  });
+
   it('binds maps, freezes side-aware results, and marks the BO3 remainder not played', () => {
     const context = contextFixture();
     let progress = reduce(createSeriesProgress(context));

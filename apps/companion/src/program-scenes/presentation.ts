@@ -64,7 +64,7 @@ export function summarizeMap(
   };
 }
 
-/** Captured synchronously after SeriesProgress consumes map-ended, before another frame can replace players. */
+/** Scores freeze at map-ended; terminal KAD may settle within that exact execution. */
 export class ProgramPresentationStore {
   private key: string | null = null;
   private value: ProgramPresentation = this.empty();
@@ -114,13 +114,56 @@ export class ProgramPresentationStore {
         map.mapName === p.map.name &&
         (p.series?.currentMapOrder === null || map.mapOrder === p.series?.currentMapOrder),
     );
+    if (!completed?.finalScore) return;
+    const snapshot = summarizeMap(p, completed.mapOrder, completed.finalScore);
+    if (!snapshot) return;
+    const prior = this.value.completed.find((item) => item.mapOrder === completed.mapOrder);
+    if (!prior) {
+      this.value.completed = [...this.value.completed, snapshot].slice(-5);
+      return;
+    }
+    const before = prior.cursor;
+    const after = snapshot.cursor;
     if (
-      !completed?.finalScore ||
-      this.value.completed.some((item) => item.mapOrder === completed.mapOrder)
+      before.producerInstanceId !== after.producerInstanceId ||
+      before.liveSessionId !== after.liveSessionId ||
+      before.mapEpoch !== after.mapEpoch ||
+      before.programSourceGeneration !== after.programSourceGeneration ||
+      before.programReceiveSequence === null ||
+      after.programReceiveSequence === null ||
+      after.programReceiveSequence <= before.programReceiveSequence ||
+      prior.mapName !== snapshot.mapName ||
+      prior.score.a !== snapshot.score.a ||
+      prior.score.b !== snapshot.score.b
     )
       return;
-    const snapshot = summarizeMap(p, completed.mapOrder, completed.finalScore);
-    if (snapshot) this.value.completed = [...this.value.completed, snapshot].slice(-5);
+    for (const side of ['a', 'b'] as const) {
+      const oldPlayers = prior.players[side];
+      const newPlayers = snapshot.players[side];
+      if (
+        oldPlayers.length === 0 ||
+        oldPlayers.length !== newPlayers.length ||
+        oldPlayers.some((player) => !newPlayers.some((item) => item.id === player.id))
+      )
+        return;
+    }
+    // Keep the captured identities/media and authoritative score. Only directly
+    // observed KAD can settle; missing fields cannot erase an established value.
+    const players = (side: 'a' | 'b') =>
+      prior.players[side].map((player) => {
+        const latest = snapshot.players[side].find((item) => item.id === player.id)!;
+        return {
+          ...player,
+          kills: latest.kills ?? player.kills,
+          assists: latest.assists ?? player.assists,
+          deaths: latest.deaths ?? player.deaths,
+        };
+      });
+    const nextPlayers = { a: players('a'), b: players('b') };
+    if (JSON.stringify(nextPlayers) === JSON.stringify(prior.players)) return;
+    this.value.completed = this.value.completed.map((item) =>
+      item === prior ? { ...prior, cursor: after, players: nextPlayers } : item,
+    );
   }
   get(document?: MatchDocumentV1 | null, schedule?: ScheduleWindow | null): ProgramPresentation {
     const value = programPresentationSchema.parse(this.value);

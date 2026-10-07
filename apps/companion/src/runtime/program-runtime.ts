@@ -447,7 +447,12 @@ export class ProgramRuntime {
             previousMapEpoch: transition.previousMapEpoch,
             previousMapName: transition.previousMapName ?? null,
             mapName: transition.mapName ?? null,
-            resetReason: transition.reason === 'explicit-reset' ? transition.resetReason : null,
+            resetReason:
+              transition.reason === 'explicit-reset'
+                ? transition.resetReason
+                : transition.reason === 'observed-same-map-restart'
+                  ? 'same-map-restart'
+                  : null,
           };
           break;
       }
