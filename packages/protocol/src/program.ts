@@ -220,14 +220,16 @@ export const programPayloadSchema = z.object({
   match: z
     .object({
       matchId: z.string(),
-      competition: z.object({
-        competitionId: z.string(),
-        slug: z.string(),
-        name: z.string(),
-        themeColor: nullableString,
-      }),
+      competition: z
+        .object({
+          competitionId: z.string(),
+          slug: z.string(),
+          name: z.string(),
+          themeColor: nullableString,
+        })
+        .nullable(),
       format: z.enum(['bo1', 'bo3', 'bo5']),
-      stage: z.string(),
+      stage: z.string().nullable(),
     })
     .nullable(),
   teams: z.object({ ct: teamSchema, t: teamSchema }),

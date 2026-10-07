@@ -8,7 +8,7 @@ import {
   compareScheduleMatches,
   validateBroadcastManifest,
   validateBroadcastScheduleWindow,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type BroadcastScheduleWindowV1,
 } from '../src/index.js';
 
@@ -28,9 +28,9 @@ function mutableClone<T>(value: T): Mutable<T> {
   return structuredClone(value) as Mutable<T>;
 }
 
-describe('BroadcastManifestV1 contract', () => {
+describe('BroadcastManifest contract', () => {
   it('accepts the full same-shape fixture with a null canonical startedAt', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const result = validateBroadcastManifest(fixture);
 
     expect(result.ok).toBe(true);
@@ -41,7 +41,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('accepts a non-null canonical startedAt without deriving or rewriting it', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     candidate.match.startedAt = '2026-09-16T10:03:00.123Z';
 
@@ -52,7 +52,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('returns a typed diagnostic for unsupported schema versions', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = { ...fixture, schemaVersion: 'rivalhub.broadcast-manifest.v9' };
 
     const result = validateBroadcastManifest(candidate);
@@ -71,14 +71,14 @@ describe('BroadcastManifestV1 contract', () => {
   it.each([
     [
       'duplicate entry',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.entrants.b.entryId = candidate.entrants.a.entryId;
       },
       'duplicate_entry_id',
     ],
     [
       'duplicate playerId',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.entrants.b.roster.players[0]!.playerId =
           candidate.entrants.a.roster.players[0]!.playerId;
       },
@@ -86,7 +86,7 @@ describe('BroadcastManifestV1 contract', () => {
     ],
     [
       'duplicate Steam64',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.entrants.b.roster.players[0]!.steam64 =
           candidate.entrants.a.roster.players[0]!.steam64;
       },
@@ -94,41 +94,41 @@ describe('BroadcastManifestV1 contract', () => {
     ],
     [
       'invalid map order',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.maps[1]!.mapOrder = candidate.maps[0]!.mapOrder;
       },
       'duplicate_map_order',
     ],
     [
       'invalid map order range',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.maps[0]!.mapOrder = 0;
       },
       'invalid_map_order',
     ],
     [
       'invalid round',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.match.round = 1.5;
       },
       'invalid_round',
     ],
     [
       'unknown map picker',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.maps[0]!.pickedByEntryId = 'entry-not-in-match';
       },
       'unknown_entry_reference',
     ],
     [
       'unknown veto entry',
-      (candidate: Mutable<BroadcastManifestV1>) => {
+      (candidate: Mutable<BroadcastManifest>) => {
         candidate.veto[0]!.entryId = 'entry-not-in-match';
       },
       'unknown_entry_reference',
     ],
   ] as const)('rejects %s with a typed semantic diagnostic', async (_name, mutate, code) => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     mutate(candidate);
 
@@ -138,7 +138,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('keeps missing canonical fields representable and reports local warnings', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     candidate.entrants.a.roster.players[0]!.steam64 = null;
     candidate.entrants.a.roster.players[0]!.displayName = null;
@@ -156,7 +156,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('rejects malformed timestamp and score-pair shapes without throwing', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     candidate.match.scheduledAt = 'not-a-timestamp';
     candidate.match.scoreA = 1;
@@ -177,7 +177,7 @@ describe('BroadcastManifestV1 contract', () => {
     ['accepts a leap-day timestamp', '2028-02-29T00:00:00Z', true],
     ['accepts an explicit offset timestamp', '2026-09-16T08:00:00+08:00', true],
   ] as const)('%s', async (_name, timestamp, expected) => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     candidate.match.scheduledAt = timestamp;
 
@@ -199,7 +199,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('enforces the canonical map count and mapOrder bounds for each match format', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
 
     const bo1 = mutableClone(fixture);
     bo1.match.format = 'bo1';
@@ -229,7 +229,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('accepts additive V1 fields and strips them before DTO consumption', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = {
       ...fixture,
       futureCoverage: { producer: 'rivalhub' },
@@ -260,7 +260,7 @@ describe('BroadcastManifestV1 contract', () => {
   });
 
   it('rejects veto action types outside the canonical V1 domain', async () => {
-    const fixture = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = mutableClone(fixture);
     candidate.veto[0]!.actionType = 'remove' as never;
 

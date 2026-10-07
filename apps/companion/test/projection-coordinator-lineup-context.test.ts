@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import { expect, it } from 'vitest';
 
@@ -10,16 +10,16 @@ import { createProjectionCoordinator } from '../src/projections/projection-coord
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
 
-async function readManifest(): Promise<BroadcastManifestV1> {
+async function readManifest(): Promise<BroadcastManifest> {
   return JSON.parse(
     await readFile(
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
 }
 
-function bindingFor(manifest: BroadcastManifestV1): MatchContextBinding {
+function bindingFor(manifest: BroadcastManifest): MatchContextBinding {
   return {
     manifest,
     context: toMatchContext(manifest),
@@ -29,7 +29,7 @@ function bindingFor(manifest: BroadcastManifestV1): MatchContextBinding {
   };
 }
 
-function matchedObservation(manifest: BroadcastManifestV1): TelemetryObservation {
+function matchedObservation(manifest: BroadcastManifest): TelemetryObservation {
   const entrantPlayers = (entry: 'a' | 'b', side: 'CT' | 'T') =>
     manifest.entrants[entry].roster.players.slice(0, 5).map((player, index) => ({
       sourcePlayerId:

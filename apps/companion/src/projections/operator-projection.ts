@@ -154,7 +154,7 @@ export function projectOperator(input: OperatorProjectionInput): OperatorProject
           ? null
           : {
               matchId: context.context.matchId,
-              competitionName: context.context.competition.name,
+              competitionName: context.context.competition?.name ?? '',
               format: context.context.format,
               entryAName: context.context.entrants.a.name,
               entryBName: context.context.entrants.b.name,

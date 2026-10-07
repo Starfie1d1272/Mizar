@@ -9,13 +9,13 @@ import {
   type Bo3BpRules,
 } from '@mizar/core/projection';
 import { localBpDraftSchema, type LocalBpDraft } from '@mizar/protocol/bp';
-import type { BroadcastManifestV1, BroadcastSide } from '@mizar/rivalhub';
+import type { BroadcastManifest, BroadcastSide } from '@mizar/rivalhub';
 import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
 import { isLocalBinding, localAuthoringMode } from '../match-context/lkg-store.js';
 
 export type LocalBpDraftResult =
-  | { readonly ok: true; readonly manifest: BroadcastManifestV1 }
+  | { readonly ok: true; readonly manifest: BroadcastManifest }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
 const mapCatalog = new Set<string>(LOCAL_BP_MAP_CATALOG.map(({ mapName }) => mapName));
@@ -160,8 +160,8 @@ export function createLocalBpManifest(
   if (
     baseManifest !== undefined &&
     !editableStandalone &&
-    (draft.competitionName.trim() !== baseManifest.match.competition.name.trim() ||
-      draft.stage.trim() !== baseManifest.match.stage.trim() ||
+    (draft.competitionName.trim() !== (baseManifest.match.competition?.name ?? '').trim() ||
+      draft.stage.trim() !== (baseManifest.match.stage ?? '').trim() ||
       draft.format !== baseManifest.match.format ||
       draft.entrants.a.name.trim() !== baseManifest.entrants.a.name.trim() ||
       draft.entrants.b.name.trim() !== baseManifest.entrants.b.name.trim() ||
@@ -295,7 +295,7 @@ export function createLocalBpManifest(
       completedAt: null,
     };
   });
-  const maps: BroadcastManifestV1['maps'][number][] = [];
+  const maps: BroadcastManifest['maps'][number][] = [];
   for (const planned of plannedMaps) {
     const existing = baseManifest?.maps.find((map) => map.mapOrder === planned.mapOrder);
     const played =
@@ -323,19 +323,22 @@ export function createLocalBpManifest(
   const competitionName = draft.competitionName.trim() || '本地赛事';
   const revision = `local-${randomUUID()}`;
   const stage = draft.stage.trim() || '本地比赛';
-  let manifest: BroadcastManifestV1;
+  let manifest: BroadcastManifest;
   if (baseManifest !== undefined) {
     const match = editableStandalone
       ? {
           ...baseManifest.match,
-          competition: {
-            ...baseManifest.match.competition,
-            name: competitionName,
-            slug:
-              competitionName === baseManifest.match.competition.name
-                ? baseManifest.match.competition.slug
-                : localSlug(competitionName),
-          },
+          competition:
+            baseManifest.match.competition === null
+              ? null
+              : {
+                  ...baseManifest.match.competition,
+                  name: competitionName,
+                  slug:
+                    competitionName === baseManifest.match.competition.name
+                      ? baseManifest.match.competition.slug
+                      : localSlug(competitionName),
+                },
           format: draft.format,
           stage,
         }
@@ -484,8 +487,8 @@ export function bpAuthoringDraftFromBinding(
       ? null
       : (sideChoices.get(deciderName)?.side ?? null);
   return {
-    competitionName: manifest.match.competition.name,
-    stage: manifest.match.stage,
+    competitionName: manifest.match.competition?.name ?? '',
+    stage: manifest.match.stage ?? '',
     format: manifest.match.format,
     entrants: {
       a: { name: manifest.entrants.a.name, logoUrl: manifest.entrants.a.logoUrl },

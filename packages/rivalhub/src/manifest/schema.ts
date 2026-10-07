@@ -80,7 +80,7 @@ export const broadcastCommentatorSchema = z.object({
   liveStreamUrl: nullableStringSchema,
 });
 
-export const broadcastManifestSchema = z.object({
+export const broadcastManifestV1Schema = z.object({
   schemaVersion: z.literal(BROADCAST_MANIFEST_SCHEMA_VERSION),
   revision: z.string(),
   match: broadcastMatchSchema,
@@ -102,3 +102,17 @@ export type BroadcastVetoStepSchemaOutput = z.infer<typeof broadcastVetoStepSche
 export type BroadcastMapSchemaOutput = z.infer<typeof broadcastMapSchema>;
 export type BroadcastCommentatorSchemaOutput = z.infer<typeof broadcastCommentatorSchema>;
 export type BroadcastManifestSchemaOutput = z.infer<typeof broadcastManifestSchema>;
+
+/** v2 removes event affiliation as a prerequisite; entrant IDs remain opaque runtime identities. */
+export const broadcastManifestV2Schema = broadcastManifestV1Schema.extend({
+  schemaVersion: z.literal('rivalhub.broadcast-manifest.v2'),
+  match: broadcastMatchSchema.extend({
+    competition: broadcastCompetitionSchema.nullable(),
+    stage: nullableStringSchema,
+  }),
+});
+export const broadcastManifestSchema = z.discriminatedUnion('schemaVersion', [
+  broadcastManifestV1Schema,
+  broadcastManifestV2Schema,
+]);
+export type BroadcastManifestV1SchemaOutput = z.infer<typeof broadcastManifestV1Schema>;

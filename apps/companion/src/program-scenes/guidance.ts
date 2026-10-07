@@ -111,7 +111,7 @@ export class ProductionGuidanceStore {
     const online =
       binding?.origin === 'online' ||
       (binding?.origin === 'cache' && binding.cachedFrom === 'online');
-    const slug = binding?.manifest.match.competition.slug;
+    const slug = binding?.manifest.match.competition?.slug;
     const rivalhubUrl =
       online && slug && p.match
         ? `${OFFICIAL_RIVALHUB_URL}/admin/${encodeURIComponent(slug)}/matches/${encodeURIComponent(p.match.matchId)}`

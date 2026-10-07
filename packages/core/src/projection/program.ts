@@ -212,9 +212,9 @@ export interface ProgramProjection {
       readonly slug: string;
       readonly name: string;
       readonly themeColor: string | null;
-    };
+    } | null;
     readonly format: MatchFormat;
-    readonly stage: string;
+    readonly stage: string | null;
   };
   readonly teams: {
     readonly ct: ProgramTeamPresentation;
@@ -659,10 +659,13 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         ? null
         : {
             matchId: input.context.matchId,
-            competition: {
-              ...input.context.competition,
-              slug: input.context.competition.slug ?? input.context.competition.competitionId,
-            },
+            competition:
+              input.context.competition === null
+                ? null
+                : {
+                    ...input.context.competition,
+                    slug: input.context.competition.slug ?? input.context.competition.competitionId,
+                  },
             format: input.context.format,
             stage: input.context.stageLabel ?? input.context.stage,
           },

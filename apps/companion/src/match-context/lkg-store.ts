@@ -4,7 +4,7 @@ import {
   BroadcastManifestConversionError,
   toMatchDocumentV1,
   validateBroadcastManifest,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type ContractDiagnostic,
 } from '@mizar/rivalhub';
 import type { MatchContext } from '@mizar/core/match-context';
@@ -19,7 +19,7 @@ export type LocalAuthoringMode = 'standalone' | 'bound-overlay';
 export const MATCH_CONTEXT_CACHE_VERSION = 'mizar.match-context-cache.v1' as const;
 
 export interface MatchContextBinding {
-  readonly manifest: BroadcastManifestV1;
+  readonly manifest: BroadcastManifest;
   readonly context: MatchContext;
   readonly origin: ContextOrigin;
   readonly freshness: ContextFreshness;
@@ -106,7 +106,7 @@ interface MatchManifestCacheMetadata {
 interface MatchManifestCacheEnvelope {
   readonly cacheVersion: typeof MATCH_CONTEXT_CACHE_VERSION;
   readonly metadata: MatchManifestCacheMetadata;
-  readonly payload: BroadcastManifestV1;
+  readonly payload: BroadcastManifest;
 }
 
 function isSourceOrigin(value: unknown): value is Exclude<ContextOrigin, 'cache'> {
@@ -147,7 +147,7 @@ function parseEnvelope(value: unknown): MatchManifestCacheEnvelope | undefined {
           ? metadata.localAuthoringMode
           : 'bound-overlay',
     },
-    payload: value.payload as BroadcastManifestV1,
+    payload: value.payload as BroadcastManifest,
   };
 }
 
@@ -193,7 +193,7 @@ export class MatchManifestLkgStore {
     candidate: unknown,
     origin: Exclude<ContextOrigin, 'cache'>,
     options: MatchManifestLkgSaveOptions = {},
-  ): Promise<MatchContextStoreResult<BroadcastManifestV1>> {
+  ): Promise<MatchContextStoreResult<BroadcastManifest>> {
     const validated = validateBroadcastManifest(candidate);
     if (!validated.ok) return invalidCandidate(validated.diagnostics);
 

@@ -10,14 +10,14 @@ import type { MatchContext } from '@mizar/core/match-context';
 import type { ObservedPlayer } from '@mizar/core/telemetry';
 import { describe, expect, it } from 'vitest';
 
-import { toMatchContext, type BroadcastManifestV1 } from '../src/index.js';
+import { toMatchContext, type BroadcastManifest } from '../src/index.js';
 
 const fixtureRoot = resolve(process.cwd(), 'packages/rivalhub/test/fixtures');
 
-async function readManifest(): Promise<BroadcastManifestV1> {
+async function readManifest(): Promise<BroadcastManifest> {
   return JSON.parse(
     await readFile(resolve(fixtureRoot, 'broadcast-manifest-v1.valid.json'), 'utf8'),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
 }
 
 function canonicalPlayers(context: MatchContext) {

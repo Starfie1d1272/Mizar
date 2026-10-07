@@ -77,7 +77,7 @@ function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
     <footer className="broadcast-identity">
       <div>
         <Media src={data.eventLogoUrl} />
-        <strong>{data.match?.competition.name}</strong>
+        <strong>{data.match?.competition?.name}</strong>
         <span>{data.match?.stage}</span>
       </div>
       <div className="broadcast-signature">
@@ -255,7 +255,7 @@ function Waiting({ data }: { data: ProgramPresentation }) {
     <main className="waiting-layout" data-schedule={Boolean(data.previous || data.next)}>
       <header className="waiting-event">
         <Media src={data.eventLogoUrl} />
-        <span>{data.match?.competition.name ?? ''}</span>
+        <span>{data.match?.competition?.name ?? ''}</span>
       </header>
       {series ? (
         <>

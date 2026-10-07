@@ -291,7 +291,7 @@ export function PreparationPage() {
               <Panel className="preparation-match">
                 <div className="preparation-match__meta">
                   <span>
-                    {match.competition.name} · {match.format.toUpperCase()}
+                    {match.competition?.name} · {match.format.toUpperCase()}
                   </span>
                   <StatusPill tone="info">
                     {envelope?.source === 'fixture'

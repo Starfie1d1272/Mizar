@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
-import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import {
   iterateCaptureFrames,
   replayCapture,
@@ -24,13 +24,13 @@ import type { createProgramRuntime } from '../../src/runtime/program-runtime.js'
 
 export const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
-export async function readReplayManifest(): Promise<BroadcastManifestV1> {
+export async function readReplayManifest(): Promise<BroadcastManifest> {
   return JSON.parse(
     await readFile(
       resolve(REPOSITORY_ROOT, 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -40,8 +40,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Build fixture-local MatchContext directly from the preserved GSI roster. */
 export async function buildReplayManifestFromCapture(
   capture: VerifiedCapture,
-  template: BroadcastManifestV1,
-): Promise<BroadcastManifestV1> {
+  template: BroadcastManifest,
+): Promise<BroadcastManifest> {
   const provenance = capture.manifest.provenance;
   const rosterCapture =
     provenance !== undefined &&
@@ -71,7 +71,7 @@ export async function buildReplayManifestFromCapture(
     }
     if (teams.get(ct.name)?.length !== 5 || teams.get(t.name)?.length !== 5) continue;
 
-    const updateEntrant = (entry: BroadcastManifestV1['entrants']['a'], name: string) => ({
+    const updateEntrant = (entry: BroadcastManifest['entrants']['a'], name: string) => ({
       ...entry,
       name,
       logoUrl: null,
@@ -102,8 +102,8 @@ export async function buildReplayManifestFromCapture(
 
 async function applyFixturePresentationEnrichment(
   capture: VerifiedCapture,
-  manifest: BroadcastManifestV1,
-): Promise<BroadcastManifestV1> {
+  manifest: BroadcastManifest,
+): Promise<BroadcastManifest> {
   const provenance = capture.manifest.provenance;
   if (
     provenance === undefined ||
@@ -171,7 +171,7 @@ async function applyFixturePresentationEnrichment(
     logos.set(candidate.gsiTeamName, candidate.logoUrl);
   }
 
-  const enrichEntrant = (entrant: BroadcastManifestV1['entrants']['a']) => ({
+  const enrichEntrant = (entrant: BroadcastManifest['entrants']['a']) => ({
     ...entrant,
     logoUrl: logos.get(entrant.name) ?? null,
     roster: {
@@ -194,8 +194,8 @@ async function applyFixturePresentationEnrichment(
 /** Tournament labels/plan are harness data; only current observation proves the side. */
 export async function normalizeReplayManifest(
   capture: VerifiedCapture,
-  manifest: BroadcastManifestV1,
-): Promise<BroadcastManifestV1> {
+  manifest: BroadcastManifest,
+): Promise<BroadcastManifest> {
   for await (const event of replayCapture(capture, { mode: { kind: 'step' } })) {
     if (event.kind !== 'frame') continue;
     if (!event.result.ok)
@@ -239,7 +239,7 @@ export interface RealReplayPipeline {
 
 /** Shared production composition for semantic fixtures and full-match fault replay. */
 export async function replayRealProgram(options: {
-  readonly configureManifest?: (manifest: BroadcastManifestV1) => BroadcastManifestV1;
+  readonly configureManifest?: (manifest: BroadcastManifest) => BroadcastManifest;
   readonly capturePath: string;
   readonly targetSequence?: number;
   readonly faultPlan?: ReplayFaultPlanV1;
@@ -251,7 +251,7 @@ export async function replayRealProgram(options: {
   readonly radarSnapshot: RadarSnapshot;
   readonly runtimeSnapshot: ReturnType<RealReplayPipeline['runtime']['getSnapshot']>;
   readonly capture: VerifiedCapture;
-  readonly manifest: BroadcastManifestV1;
+  readonly manifest: BroadcastManifest;
   readonly acceptedSequences: readonly number[];
 }> {
   const capture = await verifyCapture(options.capturePath);

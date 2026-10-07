@@ -62,7 +62,8 @@ export function projectLiveSnapshotV1(input: {
   readonly includeRadar?: boolean;
 }): LiveSnapshotV1 | null {
   const { bundle, binding } = input;
-  if (!eligible(bundle, binding) || binding === undefined) return null;
+  if (!eligible(bundle, binding) || binding === undefined || binding.context.competition === null)
+    return null;
   const { program, radar, operator } = bundle;
   const currentMap = program.series?.maps.find(
     (map) => map.mapOrder === program.series?.currentMapOrder,
@@ -207,6 +208,7 @@ export function buildReliableEventV1(input: {
   const { binding, bundle } = input;
   if (
     binding === undefined ||
+    binding.context.competition === null ||
     binding.freshness !== 'fresh' ||
     bundle.program.match?.matchId !== binding.context.matchId ||
     bundle.program.status.context !== 'fresh'

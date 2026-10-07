@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 
 import type { MatchDocumentV1 } from '@mizar/core/match-context';
 import { parseMatchDocumentV1 } from '@mizar/protocol/context';
-import { validateBroadcastManifest, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { validateBroadcastManifest, type BroadcastManifest } from '@mizar/rivalhub';
 
 /** Compatibility view for existing BP/Runtime consumers; local storage never uses this shape. */
-export function localDocumentBindingManifest(input: unknown): BroadcastManifestV1 {
+export function localDocumentBindingManifest(input: unknown): BroadcastManifest {
   const document: MatchDocumentV1 = parseMatchDocumentV1(input);
   const toWireSide = (side: 'CT' | 'T' | null) =>
     side === null ? null : side === 'CT' ? ('ct' as const) : ('t' as const);
@@ -16,14 +16,20 @@ export function localDocumentBindingManifest(input: unknown): BroadcastManifestV
     roster: { rosterId: entry.rosterId, players: entry.players.map((player) => ({ ...player })) },
   });
   const candidate = {
-    schemaVersion: 'rivalhub.broadcast-manifest.v1',
+    schemaVersion:
+      document.competition === null
+        ? 'rivalhub.broadcast-manifest.v2'
+        : 'rivalhub.broadcast-manifest.v1',
     revision: `local:${createHash('sha256').update(JSON.stringify(document)).digest('hex')}`,
     match: {
       matchId: document.matchId,
-      competition: { ...document.competition, slug: document.competition.competitionId },
+      competition:
+        document.competition === null
+          ? null
+          : { ...document.competition, slug: document.competition.competitionId },
       status: document.status,
       format: document.format,
-      stage: document.stageLabel,
+      stage: document.stage,
       stageKey: document.stage,
       stageLabel: document.stageLabel,
       roundLabel: document.roundLabel,

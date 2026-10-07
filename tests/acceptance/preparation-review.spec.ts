@@ -158,7 +158,9 @@ for (const source of ['online', 'cache'] as const) {
         },
       );
       await page.goto('/matches');
-      await expect(page.getByText(match.competition.name, { exact: true })).toBeVisible();
+      await expect(
+        page.getByText(match.competition?.name ?? 'missing-event', { exact: true }),
+      ).toBeVisible();
       await expect(page.getByText('计划开始', { exact: true })).toBeVisible();
       await expect(page.getByText('RivalHub 比赛资料', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '保存比赛资料' })).toHaveCount(0);

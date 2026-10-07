@@ -441,7 +441,7 @@ export function buildMatchHeaderPresentation(payload: ProgramPayload): MatchHead
     bestOfLabel:
       series?.format === undefined ? null : (series.format.toUpperCase() as 'BO1' | 'BO3' | 'BO5'),
     seriesScoreText: series === null ? null : `${series.score.a}:${series.score.b}`,
-    competitionName: payload.match?.competition.name ?? null,
+    competitionName: payload.match?.competition?.name ?? null,
     stageName: payload.match?.stage ?? null,
     roundNumber,
     roundLabel: roundNumber === null ? null : `ROUND ${roundNumber}`,

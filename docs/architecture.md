@@ -47,6 +47,12 @@ Companion 组装运行时、持久化和接口
 
 依赖顺序为适配器 → Mizar 领域模型 → 投影 → 渲染或传输。不得通过深层导入、TypeScript 路径映射或共享数据库绕过模块边界。
 
+## 比赛与赛事上下文
+
+`MatchContext` 与 `MatchDocumentV1` 以单场比赛为根，`competition` 和 `stage` 可以为空。两方名称、赛制、地图及 BP 引用属于比赛；赛事名称和赛程窗口是可选组织信息。空名单表示未提供名单，不能阻止文档导入、本地保存或节目投影；游戏观察身份仍由既有遥测归一化负责。
+
+来源适配器保留 opaque 参赛方标识，不将它解释成赛事报名 ID。赛事比赛继续使用已有标识与行为；无赛事比赛不创建占位赛事，也不进入赛事赛程。现有赛事授权的在线输出需要真实赛事上下文；无赛事本地制作不会伪造授权并回传。
+
 ## 单一事实与独立投影
 
 Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`、`OperatorProjection`、`ObserverAssistProjection` 和 `DebugProjection` 提供不同视图。

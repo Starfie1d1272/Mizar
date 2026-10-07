@@ -75,10 +75,10 @@ export const matchDocumentV1Schema = z
   .strictObject({
     schemaVersion: z.literal(MATCH_DOCUMENT_SCHEMA_VERSION),
     matchId: id,
-    competition,
+    competition: competition.nullable(),
     status,
     format,
-    stage: label.min(1),
+    stage: label.min(1).nullable(),
     stageLabel: label.min(1),
     round: z.number().int().min(0).max(99).nullable(),
     roundLabel: optionalLabel,

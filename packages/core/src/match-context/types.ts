@@ -65,10 +65,10 @@ export interface MatchCommentatorContext {
  */
 export interface MatchContext {
   readonly matchId: string;
-  readonly competition: MatchCompetitionContext;
+  readonly competition: MatchCompetitionContext | null;
   readonly status: MatchStatus;
   readonly format: MatchFormat;
-  readonly stage: string;
+  readonly stage: string | null;
   readonly stageLabel?: string;
   readonly round: number | null;
   readonly entryRound: string | null;
