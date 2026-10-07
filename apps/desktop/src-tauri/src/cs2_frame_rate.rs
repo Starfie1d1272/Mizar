@@ -167,15 +167,20 @@ fn patch_convars(text: &str, limit: u16) -> Result<String, String> {
 struct ConfigScript {
     applied: String,
     includes: Vec<(String, bool)>,
+    aliases: BTreeSet<String>,
+    commands: BTreeSet<String>,
 }
 fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
     let tokens = lex(text, true)?;
     let mut edits = Vec::new();
     let mut includes = Vec::new();
+    let mut aliases = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     for command in tokens
         .split(|t| !t.quoted && t.value == ";")
         .filter(|c| !c.is_empty())
     {
+        commands.insert(command[0].value.to_ascii_lowercase());
         match command[0].value.to_ascii_lowercase().as_str() {
             "fps_max" => {
                 if command.len() != 2 || command[1].value.parse::<u32>().is_err() {
@@ -205,12 +210,17 @@ fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
                     "启动配置使用异步执行，无法保证本次帧率上限，请先移除该启动命令。".into(),
                 )
             }
-            "alias" | "incrementvar" | "toggle" => {
+            "alias" => {
+                // Definitions and key bindings do not execute their bodies.
+                // Refuse startup invocations after scanning all referenced cfgs.
+                if let Some(name) = command.get(1) {
+                    aliases.insert(name.value.to_ascii_lowercase());
+                }
+            }
+            "incrementvar" | "toggle" => {
                 if command.iter().skip(1).any(|t| {
                     let value = t.value.to_ascii_lowercase();
                     value.contains("fps_max")
-                        || (command[0].value.eq_ignore_ascii_case("alias")
-                            && value.contains("exec"))
                 }) {
                     return Err("启动配置包含动态帧率命令，请先改为 fps_max 直接赋值。".into());
                 }
@@ -222,7 +232,12 @@ fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
     for (start, end, value) in edits.into_iter().rev() {
         applied.replace_range(start..end, &value);
     }
-    Ok(ConfigScript { applied, includes })
+    Ok(ConfigScript {
+        applied,
+        includes,
+        aliases,
+        commands,
+    })
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<String, String> {
@@ -295,6 +310,8 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
         .ok_or("Steam 账号目录不可用。")?;
     let localconfig = account.join("config/localconfig.vdf");
     let mut includes = vec![("autoexec.cfg".to_string(), true)];
+    let mut aliases = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     if localconfig.exists() {
         // Read only. Never put this file, its other fields, or tokens in a journal.
         let local = read_bounded(&localconfig, 16 * 1024 * 1024)?;
@@ -312,6 +329,9 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
         )? {
             let tokens = lex(&options.value, true)?;
             for (index, token) in tokens.iter().enumerate() {
+                if let Some(command) = token.value.strip_prefix('+') {
+                    commands.insert(command.to_ascii_lowercase());
+                }
                 if ["+exec_async", "+alias"]
                     .iter()
                     .any(|name| token.value.eq_ignore_ascii_case(name))
@@ -370,12 +390,17 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
             return Err("CS2 启动配置总量超过上限。".into());
         }
         let script = patch_script(&original, limit)?;
+        aliases.extend(script.aliases);
+        commands.extend(script.commands);
         includes.extend(script.includes);
         if script.applied != original {
             files.push(
                 json!({"kind":"cfg", "path":path, "original":original, "applied":script.applied}),
             );
         }
+    }
+    if !aliases.is_disjoint(&commands) {
+        return Err("启动配置调用了自定义别名，无法保证帧率上限，请改为直接命令后重试。".into());
     }
     Ok(files)
 }
@@ -471,7 +496,14 @@ mod tests {
                 .replace("\"300\"", "\"60\"")
         );
         assert_eq!(patched.includes, vec![("crosshair.cfg".into(), false)]);
-        assert!(patch_script("alias cap \"fps_max 0\"; cap", 60).is_err());
+        let aliases = patch_script(
+            "alias cap \"fps_max 0\"; alias auto \"exec auto\"; bind x cap",
+            60,
+        )
+        .unwrap();
+        assert!(aliases.aliases.is_disjoint(&aliases.commands));
+        let invoked = patch_script("alias cap \"fps_max 0\"; cap", 60).unwrap();
+        assert!(!invoked.aliases.is_disjoint(&invoked.commands));
         assert!(patch_script("fps_max invalid", 60).is_err());
         assert!(patch_script("exec_async auto", 60).is_err());
     }

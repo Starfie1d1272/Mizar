@@ -406,6 +406,41 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn startup_alias_definitions_are_preserved_but_invocations_fail_before_writes() {
+        for invoke in ["cap", "exec crosshair.cfg"] {
+            let (root, video, _, executable, store) = frame_setup();
+            let cfg = root.join("game/csgo/cfg/auto.cfg");
+            fs::write(&cfg, "fps_max 0; alias cap \"exec practice\"; bind x cap").unwrap();
+            let original = fs::read(&video).unwrap();
+            store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1920, 1080).unwrap(),
+                )
+                .unwrap();
+            store.restore().unwrap();
+            if invoke.starts_with("exec") {
+                fs::write(root.join("game/csgo/cfg/crosshair.cfg"), "cap").unwrap();
+            }
+            fs::write(
+                &cfg,
+                format!("fps_max 0; alias cap \"exec practice\"; {invoke}"),
+            )
+            .unwrap();
+            assert!(store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1920, 1080).unwrap()
+                )
+                .is_err());
+            assert_eq!(fs::read(&video).unwrap(), original);
+            assert!(store.load().unwrap().is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
     fn sized_launch_restores_after_restart_and_rejects_extra_owned_fields() {
         for (width, height) in [(1440, 810), (1920, 1080), (2880, 1620)] {
             let (root, video, store) = setup();
