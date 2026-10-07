@@ -1,9 +1,33 @@
 {
   "source": "6e84cd2eaa027ae322ad486b6b2ab31e18e2d486",
   "version": "1.0.0-rc.22",
-  "classification": "actual final Windows package and user-provided professional CS2 Inferno demo; playback paused during real freezetime for framing, not tactical timeout; actual Steam avatars and HLTV team logos; no official series result or veto claim",
+  "classification": "actual final Windows package and user-provided professional CS2 Inferno demo; real Steam avatars and HLTV team logos; scene framing with actual demo seeks, not complete-map statistics or complete production acceptance; no official series result or veto claim",
   "matchSource": "https://www.hltv.org/matches/2398745/falcons-vs-natus-vincere-esl-pro-league-season-24",
   "files": [
+    {
+      "file": "default-epl-inferno-gg.png",
+      "sha256": "4e9ae06c418dd2b098013b38908a2e79f7adcca52fcc5cedb53d9403b482ace9",
+      "width": 1920,
+      "height": 1080,
+      "pixelsModified": false,
+      "scene": "automatic GG after tick191000 seek and natural 1x final round"
+    },
+    {
+      "file": "default-epl-inferno-timeout.png",
+      "sha256": "8bf1654ce1dd8bd36a3859425e16c3eb55112a8b5fc30345b69124d66e0ff469",
+      "width": 1920,
+      "height": 1080,
+      "pixelsModified": false,
+      "scene": "real CT tactical timeout, demo tick44700, playback paused for framing"
+    },
+    {
+      "file": "epl-inferno-map-result.png",
+      "sha256": "b8469519bfdb63f0cc41497cc557ce426f9e1d7cb8e60d72b1dc5bcc17c8987f",
+      "width": 1920,
+      "height": 1080,
+      "pixelsModified": false,
+      "scene": "automatic map result after natural final round, score13:6, local series1:0"
+    },
     {
       "file": "hud-default-epl-inferno-freeze.png",
       "sha256": "97d88beb1f23be62a972f7007378e39b001c177b04360d351ab177c9ae3e1104",
@@ -17,7 +41,8 @@
         "t": 3
       },
       "sequence": 64498,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     },
     {
       "file": "hud-esl-epl-inferno-freeze.png",
@@ -32,7 +57,8 @@
         "t": 3
       },
       "sequence": 64499,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     },
     {
       "file": "hud-ewc-epl-inferno-freeze.png",
@@ -47,7 +73,8 @@
         "t": 3
       },
       "sequence": 64498,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     },
     {
       "file": "hud-iem-epl-inferno-freeze.png",
@@ -62,7 +89,8 @@
         "t": 3
       },
       "sequence": 64498,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     },
     {
       "file": "hud-perfectworld-epl-inferno-freeze.png",
@@ -77,14 +105,16 @@
         "t": 3
       },
       "sequence": 64499,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     },
     {
       "file": "workspace-epl-inferno-freeze.png",
       "sha256": "26b046d980bf2005526231675cd0ee4b2834c1fdbf611584bdc806c2198b0dfb",
       "width": 2560,
       "height": 1440,
-      "pixelsModified": false
+      "pixelsModified": false,
+      "scene": "real freezetime, playback paused for framing"
     }
   ]
 }

@@ -10,5 +10,6 @@
 - `rc22-windows-terminal-result.json`：最终 RC22 包在 Windows 中跳转至末局后以正常速度播放爆炸，十人结果页 K/D 与实时观测一致，比分13:5、历史18局。该证据只覆盖末局晚到死亡修复，不覆盖完整地图平均伤害统计。
 - `native-radar-aligned-analysis.json`：同一原生渲染器的60秒追踪与回调时间对齐。一段220.8ms间隔与约207.5ms画布像素读回及204.6ms命令缓冲等待重合；另有未被追踪跨度解释的间隔，不能将所有卡顿归因于该路径。
 - `radar-cadence-experiment-summary.json`：临时可恢复的回调节奏实验仍出现长间隔；实验没有进入发布包，不作为修复通过证据。
+- `rc22-final-session-summary.json`：最终RC22本轮混合定点验收和截图会话关闭后的74,781帧、零丢帧、完整性摘要，以及17项视频配置、GSI/RoundSense/autoexec和OBS退出恢复结果。会话包含跳转和资料变更，不能称为无跳转完整多图验收。
 
 原始完整GSI、身份映射、含声录像与用户设置仅留本机。`provenance.json` 区分实际包来源与离线修复源码；`privacy-verification.json` 记录针对本机原身份与名字的文本扫描。运行 `node docs/evidence/rc21-windows-handoff/verify.mjs` 检查摘要和源序列完整性。
