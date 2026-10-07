@@ -1,0 +1,64 @@
+{
+  "classification": "actual RC18 Program projection, source identities omitted; pair with exact recording frames for pixel evidence",
+  "defuseTransitions": [
+    {
+      "time": "2026-10-06T23:22:01.120Z",
+      "round": 10,
+      "score": {
+        "ct": 7,
+        "t": 3
+      },
+      "action": {
+        "kind": "defuse",
+        "remainingSeconds": 4.978678499999922,
+        "durationSeconds": 5,
+        "hasDefuseKit": true
+      }
+    },
+    {
+      "time": "2026-10-06T23:22:01.296Z",
+      "round": 10,
+      "score": {
+        "ct": 7,
+        "t": 3
+      },
+      "action": {
+        "kind": "defuse",
+        "remainingSeconds": 5.004618000000017,
+        "durationSeconds": 5,
+        "hasDefuseKit": true
+      }
+    },
+    {
+      "time": "2026-10-06T23:24:29.637Z",
+      "round": 12,
+      "score": {
+        "ct": 3,
+        "t": 9
+      },
+      "action": {
+        "kind": "defuse",
+        "remainingSeconds": 9.99464699999988,
+        "durationSeconds": 10,
+        "hasDefuseKit": null
+      }
+    }
+  ],
+  "source": "e452f8a701bd75ae95900fed6ebae718d3d89877",
+  "artifact": "f0c99a9be61f6f8823fd8dd2a62332b6357bbc1d56a18a3effeeff25d41e10f5",
+  "recording": {
+    "startedAt": "2026-10-06T23:15:16.060Z",
+    "durationSeconds": 600.05,
+    "tenSecondDefuseFrames": [
+      {
+        "file": "defuse-10s-mid.png",
+        "recordingOffsetSeconds": 557
+      },
+      {
+        "file": "defuse-10s-late.png",
+        "recordingOffsetSeconds": 561
+      }
+    ],
+    "limitation": "wire receive and wallclock/recording startup times have small offset; actual ring progression visible in corresponding images; Nuke history remained contaminated, raw action/time observations retained"
+  }
+}
