@@ -1,0 +1,52 @@
+{
+  "source": "e452f8a701bd75ae95900fed6ebae718d3d89877",
+  "verdict": "FAIL",
+  "classification": "real RC18 same-process demo restart after actual seek; no injected game data; new local rehearsal metadata was selected before restarting the demo",
+  "input": {
+    "before": {
+      "sequence": 7444,
+      "round": 16,
+      "phase": "live",
+      "historyRounds": 16
+    },
+    "after": {
+      "sequence": 7601,
+      "round": 0,
+      "phase": "warmup",
+      "score": {
+        "ct": 0,
+        "t": 0
+      },
+      "historyRounds": 0
+    }
+  },
+  "laterProjection": {
+    "time": "2026-10-06T23:23:26.775Z",
+    "round": 12,
+    "score": {
+      "ct": 9,
+      "t": 3
+    },
+    "mapEpoch": null,
+    "historyCompleteness": "complete",
+    "historyRoundNumbers": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  },
+  "limitation": "score and raw K/D pictures are valid observations; contaminated Nuke history/accumulated statistics are not complete-map acceptance evidence; RC19 must reverify the corrected boundary"
+}

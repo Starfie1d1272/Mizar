@@ -1,0 +1,547 @@
+{
+  "time": "2026-10-06T22:59:57.732Z",
+  "classification": "read-only actual qualified desktop Program DOM geometry during real demo; no invented player stats",
+  "source": "e452f8a701bd75ae95900fed6ebae718d3d89877",
+  "dpr": 1.5,
+  "viewport": [
+    1280,
+    720
+  ],
+  "rows": [
+    {
+      "name": "ALPHA 03",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 0,
+        "y": 393.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 65.33333587646484,
+        "y": 414.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "14",
+          "box": {
+            "x": 74.66667175292969,
+            "y": 414.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 99.1875,
+            "y": 414.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": {
+        "x": 136,
+        "y": 391.3333435058594,
+        "width": 10.666666984558105,
+        "height": 10.666666984558105
+      },
+      "badgeText": {
+        "x": 140.0729217529297,
+        "y": 394.4444580078125,
+        "width": 2.6666667461395264,
+        "height": 4.4444580078125
+      },
+      "badgeKills": "1"
+    },
+    {
+      "name": "ALPHA 01",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 0,
+        "y": 449.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 65.33333587646484,
+        "y": 470.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "13",
+          "box": {
+            "x": 74.66667175292969,
+            "y": 470.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "9",
+          "box": {
+            "x": 99.1875,
+            "y": 470.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 05",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 0,
+        "y": 505.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 65.33333587646484,
+        "y": 526.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "12",
+          "box": {
+            "x": 74.66667175292969,
+            "y": 526.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 99.1875,
+            "y": 526.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": {
+        "x": 136,
+        "y": 503.3333435058594,
+        "width": 10.666666984558105,
+        "height": 10.666666984558105
+      },
+      "badgeText": {
+        "x": 140.0729217529297,
+        "y": 506.4444580078125,
+        "width": 2.6666667461395264,
+        "height": 4.4444580078125
+      },
+      "badgeKills": "1"
+    },
+    {
+      "name": "ALPHA 02",
+      "design": "iem",
+      "dead": false,
+      "card": {
+        "x": 0,
+        "y": 561.3333740234375,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 65.33333587646484,
+        "y": 582.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "16",
+          "box": {
+            "x": 74.66667175292969,
+            "y": 582.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "10",
+          "box": {
+            "x": 99.1875,
+            "y": 582.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "ALPHA 04",
+      "design": "iem",
+      "dead": false,
+      "card": {
+        "x": 0,
+        "y": 617.3333740234375,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 65.33333587646484,
+        "y": 638.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "11",
+          "box": {
+            "x": 74.66667175292969,
+            "y": 638.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "10",
+          "box": {
+            "x": 99.1875,
+            "y": 638.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": {
+        "x": 136,
+        "y": 615.3333740234375,
+        "width": 10.666666984558105,
+        "height": 10.666666984558105
+      },
+      "badgeText": {
+        "x": 140.0729217529297,
+        "y": 618.4444580078125,
+        "width": 2.6666667461395264,
+        "height": 4.4444580078125
+      },
+      "badgeKills": "2"
+    },
+    {
+      "name": "BRAVO 05",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 1040,
+        "y": 393.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1175.3333740234375,
+        "y": 414.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "8",
+          "box": {
+            "x": 1176.9583740234375,
+            "y": 414.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "12",
+          "box": {
+            "x": 1201.479248046875,
+            "y": 414.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": {
+        "x": 1133.3333740234375,
+        "y": 391.3333435058594,
+        "width": 10.666666984558105,
+        "height": 10.666666984558105
+      },
+      "badgeText": {
+        "x": 1137.40625,
+        "y": 394.4444580078125,
+        "width": 2.6666667461395264,
+        "height": 4.4444580078125
+      },
+      "badgeKills": "2"
+    },
+    {
+      "name": "BRAVO 04",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 1040,
+        "y": 449.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1175.3333740234375,
+        "y": 470.66668701171875,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "9",
+          "box": {
+            "x": 1176.9583740234375,
+            "y": 470.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "15",
+          "box": {
+            "x": 1201.479248046875,
+            "y": 470.66668701171875,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": {
+        "x": 1133.3333740234375,
+        "y": 447.3333435058594,
+        "width": 10.666666984558105,
+        "height": 10.666666984558105
+      },
+      "badgeText": {
+        "x": 1137.40625,
+        "y": 450.4444580078125,
+        "width": 2.6666667461395264,
+        "height": 4.4444580078125
+      },
+      "badgeKills": "1"
+    },
+    {
+      "name": "BRAVO 01",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 1040,
+        "y": 505.3333435058594,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1175.3333740234375,
+        "y": 526.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "5",
+          "box": {
+            "x": 1176.9583740234375,
+            "y": 526.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "14",
+          "box": {
+            "x": 1201.479248046875,
+            "y": 526.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 03",
+      "design": "iem",
+      "dead": true,
+      "card": {
+        "x": 1040,
+        "y": 561.3333740234375,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1175.3333740234375,
+        "y": 582.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "11",
+          "box": {
+            "x": 1176.9583740234375,
+            "y": 582.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "14",
+          "box": {
+            "x": 1201.479248046875,
+            "y": 582.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    },
+    {
+      "name": "BRAVO 02",
+      "design": "iem",
+      "dead": false,
+      "card": {
+        "x": 1040,
+        "y": 617.3333740234375,
+        "width": 240,
+        "height": 50.66666793823242
+      },
+      "kd": {
+        "x": 1175.3333740234375,
+        "y": 638.6666870117188,
+        "width": 39.333335876464844,
+        "height": 12
+      },
+      "font": {
+        "family": "Inter, Inter, \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif",
+        "numeric": "tabular-nums",
+        "display": "grid"
+      },
+      "numbers": [
+        {
+          "text": "18",
+          "box": {
+            "x": 1176.9583740234375,
+            "y": 638.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        },
+        {
+          "text": "11",
+          "box": {
+            "x": 1201.479248046875,
+            "y": 638.6666870117188,
+            "width": 13.1875,
+            "height": 12
+          },
+          "client": 20,
+          "scroll": 20
+        }
+      ],
+      "badge": null,
+      "badgeText": null
+    }
+  ]
+}
