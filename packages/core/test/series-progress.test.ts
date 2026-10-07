@@ -1067,3 +1067,58 @@ describe('unplanned map observations', () => {
     ).toBe(false);
   });
 });
+
+it('keeps an event with no BP plan awaiting a plan, including checkpoint round-trip', () => {
+  const context = { ...contextFixture(), maps: [], veto: [], mapPool: ['de_mirage'] };
+  const initial = createSeriesProgress(context);
+  expect(initial.sourcePlan.mode).toBe('awaiting_plan');
+  const progress = reduce(initial, [
+    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
+  ]);
+  expect(progress.maps).toEqual([]);
+  expect(progress.score).toEqual({ a: 0, b: 0 });
+  const checkpoint = makeSeriesProgressCheckpoint(progress);
+  expect(isSeriesProgressCheckpoint(JSON.parse(JSON.stringify(checkpoint)))).toBe(true);
+  expect(isSeriesProgressCheckpointCompatible(checkpoint, context)).toBe(true);
+  expect(isSeriesProgressCheckpointCompatible(checkpoint, { ...context, competition: null })).toBe(
+    false,
+  );
+});
+
+it('does not reuse a completed map for a different unplanned map order', () => {
+  const context = {
+    ...contextFixture(),
+    competition: null,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
+  };
+  let progress = reduce(createSeriesProgress(context));
+  progress = reduce(progress, [
+    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
+  ]);
+  const frozen = progress.maps[0];
+  const repeated = reduce(progress, [], observation('Mirage', 2));
+  expect(repeated.maps).toEqual([frozen]);
+  expect(repeated.bindingState).toBe('needs_operator');
+  const restart = reduce(
+    progress,
+    [
+      {
+        kind: 'map-execution-changed',
+        sourceGeneration: 0,
+        mapEpoch: 2,
+        previousMapEpoch: 1,
+        previousMapName: 'de_mirage',
+        mapName: 'de_mirage',
+        resetReason: 'same-map-restart',
+      },
+    ],
+    observation('de_mirage', 2),
+  );
+  expect(restart.maps).toEqual([frozen]);
+  expect(restart.score).toEqual({ a: 1, b: 0 });
+  const next = reduce(progress, [], observation('de_dust2', 2));
+  expect(next.maps).toHaveLength(2);
+  expect(next.maps[1]).toMatchObject({ mapOrder: 2, mapName: 'de_dust2' });
+});

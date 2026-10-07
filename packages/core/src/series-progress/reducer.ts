@@ -21,6 +21,7 @@ import {
   isSeriesProgressCheckpoint,
   seriesCheckpointIdentity,
   seriesMapPlanFingerprint,
+  seriesSourcePlanMode,
 } from './types.js';
 
 const MAX_SERIES_ISSUES = 64;
@@ -258,7 +259,12 @@ function ensureBinding(
   observation: SeriesMapObservation | null,
   allowMapCreation = true,
 ): SeriesProgress {
-  if (observation === null || observation.mapName === null) return progress;
+  if (
+    observation === null ||
+    observation.mapName === null ||
+    progress.sourcePlan.mode === 'awaiting_plan'
+  )
+    return progress;
   if (progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins) {
     return progress;
   }
@@ -307,6 +313,7 @@ function ensureBinding(
     if (
       knownExecution !== undefined ||
       active !== undefined ||
+      progress.maps.some((map) => map.status === 'completed' && map.mapName === actualMapName) ||
       progress.maps.length >= progress.requiredWins * 2 - 1 ||
       !progress.sourcePlan.allowedMaps.includes(actualMapName)
     ) {
@@ -315,7 +322,7 @@ function ensureBinding(
         issue(
           'map_unbound',
           'warning',
-          '实际地图不在允许图池内、已有未结束执行或超出系列图数，未追加地图记录。',
+          '实际地图不在允许图池内、已有未结束执行、重复已完成地图或超出系列图数，未追加地图记录。',
           null,
           observation.mapEpoch,
         ),
@@ -846,7 +853,7 @@ export function createSeriesProgress(context: MatchContext): SeriesProgress {
     format: context.format,
     requiredWins: requiredSeriesWins(context.format),
     sourcePlan: {
-      mode: context.maps.length === 0 ? 'unplanned' : 'planned',
+      mode: seriesSourcePlanMode(context),
       fingerprint: seriesMapPlanFingerprint(context),
       allowedMaps: [...new Set((context.mapPool ?? []).map(canonicalMapName))].sort(),
     },

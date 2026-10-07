@@ -81,3 +81,5 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0042：执行结束、确认结果与地图观测分离](0042-execution-end-and-result-conclusion.md)
 
 - [ADR-0043：冻结地图计划与实际观测记录分离](0043-source-plan-and-observed-maps.md)
+
+- [ADR-0044：等待地图计划与明确无计划的比赛分开](0044-awaiting-map-plan.md)

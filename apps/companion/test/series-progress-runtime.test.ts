@@ -853,3 +853,34 @@ it('does not manufacture observed maps for a finished aggregate-only match', () 
   };
   expect(runtime.synchronizeSeriesProgress(context, sideProof, 'local')?.maps).toEqual([]);
 });
+
+it('ignores pre-BP warmup and smoothly adopts the official plan after restoring an empty checkpoint', () => {
+  const store = new MemoryCheckpointStore();
+  const runtime = createProgramRuntime('awaiting-event-plan', {
+    seriesProgressCheckpointStore: store,
+  });
+  const planned = { ...contextFixture(), mapPool: ['de_mirage', 'de_dust2', 'de_inferno'] };
+  const awaiting = { ...planned, maps: [] };
+  runtime.acceptObservation(frame(1, 'warmup', 'freezetime', { ct: 0, t: 0 }, undefined, 0));
+  const before = runtime.synchronizeSeriesProgress(awaiting, sideProof, 'local')!;
+  expect(before.sourcePlan.mode).toBe('awaiting_plan');
+  expect(before.maps).toEqual([]);
+  expect(store.checkpoint?.progress.maps).toEqual([]);
+  const restarted = createProgramRuntime('event-plan-restored', {
+    seriesProgressCheckpointStore: store,
+  });
+  expect(restarted.synchronizeSeriesProgress(awaiting, null, 'local')?.sourcePlan.mode).toBe(
+    'awaiting_plan',
+  );
+  restarted.acceptObservation(frame(2, 'warmup', 'freezetime', { ct: 0, t: 0 }, undefined, 0));
+  const after = restarted.synchronizeSeriesProgress(planned, sideProof, 'local')!;
+  expect(after.sourcePlan.mode).toBe('planned');
+  expect(after.maps).toHaveLength(3);
+  expect(after.maps[0]).toMatchObject({ mapId: 'map-1', mapOrder: 1, status: 'current' });
+  expect(
+    after.issues.some(
+      (issue) =>
+        issue.code === 'context_result_conflict' || issue.code === 'checkpoint_incompatible',
+    ),
+  ).toBe(false);
+});

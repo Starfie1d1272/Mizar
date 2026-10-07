@@ -77,7 +77,7 @@ export interface SeriesProgress {
   readonly requiredWins: 1 | 2 | 3;
   /** Frozen source plan identity; observed slots never redefine it. */
   readonly sourcePlan: {
-    readonly mode: 'planned' | 'unplanned';
+    readonly mode: 'planned' | 'awaiting_plan' | 'unplanned';
     readonly fingerprint: string;
     readonly allowedMaps: readonly string[];
   };
@@ -205,12 +205,15 @@ export function isSeriesProgressCheckpoint(value: unknown): value is SeriesProgr
     (currentMapOrder === null || isPositiveInteger(currentMapOrder)) &&
     Array.isArray(maps) &&
     isRecord(progress.sourcePlan) &&
-    (progress.sourcePlan.mode === 'planned' || progress.sourcePlan.mode === 'unplanned') &&
+    (progress.sourcePlan.mode === 'planned' ||
+      progress.sourcePlan.mode === 'awaiting_plan' ||
+      progress.sourcePlan.mode === 'unplanned') &&
     progress.sourcePlan.fingerprint === identity.mapPlanFingerprint &&
     Array.isArray(progress.sourcePlan.allowedMaps) &&
     progress.sourcePlan.allowedMaps.length <= 16 &&
     progress.sourcePlan.allowedMaps.every(isNonEmptyString) &&
-    (progress.sourcePlan.mode === 'unplanned' || maps.length > 0) &&
+    (progress.sourcePlan.mode !== 'planned' || maps.length > 0) &&
+    (progress.sourcePlan.mode !== 'awaiting_plan' || maps.length === 0) &&
     maps.length <= requiredSeriesWins(progress.format) * 2 - 1 &&
     (maps.length > 0 ||
       (currentMapOrder === null &&
@@ -368,9 +371,15 @@ function selectionForPlan(context: MatchContext, map: MatchMapContext): SeriesMa
   return isDecider ? { kind: 'decider' } : { kind: 'unknown' };
 }
 
+/** Absence of an event BP plan does not authorize ad-hoc map execution. */
+export function seriesSourcePlanMode(context: MatchContext): SeriesProgress['sourcePlan']['mode'] {
+  if (context.maps.length > 0) return 'planned';
+  return context.competition === null ? 'unplanned' : 'awaiting_plan';
+}
+
 export function seriesMapPlanFingerprint(context: MatchContext): string {
   return JSON.stringify({
-    mode: context.maps.length === 0 ? 'unplanned' : 'planned',
+    mode: seriesSourcePlanMode(context),
     allowedMaps: [...new Set((context.mapPool ?? []).map(canonicalMapName))].sort(),
     maps: context.maps
       .slice()
