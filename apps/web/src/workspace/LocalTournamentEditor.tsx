@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Button, Checkbox, StatusBanner } from '../ui';
-import { LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
+import { Button, Checkbox, StatusBanner, Select } from '../ui';
+import { LOCAL_BP_MAP_CATALOG, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
+import type { Bo3BpRules } from '@mizar/core/projection';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 
 export interface LocalTournamentView {
@@ -11,6 +12,7 @@ export interface LocalTournamentView {
     readonly logoUrl: string | null;
     readonly themeColor: string | null;
     readonly mapPool: readonly string[];
+    readonly bo3Rules?: Bo3BpRules;
     readonly matchIds: readonly string[];
   }[];
   readonly matches: readonly MatchDocumentV1[];
@@ -91,6 +93,7 @@ export function LocalTournamentEditor({
   const [eventName, setEventName] = useState(event?.name ?? '');
   const [eventLogo, setEventLogo] = useState<string | null>(event?.logoUrl ?? null);
   const [eventPool, setEventPool] = useState<readonly string[]>(event?.mapPool ?? []);
+  const [eventBo3Rules, setEventBo3Rules] = useState(event?.bo3Rules ?? DEFAULT_BO3_BP_RULES);
   const [savedMessage, setSavedMessage] = useState('');
   if (draft === null || event === undefined || view?.activeLocalMatchId !== draft.matchId)
     return null;
@@ -311,6 +314,7 @@ export function LocalTournamentEditor({
                 logoUrl: eventLogo,
                 themeColor: event.themeColor,
                 mapPool: eventPool,
+                bo3Rules: eventBo3Rules,
               });
               await refresh();
               setSavedMessage('赛事资料已保存。');
@@ -339,25 +343,57 @@ export function LocalTournamentEditor({
             </>
           ) : null}
           {section === 'maps' ? (
-            <fieldset className="preparation-map-pool">
-              <legend>赛事地图池</legend>
-              <div className="preparation-map-pool__choices">
-                {LOCAL_BP_MAP_CATALOG.map(({ mapName, label }) => (
-                  <Checkbox
-                    key={mapName}
-                    label={label}
-                    checked={eventPool.includes(mapName)}
-                    onChange={(change) =>
-                      setEventPool(
-                        change.target.checked
-                          ? [...eventPool, mapName]
-                          : eventPool.filter((name) => name !== mapName),
-                      )
-                    }
-                  />
-                ))}
-              </div>
-            </fieldset>
+            <>
+              <fieldset className="preparation-map-pool">
+                <legend>赛事地图池</legend>
+                <div className="preparation-map-pool__choices">
+                  {LOCAL_BP_MAP_CATALOG.map(({ mapName, label }) => (
+                    <Checkbox
+                      key={mapName}
+                      label={label}
+                      checked={eventPool.includes(mapName)}
+                      onChange={(change) =>
+                        setEventPool(
+                          change.target.checked
+                            ? [...eventPool, mapName]
+                            : eventPool.filter((name) => name !== mapName),
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend>赛事 BO3 禁选规则</legend>
+                <Select
+                  label="BO3 最后两次禁图"
+                  value={eventBo3Rules.finalBanOrder}
+                  onChange={(change) => {
+                    const finalBanOrder = change.currentTarget.value as Bo3BpRules['finalBanOrder'];
+                    setEventBo3Rules((current) => ({ ...current, finalBanOrder }));
+                  }}
+                  message="先禁方是 Veto A，后禁方是 Veto B；选图由对手选边。"
+                >
+                  <option value="veto_b_first">后禁方先禁，再由先禁方禁图</option>
+                  <option value="veto_a_first">先禁方先禁，再由后禁方禁图</option>
+                </Select>
+                <Select
+                  label="BO3 决胜图起始阵营"
+                  value={eventBo3Rules.deciderSideChoice}
+                  onChange={(change) => {
+                    const deciderSideChoice = change.currentTarget
+                      .value as Bo3BpRules['deciderSideChoice'];
+                    setEventBo3Rules((current) => ({ ...current, deciderSideChoice }));
+                  }}
+                  message="游戏内决定时不预填 CT / T，例如通过拼刀决定。"
+                >
+                  <option value="veto_b">由后禁方选择</option>
+                  <option value="veto_a">由先禁方选择</option>
+                  <option value="in_game">游戏内决定（如拼刀）</option>
+                </Select>
+                <p>用于本赛事新填写的 BO3；保存规则不会改写已经录入的 BP。</p>
+              </fieldset>
+            </>
           ) : null}
           <Button type="submit">保存赛事资料</Button>
         </form>

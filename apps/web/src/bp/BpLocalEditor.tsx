@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { localBpSequence } from '@mizar/core/projection';
+import { localBpSequence, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
+import type { Bo3BpRules } from '@mizar/core/projection';
+import { Select } from '../ui';
 import type { BpWorkspace, LocalBpDraft } from '@mizar/protocol/bp';
 import { saveLocalBp } from './client';
 
@@ -32,7 +34,10 @@ function draftProblems(draft: LocalBpDraft, workspace: BpWorkspace): string[] {
   if (draft.picks.length !== pickCount || draft.picks.some((pick) => !pick.mapName))
     issues.push('请完成所有选择地图。');
   if (draft.picks.some((pick) => pick.side === null)) issues.push('请填写每张已选地图的 CT / T。');
-  if (draft.format !== 'bo5' && draft.deciderSide === null) issues.push('请填写决胜图的 CT / T。');
+  const hasDeciderSidePick = localBpSequence(draft.format, draft.vetoA, draft.bo3Rules).some(
+    (action) => action.kind === 'side_pick' && action.target === 'decider',
+  );
+  if (hasDeciderSidePick && draft.deciderSide === null) issues.push('请填写决胜图的 CT / T。');
   const maps = [...draft.bans, ...draft.picks.map((pick) => pick.mapName)].filter(Boolean);
   if (maps.some((name) => !draft.mapPool.includes(name)) || new Set(maps).size !== maps.length)
     issues.push('地图不能重复，且必须来自当前地图池。');
@@ -62,8 +67,25 @@ export function BpLocalEditor({
   const [error, setError] = useState<string | null>(null);
   const problems = draftProblems(draft, workspace);
   const contextChanged = workspace.contextRevision !== baseContextRevision;
-  const actions = localBpSequence(draft.format, draft.vetoA);
+  const actions = localBpSequence(draft.format, draft.vetoA, draft.bo3Rules);
   const pool = draft.mapPool;
+
+  function changeBo3Rules(patch: Partial<Bo3BpRules>) {
+    setDraft((current) => {
+      const before = current.bo3Rules ?? DEFAULT_BO3_BP_RULES;
+      const bo3Rules = { ...before, ...patch };
+      return {
+        ...current,
+        bo3Rules,
+        bans:
+          before.finalBanOrder === bo3Rules.finalBanOrder
+            ? current.bans
+            : current.bans.map((map, index) => (index >= 2 ? '' : map)),
+        deciderSide:
+          before.deciderSideChoice === bo3Rules.deciderSideChoice ? current.deciderSide : null,
+      };
+    });
+  }
 
   function changeFormat(format: LocalBpDraft['format']) {
     setDraft((current) => ({
@@ -126,8 +148,8 @@ export function BpLocalEditor({
           aria-label={label}
         >
           <option value="">请选择</option>
-          <option value="CT">CT 开</option>
-          <option value="T">T 开</option>
+          <option value="CT">CT 开局</option>
+          <option value="T">T 开局</option>
         </select>
       </label>
     );
@@ -224,6 +246,41 @@ export function BpLocalEditor({
           </select>
         </label>
       </div>
+
+      {draft.format === 'bo3' ? (
+        <fieldset className="bp-editor-match-fields">
+          <legend>BO3 禁选规则</legend>
+          <Select
+            label="BO3 最后两次禁图"
+            value={(draft.bo3Rules ?? DEFAULT_BO3_BP_RULES).finalBanOrder}
+            disabled={saving || contextChanged}
+            onChange={(event) =>
+              changeBo3Rules({
+                finalBanOrder: event.currentTarget.value as Bo3BpRules['finalBanOrder'],
+              })
+            }
+            message="先禁方是 Veto A，后禁方是 Veto B；选图由对手选边。"
+          >
+            <option value="veto_b_first">后禁方先禁，再由先禁方禁图</option>
+            <option value="veto_a_first">先禁方先禁，再由后禁方禁图</option>
+          </Select>
+          <Select
+            label="BO3 决胜图起始阵营"
+            value={(draft.bo3Rules ?? DEFAULT_BO3_BP_RULES).deciderSideChoice}
+            disabled={saving || contextChanged}
+            onChange={(event) =>
+              changeBo3Rules({
+                deciderSideChoice: event.currentTarget.value as Bo3BpRules['deciderSideChoice'],
+              })
+            }
+            message="游戏内决定时不预填 CT / T，例如通过拼刀决定。"
+          >
+            <option value="veto_b">由后禁方选择</option>
+            <option value="veto_a">由先禁方选择</option>
+            <option value="in_game">游戏内决定（如拼刀）</option>
+          </Select>
+        </fieldset>
+      ) : null}
 
       <div className="bp-editor-teams">
         {(['a', 'b'] as const).map((key) => (

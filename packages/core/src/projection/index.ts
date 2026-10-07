@@ -49,6 +49,7 @@ export type {
   BpProjectionResult,
 } from './bp.js';
 export { DEFAULT_LOCAL_BP_MAP_POOL, LOCAL_BP_MAP_CATALOG, localBpSequence } from './bp-sequence.js';
+export { DEFAULT_BO3_BP_RULES, type Bo3BpRules } from './bp-sequence.js';
 export type { BpSequenceAction } from './bp-sequence.js';
 
 export { prepareBombDamage, projectBombDamage } from './bomb-damage.js';

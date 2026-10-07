@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getProgramFixture } from '../src/program/fixtures';
 import {
   buildMatchHeaderPresentation,
+  displayRoundNumber,
   formatMatchHeaderScore,
 } from '../src/program/widgets/match-header/presentation';
 
@@ -13,6 +14,35 @@ function presentation(fixtureId: string) {
 }
 
 describe('Match Header presentation selector', () => {
+  it.each([
+    { count: 0, phase: 'freezetime', mapPhase: 'live', ct: 0, t: 0, expected: 1 },
+    { count: 3, phase: 'freezetime', mapPhase: 'live', ct: 0, t: 3, expected: 4 },
+    { count: 3, phase: 'live', mapPhase: 'live', ct: 0, t: 3, expected: 4 },
+    { count: 3, phase: 'over', mapPhase: 'live', ct: 1, t: 3, expected: 4 },
+    { count: 4, phase: 'over', mapPhase: 'live', ct: 1, t: 3, expected: 4 },
+    { count: 19, phase: 'over', mapPhase: 'gameover', ct: 6, t: 13, expected: 19 },
+    { count: 24, phase: 'live', mapPhase: 'live', ct: 12, t: 12, expected: 25 },
+    { count: 0, phase: 'freezetime', mapPhase: 'warmup', ct: 0, t: 0, expected: null },
+    { count: null, phase: 'live', mapPhase: 'live', ct: 0, t: 3, expected: null },
+  ] as const)('uses the same active/settled round for every HUD: %j', (sample) => {
+    const base = getProgramFixture('real-live-rich')!.payload;
+    const payload = {
+      ...base,
+      map: {
+        ...base.map,
+        phase: sample.mapPhase,
+        roundNumber: sample.count,
+        score: { ct: sample.ct, t: sample.t },
+      },
+      round: { phase: sample.phase, winnerSide: 'unknown' as const },
+    };
+    expect(displayRoundNumber(payload)).toBe(sample.expected);
+    expect(buildMatchHeaderPresentation(payload)).toMatchObject({
+      roundNumber: sample.expected,
+      roundLabel: sample.expected === null ? null : `ROUND ${sample.expected}`,
+    });
+  });
+
   it('shows source-side history for a demo without series identity', () => {
     const base = getProgramFixture('real-live-rich')!.payload;
     const value = buildMatchHeaderPresentation({

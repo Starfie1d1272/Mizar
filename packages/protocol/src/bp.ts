@@ -129,6 +129,12 @@ const localEntrantSchema = z
   })
   .strict();
 
+export const localBo3BpRulesSchema = z.strictObject({
+  finalBanOrder: z.enum(['veto_a_first', 'veto_b_first']),
+  deciderSideChoice: z.enum(['veto_a', 'veto_b', 'in_game']),
+});
+export type LocalBo3BpRules = z.infer<typeof localBo3BpRulesSchema>;
+
 export const localBpDraftSchema = z
   .object({
     competitionName: z.string().max(120),
@@ -136,6 +142,7 @@ export const localBpDraftSchema = z
     format: z.enum(['bo1', 'bo3', 'bo5']),
     entrants: z.object({ a: localEntrantSchema, b: localEntrantSchema }).strict(),
     vetoA: z.enum(['a', 'b']),
+    bo3Rules: localBo3BpRulesSchema.optional(),
     mapPool: z.array(z.string().max(40)).max(10),
     bans: z.array(z.string().max(40)).max(6),
     picks: z
@@ -172,7 +179,7 @@ const bpWorkspaceCandidateSchema = z
 
 export const bpWorkspaceSchema = z
   .object({
-    schemaVersion: z.literal('mizar.bp-workspace.v4'),
+    schemaVersion: z.literal('mizar.bp-workspace.v5'),
     demo: bpDemoStateSchema,
     source: z.enum(['none', 'online', 'local', 'cache', 'fixture']),
     authoringMode: z.enum(['standalone', 'bound-overlay']),

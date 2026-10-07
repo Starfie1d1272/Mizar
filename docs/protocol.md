@@ -128,7 +128,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 `GET /local/v1/bp` 是有限的地图卡、步骤、公开标题和播放状态；不返回内部比赛 ID、名单或完整来源文档。ETag 覆盖当前播放进度，浏览器超时隐藏，恢复读取当前值，不重演旧步骤。
 
 - `POST /operator/bp-command` 接收 `{kind: "play" | "hide", expectedRevision}`。修订号随命令、资料变化或回到隐藏态更新，自动揭示不使正常收起命令失效。
-- `GET /local/v1/bp-workspace` 返回来源、就绪、草稿和候选摘要；`standalone` 可编辑本地资料，`bound-overlay` 只补 BP，在线比赛身份与名单保持锁定。
+- `GET /local/v1/bp-workspace` 使用 `mizar.bp-workspace.v5`，返回来源、就绪、草稿和候选摘要；`standalone` 可编辑本地资料，`bound-overlay` 只补 BP，在线比赛身份与名单保持锁定。草稿可携带有界 `bo3Rules`：`finalBanOrder` 为 `veto_a_first` / `veto_b_first`，`deciderSideChoice` 为 `veto_a` / `veto_b` / `in_game`；缺省请求沿用已有 BP 或本机赛事默认，不假设所有 BO3 规则相同。
 - `POST /operator/bp-local-save` 带 `expectedContextRevision`，失败保留旧绑定；成功保存后播放回到隐藏态。
 - `POST /operator/bp-rivalhub` 同时核对上下文与待确认候选修订号；确认只激活已验证候选，不发起新的获取。失败刷新保留已有有效候选，新有效结果才替换；旧激活不能清除更新候选。
 - `POST /operator/bp-demo` 启动 BO1/BO3/BO5 或退出演示，只在会话隐藏时允许。演示仅在 BP 内存会话生效，不写赛事库、系列赛、身份或在线缓存；退出恢复真实来源，重启不保留演示与播放状态。

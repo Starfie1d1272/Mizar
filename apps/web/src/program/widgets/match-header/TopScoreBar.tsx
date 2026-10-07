@@ -359,9 +359,9 @@ function ShanghaiPanels({
     <>
       <div className="shanghai-round-strip">
         <span>
-          {payload.map.roundNumber === null
+          {p.roundNumber === null
             ? 'ROUND —'
-            : `ROUND ${payload.map.roundNumber + 1}${payload.map.roundNumber < 24 ? '/24' : ''}`}
+            : `ROUND ${p.roundNumber}${p.roundNumber <= 24 ? '/24' : ''}`}
         </span>
       </div>
       {options.showObjectiveAuxiliary && p.objective.fuse !== null ? (

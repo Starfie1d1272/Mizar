@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { localBo3BpRulesSchema } from './bp.js';
 
 export const MATCH_DOCUMENT_SCHEMA_VERSION = 'mizar.match-document.v1' as const;
 export const SCHEDULE_WINDOW_SCHEMA_VERSION = 'mizar.schedule-window.v1' as const;
@@ -182,6 +183,7 @@ export const localTournamentStateV1Schema = z.strictObject({
         logoUrl: asset,
         themeColor: optionalLabel,
         mapPool: z.array(label.min(1)).max(16),
+        bo3Rules: localBo3BpRulesSchema.optional(),
         matchIds: z.array(id).max(256),
       }),
     )
