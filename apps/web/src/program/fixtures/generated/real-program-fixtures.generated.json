@@ -16909,6 +16909,12 @@
                   "winnerSide": "CT",
                   "winnerEntryId": null,
                   "winCondition": "elimination"
+                },
+                {
+                  "roundNumber": 30,
+                  "winnerSide": "T",
+                  "winnerEntryId": null,
+                  "winCondition": "elimination"
                 }
               ]
             }
