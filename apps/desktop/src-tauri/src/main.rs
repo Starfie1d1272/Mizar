@@ -14,6 +14,7 @@ mod windows_host;
 mod windows_startup;
 mod workspace_shell;
 mod window_frame;
+mod window_presentation;
 
 use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
@@ -36,7 +37,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::DialogExt;
 use windows_host::GameTracker;
@@ -260,12 +261,7 @@ fn webview_preflight() -> Result<String, String> {
 }
 
 fn placement(window: &tauri::WebviewWindow, rect: Rect) {
-    if rect.width <= 0 || rect.height <= 0 {
-        let _ = window.hide();
-        return;
-    }
-    let _ = window.set_size(PhysicalSize::new(rect.width as u32, rect.height as u32));
-    let _ = window.set_position(PhysicalPosition::new(rect.x, rect.y));
+    let _ = window_presentation::place(window, rect);
 }
 
 fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
@@ -316,9 +312,9 @@ fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
     };
     if let Some(rect) = rect {
         placement(&overlay, rect);
-        let _ = overlay.show();
+        let _ = window_presentation::set_visible(&overlay, true);
     } else {
-        let _ = overlay.hide();
+        let _ = window_presentation::set_visible(&overlay, false);
     }
 }
 
@@ -545,7 +541,7 @@ fn show_workspace(app: &tauri::AppHandle) {
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
-            let _ = window.show();
+            let _ = window_presentation::set_visible(&window, true);
             let _ = window.set_focus();
         }
     }
@@ -558,7 +554,7 @@ fn hide_workspace(app: &tauri::AppHandle) {
     sync_workspace_shell(app);
     for label in ["workspace-left", "workspace-dock", "program-overlay"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.hide();
+            let _ = window_presentation::set_visible(&window, false);
         }
     }
 }
@@ -592,7 +588,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
             )
             .map_err(|_| "无法打开 Mizar。")?;
         let _ = window.unminimize();
-        let _ = window.show();
+        let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
     }
     Ok(())
@@ -616,7 +612,7 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
         }
         show_workspace(&app);
         if let Some(main) = app.get_webview_window("main") {
-            let _ = main.hide();
+            let _ = window_presentation::set_visible(&main, false);
         }
     } else {
         open_main(app.clone(), None)?;
@@ -639,8 +635,21 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let log = app.state::<DesktopLog>();
     let result = (|| {
+        let radar_profile = window_presentation::radar_profile(&log.state_root)?;
+        log.event(
+            "radar_process_isolation", "success",
+            Some(if radar_profile.is_some() { "enabled" } else { "disabled" }),
+        );
         log.step("workspace_left", || {
-            WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
+            let builder = WebviewWindowBuilder::new(
+                app, "workspace-left", local_url("/workspace/left"),
+            );
+            let builder = if let Some(path) = radar_profile {
+                builder.data_directory(path)
+            } else {
+                builder
+            };
+            builder
                 .title("Mizar · 工作区")
                 .decorations(false)
                 .shadow(false)
@@ -676,6 +685,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
+        let _ = window_presentation::sync_visibility(&overlay);
         log.step("overlay_cursor_passthrough", || {
             overlay.set_ignore_cursor_events(true)
         })?;
@@ -716,8 +726,8 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
                     .map_err(|_| "工具地址无法识别。")?,
             )
             .map_err(|_| "工具窗口未能恢复。")?;
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
         return Ok(());
     }
@@ -1065,7 +1075,7 @@ fn run_desktop(
                     .on_menu_event(move |app, event| match event.id().as_ref() {
                         "open_workspace" => {
                             if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
+                                let _ = window_presentation::set_visible(&window, true);
                                 let _ =
                                     window.eval("window.dispatchEvent(new Event('mizar-enter'))");
                             }
@@ -1192,6 +1202,7 @@ fn run_desktop(
                                         } else {
                                             present_overlay(&tick_host, None);
                                         }
+                                        window_presentation::sync_all(&tick_host);
                                     }
                                 }
                                 tick_pending.store(false, Ordering::Relaxed);
@@ -1211,6 +1222,11 @@ fn run_desktop(
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    let _ = window_presentation::sync_visibility(&webview);
+                }
+            }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. })
                 && matches!(
                     window.label(),
@@ -1251,6 +1267,9 @@ fn run_desktop(
                     }
                     _ => {
                         let _ = window.hide();
+                        if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                            let _ = window_presentation::sync_visibility(&webview);
+                        }
                     }
                 }
             }
@@ -1358,7 +1377,7 @@ fn run_desktop(
     });
     worker_guard.stop();
     // Tauri APIs must not be used after run_return has cleaned up the application.
-    let ready_error = ready_error.lock().ok().and_then(|mut error| error.take());
+    let ready_error = ready_error.lock().ok().and_then(|error| error.clone());
     if let Some(error) = ready_error {
         Err(error)
     } else if exit_code == 0 {
