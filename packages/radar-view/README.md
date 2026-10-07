@@ -47,6 +47,8 @@ const frame = fromPublicRadar(live.radar, {
 
 ## 数据与连续性
 
+表面尺寸与祖先主题属性变化触发参数重读；纹理按既有尺寸、外观、图像与颜色缓存键复用，不因无关属性或相同尺寸通知清空整套缓存。地图或连续性边界仍清理缓存，条目保持有界。这项复用规则不代表 Windows 原生调度性能已经通过。
+
 - `fromPublicRadar` 接受结构兼容的 LiveSnapshot/public Live 雷达，不依赖协议包。坐标、facing、楼层、火焰均直接复用，未提供的本地字段保持缺失。
 - 网站传顶层 `bomb` 以保留 carried/planting 的单一视觉 owner；没有状态时只显示已有位置，不猜倒计时。
 - `current` 来自 host 的接收/新鲜度判断。`null` 清理；`paused` 冻结已接受画面及临时效果时间，不继续外推。初次挂载即 stale 时保持空画面，直到合法 fresh baseline。

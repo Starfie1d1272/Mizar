@@ -26,7 +26,7 @@ afterEach(() => {
 function setup() {
   const noOp = vi.fn();
   const context = new Proxy({}, { get: () => noOp, set: () => true }) as CanvasRenderingContext2D;
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+  const contexts = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
   let callback: FrameRequestCallback;
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     callback = cb;
@@ -37,7 +37,7 @@ function setup() {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  return { step: (now: number) => act(() => callback(now)), cancel };
+  return { step: (now: number) => act(() => callback(now)), cancel, contexts };
 }
 function frame(sequence = 1, x = 0.5): RadarViewFrame {
   const live = parseLiveSnapshotV1(fixture);
@@ -60,6 +60,42 @@ function frame(sequence = 1, x = 0.5): RadarViewFrame {
 const canvas = () => container.querySelector('canvas')!;
 
 describe('shared radar surface lifecycle', () => {
+  it('retains artwork on unchanged surface notifications and rebuilds for real size changes', async () => {
+    const { step, contexts } = setup();
+    vi.stubGlobal(
+      'Image',
+      class {
+        src = '';
+        complete = true;
+        naturalWidth = 512;
+        naturalHeight = 512;
+      },
+    );
+    const input = frame();
+    act(() =>
+      root!.render(
+        <RadarView
+          snapshot={{ ...input, payload: { ...input.payload, bomb: null } }}
+          assetBaseUrl="/radar"
+        />,
+      ),
+    );
+    step(0);
+    const initial = contexts.mock.calls.length;
+    expect(initial).toBeGreaterThan(1);
+    await act(async () => {
+      container.dataset.unrelated = 'updated';
+      await Promise.resolve();
+    });
+    step(16);
+    window.dispatchEvent(new Event('resize'));
+    step(32);
+    expect(contexts).toHaveBeenCalledTimes(initial);
+    Object.defineProperty(canvas(), 'clientWidth', { value: 400, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    step(48);
+    expect(contexts.mock.calls.length).toBeGreaterThan(initial);
+  });
   it('reuses surface styles between frames and invalidates them on theme changes and resize', async () => {
     const { step } = setup();
     const styles = vi.spyOn(globalThis, 'getComputedStyle');

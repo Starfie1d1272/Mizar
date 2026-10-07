@@ -1,0 +1,253 @@
+{
+  "source": "9d5af903544caba3123bc36789c6d0cc0af14502",
+  "artifact": "392413f3a0bee22da980937fc6971bad828cdec3428bf3f0d20de5942d70fd22",
+  "classification": "actual continuous 1x RC23 Inferno from start through final gameover; offline adapter/Core replay uses immutable qualified package, native completed ADR compared at exact terminal sequence; frozen ten-player K/A/D compared with actual terminal Program; one complete map, not three-map final RC24 acceptance",
+  "frames": 64688,
+  "lastSequence": 64687,
+  "completedRounds": 19,
+  "history": {
+    "completeness": "complete",
+    "rounds": 19,
+    "unconfirmedEntrantWinners": 1,
+    "semantics": "completeness covers consecutive known source-side outcomes; null canonical entrant is retained"
+  },
+  "score": {
+    "a": 13,
+    "b": 6
+  },
+  "seriesScore": {
+    "a": 1,
+    "b": 0
+  },
+  "boundaries": [
+    {
+      "sequence": 1799,
+      "completedRounds": 1
+    },
+    {
+      "sequence": 5963,
+      "completedRounds": 2
+    },
+    {
+      "sequence": 9722,
+      "completedRounds": 3
+    },
+    {
+      "sequence": 12880,
+      "completedRounds": 4
+    },
+    {
+      "sequence": 15052,
+      "completedRounds": 5
+    },
+    {
+      "sequence": 18172,
+      "completedRounds": 6
+    },
+    {
+      "sequence": 21063,
+      "completedRounds": 7
+    },
+    {
+      "sequence": 23128,
+      "completedRounds": 8
+    },
+    {
+      "sequence": 26048,
+      "completedRounds": 9
+    },
+    {
+      "sequence": 29809,
+      "completedRounds": 10
+    },
+    {
+      "sequence": 33248,
+      "completedRounds": 11
+    },
+    {
+      "sequence": 36757,
+      "completedRounds": 12
+    },
+    {
+      "sequence": 43038,
+      "completedRounds": 13
+    },
+    {
+      "sequence": 46400,
+      "completedRounds": 14
+    },
+    {
+      "sequence": 48689,
+      "completedRounds": 15
+    },
+    {
+      "sequence": 52883,
+      "completedRounds": 16
+    },
+    {
+      "sequence": 56893,
+      "completedRounds": 17
+    },
+    {
+      "sequence": 60736,
+      "completedRounds": 18
+    },
+    {
+      "sequence": 64687,
+      "completedRounds": 19
+    }
+  ],
+  "players": [
+    {
+      "alias": "player-1",
+      "nativeAdr": 52.89473684210526,
+      "replayAdr": 52.89473684210526,
+      "nativeKad": {
+        "kills": 6,
+        "assists": 12,
+        "deaths": 13
+      },
+      "frozenKad": {
+        "kills": 6,
+        "assists": 12,
+        "deaths": 13
+      }
+    },
+    {
+      "alias": "player-2",
+      "nativeAdr": 66.52631578947368,
+      "replayAdr": 66.52631578947368,
+      "nativeKad": {
+        "kills": 12,
+        "assists": 2,
+        "deaths": 11
+      },
+      "frozenKad": {
+        "kills": 12,
+        "assists": 2,
+        "deaths": 11
+      }
+    },
+    {
+      "alias": "player-3",
+      "nativeAdr": 58.78947368421053,
+      "replayAdr": 58.78947368421053,
+      "nativeKad": {
+        "kills": 8,
+        "assists": 6,
+        "deaths": 13
+      },
+      "frozenKad": {
+        "kills": 8,
+        "assists": 6,
+        "deaths": 13
+      }
+    },
+    {
+      "alias": "player-4",
+      "nativeAdr": 103.42105263157895,
+      "replayAdr": 103.42105263157895,
+      "nativeKad": {
+        "kills": 17,
+        "assists": 6,
+        "deaths": 11
+      },
+      "frozenKad": {
+        "kills": 17,
+        "assists": 6,
+        "deaths": 11
+      }
+    },
+    {
+      "alias": "player-5",
+      "nativeAdr": 54.26315789473684,
+      "replayAdr": 54.26315789473684,
+      "nativeKad": {
+        "kills": 9,
+        "assists": 2,
+        "deaths": 15
+      },
+      "frozenKad": {
+        "kills": 9,
+        "assists": 2,
+        "deaths": 15
+      }
+    },
+    {
+      "alias": "player-6",
+      "nativeAdr": 76.05263157894737,
+      "replayAdr": 76.05263157894737,
+      "nativeKad": {
+        "kills": 17,
+        "assists": 5,
+        "deaths": 10
+      },
+      "frozenKad": {
+        "kills": 17,
+        "assists": 5,
+        "deaths": 10
+      }
+    },
+    {
+      "alias": "player-7",
+      "nativeAdr": 59.26315789473684,
+      "replayAdr": 59.26315789473684,
+      "nativeKad": {
+        "kills": 11,
+        "assists": 4,
+        "deaths": 12
+      },
+      "frozenKad": {
+        "kills": 11,
+        "assists": 4,
+        "deaths": 12
+      }
+    },
+    {
+      "alias": "player-8",
+      "nativeAdr": 89.15789473684211,
+      "replayAdr": 89.15789473684211,
+      "nativeKad": {
+        "kills": 18,
+        "assists": 6,
+        "deaths": 11
+      },
+      "frozenKad": {
+        "kills": 18,
+        "assists": 6,
+        "deaths": 11
+      }
+    },
+    {
+      "alias": "player-9",
+      "nativeAdr": 89.42105263157895,
+      "replayAdr": 89.42105263157895,
+      "nativeKad": {
+        "kills": 19,
+        "assists": 2,
+        "deaths": 13
+      },
+      "frozenKad": {
+        "kills": 19,
+        "assists": 2,
+        "deaths": 13
+      }
+    },
+    {
+      "alias": "player-10",
+      "nativeAdr": 63.89473684210526,
+      "replayAdr": 63.89473684210526,
+      "nativeKad": {
+        "kills": 7,
+        "assists": 3,
+        "deaths": 17
+      },
+      "frozenKad": {
+        "kills": 7,
+        "assists": 3,
+        "deaths": 17
+      }
+    }
+  ],
+  "mismatches": []
+}

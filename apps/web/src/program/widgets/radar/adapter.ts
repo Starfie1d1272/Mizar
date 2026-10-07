@@ -10,16 +10,25 @@ import {
 import { resolveCs2ItemByGsiName } from '@mizar/cs2-assets';
 import { observerHotkeyLabel } from '../../observer-hotkey';
 
-/** Local protocol and world calibration stay in Mizar's adapter. */
-export function toRadarViewFrame(snapshot: RadarSnapshot | null): RadarViewFrame | null {
+function resolveRadarGeometry(snapshot: RadarSnapshot | null) {
   if (
     !snapshot ||
     snapshot.payload.telemetryFreshness !== 'fresh' ||
     snapshot.payload.identityState === 'mismatch'
   )
     return null;
-  const geometry = defaultMapGeometryProvider.resolve(snapshot.payload.mapName);
-  if (!geometry) return null;
+  return defaultMapGeometryProvider.resolve(snapshot.payload.mapName);
+}
+
+/** Check availability without projecting every player and utility position. */
+export function hasRadarViewFrame(snapshot: RadarSnapshot | null): boolean {
+  return resolveRadarGeometry(snapshot) !== null;
+}
+
+/** Local protocol and world calibration stay in Mizar's adapter. */
+export function toRadarViewFrame(snapshot: RadarSnapshot | null): RadarViewFrame | null {
+  const geometry = resolveRadarGeometry(snapshot);
+  if (!snapshot || !geometry) return null;
   const unitRadius = projectWorldRadius(1, geometry)!;
   const project = (position: { x: number; y: number; z: number } | null) => {
     const point = projectWorldPosition(position, geometry);

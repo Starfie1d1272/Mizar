@@ -186,7 +186,8 @@ export function RadarView({
         ctColor = style.getPropertyValue('--mizar-side-ct').trim() || '#6aa8ff';
         tColor = style.getPropertyValue('--mizar-side-t').trim() || '#f2bd4f';
         bombCarrierColor = style.getPropertyValue('--mizar-hud-objective-bomb').trim() || '#f06f6f';
-        renderCache.clear();
+        // Raster dependencies already participate in bounded cache keys.
+        // Refreshing surface values must not discard unrelated textures.
       }
       const size = backingSize;
       if (element.width !== size || element.height !== size) {
