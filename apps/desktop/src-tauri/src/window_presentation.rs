@@ -2,7 +2,6 @@
 //! WebviewWindow::hide() only hides the HWND in Tauri 2.12.1; the controller
 //! must also learn about hidden/minimized windows (Microsoft's IsVisible contract).
 use crate::geometry::Rect;
-use std::{ffi::OsStr, path::{Path, PathBuf}};
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 trait GeometryTarget {
@@ -15,16 +14,23 @@ trait GeometryTarget {
 struct NativeGeometry<'a>(&'a WebviewWindow);
 impl GeometryTarget for NativeGeometry<'_> {
     fn size(&self) -> Option<(u32, u32)> {
-        self.0.inner_size().ok().map(|size| (size.width, size.height))
+        self.0
+            .inner_size()
+            .ok()
+            .map(|size| (size.width, size.height))
     }
     fn position(&self) -> Option<(i32, i32)> {
         self.0.outer_position().ok().map(|point| (point.x, point.y))
     }
     fn resize(&mut self, size: (u32, u32)) -> Result<(), String> {
-        self.0.set_size(PhysicalSize::new(size.0, size.1)).map_err(|e| e.to_string())
+        self.0
+            .set_size(PhysicalSize::new(size.0, size.1))
+            .map_err(|e| e.to_string())
     }
     fn move_to(&mut self, position: (i32, i32)) -> Result<(), String> {
-        self.0.set_position(PhysicalPosition::new(position.0, position.1)).map_err(|e| e.to_string())
+        self.0
+            .set_position(PhysicalPosition::new(position.0, position.1))
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -52,7 +58,11 @@ pub fn place(window: &WebviewWindow, rect: Rect) -> Result<(), String> {
     reconcile_geometry(&mut NativeGeometry(window), rect)
 }
 
-fn visibility_change(window_visible: bool, minimized: bool, controller_visible: bool) -> Option<bool> {
+fn visibility_change(
+    window_visible: bool,
+    minimized: bool,
+    controller_visible: bool,
+) -> Option<bool> {
     let desired = window_visible && !minimized;
     (desired != controller_visible).then_some(desired)
 }
@@ -80,7 +90,11 @@ pub fn sync_visibility(window: &WebviewWindow) -> tauri::Result<()> {
 
 pub fn set_visible(window: &WebviewWindow, visible: bool) -> tauri::Result<()> {
     if window.is_visible().ok() != Some(visible) {
-        if visible { window.show()?; } else { window.hide()?; }
+        if visible {
+            window.show()?;
+        } else {
+            window.hide()?;
+        }
     }
     sync_visibility(window)
 }
@@ -91,41 +105,6 @@ pub fn sync_all(app: &tauri::AppHandle) {
     for window in app.webview_windows().values() {
         let _ = sync_visibility(window);
     }
-}
-
-fn profile_path(
-    root: &Path,
-    option: Option<&OsStr>,
-    override_folder: Option<&OsStr>,
-) -> Result<Option<PathBuf>, String> {
-    match option {
-        None => Ok(None),
-        Some(value) if value == OsStr::new("0") => Ok(None),
-        Some(value) if value == OsStr::new("1") => {
-            if override_folder.is_some_and(|value| !value.is_empty()) {
-                return Err("WEBVIEW2_USER_DATA_FOLDER 会覆盖雷达隔离目录，请先取消该环境设置。".into());
-            }
-            if !root.is_absolute() {
-                return Err("雷达隔离目录必须位于绝对状态目录中。".into());
-            }
-            // One stable optional profile, not a directory per session/map/RC.
-            Ok(Some(root.join("webview2").join("workspace-radar")))
-        }
-        Some(_) => Err("MIZAR_RADAR_PROCESS_ISOLATION 只接受 0 或 1。".into()),
-    }
-}
-
-/// Explicit, off-by-default compatibility candidate. A distinct user-data
-/// folder gives the radar-bearing workspace its own WebView2 process collection.
-/// It does not isolate the physical GPU or prove a performance improvement.
-pub fn radar_profile(root: &Path) -> Result<Option<PathBuf>, String> {
-    let option = std::env::var_os("MIZAR_RADAR_PROCESS_ISOLATION");
-    let override_folder = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER");
-    let path = profile_path(root, option.as_deref(), override_folder.as_deref())?;
-    if let Some(path) = &path {
-        std::fs::create_dir_all(path).map_err(|_| "雷达隔离目录无法创建。".to_string())?;
-    }
-    Ok(path)
 }
 
 #[cfg(test)]
@@ -141,13 +120,21 @@ mod tests {
         calls: Vec<&'static str>,
     }
     impl GeometryTarget for FakeWindow {
-        fn size(&self) -> Option<(u32, u32)> { self.size }
-        fn position(&self) -> Option<(i32, i32)> { self.position }
+        fn size(&self) -> Option<(u32, u32)> {
+            self.size
+        }
+        fn position(&self) -> Option<(i32, i32)> {
+            self.position
+        }
         fn resize(&mut self, size: (u32, u32)) -> Result<(), String> {
             self.calls.push("resize");
-            if self.fail_resize { return Err("resize failed".into()); }
+            if self.fail_resize {
+                return Err("resize failed".into());
+            }
             self.size = Some(size);
-            if let Some(position) = self.resize_moves_to { self.position = Some(position); }
+            if let Some(position) = self.resize_moves_to {
+                self.position = Some(position);
+            }
             Ok(())
         }
         fn move_to(&mut self, position: (i32, i32)) -> Result<(), String> {
@@ -156,15 +143,28 @@ mod tests {
             Ok(())
         }
     }
-    fn rect() -> Rect { Rect { x: -1280, y: 80, width: 1920, height: 1080 } }
+    fn rect() -> Rect {
+        Rect {
+            x: -1280,
+            y: 80,
+            width: 1920,
+            height: 1080,
+        }
+    }
     fn window() -> FakeWindow {
-        FakeWindow { size: Some((1920, 1080)), position: Some((-1280, 80)), ..Default::default() }
+        FakeWindow {
+            size: Some((1920, 1080)),
+            position: Some((-1280, 80)),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn unchanged_polling_has_no_native_mutations() {
         let mut window = window();
-        for _ in 0..2400 { reconcile_geometry(&mut window, rect()).unwrap(); }
+        for _ in 0..2400 {
+            reconcile_geometry(&mut window, rect()).unwrap();
+        }
         assert!(window.calls.is_empty());
     }
     #[test]
@@ -219,7 +219,15 @@ mod tests {
     fn nonpositive_dimensions_never_reach_unsigned_native_size() {
         for (width, height) in [(0, 1080), (-1, 1080), (1920, 0), (1920, -1)] {
             let mut window = window();
-            assert!(reconcile_geometry(&mut window, Rect { width, height, ..rect() }).is_err());
+            assert!(reconcile_geometry(
+                &mut window,
+                Rect {
+                    width,
+                    height,
+                    ..rect()
+                }
+            )
+            .is_err());
             assert!(window.calls.is_empty());
         }
     }
@@ -229,7 +237,10 @@ mod tests {
             for minimized in [false, true] {
                 let desired = window_visible && !minimized;
                 assert_eq!(visibility_change(window_visible, minimized, desired), None);
-                assert_eq!(visibility_change(window_visible, minimized, !desired), Some(desired));
+                assert_eq!(
+                    visibility_change(window_visible, minimized, !desired),
+                    Some(desired)
+                );
             }
         }
     }
@@ -237,29 +248,19 @@ mod tests {
     fn hide_minimize_restore_and_retry_do_not_lose_visibility() {
         let mut controller = true;
         for (shown, minimized, expected) in [
-            (false, false, false), (false, false, false),
-            (true, false, true), (true, true, false), (true, false, true),
+            (false, false, false),
+            (false, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, false, true),
         ] {
-            if let Some(next) = visibility_change(shown, minimized, controller) { controller = next; }
+            if let Some(next) = visibility_change(shown, minimized, controller) {
+                controller = next;
+            }
             assert_eq!(controller, expected);
         }
         // A failed native setter leaves actual unchanged; the next tick retries.
         assert_eq!(visibility_change(false, false, true), Some(false));
         assert_eq!(visibility_change(false, false, true), Some(false));
-    }
-    #[test]
-    fn isolation_is_explicit_and_uses_one_stable_profile() {
-        let root = std::env::temp_dir().join("mizar-native-profile-test");
-        assert_eq!(profile_path(&root, None, None).unwrap(), None);
-        assert_eq!(profile_path(&root, Some(OsStr::new("0")), None).unwrap(), None);
-        assert_eq!(profile_path(&root, Some(OsStr::new("1")), None).unwrap(),
-            Some(root.join("webview2/workspace-radar")));
-        for invalid in ["", "true", "auto", "../elsewhere"] {
-            assert!(profile_path(&root, Some(OsStr::new(invalid)), None).is_err());
-        }
-        assert!(profile_path(Path::new("relative"), Some(OsStr::new("1")), None).is_err());
-        assert!(profile_path(&root, Some(OsStr::new("1")), Some(OsStr::new("override"))).is_err());
-        assert_eq!(profile_path(&root, None, Some(OsStr::new("override"))).unwrap(), None);
-        assert!(profile_path(&root, Some(OsStr::new("1")), Some(OsStr::new(""))).unwrap().is_some());
     }
 }

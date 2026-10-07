@@ -26,7 +26,8 @@ test('optional Steam avatars explain key acquisition and open the fixed official
             detected: true,
             installed: true,
             conflict: false,
-            preserveQuality: false,
+            qualityPreset: 'very-high',
+            frameRateLimit: 60,
             pending: false,
             running: false,
             message: null,
@@ -69,14 +70,22 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
   try {
     // IPC fixture verifies browser interaction only, not Steam, Windows or CS2.
     await page.addInitScript(() => {
-      const status = { preserveQuality: false, pending: false, running: false, message: null };
+      const status = {
+        qualityPreset: 'very-high',
+        frameRateLimit: 60,
+        pending: false,
+        running: false,
+        message: null,
+      };
       Object.assign(window, {
         __TAURI_INTERNALS__: {
           invoke: <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
             if (command === 'gsi_status')
               return Promise.resolve({ installed: true, conflict: false } as T);
-            if (command === 'set_cs2_preferences')
-              status.preserveQuality = args?.preserveQuality === true;
+            if (command === 'set_cs2_preferences') {
+              status.qualityPreset = String(args?.qualityPreset);
+              status.frameRateLimit = Number(args?.frameRateLimit);
+            }
             if (command === 'start_managed_cs2') {
               status.pending = true;
               status.running = true;
@@ -95,12 +104,25 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
     );
     await page.goto('/settings?tab=gsi');
     await expect(page.getByRole('heading', { name: 'CS2 启动设置' })).toBeVisible();
-    const quality = page.getByRole('switch', { name: /保留原画质/ });
-    await expect(quality).toHaveAttribute('aria-checked', 'false');
-    await quality.click();
-    await expect(quality).toHaveAttribute('aria-checked', 'true');
+    const quality = page.getByRole('combobox', { name: '游戏画质', exact: true });
+    const frames = page.getByRole('combobox', { name: '游戏帧率上限', exact: true });
+    await expect(quality).toHaveValue('very-high');
+    await expect(frames).toHaveValue('60');
+    await quality.selectOption('high');
+    await expect(quality).toHaveValue('high');
+    await quality.selectOption('medium');
+    await expect(
+      page.getByText('中画质采用游戏原生预设，包含 FSR 缩放，画面清晰度会降低。'),
+    ).toBeVisible();
+    await quality.selectOption('preserve');
+    await frames.selectOption('0');
+    await expect(page.getByRole('alert')).toContainText('导致雷达或播出画面卡顿');
+    await frames.selectOption('30');
+    await expect(frames).toHaveValue('30');
+    await frames.selectOption('60');
     await page.getByRole('button', { name: '启动 CS2', exact: true }).click();
     await expect(quality).toBeDisabled();
+    await expect(frames).toBeDisabled();
     await page.getByRole('button', { name: '退出 CS2 并恢复设置' }).click();
     await expect(quality).toBeEnabled();
     await expect(page.getByRole('button', { name: '退出 CS2 并恢复设置' })).toHaveCount(0);
@@ -383,7 +405,8 @@ test('uncertain Steam launch recovery stays visible after navigation and require
               ? {
                   pending: !restored,
                   running: false,
-                  preserveQuality: true,
+                  qualityPreset: 'preserve',
+                  frameRateLimit: 60,
                   busy: false,
                   phase: restored ? 'idle' : 'uncertain',
                   message: restored ? '原设置已恢复。' : 'Steam 启动结果待确认，备份仍保留。',

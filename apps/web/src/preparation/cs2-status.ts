@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
 export interface Cs2ConfigStatus {
-  preserveQuality: boolean;
+  qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
+  frameRateLimit: 0 | 30 | 60;
   pending: boolean;
   running: boolean;
   message: string | null;

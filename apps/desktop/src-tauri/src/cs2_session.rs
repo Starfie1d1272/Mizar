@@ -1,5 +1,6 @@
 //! Durable physical configuration transaction; production state remains in Companion.
 use crate::cs2_video;
+use crate::{cs2_frame_rate, cs2_preferences::Preferences};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -84,12 +85,12 @@ impl SessionStore {
     pub fn load(&self) -> Result<Option<Value>, String> {
         match fs::read(self.journal_path()) {
             Ok(bytes) => {
-                if bytes.len() > 1024 * 1024 {
+                if bytes.len() > 4 * 1024 * 1024 {
                     return Err("CS2 恢复记录过大，请检查原配置备份。".into());
                 }
                 let value: Value = serde_json::from_slice(&bytes)
                     .map_err(|_| "CS2 恢复记录损坏，请检查原配置备份。")?;
-                if value["version"] != 1 {
+                if value["version"] != 1 && value["version"] != 2 {
                     return Err("CS2 恢复记录版本不支持。".into());
                 }
                 Ok(Some(value))
@@ -99,35 +100,57 @@ impl SessionStore {
         }
     }
     pub fn save(&self, value: &Value) -> Result<(), String> {
-        atomic_write(
-            &self.journal_path(),
-            &serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?,
-        )
+        let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err("CS2 恢复记录过大，未修改游戏设置。".into());
+        }
+        atomic_write(&self.journal_path(), &bytes)
     }
-    pub fn preferences(&self) -> Result<bool, String> {
+    pub fn preferences(&self) -> Result<Preferences, String> {
         match fs::read(self.root.join("preferences.json")) {
-            Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
-                .ok()
-                .and_then(|v| v["preserveQuality"].as_bool())
-                .ok_or_else(|| "CS2 画质设置无法读取。".into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Ok(bytes) => Preferences::from_json(
+                &serde_json::from_slice::<Value>(&bytes).map_err(|_| "CS2 启动设置无法读取。")?,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Preferences::default())
+            }
             Err(_) => Err("CS2 画质设置无法读取。".into()),
         }
     }
-    pub fn set_preferences(&self, preserve: bool) -> Result<(), String> {
+    pub fn set_preferences(&self, preferences: Preferences) -> Result<(), String> {
         if self.load()?.is_some() {
-            return Err("请结束制作并恢复配置后再修改画质选项。".into());
+            return Err("请结束制作并恢复配置后再修改启动设置。".into());
         }
         atomic_write(
             &self.root.join("preferences.json"),
-            &serde_json::to_vec(&json!({"preserveQuality": preserve})).unwrap(),
+            &serde_json::to_vec(&preferences.json()).unwrap(),
         )
     }
+    #[cfg(test)]
     pub fn prepare(
         &self,
         video: &Path,
         executable: &Path,
         size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        self.prepare_files(video, executable, size, None)
+    }
+    pub fn prepare_with_frame_rate(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        let frames =
+            cs2_frame_rate::prepare(video, executable, self.preferences()?.frame_rate_limit)?;
+        self.prepare_files(video, executable, size, Some(frames))
+    }
+    fn prepare_files(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+        frames: Option<Vec<Value>>,
     ) -> Result<Value, String> {
         if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
@@ -139,13 +162,33 @@ impl SessionStore {
         }
         let original =
             String::from_utf8(bytes).map_err(|_| "视频配置编码不支持，未修改游戏设置。")?;
-        let owned = cs2_video::sized_preset(self.preferences()?, size);
+        let preferences = self.preferences()?;
+        let owned = cs2_video::sized_quality_preset(preferences.quality, size);
         let applied = cs2_video::apply(&original, &owned)?;
-        let value = json!({"version":1,"video":video,"executable":executable,"original":original,"applied":applied,"owned":owned,"launchAttempted":false,"pid":null,"created":null});
+        let mut value = json!({"version":1,"video":video,"executable":executable,"original":original,"applied":applied,"owned":owned,"launchAttempted":false,"pid":null,"created":null});
+        if let Some(frames) = frames {
+            value["version"] = json!(2);
+            value["frameRateLimit"] = json!(preferences.frame_rate_limit);
+            value["frameRateFiles"] = json!(frames);
+        }
+        let frame_files = frame_files(&value, video, executable)?;
+        // Preflight every file before writing the durable journal or any config.
+        for (path, original, _) in &frame_files {
+            if fs::read_to_string(path).map_err(|_| "无法读取启动配置。")? != *original {
+                return Err("启动配置在准备期间发生变化，请重试。".into());
+            }
+        }
         // The original is durable and read-back verified before touching the game.
         self.save(&value)?;
         if let Err(error) = atomic_write(video, applied.as_bytes()) {
             return Err(error);
+        }
+        for (path, original, applied) in frame_files {
+            if fs::read_to_string(path).map_err(|_| "无法读取启动配置，备份仍保留。")? != original
+            {
+                return Err("启动配置在应用期间发生变化，备份仍保留。".into());
+            }
+            atomic_write(path, applied.as_bytes())?;
         }
         Ok(value)
     }
@@ -172,6 +215,20 @@ impl SessionStore {
         if cs2_video::apply(original, &owned)? != applied {
             return Err("CS2 原配置与应用记录不一致，备份仍保留。".into());
         }
+        let executable = Path::new(value["executable"].as_str().ok_or("CS2 程序路径缺失。")?);
+        let frames = frame_files(&value, path, executable)?;
+        let mut frame_restorations = Vec::new();
+        for (index, (frame_path, _, _)) in frames.iter().enumerate() {
+            let current =
+                fs::read_to_string(frame_path).map_err(|_| "无法读取帧率配置，备份仍保留。")?;
+            if current.len() > 256 * 1024 {
+                return Err("当前帧率配置过大，备份仍保留。".into());
+            }
+            frame_restorations.push((
+                *frame_path,
+                cs2_frame_rate::restored(&value["frameRateFiles"][index], &current)?,
+            ));
+        }
         let current =
             fs::read_to_string(path).map_err(|_| "无法读取游戏视频配置；原配置备份仍保留。")?;
         let restored = if current == original {
@@ -180,11 +237,53 @@ impl SessionStore {
             cs2_video::restore(original, applied, &current, &owned)?
         };
         atomic_write(path, restored.as_bytes())?;
+        for (frame_path, restored) in frame_restorations {
+            atomic_write(frame_path, restored.as_bytes())?;
+        }
         // Keep a readable, exact original even after successful recovery.
         atomic_write(&self.root.join("last-original.txt"), original.as_bytes())?;
+        if value["version"] == 2 {
+            atomic_write(
+                &self.root.join("last-frame-rate-backup.json"),
+                &serde_json::to_vec_pretty(&value["frameRateFiles"])
+                    .map_err(|_| "帧率备份无法保存。")?,
+            )?;
+        }
         fs::remove_file(self.journal_path())
             .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())
     }
+}
+
+fn frame_files<'a>(
+    value: &'a Value,
+    video: &Path,
+    executable: &Path,
+) -> Result<Vec<(&'a Path, &'a str, &'a str)>, String> {
+    if value["version"] == 1 {
+        return Ok(Vec::new());
+    }
+    let limit = value["frameRateLimit"]
+        .as_u64()
+        .and_then(|v| u16::try_from(v).ok())
+        .filter(|v| [0, 30, 60].contains(v))
+        .ok_or("帧率恢复选项无效。")?;
+    let records = value["frameRateFiles"]
+        .as_array()
+        .ok_or("帧率恢复记录缺失。")?;
+    if records.is_empty() || records.len() > 33 || records[0]["kind"] != "convars" {
+        return Err("帧率恢复记录无效。".into());
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    records
+        .iter()
+        .map(|record| {
+            let validated = cs2_frame_rate::validated(record, video, executable, limit)?;
+            if !unique.insert(validated.0.to_string_lossy().to_lowercase()) {
+                return Err("帧率恢复路径重复。".into());
+            }
+            Ok(validated)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -207,6 +306,104 @@ mod tests {
         fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
         let store = SessionStore::new(root.clone());
         (root, video, store)
+    }
+    fn frame_setup() -> (PathBuf, PathBuf, PathBuf, PathBuf, SessionStore) {
+        let (root, _, store) = setup();
+        let video = root.join("steam/userdata/1/730/local/cfg/cs2_video.txt");
+        fs::create_dir_all(video.parent().unwrap()).unwrap();
+        fs::copy(root.join("cs2_video.txt"), &video).unwrap();
+        let account = root.join("steam/userdata/1/config");
+        fs::create_dir_all(&account).unwrap();
+        fs::write(account.join("localconfig.vdf"), "\"UserLocalConfigStore\" {\"Software\" {\"Valve\" {\"Steam\" {\"Apps\" {\"730\" {\"LaunchOptions\" \"+exec auto.cfg\"}}}}}}").unwrap();
+        let convars = video.parent().unwrap().join("cs2_machine_convars.vcfg");
+        fs::write(
+            &convars,
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"other\" \"keep\"}}",
+        )
+        .unwrap();
+        let cfg = root.join("game/csgo/cfg");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(
+            cfg.join("auto.cfg"),
+            "// private\r\nfps_max 0; exec crosshair.cfg\r\n",
+        )
+        .unwrap();
+        fs::write(cfg.join("crosshair.cfg"), "cl_crosshairsize 2\n").unwrap();
+        let executable = root.join("game/bin/win64/cs2.exe");
+        (root, video, convars, executable, store)
+    }
+    #[test]
+    fn frame_rate_startup_override_and_crash_recovery_restore_exact_user_config() {
+        for limit in [60, 30, 0] {
+            let (root, video, convars, executable, store) = frame_setup();
+            store
+                .set_preferences(Preferences::new("high", limit).unwrap())
+                .unwrap();
+            let before_video = fs::read(&video).unwrap();
+            let before_convars = fs::read_to_string(&convars).unwrap();
+            let cfg = root.join("game/csgo/cfg/auto.cfg");
+            let before_cfg = fs::read(&cfg).unwrap();
+            let journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1920, 1080).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(journal["version"], 2);
+            assert!(fs::read_to_string(&cfg)
+                .unwrap()
+                .contains(&format!("fps_max {limit};")));
+            assert!(fs::read_to_string(&convars)
+                .unwrap()
+                .contains(&format!("\"fps_max\" \"{limit}\"")));
+            let current = fs::read_to_string(&convars)
+                .unwrap()
+                .replace("\"keep\"", "\"changed\"");
+            fs::write(&convars, current).unwrap();
+            SessionStore::new(root.clone()).restore().unwrap();
+            assert_eq!(fs::read(&video).unwrap(), before_video);
+            assert_eq!(
+                fs::read_to_string(&convars).unwrap(),
+                before_convars.replace("\"keep\"", "\"changed\"")
+            );
+            assert_eq!(fs::read(&cfg).unwrap(), before_cfg);
+            assert!(store.load().unwrap().is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn frame_rate_conflicts_do_not_overwrite_other_files_or_clear_backups() {
+        let (root, video, convars, executable, store) = frame_setup();
+        let cfg = root.join("game/csgo/cfg/auto.cfg");
+        store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
+        let applied_video = fs::read(&video).unwrap();
+        let applied_convars = fs::read(&convars).unwrap();
+        fs::write(&cfg, "fps_max 60; // external edit").unwrap();
+        assert!(store.restore().is_err());
+        assert!(store.load().unwrap().is_some());
+        assert_eq!(fs::read(&video).unwrap(), applied_video);
+        assert_eq!(fs::read(&convars).unwrap(), applied_convars);
+        fs::remove_dir_all(root).unwrap();
+        let (root, video, _, executable, store) = frame_setup();
+        let original = fs::read(&video).unwrap();
+        fs::write(root.join("game/csgo/cfg/auto.cfg"), "exec ../outside.cfg").unwrap();
+        assert!(store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1920, 1080).unwrap()
+            )
+            .is_err());
+        assert_eq!(fs::read(&video).unwrap(), original);
+        assert!(store.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn sized_launch_restores_after_restart_and_rejects_extra_owned_fields() {
@@ -272,8 +469,13 @@ mod tests {
     fn durable_restart_recovery_does_not_overwrite_pending_backup() {
         let (root, video, store) = setup();
         let original = fs::read(&video).unwrap();
-        store.set_preferences(true).unwrap();
-        assert!(store.preferences().unwrap());
+        store
+            .set_preferences(Preferences::new("preserve", 60).unwrap())
+            .unwrap();
+        assert_eq!(
+            store.preferences().unwrap().quality,
+            crate::cs2_preferences::Quality::Preserve
+        );
         store
             .prepare(
                 &video,
@@ -289,7 +491,7 @@ mod tests {
                 cs2_video::VideoSize::new(1920, 1080).unwrap()
             )
             .is_err());
-        assert!(store.set_preferences(false).is_err());
+        assert!(store.set_preferences(Preferences::default()).is_err());
         assert_eq!(fs::read(store.journal_path()).unwrap(), backup);
         let restarted = SessionStore::new(root.clone());
         restarted.restore().unwrap();

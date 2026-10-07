@@ -289,12 +289,16 @@ impl ManagedCs2 {
             .transpose()?
             .flatten()
             .is_some();
+        let preferences = self.store.preferences()?;
         Ok(
-            json!({"preserveQuality": self.store.preferences()?, "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
-    pub fn preferences(&mut self, preserve: bool) -> Result<(), String> {
-        self.store.set_preferences(preserve)
+    pub fn preferences(
+        &mut self,
+        preferences: crate::cs2_preferences::Preferences,
+    ) -> Result<(), String> {
+        self.store.set_preferences(preferences)
     }
     pub fn recover(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
         let Some(mut value) = self.store.load()? else {
@@ -355,7 +359,9 @@ impl ManagedCs2 {
         }
         self.message = None;
         let size = crate::windows_host::launch_viewport()?;
-        let mut journal = self.store.prepare(&video, &executable, size)?;
+        let mut journal = self
+            .store
+            .prepare_with_frame_rate(&video, &executable, size)?;
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
         journal["launchAttempted"] = json!(true);
@@ -375,6 +381,11 @@ impl ManagedCs2 {
                     &size.width.to_string(),
                     "-h",
                     &size.height.to_string(),
+                    "+fps_max",
+                    &journal["frameRateLimit"]
+                        .as_u64()
+                        .ok_or("帧率启动参数缺失。")?
+                        .to_string(),
                 ])
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())

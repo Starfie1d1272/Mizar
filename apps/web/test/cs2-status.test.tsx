@@ -17,7 +17,8 @@ let root: Root;
 let container: HTMLDivElement;
 let response: Record<string, unknown>;
 const idle = {
-  preserveQuality: true,
+  qualityPreset: 'preserve',
+  frameRateLimit: 60,
   pending: false,
   running: false,
   message: null,
@@ -60,10 +61,8 @@ describe('CS2 configuration progress', () => {
       await poll({ busy: true, phase: 'idle' });
       expect(container.textContent).not.toContain('正在检查');
       expect(container.textContent).not.toContain('打开备份目录');
-      expect(container.querySelector('button[role="switch"]')?.hasAttribute('disabled')).toBe(
-        false,
-      );
-      expect(container.textContent).toContain('保留原画质 · 开');
+      expect(container.querySelector('select')?.hasAttribute('disabled')).toBe(false);
+      expect(container.querySelector('select')?.value).toBe('preserve');
       await poll(idle);
     }
   });
@@ -75,8 +74,26 @@ describe('CS2 configuration progress', () => {
     expect(container.textContent?.match(/正在启动 CS2，等待 Steam…/g)).toHaveLength(1);
     expect(container.textContent).toContain('打开备份目录');
     expect(container.textContent).toContain('退出 CS2 并恢复设置');
-    expect(container.querySelector('button[role="switch"]')?.hasAttribute('disabled')).toBe(true);
+    expect(container.querySelector('select')?.hasAttribute('disabled')).toBe(true);
     await poll({ busy: true, phase: 'restoring' });
     expect(container.textContent?.match(/正在关闭游戏并恢复配置…/g)).toHaveLength(1);
+  });
+
+  it('saves quality and frame limit together and reports unlimited-frame risk in text', async () => {
+    await render();
+    const frameRate = container.querySelectorAll('select')[1]!;
+    await act(async () => {
+      frameRate.value = '0';
+      frameRate.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
+      qualityPreset: 'preserve',
+      frameRateLimit: 0,
+    });
+    await poll({ ...idle, frameRateLimit: 0 });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      '导致雷达或播出画面卡顿',
+    );
   });
 });
