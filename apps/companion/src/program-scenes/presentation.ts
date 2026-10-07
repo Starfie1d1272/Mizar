@@ -168,10 +168,14 @@ export class ProgramPresentationStore {
   get(document?: MatchDocumentV1 | null, schedule?: ScheduleWindow | null): ProgramPresentation {
     const value = programPresentationSchema.parse(this.value);
     if (!document || document.matchId !== value.match?.matchId) return value;
-    value.eventLogoUrl = document.competition.logoUrl ?? null;
+    value.eventLogoUrl = document.competition?.logoUrl ?? null;
     value.scheduledAt = document.scheduledAt;
     const neighborhood = deriveScheduleNeighborhood(
-      schedule?.competition.competitionId === document.competition.competitionId ? schedule : null,
+      schedule &&
+        document.competition &&
+        schedule.competition.competitionId === document.competition.competitionId
+        ? schedule
+        : null,
       document.matchId,
     );
     const card = (match: ScheduleMatchContext | null): ProgramPresentation['next'] =>

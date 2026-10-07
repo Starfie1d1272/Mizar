@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { toMatchContext, toMatchDocumentV1, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { toMatchContext, toMatchDocumentV1, type BroadcastManifest } from '@mizar/rivalhub';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { ReliableEventV1 } from '@mizar/protocol/output';
 
@@ -221,10 +221,11 @@ describe('Fixture durable isolation & lifecycle', () => {
     // Select the EXACT SAME focus matchId as a real online match context
     const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
       focusMatchId: string;
-      manifests: Record<string, BroadcastManifestV1>;
+      manifests: Record<string, BroadcastManifest>;
     };
     const focusManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
-    const onlineManifest: BroadcastManifestV1 = {
+    if (!focusManifest.match.competition) throw new Error('event fixture required');
+    const onlineManifest: BroadcastManifest = {
       ...focusManifest,
       match: {
         ...focusManifest.match,
@@ -372,7 +373,7 @@ describe('Fixture durable isolation & lifecycle', () => {
     // Prepare a local document with unplayed maps
     const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
       focusMatchId: string;
-      manifests: Record<string, BroadcastManifestV1>;
+      manifests: Record<string, BroadcastManifest>;
     };
     const focusManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
     const localDoc = toMatchDocumentV1({
@@ -425,10 +426,11 @@ describe('Fixture durable isolation & lifecycle', () => {
 
     const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
       focusMatchId: string;
-      manifests: Record<string, BroadcastManifestV1>;
+      manifests: Record<string, BroadcastManifest>;
     };
     const focusManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
-    const onlineManifest: BroadcastManifestV1 = {
+    if (!focusManifest.match.competition) throw new Error('event fixture required');
+    const onlineManifest: BroadcastManifest = {
       ...focusManifest,
       match: {
         ...focusManifest.match,

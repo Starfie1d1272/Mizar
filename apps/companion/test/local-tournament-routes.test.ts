@@ -41,7 +41,7 @@ it('inherits persisted event rules, preserves existing BP when defaults change, 
       ).statusCode,
     ).toBe(200);
     const initial = (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>();
-    const eventId = initial.matches[0]!.competition.competitionId;
+    const eventId = initial.matches[0]!.competition?.competitionId;
     const event = {
       eventId,
       name: 'ESL Pro League Season 24',

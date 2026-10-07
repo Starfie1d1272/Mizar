@@ -75,3 +75,11 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0038：热身省略回合历史时的执行边界](0038-warmup-without-round-history.md)
 - [ADR-0039：同一地图结束执行的选手摘要收敛](0039-terminal-player-summary-settlement.md)
 - [ADR-0040：赛事 BO3 禁选规则与本场 BP 事实](0040-event-bo3-authoring-rules.md)
+
+- [ADR-0041：比赛上下文中的可选赛事](0041-optional-match-competition.md)
+
+- [ADR-0042：执行结束、确认结果与地图观测分离](0042-execution-end-and-result-conclusion.md)
+
+- [ADR-0043：冻结地图计划与实际观测记录分离](0043-source-plan-and-observed-maps.md)
+
+- [ADR-0044：等待地图计划与明确无计划的比赛分开](0044-awaiting-map-plan.md)

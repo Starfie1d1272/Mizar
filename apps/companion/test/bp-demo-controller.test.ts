@@ -278,7 +278,7 @@ describe('BP demo state and command route', () => {
       expect(wireProjection?.entrants).not.toHaveProperty('a.entryId');
       expect(wireProjection?.entrants).not.toHaveProperty('b.entryId');
       expect(wireProjection).not.toHaveProperty('manifest');
-      expect(wireProjection?.competition).toBe(demoManifest.match.competition.name);
+      expect(wireProjection?.competition).toBe(demoManifest.match.competition?.name);
 
       const workspace = bpWorkspaceSchema.parse(
         (await app.inject('/local/v1/bp-workspace')).json(),

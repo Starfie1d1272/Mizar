@@ -17,7 +17,7 @@ export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererP
     >
       {design === 'perfectworld' ? (
         <strong className="shanghai-series-stage">
-          {broadcastStage(snapshot.payload.match?.stage)}
+          {broadcastStage(snapshot.payload.match?.stage ?? undefined)}
         </strong>
       ) : null}
       <div

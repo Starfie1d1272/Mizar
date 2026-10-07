@@ -10,7 +10,7 @@ import {
   type IdentityState,
 } from '../identity/index.js';
 import type { MatchContext, MatchFormat, MatchVetoActionType } from '../match-context/index.js';
-import { safeAbsoluteRoundWins } from '../series-progress/index.js';
+import { createSeriesProgress, safeAbsoluteRoundWins } from '../series-progress/index.js';
 import type {
   SeriesMapProgress,
   SeriesMapSelection,
@@ -101,7 +101,8 @@ export interface ProgramSeriesProjection {
     readonly a: ProgramSeriesEntrant;
     readonly b: ProgramSeriesEntrant;
   };
-  readonly score: { readonly a: number; readonly b: number };
+  readonly score: { readonly a: number | null; readonly b: number | null };
+  readonly resultDisposition?: 'recorded' | 'pending' | 'omitted' | null | undefined;
   readonly status: 'planned' | 'live' | 'completed';
   readonly bindingState: SeriesProgress['bindingState'];
   readonly currentMapOrder: number | null;
@@ -212,9 +213,9 @@ export interface ProgramProjection {
       readonly slug: string;
       readonly name: string;
       readonly themeColor: string | null;
-    };
+    } | null;
     readonly format: MatchFormat;
-    readonly stage: string;
+    readonly stage: string | null;
   };
   readonly teams: {
     readonly ct: ProgramTeamPresentation;
@@ -317,8 +318,9 @@ function canonicalTeams(
   const seriesScoreFor = (entryId: string): number | null => {
     if (seriesProgress === null || seriesProgress === undefined) return null;
     if (seriesProgress.matchId !== context.matchId) return null;
-    if (seriesProgress.entrants.a.entryId === entryId) return seriesProgress.score.a;
-    if (seriesProgress.entrants.b.entryId === entryId) return seriesProgress.score.b;
+    const score = seriesPresentationScore(context, seriesProgress);
+    if (seriesProgress.entrants.a.entryId === entryId) return score.a;
+    if (seriesProgress.entrants.b.entryId === entryId) return score.b;
     return null;
   };
   return {
@@ -339,11 +341,23 @@ function canonicalTeams(
   };
 }
 
-function projectSeries(
+/** Presentation consumes a confirmed conclusion separately from observed map progress. */
+function seriesPresentationScore(context: MatchContext, progress: SeriesProgress) {
+  if (context.status !== 'finished') return progress.score;
+  if (context.resultDisposition === 'pending' || context.resultDisposition === 'omitted')
+    return { a: null, b: null };
+  return { a: context.scoreA, b: context.scoreB };
+}
+
+export function projectSeries(
   context: MatchContext | undefined,
   progress: SeriesProgress | null | undefined,
 ): ProgramSeriesProjection | null {
-  if (context === undefined || progress === null || progress === undefined) return null;
+  if (context === undefined) return null;
+  if (progress == null) {
+    if (context.status !== 'finished') return null;
+    progress = createSeriesProgress(context);
+  }
   if (progress.matchId !== context.matchId) return null;
 
   const complete =
@@ -371,8 +385,20 @@ function projectSeries(
       a: { ...progress.entrants.a },
       b: { ...progress.entrants.b },
     },
-    score: { ...progress.score },
-    status: complete ? 'completed' : hasLiveEvidence ? 'live' : 'planned',
+    score: seriesPresentationScore(context, progress),
+    resultDisposition:
+      context.status === 'finished'
+        ? (context.resultDisposition ??
+          (context.scoreA !== null && context.scoreB !== null ? 'recorded' : 'pending'))
+        : null,
+    status:
+      context.status === 'finished'
+        ? 'completed'
+        : complete
+          ? 'completed'
+          : hasLiveEvidence
+            ? 'live'
+            : 'planned',
     bindingState: progress.bindingState,
     currentMapOrder: progress.currentMapOrder,
     maps: progress.maps.map((map) => ({
@@ -659,10 +685,13 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         ? null
         : {
             matchId: input.context.matchId,
-            competition: {
-              ...input.context.competition,
-              slug: input.context.competition.slug ?? input.context.competition.competitionId,
-            },
+            competition:
+              input.context.competition === null
+                ? null
+                : {
+                    ...input.context.competition,
+                    slug: input.context.competition.slug ?? input.context.competition.competitionId,
+                  },
             format: input.context.format,
             stage: input.context.stageLabel ?? input.context.stage,
           },

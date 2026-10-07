@@ -266,7 +266,7 @@ export function registerLocalTournamentRoutes(
         .matches.find((match) => match.matchId === store.getSnapshot().selectedMatchId);
       if (
         selected !== undefined &&
-        selected.competition.competitionId === body.eventId &&
+        selected.competition?.competitionId === body.eventId &&
         controller.getActiveBinding()?.origin === 'local'
       )
         controller.activateLocalDocument(selected);

@@ -4,7 +4,7 @@ export {
   selectProgramSafeRuntimeView,
 } from './program-safe-runtime.js';
 export { projectObserverAssist } from './observer-assist.js';
-export { projectProgram } from './program.js';
+export { projectProgram, projectSeries } from './program.js';
 export { derivePlayerLifeState } from './player-life-state.js';
 export {
   getProjectionIdentityCapabilities,

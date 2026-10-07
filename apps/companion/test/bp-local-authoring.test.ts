@@ -3,11 +3,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { DEFAULT_LOCAL_BP_MAP_POOL, inspectBp, localBpSequence } from '@mizar/core/projection';
-import {
-  toMatchContext,
-  validateBroadcastManifest,
-  type BroadcastManifestV1,
-} from '@mizar/rivalhub';
+import { toMatchContext, validateBroadcastManifest, type BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it } from 'vitest';
 
 import { bpAuthoringDraftFromBinding, createLocalBpManifest } from '../src/bp/local-draft.js';
@@ -157,7 +153,7 @@ describe('event-specific BO3 rules', () => {
   });
 });
 
-async function knownManifest(): Promise<BroadcastManifestV1> {
+async function knownManifest(): Promise<BroadcastManifest> {
   const candidate: unknown = JSON.parse(
     await readFile(
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
@@ -170,7 +166,7 @@ async function knownManifest(): Promise<BroadcastManifestV1> {
 }
 
 function bindingFor(
-  manifest: BroadcastManifestV1,
+  manifest: BroadcastManifest,
   origin: MatchContextBinding['origin'],
 ): MatchContextBinding {
   return {
@@ -193,7 +189,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function boundBo3Draft(manifest: BroadcastManifestV1) {
+function boundBo3Draft(manifest: BroadcastManifest) {
   return {
     ...bpAuthoringDraftFromBinding(bindingFor(manifest, 'online')),
     mapPool: [
@@ -324,7 +320,7 @@ describe('local BP authoring', () => {
     const partial = (
       pickSide: 'ct' | null,
       explicitSide: 'ct' | 't' | null,
-    ): BroadcastManifestV1 => ({
+    ): BroadcastManifest => ({
       ...original,
       match: { ...original.match, format: 'bo3' },
       maps: original.maps.map((map) =>
@@ -438,8 +434,8 @@ describe('local BP authoring', () => {
       expect(saved.ok).toBe(true);
       expect(controller.getActiveBinding()?.origin).toBe('local');
       expect(controller.getActiveBinding()?.manifest.match.matchId).toBe(previous.match.matchId);
-      expect(controller.getActiveBinding()?.manifest.match.competition.competitionId).toBe(
-        previous.match.competition.competitionId,
+      expect(controller.getActiveBinding()?.manifest.match.competition?.competitionId).toBe(
+        previous.match.competition?.competitionId,
       );
       expect(controller.getActiveBinding()?.manifest.entrants).toEqual(previous.entrants);
       expect(controller.getActiveBinding()?.manifest.commentators).toEqual(previous.commentators);
@@ -545,7 +541,7 @@ describe('local BP authoring', () => {
       expect(localBinding.localAuthoringMode).toBe('standalone');
       const originalIds = {
         matchId: localBinding.manifest.match.matchId,
-        competitionId: localBinding.manifest.match.competition.competitionId,
+        competitionId: localBinding.manifest.match.competition?.competitionId,
         a: localBinding.manifest.entrants.a.entryId,
         b: localBinding.manifest.entrants.b.entryId,
       };
@@ -562,7 +558,7 @@ describe('local BP authoring', () => {
       expect(edited.ok).toBe(true);
       if (!edited.ok) return;
       expect(edited.manifest.match.matchId).toBe(originalIds.matchId);
-      expect(edited.manifest.match.competition.competitionId).toBe(originalIds.competitionId);
+      expect(edited.manifest.match.competition?.competitionId).toBe(originalIds.competitionId);
       expect(edited.manifest.entrants.a.entryId).toBe(originalIds.a);
       expect(edited.manifest.entrants.b.entryId).toBe(originalIds.b);
       expect(edited.manifest.entrants.a.name).toBe('本地队伍 A');
@@ -626,12 +622,12 @@ describe('local BP authoring', () => {
     expect(base.ok).toBe(true);
     if (!base.ok) return;
     const online = await knownManifest();
-    const older: BroadcastManifestV1 = {
+    const older: BroadcastManifest = {
       ...online,
       revision: 'revision-older',
       match: { ...online.match, matchId: 'match-m2-older' },
     };
-    const newer: BroadcastManifestV1 = {
+    const newer: BroadcastManifest = {
       ...online,
       revision: 'revision-newer',
       match: { ...online.match, matchId: 'match-m2-newer' },
@@ -831,12 +827,12 @@ describe('local BP authoring', () => {
     expect(base.ok).toBe(true);
     if (!base.ok) return;
     const fixture = await knownManifest();
-    const first: BroadcastManifestV1 = {
+    const first: BroadcastManifest = {
       ...fixture,
       revision: 'revision-first',
       match: { ...fixture.match, matchId: 'match-m2-first' },
     };
-    const newer: BroadcastManifestV1 = {
+    const newer: BroadcastManifest = {
       ...fixture,
       revision: 'revision-newest',
       match: { ...fixture.match, matchId: 'match-m2-newest' },
@@ -852,7 +848,7 @@ describe('local BP authoring', () => {
       ) {
         if (
           origin === 'online' &&
-          (candidate as BroadcastManifestV1).match.matchId === first.match.matchId
+          (candidate as BroadcastManifest).match.matchId === first.match.matchId
         ) {
           saveStarted.resolve();
           await releaseSave.promise;
@@ -895,4 +891,28 @@ describe('local BP authoring', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+it('preserves a complete BO3 BP without an event or predeclared players', () => {
+  const compiled = createLocalBpManifest(draftFor('bo3'));
+  if (!compiled.ok) throw new Error('Invalid complete BO3 fixture');
+  const manifest = {
+    ...compiled.manifest,
+    schemaVersion: 'rivalhub.broadcast-manifest.v2',
+    match: {
+      ...compiled.manifest.match,
+      resultDisposition: null,
+      competition: null,
+      stage: null,
+      stageKey: null,
+      stageLabel: null,
+    },
+    entrants: {
+      a: { ...compiled.manifest.entrants.a, roster: { rosterId: null, players: [] } },
+      b: { ...compiled.manifest.entrants.b, roster: { rosterId: null, players: [] } },
+    },
+  };
+  expect(validateBroadcastManifest(manifest).ok).toBe(true);
+  const inspection = inspectBp(toMatchContext(manifest));
+  expect(inspection.readiness).toBe('ready');
 });

@@ -6,7 +6,7 @@ import Fastify from 'fastify';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { ProgramProjection } from '@mizar/core/projection';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { MatchContextController, MatchManifestLkgStore } from '../src/match-context/index.js';
 import {
   RivalsRehearsal,
@@ -513,11 +513,11 @@ describe('RivalsRehearsal', () => {
     // 3. Activate normal online MatchContext (even with the exact same focus matchId)
     const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
       focusMatchId: string;
-      manifests: Record<string, BroadcastManifestV1>;
+      manifests: Record<string, BroadcastManifest>;
     };
     // Create an unstarted online match manifest with the same matchId to test production progression
     const baseManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
-    const onlineManifest: BroadcastManifestV1 = {
+    const onlineManifest: BroadcastManifest = {
       ...baseManifest,
       match: {
         ...baseManifest.match,

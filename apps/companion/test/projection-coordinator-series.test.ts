@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { MatchContext } from '@mizar/core/match-context';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
-import type { BroadcastManifestV1 } from '@mizar/rivalhub';
+import type { BroadcastManifest } from '@mizar/rivalhub';
 import { programSnapshotSchema } from '@mizar/protocol/program';
 import { operatorSnapshotSchema } from '@mizar/protocol/operator';
 import { programCueMessageSchema } from '@mizar/protocol/program-cue';
@@ -23,13 +23,13 @@ import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.j
 import { MatchContextController, MatchManifestLkgStore } from '../src/match-context/index.js';
 import { MAX_LOCAL_SNAPSHOT_BYTES } from '../src/local-web/transport-constants.js';
 
-async function readManifest(cleanScores = true): Promise<BroadcastManifestV1> {
+async function readManifest(cleanScores = true): Promise<BroadcastManifest> {
   const manifest = JSON.parse(
     await readFile(
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
   if (cleanScores) {
     return {
       ...manifest,
@@ -45,7 +45,7 @@ async function readManifest(cleanScores = true): Promise<BroadcastManifestV1> {
 }
 
 function matchedObservation(
-  manifest: BroadcastManifestV1,
+  manifest: BroadcastManifest,
   overrides: {
     readonly mapName?: string;
     readonly mapPhase?: 'live' | 'gameover';

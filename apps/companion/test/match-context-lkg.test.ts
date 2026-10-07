@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import type { BroadcastManifestV1, BroadcastScheduleWindowV1 } from '@mizar/rivalhub';
+import type { BroadcastManifest, BroadcastScheduleWindowV1 } from '@mizar/rivalhub';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { MATCH_CONTEXT_CACHE_VERSION } from '../src/match-context/lkg-store.js';
@@ -37,7 +37,7 @@ function source(kind: 'online' | 'fixture', value: unknown) {
 
 function scheduleRequest(schedule: BroadcastScheduleWindowV1): ScheduleWindowRequest {
   return {
-    competitionId: schedule.competition.competitionId,
+    competitionId: schedule.competition?.competitionId,
     from: schedule.from,
     to: schedule.to,
   };
@@ -78,7 +78,7 @@ afterEach(async () => {
 describe('Match Manifest last-known-good seam', () => {
   it('saves one versioned envelope and restores its raw DTO with stale metadata', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const filePath = join(root, 'manifest.json');
     const store = new MatchManifestLkgStore({
       filePath,
@@ -118,7 +118,7 @@ describe('Match Manifest last-known-good seam', () => {
   it('uses the same-shape local fixture as a Companion source', async () => {
     const root = await temporaryDirectory();
     const manifestPath = join(fixtureRoot, 'broadcast-manifest-v1.valid.json');
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const controller = new MatchContextController({
       lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
     });
@@ -136,7 +136,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('does not overwrite a valid LKG with malformed or semantically invalid input', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const store = new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') });
     expect((await store.save(manifest, 'fixture')).ok).toBe(true);
 
@@ -154,7 +154,7 @@ describe('Match Manifest last-known-good seam', () => {
     'preserves the old Manifest envelope when the %s commit step fails',
     async (failurePoint) => {
       const root = await temporaryDirectory();
-      const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+      const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
       const filePath = join(root, 'manifest.json');
       const baseline = new MatchManifestLkgStore({
         filePath,
@@ -190,7 +190,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('only restores an exact requested match and never chooses a nearest match', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const store = new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') });
     expect((await store.save(manifest, 'online')).ok).toBe(true);
 
@@ -202,7 +202,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('commits only the latest deferred MatchContext selection', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const nextManifest = structuredClone(manifest) as {
       revision: string;
       match: { matchId: string };
@@ -238,7 +238,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('clears A before selecting B, so B failure cannot leak A branding', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const store = new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') });
     const controller = new MatchContextController({ lkgStore: store });
     const first = await controller.selectMatch(manifest.match.matchId, source('fixture', manifest));
@@ -259,7 +259,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('keeps the same-match in-memory binding when refresh fails', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = structuredClone(manifest) as unknown as {
       revision: string;
       match: { matchId: string };
@@ -297,7 +297,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('cancels an in-flight selection when clearActive is called', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const controller = new MatchContextController({
       lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
     });
@@ -319,7 +319,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('carries contract warnings into fresh and restored MatchContext bindings', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const candidate = structuredClone(manifest) as unknown as {
       entrants: {
         a: { roster: { players: Array<{ steam64: string | null; displayName: string | null }> } };
@@ -354,7 +354,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('keeps a fresh MatchContext when its LKG persistence fails', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const filePath = join(root, 'manifest.json');
     const store = new MatchManifestLkgStore({
       filePath,
@@ -381,7 +381,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('uses same-match LKG on source failure and restores deterministically after process restart', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const filePath = join(root, 'manifest.json');
     const store = new MatchManifestLkgStore({ filePath });
     const controller = new MatchContextController({ lkgStore: store });
@@ -407,7 +407,7 @@ describe('Match Manifest last-known-good seam', () => {
   it('rejects an unsupported-schema payload in the versioned envelope', async () => {
     const root = await temporaryDirectory();
     const filePath = join(root, 'manifest.json');
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const store = new MatchManifestLkgStore({ filePath });
     expect((await store.save(manifest, 'fixture')).ok).toBe(true);
     const envelope = JSON.parse(await readFile(filePath, 'utf8')) as {
@@ -427,7 +427,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('does not classify callback failures as source_load_failed', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const callbackError = new Error('binding callback failed');
     const controller = new MatchContextController({
       lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
@@ -443,7 +443,7 @@ describe('Match Manifest last-known-good seam', () => {
 
   it('propagates untyped source-loader errors instead of masking them as source_load_failed', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const programmerError = new TypeError('source callback invariant failed');
     const controller = new MatchContextController({
       lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
@@ -794,7 +794,7 @@ describe('independent ScheduleWindow last-known-good seam', () => {
 
   it('does not couple schedule failure to an active MatchContext', async () => {
     const root = await temporaryDirectory();
-    const manifest = await readFixture<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const schedule = await readFixture<BroadcastScheduleWindowV1>(
       'broadcast-schedule-window-v1.valid.json',
     );

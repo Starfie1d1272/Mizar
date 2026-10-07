@@ -1,3 +1,4 @@
+import { matchResultIssue } from '@mizar/protocol/context';
 import {
   hasBlockingDiagnostic,
   makeContractDiagnostic,
@@ -16,13 +17,13 @@ import {
 import { broadcastManifestSchema } from './schema.js';
 import {
   BROADCAST_MANIFEST_SCHEMA_VERSION,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type BroadcastPlayerV1,
 } from './types.js';
 
 const STEAM64_PATTERN = /^\d{17}$/;
 
-function maximumMapCount(format: BroadcastManifestV1['match']['format']): number {
+function maximumMapCount(format: BroadcastManifest['match']['format']): number {
   return format === 'bo1' ? 1 : format === 'bo3' ? 3 : 5;
 }
 
@@ -32,7 +33,8 @@ function hasUnsupportedSchemaVersion(input: unknown): boolean {
     input !== null &&
     !Array.isArray(input) &&
     'schemaVersion' in input &&
-    input.schemaVersion !== BROADCAST_MANIFEST_SCHEMA_VERSION
+    input.schemaVersion !== BROADCAST_MANIFEST_SCHEMA_VERSION &&
+    input.schemaVersion !== 'rivalhub.broadcast-manifest.v2'
   );
 }
 
@@ -100,19 +102,31 @@ function validatePlayer(
   }
 }
 
-function validateManifestSemantics(value: BroadcastManifestV1): ContractDiagnostic[] {
+function validateManifestSemantics(value: BroadcastManifest): ContractDiagnostic[] {
   const diagnostics: ContractDiagnostic[] = [];
   nonEmpty(value.revision, 'revision', diagnostics, 'revision');
   nonEmpty(value.match.matchId, 'match.matchId', diagnostics, 'matchId');
-  nonEmpty(
-    value.match.competition.competitionId,
-    'match.competition.competitionId',
-    diagnostics,
-    'competitionId',
-  );
-  nonEmpty(value.match.competition.slug, 'match.competition.slug', diagnostics, 'competition slug');
-  nonEmpty(value.match.competition.name, 'match.competition.name', diagnostics, 'competition name');
-  nonEmpty(value.match.stage, 'match.stage', diagnostics, 'stage');
+  if (value.match.competition !== null) {
+    nonEmpty(
+      value.match.competition.competitionId,
+      'match.competition.competitionId',
+      diagnostics,
+      'competitionId',
+    );
+    nonEmpty(
+      value.match.competition.slug,
+      'match.competition.slug',
+      diagnostics,
+      'competition slug',
+    );
+    nonEmpty(
+      value.match.competition.name,
+      'match.competition.name',
+      diagnostics,
+      'competition name',
+    );
+  }
+  if (value.match.stage !== null) nonEmpty(value.match.stage, 'match.stage', diagnostics, 'stage');
 
   const entryIds = [value.entrants.a.entryId, value.entrants.b.entryId];
   nonEmpty(value.entrants.a.entryId, 'entrants.a.entryId', diagnostics, 'entryId');
@@ -277,7 +291,7 @@ function validateManifestSemantics(value: BroadcastManifestV1): ContractDiagnost
 
 export function validateBroadcastManifest(
   input: unknown,
-): ContractValidationResult<BroadcastManifestV1> {
+): ContractValidationResult<BroadcastManifest> {
   if (hasUnsupportedSchemaVersion(input)) {
     return validationFailure([
       makeContractDiagnostic(
@@ -291,11 +305,22 @@ export function validateBroadcastManifest(
   }
   const parsed = broadcastManifestSchema.safeParse(input);
   if (!parsed.success) {
-    return validationFailure(structuralDiagnostics(parsed.error, 'BroadcastManifestV1'));
+    return validationFailure(structuralDiagnostics(parsed.error, 'BroadcastManifest'));
   }
 
   const value = parsed.data;
   const diagnostics = validateManifestSemantics(value);
+  const resultIssue = matchResultIssue(value.match, value.maps);
+  if (resultIssue)
+    diagnostics.push(
+      makeContractDiagnostic(
+        'semantic',
+        'error',
+        'invalid_field',
+        'match.resultDisposition',
+        resultIssue,
+      ),
+    );
   return hasBlockingDiagnostic(diagnostics)
     ? validationFailure(diagnostics)
     : validationSuccess(value, diagnostics);

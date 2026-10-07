@@ -4,6 +4,7 @@ export {
   type BroadcastCommentatorV1,
   type BroadcastEntrantV1,
   type BroadcastManifestSchemaVersion,
+  type BroadcastManifest,
   type BroadcastManifestV1,
   type BroadcastMapV1,
   type BroadcastMatchFormat,

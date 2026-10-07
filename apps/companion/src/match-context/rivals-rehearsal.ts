@@ -5,7 +5,7 @@ import {
   toMatchContext,
   validateBroadcastManifest,
   validateBroadcastScheduleWindow,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type BroadcastScheduleWindowV1,
 } from '@mizar/rivalhub';
 import { adaptGsiPayload } from '@mizar/telemetry-gsi';
@@ -49,7 +49,7 @@ export class RivalsRehearsal {
   private fixture: {
     focusMatchId: string;
     schedule: BroadcastScheduleWindowV1;
-    manifests: Map<string, BroadcastManifestV1>;
+    manifests: Map<string, BroadcastManifest>;
     provenance: RehearsalFile['provenance'];
   } | null = null;
   private selectedMatchId: string | null = null;
@@ -79,7 +79,7 @@ export class RivalsRehearsal {
       throw new Error('Rivals 示例版本不兼容。');
     const schedule = validateBroadcastScheduleWindow(input.schedule);
     if (!schedule.ok) throw new Error('Rivals 示例赛程无效。');
-    const manifests = new Map<string, BroadcastManifestV1>();
+    const manifests = new Map<string, BroadcastManifest>();
     for (const match of schedule.value.matches) {
       const checked = validateBroadcastManifest(input.manifests[match.matchId]);
       if (!checked.ok || checked.value.match.matchId !== match.matchId)
@@ -242,7 +242,7 @@ export class RivalsRehearsal {
     return this.view();
   }
 
-  private stageManifest(final: BroadcastManifestV1, index: number): BroadcastManifestV1 {
+  private stageManifest(final: BroadcastManifest, index: number): BroadcastManifest {
     const stage = STAGES[index]!;
     const completed = final.maps.slice(0, stage.completedMaps);
     const scoreA = completed.filter(

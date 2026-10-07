@@ -21,7 +21,7 @@ export function MatchDocumentView({
     return (
       <Panel className="match-document-summary">
         <div className="preparation-match__meta">
-          <strong>{match.competition.name}</strong>
+          <strong>{match.competition?.name}</strong>
           <StatusPill tone="info">
             {
               {

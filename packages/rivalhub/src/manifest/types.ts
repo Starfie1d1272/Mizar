@@ -7,6 +7,7 @@ import type {
   BroadcastCompetitionSchemaOutput,
   BroadcastEntrantSchemaOutput,
   BroadcastManifestSchemaOutput,
+  BroadcastManifestV1SchemaOutput,
   BroadcastMapSchemaOutput,
   BroadcastMatchSchemaOutput,
   BroadcastPlayerSchemaOutput,
@@ -20,7 +21,16 @@ type ReadonlyDeep<T> = T extends readonly (infer Item)[]
     ? { readonly [Key in keyof T]: ReadonlyDeep<T[Key]> }
     : T;
 
-export type BroadcastManifestV1 = ReadonlyDeep<BroadcastManifestSchemaOutput>;
+export type BroadcastManifestV1 = ReadonlyDeep<BroadcastManifestV1SchemaOutput>;
+export type BroadcastManifest = ReadonlyDeep<
+  Omit<BroadcastManifestSchemaOutput, 'schemaVersion' | 'match'> & {
+    schemaVersion: BroadcastManifestSchemaOutput['schemaVersion'];
+    match: Omit<BroadcastMatchSchemaOutput, 'competition' | 'stage'> & {
+      competition: BroadcastCompetitionSchemaOutput | null;
+      stage: string | null;
+    };
+  }
+>;
 export type BroadcastCompetitionV1 = ReadonlyDeep<BroadcastCompetitionSchemaOutput>;
 export type BroadcastMatchV1 = ReadonlyDeep<BroadcastMatchSchemaOutput>;
 export type BroadcastPlayerV1 = ReadonlyDeep<BroadcastPlayerSchemaOutput>;

@@ -779,3 +779,108 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     expect(afterConflict?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
   });
 });
+
+it('persists empty and observed unplanned progress across restart and context refresh', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-unplanned-checkpoint-'));
+  const filePath = join(directory, 'series.json');
+  const diagnostics: string[] = [];
+  const store = () =>
+    new JsonSeriesProgressCheckpointStore({
+      filePath,
+      onDiagnostic: (code) => diagnostics.push(code),
+    });
+  const context: MatchContext = {
+    ...contextFixture(),
+    competition: null,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
+  };
+  try {
+    const initial = createProgramRuntime('empty-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    initial.synchronizeSeriesProgress(context, null, 'local');
+    await initial.flushSeriesProgressCheckpoint();
+    expect(store().load()?.progress.maps).toEqual([]);
+    const runtime = createProgramRuntime('observed-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    runtime.synchronizeSeriesProgress(context, null, 'local');
+    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+    const observed = runtime.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    expect(observed.maps).toHaveLength(1);
+    expect(observed.maps[0]).toMatchObject({
+      mapId: null,
+      mapName: 'de_mirage',
+      status: 'current',
+    });
+    await runtime.flushSeriesProgressCheckpoint();
+    const restarted = createProgramRuntime('restored-unplanned', {
+      seriesProgressCheckpointStore: store(),
+    });
+    const restored = restarted.synchronizeSeriesProgress(context, null, 'local')!;
+    expect(restored.maps).toEqual(observed.maps);
+    restarted.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 9 }));
+    const completed = restarted.synchronizeSeriesProgress(context, sideProof, 'local')!;
+    expect(completed.score).toEqual({ a: 1, b: 0 });
+    expect(
+      completed.issues.some(
+        (issue) =>
+          issue.code === 'context_result_conflict' || issue.code === 'checkpoint_incompatible',
+      ),
+    ).toBe(false);
+    await restarted.flushSeriesProgressCheckpoint();
+    expect(store().load()?.progress.score).toEqual({ a: 1, b: 0 });
+    expect(diagnostics).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('does not manufacture observed maps for a finished aggregate-only match', () => {
+  const runtime = createProgramRuntime('finished-unplanned');
+  runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+  const context: MatchContext = {
+    ...contextFixture(),
+    status: 'finished',
+    resultDisposition: 'recorded',
+    scoreA: 2,
+    scoreB: 1,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage'],
+  };
+  expect(runtime.synchronizeSeriesProgress(context, sideProof, 'local')?.maps).toEqual([]);
+});
+
+it('ignores pre-BP warmup and smoothly adopts the official plan after restoring an empty checkpoint', () => {
+  const store = new MemoryCheckpointStore();
+  const runtime = createProgramRuntime('awaiting-event-plan', {
+    seriesProgressCheckpointStore: store,
+  });
+  const planned = { ...contextFixture(), mapPool: ['de_mirage', 'de_dust2', 'de_inferno'] };
+  const awaiting = { ...planned, maps: [] };
+  runtime.acceptObservation(frame(1, 'warmup', 'freezetime', { ct: 0, t: 0 }, undefined, 0));
+  const before = runtime.synchronizeSeriesProgress(awaiting, sideProof, 'local')!;
+  expect(before.sourcePlan.mode).toBe('awaiting_plan');
+  expect(before.maps).toEqual([]);
+  expect(store.checkpoint?.progress.maps).toEqual([]);
+  const restarted = createProgramRuntime('event-plan-restored', {
+    seriesProgressCheckpointStore: store,
+  });
+  expect(restarted.synchronizeSeriesProgress(awaiting, null, 'local')?.sourcePlan.mode).toBe(
+    'awaiting_plan',
+  );
+  restarted.acceptObservation(frame(2, 'warmup', 'freezetime', { ct: 0, t: 0 }, undefined, 0));
+  const after = restarted.synchronizeSeriesProgress(planned, sideProof, 'local')!;
+  expect(after.sourcePlan.mode).toBe('planned');
+  expect(after.maps).toHaveLength(3);
+  expect(after.maps[0]).toMatchObject({ mapId: 'map-1', mapOrder: 1, status: 'current' });
+  expect(
+    after.issues.some(
+      (issue) =>
+        issue.code === 'context_result_conflict' || issue.code === 'checkpoint_incompatible',
+    ),
+  ).toBe(false);
+});

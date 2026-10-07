@@ -289,3 +289,18 @@ describe('Match Header presentation selector', () => {
     expect(formatMatchHeaderScore(0)).toBe('0');
   });
 });
+
+it('shows an absent terminal result without a synthetic zero score or wins', () => {
+  const base = getProgramFixture('real-live-rich')!.payload;
+  if (base.series === null) throw new Error('Missing fixture series');
+  const value = buildMatchHeaderPresentation({
+    ...base,
+    series: {
+      ...base.series,
+      status: 'completed',
+      resultDisposition: 'omitted',
+      score: { a: null, b: null },
+    },
+  });
+  expect(value.seriesScoreText).toBe('—:—');
+});

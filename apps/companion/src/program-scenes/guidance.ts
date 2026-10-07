@@ -111,7 +111,7 @@ export class ProductionGuidanceStore {
     const online =
       binding?.origin === 'online' ||
       (binding?.origin === 'cache' && binding.cachedFrom === 'online');
-    const slug = binding?.manifest.match.competition.slug;
+    const slug = binding?.manifest.match.competition?.slug;
     const rivalhubUrl =
       online && slug && p.match
         ? `${OFFICIAL_RIVALHUB_URL}/admin/${encodeURIComponent(slug)}/matches/${encodeURIComponent(p.match.matchId)}`
@@ -156,7 +156,7 @@ export class ProductionGuidanceStore {
       nextMap: phase === 'match_end' ? null : (current?.mapName ?? next?.mapName ?? null),
       result:
         phase === 'match_end' && series
-          ? `${series.score.a} : ${series.score.b}`
+          ? `${series.score.a ?? '—'} : ${series.score.b ?? '—'}`
           : completed?.finalScore
             ? `${completed.mapName} · ${completed.finalScore.a} : ${completed.finalScore.b}`
             : null,

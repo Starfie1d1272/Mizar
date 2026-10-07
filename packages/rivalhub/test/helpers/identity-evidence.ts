@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { MatchContext } from '@mizar/core/match-context';
 import { iterateCaptureFrames, verifyCapture } from '@mizar/testkit';
 
-import { toMatchContext, type BroadcastManifestV1 } from '../../src/index.js';
+import { toMatchContext, type BroadcastManifest } from '../../src/index.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -12,8 +12,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function manifestFromCapture(
   capturePath: string,
-  template: BroadcastManifestV1,
-): Promise<BroadcastManifestV1> {
+  template: BroadcastManifest,
+): Promise<BroadcastManifest> {
   const capture = await verifyCapture(capturePath);
   for await (const frame of iterateCaptureFrames(capture)) {
     const map = isRecord(frame.payload.map) ? frame.payload.map : undefined;
@@ -37,7 +37,7 @@ async function manifestFromCapture(
     if (playersByTeam.get(ct.name)?.length !== 5 || playersByTeam.get(t.name)?.length !== 5)
       continue;
 
-    const entrant = (source: BroadcastManifestV1['entrants']['a'], name: string) => ({
+    const entrant = (source: BroadcastManifest['entrants']['a'], name: string) => ({
       ...source,
       name,
       logoUrl: null,
@@ -80,6 +80,6 @@ export async function contextFromCapture(capturePath: string): Promise<MatchCont
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
   return toMatchContext(await manifestFromCapture(identityCapturePath, template));
 }

@@ -88,7 +88,7 @@ export function LocalTournamentEditor({
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
   const selected = document;
-  const event = view?.events.find((item) => item.eventId === selected?.competition.competitionId);
+  const event = view?.events.find((item) => item.eventId === selected?.competition?.competitionId);
   const [draft, setDraft] = useState<MatchDocumentV1 | null>(selected ?? null);
   const [eventName, setEventName] = useState(event?.name ?? '');
   const [eventLogo, setEventLogo] = useState<string | null>(event?.logoUrl ?? null);

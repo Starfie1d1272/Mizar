@@ -76,7 +76,7 @@ function readState(input: unknown): LocalTournamentState {
         event.matchIds.some(
           (id) =>
             !matchIds.has(id) ||
-            matches.find((match) => match.matchId === id)?.competition.competitionId !==
+            matches.find((match) => match.matchId === id)?.competition?.competitionId !==
               event.eventId,
         ),
     ) ||
@@ -84,14 +84,15 @@ function readState(input: unknown): LocalTournamentState {
       (match) =>
         !teams.some((team) => team.teamId === match.entrants.a.entryId) ||
         !teams.some((team) => team.teamId === match.entrants.b.entryId) ||
-        !events.some(
-          (event) =>
-            event.eventId === match.competition.competitionId &&
-            event.matchIds.includes(match.matchId) &&
-            event.name === match.competition.name &&
-            event.logoUrl === match.competition.logoUrl &&
-            event.themeColor === match.competition.themeColor,
-        ),
+        (match.competition !== null &&
+          !events.some(
+            (event) =>
+              event.eventId === match.competition?.competitionId &&
+              event.matchIds.includes(match.matchId) &&
+              event.name === match.competition?.name &&
+              event.logoUrl === match.competition?.logoUrl &&
+              event.themeColor === match.competition?.themeColor,
+          )),
     )
   )
     throw new Error('local_store_identity_invalid');
@@ -265,14 +266,16 @@ export class LocalTournamentStore {
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
       if (existing === undefined) throw new Error('local_match_not_found');
       const event = this.state.events.find(
-        (item) => item.eventId === existing.competition.competitionId,
+        (item) => item.eventId === existing.competition?.competitionId,
       );
       if (
-        event === undefined ||
-        document.competition.name !== event.name ||
-        document.competition.logoUrl !== event.logoUrl ||
-        document.competition.themeColor !== event.themeColor ||
-        existing.competition.competitionId !== document.competition.competitionId ||
+        (existing.competition?.competitionId ?? null) !==
+          (document.competition?.competitionId ?? null) ||
+        (document.competition !== null &&
+          (event === undefined ||
+            document.competition.name !== event.name ||
+            document.competition.logoUrl !== event.logoUrl ||
+            document.competition.themeColor !== event.themeColor)) ||
         existing.entrants.a.entryId !== document.entrants.a.entryId ||
         existing.entrants.b.entryId !== document.entrants.b.entryId ||
         (existing.format !== document.format &&
@@ -333,7 +336,7 @@ export class LocalTournamentStore {
         ...(input.bo3Rules === undefined ? {} : { bo3Rules: input.bo3Rules }),
       };
       const nextMatches = this.state.matches.map((match) =>
-        match.competition.competitionId === input.eventId
+        match.competition?.competitionId === input.eventId
           ? parseMatchDocumentV1({
               ...match,
               competition: {
@@ -363,18 +366,22 @@ export class LocalTournamentStore {
   /** One-time import of a previously saved standalone BP match. */
   async importLegacyMatch(input: unknown, bo3Rules?: LocalBo3BpRules): Promise<MatchDocumentV1> {
     const document = parseMatchDocumentV1(input);
+    const competition = document.competition;
     return this.queue.run(async () => {
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
       if (existing !== undefined) return existing;
-      const event: LocalEventV1 = {
-        eventId: document.competition.competitionId,
-        name: document.competition.name,
-        logoUrl: document.competition.logoUrl ?? null,
-        themeColor: document.competition.themeColor,
-        mapPool: document.mapPool,
-        ...(bo3Rules === undefined ? {} : { bo3Rules }),
-        matchIds: [document.matchId],
-      };
+      const event: LocalEventV1 | null =
+        competition === null
+          ? null
+          : {
+              eventId: competition.competitionId,
+              name: competition.name,
+              logoUrl: competition.logoUrl ?? null,
+              themeColor: competition.themeColor,
+              mapPool: document.mapPool,
+              ...(bo3Rules === undefined ? {} : { bo3Rules }),
+              matchIds: [document.matchId],
+            };
       const team = (entrant: MatchDocumentV1['entrants']['a']): LocalTeamV1 => ({
         teamId: entrant.entryId,
         name: entrant.name,
@@ -383,13 +390,16 @@ export class LocalTournamentStore {
       });
       await this.commit({
         ...this.state,
-        events: this.state.events.some((item) => item.eventId === event.eventId)
-          ? this.state.events.map((item) =>
-              item.eventId === event.eventId
-                ? { ...item, matchIds: [...item.matchIds, document.matchId] }
-                : item,
-            )
-          : [...this.state.events, event],
+        events:
+          event === null
+            ? this.state.events
+            : this.state.events.some((item) => item.eventId === event.eventId)
+              ? this.state.events.map((item) =>
+                  item.eventId === event.eventId
+                    ? { ...item, matchIds: [...item.matchIds, document.matchId] }
+                    : item,
+                )
+              : [...this.state.events, event],
         teams: [...this.state.teams, team(document.entrants.a), team(document.entrants.b)].filter(
           (item, index, all) =>
             all.findIndex((candidate) => candidate.teamId === item.teamId) === index,

@@ -2,7 +2,7 @@ import type { MatchContext, MatchDocumentV1 } from '@mizar/core/match-context';
 import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 
 import { validateBroadcastManifest } from './validate.js';
-import type { BroadcastEntrantV1, BroadcastManifestV1, BroadcastSide } from './types.js';
+import type { BroadcastEntrantV1, BroadcastManifest, BroadcastSide } from './types.js';
 
 export class BroadcastManifestConversionError extends Error {
   readonly diagnostics: ReturnType<typeof validateBroadcastManifest>['diagnostics'];
@@ -38,12 +38,21 @@ function toEntrant(entrant: BroadcastEntrantV1) {
 export function toMatchContext(input: unknown): MatchContext {
   const result = validateBroadcastManifest(input);
   if (!result.ok) throw new BroadcastManifestConversionError(result.diagnostics);
-  const manifest: BroadcastManifestV1 = result.value;
-  const { logoUrl, ...competition } = manifest.match.competition;
+  const manifest: BroadcastManifest = result.value;
+  const competition = manifest.match.competition;
 
   return {
     matchId: manifest.match.matchId,
-    competition: logoUrl === undefined ? competition : { ...competition, logoUrl },
+    competition:
+      competition === null
+        ? null
+        : {
+            competitionId: competition.competitionId,
+            slug: competition.slug,
+            name: competition.name,
+            themeColor: competition.themeColor,
+            ...(competition.logoUrl === undefined ? {} : { logoUrl: competition.logoUrl }),
+          },
     status: manifest.match.status,
     format: manifest.match.format,
     stage: manifest.match.stage,
@@ -54,11 +63,19 @@ export function toMatchContext(input: unknown): MatchContext {
     completedAt: manifest.match.completedAt,
     scoreA: manifest.match.scoreA,
     scoreB: manifest.match.scoreB,
+    resultDisposition:
+      manifest.match.resultDisposition ??
+      (manifest.match.status === 'finished'
+        ? manifest.match.scoreA !== null && manifest.match.scoreB !== null
+          ? 'recorded'
+          : 'pending'
+        : null),
     isForfeit: manifest.match.isForfeit,
     entrants: {
       a: toEntrant(manifest.entrants.a),
       b: toEntrant(manifest.entrants.b),
     },
+    mapPool: manifest.match.mapPool ?? [],
     maps: [...manifest.maps]
       .sort(
         (left, right) => left.mapOrder - right.mapOrder || left.mapId.localeCompare(right.mapId),
@@ -100,14 +117,17 @@ export function toMatchDocumentV1(input: unknown): MatchDocumentV1 {
   return parseMatchDocumentV1({
     ...context,
     schemaVersion: 'mizar.match-document.v1',
-    competition: {
-      competitionId: context.competition.competitionId,
-      name: context.competition.name,
-      themeColor: context.competition.themeColor,
-      logoUrl: context.competition.logoUrl ?? null,
-    },
+    competition:
+      context.competition === null
+        ? null
+        : {
+            competitionId: context.competition.competitionId,
+            name: context.competition.name,
+            themeColor: context.competition.themeColor,
+            logoUrl: context.competition.logoUrl ?? null,
+          },
     stage: manifest.match.stageKey ?? context.stage,
-    stageLabel: manifest.match.stageLabel ?? context.stage,
+    stageLabel: manifest.match.stageLabel ?? context.stage ?? '比赛',
     roundLabel: manifest.match.roundLabel ?? null,
     matchLabel: manifest.match.matchLabel ?? null,
     stakesLabel: manifest.match.stakesLabel ?? null,

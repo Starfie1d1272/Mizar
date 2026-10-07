@@ -37,7 +37,7 @@ export function registerOnlineManifestRoutes(
           : {
               revision: options.controller.getPendingOnlineCandidate()!.revision,
               competition:
-                options.controller.getPendingOnlineCandidate()!.binding.context.competition.name,
+                options.controller.getPendingOnlineCandidate()!.binding.context.competition?.name,
               entryA:
                 options.controller.getPendingOnlineCandidate()!.binding.context.entrants.a.name,
               entryB:

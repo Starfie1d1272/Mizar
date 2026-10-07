@@ -145,7 +145,7 @@ export function ProgramFoundationProbe({
         <h2>节目状态示例</h2>
         <div className="program-foundation-probe__sample-row">
           <span className="program-foundation-probe__sample-label">赛事</span>
-          <SampleValue value={payload.match?.competition.name} />
+          <SampleValue value={payload.match?.competition?.name} />
         </div>
         <div className="program-foundation-probe__sample-row">
           <span className="program-foundation-probe__sample-label">CT / T</span>

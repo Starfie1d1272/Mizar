@@ -20,7 +20,8 @@ import {
   requiredSeriesWins,
   isSeriesProgressCheckpoint,
   seriesCheckpointIdentity,
-  seriesProgressMapPlanFingerprint,
+  seriesMapPlanFingerprint,
+  seriesSourcePlanMode,
 } from './types.js';
 
 const MAX_SERIES_ISSUES = 64;
@@ -124,6 +125,12 @@ function applySeriesCompletion(progress: SeriesProgress): SeriesProgress {
   const complete =
     progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins;
   if (!complete) return progress;
+  const completedOrders = progress.maps
+    .filter((map) => map.status === 'completed')
+    .map((map) => map.mapOrder)
+    .sort((a, b) => a - b);
+  // Late evidence can skip an earlier map; unknown games are not "not played".
+  if (!completedOrders.every((order, index) => order === index + 1)) return progress;
   const maps = progress.maps.map((map) =>
     map.status === 'pending' || map.status === 'current'
       ? { ...map, status: 'not_played' as const }
@@ -250,8 +257,14 @@ function markHistoryPartial(
 function ensureBinding(
   progress: SeriesProgress,
   observation: SeriesMapObservation | null,
+  allowMapCreation = true,
 ): SeriesProgress {
-  if (observation === null || observation.mapName === null) return progress;
+  if (
+    observation === null ||
+    observation.mapName === null ||
+    progress.sourcePlan.mode === 'awaiting_plan'
+  )
+    return progress;
   if (progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins) {
     return progress;
   }
@@ -270,8 +283,8 @@ function ensureBinding(
   if (
     currentlyBound !== undefined &&
     currentlyBound.mapName === actualMapName &&
-    (currentlyBound.status === 'completed' ||
-      (currentlyBound.status === 'current' &&
+    ((currentlyBound.status === 'completed' && progress.sourcePlan.mode === 'planned') ||
+      ((currentlyBound.status === 'completed' || currentlyBound.status === 'current') &&
         currentlyBound.executionMapEpoch === observation.mapEpoch))
   ) {
     return progress;
@@ -282,6 +295,63 @@ function ensureBinding(
     hasOperatorBindingForEpoch
   ) {
     return progress;
+  }
+  if (progress.sourcePlan.mode === 'unplanned') {
+    const knownExecution = progress.maps.find(
+      (map) => map.executionMapEpoch === observation.mapEpoch,
+    );
+    if (knownExecution !== undefined && knownExecution.mapName === actualMapName) {
+      return isPlayable(knownExecution)
+        ? setCurrentMap(progress, knownExecution.mapOrder, observation.mapEpoch)
+        : progress;
+    }
+    const active = progress.maps.find(isPlayable);
+    if (active !== undefined && active.mapName === actualMapName) {
+      return setCurrentMap(progress, active.mapOrder, observation.mapEpoch);
+    }
+    // A different map is not evidence that the previous game has a result.
+    if (
+      knownExecution !== undefined ||
+      active !== undefined ||
+      progress.maps.some((map) => map.status === 'completed' && map.mapName === actualMapName) ||
+      progress.maps.length >= progress.requiredWins * 2 - 1 ||
+      !progress.sourcePlan.allowedMaps.includes(actualMapName)
+    ) {
+      return addIssue(
+        { ...progress, currentMapOrder: null, bindingState: 'needs_operator' },
+        issue(
+          'map_unbound',
+          'warning',
+          '实际地图不在允许图池内、已有未结束执行、重复已完成地图或超出系列图数，未追加地图记录。',
+          null,
+          observation.mapEpoch,
+        ),
+      );
+    }
+    if (!allowMapCreation) return progress;
+    const mapOrder = progress.maps.length + 1;
+    return setCurrentMap(
+      {
+        ...progress,
+        maps: [
+          ...progress.maps,
+          {
+            mapId: null,
+            mapOrder,
+            mapName: actualMapName,
+            selection: { kind: 'unknown' },
+            teamAStartSide: null,
+            status: 'pending',
+            executionMapEpoch: null,
+            finalScore: null,
+            winnerEntryId: null,
+            roundHistory: emptyRoundHistory(),
+          },
+        ],
+      },
+      mapOrder,
+      observation.mapEpoch,
+    );
   }
   const expected = nextPlayableMap(progress);
   if (expected === undefined) {
@@ -531,16 +601,21 @@ function resetCurrentMap(
 function applyMapExecutionChange(
   progress: SeriesProgress,
   event: Extract<SeriesProgressEvent, { readonly kind: 'map-execution-changed' }>,
+  allowMapCreation: boolean | undefined,
 ): SeriesProgress {
   if (event.resetReason !== null) return resetCurrentMap(progress, event);
-  return ensureBinding(progress, {
-    sourceGeneration: event.sourceGeneration,
-    mapEpoch: event.mapEpoch,
-    mapName: event.mapName,
-    roundNumber: null,
-    score: { ct: null, t: null },
-    roundWins: [],
-  });
+  return ensureBinding(
+    progress,
+    {
+      sourceGeneration: event.sourceGeneration,
+      mapEpoch: event.mapEpoch,
+      mapName: event.mapName,
+      roundNumber: null,
+      score: { ct: null, t: null },
+      roundWins: [],
+    },
+    allowMapCreation,
+  );
 }
 
 function applyOperatorBind(
@@ -777,6 +852,11 @@ export function createSeriesProgress(context: MatchContext): SeriesProgress {
     matchId: context.matchId,
     format: context.format,
     requiredWins: requiredSeriesWins(context.format),
+    sourcePlan: {
+      mode: seriesSourcePlanMode(context),
+      fingerprint: seriesMapPlanFingerprint(context),
+      allowedMaps: [...new Set((context.mapPool ?? []).map(canonicalMapName))].sort(),
+    },
     entrants,
     score: { a: 0, b: 0 },
     maps,
@@ -811,7 +891,7 @@ export function makeSeriesProgressCheckpoint(progress: SeriesProgress): SeriesPr
       format: progress.format,
       entryAId: progress.entrants.a.entryId,
       entryBId: progress.entrants.b.entryId,
-      mapPlanFingerprint: seriesProgressMapPlanFingerprint(progress.maps),
+      mapPlanFingerprint: progress.sourcePlan.fingerprint,
     },
     progress,
   };
@@ -862,7 +942,7 @@ export function syncSeriesProgress(
   progress: SeriesProgress,
   input: SeriesProgressSyncInput,
 ): SeriesProgressReduceResult {
-  let next = ensureBinding(progress, input.observation);
+  let next = ensureBinding(progress, input.observation, input.allowMapCreation);
   if (input.restore && input.observation !== null) {
     next = reconcileRestoredState(next, input.observation);
   }
@@ -870,7 +950,7 @@ export function syncSeriesProgress(
     const event = eventFromTransition(rawEvent, input.observation);
     switch (event.kind) {
       case 'map-execution-changed':
-        next = applyMapExecutionChange(next, event);
+        next = applyMapExecutionChange(next, event, input.allowMapCreation);
         break;
       case 'round-ended':
         next = addRound(next, event, input.sideProof);

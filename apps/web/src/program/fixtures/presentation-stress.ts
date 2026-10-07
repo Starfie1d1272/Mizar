@@ -108,7 +108,7 @@ export function derivePresentationStressFixture(
         stage: patch.stage ?? payload.match.stage,
         competition: {
           ...payload.match.competition,
-          name: patch.competitionName ?? payload.match.competition.name,
+          name: patch.competitionName ?? payload.match.competition?.name,
         },
       },
       teams: { ct: team('ct'), t: team('t') },

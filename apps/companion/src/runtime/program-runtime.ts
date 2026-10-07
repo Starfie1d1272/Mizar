@@ -278,6 +278,7 @@ export class ProgramRuntime {
     const observation = this.seriesObservation();
     const restoring = this.restorePending && observation.mapName !== null;
     const reduced = reduceSeriesProgress(before, {
+      allowMapCreation: context.status !== 'finished' && context.status !== 'cancelled',
       events,
       observation,
       sideProof,

@@ -5,7 +5,7 @@ import {
   BroadcastManifestConversionError,
   toMatchDocumentV1,
   validateBroadcastManifest,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type ContractDiagnostic,
 } from '@mizar/rivalhub';
 import type { ContextEnvelope, MatchDocumentV1 } from '@mizar/core/match-context';
@@ -86,27 +86,27 @@ function controllerIssue(
   return { code, message, ...details };
 }
 
-function isPlayedMap(map: BroadcastManifestV1['maps'][number]): boolean {
+function isPlayedMap(map: BroadcastManifest['maps'][number]): boolean {
   return map.scoreA !== null || map.scoreB !== null || map.completedAt !== null;
 }
 
 function preservesLocalMatchIdentity(
-  current: BroadcastManifestV1,
-  candidate: BroadcastManifestV1,
+  current: BroadcastManifest,
+  candidate: BroadcastManifest,
 ): boolean {
-  const stableMatch = (match: BroadcastManifestV1['match']) => ({
+  const stableMatch = (match: BroadcastManifest['match']) => ({
     ...match,
     competition: { ...match.competition, name: '', slug: '' },
     format: 'bo1',
     stage: '',
   });
-  const stableEntrants = (manifest: BroadcastManifestV1) => ({
+  const stableEntrants = (manifest: BroadcastManifest) => ({
     a: { entryId: manifest.entrants.a.entryId, roster: manifest.entrants.a.roster },
     b: { entryId: manifest.entrants.b.entryId, roster: manifest.entrants.b.roster },
   });
   if (
     current.match.matchId !== candidate.match.matchId ||
-    current.match.competition.competitionId !== candidate.match.competition.competitionId ||
+    current.match.competition?.competitionId !== candidate.match.competition?.competitionId ||
     !isDeepStrictEqual(stableMatch(current.match), stableMatch(candidate.match)) ||
     !isDeepStrictEqual(stableEntrants(current), stableEntrants(candidate)) ||
     !isDeepStrictEqual(current.commentators, candidate.commentators)
@@ -119,10 +119,7 @@ function preservesLocalMatchIdentity(
     .every((map) => isDeepStrictEqual(map, candidateMaps.get(map.mapOrder)));
 }
 
-function preservesBoundMatch(
-  current: MatchContextBinding,
-  candidate: BroadcastManifestV1,
-): boolean {
+function preservesBoundMatch(current: MatchContextBinding, candidate: BroadcastManifest): boolean {
   if (isStandaloneLocalMatch(current))
     return preservesLocalMatchIdentity(current.manifest, candidate);
   return (
@@ -678,4 +675,4 @@ export function createMatchContextController(
 }
 
 export type { ContextFreshness, ContextOrigin };
-export type { BroadcastManifestV1 };
+export type { BroadcastManifest };

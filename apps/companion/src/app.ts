@@ -605,8 +605,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const envelope = matchContextController?.getActiveDocumentEnvelope();
     const document = envelope?.freshness === 'fresh' ? envelope.document : null;
     const schedule =
-      envelope?.source === 'local' && document
-        ? localTournamentStore?.scheduleWindow(document.competition.competitionId)
+      envelope?.source === 'local' && document?.competition
+        ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
         : options.rivalhubConnection?.getSchedule();
     return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
   });

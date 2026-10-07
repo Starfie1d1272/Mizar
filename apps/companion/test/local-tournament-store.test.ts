@@ -32,7 +32,7 @@ describe('Mizar local tournament input', () => {
       expect(first.veto).toEqual([]);
       expect(first.maps).toEqual([]);
       expect(first.entrants.a.players).toEqual([]);
-      const eventId = first.competition.competitionId;
+      const eventId = first.competition?.competitionId ?? 'missing-event';
       expect(store.scheduleWindow(eventId)?.from).toBeNull();
       await store.saveEvent({
         eventId,
@@ -97,7 +97,7 @@ describe('Mizar local tournament input', () => {
     const manifest: unknown = JSON.parse(await readFile(file, 'utf8'));
     const document = toMatchDocumentV1(manifest);
     expect(document.schemaVersion).toBe('mizar.match-document.v1');
-    expect(document.competition.logoUrl).toBeNull();
+    expect(document.competition?.logoUrl).toBeNull();
     expect(document.entrants.a.players).toHaveLength(6);
     expect(document.maps).toHaveLength(3);
     expect(document.veto.length).toBeGreaterThan(0);
@@ -124,7 +124,7 @@ describe('Mizar local tournament input', () => {
     expect(enriched.stage).toBe('swiss');
     expect(enriched.stageLabel).toBe('瑞士赛');
     expect(enriched.startedAt).toBe('2026-09-28T10:00:00.000Z');
-    expect(enriched.competition.logoUrl).toBe('https://example.invalid/event.png');
+    expect(enriched.competition?.logoUrl).toBe('https://example.invalid/event.png');
     const scheduleFile = join(
       process.cwd(),
       'packages/rivalhub/test/fixtures/broadcast-schedule-window-v1.valid.json',
@@ -157,7 +157,7 @@ it('validates every durable Local asset and preserves existing match team snapsh
     const store = new LocalTournamentStore(file);
     const a = await store.createMatch({ teamA: 'A', teamB: 'B', format: 'bo3', mapPool: [] });
     const b = await store.createMatch({
-      eventId: a.competition.competitionId,
+      eventId: a.competition?.competitionId ?? 'missing-event',
       teamA: '',
       teamAId: a.entrants.a.entryId,
       teamB: 'C',
@@ -172,7 +172,7 @@ it('validates every durable Local asset and preserves existing match team snapsh
       store.getSnapshot().matches.find((match) => match.matchId === b.matchId)?.entrants.a.name,
     ).toBe('A');
     const c = await store.createMatch({
-      eventId: a.competition.competitionId,
+      eventId: a.competition?.competitionId ?? 'missing-event',
       teamA: '',
       teamAId: a.entrants.a.entryId,
       teamB: 'D',
@@ -213,6 +213,54 @@ it('validates every durable Local asset and preserves existing match team snapsh
       await writeFile(file, JSON.stringify(corrupted));
       await expect(new LocalTournamentStore(file).load()).rejects.toThrow();
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('persists and reloads an independent match without fabricating an event or roster', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-independent-input-'));
+  try {
+    const file = join(directory, 'local-tournament.json');
+    const store = new LocalTournamentStore(file);
+    await store.load();
+    const parsed = validateBroadcastManifest(
+      JSON.parse(
+        await readFile(
+          join(process.cwd(), 'packages/rivalhub/test/fixtures/rivalhub-provider-manifest-v1.json'),
+          'utf8',
+        ),
+      ),
+    );
+    if (!parsed.ok) throw new Error('Invalid provider fixture');
+    const fixture = {
+      ...parsed.value,
+      schemaVersion: 'rivalhub.broadcast-manifest.v2',
+      match: {
+        ...parsed.value.match,
+        resultDisposition: null,
+        competition: null,
+        stage: null,
+        stageKey: null,
+        stageLabel: null,
+      },
+      entrants: {
+        a: { ...parsed.value.entrants.a, roster: { rosterId: null, players: [] } },
+        b: { ...parsed.value.entrants.b, roster: { rosterId: null, players: [] } },
+      },
+    };
+    const document = toMatchDocumentV1(fixture);
+    await store.importLegacyMatch(document);
+    await store.saveMatch(document);
+    const reloaded = new LocalTournamentStore(file);
+    await reloaded.load();
+    const persisted = reloaded.getSnapshot();
+    expect(persisted.events).toEqual([]);
+    expect(persisted.matches[0]!.competition).toBeNull();
+    expect(persisted.matches[0]!.entrants.a.players).toEqual([]);
+    expect(localDocumentBindingManifest(document).schemaVersion).toBe(
+      'rivalhub.broadcast-manifest.v2',
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

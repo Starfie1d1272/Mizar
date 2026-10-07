@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import type { BroadcastManifestV1 } from '@mizar/rivalhub';
+import type { BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it, vi } from 'vitest';
 import { BombDamageResources } from '../src/projections/bomb-damage-resources.js';
 
@@ -73,16 +73,16 @@ function objectiveObservation(
   };
 }
 
-async function readManifest(): Promise<BroadcastManifestV1> {
+async function readManifest(): Promise<BroadcastManifest> {
   return JSON.parse(
     await readFile(
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
 }
 
-function matchedObservation(manifest: BroadcastManifestV1): TelemetryObservation {
+function matchedObservation(manifest: BroadcastManifest): TelemetryObservation {
   const entrantPlayers = (entry: 'a' | 'b', side: 'CT' | 'T') =>
     manifest.entrants[entry].roster.players.slice(0, 5).map((player, index) => ({
       sourcePlayerId:
@@ -499,7 +499,7 @@ describe('ProjectionCoordinator', () => {
       const manifestWithScore = {
         ...manifest,
         match: { ...manifest.match, scoreA: 1, scoreB: 0 },
-      } as BroadcastManifestV1;
+      } as BroadcastManifest;
       const runtime = createProgramRuntime('coordinator-context', {
         continuityPolicy: { staleAfterMs: 100 },
       });

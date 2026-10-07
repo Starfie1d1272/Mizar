@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createSeriesProgress,
+  isSeriesProgressCheckpoint,
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   seriesMapPlanFingerprint,
@@ -957,4 +958,167 @@ describe('SeriesProgress', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'map_ambiguous' })]),
     );
   });
+});
+
+describe('unplanned map observations', () => {
+  const context = (): MatchContext => ({
+    ...contextFixture(),
+    competition: null,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
+  });
+
+  it('round-trips an empty checkpoint and rejects malformed empty progress', () => {
+    const checkpoint = makeSeriesProgressCheckpoint(createSeriesProgress(context()));
+    expect(isSeriesProgressCheckpoint(JSON.parse(JSON.stringify(checkpoint)))).toBe(true);
+    expect(isSeriesProgressCheckpointCompatible(checkpoint, context())).toBe(true);
+    expect(
+      isSeriesProgressCheckpoint({
+        ...checkpoint,
+        progress: { ...checkpoint.progress, score: { a: 1, b: 0 } },
+      }),
+    ).toBe(false);
+    expect(
+      isSeriesProgressCheckpoint({
+        ...checkpoint,
+        progress: { ...checkpoint.progress, currentMapOrder: 1 },
+      }),
+    ).toBe(false);
+  });
+
+  it('observes and completes a BO3 without changing the frozen plan identity', () => {
+    let progress = createSeriesProgress(context());
+    const fingerprint = makeSeriesProgressCheckpoint(progress).identity.mapPlanFingerprint;
+    for (const [index, mapName] of ['de_mirage', 'de_dust2'].entries()) {
+      const epoch = index + 1;
+      progress = reduce(progress, [], observation(mapName, epoch));
+      expect(progress.maps[index]).toMatchObject({
+        mapId: null,
+        mapOrder: epoch,
+        mapName,
+        selection: { kind: 'unknown' },
+        status: 'current',
+      });
+      progress = reduce(
+        progress,
+        [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: epoch, finalScore: { ct: 13, t: 7 } }],
+        observation(mapName, epoch, { ct: 13, t: 7 }),
+        proof(epoch),
+      );
+      const checkpoint: unknown = JSON.parse(
+        JSON.stringify(makeSeriesProgressCheckpoint(progress)),
+      );
+      if (!isSeriesProgressCheckpoint(checkpoint)) throw new Error('Invalid checkpoint round-trip');
+      expect(checkpoint.identity.mapPlanFingerprint).toBe(fingerprint);
+      expect(isSeriesProgressCheckpointCompatible(checkpoint, context())).toBe(true);
+      progress = checkpoint.progress;
+    }
+    expect(progress.score).toEqual({ a: 2, b: 0 });
+    expect(reduce(progress, [], observation('de_inferno', 3)).maps).toHaveLength(2);
+  });
+
+  it('requires pool membership and a completed preceding map, never guesses side identity', () => {
+    const initial = createSeriesProgress(context());
+    const outsidePool = reduce(initial, [], observation('de_nuke', 1));
+    expect(outsidePool.maps).toEqual([]);
+    expect(isSeriesProgressCheckpoint(makeSeriesProgressCheckpoint(outsidePool))).toBe(true);
+    let progress = reduce(initial);
+    const interrupted = reduce(progress, [], observation('de_dust2', 2));
+    expect(interrupted.maps).toHaveLength(1);
+    expect(interrupted.bindingState).toBe('needs_operator');
+    expect(reduce(interrupted).bindingState).toBe('bound');
+    progress = reduce(
+      progress,
+      [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } }],
+      observation('de_mirage', 1, { ct: 13, t: 7 }),
+      null,
+    );
+    expect(progress.score).toEqual({ a: 0, b: 0 });
+    expect(progress.issues.some((issue) => issue.code === 'side_mapping_unproven')).toBe(true);
+    expect(reduce(progress, [], observation('de_dust2', 2)).maps).toHaveLength(1);
+  });
+
+  it('does not append slots for repeated observations or same-map restart', () => {
+    let progress = reduce(createSeriesProgress(context()));
+    progress = reduce(progress);
+    progress = reduce(
+      progress,
+      [
+        {
+          kind: 'map-execution-changed',
+          sourceGeneration: 0,
+          mapEpoch: 2,
+          previousMapEpoch: 1,
+          previousMapName: 'de_mirage',
+          mapName: 'de_mirage',
+          resetReason: 'same-map-restart',
+        },
+      ],
+      observation('de_mirage', 2),
+    );
+    expect(progress.maps).toHaveLength(1);
+    expect(progress.maps[0]?.executionMapEpoch).toBe(2);
+    expect(
+      isSeriesProgressCheckpointCompatible(makeSeriesProgressCheckpoint(progress), {
+        ...context(),
+        mapPool: ['de_nuke'],
+      }),
+    ).toBe(false);
+  });
+});
+
+it('keeps an event with no BP plan awaiting a plan, including checkpoint round-trip', () => {
+  const context = { ...contextFixture(), maps: [], veto: [], mapPool: ['de_mirage'] };
+  const initial = createSeriesProgress(context);
+  expect(initial.sourcePlan.mode).toBe('awaiting_plan');
+  const progress = reduce(initial, [
+    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
+  ]);
+  expect(progress.maps).toEqual([]);
+  expect(progress.score).toEqual({ a: 0, b: 0 });
+  const checkpoint = makeSeriesProgressCheckpoint(progress);
+  expect(isSeriesProgressCheckpoint(JSON.parse(JSON.stringify(checkpoint)))).toBe(true);
+  expect(isSeriesProgressCheckpointCompatible(checkpoint, context)).toBe(true);
+  expect(isSeriesProgressCheckpointCompatible(checkpoint, { ...context, competition: null })).toBe(
+    false,
+  );
+});
+
+it('does not reuse a completed map for a different unplanned map order', () => {
+  const context = {
+    ...contextFixture(),
+    competition: null,
+    maps: [],
+    veto: [],
+    mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
+  };
+  let progress = reduce(createSeriesProgress(context));
+  progress = reduce(progress, [
+    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
+  ]);
+  const frozen = progress.maps[0];
+  const repeated = reduce(progress, [], observation('Mirage', 2));
+  expect(repeated.maps).toEqual([frozen]);
+  expect(repeated.bindingState).toBe('needs_operator');
+  const restart = reduce(
+    progress,
+    [
+      {
+        kind: 'map-execution-changed',
+        sourceGeneration: 0,
+        mapEpoch: 2,
+        previousMapEpoch: 1,
+        previousMapName: 'de_mirage',
+        mapName: 'de_mirage',
+        resetReason: 'same-map-restart',
+      },
+    ],
+    observation('de_mirage', 2),
+  );
+  expect(restart.maps).toEqual([frozen]);
+  expect(restart.score).toEqual({ a: 1, b: 0 });
+  const next = reduce(progress, [], observation('de_dust2', 2));
+  expect(next.maps).toHaveLength(2);
+  expect(next.maps[1]).toMatchObject({ mapOrder: 2, mapName: 'de_dust2' });
 });

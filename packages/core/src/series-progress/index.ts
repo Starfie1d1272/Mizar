@@ -36,5 +36,4 @@ export {
   requiredSeriesWins,
   seriesCheckpointIdentity,
   seriesMapPlanFingerprint,
-  seriesProgressMapPlanFingerprint,
 } from './types.js';

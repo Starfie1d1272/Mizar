@@ -49,7 +49,11 @@ const seriesProjectionSchema = z.object({
     a: z.object({ entryId: z.string().min(1), name: z.string(), logoUrl: nullableString }),
     b: z.object({ entryId: z.string().min(1), name: z.string(), logoUrl: nullableString }),
   }),
-  score: z.object({ a: z.number().int().nonnegative(), b: z.number().int().nonnegative() }),
+  score: z.object({
+    a: z.number().int().nonnegative().nullable(),
+    b: z.number().int().nonnegative().nullable(),
+  }),
+  resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable().optional(),
   status: z.enum(['planned', 'live', 'completed']),
   bindingState: z.enum(['bound', 'unbound', 'needs_operator']),
   currentMapOrder: z.number().int().positive().nullable(),
@@ -220,14 +224,16 @@ export const programPayloadSchema = z.object({
   match: z
     .object({
       matchId: z.string(),
-      competition: z.object({
-        competitionId: z.string(),
-        slug: z.string(),
-        name: z.string(),
-        themeColor: nullableString,
-      }),
+      competition: z
+        .object({
+          competitionId: z.string(),
+          slug: z.string(),
+          name: z.string(),
+          themeColor: nullableString,
+        })
+        .nullable(),
       format: z.enum(['bo1', 'bo3', 'bo5']),
-      stage: z.string(),
+      stage: z.string().nullable(),
     })
     .nullable(),
   teams: z.object({ ct: teamSchema, t: teamSchema }),

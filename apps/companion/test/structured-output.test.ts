@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { TelemetryObservation } from '@mizar/core/telemetry';
-import { toMatchContext, type BroadcastManifestV1 } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { expect, it, vi } from 'vitest';
 
 import { buildApp } from '../src/app.js';
@@ -18,7 +18,7 @@ import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
 
 function observation(
-  manifest: BroadcastManifestV1,
+  manifest: BroadcastManifest,
   sequence: number,
   phase: 'live' | 'gameover',
   mapName = 'de_ancient',
@@ -92,7 +92,7 @@ it('projects bounded public-safe live data and transition-time reliable event', 
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
   const sourceContext = toMatchContext(manifest);
   const binding: MatchContextBinding = {
     manifest,
@@ -124,6 +124,17 @@ it('projects bounded public-safe live data and transition-time reliable event', 
     const bundle = coordinator.getCurrent();
     const base = projectLiveSnapshotV1({ bundle, binding, producedAt: '2026-09-28T00:00:01.000Z' });
     expect(bundle.program.match?.stage).toBe('瑞士赛');
+    const independentBinding = {
+      ...binding,
+      context: { ...binding.context, competition: null, stage: null },
+    };
+    expect(
+      projectLiveSnapshotV1({
+        bundle,
+        binding: independentBinding,
+        producedAt: '2026-09-28T00:00:01.000Z',
+      }),
+    ).toBeNull();
     expect(base?.players).toHaveLength(10);
     expect(base?.players[0]).toMatchObject({ money: 16000, equipmentValue: 5700 });
     expect(base?.radar).toBeNull();
@@ -161,6 +172,9 @@ it('projects bounded public-safe live data and transition-time reliable event', 
     const result = runtime.acceptObservation(observation(manifest, 2, 'gameover'));
     const ended = coordinator.afterRuntimeMutation(result);
     const events = transitionReliableEventsV1({ result, bundle: ended, binding });
+    expect(
+      transitionReliableEventsV1({ result, bundle: ended, binding: independentBinding }),
+    ).toEqual([]);
     const mapEnded = events.find((event) => event.kind === 'map_ended');
     expect(mapEnded).toMatchObject({
       observedAt: '2026-09-28T00:00:02.000Z',
@@ -210,7 +224,7 @@ async function bindingFixture(): Promise<MatchContextBinding> {
       resolve(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
       'utf8',
     ),
-  ) as BroadcastManifestV1;
+  ) as BroadcastManifest;
   const context = toMatchContext(manifest);
   return {
     manifest,

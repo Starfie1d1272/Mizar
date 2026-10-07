@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   toMatchContext,
   toScheduleWindow,
-  type BroadcastManifestV1,
+  type BroadcastManifest,
   type BroadcastScheduleWindowV1,
 } from '../src/index.js';
 
@@ -24,7 +24,7 @@ async function readJson<T>(fileName: string): Promise<T> {
 
 describe('RivalHub DTO to Broadcast domain conversion', () => {
   it('converts the same Manifest deterministically without acquisition metadata', async () => {
-    const manifest = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
+    const manifest = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
     const first = toMatchContext(manifest);
     const second = toMatchContext(manifest);
 
@@ -49,8 +49,8 @@ describe('RivalHub DTO to Broadcast domain conversion', () => {
   });
 
   it('preserves a canonical startedAt exactly as supplied', async () => {
-    const manifest = await readJson<BroadcastManifestV1>('broadcast-manifest-v1.valid.json');
-    const candidate = structuredClone(manifest) as Mutable<BroadcastManifestV1>;
+    const manifest = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+    const candidate = structuredClone(manifest) as Mutable<BroadcastManifest>;
     candidate.match.startedAt = '2026-09-16T10:03:00.123+00:00';
 
     expect(toMatchContext(candidate).startedAt).toBe(candidate.match.startedAt);

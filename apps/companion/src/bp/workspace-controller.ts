@@ -41,7 +41,7 @@ export function registerBpWorkspaceRoutes(
         ? undefined
         : options.localTournamentStore
             ?.getSnapshot()
-            .events.find((event) => event.eventId === binding.context.competition.competitionId)
+            .events.find((event) => event.eventId === binding.context.competition?.competitionId)
             ?.bo3Rules;
     const publicSource =
       binding?.origin === 'online'
@@ -58,7 +58,7 @@ export function registerBpWorkspaceRoutes(
       binding === undefined
         ? null
         : {
-            competition: binding.context.competition.name,
+            competition: binding.context.competition?.name,
             stage: binding.context.stageLabel ?? binding.context.stage,
             format: binding.context.format,
             entrants: {
@@ -94,7 +94,7 @@ export function registerBpWorkspaceRoutes(
           ? null
           : {
               revision: pending.revision,
-              competition: pending.binding.context.competition.name,
+              competition: pending.binding.context.competition?.name,
               stage: pending.binding.context.stageLabel ?? pending.binding.context.stage,
               format: pending.binding.context.format,
               entrants: {
@@ -137,7 +137,7 @@ export function registerBpWorkspaceRoutes(
         : options.localTournamentStore
             ?.getSnapshot()
             .events.find(
-              (event) => event.eventId === activeBinding.context.competition.competitionId,
+              (event) => event.eventId === activeBinding.context.competition?.competitionId,
             )?.bo3Rules;
     const draft = {
       ...parsed.data,

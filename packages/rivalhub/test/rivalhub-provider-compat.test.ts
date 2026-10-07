@@ -23,7 +23,7 @@ describe('RivalHub checked-in provider fixtures', () => {
     if (!validated.ok) throw new Error(JSON.stringify(validated.diagnostics));
 
     const document = parseMatchDocumentV1(toMatchDocumentV1(validated.value));
-    expect(document.competition.logoUrl).toContain('season-public-assets');
+    expect(document.competition?.logoUrl).toContain('season-public-assets');
     expect(document.startedAt).toBe('2026-09-16T10:03:00.000Z');
     expect(document.stageLabel).toBe('瑞士赛');
     expect(
@@ -76,6 +76,6 @@ describe('RivalHub checked-in provider fixtures', () => {
       'match-m2-unknown-time',
     ]);
     expect(window.matches[1]?.scheduledAt).toBeNull();
-    expect(window.competition.logoUrl).toContain('season-public-assets');
+    expect(window.competition?.logoUrl).toContain('season-public-assets');
   });
 });

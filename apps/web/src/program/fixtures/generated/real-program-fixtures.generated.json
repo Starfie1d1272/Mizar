@@ -69,6 +69,7 @@
               "b": { "entryId": "entry-m2-b", "name": "她还爱我对不 队", "logoUrl": null }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -942,6 +943,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -1953,6 +1955,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -2624,6 +2627,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -3477,6 +3481,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -4454,6 +4459,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -5355,6 +5361,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -6172,6 +6179,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -6990,6 +6998,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -7717,6 +7726,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -8580,6 +8590,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -9593,6 +9604,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -10550,6 +10562,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -11765,6 +11778,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -12646,6 +12660,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -13527,6 +13542,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -14552,6 +14568,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -15613,6 +15630,7 @@
               }
             },
             "score": { "a": 0, "b": 0 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,
@@ -16674,6 +16692,7 @@
               }
             },
             "score": { "a": 0, "b": 1 },
+            "resultDisposition": null,
             "status": "live",
             "bindingState": "bound",
             "currentMapOrder": 1,

@@ -993,8 +993,8 @@ export const syntheticProgramFixtures = {
         stressPlayers[index]!.displayName,
       ]),
     ),
-    competitionName: stressMatch.competition.name,
-    stage: stressMatch.stage,
+    competitionName: stressMatch.competition?.name ?? '',
+    stage: stressMatch.stage ?? '',
   }),
   'player-rails-eco': makeSnapshot(
     makeLivePayload({
@@ -1162,8 +1162,8 @@ export const syntheticProgramFixtures = {
         stressPlayers[index]!.displayName,
       ]),
     ),
-    competitionName: stressMatch.competition.name,
-    stage: stressMatch.stage,
+    competitionName: stressMatch.competition?.name ?? '',
+    stage: stressMatch.stage ?? '',
   }),
   'player-rails-freezetime': makeSnapshot(
     makeLivePayload({
