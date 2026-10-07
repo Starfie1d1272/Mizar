@@ -75,3 +75,49 @@ describe('RivalHub DTO to Broadcast domain conversion', () => {
     expect(window.matches[0]?.startedAt).toBe('2026-09-16T09:02:00.000Z');
   });
 });
+
+it('preserves test purpose across provider parsing, saved documents and schedule projections', async () => {
+  const { validateBroadcastManifest, toMatchDocumentV1, toScheduleWindowV1 } =
+    await import('../src/index.js');
+  const { parseMatchDocumentV1, parseScheduleWindowV1 } = await import('@mizar/protocol/context');
+  const { deriveScheduleNeighborhood } = await import('@mizar/core/match-context');
+  const manifest = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+  const testManifest = validateBroadcastManifest({
+    ...manifest,
+    match: {
+      ...manifest.match,
+      isTest: true,
+      stage: 'test',
+      stageKey: 'test',
+      stageLabel: '测试赛',
+      matchLabel: '测试赛',
+    },
+  });
+  if (!testManifest.ok) throw new Error(JSON.stringify(testManifest));
+  const document = toMatchDocumentV1(testManifest.value);
+  expect(parseMatchDocumentV1(JSON.parse(JSON.stringify(document))).isTest).toBe(true);
+  expect(document.entrants).toEqual(toMatchDocumentV1(manifest).entrants);
+  const raw = await readJson<BroadcastScheduleWindowV1>('broadcast-schedule-window-v1.valid.json');
+  const base = raw.matches[0]!;
+  const window = toScheduleWindowV1({
+    ...raw,
+    matches: [
+      { ...base, matchId: 'official-before', isTest: false, scheduledAt: '2026-09-16T10:00:00Z' },
+      { ...base, matchId: document.matchId, isTest: true, scheduledAt: '2026-09-16T11:00:00Z' },
+      { ...base, matchId: 'official-after', isTest: false, scheduledAt: '2026-09-16T12:00:00Z' },
+    ],
+  });
+  const restored = parseScheduleWindowV1(JSON.parse(JSON.stringify(window)));
+  expect(deriveScheduleNeighborhood(restored, document.matchId)).toMatchObject({
+    previous: null,
+    current: { isTest: true },
+    next: null,
+    upcoming: [],
+  });
+  expect(deriveScheduleNeighborhood(restored, 'official-before').next?.matchId).toBe(
+    'official-after',
+  );
+  expect(deriveScheduleNeighborhood(restored, 'official-after').previous?.matchId).toBe(
+    'official-before',
+  );
+});
