@@ -4,7 +4,7 @@
 
 > 让校园赛事，也有职业赛场的转播呈现。
 
-Mizar 将自动节目流程、制播工作台、HUD与雷达、赛事连接组织为本地CS2制播系统。产品范围见[产品定位](product.md)，操作步骤见[使用手册](quick-start.md)，实际画面见[Windows真实demo图集](screenshots/windows-rc22/README.md)。
+Mizar 将自动节目流程、制播工作台、HUD与雷达、赛事连接组织为本地CS2制播系统。产品范围见[产品定位](product.md)，操作步骤见[使用手册](quick-start.md)，实际画面见[RC27 实机图集](screenshots/windows-rc27/README.md)。
 
 ## 当前交付
 

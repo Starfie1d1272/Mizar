@@ -381,6 +381,7 @@ async function main() {
       'common.ps1',
       'gsi-discovery.ps1',
       'gsi-status.ps1',
+      'select-cs2-installation.ps1',
       'install-gsi.ps1',
       'restore-gsi.ps1',
       'start.ps1',

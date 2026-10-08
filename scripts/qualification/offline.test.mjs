@@ -92,16 +92,19 @@ describe('offline qualification GSI scripts', () => {
     await expect(assertGsiScriptContract(await bundleScripts())).resolves.toBeUndefined();
   });
 
-  it.each(['common.ps1', 'gsi-discovery.ps1', 'gsi-status.ps1', 'restore-gsi.ps1'])(
-    'rejects a bundle missing %s',
-    async (name) => {
-      const root = await bundleScripts();
-      await rm(join(root, name));
-      await expect(assertGsiScriptContract(root)).rejects.toThrow(`缺少 ${name}`);
-    },
-  );
+  it.each([
+    'common.ps1',
+    'gsi-discovery.ps1',
+    'gsi-status.ps1',
+    'restore-gsi.ps1',
+    'select-cs2-installation.ps1',
+  ])('rejects a bundle missing %s', async (name) => {
+    const root = await bundleScripts();
+    await rm(join(root, name));
+    await expect(assertGsiScriptContract(root)).rejects.toThrow(`缺少 ${name}`);
+  });
 
-  it.each(['install-gsi.ps1', 'gsi-status.ps1'])(
+  it.each(['install-gsi.ps1', 'gsi-status.ps1', 'select-cs2-installation.ps1'])(
     'rejects %s when shared discovery is present but not loaded',
     async (name) => {
       const root = await bundleScripts();
@@ -127,7 +130,7 @@ describe('offline qualification GSI scripts', () => {
   it('rejects lost Steam library discovery in the extracted module', async () => {
     const root = await bundleScripts();
     await changeScript(root, 'gsi-discovery.ps1', (source) =>
-      source.replace('libraryfolders.vdf', 'missing.vdf'),
+      source.replaceAll('libraryfolders.vdf', 'missing.vdf'),
     );
     await expect(assertGsiScriptContract(root)).rejects.toThrow('缺少 Steam library');
   });

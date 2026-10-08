@@ -12,7 +12,7 @@ HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归�
 | 类 Perfect World | 矩形生命带、状态附加面板与上海参考构图 | `presets/perfectworld.ts` |
 | 类 ESL | 荧光绿强调、独立字体与纹理 | `presets/esl.ts` |
 
-定义位于 [packages/hud-config/src](../../packages/hud-config/src/)，对应渲染样式位于 [apps/web/src/program/designs](../../apps/web/src/program/designs/)。四套参考是 HUD 风格，完整默认节目包装由 Pulse 提供。参考来源与取舍见[历史审查](../archive/design/README.md)，许可见[第三方说明](../../THIRD-PARTY-NOTICES.md)。
+定义位于 [packages/hud-config/src](../../packages/hud-config/src/)，对应渲染样式位于 [apps/web/src/program/designs](../../apps/web/src/program/designs/)。四套参考是 HUD 风格，完整默认节目包装由 Pulse 提供。参考来源与取舍见[历史审查](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)，许可见[第三方说明](../../THIRD-PARTY-NOTICES.md)。
 
 ## 共同规则
 
@@ -43,7 +43,7 @@ EWC 存活卡在文字下保留按参考周期和连接关系拟合的 60° 矢�
 
 预设文件只组合已注册的设置、布局与外观。新增组件结构或赛事造型仍需实现渲染器并注册，完整模板包和第三方 HUD 接入属于[后续方向](../roadmap.md)。
 
-维护时检查五套方案的生死、残血、目标状态、长名称、头像失效后恢复、满库存、跳转重放与减少动效。布局与样式变更不改变比赛事实。离线展示交换包的用途见[参考包说明](../../scripts/hud-reference/README.md)。
+维护时检查五套方案的生死、残血、目标状态、长名称、头像失效后恢复、满库存、跳转重放与减少动效。布局与样式变更不改变比赛事实。展示与复核直接使用 HUD 编辑器中的实际渲染器。
 
 ## 共享展示行为
 

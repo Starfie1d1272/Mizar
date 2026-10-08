@@ -2,7 +2,7 @@ use crate::cs2_session::SessionStore;
 use serde_json::{json, Value};
 use std::{
     os::windows::process::CommandExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -21,11 +21,12 @@ pub const LAUNCH_ARGS: &[&str] = &[
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
 // Fixed scripts only: no paths supplied by the webview are interpolated as code.
-fn powershell(script: &str) -> Result<String, String> {
+fn powershell(script: &str, state_root: &Path) -> Result<String, String> {
     let system = std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?;
     let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
     let mut child = Command::new(executable)
         .env_remove("PSModulePath")
+        .env("MIZAR_STATE_ROOT", state_root)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -56,9 +57,7 @@ fn powershell(script: &str) -> Result<String, String> {
         .wait_with_output()
         .map_err(|_| "CS2 配置工具结果不可用。")?;
     if !result.status.success() {
-        return Err(
-            "未找到唯一的 CS2 安装位置或活动 Steam 账号，请先登录 Steam 并运行一次 CS2。".into(),
-        );
+        return Err(crate::cs2_diagnostics::failure(&result.stdout));
     }
     String::from_utf8(result.stdout).map_err(|_| "CS2 配置检测结果无法读取。".into())
 }
@@ -67,35 +66,43 @@ fn any_cs2_running() -> Result<bool, String> {
     Ok(!cs2_pids()?.is_empty())
 }
 
-fn discover() -> Result<(PathBuf, PathBuf, PathBuf), String> {
+fn discover(state_root: &Path) -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let discovery = DISCOVERY.trim_start_matches('\u{feff}');
     let script = format!(
         r#"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 {discovery}
+trap {{
+  $code = [string]$_.Exception.Data['MizarCode']
+  if (-not $code) {{ $code = 'operation-failed' }}
+  @{{error=@{{code=$code;stage='launch'}}}} | ConvertTo-Json -Compress
+  exit 1
+}}
 $cfg = Resolve-CfgDirectory
 $game = Split-Path (Split-Path $cfg -Parent) -Parent
 $exe = Join-Path $game 'bin\win64\cs2.exe'
-if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {{ throw 'missing game' }}
+if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {{ Stop-Cs2Discovery 'selected-path-invalid' }}
 $steamProcesses = @(Get-Process -Name steam -ErrorAction SilentlyContinue)
-if ($steamProcesses.Count -ne 1) {{ throw 'Steam not uniquely running' }}
+if ($steamProcesses.Count -eq 0) {{ Stop-Cs2Discovery 'steam-not-running' }}
+if ($steamProcesses.Count -ne 1) {{ Stop-Cs2Discovery 'steam-not-unique' }}
 $steamExe = $steamProcesses[0].Path
-if (!(Test-Path -LiteralPath $steamExe -PathType Leaf)) {{ throw 'Steam executable missing' }}
-$accountValue = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser
+if (!(Test-Path -LiteralPath $steamExe -PathType Leaf)) {{ Stop-Cs2Discovery 'steam-not-running' }}
+try {{ $accountValue = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser }} catch {{ Stop-Cs2Discovery 'steam-account-unavailable' }}
 if ($accountValue -lt 0) {{ $accountValue = [long]$accountValue + 4294967296 }}
 $account = [uint32]$accountValue
-if ($account -eq 0) {{ throw 'Steam not logged in' }}
+if ($account -eq 0) {{ Stop-Cs2Discovery 'steam-account-unavailable' }}
 $videos = @()
 foreach ($root in @(Get-SteamInstallRoots)) {{
   $candidate = Join-Path $root ('userdata\' + $account + '\730\local\cfg\cs2_video.txt')
   if (Test-Path -LiteralPath $candidate -PathType Leaf) {{ $videos += (Resolve-Path -LiteralPath $candidate).Path }}
 }}
 $videos = @($videos | Select-Object -Unique)
-if ($videos.Count -ne 1) {{ throw 'ambiguous account video config' }}
+if ($videos.Count -eq 0) {{ Stop-Cs2Discovery 'video-config-missing' }}
+if ($videos.Count -ne 1) {{ Stop-Cs2Discovery 'video-config-ambiguous' }}
 @{{executable=(Resolve-Path -LiteralPath $exe).Path; video=$videos[0]; steam=$steamExe}} | ConvertTo-Json -Compress
 "#
     );
-    let value: Value =
-        serde_json::from_str(powershell(&script)?.trim()).map_err(|_| "CS2 配置检测结果无效。")?;
+    let value: Value = serde_json::from_str(powershell(&script, state_root)?.trim())
+        .map_err(|_| "CS2 配置检测结果无效。")?;
     let path = |key: &str| {
         value[key]
             .as_str()
@@ -353,7 +360,12 @@ impl ManagedCs2 {
         if any_cs2_running()? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
-        let (executable, video, steam) = discover()?;
+        let backup = self.store.backup_directory();
+        let state_root = backup
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("运行数据目录无效。")?;
+        let (executable, video, steam) = discover(state_root)?;
         if any_cs2_running()? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }

@@ -23,7 +23,7 @@
 - 设计系统维护视觉与文案；代码维护精确版本、默认值、字段和资源清单。
 - 开发验证维护验证方法；发布流程维护 RC 到正式发布的顺序；具体执行状态与报告放 Issue / PR。
 - ADR 保存决策理由与演变。当前文档给出有效规则，历史 ADR 通过替代关系解释旧规则。
-- [历史设计审查](archive/design/README.md)和[历史证据](evidence/)用于追溯，不作为当前规范。末局统计的[最小复现与校验](evidence/rc21-windows-handoff/README.md)保留在主线；已结束的原生诊断与探针见[固定提交的完整历史](https://github.com/Starfie1d1272/Mizar/tree/ab787f93837c424e5cf2447696d906db28b758db/docs/evidence)。
+- 历史截图、设计审查与一次性调查材料不再随主线维护，可从 [Git 历史](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs)追溯；当前只保留 [RC27 实机图集](screenshots/windows-rc27/README.md)及其来源记录。
 
 ## 写作与维护
 
