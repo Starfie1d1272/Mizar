@@ -304,11 +304,14 @@ export function Settings({ tab }: { tab: string }) {
                   : gsi?.conflict
                     ? '需检查'
                     : gsi?.installed
-                      ? 'GSI 已配置（等待游戏数据）'
+                      ? 'GSI 文件已配置'
                       : '待安装 GSI'}
               </StatusPill>
             </div>
-            <p>安装 GSI 后，CS2 会向 Mizar 发送比赛与选手数据。</p>
+            <p>
+              新写入的 GSI 将在下次启动 CS2
+              时加载；若游戏已运行，请重启。收到实际数据后，总览会更新游戏数据状态。
+            </p>
             <p>
               {cs2?.found
                 ? cs2.managed
@@ -350,11 +353,12 @@ export function Settings({ tab }: { tab: string }) {
                     void action(async () => {
                       try {
                         await desktopInvoke('configure_gsi', { restore: false, choose: false });
+                        window.dispatchEvent(new Event('mizar:gsi-configured'));
                         const next = await desktopInvoke<NonNullable<typeof gsi>>('gsi_status');
                         setGsi(next);
                         setMessage(
                           next.installed && !next.conflict && !next.readFailed
-                            ? 'GSI 已配置（等待游戏数据），请重新启动 CS2 以加载配置。'
+                            ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
                             : '已执行安装检查，请处理上方列出的问题后重新检查。',
                         );
                       } finally {

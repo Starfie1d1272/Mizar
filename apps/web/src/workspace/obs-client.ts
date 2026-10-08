@@ -60,7 +60,10 @@ export async function obsCommand(
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
   if (nativeOpen) {
     if (!value?.executablePath) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
-    await desktopInvoke('launch_obs', { executablePath: value.executablePath });
+    const alreadyRunning = await desktopInvoke<boolean>('launch_obs', {
+      executablePath: value.executablePath,
+    });
+    return { ...value, alreadyRunning };
   }
   return value;
 }

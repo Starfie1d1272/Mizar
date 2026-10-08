@@ -49,6 +49,7 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+static OBS_LAUNCH_LOCK: Mutex<()> = Mutex::new(());
 
 #[link(name = "shell32")]
 extern "system" {
@@ -423,9 +424,10 @@ fn obs_executable_allowed(path: &Path) -> bool {
 }
 
 #[tauri::command]
-async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) -> Result<(), String> {
+async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) -> Result<bool, String> {
     let log = log.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = OBS_LAUNCH_LOCK.lock().map_err(|_| "OBS 启动状态不可用。")?;
         let path = Path::new(&executable_path);
         if !obs_executable_allowed(path) || !path.is_file() {
             return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
@@ -444,7 +446,7 @@ async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) 
             .parse::<u32>()
             .map_err(|_| "无法检查 OBS 进程。".to_string())?;
         if count > 0 {
-            return Ok(());
+            return Ok(true);
         }
         // Host is outside the runtime Job. Independent OBS must not inherit
         // Companion's rollback/shutdown ownership.
@@ -455,7 +457,7 @@ async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) 
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| "OBS 程序未能打开。".to_string())?;
-        Ok(())
+        Ok(false)
     })
     .await
     .map_err(|_| "OBS 程序未能打开。".to_string())?

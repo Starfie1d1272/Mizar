@@ -109,3 +109,27 @@ test('rejects a corrupt background before offering a playable replay and recover
   await expect(replay.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
   await expect(replay.getByRole('alert')).toHaveCount(0);
 });
+
+test('keeps a ready replay recoverable when the browser blocks autoplay', async ({ page }) => {
+  await page.addInitScript(() => {
+    const play = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'play')!.value as (
+      this: HTMLMediaElement,
+    ) => Promise<void>;
+    let blocked = false;
+    HTMLMediaElement.prototype.play = function () {
+      if (!blocked) {
+        blocked = true;
+        return Promise.reject(new DOMException('Blocked autoplay', 'NotAllowedError'));
+      }
+      return play.call(this);
+    };
+  });
+  await page.goto('/operator/hud');
+  await expect(page.getByText('自动播放受阻，请点击「播放」。')).toBeVisible();
+  const replay = page.getByRole('region', { name: '重放控制' });
+  await replay.getByRole('button', { name: '播放', exact: true }).click();
+  await expect
+    .poll(() => page.locator('video').evaluate((video: HTMLVideoElement) => video.paused))
+    .toBe(false);
+  await expect(page.getByText('自动播放受阻，请点击「播放」。')).toHaveCount(0);
+});

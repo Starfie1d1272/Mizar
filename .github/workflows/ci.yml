@@ -251,6 +251,7 @@ jobs:
           packages/telemetry-gsi
           packages/telemetry-cstv
           scripts/qualification/product-runtime.test.mjs
+          scripts/qualification/gsi-discovery.test.mjs
           scripts/qualification/product-logs.test.mjs
           scripts/qualification/supervisor.test.mjs
           scripts/qualification/offline.test.mjs
