@@ -83,7 +83,9 @@
       "source": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
       "fetchedAt": "2026-10-08T08:56:47.115Z",
       "path": "apps/web/public/fixture-media/epl-s24/epl-navi.svg",
-      "sha256": "61b5ceaa537dcac7a7f8d7c0b49f5557553c094c8fcaca710bc7d50742485a3d"
+      "sha256": "ad2cca38fe4bdc2229c0bfe6f001fce2522736d923f4e1307cd809bfbaa3fd61",
+      "sourceSha256": "61b5ceaa537dcac7a7f8d7c0b49f5557553c094c8fcaca710bc7d50742485a3d",
+      "processing": "Normalize SVG line endings to LF; artwork unchanged"
     }
   ]
 }
