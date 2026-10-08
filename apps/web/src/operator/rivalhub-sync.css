@@ -1,0 +1,11 @@
+.rivalhub-sync-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+}
+.rivalhub-sync-controls > small,
+.rivalhub-sync-controls > [role='status'],
+.rivalhub-sync-controls > [role='alert'] {
+  flex-basis: 100%;
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
 import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
+import { RivalHubSyncControls } from './RivalHubSyncControls';
 
 type Connection = {
   paired: boolean;
@@ -195,6 +196,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
 
   return (
     <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
+      {mode === 'settings' ? <RivalHubSyncControls /> : null}
       {connection === null ? (
         <p role="status">{loadError ? '赛事连接尚未读取' : '正在读取赛事连接…'}</p>
       ) : !connection.paired || (mode === 'settings' && rePairing) ? (
@@ -298,7 +300,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                 <p className="operator-rivalhub-empty">近期暂无比赛</p>
               )}
 
-              {bpWorkspace?.pendingRivalhub ? (
+              {bpWorkspace?.pendingRivalhub && !connection.activeMatchId ? (
                 <div className="operator-rivalhub-candidate">
                   <div className="operator-rivalhub-candidate-info">
                     <small>待确认比赛候选</small>

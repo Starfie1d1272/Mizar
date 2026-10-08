@@ -477,3 +477,8 @@
 .workspace-error:focus-visible {
   outline: var(--mizar-line-focus) solid var(--mizar-focus-ring);
 }
+
+.workspace-rivalhub-source[data-compact='true'] {
+  display: flex;
+  align-items: center;
+}

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Dialog } from '../ui';
+import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
 import { BpPresentation } from './BpPresentation';
@@ -118,6 +119,7 @@ export function BpWorkspaceControls() {
 
   return (
     <div className="bp-workspace-controls" data-surface="bp-operator">
+      <RivalHubSyncControls />
       <span
         className="bp-source-badge"
         data-source={demoActive ? 'demo' : (workspace?.source ?? 'none')}

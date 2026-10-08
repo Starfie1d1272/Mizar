@@ -14,9 +14,8 @@ import { StringDecoder } from 'node:string_decoder';
 import { clearTimeout, setTimeout } from 'node:timers';
 
 const HISTORY_COUNT = 3;
-export const PRODUCT_LOG_BYTES = 2 * 1024 * 1024;
+export const PRODUCT_LOG_BYTES = 25 * 1024 * 1024;
 const MAX_LINE_BYTES = 16 * 1024;
-const TRUNCATED = '\n[Mizar: log size limit reached; remaining output omitted]\n';
 
 export function startupSessionId(value) {
   return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(value) ? value : randomUUID();
@@ -68,7 +67,7 @@ export function createSupervisorLog(stateRoot, sessionId, { maxBytes = PRODUCT_L
   };
 }
 
-/** Keep this startup and the three previous startup files; never grow an output queue. */
+/** Keep the current segment and three previous segments, rotating during a running session. */
 export function createCompanionLog(
   stateRoot,
   name,
@@ -94,13 +93,17 @@ export function createCompanionLog(
     if (stopped) return;
     try {
       const bytes = Buffer.from(safeLogText(text, secrets));
-      if (size + bytes.length + Buffer.byteLength(TRUNCATED) > maxBytes) {
-        appendFileSync(path, TRUNCATED);
-        stopped = true;
-        return;
+      if (size + bytes.length > maxBytes) {
+        rotate(path);
+        writeFileSync(path, header, { mode: 0o600 });
+        size = Buffer.byteLength(header);
       }
-      appendFileSync(path, bytes);
-      size += bytes.length;
+      const bounded =
+        bytes.length + size > maxBytes
+          ? Buffer.from('[Mizar: oversized log line omitted]\n')
+          : bytes;
+      appendFileSync(path, bounded);
+      size += bounded.length;
     } catch (error) {
       stopped = true;
       onFailure({ name, code: error.code ?? 'LOG_WRITE_FAILED' });

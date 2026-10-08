@@ -90,3 +90,5 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0046：赛事测试赛与节目衔接隔离](0046-event-test-matches.md)
 
 - [ADR-0047：CS2 安装选择、发现与故障引导](0047-shared-cs2-installation-discovery.md)
+
+- [ADR-0049：在线比赛刷新、恢复入口与运行日志保留](0049-connected-match-refresh-and-diagnostic-retention.md)

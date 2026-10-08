@@ -1,7 +1,7 @@
 import { expect, test } from './companion-isolation.js';
 
 for (const width of [320, 390, 1280]) {
-  test(`product tools fit ${width}px and retain focus`, async ({ page }) => {
+  test(`product tools fit ${width}px and retain focus`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     for (const route of ['/preview', '/operator/hud?mode=fixture', '/debug', '/workspace']) {
@@ -12,7 +12,9 @@ for (const width of [320, 390, 1280]) {
       ).toBe(true);
       await page.keyboard.press('Tab');
       expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY');
-      await page.screenshot({ path: `/tmp/mizar-107-${route.replaceAll('/', '-')}-${width}.png` });
+      await page.screenshot({
+        path: testInfo.outputPath(`product-${route.replace(/[^a-z0-9-]/gi, '-')}-${width}.png`),
+      });
     }
   });
 }

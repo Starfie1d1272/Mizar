@@ -385,7 +385,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(container.textContent).toContain('停止作为数据源');
   });
 
-  it('renders null when not paired or no active online match', async () => {
+  it('offers a recovery link instead of hiding the data source entry when unpaired', async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
         Response.json({
@@ -406,7 +406,41 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
-    expect(container.innerHTML).toBe('');
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('/settings?tab=rivalhub');
+    expect(container.textContent).toContain('连接 RivalHub');
+  });
+
+  it('keeps refresh and website recovery visible for a local BP conflict without claiming prematurely', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        Response.json({
+          paired: true,
+          activeMatchId: 'match-101',
+          activeSourceMatchId: null,
+          sourceReady: false,
+          sourceBlockedReason: '本地 BP 尚未与网站一致',
+          websiteUrl: 'https://match.starfie1d.top/admin/test/matches/match-101',
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      root!.render(
+        <RivalHubLiveSourcePanel action={async (fn) => void (await fn())} onMessage={() => {}} />,
+      );
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('本地 BP 尚未与网站一致');
+    expect(container.textContent).toContain('刷新比赛资料与 BP');
+    expect(container.textContent).toContain('打开网站本场工作台');
+    expect(
+      [...container.querySelectorAll('button')].find(
+        (button) => button.textContent === '成为本场数据源',
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((call) => toUrlString(call[0]).includes('/source/claim')),
+    ).toBe(false);
   });
 
   it('auto-claims when entering workspace with an unowned active match', async () => {

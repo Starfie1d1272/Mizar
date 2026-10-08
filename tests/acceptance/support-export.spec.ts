@@ -23,7 +23,11 @@ test('normal UI downloads the real Companion allowlist export through the local 
     },
   });
   try {
-    await app.listen({ host: '127.0.0.1', port: 3000 });
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    await page.route('**/debug/support-bundle', async (route) => {
+      const response = await route.fetch({ url: `${address}/debug/support-bundle` });
+      await route.fulfill({ response });
+    });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto('/debug');

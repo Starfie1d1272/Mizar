@@ -445,10 +445,12 @@ export class MatchContextController {
   async activatePendingOnlineMatch(
     expectedBindingRevision: string,
     expectedPendingRevision: string,
+    canActivate: () => boolean = () => true,
   ): Promise<MatchContextSelectionResult> {
     const pending = this.pendingOnlineCandidate;
     if (
       pending === undefined ||
+      !canActivate() ||
       pending.revision !== expectedPendingRevision ||
       this.onlineCandidateAcquisition !== undefined ||
       expectedBindingRevision !== this.getActiveRevision()
@@ -457,6 +459,7 @@ export class MatchContextController {
     const generation = ++this.activeSelectionGeneration;
     const candidateGeneration = this.onlineCandidateGeneration;
     const isCurrent = () =>
+      canActivate() &&
       generation === this.activeSelectionGeneration &&
       candidateGeneration === this.onlineCandidateGeneration &&
       expectedBindingRevision === this.getActiveRevision() &&
@@ -493,11 +496,84 @@ export class MatchContextController {
     return isLocalBinding(this.activeBinding);
   }
 
+  /** Refresh the selected match without silently replacing a locally authored map plan. */
+  async refreshOnlineMatch(
+    source: MatchContextSource,
+    allowPlanUpdate: () => boolean = () => false,
+  ) {
+    const active = this.activeBinding;
+    const revision = this.getActiveRevision();
+    if (!active || isStandaloneLocalMatch(active)) return this.staleSelectionResult('');
+    const result = await this.stageOnlineMatch(active.context.matchId, source);
+    if (!result.ok || revision !== this.getActiveRevision()) return result;
+    const pending = this.pendingOnlineCandidate;
+    if (!pending) return result;
+    const next = pending.binding.manifest;
+    const current = active.manifest;
+    if (
+      next.match.competition?.competitionId !== current.match.competition?.competitionId ||
+      next.match.format !== current.match.format ||
+      next.entrants.a.entryId !== current.entrants.a.entryId ||
+      next.entrants.b.entryId !== current.entrants.b.entryId
+    )
+      return result;
+    const samePlan =
+      isDeepStrictEqual(current.maps, next.maps) && isDeepStrictEqual(current.veto, next.veto);
+    const canActivate = () => samePlan || (!isLocalBinding(active) && allowPlanUpdate());
+    if (canActivate())
+      return this.activatePendingOnlineMatch(revision, pending.revision, canActivate);
+    // Refresh roster/commentators even while a local BP conflict awaits confirmation.
+    if (!isLocalBinding(active)) return result;
+    return this.commitQueue.run(async () => {
+      const canCommit = () =>
+        revision === this.getActiveRevision() &&
+        this.pendingOnlineCandidate?.revision === pending.revision;
+      if (!canCommit()) return this.staleSelectionResult(current.match.matchId);
+      const manifest = { ...next, maps: current.maps, veto: current.veto };
+      const validated = validateBroadcastManifest(manifest);
+      if (!validated.ok)
+        return {
+          ok: false as const,
+          requestedMatchId: current.match.matchId,
+          diagnostics: [
+            controllerIssue('source_invalid', '网站资料与本地 BP 不兼容，请核对并确认网站候选。', {
+              diagnostics: validated.diagnostics,
+            }),
+          ],
+        };
+      if (isDeepStrictEqual(active.manifest, validated.value)) return result;
+      const context = toMatchDocumentV1(validated.value);
+      const saved = await this.lkgStore.save(validated.value, 'local', {
+        canCommit,
+        localAuthoringMode: 'bound-overlay',
+      });
+      if (!canCommit()) return this.staleSelectionResult(current.match.matchId);
+      if (!saved.ok)
+        return {
+          ok: false as const,
+          requestedMatchId: current.match.matchId,
+          diagnostics: [
+            controllerIssue('lkg_persistence_failed', '刷新资料未能保存，请重试。', {
+              storeIssue: saved.issue,
+            }),
+          ],
+        };
+      if (!isDeepStrictEqual(active.manifest, validated.value))
+        this.setActive({
+          ...active,
+          manifest: validated.value,
+          context,
+          freshness: 'fresh',
+          diagnostics: validated.diagnostics,
+        });
+      return { ok: true as const, binding: this.activeBinding!, diagnostics: result.diagnostics };
+    });
+  }
+
   /** Network refresh only stages a candidate; explicit operator confirmation owns activation. */
   async stageOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
     const generation = ++this.onlineCandidateGeneration;
     this.onlineCandidateAcquisition = generation;
-    this.pendingOnlineCandidate = undefined;
     try {
       const result = await this.stageOnlineCandidate(
         requestedMatchId,
@@ -595,11 +671,13 @@ export class MatchContextController {
         this.activeBinding?.origin === 'online' &&
         isDeepStrictEqual(this.activeBinding.manifest, binding.manifest)
       ) {
+        this.pendingOnlineCandidate = undefined;
         if (this.activeBinding.freshness !== 'fresh')
           this.setActive({ ...this.activeBinding, freshness: 'fresh' });
         return { ok: true, binding: this.activeBinding, diagnostics: [] };
       }
-      this.pendingOnlineCandidate = { binding, revision: randomUUID() };
+      if (!isDeepStrictEqual(this.pendingOnlineCandidate?.binding.manifest, binding.manifest))
+        this.pendingOnlineCandidate = { binding, revision: randomUUID() };
       return {
         ok: true,
         binding: this.activeBinding ?? binding,
