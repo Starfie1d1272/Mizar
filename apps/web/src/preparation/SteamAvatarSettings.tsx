@@ -12,7 +12,7 @@ export function SteamAvatarSettings() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   async function save(action: 'configure' | 'clear', remove = false) {
-    if (busy) return;
+    if (busy || (action === 'configure' && !remove && !key.trim())) return;
     setBusy(true);
     setMessage('');
     try {
@@ -40,15 +40,47 @@ export function SteamAvatarSettings() {
     }
   }
   return (
-    <Panel>
+    <Panel className="settings-card">
       <h2>Steam 头像（可选）</h2>
-      <p>
-        推荐填写 Steam Web API Key。保存后自动按当前选手的 Steam64 获取 Steam
-        头像并缓存在本机，赛事提供的头像优先。不填写也能正常使用 HUD，显示已有头像或观察编号。
-      </p>
+      <p>自动补全缺少的选手头像，赛事提供的头像优先。</p>
       <p>
         {status?.configured ? '已配置密钥' : '尚未配置密钥'} · 本机缓存 {status?.cached ?? 0} 个头像
       </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save('configure');
+        }}
+      >
+        <Field
+          label="Steam Web API Key（可选，推荐填写）"
+          type="password"
+          autoComplete="off"
+          value={key}
+          disabled={busy}
+          placeholder={status?.configured ? '••••••••••••' : '输入 32 位密钥'}
+          onChange={(event) => setKey(event.target.value)}
+          message={
+            status?.configured
+              ? '已配置。输入新密钥后更新，留空保留当前密钥。'
+              : '密钥仅保存在本机；不填写也能正常使用 HUD。'
+          }
+        />
+        <div className="preparation-actions">
+          <Button type="submit" variant="primary" disabled={busy || !key.trim()}>
+            {busy ? '保存中…' : status?.configured ? '更新密钥' : '保存密钥'}
+          </Button>
+          <Button
+            disabled={busy || !status?.configured}
+            onClick={() => void save('configure', true)}
+          >
+            停用在线获取
+          </Button>
+          <Button disabled={busy || !status?.cached} onClick={() => void save('clear')}>
+            清除头像缓存
+          </Button>
+        </div>
+      </form>
       <p>
         <a
           href="https://steamcommunity.com/dev/apikey"
@@ -77,35 +109,6 @@ export function SteamAvatarSettings() {
         </ol>
         <p>若 Steam 提示账号暂不能申请，可跳过此项，不影响 HUD 使用。</p>
       </details>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save('configure');
-        }}
-      >
-        <Field
-          label="Steam Web API Key（可选，推荐填写）"
-          type="password"
-          autoComplete="off"
-          value={key}
-          onChange={(event) => setKey(event.target.value)}
-          message="密钥仅保存在本机设置中，不写入比赛资料、预设或诊断包。"
-        />
-        <div className="preparation-actions">
-          <Button type="submit" disabled={busy || !key.trim()}>
-            保存密钥
-          </Button>
-          <Button
-            disabled={busy || !status?.configured}
-            onClick={() => void save('configure', true)}
-          >
-            停用在线获取
-          </Button>
-          <Button disabled={busy || !status?.cached} onClick={() => void save('clear')}>
-            清除头像缓存
-          </Button>
-        </div>
-      </form>
       {status?.configured && status.unavailable ? (
         <StatusBanner tone="warning">
           Steam 头像暂时无法获取，请检查密钥与网络；现有媒体和观察编号继续显示。

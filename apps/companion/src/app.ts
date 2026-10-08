@@ -91,6 +91,7 @@ export interface CompanionAppOptions {
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
   readonly productRuntime?: {
+    readonly appVersion?: string;
     readonly artifactSha256: string;
     readonly gitSha: string;
     readonly instanceId: string;
@@ -716,6 +717,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {
             product: {
               repository: 'Starfie1d1272/Mizar',
+              appVersion: options.productRuntime.appVersion,
               artifactSha256: options.productRuntime.artifactSha256,
               gitSha: options.productRuntime.gitSha,
               instanceId: options.productRuntime.instanceId,

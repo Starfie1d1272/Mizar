@@ -14,7 +14,7 @@ test('sidebar links and preparation tools open their actual destinations', async
   for (const [label, path, heading] of [
     ['比赛资料', '/matches', '比赛资料'],
     ['播出画面', '/picture', '播出画面'],
-    ['游戏数据', '/settings?tab=gsi', '游戏数据'],
+    ['游戏设置', '/settings?tab=gsi', '游戏设置'],
     ['OBS 连接', '/settings?tab=obs', 'OBS 连接'],
     ['赛事平台', '/settings?tab=rivalhub', '赛事平台'],
     ['高级设置', '/settings?tab=advanced', '高级设置'],

@@ -2,6 +2,8 @@
 
 本文解释交互语义与兼容规则，精确字段和版本以链接的解析器为准。系统职责见[架构](architecture.md)，游戏字段解释见[遥测语义](telemetry.md)。
 
+产品运行时的 `/health.product.appVersion` 来自同包 artifact 元数据，与 `gitSha` 一同供高级设置展示；开发运行或旧包缺少版本号时明确显示不可用。
+
 ## 契约来源
 
 | 契约 | 代码入口 |

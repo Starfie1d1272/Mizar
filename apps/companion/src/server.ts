@@ -195,6 +195,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
       ? {}
       : {
           productRuntime: {
+            ...(process.env.MIZAR_APP_VERSION ? { appVersion: process.env.MIZAR_APP_VERSION } : {}),
             instanceId: productInstance,
             artifactSha256: productArtifact!,
             gitSha: mizarCommit,

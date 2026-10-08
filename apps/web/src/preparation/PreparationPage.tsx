@@ -174,7 +174,7 @@ export function PreparationPage() {
   const pending = (capabilities ?? []).filter((item) => !item.ready && !item.action);
   const completed = (capabilities ?? []).filter((item) => item.ready);
   const settingsTitle: Record<string, string> = {
-    gsi: '游戏数据',
+    gsi: '游戏设置',
     obs: 'OBS 连接',
     rivalhub: '赛事平台',
     advanced: '高级设置',

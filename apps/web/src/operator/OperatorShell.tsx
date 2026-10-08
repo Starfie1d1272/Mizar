@@ -67,7 +67,7 @@ export function OperatorShell({
           <small>连接与设置</small>
           {(
             [
-              ['gsi', '游戏数据'],
+              ['gsi', '游戏设置'],
               ['obs', 'OBS 连接'],
               ['rivalhub', '赛事平台'],
               ['advanced', '高级设置'],

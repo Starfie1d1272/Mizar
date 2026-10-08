@@ -55,6 +55,32 @@ async function render() {
 }
 
 describe('CS2 configuration progress', () => {
+  it('preserves an unsaved draft after a failed save and allows retry', async () => {
+    await render();
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      select.value = 'high';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    mocks.invoke.mockImplementation((command) =>
+      command === 'set_cs2_preferences'
+        ? Promise.reject(new Error('磁盘不可写'))
+        : Promise.resolve(idle),
+    );
+    await act(async () => {
+      container
+        .querySelector('form')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('磁盘不可写');
+    await poll(idle);
+    expect(select.value).toBe('high');
+    expect(container.querySelector('button[type="submit"]')?.hasAttribute('disabled')).toBe(false);
+    expect(container.textContent).not.toContain('已保存，下次启动生效。');
+  });
+
   it('keeps idle controls stable across routine Host lock contention', async () => {
     await render();
     for (let index = 0; index < 4; index += 1) {
@@ -87,10 +113,25 @@ describe('CS2 configuration progress', () => {
       frameRate.dispatchEvent(new Event('change', { bubbles: true }));
       await Promise.resolve();
     });
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'set_cs2_preferences')).toBe(
+      false,
+    );
+    await poll(idle);
+    expect(frameRate.value).toBe('0');
+    await act(async () => {
+      container
+        .querySelector('form')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
     expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
       qualityPreset: 'preserve',
       frameRateLimit: 0,
     });
+    expect(container.textContent).toContain('已保存，下次启动生效。');
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'start_managed_cs2')).toBe(
+      false,
+    );
     await poll({ ...idle, frameRateLimit: 0 });
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       '导致雷达或播出画面卡顿',

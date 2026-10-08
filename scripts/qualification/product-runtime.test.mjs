@@ -44,6 +44,7 @@ async function fixture({ extraFiles = [] } = {}) {
     desktopHost: 'tauri2',
     platform: 'win32-x64',
     gitSha: 'a'.repeat(40),
+    appVersion: '1.0.0-rc.27',
     artifactSha256: hash(files.map((name) => `${name}\0${hash('fixture')}\n`).join('')),
   };
   const json = JSON.stringify(artifact);
@@ -168,7 +169,7 @@ describe('portable process lifecycle', () => {
     const stateRoot = join(root, 'state');
     await writeFile(
       join(root, 'resources/app/dist/server.js'),
-      `const http=require('node:http'); const env=process.env; const server=http.createServer((req,res)=>{if(req.url==='/health'){res.end(JSON.stringify({product:{repository:'${PRODUCT_REPOSITORY}',artifactSha256:env.MIZAR_ARTIFACT_SHA256,instanceId:env.MIZAR_PRODUCT_INSTANCE,mode:'product'}}));}else if(req.headers['x-runtime-token']===env.MIZAR_RUNTIME_TOKEN){res.end('{}'); server.close();}else {res.statusCode=403;res.end();}});server.listen(Number(env.PORT),'127.0.0.1');`,
+      `const http=require('node:http'); const env=process.env; const server=http.createServer((req,res)=>{if(req.url==='/health'){res.end(JSON.stringify({product:{repository:'${PRODUCT_REPOSITORY}',appVersion:env.MIZAR_APP_VERSION,artifactSha256:env.MIZAR_ARTIFACT_SHA256,instanceId:env.MIZAR_PRODUCT_INSTANCE,mode:'product'}}));}else if(req.headers['x-runtime-token']===env.MIZAR_RUNTIME_TOKEN){res.end('{}'); server.close();}else {res.statusCode=403;res.end();}});server.listen(Number(env.PORT),'127.0.0.1');`,
     );
     let previousToken;
     let previousInstance;
@@ -205,6 +206,10 @@ describe('portable process lifecycle', () => {
         await delay(30);
       }
       expect(ready).toBe(true);
+      expect(
+        (await (await globalThis.fetch(`http://127.0.0.1:${port}/health`)).json()).product
+          .appVersion,
+      ).toBe(artifact.appVersion);
       expect(state.startupSessionId).toBe(`restart-${attempt}`);
       expect(state.supervisorPid).toBe(process.pid);
       const token = await readFile(join(stateRoot, 'data/gsi-token.txt'), 'utf8');
