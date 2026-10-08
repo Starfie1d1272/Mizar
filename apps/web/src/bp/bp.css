@@ -942,3 +942,21 @@
     transition: none;
   }
 }
+
+/* The modal owns the editor's responsive width, independently of the control rail. */
+.mizar-dialog.bp-editor-dialog {
+  width: min(96vw, calc(var(--mizar-layout-target) * 34));
+  max-width: 96vw;
+  max-height: 90dvh;
+  box-sizing: border-box;
+  overflow: auto;
+}
+.bp-editor-dialog__content {
+  container: bp-workspace / inline-size;
+}
+.bp-editor-dialog .bp-editor-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--mizar-bg-surface);
+  padding-block: var(--mizar-layout-gap);
+}

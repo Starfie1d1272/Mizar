@@ -207,7 +207,12 @@
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-shell {
   left: 12px;
   width: 456px;
-  background: transparent;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--mizar-hud-surface-strong) 40%, transparent) 16% 84%,
+    transparent
+  );
   clip-path: none;
   overflow: visible;
 }
@@ -219,7 +224,7 @@
   clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 44px 100%);
 }
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo {
-  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 72%, transparent);
+  background: transparent;
 }
 /* EWC's 473px shell at 1988px frame width becomes 457px at 1920px. */
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo-b {
@@ -289,6 +294,7 @@
 /* Prediction remains a full-height overlay. Its two boundaries follow HP;
  * the shared right-side transform mirrors it exactly once. */
 .hud-widget-design[data-hud-design='ewc'] .player-rail__bomb-prediction {
+  background: color-mix(in srgb, var(--mizar-hud-state-warning) 48%, transparent);
   clip-path: polygon(
     calc(var(--prediction-start) + var(--ewc-half-taper)) 0,
     calc(var(--prediction-end) + var(--ewc-half-taper)) 0,
@@ -301,6 +307,7 @@
     [data-bomb-prediction='lethal'],
     [data-bomb-estimate-echo='lethal']
   ) {
+  background: color-mix(in srgb, var(--mizar-hud-state-danger) 58%, transparent);
   clip-path: polygon(
     0 0,
     calc(var(--prediction-end) + var(--ewc-half-taper)) 0,

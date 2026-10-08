@@ -35,7 +35,7 @@
 
 ## 自解压分发工具
 
-Windows 自解压分发使用未修改的 7-Zip GUI SFX 模块（Igor Pavlov）。它只负责提取完整便携包，不属于 Mizar 的运行依赖。7-Zip 主要采用 GNU LGPL，部分代码为 BSD 3-Clause 或受 unRAR 限制；随包 `7zip-LICENSE.txt` 保留官方说明。精确版本、模块与许可摘要、对应官方源码地址及发布资产摘要记录于 `distribution-manifest.json`；对应源码归档与完整许可随同一 Release 单独提供。压缩容器内的 Mizar 与第三方资源沿用各自原有许可证。
+Windows Setup 使用 NSIS 3.11 封装完整便携 payload，不属于 Mizar 的运行依赖。NSIS 安装器使用 zlib/libpng 许可，编译工具及所含第三方组件的具体许可见同一 Release 提供的官方 `NSIS-LICENSE.txt`（NSIS COPYING）。精确版本、编译器、安装脚本、许可及安装包摘要记录于 `distribution-manifest.json`。安装包内的 Mizar 与第三方资源沿用各自原有许可证。历史 7-Zip 自解压发行版的许可与源码资产保留在对应历史 Release。
 
 ## C4 数值地图与上游说明
 

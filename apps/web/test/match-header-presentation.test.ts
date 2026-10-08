@@ -304,3 +304,28 @@ it('shows an absent terminal result without a synthetic zero score or wins', () 
   });
   expect(value.seriesScoreText).toBe('—:—');
 });
+
+it('selects completed map winner logos independently of picker and rejects unknown winners', () => {
+  const base = getProgramFixture('series-bo5')!.payload;
+  const series = base.series!;
+  const entrants = {
+    a: { ...series.entrants.a, logoUrl: '/a.svg' },
+    b: { ...series.entrants.b, logoUrl: '/b.svg' },
+  };
+  const maps = series.maps.map((map, index) =>
+    index === 0
+      ? { ...map, pickerEntryId: entrants.a.entryId, winnerEntryId: entrants.b.entryId }
+      : map,
+  );
+  const result = buildMatchHeaderPresentation({ ...base, series: { ...series, entrants, maps } });
+  expect(result.seriesMaps![0]).toMatchObject({ pickerLogoUrl: '/a.svg', winnerLogoUrl: '/b.svg' });
+  const unknown = buildMatchHeaderPresentation({
+    ...base,
+    series: {
+      ...series,
+      entrants,
+      maps: maps.map((map) => ({ ...map, winnerEntryId: 'unknown' })),
+    },
+  });
+  expect(unknown.seriesMaps!.every((map) => map.winnerLogoUrl === null)).toBe(true);
+});

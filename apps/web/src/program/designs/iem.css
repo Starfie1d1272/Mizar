@@ -240,7 +240,7 @@
   height: 9px;
 }
 .hud-widget-design[data-hud-design='iem'] .match-header__score-zone--logo {
-  background: var(--mizar-hud-surface-strong);
+  background: transparent;
   margin: 6px;
   width: 60px;
   height: 62px;

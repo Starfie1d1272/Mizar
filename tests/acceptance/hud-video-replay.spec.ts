@@ -8,8 +8,8 @@ test('plays real game background with live HUD and seeks both to the recorded C4
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
   await page.goto('/operator/hud');
-  await page.getByLabel('预览来源').selectOption('replay');
-  await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-video');
+  await expect(page.getByLabel('预览来源')).toHaveValue('replay');
+  await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-video');
   const replay = page.getByRole('region', { name: '重放控制' });
   const video = page.locator('video.hud-console__map-background');
   await expect(video).toHaveCount(1, { timeout: 30_000 });
@@ -26,6 +26,10 @@ test('plays real game background with live HUD and seeks both to the recorded C4
       ),
     )
     .toBe(true);
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.paused))
+    .toBe(false);
+  await replay.getByRole('button', { name: '暂停', exact: true }).click();
   const events = (
     await (await page.request.get('/fixtures/epl-inferno-video/replay/events.jsonl')).text()
   )
@@ -68,6 +72,9 @@ test('plays real game background with live HUD and seeks both to the recorded C4
       `builtin:${preset}-preset`,
     );
     await expect(replay).toHaveAttribute('data-replay-cursor', cursor!);
+    await page
+      .locator('.hud-console__canvas-frame')
+      .screenshot({ path: `.agent-tmp/rc-fixes/video-${preset}.png` });
     expect(await video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeCloseTo(
       stopped,
       2,
@@ -92,8 +99,8 @@ test('rejects a corrupt background before offering a playable replay and recover
     route.fulfill({ status: 200, contentType: 'video/mp4', body: 'corrupt' }),
   );
   await page.goto('/operator/hud');
-  await page.getByLabel('预览来源').selectOption('replay');
-  await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-video');
+  await expect(page.getByLabel('预览来源')).toHaveValue('replay');
+  await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-video');
   const replay = page.getByRole('region', { name: '重放控制' });
   await expect(replay.getByRole('alert')).toBeVisible();
   await expect(replay.getByRole('button', { name: '播放', exact: true })).toBeDisabled();
@@ -101,4 +108,28 @@ test('rejects a corrupt background before offering a playable replay and recover
   await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-opening');
   await expect(replay.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
   await expect(replay.getByRole('alert')).toHaveCount(0);
+});
+
+test('keeps a ready replay recoverable when the browser blocks autoplay', async ({ page }) => {
+  await page.addInitScript(() => {
+    const play = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'play')!.value as (
+      this: HTMLMediaElement,
+    ) => Promise<void>;
+    let blocked = false;
+    HTMLMediaElement.prototype.play = function () {
+      if (!blocked) {
+        blocked = true;
+        return Promise.reject(new DOMException('Blocked autoplay', 'NotAllowedError'));
+      }
+      return play.call(this);
+    };
+  });
+  await page.goto('/operator/hud');
+  await expect(page.getByText('自动播放受阻，请点击「播放」。')).toBeVisible();
+  const replay = page.getByRole('region', { name: '重放控制' });
+  await replay.getByRole('button', { name: '播放', exact: true }).click();
+  await expect
+    .poll(() => page.locator('video').evaluate((video: HTMLVideoElement) => video.paused))
+    .toBe(false);
+  await expect(page.getByText('自动播放受阻，请点击「播放」。')).toHaveCount(0);
 });

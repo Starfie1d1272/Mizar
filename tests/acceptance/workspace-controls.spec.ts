@@ -99,6 +99,9 @@ test('OBS setup buttons launch the configured target, configure, check and repai
       command: 'launch_obs',
       args: { executablePath: 'C:\\ConfiguredOBS\\obs64.exe' },
     });
+  await expect.poll(() => requests).toContainEqual({ path: '/operator/obs/ensure', body: {} });
+  await expect(page.getByRole('button', { name: '检查配置', exact: true })).toHaveCount(0);
+  await page.locator('summary').filter({ hasText: 'WebSocket 连接设置' }).click();
   await page.getByLabel('WebSocket 端口').fill('4466');
   await page.getByLabel('WebSocket 密码').fill('ui-test-password');
   await page.getByRole('button', { name: '保存并测试', exact: true }).click();
@@ -109,7 +112,6 @@ test('OBS setup buttons launch the configured target, configure, check and repai
       body: { port: 4466, password: 'ui-test-password' },
     });
   await expect(page.getByLabel('WebSocket 密码')).toHaveValue('');
-  await page.getByRole('button', { name: '检查配置', exact: true }).click();
   await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/check', body: {} });
   await page.getByRole('button', { name: '修复 Mizar 场景', exact: true }).click();
   await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/repair', body: {} });

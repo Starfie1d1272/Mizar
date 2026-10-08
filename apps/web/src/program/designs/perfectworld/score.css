@@ -313,14 +313,6 @@
   box-sizing: border-box;
   padding-bottom: 12px;
 }
-.shanghai-winner-name {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  padding: 12px;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
 .hud-widget-design[data-hud-design='perfectworld']
   .match-header__score-zone--logo:not(:has(.match-header__team-logo)) {
   padding-inline: 12px;
@@ -335,11 +327,6 @@
   .objective-center__icon {
   background: var(--mizar-hud-objective-defuse);
 }
-.shanghai-round-winner span.shanghai-winner-name {
-  font-size: 24px;
-  line-height: 1.2;
-}
-
 @keyframes shanghai-c4-pulse {
   from {
     opacity: 0.65;

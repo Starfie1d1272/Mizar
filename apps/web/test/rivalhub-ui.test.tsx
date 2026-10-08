@@ -68,6 +68,65 @@ afterEach(() => {
 });
 
 describe('Preparation: RivalHubPreparationPanel', () => {
+  it('keeps pending schedules distinct from empty results and supports refresh after failure', async () => {
+    let finish!: (response: Response) => void;
+    let scheduleResponse = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    const fetchMock = vi.fn((url: string | URL | Request) =>
+      toUrlString(url).includes('/rivalhub-connection')
+        ? Promise.resolve(Response.json({ paired: true, displayName: '测试赛事' }))
+        : scheduleResponse,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      root?.render(<RivalHubPreparationPanel />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).not.toContain('近期暂无比赛');
+    const refreshButton = () =>
+      Array.from(container.querySelectorAll('button')).find(
+        (button) =>
+          button.getAttribute('aria-label') === '刷新比赛' ||
+          button.textContent?.includes('刷新比赛') ||
+          button.textContent?.includes('刷新中'),
+      )!;
+    expect(refreshButton().disabled).toBe(true);
+    await act(async () => {
+      finish(Response.json({ competition: { name: '测试赛事' }, matches: [] }));
+      await scheduleResponse;
+    });
+    expect(container.textContent).toContain('近期暂无比赛');
+    scheduleResponse = Promise.resolve(new Response('', { status: 503 }));
+    await act(async () => {
+      refreshButton().click();
+      await scheduleResponse;
+    });
+    expect(container.textContent).toContain('赛事赛程暂时无法获取');
+    expect(refreshButton().disabled).toBe(false);
+    scheduleResponse = Promise.resolve(
+      Response.json({
+        competition: { name: '测试赛事' },
+        matches: [
+          {
+            matchId: 'new',
+            scheduledAt: null,
+            entrantA: { name: 'Alpha' },
+            entrantB: { name: 'Beta' },
+            format: 'bo3',
+          },
+        ],
+      }),
+    );
+    await act(async () => {
+      refreshButton().click();
+      await scheduleResponse;
+    });
+    expect(container.textContent).toContain('Alpha');
+    expect(container.textContent).not.toContain('近期暂无比赛');
+    expect(container.textContent).not.toContain('赛事赛程暂时无法获取');
+  });
+
   it('renders browser pairing trigger when not paired, and polls to completion', async () => {
     let pairedState = false;
     let pollCount = 0;

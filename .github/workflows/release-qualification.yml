@@ -120,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [portable, sfx]
+        lane: [portable, setup]
     env:
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
@@ -180,47 +180,51 @@ jobs:
           node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
           if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
 
-      - name: Extract pristine candidate for SFX
-        if: ${{ matrix.lane == 'sfx' }}
+      - name: Extract pristine candidate for Setup
+        if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
         run: |
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
           & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
-      - name: Build and verify same-content LZMA2 self-extracting distribution
-        if: ${{ matrix.lane == 'sfx' }}
+      - name: Install pinned NSIS
+        if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
-        timeout-minutes: 5
+        run: choco install nsis --version=3.11 -y --no-progress
+
+      - name: Build and verify same-content NSIS installer
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
+        timeout-minutes: 15
         run: |
           $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'sfx extracted path'
-          & ./scripts/qualification/create-windows-sfx.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
           $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
           node scripts/qualification/product-smoke.mjs $extracted.FullName
-          if ($LASTEXITCODE -ne 0) { throw 'SFX portable smoke failed' }
-          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'sfx-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'SFX desktop GUI smoke failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Setup portable smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
 
       - name: Record successful lane identity
         shell: pwsh
         env:
           LANE: ${{ matrix.lane }}
         run: |
-          $extractRoot = if ($env:LANE -eq 'sfx') { Join-Path $env:RUNNER_TEMP 'sfx extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          $extractRoot = if ($env:LANE -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "$env:LANE-identity.json")
           if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
 
       - name: Upload verified distribution
-        if: ${{ matrix.lane == 'sfx' }}
+        if: ${{ matrix.lane == 'setup' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-sfx
+          name: release-setup
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
           compression-level: 0
           retention-days: 7
@@ -232,11 +236,11 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'sfx-desktop-smoke.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'sfx-identity.json')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }
-          $extractedRoot = if ('${{ matrix.lane }}' -eq 'sfx') { Join-Path $env:RUNNER_TEMP 'sfx extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          $extractedRoot = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
           if (Test-Path -LiteralPath $extractedRoot) {
             $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
             if ($null -ne $bundle) {
@@ -285,7 +289,7 @@ jobs:
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-sfx
+          name: release-setup
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -300,7 +304,7 @@ jobs:
         shell: pwsh
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          foreach ($lane in @('portable', 'sfx')) {
+          foreach ($lane in @('portable', 'setup')) {
             $archive = Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-$env:RELEASE_LABEL-$lane-evidence.zip"
             Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $evidenceRoot $lane)
           }
@@ -320,8 +324,7 @@ jobs:
           subject-path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
 
@@ -334,8 +337,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
           if-no-files-found: error

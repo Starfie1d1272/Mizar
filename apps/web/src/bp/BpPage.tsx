@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { Dialog } from '../ui';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
 import { BpPresentation } from './BpPresentation';
@@ -45,6 +46,13 @@ export function BpWorkspaceControls() {
   const { snapshot } = useBpSession();
   const { workspace, connected, loading } = useBpWorkspace();
   const [localEditorOpen, setLocalEditorOpen] = useState(false);
+  const editorState = useRef({ dirty: false, saving: false });
+  const canCloseEditor = () =>
+    !editorState.current.saving &&
+    (!editorState.current.dirty || window.confirm('放弃尚未保存的 BP 修改？'));
+  const closeEditor = () => {
+    if (canCloseEditor()) setLocalEditorOpen(false);
+  };
   const [sourceBusy, setSourceBusy] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoBpRevision, setDemoBpRevision] = useState<string | null>(null);
@@ -262,16 +270,29 @@ export function BpWorkspaceControls() {
           </div>
         </section>
       ) : null}
-      {demoActive === null && localEditorOpen && workspace ? (
-        <BpLocalEditor
-          key={workspace.contextRevision}
-          workspace={workspace}
-          onCancel={() => setLocalEditorOpen(false)}
-          onSaved={(message) => {
-            setLocalEditorOpen(false);
-            setWorkspaceMessage(message);
-          }}
-        />
+      {localEditorOpen && workspace ? (
+        <Dialog
+          open
+          title="编辑比赛 BP"
+          className="bp-editor-dialog"
+          canClose={canCloseEditor}
+          onClose={() => setLocalEditorOpen(false)}
+        >
+          <div className="bp-editor-dialog__content">
+            <BpLocalEditor
+              connected={connected && demoActive === null}
+              onStateChange={(state) => {
+                editorState.current = state;
+              }}
+              workspace={workspace}
+              onCancel={closeEditor}
+              onSaved={(message) => {
+                setLocalEditorOpen(false);
+                setWorkspaceMessage(message);
+              }}
+            />
+          </div>
+        </Dialog>
       ) : demoActive === null && localSource && workspace?.localDraft ? (
         <section className="bp-local-summary" aria-label="本地 BP">
           <div>

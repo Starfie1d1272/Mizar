@@ -700,15 +700,11 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
 
     await editor.locator('.bp-editor-match-fields input').nth(0).fill('本地赛事');
     await editor.locator('.bp-editor-match-fields input').nth(1).fill('决赛');
-    await page.getByRole('button', { name: '半场', exact: true }).click();
-    await expect(editor).toBeHidden();
-    await page.getByRole('button', { name: 'BP', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '编辑比赛 BP' })).toBeVisible();
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.keyboard.press('Escape');
     await expect(editor).toBeVisible();
     await expect(editor.locator('.bp-editor-match-fields input').nth(0)).toHaveValue('本地赛事');
-    await page.getByRole('button', { name: '播放演示', exact: true }).click();
-    await expect(editor).toBeHidden();
-    await page.getByRole('button', { name: 'BP', exact: true }).click();
-    await expect(editor.locator('.bp-editor-match-fields input').nth(1)).toHaveValue('决赛');
     await editor
       .locator('.bp-editor-team[data-entrant="a"] input')
       .first()
@@ -730,6 +726,14 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await steps.nth(9).locator('select').selectOption('T');
     await expect(editor.getByRole('button', { name: '保存本地 BP' })).toBeEnabled();
 
+    for (const width of [1493, 1920]) {
+      await page.setViewportSize({ width, height: width === 1493 ? 992 : 1080 });
+      const dialog = page.getByRole('dialog', { name: '编辑比赛 BP' });
+      const bounds = await dialog.boundingBox();
+      expect(bounds!.width).toBeGreaterThan(1000);
+      expect(bounds!.width).toBeLessThanOrEqual(width * 0.96);
+      await page.screenshot({ path: `.agent-tmp/rc-fixes/bp-editor-${width}.png` });
+    }
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
@@ -770,6 +774,10 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     const program = await context.newPage();
     await program.goto('/program/bp');
     await expect(program.locator('.bp-scene')).toHaveCount(0);
+    await page
+      .getByRole('dialog', { name: '编辑比赛 BP' })
+      .getByRole('button', { name: '关闭', exact: true })
+      .click();
     await page.getByRole('button', { name: '播放 BP', exact: true }).click();
     await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
     await expect(

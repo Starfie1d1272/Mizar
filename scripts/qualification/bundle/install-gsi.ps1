@@ -1,4 +1,4 @@
-﻿param([string]$Cs2Root, [switch]$Product)
+﻿param([string]$Cs2Root, [switch]$Product, [switch]$Automatic)
 . (Join-Path $PSScriptRoot 'common.ps1')
 trap { Write-Cs2OperationFailure -Failure $_ -Stage 'install'; exit 1 }
 . (Join-Path $PSScriptRoot 'gsi-discovery.ps1')
@@ -9,6 +9,27 @@ if ($Product) {
 }
 $LEGACY_GSI_CFG_NAME = 'gamestate_integration_rivalhub_broadcast.cfg'
 $MIZAR_GSI_CFG_NAME = 'gamestate_integration_mizar.cfg'
+# Automatic preparation never takes ownership of an unknown sender or disables third-party files.
+if ($Automatic) {
+    if (-not $Product) { throw 'Automatic configuration requires product mode' }
+    $safeDirectory = Resolve-CfgDirectory -ExplicitRoot $Cs2Root
+    $safePath = Join-Path $safeDirectory $MIZAR_GSI_CFG_NAME
+    if (@(Get-GsiEndpointConflicts -CfgDirectory $safeDirectory -CanonicalCfgPath $safePath).Count -gt 0) { Stop-Cs2Discovery 'endpoint-conflict' }
+    if (Test-Path -LiteralPath (Join-Path $safeDirectory $LEGACY_GSI_CFG_NAME)) { Stop-Cs2Discovery 'gsi-file-changed' }
+    if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
+        $owned = Read-InstallState
+        if ([string]$owned.cfgPath -ine $safePath) { Stop-Cs2Discovery 'record-unreadable' }
+        if (-not (Test-Path -LiteralPath $safePath)) {
+            # Only recreate bytes whose identity was already recorded by our install transaction.
+            $template = Get-Content -LiteralPath (Join-Path $script:BundleRoot 'config\gamestate_integration_mizar.cfg.template') -Raw -Encoding UTF8
+            $restored = $template.Replace('REPLACE_WITH_GSI_TOKEN', [string]$owned.gsiToken)
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            try { $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($restored))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+            if ($digest -ne [string]$owned.cfgFingerprint) { Stop-Cs2Discovery 'gsi-file-changed' }
+            Write-Utf8NoBom -Path $safePath -Content $restored
+        }
+    } elseif (Test-Path -LiteralPath $safePath) { Stop-Cs2Discovery 'gsi-file-changed' }
+}
 if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
     try { $existing = Read-InstallState } catch { Stop-Cs2Discovery 'record-unreadable' }
     $existingCfgPath = [string]$existing.cfgPath
@@ -32,7 +53,7 @@ if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
             if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
                 Remove-Item -LiteralPath $legacyCfgPath -Force
             }
-            if ($Product) { Suspend-GsiEndpointConflicts -CfgDirectory $existingCfgDirectory -CanonicalCfgPath $existingCfgPath }
+            if ($Product -and -not $Automatic) { Suspend-GsiEndpointConflicts -CfgDirectory $existingCfgDirectory -CanonicalCfgPath $existingCfgPath }
             Write-Output 'Mizar GSI 配置已安装且一致。'
             Clear-Cs2OperationError
             exit 0
@@ -52,7 +73,7 @@ if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
     Remove-Item -LiteralPath $legacyCfgPath -Force
 }
 if (Test-Path -LiteralPath $legacyCfgPath) { throw '旧 GSI 配置仍然存在' }
-if ($Product) { Suspend-GsiEndpointConflicts -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath }
+if ($Product -and -not $Automatic) { Suspend-GsiEndpointConflicts -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath }
 else { Write-GsiEndpointConflictWarning -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath | Out-Null }
 
 $token = New-QualificationToken

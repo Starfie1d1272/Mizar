@@ -4,7 +4,7 @@ for (const width of [320, 390, 1280]) {
   test(`product tools fit ${width}px and retain focus`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    for (const route of ['/preview', '/operator/hud', '/debug', '/workspace']) {
+    for (const route of ['/preview', '/operator/hud?mode=fixture', '/debug', '/workspace']) {
       await page.goto(route);
       await expect(page.locator('body')).not.toBeEmpty();
       expect(

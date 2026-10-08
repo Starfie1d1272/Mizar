@@ -161,6 +161,7 @@ export interface LoadedReplayFixture {
 }
 
 export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedReplayFixture> {
+  const signal = AbortSignal.timeout(30_000);
   const paths = sourceFiles[id];
   if (paths === undefined) throw new RangeError(`Unknown replay source: ${id}`);
   const [
@@ -170,11 +171,11 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     contextResponse,
     captureManifestResponse,
   ] = await Promise.all([
-    fetch(`${paths.basePath}/manifest.json`, { cache: 'no-store' }),
-    fetch(`${paths.basePath}/frames.jsonl`, { cache: 'no-store' }),
-    fetch(`${paths.basePath}/events.jsonl`, { cache: 'no-store' }),
-    fetch(`${paths.basePath}/match-context.json`, { cache: 'no-store' }),
-    fetch(`${paths.basePath}/capture-manifest.json`, { cache: 'no-store' }),
+    fetch(`${paths.basePath}/manifest.json`, { cache: 'no-store', signal }),
+    fetch(`${paths.basePath}/frames.jsonl`, { cache: 'no-store', signal }),
+    fetch(`${paths.basePath}/events.jsonl`, { cache: 'no-store', signal }),
+    fetch(`${paths.basePath}/match-context.json`, { cache: 'no-store', signal }),
+    fetch(`${paths.basePath}/capture-manifest.json`, { cache: 'no-store', signal }),
   ]);
   for (const response of [
     manifestResponse,
@@ -312,7 +313,7 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
       !Number.isFinite(media.timelineStartUs)
     )
       throw new Error('Invalid replay video binding');
-    const response = await fetch(`${paths.basePath}/${media.file}`);
+    const response = await fetch(`${paths.basePath}/${media.file}`, { signal });
     if (!response.ok) throw new Error('Replay video could not be loaded');
     const bytes = await response.arrayBuffer();
     if ((await sha256Hex(bytes)) !== media.sha256) throw new Error('Replay video hash mismatch');

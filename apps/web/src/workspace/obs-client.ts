@@ -43,7 +43,7 @@ export function useObsStatus(): ObsStatus | null {
 }
 
 export async function obsCommand(
-  action: 'open' | 'check' | 'repair' | 'configure',
+  action: 'open' | 'check' | 'ensure' | 'repair' | 'configure',
   body: Record<string, unknown> = {},
 ): Promise<unknown> {
   const nativeOpen = action === 'open' && Boolean(window.__TAURI_INTERNALS__);
@@ -51,7 +51,7 @@ export async function obsCommand(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(action === 'repair' ? 15_000 : 6000),
+    signal: AbortSignal.timeout(action === 'repair' || action === 'ensure' ? 15_000 : 6000),
   });
   const value = (await response.json().catch(() => null)) as {
     message?: string;
@@ -60,7 +60,10 @@ export async function obsCommand(
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
   if (nativeOpen) {
     if (!value?.executablePath) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
-    await desktopInvoke('launch_obs', { executablePath: value.executablePath });
+    const alreadyRunning = await desktopInvoke<boolean>('launch_obs', {
+      executablePath: value.executablePath,
+    });
+    return { ...value, alreadyRunning };
   }
   return value;
 }

@@ -22,7 +22,7 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
   for await (const chunk of createReadStream(join(product, manifest.archive))) hash.update(chunk);
   if (hash.digest('hex') !== archiveSha256) throw new Error('候选 ZIP 传输摘要不一致');
   if (evidenceRoot) {
-    for (const lane of ['portable', 'sfx']) {
+    for (const lane of ['portable', 'setup']) {
       const identity = JSON.parse(
         await readFile(join(evidenceRoot, lane, `${lane}-identity.json`), 'utf8'),
       );
@@ -30,12 +30,12 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
         if (identity[field] !== manifest[field])
           throw new Error(`${lane} 验收身份不一致：${field}`);
       }
-      if (lane === 'sfx') {
+      if (lane === 'setup') {
         const distribution = JSON.parse(
           await readFile(join(product, 'distribution-manifest.json'), 'utf8'),
         );
         if (JSON.stringify(identity.distribution) !== JSON.stringify(distribution)) {
-          throw new Error('SFX 验收身份与分发清单不一致');
+          throw new Error('Setup 验收身份与分发清单不一致');
         }
       }
     }

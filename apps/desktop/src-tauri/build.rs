@@ -22,6 +22,7 @@ fn main() {
             "open_issue_report",
             "save_support_bundle",
             "gsi_status",
+            "ensure_gsi",
             "configure_gsi",
             "select_cs2_installation",
             "open_cs2_config_directory",

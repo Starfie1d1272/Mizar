@@ -47,7 +47,17 @@ fn is_payload(state: &Path, payload: &Path) -> bool {
 }
 
 pub fn writable_root(root: &Path, override_path: Option<PathBuf>) -> io::Result<PathBuf> {
-    let state = normalized(&override_path.unwrap_or_else(|| root.join("state")));
+    let default = if let Some(path) = override_path {
+        path
+    } else if root.join("installed.flag").is_file() {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "用户数据目录不可用。")
+        })?)
+        .join("Mizar")
+    } else {
+        root.join("state")
+    };
+    let state = normalized(&default);
     if !state.is_absolute() || is_payload(&state, &normalized(&root.join("resources"))) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

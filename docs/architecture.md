@@ -153,3 +153,5 @@ OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录�
 Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md) 和 [ADR-0027](decisions/0027-cs2-launch-recovery-workflow.md)。状态查询不等待启动或退出操作锁；Steam 请求待确认时保留持久记录，正常退出（含 `--stop`）先由 Host 请求 Companion 安全切场与释放数据源，再关闭受管理游戏、恢复配置，成功后才停止服务；收尾失败保留 Host，退出期间拒绝新启动与工作台进入，异常退出后的恢复状态跨窗口可见。启动项只传给本次 Steam 调用，不修改持久启动项。退出请求与失败重试见 [ADR-0033](decisions/0033-host-first-exit-request.md)。
 
 可选 Steam 头像由 Companion 的本机媒体缓存提供，赛事头像优先；不修改身份或比赛文档。密钥与缓存独立于采集、预设和支持包，见 [ADR-0034](decisions/0034-local-steam-avatar-fallback.md)。
+
+安装版的数据目录与自动准备所有权边界见 [ADR-0048](decisions/0048-installed-state-and-safe-preparation.md)：安装版使用当前用户数据目录，便携模式保持原路径；自动 GSI 不取得未知文件所有权，OBS 重连不覆盖手动配置。

@@ -12,6 +12,8 @@ ADR 保存长期决定的背景、取舍和演变。当前规则从[架构](../a
 
 ## 决策索引
 
+- [ADR-0048：安装版数据目录与安全自动准备](0048-installed-state-and-safe-preparation.md)
+
 - [ADR-0030：现场工作区的全屏 Shell 协作与窗口外框避让](0030-workspace-fullscreen-shell.md)
 - [ADR-0031：工作台中的受管理 CS2 使用无边框窗口](0031-borderless-workspace-game.md)
 

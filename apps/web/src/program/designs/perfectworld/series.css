@@ -55,7 +55,7 @@
   font-size: 12px;
   text-transform: uppercase;
 }
-.shanghai-series-detail img {
+.shanghai-series-detail .match-header__team-logo {
   width: 34px;
   height: 34px;
   object-fit: contain;

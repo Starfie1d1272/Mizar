@@ -5,6 +5,7 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ObsConfigStore, discoverObsExecutable } from './config.js';
 import {
   checkObsConfiguration,
+  ensureObsConfiguration,
   repairObsConfiguration,
   refreshObsBrowserSources,
   switchObsScene,
@@ -203,6 +204,17 @@ export class ObsAdapter {
   check(): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
       this.findings = await this.withObs((obs) => checkObsConfiguration(obs, this.browserBaseUrl));
+      return this.findings;
+    });
+  }
+  private preparationStarted = false;
+  ensure(): Promise<readonly ObsFinding[]> {
+    return this.serial(async () => {
+      this.findings = await this.withObs(async (obs) => {
+        const firstPreparation = !this.preparationStarted;
+        this.preparationStarted = true;
+        return ensureObsConfiguration(obs, this.browserBaseUrl, firstPreparation);
+      }, 12_000);
       return this.findings;
     });
   }

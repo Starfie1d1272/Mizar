@@ -339,12 +339,6 @@ async function main() {
     for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
       await cp(join(rootDir, name), join(stagingDir, name));
     }
-    if (process.platform === 'win32' && !options.skipNodeRuntime) {
-      await cp(
-        join(process.env.ProgramFiles, '7-Zip', 'License.txt'),
-        join(stagingDir, '7zip-LICENSE.txt'),
-      );
-    }
     await createDeployWorkspace(deployWorkspaceDir);
     await timed('deploy-production-dependencies', () =>
       runCommand(
@@ -383,6 +377,7 @@ async function main() {
       'gsi-status.ps1',
       'select-cs2-installation.ps1',
       'install-gsi.ps1',
+      'ensure-gsi.ps1',
       'restore-gsi.ps1',
       'start.ps1',
       'rotate.ps1',

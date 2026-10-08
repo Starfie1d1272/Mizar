@@ -1,5 +1,5 @@
 import { validateArtifact } from './evidence/integrity.mjs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ import {
 
 const roots = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 async function fixture({ extraFiles = [] } = {}) {
@@ -62,6 +63,19 @@ async function freePort() {
 }
 
 describe('portable payload', () => {
+  it('keeps installed user data outside replaceable payload while retaining explicit and portable roots', async () => {
+    const { root } = await fixture();
+    expect(writableRoot(root)).toBe(join(root, 'state'));
+    const local = join(root, 'user-profile');
+    vi.stubEnv('LOCALAPPDATA', local);
+    await writeFile(join(root, 'installed.flag'), 'installed');
+    expect(writableRoot(root)).toBe(join(local, 'Mizar'));
+    expect(writableRoot(root, join(root, 'explicit-data'))).toBe(join(root, 'explicit-data'));
+    vi.stubEnv('LOCALAPPDATA', undefined);
+    expect(() => writableRoot(root)).toThrow('用户数据目录不可用');
+    expect(writableRoot(root, join(root, 'explicit-data'))).toBe(join(root, 'explicit-data'));
+  });
+
   it('checks complete content and excludes writable data', async () => {
     const { root, artifact } = await fixture();
     await mkdir(join(root, 'state'), { recursive: true });

@@ -311,12 +311,25 @@ test('Tool surfaces retain their role and Preview changes never TAKE a scene', a
     commands.push(route.request().url());
     return route.fulfill({ json: {} });
   });
-  for (const path of ['/operator/hud', '/operator/bp', '/debug', '/preview']) {
+  for (const path of ['/operator/hud?mode=fixture', '/operator/bp', '/debug', '/preview']) {
     await page.goto(path);
     await expect(page.locator('.mizar-tool-heading')).toBeVisible();
     await expect(page.getByRole('navigation', { name: '制作导航' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: '总览', exact: true })).toHaveCount(0);
+    for (const width of [1493, 1920, 390]) {
+      await page.setViewportSize({ width, height: width === 1493 ? 992 : 1080 });
+      const heading = await page.locator('.mizar-tool-heading').boundingBox();
+      expect(heading!.x).toBeLessThan(80);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      if (width !== 390)
+        await page.screenshot({
+          path: `.agent-tmp/rc-fixes/tool-${path.split('?')[0]!.replaceAll('/', '-')}-${width}.png`,
+        });
+    }
   }
+  await page.setViewportSize({ width: 1493, height: 992 });
   await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect(page.getByTitle('节目预览', { exact: true })).toHaveAttribute(
     'src',

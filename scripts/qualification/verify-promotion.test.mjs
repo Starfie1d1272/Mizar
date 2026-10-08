@@ -7,12 +7,12 @@ import { createHash } from 'node:crypto';
 import { verifyPromotion } from './verify-promotion.mjs';
 
 it.each([
-  ['Mizar-v1.0.0-rc.7-Windows-x64', '1.0.0-rc.7', '.exe'],
-  ['Mizar-v1.0.0-Windows-x64', '1.0.0', '.exe'],
-  ['Mizar-RC7-win-x64-portable-aaaaaaa', '1.0.0-rc.7', '-extract.exe'],
+  ['Mizar-v1.0.0-rc.7-Windows-x64', '1.0.0-rc.7', '-Setup.exe'],
+  ['Mizar-v1.0.0-Windows-x64', '1.0.0', '-Setup.exe'],
+  ['Mizar-RC7-win-x64-portable-aaaaaaa', '1.0.0-rc.7', '-Setup.exe'],
 ])(
   'verifies %s and rejects mismatched promotion identities',
-  async (name, appVersion, sfxSuffix) => {
+  async (name, appVersion, setupSuffix) => {
     const root = await mkdtemp(join(tmpdir(), 'mizar-promotion-'));
     const product = join(root, 'product');
     const extracted = join(root, 'extracted');
@@ -91,19 +91,18 @@ it.each([
         appVersion: artifact.appVersion,
         contentDigest,
         originalArchiveSha256: manifest.archiveSha256,
-        archive: archive.replace('.zip', sfxSuffix),
-        archiveSha256: hash('sfx fixture'),
-        archiveBytes: Buffer.byteLength('sfx fixture'),
-        format: '7zip-gui-sfx-lzma2-solid',
-        extractorLicense: '7zip-LICENSE.txt',
-        extractorLicenseSha256: hash('license fixture'),
-        extractorSourceArchive: '7z2501-src.7z',
-        extractorSourceSha256: hash('source fixture'),
-        extractorSourceUrl: 'https://www.7-zip.org/a/7z2501-src.7z',
+        archive: archive.replace('.zip', setupSuffix),
+        archiveSha256: hash('setup fixture'),
+        archiveBytes: Buffer.byteLength('setup fixture'),
+        format: 'nsis-setup',
+        installerLicense: 'NSIS-LICENSE.txt',
+        installerLicenseSha256: hash('license fixture'),
+        installerVersion: 'v3.11',
+        installerCompilerSha256: hash('compiler fixture'),
+        installerScriptSha256: hash('script fixture'),
       };
-      await writeFile(join(product, distribution.extractorLicense), 'license fixture');
-      await writeFile(join(product, distribution.extractorSourceArchive), 'source fixture');
-      await writeFile(join(product, distribution.archive), 'sfx fixture');
+      await writeFile(join(product, distribution.installerLicense), 'license fixture');
+      await writeFile(join(product, distribution.archive), 'setup fixture');
       await writeFile(
         join(product, `${distribution.archive}.sha256`),
         `${distribution.archiveSha256}  ${distribution.archive}\n`,
@@ -111,13 +110,13 @@ it.each([
       await writeFile(join(product, 'distribution-manifest.json'), JSON.stringify(distribution));
       expect((await verifyPromotion(options)).distribution).toEqual(distribution);
       await writeFile(join(product, distribution.archive), 'tampered');
-      await expect(verifyPromotion(options)).rejects.toThrow('自解压包摘要');
-      await writeFile(join(product, distribution.archive), 'sfx fixture');
+      await expect(verifyPromotion(options)).rejects.toThrow('安装包摘要');
+      await writeFile(join(product, distribution.archive), 'setup fixture');
       await writeFile(
         join(product, 'distribution-manifest.json'),
         JSON.stringify({ ...distribution, contentDigest: 'b'.repeat(64) }),
       );
-      await expect(verifyPromotion(options)).rejects.toThrow('自解压包身份');
+      await expect(verifyPromotion(options)).rejects.toThrow('安装包身份');
       await rm(join(product, 'distribution-manifest.json'));
       await expect(verifyPromotion(options)).rejects.toThrow('缺少');
       await rm(join(product, distribution.archive));

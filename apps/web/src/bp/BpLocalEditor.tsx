@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { localBpSequence, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
 import type { Bo3BpRules } from '@mizar/core/projection';
 import { Select } from '../ui';
@@ -50,22 +50,31 @@ export function BpLocalEditor({
   workspace,
   onCancel,
   onSaved,
+  connected = true,
+  onStateChange,
 }: {
   readonly workspace: BpWorkspace;
+  readonly connected?: boolean;
+  readonly onStateChange?: (state: { dirty: boolean; saving: boolean }) => void;
   readonly onCancel: () => void;
   readonly onSaved: (message: string) => void;
 }) {
   const [baseContextRevision] = useState(workspace.contextRevision);
+  const [baseline] = useState(workspace);
   const localSource =
-    workspace.source === 'local' || (workspace.source === 'cache' && workspace.localDraft !== null);
-  const lockedMatch = workspace.match !== null && workspace.authoringMode === 'bound-overlay';
+    baseline.source === 'local' || (baseline.source === 'cache' && baseline.localDraft !== null);
+  const lockedMatch = baseline.match !== null && baseline.authoringMode === 'bound-overlay';
   const [initial] = useState(
     () => workspace.localDraft ?? workspace.authoringDraft ?? emptyDraft(workspace),
   );
   const [draft, setDraft] = useState<LocalBpDraft>(() => initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const problems = draftProblems(draft, workspace);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  useEffect(() => {
+    onStateChange?.({ dirty, saving });
+  }, [dirty, saving, onStateChange]);
+  const problems = draftProblems(draft, baseline);
   const contextChanged = workspace.contextRevision !== baseContextRevision;
   const actions = localBpSequence(draft.format, draft.vetoA, draft.bo3Rules);
   const pool = draft.mapPool;
@@ -156,7 +165,7 @@ export function BpLocalEditor({
   }
 
   async function save() {
-    if (saving || problems.length > 0 || contextChanged) return;
+    if (!connected || saving || problems.length > 0 || contextChanged) return;
     setSaving(true);
     setError(null);
     try {
@@ -462,6 +471,9 @@ export function BpLocalEditor({
       </section>
 
       <div className="bp-editor-feedback" aria-live="polite">
+        {!connected ? (
+          <p role="alert">制作服务断开或已进入演示，恢复当前比赛连接后再保存。</p>
+        ) : null}
         {contextChanged ? (
           <p role="alert">比赛上下文已更新。为保护新数据，请取消编辑后重新打开本地填写。</p>
         ) : null}
@@ -491,7 +503,7 @@ export function BpLocalEditor({
           type="button"
           className="bp-button bp-button--primary"
           onClick={() => void save()}
-          disabled={saving || problems.length > 0 || contextChanged}
+          disabled={!connected || saving || problems.length > 0 || contextChanged}
         >
           {saving ? '正在保存…' : '保存本地 BP'}
         </button>

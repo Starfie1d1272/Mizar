@@ -55,7 +55,10 @@ export function Settings({ tab }: { tab: string }) {
       }
     }
     void load();
+    const reload = () => void load();
+    window.addEventListener('mizar:gsi-configured', reload);
     return () => {
+      window.removeEventListener('mizar:gsi-configured', reload);
       active = false;
     };
   }, []);
@@ -162,65 +165,68 @@ export function Settings({ tab }: { tab: string }) {
                 </details>
               ) : null}
             </Panel>
-            <Panel>
-              <h3>连接控制</h3>
-              <p>填写 OBS 提供的端口与密码。</p>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void action(async () => {
-                    await obsCommand('configure', {
-                      port,
-                      ...(password.length > 0 ? { password } : {}),
+            <details open={obs?.connection !== 'connected'}>
+              <summary>WebSocket 连接设置</summary>
+              <Panel>
+                <h3>连接控制</h3>
+                <p>填写 OBS 提供的端口与密码。</p>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void action(async () => {
+                      await obsCommand('configure', {
+                        port,
+                        ...(password.length > 0 ? { password } : {}),
+                      });
+                      setPassword('');
+                      await obsCommand('check');
+                      setMessage(
+                        password.length > 0
+                          ? '已保存新密码并测试连接。'
+                          : '已保存端口并测试连接，原密码保持不变。',
+                      );
                     });
-                    setPassword('');
-                    await obsCommand('check');
-                    setMessage(
-                      password.length > 0
-                        ? '已保存新密码并测试连接。'
-                        : '已保存端口并测试连接，原密码保持不变。',
-                    );
-                  });
-                }}
-              >
-                <Field
-                  label="WebSocket 端口"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={port}
-                  onChange={(e) => setPortOverride(Number(e.target.value))}
-                />
-                <Field
-                  label="WebSocket 密码"
-                  type="password"
-                  autoComplete="off"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
-                />
-                <Button type="submit" variant="primary" loading={busy}>
-                  保存并测试
-                </Button>
-              </form>
-              {obs?.passwordConfigured ? (
-                <details>
-                  <summary>已保存密码</summary>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        await obsCommand('configure', { port, password: '' });
-                        await obsCommand('check');
-                        setMessage('已清除 Mizar 保存的 OBS 密码。');
-                      })
-                    }
-                  >
-                    清除已保存密码
+                  }}
+                >
+                  <Field
+                    label="WebSocket 端口"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={port}
+                    onChange={(e) => setPortOverride(Number(e.target.value))}
+                  />
+                  <Field
+                    label="WebSocket 密码"
+                    type="password"
+                    autoComplete="off"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
+                  />
+                  <Button type="submit" variant="primary" loading={busy}>
+                    保存并测试
                   </Button>
-                </details>
-              ) : null}
-            </Panel>
+                </form>
+                {obs?.passwordConfigured ? (
+                  <details>
+                    <summary>已保存密码</summary>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void action(async () => {
+                          await obsCommand('configure', { port, password: '' });
+                          await obsCommand('check');
+                          setMessage('已清除 Mizar 保存的 OBS 密码。');
+                        })
+                      }
+                    >
+                      清除已保存密码
+                    </Button>
+                  </details>
+                ) : null}
+              </Panel>
+            </details>
             <Panel>
               <h3>检查画面</h3>
               <div className="obs-setup__signals">
@@ -242,21 +248,6 @@ export function Settings({ tab }: { tab: string }) {
                       : '未启动'}
                 </span>
               </div>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void action(async () => {
-                    const result = (await obsCommand('check')) as {
-                      findings: { message: string }[];
-                    };
-                    setMessage(
-                      result.findings.map((item) => item.message).join('；') || '配置检查通过。',
-                    );
-                  })
-                }
-              >
-                检查配置
-              </Button>
               <Button
                 disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
                 onClick={() =>
@@ -289,8 +280,8 @@ export function Settings({ tab }: { tab: string }) {
           <details className="obs-setup__help">
             <summary>游戏捕获说明</summary>
             <p>
-              先打开 CS2，再检查或修复场景。Mizar 按 cs2.exe 匹配实际窗口；配置检查通过后，仍需核对
-              OBS 的游戏画面。
+              Mizar 会先建立场景，无需等待 CS2 启动；启动游戏后按 cs2.exe 核实窗口，并在 OBS
+              的游戏画面。
             </p>
             <p>
               若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software 。由 Mizar
@@ -313,11 +304,14 @@ export function Settings({ tab }: { tab: string }) {
                   : gsi?.conflict
                     ? '需检查'
                     : gsi?.installed
-                      ? 'GSI 已安装'
+                      ? 'GSI 文件已配置'
                       : '待安装 GSI'}
               </StatusPill>
             </div>
-            <p>安装 GSI 后，CS2 会向 Mizar 发送比赛与选手数据。</p>
+            <p>
+              新写入的 GSI 将在下次启动 CS2
+              时加载；若游戏已运行，请重启。收到实际数据后，总览会更新游戏数据状态。
+            </p>
             <p>
               {cs2?.found
                 ? cs2.managed
@@ -359,11 +353,12 @@ export function Settings({ tab }: { tab: string }) {
                     void action(async () => {
                       try {
                         await desktopInvoke('configure_gsi', { restore: false, choose: false });
+                        window.dispatchEvent(new Event('mizar:gsi-configured'));
                         const next = await desktopInvoke<NonNullable<typeof gsi>>('gsi_status');
                         setGsi(next);
                         setMessage(
                           next.installed && !next.conflict && !next.readFailed
-                            ? 'GSI 已安装，请重新启动 CS2 以加载配置。'
+                            ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
                             : '已执行安装检查，请处理上方列出的问题后重新检查。',
                         );
                       } finally {

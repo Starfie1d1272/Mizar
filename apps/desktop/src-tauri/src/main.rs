@@ -49,6 +49,7 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+static OBS_LAUNCH_LOCK: Mutex<()> = Mutex::new(());
 
 #[link(name = "shell32")]
 extern "system" {
@@ -423,11 +424,29 @@ fn obs_executable_allowed(path: &Path) -> bool {
 }
 
 #[tauri::command]
-async fn launch_obs(executable_path: String) -> Result<(), String> {
+async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) -> Result<bool, String> {
+    let log = log.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = OBS_LAUNCH_LOCK.lock().map_err(|_| "OBS 启动状态不可用。")?;
         let path = Path::new(&executable_path);
         if !obs_executable_allowed(path) || !path.is_file() {
             return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
+        }
+        // Query all processes, including minimized/tray OBS; never start a second instance.
+        let mut probe = background_powershell();
+        probe.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "@(Get-Process -Name obs64 -ErrorAction SilentlyContinue).Count",
+        ]);
+        let output = powershell::run(probe, &log, "OBS 进程检测", Duration::from_secs(10))?;
+        let count = output
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| "无法检查 OBS 进程。".to_string())?;
+        if count > 0 {
+            return Ok(true);
         }
         // Host is outside the runtime Job. Independent OBS must not inherit
         // Companion's rollback/shutdown ownership.
@@ -438,7 +457,7 @@ async fn launch_obs(executable_path: String) -> Result<(), String> {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| "OBS 程序未能打开。".to_string())?;
-        Ok(())
+        Ok(false)
     })
     .await
     .map_err(|_| "OBS 程序未能打开。".to_string())?
@@ -1023,6 +1042,22 @@ async fn open_cs2_config_directory(log: tauri::State<'_, DesktopLog>) -> Result<
 }
 
 #[tauri::command]
+async fn ensure_gsi(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = GSI_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "GSI 操作状态不可用。")?;
+        gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)?;
+        let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
+        let result = powershell::parse(&log, "GSI 检测", &output)?;
+        Ok(cs2_diagnostics::gsi_status(&result))
+    })
+    .await
+    .map_err(|_| "GSI 自动配置未完成。".to_string())?
+}
+
+#[tauri::command]
 async fn configure_gsi(app: tauri::AppHandle, restore: bool, choose: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = GSI_OPERATION_LOCK
@@ -1111,6 +1146,7 @@ fn run_desktop(
             save_support_bundle,
             gsi_status,
             configure_gsi,
+            ensure_gsi,
             select_cs2_installation,
             open_cs2_config_directory
         ])

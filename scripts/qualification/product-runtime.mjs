@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,11 @@ const bundleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export function writableRoot(root, override) {
   if (override !== undefined && !isAbsolute(override))
     throw new Error('运行数据目录必须是绝对路径');
-  const state = resolve(override ?? join(root, 'state'));
+  const installed = existsSync(join(root, 'installed.flag'));
+  if (installed && !override && !process.env.LOCALAPPDATA) throw new Error('用户数据目录不可用');
+  const state = resolve(
+    override ?? (installed ? join(process.env.LOCALAPPDATA, 'Mizar') : join(root, 'state')),
+  );
   const payload = resolve(root, 'resources');
   const rel = relative(payload, state);
   if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))) {
