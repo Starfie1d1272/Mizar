@@ -25,7 +25,7 @@ $lines += @(Get-ChildItem -LiteralPath $source -Recurse -Directory | Sort-Object
 $lines | Set-Content -LiteralPath $remove -Encoding utf8
 $script = Join-Path $PSScriptRoot 'windows-setup.nsi'
 $icon = Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico'
-& $compiler "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DREMOVE_FILES=$remove" $script
+& $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DREMOVE_FILES=$remove" $script
 if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
 function Install-Setup {
   $process = Start-Process -FilePath $archive -ArgumentList @('/S', ('/D=' + $target)) -PassThru -Wait

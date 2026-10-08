@@ -28,7 +28,7 @@ Final RC 的剩余门槛是受影响功能和视觉收敛、短 Windows 原生�
 
 Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64-Setup.exe`，便携 ZIP 命名为 `Mizar-v<应用版本>-Windows-x64.zip`。RC 保留版本中的 `-rc.N`，正式版本不带 RC 标记；文件名不附加提交 SHA、`portable` 或 `extract`，完整源码身份和摘要仍记录在包内 metadata 与发布清单中。GitHub 已发布的旧包保留原始名称、内容和验证记录；后续构建使用新规则。镜像可单独修改下载文件名，需核对文件大小与 SHA-256，确认内容与已验产物一致。
 
-产品 ZIP 与维护者 evidence ZIP 分开交付；Windows 资格构建使用固定 NSIS 3.11 从同一原始 ZIP 生成中文 Setup，在带空格目录实际安装、升级、卸载并确认用户数据保留，逐文件核对路径和 SHA-256，再对安装结果执行产品与 GUI smoke。`distribution-manifest.json` 记录独立下载摘要、编译器、安装脚本和许可证身份及与原始 ZIP 的内容关系；晋级核对身份、摘要和 provenance，不重新压缩。Setup 不重新构建 payload，也不替代 Windows 实机验收。公开预发布前统一 Desktop 的应用版本。用户完整解压产品 ZIP 到可写目录后运行 `Mizar.exe`。
+产品 ZIP 与维护者 evidence ZIP 分开交付；Windows 资格构建使用固定 NSIS 3.11，以显式 UTF-8 输入字符集从同一原始 ZIP 生成中文 Setup，在带空格目录实际安装、升级、卸载并确认用户数据保留，逐文件核对路径和 SHA-256，再对安装结果执行产品与 GUI smoke。`distribution-manifest.json` 记录独立下载摘要、编译器、安装脚本和许可证身份及与原始 ZIP 的内容关系；晋级核对身份、摘要和 provenance，不重新压缩。Setup 不重新构建 payload，也不替代 Windows 实机验收。公开预发布前统一 Desktop 的应用版本。用户完整解压产品 ZIP 到可写目录后运行 `Mizar.exe`。
 
 资源校验、GUI 启动检查和合成长时测试的证明范围见[开发验证](development-validation.md#便携包自动化)。检查通过后即可作为明确标记的 RC 移交，不填写尚未进行的实机结果。
 

@@ -172,6 +172,10 @@ it('pairs via browser authorization, persists only in Companion, and claims with
     lineupSteam64: players.map((player) => player.sourcePlayerId),
   });
 
+  await restored.sendReliable(
+    { kind: 'map_started', matchId: snapshot.matchId, cursor: snapshot.cursor } as ReliableEventV1,
+    snapshot,
+  );
   await restored.sendLive(snapshot);
   const live = requests.find((request) => request.url.endsWith('/live'))!;
   expect(new Headers(live.init.headers).get('x-rivalhub-authority')).toBe('4');
@@ -186,6 +190,141 @@ it('pairs via browser authorization, persists only in Companion, and claims with
   });
   expect(restored.view().activeSourceMatchId).toBeNull();
   expect(restored.reliableAuthorityScope()).toBeNull();
+});
+
+it('waits for the current authority and execution start acknowledgement before uploading live frames', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-live-start-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test',
+      installationId: 'installation',
+      competitionId: 'competition',
+      displayName: 'Test',
+    }),
+  );
+  let acknowledge: ((response: Response) => void) | undefined;
+  const request = vi.fn<typeof fetch>((url) => {
+    if (
+      (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/claim')
+    )
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+    if (
+      (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith(
+        '/reliable',
+      )
+    )
+      return new Promise<Response>((resolve) => {
+        acknowledge = resolve;
+      });
+    return Promise.resolve(new Response(null, { status: 204 }));
+  });
+  const connection = new RivalHubConnection(path, request);
+  await connection.load();
+  const snapshot = {
+    matchId: 'match',
+    competitionId: 'competition',
+    cursor: {
+      producerInstanceId: 'producer',
+      liveSessionId: 'session',
+      programSourceGeneration: 1,
+      mapEpoch: 1,
+    },
+    players: [],
+  } as unknown as LiveSnapshotV1;
+  const start = {
+    kind: 'map_started',
+    matchId: 'match',
+    cursor: snapshot.cursor,
+  } as ReliableEventV1;
+  await connection.claim(snapshot, 'revision', false);
+  await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_map_start_pending');
+  const delivery = connection.sendReliable(start, snapshot);
+  await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_map_start_pending');
+  expect(
+    request.mock.calls.filter(([url]) =>
+      (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/live'),
+    ),
+  ).toHaveLength(0);
+  acknowledge!(new Response(null, { status: 204 }));
+  expect(await delivery).toBe('accepted');
+  await connection.sendLive(snapshot);
+  expect(
+    request.mock.calls.filter(([url]) =>
+      (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/live'),
+    ),
+  ).toHaveLength(1);
+  for (const cursor of [
+    { ...snapshot.cursor, programSourceGeneration: 2 },
+    { ...snapshot.cursor, mapEpoch: 2 },
+  ])
+    await expect(connection.sendLive({ ...snapshot, cursor })).rejects.toThrow(
+      'rivalhub_map_start_pending',
+    );
+
+  const oldDelivery = connection.sendReliable(start, snapshot);
+  await connection.claim(snapshot, 'revision', false);
+  acknowledge!(new Response(null, { status: 204 }));
+  await oldDelivery;
+  await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_map_start_pending');
+  const retry = connection.sendReliable(start, snapshot);
+  acknowledge!(new Response(null, { status: 503 }));
+  expect(await retry).toBe('retry');
+  await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_map_start_pending');
+  expect(connection.view().activeSourceMatchId).toBe('match');
+
+  const restored = connection.sendReliable(start, snapshot);
+  acknowledge!(new Response(null, { status: 204 }));
+  await restored;
+  let rejectOldLive: ((response: Response) => void) | undefined;
+  request.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        rejectOldLive = resolve;
+      }),
+  );
+  const oldLive = connection.sendLive(snapshot);
+  await connection.claim(snapshot, 'revision', false);
+  rejectOldLive!(new Response(null, { status: 403 }));
+  await expect(oldLive).rejects.toThrow('rivalhub_live_unavailable');
+  expect(connection.view().activeSourceMatchId).toBe('match');
+  expect(connection.view().activeDeviceName).toBeNull();
+});
+
+it('coalesces slow pairing polls and preserves the original timeout in the user-facing error cause', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-pairing-poll-'));
+  temporary.push(directory);
+  let finish: ((response: Response) => void) | undefined;
+  const request = vi.fn<typeof fetch>((url) =>
+    (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/start')
+      ? Promise.resolve(
+          Response.json({
+            pairingId: validPairingId,
+            pollToken: validPollToken,
+            authorizeUrl: validAuthorizeUrl,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          }),
+        )
+      : new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+  );
+  const connection = new RivalHubConnection(join(directory, 'connection.json'), request);
+  await connection.startPairing();
+  const first = connection.pollPairing();
+  const second = connection.pollPairing();
+  expect(request).toHaveBeenCalledTimes(2);
+  finish!(Response.json({ status: 'pending' }));
+  expect(await Promise.all([first, second])).toEqual(['pending', 'pending']);
+  const timeout = new DOMException('original transport deadline', 'TimeoutError');
+  request.mockRejectedValueOnce(timeout);
+  await expect(connection.pollPairing()).rejects.toMatchObject({
+    message: '连接 RivalHub 超时，请检查网络后重试。',
+    cause: timeout,
+  });
 });
 
 it('does not discard reliable events while an online match is waiting for a source claim', async () => {
@@ -356,6 +495,10 @@ it('fails closed when remote server returns 403 indicating authority loss', asyn
   await connection.claim(snapshot, 'rev-1', false);
   expect(connection.view().activeSourceMatchId).toBe('match-1');
 
+  await connection.sendReliable(
+    { kind: 'map_started', matchId: snapshot.matchId, cursor: snapshot.cursor } as ReliableEventV1,
+    snapshot,
+  );
   await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
   expect(connection.view().activeSourceMatchId).toBeNull();
   expect(connection.view().activeDeviceName).toBe('另一台制播设备');
