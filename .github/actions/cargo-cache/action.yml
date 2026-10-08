@@ -1,0 +1,61 @@
+name: Restore Cargo caches
+description: Separate downloaded dependencies from a stable compiler/dependency/profile target baseline
+inputs:
+  profile:
+    description: Cargo profile (ci or release)
+    required: true
+outputs:
+  registry-key:
+    value: ${{ steps.registry.outputs.cache-primary-key }}
+    description: Dependency cache key
+  registry-hit:
+    value: ${{ steps.registry.outputs.cache-hit }}
+    description: Exact dependency cache hit
+  target-key:
+    value: ${{ steps.target.outputs.cache-primary-key }}
+    description: Profile cache key
+  target-hit:
+    value: ${{ steps.target.outputs.cache-hit }}
+    description: Exact profile cache hit
+runs:
+  using: composite
+  steps:
+    - name: Identify Rust toolchain
+      id: rust
+      shell: pwsh
+      run: |
+        $version = rustc -vV | Out-String
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot identify Rust compiler' }
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($version))).ToLowerInvariant()
+        "fingerprint=$hash" >> $env:GITHUB_OUTPUT
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: registry
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-v2-${{ runner.os }}-${{ runner.arch }}-registry-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+        restore-keys: |
+          cargo-v2-${{ runner.os }}-${{ runner.arch }}-registry-
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: target
+      with:
+        path: apps/desktop/src-tauri/target/${{ inputs.profile }}
+        key: cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
+    - name: Record cache observations
+      shell: pwsh
+      env:
+        PROFILE: ${{ inputs.profile }}
+        REGISTRY_HIT: ${{ steps.registry.outputs.cache-hit }}
+        REGISTRY_MATCH: ${{ steps.registry.outputs.cache-matched-key }}
+        TARGET_HIT: ${{ steps.target.outputs.cache-hit }}
+        TARGET_MATCH: ${{ steps.target.outputs.cache-matched-key }}
+      run: |
+        @"
+        ### Cargo cache ($env:PROFILE)
+        | Cache | Exact hit | Restored key |
+        | --- | --- | --- |
+        | Dependencies | $env:REGISTRY_HIT | $env:REGISTRY_MATCH |
+        | Compiled profile | $env:TARGET_HIT | $env:TARGET_MATCH |
+        "@ >> $env:GITHUB_STEP_SUMMARY

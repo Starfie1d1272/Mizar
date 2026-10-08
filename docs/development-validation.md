@@ -101,7 +101,7 @@ Rivals 排练的赛事资料来自公开赛程，局内遥测来自独立真实�
 
 Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 保留 Ancient 编辑器回放，排除开发专用 Nuke 回放；每次产品构建校验资源边界。
 
-常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo target cache 仅由 main 写入，PR 读取共享缓存。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
+常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和 `ci` / `release` 配置建立稳定基线，不再按提交 SHA 保存整份 target。相同基线命中后不重复上传，依赖或工具链变化建立新基线；GitHub 仍可能按容量和最近使用时间淘汰缓存。缓存命中与恢复键写入 Actions 摘要，构建分阶段耗时写入摘要和 `build-timings.json`，失败阶段也保留记录。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
 - Windows 发布与 CI 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。

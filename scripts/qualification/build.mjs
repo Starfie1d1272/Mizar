@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
+import { createBuildTimer } from './build-timings.mjs';
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
@@ -300,6 +301,10 @@ async function main() {
   const appVersion = await readAppVersion();
   const bundleName = windowsBundleName(appVersion);
   await mkdir(options.output, { recursive: true });
+  const timed = createBuildTimer(options.output, {
+    gitSha,
+    desktopBuildProfile: options.desktopProfile,
+  });
   const bundleDir = join(options.output, bundleName);
   const archivePath = join(options.output, `${bundleName}.zip`);
   for (const path of [bundleDir, archivePath]) {
@@ -310,7 +315,7 @@ async function main() {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
-  if (!options.skipBuild) await runCommand('pnpm', ['build']);
+  if (!options.skipBuild) await timed('workspace-build', () => runCommand('pnpm', ['build']));
   await runCommand(process.execPath, [
     join(scriptDir, 'verify-web-resources.mjs'),
     join(rootDir, 'apps/web/dist'),
@@ -341,10 +346,19 @@ async function main() {
       );
     }
     await createDeployWorkspace(deployWorkspaceDir);
-    await runCommand(
-      'pnpm',
-      ['--filter', '@mizar/companion', 'deploy', deployedAppDir, '--prod', '--node-linker=hoisted'],
-      { cwd: deployWorkspaceDir },
+    await timed('deploy-production-dependencies', () =>
+      runCommand(
+        'pnpm',
+        [
+          '--filter',
+          '@mizar/companion',
+          'deploy',
+          deployedAppDir,
+          '--prod',
+          '--node-linker=hoisted',
+        ],
+        { cwd: deployWorkspaceDir },
+      ),
     );
     await cp(deployedAppDir, appDir, { recursive: true, dereference: true });
     // Keep dependency test directories: package entry points may reference them.
@@ -358,7 +372,9 @@ async function main() {
     });
     const nodeVersion = options.skipNodeRuntime
       ? QUALIFICATION_NODE_VERSION
-      : await downloadNodeRuntime(join(resourcesDir, 'runtime'), options.nodeVersion, downloadDir);
+      : await timed('node-runtime', () =>
+          downloadNodeRuntime(join(resourcesDir, 'runtime'), options.nodeVersion, downloadDir),
+        );
     for (const name of [
       'start-product.ps1',
       'stop-product.ps1',
@@ -423,14 +439,16 @@ async function main() {
       options.allowDirty || options.skipNodeRuntime || process.platform !== 'win32';
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
       const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
-      await runCommand('cargo', [
-        'build',
-        '--profile',
-        options.desktopProfile,
-        '--locked',
-        '--manifest-path',
-        join(desktopDir, 'Cargo.toml'),
-      ]);
+      await timed('desktop-cargo-build', () =>
+        runCommand('cargo', [
+          'build',
+          '--profile',
+          options.desktopProfile,
+          '--locked',
+          '--manifest-path',
+          join(desktopDir, 'Cargo.toml'),
+        ]),
+      );
       await cp(
         join(desktopDir, 'target', options.desktopProfile, 'mizar-desktop.exe'),
         join(stagingDir, 'Mizar.exe'),
@@ -445,7 +463,7 @@ async function main() {
       if (compiledVersion !== appVersion) throw new Error('EXE 编译版本与配置版本不一致');
     }
     const buildTimestamp = new Date().toISOString();
-    const digest = await contentDigest(stagingDir);
+    const digest = await timed('content-digest', () => contentDigest(stagingDir));
     const artifact = {
       appVersion,
       schemaVersion: 1,
@@ -467,12 +485,14 @@ async function main() {
       `${JSON.stringify(artifact, null, 2)}\n`,
       'utf8',
     );
-    await writeShaSums(stagingDir);
+    await timed('payload-checksums', () => writeShaSums(stagingDir));
 
     await rename(stagingDir, bundleDir);
     await rm(stagingParent, { recursive: true, force: true });
     await rm(downloadDir, { recursive: true, force: true });
-    const archive = await createArchive(bundleDir, options.output, bundleName);
+    const archive = await timed('zip-archive', () =>
+      createArchive(bundleDir, options.output, bundleName),
+    );
     await writeFile(
       `${archive.archivePath}.sha256`,
       `${archive.archiveSha256}  ${bundleName}.zip\n`,
