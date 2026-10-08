@@ -22,6 +22,14 @@ describe('Cargo cache identity', () => {
     );
   });
 
+  it('normalizes CRLF checkout line endings without changing cache identity', () => {
+    const windowsManifest = manifest.replace(/\r?\n/g, '\r\n');
+    const windowsLock = lock.replace(/\r?\n/g, '\r\n');
+    expect(cargoCacheFingerprints(windowsManifest, windowsLock)).toEqual(
+      cargoCacheFingerprints(manifest, lock),
+    );
+  });
+
   it('invalidates relevant keys when dependencies or compiler profile change', () => {
     const original = cargoCacheFingerprints(manifest, lock);
     const changedLock = lock.replace(

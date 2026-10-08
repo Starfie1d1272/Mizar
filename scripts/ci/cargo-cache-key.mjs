@@ -14,7 +14,7 @@ export function cargoCacheFingerprints(manifest, lock) {
   nextSection.lastIndex = sectionStart;
   const sectionEnd = nextSection.exec(manifest)?.index ?? manifest.length;
   const packageText = manifest.slice(sectionStart, sectionEnd);
-  const ownVersion = /^(version[ \t]*=[ \t]*)"[^"\r\n]+"(?=[ \t]*(?:#[^\r\n]*)?$)/gm;
+  const ownVersion = /^(version[ \t]*=[ \t]*)"[^"\r\n]+"(?=[ \t]*(?:#[^\r\n]*)?\r?$)/gm;
   if ([...packageText.matchAll(ownVersion)].length !== 1) {
     throw new Error('Cargo.toml must contain exactly one package.version');
   }
@@ -29,7 +29,10 @@ export function cargoCacheFingerprints(manifest, lock) {
     throw new Error('Cargo.lock must contain exactly one mizar-desktop package');
   }
   const normalizedLock = lock.replace(ownLockVersion, '$1"0.0.0"');
-  return { manifest: hash(normalizedManifest), lock: hash(normalizedLock) };
+  return {
+    manifest: hash(normalizedManifest.replace(/\r\n/g, '\n')),
+    lock: hash(normalizedLock.replace(/\r\n/g, '\n')),
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

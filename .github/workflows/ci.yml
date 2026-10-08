@@ -285,12 +285,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
+
       - name: Restore Cargo dependency and profile caches
         id: cargo-cache
         uses: ./.github/actions/cargo-cache
         with:
           profile: ci
-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
