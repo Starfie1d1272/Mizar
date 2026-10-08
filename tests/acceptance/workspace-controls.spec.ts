@@ -283,7 +283,8 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
   expect(commands).toEqual([]);
   next = null;
   await expect(preview.locator('iframe')).toHaveCount(0);
-  await expect(preview).toContainText('未安排');
+  await expect(preview).toContainText('待确认');
+  await expect(preview).toContainText('等待编排数据');
   next = 'halftime';
   mode = 'manual';
   await expect(page.getByText('手动保持', { exact: true })).toBeVisible();

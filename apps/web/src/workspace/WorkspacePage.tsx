@@ -291,7 +291,11 @@ export function WorkspaceDock() {
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
             <small>{mode === 'manual' ? '恢复自动后建议进入' : '下一场景'}</small>
-            <strong>{next?.title ?? '未安排'}</strong>
+            <strong>
+              {next?.title ??
+                (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')}
+            </strong>
+            <small>{sceneState?.director?.nextReason ?? '等待编排数据'}</small>
           </div>
         </div>
       </section>

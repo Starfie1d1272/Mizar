@@ -60,7 +60,12 @@ export const programSceneStateSchema = z.object({
   director: z
     .object({
       mode: z.enum(['auto', 'manual', 'blocked', 'preparation']),
+      // Prediction only; never an instruction to Take.
       next: programSceneIdSchema.nullable(),
+      nextStatus: z.enum(['predicted', 'awaiting', 'complete']).optional(),
+      nextReason: z.string().nullable().optional(),
+      // A target admitted by the Director timing gates; manual hold still prevents execution.
+      readyToTake: programSceneIdSchema.nullable().optional(),
       reason: z.string().nullable(),
       introDurationMs: z.number().nonnegative(),
       sceneElapsedMs: z.number().nonnegative(),

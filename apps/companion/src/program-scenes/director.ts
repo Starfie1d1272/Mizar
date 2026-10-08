@@ -22,6 +22,9 @@ export class ProgramDirector {
   private view: DirectorView = {
     mode: 'preparation',
     next: null,
+    nextStatus: 'awaiting',
+    nextReason: '等待编排数据。',
+    readyToTake: null,
     reason: null,
     introDurationMs: 6000,
     sceneElapsedMs: 0,
@@ -61,7 +64,12 @@ export class ProgramDirector {
     this.view.gg = null;
     this.manual = true;
     this.generation++;
-    this.view = { ...this.view, mode: 'manual', next: null, reason: '手动保持，恢复自动后继续。' };
+    this.view = {
+      ...this.view,
+      mode: 'manual',
+      readyToTake: null,
+      reason: '手动保持，恢复自动后继续。',
+    };
   }
   resume(): void {
     this.manual = false;
@@ -89,6 +97,62 @@ export class ProgramDirector {
   private executionKey(p: ProgramProjection): string {
     return `${this.contextKey(p)}:${p.cursor.producerInstanceId}:${p.cursor.liveSessionId}:${p.cursor.programSourceGeneration}:${p.cursor.mapEpoch}:${p.series?.currentMapOrder}`;
   }
+  private predict(p: ProgramProjection, active: ProgramSceneId): void {
+    this.view.next = null;
+    this.view.nextStatus = 'awaiting';
+    this.view.nextReason = '比赛阶段待确认。';
+    this.view.readyToTake = null;
+    if (!this.safe(p)) {
+      this.view.nextReason = '等待有效比赛数据与归属确认。';
+      return;
+    }
+    const confirmedMap = p.series?.maps.some(
+      (map) => map.status === 'completed' && map.mapName === p.map.name && map.finalScore,
+    );
+    let next: ProgramSceneId | null = null;
+    if (p.map.phase === 'gameover') {
+      if (!confirmedMap) {
+        this.view.nextReason = '等待单图赛果确认。';
+        return;
+      }
+      if (active === 'match_result' && p.series?.status === 'completed') {
+        this.view.nextStatus = 'complete';
+        this.view.nextReason = '本场节目已结束。';
+        return;
+      }
+      if (active === 'map_result')
+        next = p.series?.status === 'completed' ? 'match_result' : 'intermap';
+      else if (active === 'intermap') {
+        if (p.series?.status === 'completed') next = 'match_result';
+        else {
+          this.view.nextReason = '等待下一图计划与比赛阶段确认。';
+          return;
+        }
+      } else next = 'map_result';
+    } else if (isRegulationHalftime(p)) {
+      next = active === 'halftime' ? 'gameplay' : 'halftime';
+    } else if (active === 'halftime' && this.halftimeSeen) {
+      next = 'gameplay';
+    } else if (p.map.phase === 'live' || p.map.phase === 'intermission') {
+      if (active === 'gameplay') {
+        const { ct, t } = p.map.score;
+        // Score is completed rounds; 12:12 and every OT half lead to results.
+        if (ct !== null && t !== null) next = ct + t < 12 ? 'halftime' : 'map_result';
+      } else if (active === 'bp') next = 'matchup';
+      else next = 'gameplay';
+    } else if (p.map.phase === 'warmup') {
+      if (active === 'bp') next = 'waiting';
+      else if (!this.warmupPlayed && this.projections.getBpAssessment().readiness === 'ready')
+        next = 'bp';
+      else this.view.nextReason = '等待首回合冻结期确认开场安排。';
+    }
+    if (next) this.setPrediction(next);
+  }
+  private setPrediction(next: ProgramSceneId): void {
+    this.view.next = next;
+    this.view.nextStatus = 'predicted';
+    this.view.nextReason = '后续节目预告，实际切换仍需满足比赛与播出条件。';
+  }
   async tick(): Promise<void> {
     if (this.inFlight) return;
     const time = this.now();
@@ -96,6 +160,7 @@ export class ProgramDirector {
     this.lastTime = time;
     const { program: p, operator } = this.projections.getCurrent();
     this.view.gg = null;
+    this.predict(p, this.scenes.get().active);
     const production = this.production() && operator.matchContext.origin !== 'fixture';
     this.bp.setPaused(
       production &&
@@ -103,7 +168,14 @@ export class ProgramDirector {
     );
     if (!production) {
       this.wasProduction = false;
-      this.view = { ...this.view, mode: 'preparation', next: null, reason: null };
+      this.view = {
+        ...this.view,
+        mode: 'preparation',
+        next: null,
+        nextStatus: 'awaiting',
+        nextReason: '准备中，等待正式比赛。',
+        reason: null,
+      };
       return;
     }
     if (!this.wasProduction) {
@@ -156,7 +228,6 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
-        next: null,
         reason: '比赛暂停，保持当前画面。',
       };
       return;
@@ -165,7 +236,6 @@ export class ProgramDirector {
       ...this.view,
       mode: this.manual ? 'manual' : 'auto',
       reason: this.manual ? '手动保持，恢复自动后继续。' : null,
-      next: null,
     };
     if (!paused && !this.manual) this.elapsed += delta;
     const seconds = p.clock?.phase === 'freezetime' ? p.clock.endsInSeconds : null;
@@ -194,17 +264,18 @@ export class ProgramDirector {
           remainingMs > 0 && active === 'gameplay' && !this.manual
             ? { mapEpoch: p.cursor.mapEpoch, remainingMs }
             : null;
-        this.view.next = 'map_result';
+        this.setPrediction('map_result');
         if (!this.view.gg) target = 'map_result';
       } else if (active === 'map_result') {
-        this.view.next = p.series.status === 'completed' ? 'match_result' : 'intermap';
-        if (this.elapsed >= this.timings.mapResultMs) target = this.view.next;
+        const following = p.series.status === 'completed' ? 'match_result' : 'intermap';
+        this.setPrediction(following);
+        if (this.elapsed >= this.timings.mapResultMs) target = following;
       }
     } else if (halftime) {
       this.halftimeSeen = true;
       target = 'halftime';
     } else if (this.halftimeSeen && active === 'halftime') {
-      this.view.next = 'gameplay';
+      this.setPrediction('gameplay');
       if (
         p.round?.phase === 'live' ||
         (seconds !== null && seconds > 0 && remaining <= this.timings.halftimeLeadMs)
@@ -215,7 +286,7 @@ export class ProgramDirector {
         target = 'bp';
       else if (active === 'bp' && this.bp.get().state === 'shown') {
         if (!this.manual) this.warmupFinalElapsed += delta;
-        this.view.next = 'waiting';
+        this.setPrediction('waiting');
         if (this.warmupFinalElapsed >= this.timings.warmupFinalMs) target = 'waiting';
       }
     } else if (p.map.phase === 'live') {
@@ -228,13 +299,13 @@ export class ProgramDirector {
         if (!this.manual) this.introFinished = true;
         target = 'gameplay';
       } else if (active === 'matchup' && this.introStarted) {
-        this.view.next = 'gameplay';
+        this.setPrediction('gameplay');
         if (this.elapsed >= this.view.introDurationMs) {
           if (!this.manual) this.introFinished = true;
           target = 'gameplay';
         }
       } else if (active === 'bp' && this.introStarted) {
-        this.view.next = 'matchup';
+        this.setPrediction('matchup');
         if (
           this.elapsed >= this.timings.bpFinalMs ||
           remaining <= this.timings.introMs + this.timings.hudLeadMs
@@ -261,7 +332,8 @@ export class ProgramDirector {
             : this.timings.shortIntroMs;
     }
     if (!target) return;
-    this.view.next = target === active ? this.view.next : target;
+    this.view.readyToTake = target === active ? null : target;
+    if (target !== active) this.setPrediction(target);
     // Manual hold keeps the recommendation live without issuing or consuming a Take.
     if (this.manual) return;
     if (target === active) {
@@ -319,6 +391,7 @@ export class ProgramDirector {
       }
       if (target === 'matchup') this.introStarted = true;
       if (target === 'map_result') this.resultShown = true;
+      this.predict(this.projections.getCurrent().program, target);
     } finally {
       this.inFlight = false;
     }

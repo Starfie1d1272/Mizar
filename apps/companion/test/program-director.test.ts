@@ -83,6 +83,85 @@ function rig() {
 }
 
 describe('automatic Program choreography', () => {
+  it.each([
+    [3, 2, 'halftime'],
+    [7, 6, 'map_result'],
+    [12, 12, 'map_result'],
+    [15, 15, 'map_result'],
+  ] as const)('predicts the next programme at %i:%i without an early Take', async (ct, t, next) => {
+    const r = rig();
+    r.program.round!.phase = 'live';
+    r.program.clock!.phase = 'live';
+    r.program.map.score = { ct, t };
+    r.program.map.roundNumber = ct + t;
+    await r.step();
+    const calls = r.switchObs.mock.calls.length;
+    await r.pass(2000);
+    expect(r.director.get()).toMatchObject({ next, nextStatus: 'predicted', readyToTake: null });
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+    r.program.clock!.phase = 'timeout_ct';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'blocked', next, readyToTake: null });
+    await r.scenes.select('gameplay', r.scenes.get().revision);
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'manual', next, readyToTake: null });
+    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+  });
+  it('keeps halftime prediction while waiting for the second half and rejects stale/source facts', async () => {
+    const r = rig();
+    r.program.map.score = { ct: 7, t: 5 };
+    r.program.map.phase = 'intermission';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ next: 'gameplay', readyToTake: null });
+    r.program.status.telemetry = 'stale';
+    r.program.cursor.programSourceGeneration++;
+    await r.step();
+    expect(r.director.get()).toMatchObject({
+      next: null,
+      nextStatus: 'awaiting',
+      readyToTake: null,
+    });
+    r.program.status.telemetry = 'fresh';
+    r.program.status.identity = 'mismatch';
+    await r.step();
+    expect(r.director.get().next).toBeNull();
+  });
+  it.each(['bo1', 'bo3'] as const)(
+    'predicts match result for a completed %s without entering intermap',
+    async (format) => {
+      const r = rig();
+      Object.assign(r.program, sample('real-gameover'));
+      r.program.series!.format = format;
+      r.program.series!.status = 'completed';
+      await r.step();
+      expect(r.scenes.get().active).toBe('map_result');
+      expect(r.director.get()).toMatchObject({ next: 'match_result', readyToTake: null });
+      await r.pass(12_000);
+      expect(r.scenes.get().active).toBe('match_result');
+      expect(r.director.get()).toMatchObject({ next: null, nextStatus: 'complete' });
+    },
+  );
+  it('distinguishes unconfirmed results and unknown next-map preparation from a scheduled Take', async () => {
+    const r = rig();
+    Object.assign(r.program, sample('real-gameover'));
+    const completed = r.program.series!.maps.find((map) => map.status === 'completed')!;
+    const score = completed.finalScore;
+    completed.finalScore = null;
+    await r.step();
+    expect(r.director.get()).toMatchObject({
+      next: null,
+      nextStatus: 'awaiting',
+      readyToTake: null,
+    });
+    expect(r.director.get().nextReason).toContain('赛果');
+    completed.finalScore = score;
+    await r.step();
+    expect(r.director.get().next).toBe('intermap');
+    await r.pass(12_000);
+    expect(r.scenes.get().active).toBe('intermap');
+    expect(r.director.get()).toMatchObject({ next: null, nextStatus: 'awaiting' });
+  });
   it('holds an observed trusted map end for 3s, never replays after recovery, and honors manual Take', async () => {
     const r = rig();
     await r.step();
