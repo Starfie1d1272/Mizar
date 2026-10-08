@@ -37,7 +37,7 @@ resources 是程序资源，不能保存运行数据。设置保存在 state\dat
 可使用 MIZAR_STATE_ROOT 指向其它绝对运行目录；首次启动与后续脚本必须使用同一设置。请保留 state 以保留 HUD 和系列进度。
 端口被其它程序占用时先停止占用程序；不会静默换端口。文件缺损时重新解压完整 ZIP。
 桌面启动失败会显示原生错误提示，可打开日志目录；即使准备页面未打开，也能保留失败阶段和原始错误。若提示 WebView2 不可用，请安装或修复 Microsoft Edge WebView2 Evergreen Runtime 后重试。不要仅凭此说明认定其它启动失败也由 WebView2 引起。
-日志保存在 state\logs（设置 MIZAR_STATE_ROOT 后以该目录为准）：desktop.ndjson、supervisor.ndjson、companion.log 与 companion.stderr.log。每类保留当前文件和最多 3 个历史文件；桌面单文件最多 256 KiB，其余各 2 MiB。它们是本机诊断记录，不是自动脱敏的公开支持包；不要直接分享整个 state 目录。
+安装版日志保存在 %LOCALAPPDATA%\Mizar\logs，便携版在 state\logs（设置 MIZAR_STATE_ROOT 后以该目录为准）：desktop.ndjson、supervisor.ndjson、companion.log 与 companion.stderr.log。每类保留当前文件和最多 3 个历史文件；每段最多 25 MiB，运行中滚动，每类约 100 MiB、合计约 400 MiB。它们是本机诊断记录，不是自动脱敏的公开支持包；不要直接分享整个 state 目录。
 若桌面页面未打开但本地服务仍正常，可在浏览器访问 http://127.0.0.1:3000/debug 导出同一安全诊断包，并在浏览器下载列表确认文件。服务未启动时先按原生错误提示恢复；保留本机日志，勿直接公开上传。诊断包最多 256 KiB，记录缺失、不可读与截断情况，不会修改历史日志。
 
 现场验收模式（先停止正常制作服务）：

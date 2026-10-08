@@ -1,10 +1,10 @@
 # 快速开始与操作手册
 
-适用于 Windows 安装版及便携版。首选[南大云盘下载完整包](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)；备用下载与发布状态见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。当前已发布 RC29 开发预览版；候选包的验证记录见对应 Release，正式 1.0 实机验收仍由 #35 跟踪。功能适用范围见[数据源能力](data-source-capabilities.md)。
+适用于 Windows 安装版及便携版。首选[南大云盘下载完整包](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)；备用下载与发布状态见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。当前候选为 RC30 开发预览版，是否已发布以 GitHub Releases 为准；候选包的验证记录见对应 Release，正式 1.0 实机验收仍由 #35 跟踪。功能适用范围见[数据源能力](data-source-capabilities.md)。
 
 ## 第一次使用
 
-1. 下一候选默认运行 `-Setup.exe`，按中文向导安装到当前用户目录，可创建快捷方式并在完成后启动。升级前正常退出 Mizar；卸载保留 `%LOCALAPPDATA%/Mizar` 中的比赛与配置。便携 ZIP 仍可完整解压到可写目录后运行 `Mizar.exe`，数据在同目录 `state/`。历史 RC 自解压包只提取文件，请按该 Release 的说明使用。安装 Microsoft Edge WebView2 Evergreen Runtime；包内已带 Node，无需开发工具。
+1. RC30 默认运行 `-Setup.exe`，按中文向导安装到当前用户目录，可创建快捷方式并在完成后启动。升级前正常退出 Mizar；卸载保留 `%LOCALAPPDATA%/Mizar` 中的比赛与配置。便携 ZIP 仍可完整解压到可写目录后运行 `Mizar.exe`，数据在同目录 `state/`。历史 RC 自解压包只提取文件，请按该 Release 的说明使用。安装 Microsoft Edge WebView2 Evergreen Runtime；包内已带 Node，无需开发工具。
 2. 双击 `Mizar.exe`，进入默认最大化、带左侧导航的准备中心，保留标准标题栏和任务栏，可自行还原窗口。
 3. 创建或选择比赛，核对队伍、名单、地图与 BP；连接 RivalHub 时先授权，再选择比赛。赛程读取中显示加载状态，只有成功读取空列表才显示近期暂无比赛；可点击「刷新比赛」重新获取，失败时保留上次赛程。
 4. 准备中心自动发现已安装的 CS2 并配置 GSI，无需先启动游戏。多个安装或配置冲突时，在「游戏设置」选择安装目录、`game/bin/win64` 或 `cs2.exe` 并显式修复；不会自动停用第三方 GSI。保存的位置同时用于游戏启动。新写入的 GSI 需要下次启动游戏才加载；文件配置完成与收到实际数据是两个状态。

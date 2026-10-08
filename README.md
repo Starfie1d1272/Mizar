@@ -21,7 +21,7 @@
 
 **[下载 Windows 完整包（南大云盘）](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)** · [GitHub 备用下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
 
-当前已发布 RC29 开发预览版；下载资产与版本说明见 GitHub Releases。下一候选使用中文 Windows Setup 安装包，保留完整便携 ZIP；已有 RC 下载方式以对应 Release 为准。完整操作见[快速开始](docs/quick-start.md)。
+当前候选为 RC30 开发预览版；已发布资产与版本说明见 GitHub Releases。RC30 使用中文 Windows Setup 安装包，保留完整便携 ZIP；已有 RC 下载方式以对应 Release 为准。完整操作见[快速开始](docs/quick-start.md)。
 
 Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
