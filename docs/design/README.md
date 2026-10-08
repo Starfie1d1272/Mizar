@@ -1,6 +1,6 @@
 # 设计系统
 
-这里维护当前视觉、界面与文案规则。产品目标见[产品定位](../product.md)，历史取舍见[设计审查归档](../archive/design/README.md)。
+这里维护当前视觉、界面与文案规则。产品目标见[产品定位](../product.md)，历史取舍见[设计审查归档](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)。
 
 | 文档 | 唯一负责的内容 |
 | --- | --- |
