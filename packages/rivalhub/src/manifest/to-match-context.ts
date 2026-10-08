@@ -71,6 +71,7 @@ export function toMatchContext(input: unknown): MatchContext {
           : 'pending'
         : null),
     isForfeit: manifest.match.isForfeit,
+    isTest: manifest.match.isTest ?? false,
     entrants: {
       a: toEntrant(manifest.entrants.a),
       b: toEntrant(manifest.entrants.b),

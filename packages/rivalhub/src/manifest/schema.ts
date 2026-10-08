@@ -33,6 +33,7 @@ export const broadcastMatchSchema = z.object({
   scoreB: nullableNumberSchema,
   resultDisposition: z.enum(['recorded', 'pending', 'omitted']).nullable().optional(),
   isForfeit: z.boolean(),
+  isTest: z.boolean().optional(),
 });
 
 export const broadcastPlayerSchema = z.object({

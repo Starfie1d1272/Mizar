@@ -30,6 +30,7 @@ export const broadcastScheduleMatchSchema = z.object({
   roundLabel: nullableStringSchema.optional(),
   matchLabel: nullableStringSchema.optional(),
   isForfeit: z.boolean(),
+  isTest: z.boolean().optional(),
   scoreA: nullableNumberSchema,
   scoreB: nullableNumberSchema,
   entrantA: broadcastScheduleEntrantSchema,

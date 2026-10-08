@@ -79,6 +79,7 @@ export interface MatchContext {
   readonly scoreB: number | null;
   readonly resultDisposition?: 'recorded' | 'pending' | 'omitted' | null;
   readonly isForfeit: boolean;
+  readonly isTest?: boolean;
   readonly entrants: {
     readonly a: MatchEntrantContext;
     readonly b: MatchEntrantContext;
@@ -109,6 +110,7 @@ export interface ScheduleMatchContext {
   readonly stage: string;
   readonly round: number | null;
   readonly isForfeit: boolean;
+  readonly isTest?: boolean;
   readonly scoreA: number | null;
   readonly scoreB: number | null;
   readonly entrants: {

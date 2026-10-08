@@ -13,7 +13,10 @@ export function deriveScheduleNeighborhood(
   matchId: string,
 ): ScheduleNeighborhood {
   if (window === null) return { previous: null, current: null, next: null, upcoming: [] };
-  const matches = window.matches;
+  const selected = window.matches.find((match) => match.matchId === matchId);
+  // Test matches are individually rehearsed; neither official nor other test
+  // matches become automatic adjacent-program destinations.
+  const matches = selected?.isTest ? [selected] : window.matches.filter((match) => !match.isTest);
   const index = matches.findIndex((match) => match.matchId === matchId);
   if (index < 0) return { previous: null, current: null, next: null, upcoming: [] };
   return {

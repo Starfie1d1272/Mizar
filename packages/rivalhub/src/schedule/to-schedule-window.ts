@@ -37,6 +37,7 @@ export function toScheduleWindow(input: unknown): ScheduleWindow {
       stage: match.stage,
       round: match.round,
       isForfeit: match.isForfeit,
+      isTest: match.isTest ?? false,
       scoreA: match.scoreA,
       scoreB: match.scoreB,
       entrants: {
