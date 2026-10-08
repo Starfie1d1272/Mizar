@@ -167,7 +167,7 @@ function Restore-GsiEndpointConflicts {
     foreach ($entry in $entries) {
         # Never overwrite a file recreated by another application.
         if (-not (Test-Path -LiteralPath $entry.originalPath)) {
-            Copy-Item -LiteralPath $entry.backupPath -Destination $entry.originalPath
+            [System.IO.File]::Copy([string]$entry.backupPath, [string]$entry.originalPath, $false)
         }
     }
 }
