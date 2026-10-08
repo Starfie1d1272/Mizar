@@ -206,6 +206,46 @@ describe('Match Manifest last-known-good seam', () => {
     expect(controller.getActiveBinding()).toBeUndefined();
   });
 
+  it.each(['manual-first', 'refresh-first'] as const)(
+    'keeps an in-flight explicit selection ahead of background refresh (%s)',
+    async (order) => {
+      const root = await temporaryDirectory();
+      const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+      const next = { ...manifest, match: { ...manifest.match, matchId: 'selected-b' } };
+      const controller = new MatchContextController({
+        lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
+      });
+      await controller.selectMatch(manifest.match.matchId, source('online', manifest));
+      const manual = deferred<unknown>();
+      const background = deferred<unknown>();
+      const select = () =>
+        controller.stageOnlineMatch(next.match.matchId, {
+          kind: 'online',
+          load: () => manual.promise,
+        });
+      const refresh = () =>
+        controller.refreshOnlineMatch({ kind: 'online', load: () => background.promise });
+      const first = order === 'manual-first' ? select() : refresh();
+      const second = order === 'manual-first' ? refresh() : select();
+      background.resolve({ ...manifest, revision: 'refreshed-a' });
+      manual.resolve(next);
+      const results = await Promise.all([first, second]);
+      expect(results[order === 'manual-first' ? 0 : 1].ok).toBe(true);
+      expect(controller.getActiveBinding()?.manifest).toEqual(manifest);
+      const pending = controller.getPendingOnlineCandidate()!;
+      expect(pending.binding.context.matchId).toBe('selected-b');
+      expect(
+        (
+          await controller.activatePendingOnlineMatch(
+            controller.getActiveRevision(),
+            pending.revision,
+          )
+        ).ok,
+      ).toBe(true);
+      expect(controller.getActiveBinding()?.context.matchId).toBe('selected-b');
+    },
+  );
+
   it('does not overwrite a valid LKG with malformed or semantically invalid input', async () => {
     const root = await temporaryDirectory();
     const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');

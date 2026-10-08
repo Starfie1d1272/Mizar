@@ -215,6 +215,10 @@ export class MatchContextController {
     return binding;
   }
 
+  isOnlineCandidateLoading(): boolean {
+    return this.onlineCandidateAcquisition !== undefined;
+  }
+
   getPendingOnlineCandidate(): PendingOnlineMatchCandidate | undefined {
     const candidate = this.pendingOnlineCandidate;
     return candidate === undefined
@@ -504,8 +508,22 @@ export class MatchContextController {
     const active = this.activeBinding;
     const revision = this.getActiveRevision();
     if (!active || isStandaloneLocalMatch(active)) return this.staleSelectionResult('');
+    // Background work must not supersede an explicit selection, including its
+    // network phase before a candidate exists.
+    if (
+      this.onlineCandidateAcquisition !== undefined ||
+      (this.pendingOnlineCandidate &&
+        this.pendingOnlineCandidate.binding.context.matchId !== active.context.matchId)
+    )
+      return this.staleSelectionResult(active.context.matchId);
+    const generation = this.onlineCandidateGeneration + 1;
     const result = await this.stageOnlineMatch(active.context.matchId, source);
-    if (!result.ok || revision !== this.getActiveRevision()) return result;
+    if (
+      !result.ok ||
+      revision !== this.getActiveRevision() ||
+      generation !== this.onlineCandidateGeneration
+    )
+      return result;
     const pending = this.pendingOnlineCandidate;
     if (!pending) return result;
     const next = pending.binding.manifest;
@@ -526,6 +544,7 @@ export class MatchContextController {
     if (!isLocalBinding(active)) return result;
     return this.commitQueue.run(async () => {
       const canCommit = () =>
+        generation === this.onlineCandidateGeneration &&
         revision === this.getActiveRevision() &&
         this.pendingOnlineCandidate?.revision === pending.revision;
       if (!canCommit()) return this.staleSelectionResult(current.match.matchId);
@@ -583,12 +602,14 @@ export class MatchContextController {
       );
       if (
         !result.ok &&
+        generation === this.onlineCandidateGeneration &&
         this.activeBinding?.origin === 'online' &&
         this.activeBinding.context.matchId === requestedMatchId &&
         this.activeBinding.freshness !== 'stale'
       ) {
         await this.commitQueue.run(() => {
           if (
+            generation === this.onlineCandidateGeneration &&
             this.activeBinding?.origin === 'online' &&
             this.activeBinding.context.matchId === requestedMatchId
           )

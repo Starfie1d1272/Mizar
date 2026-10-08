@@ -86,7 +86,7 @@ export function useBpWorkspace() {
         const workspace = bpWorkspaceSchema.parse(await response.json());
         if (active) setValue({ workspace, connected: true, loading: false });
       } catch {
-        if (active) setValue({ workspace: null, connected: false, loading: false });
+        if (active) setValue((previous) => ({ ...previous, connected: false, loading: false }));
       } finally {
         clearTimeout(timeout);
         if (active) timer = setTimeout(() => void poll(), 1000);

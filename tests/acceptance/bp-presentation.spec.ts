@@ -796,6 +796,67 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
   }
 });
 
+for (const failure of ['network', 'timeout'] as const)
+  test(`BP workspace ${failure} preserves unsaved edits and restores saving after reconnection`, async ({
+    page,
+    context,
+  }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'bp-disconnect-'));
+    const app = buildAppWithManualBpClock(createManualBpClock(), {
+      matchContextBinding: {
+        ...bindingFor('semifinalA'),
+        origin: 'local',
+        localAuthoringMode: 'standalone',
+      },
+      matchManifestPath: join(directory, 'match.json'),
+    });
+    let offline = false;
+    await routeCompanionApi(
+      context,
+      () => app,
+      (path) => failure === 'network' && offline && path === '/local/v1/bp-workspace',
+    );
+    if (failure === 'timeout')
+      await context.route('**/local/v1/bp-workspace', async (route) => {
+        if (!offline) return route.fallback();
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await route.abort().catch(() => undefined);
+      });
+    try {
+      await page.goto('/preview?scene=bp');
+      await page
+        .getByRole('complementary', { name: '播出控制' })
+        .getByRole('button', { name: '编辑本地 BP', exact: true })
+        .click();
+      const editor = page.locator('.bp-local-editor');
+      const title = editor.locator('.bp-editor-match-fields input').first();
+      await title.fill('保留未保存的测试草稿');
+      const save = editor.getByRole('button', { name: '保存本地 BP', exact: true });
+      await expect(save).toBeEnabled();
+      offline = true;
+      await expect(editor.getByRole('alert')).toContainText('制作服务断开');
+      await expect(title).toHaveValue('保留未保存的测试草稿');
+      await expect(save).toBeDisabled();
+      let closeAsked = false;
+      page.once('dialog', async (dialog) => {
+        closeAsked = true;
+        await dialog.dismiss();
+      });
+      await page
+        .getByRole('dialog', { name: '编辑比赛 BP' })
+        .getByRole('button', { name: '关闭', exact: true })
+        .click();
+      expect(closeAsked).toBe(true);
+      await expect(title).toHaveValue('保留未保存的测试草稿');
+      offline = false;
+      await expect(save).toBeEnabled();
+      await expect(title).toHaveValue('保留未保存的测试草稿');
+    } finally {
+      await app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
 test('bound RivalHub BP fallback locks canonical identity and preserves roster and played maps', async ({
   page,
   context,

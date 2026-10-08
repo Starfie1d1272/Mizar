@@ -294,6 +294,139 @@ it('waits for the current authority and execution start acknowledgement before u
   expect(connection.view().activeDeviceName).toBeNull();
 });
 
+it.each(['producerInstanceId', 'liveSessionId'] as const)(
+  'rejects recovered events from an old %s without sending them under a new claim',
+  async (field) => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-recovered-authority-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: 'test',
+        installationId: 'installation',
+        competitionId: 'competition',
+        displayName: 'Test',
+      }),
+    );
+    const request = vi.fn<typeof fetch>((url, init) => {
+      if (
+        (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/claim')
+      )
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 2 }));
+      const body = JSON.parse(init?.body as string) as { event?: ReliableEventV1 };
+      // The real website binds both producer and session to the claimed authority.
+      return Promise.resolve(
+        new Response(null, {
+          status: body.event?.cursor[field] === 'previous' ? 403 : 204,
+        }),
+      );
+    });
+    const connection = new RivalHubConnection(path, request);
+    await connection.load();
+    const current = {
+      matchId: 'match',
+      competitionId: 'competition',
+      cursor: {
+        producerInstanceId: 'current',
+        liveSessionId: 'session',
+        programSourceGeneration: 1,
+        mapEpoch: 1,
+      },
+      players: [],
+    } as unknown as LiveSnapshotV1;
+    await connection.claim(current, 'revision', true);
+    for (const kind of ['map_started', 'match_started'] as const) {
+      const recovered = {
+        kind,
+        matchId: 'match',
+        cursor: { ...current.cursor, [field]: 'previous' },
+      } as ReliableEventV1;
+      const original = JSON.stringify(recovered);
+      expect(await connection.sendReliable(recovered, current)).toBe('rejected');
+      expect(JSON.stringify(recovered)).toBe(original);
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    await expect(connection.sendLive(current)).rejects.toThrow('rivalhub_map_start_pending');
+    expect(connection.view().activeSourceMatchId).toBe('match');
+    await connection.sendReliable(
+      { kind: 'map_started', matchId: 'match', cursor: current.cursor } as ReliableEventV1,
+      current,
+    );
+    await connection.sendLive(current);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(connection.view().activeSourceMatchId).toBe('match');
+    expect(connection.view().activeDeviceName).toBeNull();
+  },
+);
+
+it.each([false, true])(
+  'does not let a late map A acknowledgement replace confirmed map B (cancelled=%s)',
+  async (cancelled) => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-late-map-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: 'private',
+        installationId: 'installation',
+        competitionId: 'competition',
+      }),
+    );
+    const pending: ((response: Response) => void)[] = [];
+    const request = vi.fn<typeof fetch>((url) => {
+      if (
+        (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/claim')
+      )
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+      if (
+        (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith(
+          '/reliable',
+        )
+      )
+        return new Promise<Response>((resolve) => pending.push(resolve));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    const connection = new RivalHubConnection(path, request);
+    await connection.load();
+    const a = {
+      matchId: 'match',
+      competitionId: 'competition',
+      cursor: {
+        producerInstanceId: 'producer',
+        liveSessionId: 'session',
+        programSourceGeneration: 1,
+        mapEpoch: 1,
+      },
+      players: [],
+    } as unknown as LiveSnapshotV1;
+    const b = { ...a, cursor: { ...a.cursor, mapEpoch: 2 } };
+    await connection.claim(a, 'revision', false);
+    const controller = new AbortController();
+    const first = connection.sendReliable(
+      { kind: 'map_started', matchId: 'match', cursor: a.cursor } as ReliableEventV1,
+      a,
+      controller.signal,
+    );
+    if (cancelled) controller.abort();
+    const second = connection.sendReliable(
+      { kind: 'map_started', matchId: 'match', cursor: b.cursor } as ReliableEventV1,
+      b,
+    );
+    pending[1]!(new Response(null, { status: 204 }));
+    expect(await second).toBe('accepted');
+    await connection.sendLive(b);
+    pending[0]!(new Response(null, { status: 204 }));
+    expect(await first).toBe('retry');
+    await connection.sendLive(b);
+    await expect(connection.sendLive(a)).rejects.toThrow('rivalhub_map_start_pending');
+    expect(connection.view().activeSourceMatchId).toBe('match');
+  },
+);
+
 it('coalesces slow pairing polls and preserves the original timeout in the user-facing error cause', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-pairing-poll-'));
   temporary.push(directory);

@@ -15,7 +15,7 @@ export type ReliableDeliveryResult = 'accepted' | 'rejected' | 'retry';
 export type ReliableDeliveryStatus = 'pending' | 'accepted' | 'rejected' | 'expired' | 'superseded';
 
 export interface ReliableEventSink {
-  send(event: ReliableEventV1): Promise<ReliableDeliveryResult>;
+  send(event: ReliableEventV1, signal?: AbortSignal): Promise<ReliableDeliveryResult>;
 }
 
 export interface ReliableOutboxRecord {
@@ -212,11 +212,15 @@ export class ReliableOutbox {
         }
         let outcome: ReliableDeliveryResult;
         let timeout: ReturnType<typeof setTimeout> | undefined;
+        const controller = new AbortController();
         try {
           outcome = await Promise.race([
-            input.sink.send(record.event),
+            input.sink.send(record.event, controller.signal),
             new Promise<'retry'>((resolve) => {
-              timeout = setTimeout(() => resolve('retry'), RELIABLE_SEND_TIMEOUT_MS);
+              timeout = setTimeout(() => {
+                controller.abort(new DOMException('Reliable delivery timed out', 'TimeoutError'));
+                resolve('retry');
+              }, RELIABLE_SEND_TIMEOUT_MS);
               timeout.unref();
             }),
           ]);

@@ -82,7 +82,7 @@ export function registerRivalHubConnectionRoutes(
     return refreshing;
   };
   const timer = setInterval(() => {
-    if (linkedBinding())
+    if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
         .then(refresh)
         .catch(() => undefined);

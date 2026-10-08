@@ -120,20 +120,36 @@ export class ObsAdapter {
     }
   }
 
-  async status(): Promise<ObsStatus> {
+  private statusPending: Promise<ObsStatus> | undefined;
+  status(): Promise<ObsStatus> {
+    this.statusPending ??= this.serial(() => this.readStatus()).finally(() => {
+      this.statusPending = undefined;
+    });
+    return this.statusPending;
+  }
+
+  private async configurationFindings(obs: ObsRpc, visual?: ObsFinding[]): Promise<ObsFinding[]> {
+    const findings = visual ?? (await checkObsConfiguration(obs, this.browserBaseUrl));
+    return findings.some((item) =>
+      ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
+    )
+      ? findings
+      : [...findings, ...(await checkObsAudio(obs))];
+  }
+
+  private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
     try {
-      return await this.withObs(async (obs) => {
+      const status = await this.withObs(async (obs) => {
         const [scene, stream, record, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           obs.call('GetStreamStatus'),
           obs.call('GetRecordStatus'),
           obs.call('GetVideoSettings'),
-          checkObsConfiguration(obs, this.browserBaseUrl).catch(() => [
+          this.configurationFindings(obs).catch(() => [
             { code: 'configuration_check_failed', message: 'OBS 配置检查未完成，请重新检查。' },
           ]),
         ]);
-        this.findings = findings;
         return {
           connection: 'connected',
           currentScene:
@@ -152,6 +168,8 @@ export class ObsAdapter {
           findings,
         } satisfies ObsStatus;
       });
+      this.findings = [...status.findings];
+      return status;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message.toLowerCase() : '';
       return {
@@ -204,17 +222,7 @@ export class ObsAdapter {
 
   check(): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
-      this.findings = await this.withObs(async (obs) => {
-        const visual = await checkObsConfiguration(obs, this.browserBaseUrl);
-        return visual.some(
-          (item) =>
-            item.code === 'collection_missing' ||
-            item.code === 'collection_inactive' ||
-            item.code === 'scene_missing',
-        )
-          ? visual
-          : [...visual, ...(await checkObsAudio(obs))];
-      }, 12_000);
+      this.findings = await this.withObs((obs) => this.configurationFindings(obs), 12_000);
       return this.findings;
     });
   }
@@ -225,14 +233,7 @@ export class ObsAdapter {
         const firstPreparation = !this.preparationStarted;
         this.preparationStarted = true;
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, firstPreparation);
-        return visual.some(
-          (item) =>
-            item.code === 'collection_missing' ||
-            item.code === 'collection_inactive' ||
-            item.code === 'scene_missing',
-        )
-          ? visual
-          : [...visual, ...(await checkObsAudio(obs))];
+        return this.configurationFindings(obs, visual);
       }, 12_000);
       return this.findings;
     });
@@ -242,7 +243,7 @@ export class ObsAdapter {
       this.findings = await this.withObs(async (obs) => {
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
-        return [...findings, ...(await checkObsAudio(obs))];
+        return this.configurationFindings(obs, findings);
       }, 12_000);
       return this.findings;
     });
