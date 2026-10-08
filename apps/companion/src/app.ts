@@ -195,12 +195,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ? {
           authorityScope: () => options.rivalhubConnection!.reliableAuthorityScope(),
           sink: {
-            send: (event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0]) =>
+            send: (
+              event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
+              signal?: AbortSignal,
+            ) =>
               options.rivalhubConnection!.view().paired &&
               outputBinding?.origin === 'online' &&
               outputBinding.context.matchId === event.matchId
-                ? options.rivalhubConnection!.sendReliable(event, outputService.current(true))
-                : (options.reliableSink?.send(event) ?? Promise.resolve('rejected' as const)),
+                ? options.rivalhubConnection!.sendReliable(
+                    event,
+                    outputService.current(true),
+                    signal,
+                  )
+                : (options.reliableSink?.send(event, signal) ??
+                  Promise.resolve('rejected' as const)),
           },
         }
       : options.reliableSink === undefined

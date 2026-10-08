@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -9,7 +9,11 @@ import { expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type { MatchContextBinding } from '../src/match-context/index.js';
 import { projectLiveSnapshotV1, transitionReliableEventsV1 } from '../src/output/projector.js';
-import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import {
+  RivalHubConnection,
+  OFFICIAL_RIVALHUB_URL,
+} from '../src/match-context/rivalhub-connection.js';
+import { ReliableOutbox, RELIABLE_SEND_TIMEOUT_MS } from '../src/output/reliable-outbox.js';
 import { configuredHttpOutputs } from '../src/output/http-sink.js';
 import { OutputService } from '../src/output/service.js';
 import * as outputProjector from '../src/output/projector.js';
@@ -454,7 +458,7 @@ it('restores pending events into a new Runtime process without rewriting produce
     serviceB.setCurrent(coordinatorB.afterRuntimeMutation(baseline), binding);
     await serviceB.retry();
     expect(runtimeB.getCurrentState().producerInstanceId).toBe('process-B');
-    expect(sink.send).toHaveBeenCalledWith(originalEvent);
+    expect(sink.send).toHaveBeenCalledWith(originalEvent, expect.any(AbortSignal));
     expect(outboxB.getRecords().find((record) => record.event.kind === 'map_ended')?.status).toBe(
       'accepted',
     );
@@ -674,7 +678,9 @@ it('wires restart recovery through production app composition and GSI ingress', 
       liveSessionId: event.cursor.liveSessionId,
       mapEpoch: event.cursor.mapEpoch,
     });
-    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(event), { timeout: 2500 });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(event, expect.any(AbortSignal)), {
+      timeout: 2500,
+    });
   } finally {
     await appB.close();
     await rm(directory, { recursive: true, force: true });
@@ -977,10 +983,13 @@ it('production HTTP liveSink includes Radar by default, drops failed delivery, a
   }
 });
 
-async function recoveryFixture() {
+async function recoveryFixture(boundSession = false) {
   let binding = await bindingFixture();
   const directory = await mkdtemp(join(tmpdir(), 'mizar-start-recovery-'));
-  const runtime = createProgramRuntime('start-recovery');
+  const runtime = createProgramRuntime(
+    'start-recovery',
+    boundSession ? { liveSession: { kind: 'bound', liveSessionId: 'test-session' } } : undefined,
+  );
   let time = 0;
   let authority: string | null = null;
   const coordinator = createProjectionCoordinator({
@@ -1380,3 +1389,82 @@ it.each(['durable', 'failed'] as const)(
     }
   },
 );
+
+it('cancels a timed-out outbox request and keeps map B live after map A returns late', async () => {
+  const f = await recoveryFixture(true);
+  try {
+    f.apply(1);
+    await f.settle();
+    const a = f.starts()[0]!.event;
+    const snapshot = f.service.current(true)!;
+    expect(snapshot).not.toBeNull();
+    const b = {
+      ...a,
+      idempotencyKey: 'b'.repeat(64),
+      cursor: { ...a.cursor, mapEpoch: a.cursor.mapEpoch + 1 },
+    };
+    const nextSnapshot = { ...snapshot, cursor: b.cursor };
+    const path = join(f.directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: 'private',
+        installationId: 'installation',
+        competitionId: a.competitionId,
+      }),
+    );
+    let finishA!: (response: Response) => void;
+    let signalA: AbortSignal | null | undefined;
+    const request = vi.fn<typeof fetch>((url, init) => {
+      if (
+        (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith('/claim')
+      )
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+      if (
+        (typeof url === 'string' ? url : url instanceof URL ? url.href : url.url).endsWith(
+          '/reliable',
+        ) &&
+        (JSON.parse(init?.body as string) as { event: { idempotencyKey: string } }).event
+          .idempotencyKey === a.idempotencyKey
+      ) {
+        signalA = init?.signal;
+        return new Promise<Response>((resolve) => {
+          finishA = resolve;
+        });
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    const connection = new RivalHubConnection(path, request);
+    await connection.load();
+    await connection.claim(snapshot, a.contextRevision, false);
+    const box = new ReliableOutbox(join(f.directory, 'deadline-outbox.json'));
+    const now = new Date(a.observedAt);
+    await box.enqueue(a, now);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const flush = box.flush({
+      now,
+      isCurrent: () => true,
+      sink: { send: (event, signal) => connection.sendReliable(event, snapshot, signal) },
+    });
+    await vi.advanceTimersByTimeAsync(RELIABLE_SEND_TIMEOUT_MS);
+    await flush;
+    expect(signalA?.aborted).toBe(true);
+    expect(box.getRecords()[0]!.status).toBe('pending');
+    await box.enqueue(b, now);
+    await box.flush({
+      now,
+      isCurrent: (event) => event.cursor.mapEpoch === b.cursor.mapEpoch,
+      sink: { send: (event, signal) => connection.sendReliable(event, nextSnapshot, signal) },
+    });
+    await connection.sendLive(nextSnapshot);
+    finishA(new Response(null, { status: 204 }));
+    await vi.advanceTimersByTimeAsync(0);
+    await connection.sendLive(nextSnapshot);
+    expect(connection.view().activeSourceMatchId).toBe(a.matchId);
+    expect(box.getRecords().map((record) => record.status)).toEqual(['superseded', 'accepted']);
+  } finally {
+    vi.useRealTimers();
+    await f.close();
+  }
+});

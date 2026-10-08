@@ -27,6 +27,7 @@ function transport(config: HttpOutputConfig) {
   return async (
     payload: LiveSnapshotV1 | ReliableEventV1,
     key?: string,
+    signal?: AbortSignal,
   ): Promise<ReliableDeliveryResult> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -35,7 +36,7 @@ function transport(config: HttpOutputConfig) {
       const response = await (config.fetch ?? fetch)(url, {
         method: 'POST',
         redirect: 'manual',
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         headers: {
           authorization: `Bearer ${config.token}`,
           'content-type': 'application/json',
@@ -44,6 +45,7 @@ function transport(config: HttpOutputConfig) {
         body: JSON.stringify(payload),
       });
       await response.body?.cancel();
+      if (signal?.aborted || controller.signal.aborted) return 'retry';
       if (response.ok) return 'accepted';
       if (response.status === 408 || response.status === 429 || response.status >= 500)
         return 'retry';
@@ -58,7 +60,7 @@ function transport(config: HttpOutputConfig) {
 
 export function createHttpReliableSink(config: HttpOutputConfig): ReliableEventSink {
   const post = transport(config);
-  return { send: (event) => post(event, event.idempotencyKey) };
+  return { send: (event, signal) => post(event, event.idempotencyKey, signal) };
 }
 
 /** Failed snapshots are dropped; the OutputService lane offers only the latest next value. */

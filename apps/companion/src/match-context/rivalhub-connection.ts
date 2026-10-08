@@ -6,7 +6,10 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
 import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
-import type { ReliableDeliveryResult } from '../output/reliable-outbox.js';
+import {
+  RELIABLE_SEND_TIMEOUT_MS,
+  type ReliableDeliveryResult,
+} from '../output/reliable-outbox.js';
 
 type Installation = {
   baseUrl: string;
@@ -29,6 +32,7 @@ type Source = {
   producerInstanceId: string;
   liveSessionId: string;
   acknowledgedExecution?: string;
+  mapStartAttempt?: symbol;
 };
 
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
@@ -423,12 +427,16 @@ export class RivalHubConnection {
     operation: 'live' | 'reliable',
     body: unknown,
     matchId: string,
+    signal?: AbortSignal,
+    isCurrent: () => boolean = () => true,
   ): Promise<ReliableDeliveryResult> {
     if (!this.source) return 'retry';
     if (this.source.matchId !== matchId) return 'rejected';
     const source = this.source;
     try {
+      if (signal?.aborted || !isCurrent()) return 'retry';
       const response = await this.request(operation, {
+        ...(signal ? { signal } : {}),
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -437,6 +445,7 @@ export class RivalHubConnection {
         body: JSON.stringify(body),
       });
       await response.body?.cancel();
+      if (signal?.aborted || !isCurrent()) return 'retry';
       if (response.ok) return 'accepted';
       if (response.status === 403) {
         if (this.source === source) {
@@ -466,6 +475,7 @@ export class RivalHubConnection {
   async sendReliable(
     event: ReliableEventV1,
     current: LiveSnapshotV1 | null,
+    signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
   ): Promise<ReliableDeliveryResult> {
     const source = this.source;
     // Durable recovery keeps the original producer evidence. A new claim cannot
@@ -490,12 +500,19 @@ export class RivalHubConnection {
           )
           .map((player) => player.sourcePlayerId)
       : [];
+    if (signal.aborted) return 'retry';
+    const attempt = event.kind === 'map_started' ? Symbol('map_start') : undefined;
+    if (source && attempt) source.mapStartAttempt = attempt;
+    const isCurrent = () =>
+      this.source === source && (attempt === undefined || source?.mapStartAttempt === attempt);
     const result = await this.upload(
       'reliable',
       { event, lineupSteam64: observed.length === 10 ? observed : [] },
       event.matchId,
+      signal,
+      isCurrent,
     );
-    if (result === 'accepted' && event.kind === 'map_started' && source && this.source === source)
+    if (result === 'accepted' && attempt && source && isCurrent() && !signal.aborted)
       source.acknowledgedExecution = executionKey(event.cursor);
     return result;
   }
