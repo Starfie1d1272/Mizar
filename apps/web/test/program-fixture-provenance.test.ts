@@ -70,7 +70,7 @@ describe('Program fixture provenance policy', () => {
     expect(getProgramFixtureProvenance('unknown')).toBeNull();
   });
 
-  it('keeps the operator preview limited to real replay and declared BP or media boundaries', () => {
+  it('keeps the operator preview limited to EPL replay and the empty initial state', () => {
     const ids = HUD_EDITOR_FIXTURE_GROUPS.flatMap((group) => group.ids);
     expect(ids).toEqual(
       expect.arrayContaining([
@@ -83,16 +83,11 @@ describe('Program fixture provenance policy', () => {
     );
     expect(ids.every((id) => id.startsWith('epl-') || id === 'awaiting-neutral')).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(
-      HUD_EDITOR_FIXTURE_GROUPS[0]?.ids.every(
-        (id) => getProgramFixtureProvenance(id)?.kind === 'real-derived',
-      ),
-    ).toBe(true);
-    expect(
-      HUD_EDITOR_FIXTURE_GROUPS[1]?.ids.every(
-        (id) => getProgramFixtureProvenance(id)?.kind === 'synthetic-presentation',
-      ),
-    ).toBe(true);
+    for (const id of ids) {
+      expect(getProgramFixtureProvenance(id)?.kind, id).toBe(
+        id === 'awaiting-neutral' ? 'synthetic-edge' : 'real-derived',
+      );
+    }
   });
 
   it('rejects gameplay patches, including nested series injection, without changing the base', () => {
