@@ -176,3 +176,5 @@ Program series-strip map scenes and CT/T side marks are Valve / Counter-Strike 2
 - `texture.svg` 是本次新绘制的近似纹理，用来补足参考中缺失的 `text2.png`，并非该文件的原件。
 
 EPL 样例的 Falcons 与 Natus Vincere 队伍标识来自公开 HLTV 队伍图片，仅用于比赛身份展示；原始地址、获取时间与 SHA-256 记录在 `fixtures/epl-s24/media.json`。商标与图片权利仍归原权利人，不作为 Mizar 品牌或项目许可资产。
+
+EWC 的 `apps/web/public/brand/hud/ewc/contour.svg` 为从用户 EWC01 参考中测量重复周期、排除文字遮挡并拟合为 60° 直线的矢量线纹，不是赛事原始美术文件，也未将参考截图像素作为随包纹理。

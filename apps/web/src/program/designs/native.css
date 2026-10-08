@@ -504,7 +504,7 @@
     right: 10px;
     top: 7px;
     left: auto;
-    width: 68px;
+    width: max-content;
     margin: 0;
     font-size: 14px;
     color: var(--mizar-hud-text-muted);

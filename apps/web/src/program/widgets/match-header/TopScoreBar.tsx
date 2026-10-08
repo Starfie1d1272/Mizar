@@ -67,14 +67,14 @@ function TeamLogo({
   readonly team: MatchHeaderTeamPresentation;
   readonly fallback?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
-  if (team.logoUrl === null || failed)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (team.logoUrl === null || team.logoUrl === failedUrl)
     return fallback ? <span className="shanghai-winner-name">{team.name}</span> : null;
   return (
     <img
       alt=""
       className="match-header__team-logo"
-      onError={() => setFailed(true)}
+      onError={() => setFailedUrl(team.logoUrl)}
       src={team.logoUrl}
     />
   );

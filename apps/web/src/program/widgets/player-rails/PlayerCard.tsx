@@ -253,12 +253,18 @@ function UtilityIcons({
   );
 }
 
-function Kd({ player }: { readonly player: PlayerCardPresentation }) {
+function Kd({
+  player,
+  design,
+}: {
+  readonly player: PlayerCardPresentation;
+  readonly design: HudDesign;
+}) {
   return (
     <span className="player-rail__kd" aria-label="Kills and deaths" data-player-rail-row-part="kd">
       <StatGlyph kind="kills" />
       <span>{displayNumber(player.stats.kills)}</span>
-      <StatGlyph kind="deaths" />
+      <StatGlyph kind="deaths" filled={design === 'ewc' || design === 'iem'} />
       <span>{displayNumber(player.stats.deaths)}</span>
     </span>
   );
@@ -371,7 +377,9 @@ function PlayerBody({
         data-phase={player.mode}
         data-secondary={secondaryVisible}
       >
-        {!dead || options.deadInformation === 'stats' ? <Kd player={player} /> : null}
+        {!dead || options.deadInformation === 'stats' ? (
+          <Kd player={player} design={design} />
+        ) : null}
         <div className="player-rail__context" data-player-rail-row-part="context">
           {dead ? (
             <div className="player-rail__dead-stats" data-dead-stats="true">
@@ -446,9 +454,33 @@ function PlayerBody({
           {(!dead || options.deadInformation === 'stats') &&
           player.roundKills !== null &&
           player.roundKills > 0 ? (
-            design === 'esl' ? (
+            design === 'ewc' ? (
+              <span
+                className="player-rail__round-kill-marks"
+                aria-label={`Round kills ${player.roundKills}`}
+                role="img"
+              >
+                {Array.from({ length: Math.min(5, player.roundKills) }, (_, index) => (
+                  <svg key={index} aria-hidden="true" viewBox="0 0 24 20">
+                    <path d="M12 0 22 14 15 14 9 8 8 6ZM8 7 11 11 8 20H0ZM12 15H21L24 20H10Z" />
+                  </svg>
+                ))}
+              </span>
+            ) : design === 'esl' ? (
               <span aria-label={`Round kills ${player.roundKills}`}>
                 {'★'.repeat(Math.min(5, player.roundKills))}
+              </span>
+            ) : design === 'iem' ? (
+              <span
+                className="player-rail__round-kill-marks"
+                role="img"
+                aria-label={`Round kills ${player.roundKills}`}
+              >
+                {Array.from({ length: Math.min(5, player.roundKills) }, (_, index) => (
+                  <svg key={index} aria-hidden="true" viewBox="0 0 20 20">
+                    <path d="m10 1 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L10 15.3l-5.6 2.9 1.1-6.2L1 7.6l6.2-.9Z" />
+                  </svg>
+                ))}
               </span>
             ) : (
               <RoundKillBadge key={player.roundKills} kills={player.roundKills} />

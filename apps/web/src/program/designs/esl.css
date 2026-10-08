@@ -63,6 +63,8 @@
   left: 160px;
   width: 120px;
   height: 80px;
+  justify-content: center;
+  gap: 2px;
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__map-score {
   font-size: 60px;
@@ -103,10 +105,14 @@
   right: 96px;
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__round-meta {
+  margin-top: 0;
+  height: 26px;
+  line-height: 26px;
   font-size: 24px;
 }
 .hud-widget-design[data-hud-design='esl'] .match-header__clock-value {
-  font-size: 22px;
+  font-size: 28px;
+  line-height: 32px;
 }
 .hud-widget-design[data-hud-design='esl'] .objective-center__fuse {
   top: 120px;
@@ -182,6 +188,12 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail__round-kill-slot {
   left: 164px;
   top: -10px;
+  width: max-content;
+  height: 20px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  text-shadow: 0 1px 2px var(--mizar-hud-surface-strong);
   z-index: 5;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__round-kill-slot {
@@ -241,9 +253,9 @@
   );
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player {
-  margin-top: 0;
+  margin-top: 96px;
   width: 296px;
-  height: 316px;
+  height: 220px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__face {
   background: transparent;
@@ -253,25 +265,25 @@
   .focused-player__face[data-dead='true']
   .focused-player__action {
   top: 0;
-  height: 316px;
+  height: 220px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__media,
 .hud-widget-design[data-hud-design='esl'] .focused-player__media img {
   top: 0;
-  left: 28px;
-  width: 240px;
-  height: 240px;
+  left: 76px;
+  width: 144px;
+  height: 144px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__media img {
   left: 0;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__observer-tile-number {
-  width: 240px;
-  height: 240px;
-  line-height: 240px;
+  width: 144px;
+  height: 144px;
+  line-height: 144px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__identity {
-  top: 240px;
+  top: 144px;
   height: 36px;
   padding: 0 8px;
   background: color-mix(in srgb, var(--mizar-side-ct) 40%, var(--mizar-hud-surface-strong));
@@ -282,7 +294,7 @@
   text-transform: uppercase;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__vitals {
-  top: 240px;
+  top: 144px;
   left: auto;
   right: 4px;
   width: 64px;
@@ -313,13 +325,13 @@
   right: 94px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__active {
-  top: 232px;
+  top: 184px;
   left: 8px;
   width: 96px;
   height: 30px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__ammo {
-  top: 232px;
+  top: 184px;
   right: 8px;
   width: 84px;
   height: 30px;
@@ -335,7 +347,7 @@
   top: 40px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__dead-state {
-  top: 240px;
+  top: 144px;
   right: 4px;
   width: 64px;
   height: 36px;
@@ -554,4 +566,29 @@
 
 .hud-widget-design[data-hud-design='esl'] .player-rail__summary-slot {
   display: none;
+}
+
+/* The badge crosses the card edge; clipping stays on HP and effect surfaces. */
+.hud-widget-design[data-hud-design='esl'] .player-rail__card,
+.hud-widget-design[data-hud-design='esl'] .player-rail__body {
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail__card[data-avatar='false']
+  .player-rail__avatar {
+  display: none;
+}
+.hud-widget-design[data-hud-design='esl'] .match-header__clock {
+  height: 32px;
+}
+
+.hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__round-kill-slot {
+  left: 120px;
+}
+.hud-widget-design[data-hud-design='esl']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__round-kill-slot {
+  left: auto;
+  right: 120px;
 }
