@@ -1,9 +1,0 @@
-{
-  "classification": "Second timing window remains unlimited; not a 60 FPS A/B comparison. No setting changed.",
-  "consoleResponse": "Can't change 'fps_max' right now.",
-  "accepted": false,
-  "time": "2026-10-07T05:07:47.5580952Z",
-  "requested": 60,
-  "queriedAfter": 0,
-  "baseline": 0
-}
