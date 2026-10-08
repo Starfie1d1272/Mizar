@@ -106,7 +106,6 @@ for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld'] as co
     await expect(armor.first()).toHaveText('7');
     const firstId = program.payload.players[0]!.sourcePlayerId;
     const card = page.locator(`[data-player-card="${firstId}"]`);
-    const initialBox = await card.boundingBox();
     // Establish the flight only after asynchronous preset/font loading settles.
     radar.channelSeq++;
     radar.cursor.programSourceGeneration++;
@@ -141,6 +140,8 @@ for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld'] as co
         }
       } else await page.waitForTimeout(10);
     }
+    // Compare the armor transition itself, after preset layout and flight rendering settle.
+    const initialBox = await card.boundingBox();
     program.channelSeq++;
     program.cursor.programReceiveSequence = (program.cursor.programReceiveSequence ?? 0) + 1;
     program.payload.players[0]!.state!.armor = 100;
