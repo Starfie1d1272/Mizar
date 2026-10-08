@@ -1,0 +1,9 @@
+{"id":"bomb-0","kind":"bomb-carried","captureIndex":0,"sequence":17967,"scheduledElapsedUs":0,"label":"携带 C4"}
+{"id":"bomb-1","kind":"bomb-planting","captureIndex":30,"sequence":17997,"scheduledElapsedUs":1588912,"label":"部署 C4"}
+{"id":"bomb-2","kind":"bomb-planted","captureIndex":86,"sequence":18053,"scheduledElapsedUs":4699712,"label":"C4 已部署"}
+{"id":"bomb-3","kind":"bomb-defusing","captureIndex":587,"sequence":18550,"scheduledElapsedUs":30249489,"label":"尝试拆除 C4"}
+{"id":"bomb-4","kind":"bomb-planted","captureIndex":592,"sequence":18554,"scheduledElapsedUs":30400842,"label":"C4 已部署"}
+{"id":"bomb-5","kind":"bomb-defusing","captureIndex":646,"sequence":18607,"scheduledElapsedUs":33078486,"label":"尝试拆除 C4"}
+{"id":"bomb-6","kind":"bomb-planted","captureIndex":650,"sequence":18610,"scheduledElapsedUs":33198117,"label":"C4 已部署"}
+{"id":"bomb-7","kind":"bomb-defusing","captureIndex":762,"sequence":18720,"scheduledElapsedUs":38715653,"label":"尝试拆除 C4"}
+{"id":"bomb-8","kind":"bomb-planted","captureIndex":768,"sequence":18725,"scheduledElapsedUs":38949082,"label":"C4 已部署"}

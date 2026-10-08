@@ -64,6 +64,70 @@ function frames(elapsedMs: readonly number[]): readonly TestFrame[] {
 }
 
 describe('shared ReplaySession', () => {
+  it('keeps media time between data frames across pause, resume, seek, and completion', async () => {
+    const scheduler = new ManualScheduler();
+    const sourceFrames = frames([1000, 1250, 1500]);
+    const session = createReplaySession(
+      { frames: sourceFrames, events: [], rebuild: (index) => sourceFrames[index]! },
+      scheduler,
+    );
+    expect(session.getPlaybackElapsedUs()).toBe(1_000_000);
+    session.play();
+    scheduler.advanceBy(120);
+    expect(session.getPlaybackElapsedUs()).toBe(1_120_000);
+    expect(session.getSnapshot().currentIndex).toBe(0);
+    session.pause();
+    scheduler.advanceBy(900);
+    expect(session.getPlaybackElapsedUs()).toBe(1_120_000);
+    session.play(2);
+    expect(session.getPlaybackSpeed()).toBe(2);
+    scheduler.advanceBy(65);
+    expect(session.getPlaybackElapsedUs()).toBe(1_250_000);
+    expect(session.getSnapshot().currentIndex).toBe(1);
+    await session.restart();
+    expect(session.getPlaybackElapsedUs()).toBe(1_000_000);
+    await session.seekCaptureIndex(1);
+    expect(session.getPlaybackElapsedUs()).toBe(1_250_000);
+    session.play();
+    scheduler.fireNextAt(scheduler.currentMs + 1000);
+    expect(session.getPlaybackElapsedUs()).toBe(1_500_000);
+    expect(session.getSnapshot().isPlaying).toBe(false);
+    session.dispose();
+  });
+
+  it('freezes media time while seeking and preserves it when reconstruction fails', async () => {
+    const scheduler = new ManualScheduler();
+    const sourceFrames = frames([0, 250, 500]);
+    let rejectSeek!: (error: Error) => void;
+    const session = createReplaySession(
+      {
+        frames: sourceFrames,
+        events: [],
+        rebuild: () =>
+          new Promise<TestFrame>((_, reject) => {
+            rejectSeek = reject;
+          }),
+      },
+      scheduler,
+    );
+    session.play();
+    scheduler.advanceBy(120);
+    const seek = session.seekCaptureIndex(2);
+    scheduler.advanceBy(1000);
+    expect(session.getPlaybackElapsedUs()).toBe(120_000);
+    rejectSeek(new Error('unavailable'));
+    await expect(seek).rejects.toThrow('unavailable');
+    expect(session.getPlaybackElapsedUs()).toBe(120_000);
+    expect(session.getSnapshot().currentIndex).toBe(0);
+    session.play();
+    scheduler.advanceBy(130);
+    expect(session.getSnapshot().currentIndex).toBe(1);
+    session.abort();
+    scheduler.advanceBy(1000);
+    expect(session.getPlaybackElapsedUs()).toBe(250_000);
+    session.dispose();
+  });
+
   it('rebuilds seeks, restarts, and steps through frames', async () => {
     const scheduler = new ManualScheduler();
     const sourceFrames = frames([0, 100, 200]);

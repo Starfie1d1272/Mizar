@@ -290,12 +290,11 @@ export function WorkspaceDock() {
         <div className="workspace-next-preview" aria-label="下一个场景预览">
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
-            <small>{mode === 'manual' ? '恢复自动后建议进入' : '下一场景'}</small>
+            <small>下一场景</small>
             <strong>
               {next?.title ??
                 (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')}
             </strong>
-            <small>{sceneState?.director?.nextReason ?? '等待编排数据'}</small>
           </div>
         </div>
       </section>

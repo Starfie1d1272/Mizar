@@ -74,6 +74,7 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
     }
     this.source = source;
     this.scheduler = scheduler;
+    this.playbackCaptureAnchorUs = source.frames[0]!.cursor.scheduledElapsedUs;
     this.snapshot = {
       current: source.frames[0]!,
       currentIndex: 0,
@@ -86,6 +87,20 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
   }
 
   getSnapshot = (): ReplaySessionSnapshot<Frame> => this.snapshot;
+
+  /** Presentation clock for synchronized media; never changes discrete gameplay facts. */
+  getPlaybackElapsedUs = (): number => {
+    const elapsed = this.snapshot.isPlaying
+      ? this.playbackCaptureAnchorUs +
+        (this.scheduler.nowMs() - this.playbackWallAnchorMs) * 1000 * this.speed
+      : this.playbackCaptureAnchorUs;
+    return Math.min(
+      this.source.frames[this.source.frames.length - 1]!.cursor.scheduledElapsedUs,
+      Math.max(this.source.frames[0]!.cursor.scheduledElapsedUs, elapsed),
+    );
+  };
+
+  getPlaybackSpeed = (): number => this.speed;
 
   subscribe = (listener: () => void): (() => void) => {
     this.assertActive();
@@ -100,9 +115,6 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
     if (this.snapshot.currentIndex >= this.source.frames.length - 1 || this.snapshot.isPlaying)
       return;
     this.speed = speed;
-    this.playbackCaptureAnchorUs =
-      this.snapshot.current?.cursor.scheduledElapsedUs ??
-      this.source.frames[0]!.cursor.scheduledElapsedUs;
     this.playbackWallAnchorMs = this.scheduler.nowMs();
     this.update({ isPlaying: true, error: null });
     this.scheduleNextFrame();
@@ -110,6 +122,7 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
 
   pause(): void {
     if (this.disposed || !this.snapshot.isPlaying) return;
+    this.playbackCaptureAnchorUs = this.getPlaybackElapsedUs();
     this.cancelTimer();
     this.update({ isPlaying: false });
   }
@@ -139,6 +152,7 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
     this.seekController?.abort();
     const controller = new AbortController();
     this.seekController = controller;
+    this.playbackCaptureAnchorUs = this.getPlaybackElapsedUs();
     this.cancelTimer();
     this.update({ isPlaying: false, isSeeking: true, error: null });
     try {
@@ -147,6 +161,7 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
       if (frame.cursor.captureIndex !== targetCaptureIndex) {
         throw new Error('Replay prefix rebuild returned a mismatched capture cursor');
       }
+      this.playbackCaptureAnchorUs = frame.cursor.scheduledElapsedUs;
       this.update({
         current: frame,
         currentIndex: targetCaptureIndex,
@@ -225,6 +240,7 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
 
   abort(): void {
     if (this.disposed) return;
+    this.playbackCaptureAnchorUs = this.getPlaybackElapsedUs();
     this.generation += 1;
     this.seekController?.abort();
     this.seekController = undefined;
@@ -265,8 +281,10 @@ export class ReplaySession<Frame extends ReplaySessionFrame> {
             currentEventId: this.eventIdAt(targetIndex),
           });
         }
-        if (targetIndex >= this.source.frames.length - 1) this.update({ isPlaying: false });
-        else this.scheduleNextFrame();
+        if (targetIndex >= this.source.frames.length - 1) {
+          this.playbackCaptureAnchorUs = this.source.frames[targetIndex]!.cursor.scheduledElapsedUs;
+          this.update({ isPlaying: false });
+        } else this.scheduleNextFrame();
       },
       Math.max(0, deadline - this.scheduler.nowMs()),
     );

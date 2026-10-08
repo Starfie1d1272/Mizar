@@ -1,93 +1,69 @@
 {
   "provenance": {
-    "source": "fixtures/rivals-rehearsal/rivals-rehearsal.generated.json",
-    "capturedAt": "2026-09-29",
-    "usage": "Retrospective pre-match presentation: current and next results are hidden. Not live fixtures."
+    "source": "fixtures/epl-s24/source.json",
+    "capturedAt": "2026-10-08",
+    "usage": "回顾性赛程窗口：同组前场、焦点比赛、NAVI 后续比赛；后两场结果隐藏。时间核对来源见 fixtures/epl-s24/source.json。"
   },
   "competition": {
-    "competitionId": "2baa51ad-3615-4702-81a5-0bb39a71284a",
-    "slug": "2026-nju-rivals",
-    "name": "2026 NJU Rivals",
-    "logoUrl": null,
-    "themeColor": "#f97316"
+    "competitionId": "hltv-event-8244",
+    "name": "ESL Pro League Season 24",
+    "logoUrl": "https://img-cdn.hltv.org/eventlogo/PhVPy7kXO_J_nfTng7a87h.png?ixlib=java-2.1.0&w=400&s=c0aedfdc29d3c83494b063e81e987cf6",
+    "themeColor": null,
+    "slug": "esl-pro-league-season-24"
   },
   "matches": [
     {
-      "matchId": "3ed23d38-3507-44db-9a02-e0e2390080e6",
-      "scheduledAt": "2026-05-23T11:00:00.000Z",
-      "startedAt": null,
-      "completedAt": "2026-05-23T13:00:00.000Z",
-      "status": "finished",
+      "matchId": "hltv-2398743",
+      "scheduledAt": "2026-10-06T15:40:00.000Z",
+      "stageLabel": "瑞士轮 · 第 4 轮 · 2–1 组",
       "format": "bo3",
-      "stage": "playoff",
-      "stageLabel": "正赛",
-      "round": null,
-      "roundLabel": null,
-      "matchLabel": null,
-      "isForfeit": false,
-      "scoreA": 0,
+      "scoreA": 1,
       "scoreB": 2,
       "entrantA": {
-        "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
-        "name": "她还爱我对不 队",
-        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+        "entryId": "epl-furia",
+        "name": "FURIA",
+        "logoUrl": null
       },
       "entrantB": {
-        "entryId": "fbdf2889-db44-4006-a9f6-08ee88628676",
-        "name": "Team Plasma",
-        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/fbdf2889-db44-4006-a9f6-08ee88628676/1778943880190.png"
-      }
-    },
-    {
-      "matchId": "d9987c41-180a-4113-8003-c6d18d1ba1e6",
-      "scheduledAt": "2026-05-24T02:30:00.000Z",
-      "startedAt": null,
-      "completedAt": "2026-05-24T06:47:21.636Z",
-      "status": "finished",
-      "format": "bo3",
-      "stage": "playoff",
-      "stageLabel": "正赛",
-      "round": null,
-      "roundLabel": null,
-      "matchLabel": null,
-      "isForfeit": false,
-      "scoreA": 2,
-      "scoreB": 1,
-      "entrantA": {
-        "entryId": "8d3005e2-65d1-4135-8c02-8ead0624f147",
-        "name": "Team D'avenir",
-        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8d3005e2-65d1-4135-8c02-8ead0624f147/1778998794517.jpg"
-      },
-      "entrantB": {
-        "entryId": "e67eb4c5-e842-4781-b35c-276563ac8e70",
-        "name": "暴躁南梁",
+        "entryId": "epl-aurora",
+        "name": "Aurora",
         "logoUrl": null
       }
     },
     {
-      "matchId": "e2088991-2f0d-4ef0-9a5b-1d2250a4e9fd",
-      "scheduledAt": "2026-05-24T11:00:00.000Z",
-      "startedAt": null,
-      "completedAt": "2026-05-24T12:50:00.000Z",
-      "status": "finished",
+      "matchId": "hltv-2398745",
+      "scheduledAt": "2026-10-06T19:00:00.000Z",
+      "stageLabel": "瑞士轮 · 第 4 轮 · 2–1 组",
       "format": "bo3",
-      "stage": "playoff",
-      "stageLabel": "正赛",
-      "round": null,
-      "roundLabel": null,
-      "matchLabel": null,
-      "isForfeit": false,
-      "scoreA": 2,
-      "scoreB": 0,
+      "scoreA": null,
+      "scoreB": null,
       "entrantA": {
-        "entryId": "bd8e019b-be34-46c9-af92-12cfef45cccb",
-        "name": "車一进一宝贝队",
-        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/bd8e019b-be34-46c9-af92-12cfef45cccb/1778943079776.jpg"
+        "entryId": "epl-falcons",
+        "name": "Falcons",
+        "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
       },
       "entrantB": {
-        "entryId": "8123558b-4db7-40f4-8008-3493ed60f4dd",
-        "name": "她还爱我对不 队",
-        "logoUrl": "https://sucokfotkypwqkckfynp.supabase.co/storage/v1/object/public/team-logos/8123558b-4db7-40f4-8008-3493ed60f4dd/1779105558952.png"
+        "entryId": "epl-navi",
+        "name": "Natus Vincere",
+        "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+      }
+    },
+    {
+      "matchId": "hltv-2398748",
+      "scheduledAt": "2026-10-07T14:30:00.000Z",
+      "stageLabel": "瑞士轮 · 第 5 轮 · 2–2 组",
+      "format": "bo3",
+      "scoreA": null,
+      "scoreB": null,
+      "entrantA": {
+        "entryId": "epl-parivision",
+        "name": "PARIVISION",
+        "logoUrl": null
+      },
+      "entrantB": {
+        "entryId": "epl-navi",
+        "name": "Natus Vincere",
+        "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
       }
     }
   ]

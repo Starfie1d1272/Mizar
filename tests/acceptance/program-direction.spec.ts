@@ -49,17 +49,17 @@ test('map result uses the fixed score anchors and the real-derived final score',
     width: 500,
     height: 480,
   });
-  await expect(page.locator('.result-side--a .result-round-score')).toHaveText('14');
-  await expect(page.locator('.result-side--b .result-round-score')).toHaveText('16');
+  await expect(page.locator('.result-side--a .result-round-score')).toHaveText('13');
+  await expect(page.locator('.result-side--b .result-round-score')).toHaveText('6');
   const leftScore = (await page.locator('.result-side--a .result-round-score').boundingBox())!;
   const leftLogo = (await page.locator('.result-side--a .result-logo').boundingBox())!;
   expect(leftLogo.x - (leftScore.x + leftScore.width)).toBeGreaterThanOrEqual(40);
-  await expect(page.locator('.result-side--b')).toHaveAttribute('data-winner', 'true');
+  await expect(page.locator('.result-side--a')).toHaveAttribute('data-winner', 'true');
 });
 
 test('intro hands off to HUD and reduced motion retains the same content', async ({ page }) => {
   await page.goto('/program/matchup?preview=1&intro=short');
-  await expect(page.locator('.intro-team--a strong')).toHaveText('FURIA');
+  await expect(page.locator('.intro-team--a strong')).toHaveText('Falcons');
   await expect(page.locator('.intro-hud')).toHaveCSS('opacity', '1', { timeout: 4000 });
   await expect(page.locator('.intro-body')).toHaveCSS('opacity', '0');
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -70,7 +70,7 @@ test('intro hands off to HUD and reduced motion retains the same content', async
 
 test('waiting and match result use event identity and last-map statistics', async ({ page }) => {
   await page.goto('/program/waiting?preview=1&variant=no-media');
-  await expect(page.locator('.waiting-event')).toContainText('2026 NJU Rivals');
+  await expect(page.locator('.waiting-event')).toContainText('ESL Pro League Season 24');
   await expect(page.locator('.waiting-team img')).toHaveCount(0);
   await page.goto('/program/match-result?preview=1');
   await expect(page.locator('.summary-caption')).toContainText('FINAL MAP STATS');
@@ -81,21 +81,23 @@ test('waiting exposes source-derived schedule and summary logos have clear space
   page,
 }) => {
   await page.goto('/program/waiting?preview=1');
-  await expect(page.locator('.waiting-schedule--previous')).toContainText('0 : 2');
+  await expect(page.locator('.waiting-schedule--previous')).toContainText('1 : 2');
   await expect(page.locator('.waiting-schedule--next')).toContainText('VS');
   await expect(page.locator('.waiting-time')).toContainText('SCHEDULED');
+  await expect(page.locator('.waiting-time')).toContainText('03:00');
+  await expect(page.locator('.waiting-time')).toContainText('UTC+8');
   await page.goto('/program/waiting?preview=1&variant=no-schedule');
   await expect(page.locator('.waiting-schedule article')).toHaveCount(0);
   await page.goto('/program/halftime?preview=1');
   const logo = await page.locator('.summary-entrant-logo').first().boundingBox();
   const maps = await page.locator('.summary-map-cards').boundingBox();
   expect(maps!.x - logo!.x - logo!.width).toBeGreaterThanOrEqual(24);
-  await expect(page.locator('.summary-map-tab').first()).toHaveText('ANCIENT');
+  await expect(page.locator('.summary-map-tab').first()).toHaveText('INFERNO');
   await expect(page.locator('.summary-map-pick').last()).toHaveText('DECIDER');
   await expect(page.locator('.summary-stat-axis > span').first()).toHaveText('K/D');
-  await expect(page.locator('.summary-player-stats').first()).toHaveText('6–6');
+  await expect(page.locator('.summary-player-stats').first()).toHaveText('5–7');
   await expect(page.locator('.summary-player-stats').first().locator('span')).toHaveCount(3);
-  await expect(page.locator('.summary-map-art > strong').first()).toHaveText('7 – 5');
+  await expect(page.locator('.summary-map-art > strong').first()).toHaveText('6 – 6');
 });
 
 test('live intro mounts after delayed presentation and polls do not repeatedly seek motion', async ({
@@ -217,7 +219,9 @@ test('Pulse scene shells keep arcs subordinate and result headers clear of map t
       const footer = (await page.locator('.summary-footer').boundingBox())!;
       const tab = (await page.locator('.summary-map-tab').first().boundingBox())!;
       expect(footer.y + footer.height).toBeLessThanOrEqual(tab.y);
-      await expect(page.locator('.summary-footer [data-winner="true"]')).toHaveCount(0);
+      await expect(page.locator('.summary-footer [data-winner="true"]')).toHaveCount(
+        scene === 'match-result' ? 1 : 0,
+      );
     }
   }
 });

@@ -1,0 +1,10 @@
+{
+  "kind": "recorded-projections",
+  "description": "Production RC27 Program/Radar snapshots; no synthetic gameplay or raw-input prefix reconstruction",
+  "match": "HLTV 2398745 Falcons vs Natus Vincere",
+  "map": "de_inferno",
+  "demoSha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+  "trimStartSeconds": 40,
+  "trimEndSeconds": 80,
+  "calibration": "OBS outputDuration median anchor; end-to-end validation pending"
+}

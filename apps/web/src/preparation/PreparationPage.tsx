@@ -534,7 +534,7 @@ export function PreparationPage() {
               ) : null}
               {hasSampleCapability && rehearsal?.loaded && rehearsalSchedule?.matches ? (
                 <>
-                  <h2>Rivals 示例赛程</h2>
+                  <h2>{rehearsalSchedule.competition.name} · 示例赛程</h2>
                   <div className="preparation-schedule-selector">
                     <label htmlFor="rehearsal-match-select-tab">切换示例比赛：</label>
                     <select

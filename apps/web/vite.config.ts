@@ -5,10 +5,19 @@ import react from '@vitejs/plugin-react';
 
 const cs2AssetsPublicDir = '../../packages/cs2-assets/generated/public';
 const replayPublicDir = resolve(import.meta.dirname, 'public');
-const brandPublicDir = resolve(import.meta.dirname, 'public/brand');
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 
 const replaySources = {
+  'epl-inferno-opening': {
+    capturePath: resolve(repositoryRoot, 'fixtures/epl-s24/captures/inferno-opening'),
+    firstSequence: 13,
+    lastSequence: 650,
+  },
+  'epl-inferno-final-round': {
+    capturePath: resolve(repositoryRoot, 'fixtures/epl-s24/captures/inferno-final-round'),
+    firstSequence: 2200,
+    lastSequence: 3160,
+  },
   'ancient-round-03': {
     capturePath: resolve(repositoryRoot, 'fixtures/gsi/acceptance/ancient-round-03'),
     firstSequence: 587,
@@ -40,6 +49,7 @@ function replayPrefixDevelopmentApi() {
         readonly replayRealProgram: (options: {
           readonly capturePath: string;
           readonly targetSequence: number;
+          readonly configureManifest?: () => unknown;
         }) => Promise<{
           readonly snapshot: unknown;
           readonly radarSnapshot: unknown;
@@ -75,9 +85,18 @@ function replayPrefixDevelopmentApi() {
           )) as unknown as ReplayModule;
           let result: Awaited<ReturnType<ReplayModule['replayRealProgram']>>;
           try {
+            const eplContext = sourceId.startsWith('epl-')
+              ? (JSON.parse(
+                  await readFile(
+                    resolve(replayPublicDir, 'fixtures', sourceId, 'replay/match-context.json'),
+                    'utf8',
+                  ),
+                ) as { manifest: unknown })
+              : undefined;
             result = await replayRealProgram({
               capturePath: source.capturePath,
               targetSequence,
+              ...(eplContext ? { configureManifest: () => eplContext.manifest } : {}),
             });
           } catch (error) {
             let sanitizerVersion: unknown = 'unreadable';
@@ -163,18 +182,26 @@ function replayPublicAssets() {
         {
           recursive: true,
           force: true,
-          filter: (source) => !source.split(sep).includes('nuke-demo-round-01'),
+          filter: (source) =>
+            !source
+              .split(sep)
+              .some((part) =>
+                ['nuke-demo-round-01', 'ancient-round-03', 'ancient-round-11-defuse'].includes(
+                  part,
+                ),
+              ),
         },
       );
     },
   };
 }
 
-function brandPublicAssets() {
+function appPublicAssets(directory: 'brand' | 'fixture-media') {
+  const assetDirectory = resolve(replayPublicDir, directory);
   return {
-    name: 'mizar-brand-public-assets',
+    name: `mizar-${directory}-public-assets`,
     configureServer(server: import('vite').ViteDevServer) {
-      server.middlewares.use('/brand', (request, response, next) => {
+      server.middlewares.use(`/${directory}`, (request, response, next) => {
         const requestUrl = request.url;
         if (requestUrl === undefined) return next();
         let pathname: string;
@@ -183,13 +210,14 @@ function brandPublicAssets() {
         } catch {
           return next();
         }
-        const filePath = resolve(brandPublicDir, `.${pathname}`);
-        if (!filePath.startsWith(`${brandPublicDir}${sep}`)) return next();
+        const filePath = resolve(assetDirectory, `.${pathname}`);
+        if (!filePath.startsWith(`${assetDirectory}${sep}`)) return next();
         void readFile(filePath)
           .then((bytes) => {
             const contentTypes: Record<string, string> = {
               '.svg': 'image/svg+xml',
               '.png': 'image/png',
+              '.jpg': 'image/jpeg',
             };
             response.statusCode = 200;
             response.setHeader(
@@ -203,7 +231,7 @@ function brandPublicAssets() {
       });
     },
     async closeBundle() {
-      await cp(brandPublicDir, resolve(import.meta.dirname, 'dist/brand'), {
+      await cp(assetDirectory, resolve(import.meta.dirname, 'dist', directory), {
         recursive: true,
         force: true,
       });
@@ -289,7 +317,8 @@ export default defineConfig({
   plugins: [
     react(),
     replayPublicAssets(),
-    brandPublicAssets(),
+    appPublicAssets('brand'),
+    appPublicAssets('fixture-media'),
     replayPrefixDevelopmentApi(),
     productShellStylesheet(),
     hostDiagnosticsDevelopmentApi(),

@@ -1,0 +1,11 @@
+{
+  "kind": "recorded-projections",
+  "captureId": "rc27-obs-inferno-20261008T050144Z",
+  "frameCount": 790,
+  "framesSha256": "1fc2595fa6cf3a53073c1799fbc1404c570ecd5fcfdbab48a880bdbc740e97c7",
+  "provenance": {
+    "sanitizerVersion": 1,
+    "sourceCaptureId": "rc27-obs-inferno-20261008T050144Z",
+    "sourceFramesSha256": "fc975491d5aa3735936b4b6af24cecb59c47f785321b746d93054c08de11be03"
+  }
+}

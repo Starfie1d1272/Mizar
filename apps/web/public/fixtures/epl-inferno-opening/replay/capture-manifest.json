@@ -1,0 +1,48 @@
+{
+  "formatVersion": 1,
+  "captureId": "sanitized-20261007075825391-05e72b58-seq-13-650",
+  "createdAt": "2026-10-07T07:58:25.391Z",
+  "platform": "win32",
+  "broadcastCommit": "6e84cd2eaa027ae322ad486b6b2ab31e18e2d486",
+  "scenario": "EPL S24 Falcons vs NAVI · inferno-opening",
+  "gsiConfig": {
+    "buffer": 0,
+    "components": [
+      "provider",
+      "map",
+      "map_round_wins",
+      "round",
+      "player_id",
+      "player_state",
+      "player_weapons",
+      "player_match_stats",
+      "player_position",
+      "phase_countdowns",
+      "allplayers_id",
+      "allplayers_state",
+      "allplayers_match_stats",
+      "allplayers_weapons",
+      "allplayers_position",
+      "allgrenades",
+      "bomb"
+    ],
+    "heartbeat": 10,
+    "precision_position": 1,
+    "precision_time": 3,
+    "precision_vector": 3,
+    "throttle": 0,
+    "timeout": 1.1
+  },
+  "complete": true,
+  "frameCount": 638,
+  "droppedFrames": 0,
+  "framesSha256": "5fad977ec413672705c7386bf1504d27c21e006127d83b239c06e596eaf57c09",
+  "provenance": {
+    "fixtureKind": "sanitized-real-capture",
+    "sourceCaptureId": "20261007075825391-05e72b58",
+    "sourceFramesSha256": "b99117762d643f8d94300d986744e829260dee49ef5b6e452f253b4027329edf",
+    "sourceFrameSelection": { "kind": "sequence-range", "firstSequence": 13, "lastSequence": 650 },
+    "sanitizerVersion": 2,
+    "lifecycleCoverage": "partial"
+  }
+}
