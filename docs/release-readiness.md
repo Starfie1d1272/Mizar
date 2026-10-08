@@ -11,16 +11,16 @@
   → 最终版本、检查、构建身份与正式发布
 ```
 
-Final RC 的剩余门槛是受影响功能和视觉收敛、短 Windows 原生检查，以及同一候选的一场真实 Play-in BO1 制作与 RivalHub 正式写回。无需重复历史完整三图采样或穷举 DPI / 多显示器矩阵。真实制作通过后冻结功能代码；正式 `1.0.0` 只允许版本、发布说明与必要元数据变化，并重新生成正式版本资格产物，再晋级同一已验产物。若修改运行时逻辑，返回 #35 按影响复验。
+Final RC 的剩余门槛是受影响功能和视觉收敛、短 Windows 原生检查，以及同一候选的一场真实赛事测试赛制作与 RivalHub 测试数据闭环；正式比赛专有的晋级/赛果写回另用针对性回归及首场正式赛抽查验证。无需重复历史完整三图采样或穷举 DPI / 多显示器矩阵。真实制作通过后冻结功能代码；正式 `1.0.0` 只允许版本、发布说明与必要元数据变化，并重新生成正式版本资格产物，再晋级同一已验产物。若修改运行时逻辑，返回 #35 按影响复验。
 
-临时诊断材料在发布冻结前按 #133 逐文件整理，保留最低缺陷复现、来源及校验依赖；历史原件可以由固定 Git 提交和既有 Release 承接。先检查本地与 GitHub 引用，再以独立文档提交清理，不与功能修改混合，不改写已发布资产或资格身份。
+历史临时诊断材料已由 [PR #178](https://github.com/Starfie1d1272/Mizar/pull/178) 逐文件审计并精简，最小缺陷复现、来源与校验依赖继续保留，详细原件由固定 Git 提交和既有 Release 承接。#133 在最终冻结时只复核新证据与发布文档的引用、真实限制和产物身份；不重复已完成的历史清理，也不改写已发布资产或资格身份。
 
 总体状态由 [Release Closure #90](https://github.com/Starfie1d1272/Mizar/issues/90) 维护，现场场景、结果和证据由 [Production Acceptance #35](https://github.com/Starfie1d1272/Mizar/issues/35) 维护；不在仓库再复制一份现场报告。
 
 ## 构建 RC
 
 - [ ] 操作入口、默认视觉、随包说明与拟发布功能一致。
-- [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的适用 CI。
+- [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的完整 CI；仅按差异跳过检查的成功记录不足以晋级，必要时在该 SHA 对应的 ref 手动运行 CI。Final RC 纳入最后的功能与视觉修改后，重新核对精确候选 SHA 的完整质量、浏览器、协议、构建和 Release Qualification 证据；冻结后新增代码必须重新判定候选身份，不能沿用旧 RC 的证据。
 - [ ] 用 Release Qualification workflow 指定 SHA，或在 Windows x64 执行 `node scripts/qualification/build.mjs`，正式 RC 使用默认 `release` 桌面构建配置，可用 `--label RC0` 标记报告；产品文件名从应用版本生成。
 - [ ] 包含桌面 EXE、Node、Web、脚本、配置、素材与许可；核对解压启动及适用自动化报告。
 - [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，核对自动生成的外层 `.zip.sha256` 与 `release-manifest.json`；ZIP 摘要与包内内容摘要含义不同。
@@ -54,8 +54,12 @@ Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64.exe`，便�
 
 Cargo.toml 的 package.version 是应用版本权威；Tauri config 为镜像，`app-version.mjs` 在 CI 与构建时强制核对。修改版本同时更新镜像；产品 metadata/manifest 的 appVersion 及 EXE `--app-version` 必须一致。Node runtime 版本与 Windows x64 archive SHA-256 一并固定于 qualification contract，升级时经 PR 更新。
 
-Release Qualification 成功后使用 Release Promotion，输入成功 run ID 与精确应用版本标签。流程下载原始 product/evidence，验证 provenance、源码、ZIP、内容、EXE 版本及标签一致，创建 draft 并上传全部资产后发布。晋级不运行 build；已有不同身份的 tag/release 拒绝修改，同身份重复执行不变更。该流程同时支持 RC 和正式版本；正式发布的人工环境门槛仍需先满足。
+Release Qualification 先将输入 ref 固定为源码 SHA，只构建一次 release ZIP 并运行 Rust 测试。两个独立 Windows runner 随后并行验证：便携 ZIP 的产品、GUI、C4 与三地图合成生命周期检查，以及从同一原始 ZIP 生成的 SFX 提取与产品、GUI 检查。每路在提取前核对构建任务输出的 SHA 和 ZIP 摘要，通过后记录身份；汇总任务核对两路身份及全部分发资产后才签发 provenance 并上传 qualified product。候选和中间分发产物不是已验发布包，任一路失败或取消都不能签发。失败诊断按 lane 保留，最终 evidence ZIP 在 `portable/`、`sfx/` 下收录对应证据，根目录保留发布清单和构建计时。
+
+Release Qualification 成功后使用 Release Promotion，输入成功 run ID 与精确应用版本标签。流程下载原始 product/evidence，按产品清单的真实 `gitSha` 查询同仓库最新的 push、手工或定时 CI；必须完成且成功，并具备全部质量、设计、浏览器、平台、Windows/离线验收及 `ci-gate` 成功证据，PR 的合并引用或仅文档检查不能替代。缺失、失败、仍在运行或有跳过项时拒绝晋级；在相同源码上手动运行完整 CI 后重试，CI run/attempt 记录随发布资产保存。然后验证 provenance、源码、ZIP、内容、EXE 版本及标签一致，创建 draft 并上传全部资产后发布。晋级不运行 build；已有不同身份的 tag/release 拒绝修改，同身份重复执行不变更。该流程同时支持 RC 和正式版本；正式发布的人工环境门槛仍需先满足。
 
 依赖 test/tests/**tests** 目录按名称递归删除的策略已移除，以避免破坏包入口；声明、source map、构建缓存与 runtime npm/Corepack 仍按已有明确规则裁剪。大小与启动测量随 final candidate evidence 提供，不因理论优化修改全量 hash 策略。
 
 当前没有代码签名证书，unsigned 1.0 为明确发布例外；证书与发布主体另在 1.0.x 解决，见发布说明草案。GitHub public repository 支持 qualification provenance，验证使用 gh attestation verify；immutable release 在流程配置与实测后记录实际启用状态，不把 GitHub 支持误写成已启用。
+
+构建优化的实际收益以 Actions 耗时、缓存命中、传输时间和构建计时对比为准；并行任务存在 runner 启动和产物传输开销，不承诺固定提速。正式 Rust Release 优化参数保持不变，Thin LTO 等调整需要单独对照测试与验收。

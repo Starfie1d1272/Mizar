@@ -25,6 +25,25 @@ const findingCodes = [
   'collection_missing',
 ];
 
+const cs2IssueCodes = [
+  'installation-not-found',
+  'multiple-installations',
+  'selected-path-missing',
+  'selected-path-invalid',
+  'metadata-invalid',
+  'selection-unreadable',
+  'restore-before-selection',
+  'gsi-file-missing',
+  'gsi-file-changed',
+  'record-unreadable',
+  'endpoint-conflict',
+  'status-unreadable',
+  'access-denied',
+  'operation-failed',
+];
+const cs2Stages = ['status', 'selection', 'install', 'restore'];
+const collectionStates = ['available', 'failed', 'timeout'];
+
 export function registerSupportRoutes(
   app: FastifyInstance,
   options: {
@@ -56,16 +75,41 @@ export function registerSupportRoutes(
                 gsi: {
                   type: ['object', 'null'],
                   additionalProperties: false,
-                  properties: Object.fromEntries(
-                    ['detected', 'installed', 'conflict', 'fileConflict', 'endpointConflict'].map(
-                      (key) => [key, { type: 'boolean' }],
+                  properties: {
+                    ...Object.fromEntries(
+                      [
+                        'detected',
+                        'installed',
+                        'conflict',
+                        'fileConflict',
+                        'endpointConflict',
+                        'readFailed',
+                      ].map((key) => [key, { type: 'boolean' }]),
                     ),
-                  ),
+                    collectionStatus: { type: 'string', enum: collectionStates },
+                    candidateCount: { type: 'integer', minimum: 0, maximum: 10000 },
+                    conflictCount: { type: 'integer', minimum: 0, maximum: 10000 },
+                    issueCodes: {
+                      type: 'array',
+                      maxItems: 16,
+                      items: { type: 'string', enum: cs2IssueCodes },
+                    },
+                    lastOperation: {
+                      type: ['object', 'null'],
+                      additionalProperties: false,
+                      required: ['code', 'stage'],
+                      properties: {
+                        code: { type: 'string', enum: cs2IssueCodes },
+                        stage: { type: 'string', enum: cs2Stages },
+                      },
+                    },
+                  },
                 },
                 cs2: {
                   type: ['object', 'null'],
                   additionalProperties: false,
                   properties: {
+                    collectionStatus: { type: 'string', enum: collectionStates },
                     found: { type: 'boolean' },
                     managed: { type: 'boolean' },
                   },
@@ -127,7 +171,7 @@ export function registerSupportRoutes(
             '本文件是有界诊断摘要，可用于提交 Mizar 问题；不包含原始遥测、选手资料、凭据、主机名或本地路径。',
             '日志保留启动阶段、结果与数值错误码；原始错误文本仅留在本机。session 只在本文件内关联。',
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
-            'desktop 状态来自导出时浏览器调用本机 Host；null 表示不可用，不能据此推断 CS2 或 GSI 安装失败。',
+            'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
@@ -140,9 +184,28 @@ export function registerSupportRoutes(
               conflict: bool(gsi.conflict),
               fileConflict: bool(gsi.fileConflict),
               endpointConflict: bool(gsi.endpointConflict),
+              readFailed: bool(gsi.readFailed),
+              collectionStatus: choice(gsi.collectionStatus, collectionStates),
+              candidateCount:
+                typeof gsi.candidateCount === 'number' ? count(gsi.candidateCount) : null,
+              conflictCount:
+                typeof gsi.conflictCount === 'number' ? count(gsi.conflictCount) : null,
+              issueCodes: Array.isArray(gsi.issueCodes)
+                ? gsi.issueCodes
+                    .map((code) => choice(code, cs2IssueCodes))
+                    .filter((code) => code !== null)
+                : [],
+              lastOperation:
+                gsi.lastOperation === null || gsi.lastOperation === undefined
+                  ? null
+                  : {
+                      code: choice(record(gsi.lastOperation).code, cs2IssueCodes),
+                      stage: choice(record(gsi.lastOperation).stage, cs2Stages),
+                    },
             },
             cs2: {
               source: 'desktop-host-via-browser',
+              collectionStatus: choice(cs2.collectionStatus, collectionStates),
               found: bool(cs2.found),
               managed: bool(cs2.managed),
             },

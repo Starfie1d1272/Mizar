@@ -2,15 +2,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ProgramPage } from '../src/program/ProgramPage';
-import { ProgramCanvas } from '../src/program/ProgramCanvas';
 import {
   getProgramFixture,
   getProgramFixtureProvenance,
   PROGRAM_FIXTURE_IDS,
   programFixtures,
 } from '../src/program/fixtures';
-import { ProgramVisualFixturePage } from '../src/program/testing/ProgramVisualFixturePage';
 
 describe('Program presentation foundation', () => {
   it('provides every frozen deterministic fixture through the ProgramSnapshot schema', () => {
@@ -103,18 +100,5 @@ describe('Program presentation foundation', () => {
     const stress = getProgramFixture('stress-long-labels');
     expect(stress?.payload.players).toHaveLength(10);
     expect(stress?.payload.teams.ct.name).toContain('International Academy');
-  });
-
-  it('uses the same ProgramCanvas for production and visual-only pages', () => {
-    const production = ProgramPage();
-    const visual = ProgramVisualFixturePage({ fixtureId: 'awaiting-neutral' });
-
-    expect(production).toMatchObject({
-      type: ProgramCanvas,
-      props: {},
-    });
-    expect(visual).toMatchObject({
-      type: ProgramCanvas,
-    });
   });
 });

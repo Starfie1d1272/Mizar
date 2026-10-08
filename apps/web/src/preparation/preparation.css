@@ -964,3 +964,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.settings-conflict-files {
+  overflow-wrap: anywhere;
+}

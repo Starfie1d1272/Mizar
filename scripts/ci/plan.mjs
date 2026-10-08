@@ -12,6 +12,25 @@ export const CI_JOB_IDS = Object.freeze([
 
 const DOCS_ONLY_PATTERN = /^(?:docs\/.*|.*\.(?:md|mdx))$/s;
 const WEB_BEHAVIOR_SOURCE_PATTERN = /\.(?:ts|tsx|js|jsx|html)$/;
+// These producers share browser consumers. Until dependency-aware selection exists,
+// route their source changes to the existing complete acceptance lane.
+const ACCEPTANCE_SOURCE_PREFIXES = [
+  'packages/core/src/',
+  'packages/radar/src/',
+  'packages/radar-view/src/',
+  'packages/hud-config/src/',
+  'packages/protocol/src/',
+  'apps/companion/src/runtime/',
+  'apps/companion/src/projections/',
+  'apps/companion/src/program-scenes/',
+  'apps/companion/src/local-protocol/',
+  'apps/companion/src/hud-config/',
+  'apps/companion/src/bp/',
+  'apps/companion/src/match-context/',
+  'apps/companion/src/series-progress/',
+  'apps/companion/src/replay/',
+  'apps/companion/src/output/',
+];
 const KNOWN_QUALITY_PREFIXES = ['apps/', 'packages/', 'tests/', 'scripts/'];
 const PLATFORM_PREFIXES = [
   'apps/companion/',
@@ -87,8 +106,11 @@ function isAcceptancePath(path) {
     (path.startsWith('apps/web/') && WEB_BEHAVIOR_SOURCE_PATTERN.test(path)) ||
     path.startsWith('tests/acceptance/') ||
     path.startsWith('packages/replay/') ||
-    path === 'packages/protocol/src/program.ts' ||
-    path === 'packages/protocol/src/version.ts' ||
+    (!isDocsOnlyPath(path) &&
+      !path.endsWith('.css') &&
+      ACCEPTANCE_SOURCE_PREFIXES.some((prefix) => path.startsWith(prefix))) ||
+    path === 'apps/companion/src/app.ts' ||
+    path === 'apps/companion/src/server.ts' ||
     path.includes('program-fixtures/')
   );
 }

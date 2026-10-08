@@ -49,6 +49,11 @@ jobs:
           foreach ($field in @('gitSha','archiveSha256','contentDigest','appVersion')) { if ($manifest.$field -ne $evManifest.$field) { throw "Evidence mismatch: $field" } }
           "SOURCE_SHA=$($manifest.gitSha)" >> $env:GITHUB_ENV
           "PRODUCT_ARCHIVE=$($manifest.archive)" >> $env:GITHUB_ENV
+      - name: Require full CI for the product manifest source
+        shell: pwsh
+        run: |
+          node scripts/qualification/verify-source-ci.mjs product/release-manifest.json promotion-ci.json
+          if ($LASTEXITCODE -ne 0) { throw 'Full source CI verification failed' }
       - name: Checkout the qualified source (no rebuild)
         shell: pwsh
         run: |
@@ -92,7 +97,7 @@ jobs:
           }
           gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw 'Existing tag without verified release; refusing mutation' }
-          $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path)
+          $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
           $notes = "Exact qualified source: $env:SOURCE_SHA`nQualification: https://github.com/$env:GH_REPO/actions/runs/$env:RUN_ID`nAutomated qualification passed; see evidence for real-environment limits."
           Set-Content release-notes.md $notes -Encoding utf8
           $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets

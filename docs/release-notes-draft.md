@@ -20,7 +20,7 @@ RC26 默认以最高画质、60 帧上限启动受管理 CS2；画质新增高�
 - 游戏设置按连接、启动偏好和可选头像分组；画质／帧率显式保存，下次从页头启动游戏并进入工作台。密钥使用固定长度掩码占位及更新操作，高级设置同时显示包版本与 Commit。
 - Next 预告与实际切场条件分开；赛果确认中仍预告结果，图间依据下一图计划预告赛前节目，同源短暂断流保留最近预告。比赛资料不足时说明原因。
 - 五套雷达保留从最早可信观测点开始的完整虚线飞行轨迹，以固定点数预算压缩历史；共享 HUD 补齐短时减员提示、低甲数值与未知队伍归属处理，各预设保持既有策略。
-- 赛事测试赛保留提供方标记、真实名单、BP 和既有输出链路；正式相邻赛程排除测试赛。服务端配套见 [RivalHub #840](https://github.com/Starfie1d1272/RivalHub/pull/840)，需要两端具备支持后进行实测。
+- 赛事测试赛保留提供方标记、真实名单、BP 和既有输出链路；正式相邻赛程排除测试赛。Mizar [#175](https://github.com/Starfie1d1272/Mizar/pull/175) 与 RivalHub [#840](https://github.com/Starfie1d1272/RivalHub/pull/840) 均已合并，但双方实际操作、LIVE 与 DAK 端到端彩排仍待 #35 验收。
 
 - 本机赛事与比赛支持 BO3 规则、游戏内决定决胜图阵营、既有 BP 恢复；BP 表单按实际容器宽度布局，避免窄侧栏控件溢出。保存与恢复的最终实机范围由 #35 记录。
 - 准备中心默认最大化，游戏配置检查和恢复入口显示稳定；受管理游戏按实际工作区尺寸启动，现场左栏、底栏与任务栏布局协调。
@@ -35,7 +35,7 @@ RC26 默认以最高画质、60 帧上限启动受管理 CS2；画质新增高�
 
 RC26 的默认 60 帧在原故障机三个两分钟采样中未出现超过 100ms 的雷达回调间隔；不限帧仍有风险，具体驱动内部机制和其他显示条件未穷举，跟踪保留在 [#149](https://github.com/Starfie1d1272/Mizar/issues/149)。不把历史 A/B 假设作为已证实的 GPU 根因，也不将旧包的实机结果转写为最终候选通过。
 
-[#177](https://github.com/Starfie1d1272/Mizar/issues/177) 的代码收尾已合并，人工视觉审查尚待完成。RC27 重点复核设置保存与重载、启动／退出恢复、Next、五套 HUD 和轨迹，并重新截图；随后以同一最终候选完成一场真实 Play-in BO1 制作与 RivalHub 正式写回。临时证据删减已通过独立 PR #178 完成，保留缺陷复现与追溯资料。最终版本只在 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 明确通过后按 [#133](https://github.com/Starfie1d1272/Mizar/issues/133) 晋级。完整三图 demo 和穷举显示矩阵不是新增硬门槛；首场正式 BO3 作为发布后生产验证。
+[#177](https://github.com/Starfie1d1272/Mizar/issues/177) 的代码收尾已合并，人工视觉审查尚待完成。RC27 正在用于设置保存与重载、启动／退出恢复、下一场景预告、五套 HUD 和投掷物轨迹的定点复核与重新截图；[#167](https://github.com/Starfie1d1272/Mizar/issues/167) 还需区分持包红圈、真正掉落的独立图标和安放后的 C4 图标。通过审美与必要功能验收后，冻结源码身份明确的 Final RC；以该同一 Final RC 完整制作**一场真实赛事测试赛**（BO1 即可验证地图闭环），覆盖双方正式 BP、真实 CS2/GSI、Program/OBS、RivalHub 测试赛 LIVE/reliable/终局及 DAK。测试赛不能证明正式比赛的晋级或赛果回写；正式赛专有分支保留针对性自动回归与首场正式比赛的生产抽查，不强制提前完成一场正式 Play-in BO1。历史证据已通过 PR #178 精简，保留最小复现与追溯资料；最终版本仅在 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 通过后按 [#133](https://github.com/Starfie1d1272/Mizar/issues/133) 晋级。无需重跑完整三图 demo 或穷举显示矩阵。
 
 RC26 的 [发布清单](https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0-rc.26/release-manifest.json) 与 [分发清单](https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0-rc.26/distribution-manifest.json) 提供源码、内容摘要、ZIP / 自解压包摘要和 release 构建配置；来源证明与原故障机恢复/性能摘要见 [PR #176](https://github.com/Starfie1d1272/Mizar/pull/176)。旧版本调查保存在[固定提交的历史证据](https://github.com/Starfie1d1272/Mizar/tree/ab787f93837c424e5cf2447696d906db28b758db/docs/evidence)，产品截图及其来源继续由[图集](screenshots/README.md)维护。
 

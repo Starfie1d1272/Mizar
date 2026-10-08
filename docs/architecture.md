@@ -128,6 +128,8 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期；它们不等
 
 桌面和 Web 的进入现场入口先读取当前 OBS 连接与场景检查结果；未通过时打开连接引导，不提交制作命令。此准备门禁不复制生命周期状态，也不改变现场运行后的离线恢复能力；理由见 [ADR-0023](decisions/0023-workspace-preflight-and-density.md)。
 
+CS2 的自动发现、手动安装选择和 GSI 配置目录统一由 Host 管理。按 Steam AppID 730 清单定位，验证程序与新版 cfg，按安装根目录去重；保存的手动位置同时供 GSI 与启动使用。文件冲突、重复发送与读取失败分别展示，支持包只导出有限问题码、数量和阶段；见 [ADR-0047](decisions/0047-shared-cs2-installation-discovery.md)。
+
 桌面通过准备检查后，由 Host 启动或复用本次受管理 CS2，再提交进入现场。结束制作成功后正常关闭该游戏并恢复临时视频与帧率配置；隐藏现场不关闭。配置文件与进程身份、备份及重启恢复只由 Host 管理，网页发送固定意图。画质与帧率使用独立的有限选项，默认最高画质与 60 帧／秒；启动脚本中直接设置的帧率纳入同一恢复事务，避免覆盖本次上限。细节见 [ADR-0026](decisions/0026-managed-cs2-launch-and-restoration.md)及其局部替代 [ADR-0045](decisions/0045-managed-game-quality-and-frame-budget.md)。
 
 现场窗口采用窗口级全屏 Shell 标记，让任务栏在现场处于活动状态时退到其后，不修改系统自动隐藏设置；隐藏、退出或更换游戏窗口撤销标记。标记成功后按完整显示器边界排布，失败沿用工作区。受管理 CS2 使用无边框窗口，启动参数与临时视频配置都使用既有工作台布局算出的游戏尺寸，保持 75% 上限与 16:9 客户区，左栏贴屏幕底部，与游戏、底栏连续平铺；游戏拒绝无边框时保留原生外框避让。外框缩放成功不代替客户区对齐；游戏拒绝运行中的分辨率变更时不再次缩小无边框外框，本机覆盖保持隐藏并提示重新进入工作台。DPI 与窗口变化共用同一 Host 物理布局；现场 WebView 自身的缩放变化也通过既有工作线程合并重排，不依赖游戏窗口同时改变尺寸或 DPI，隐藏期间的变化在恢复现场时处理。决策及异常退出边界见 [ADR-0030](decisions/0030-workspace-fullscreen-shell.md)、[ADR-0031](decisions/0031-borderless-workspace-game.md)与[ADR-0036](decisions/0036-workspace-sized-cs2-launch.md)。

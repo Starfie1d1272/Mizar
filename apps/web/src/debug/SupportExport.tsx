@@ -2,13 +2,17 @@ import { useState } from 'react';
 import { Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
-async function boundedStatus(operation: Promise<unknown>): Promise<unknown> {
+type CollectedStatus = { collectionStatus: 'available' | 'failed' | 'timeout'; value: unknown };
+async function boundedStatus(operation: Promise<unknown>): Promise<CollectedStatus> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      operation.catch(() => null),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), 2000);
+      operation.then(
+        (value): CollectedStatus => ({ collectionStatus: 'available', value }),
+        (): CollectedStatus => ({ collectionStatus: 'failed', value: null }),
+      ),
+      new Promise<CollectedStatus>((resolve) => {
+        timer = setTimeout(() => resolve({ collectionStatus: 'timeout', value: null }), 8000);
       }),
     ]);
   } finally {
@@ -22,6 +26,37 @@ function booleans(value: unknown, keys: readonly string[]) {
   return Object.fromEntries(
     keys.filter((key) => typeof input[key] === 'boolean').map((key) => [key, input[key]]),
   );
+}
+
+function supportGsi(value: unknown) {
+  const input =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const operation =
+    typeof input.lastOperation === 'object' && input.lastOperation !== null
+      ? (input.lastOperation as Record<string, unknown>)
+      : {};
+  return {
+    ...booleans(input, [
+      'detected',
+      'installed',
+      'conflict',
+      'fileConflict',
+      'endpointConflict',
+      'readFailed',
+    ]),
+    ...(typeof input.candidateCount === 'number' ? { candidateCount: input.candidateCount } : {}),
+    ...(typeof input.conflictCount === 'number' ? { conflictCount: input.conflictCount } : {}),
+    issueCodes: Array.isArray(input.issues)
+      ? input.issues
+          .slice(0, 16)
+          .map((issue: { code?: unknown }) => issue.code)
+          .filter((code) => typeof code === 'string')
+      : [],
+    lastOperation:
+      typeof operation.code === 'string' && typeof operation.stage === 'string'
+        ? { code: operation.code, stage: operation.stage }
+        : null,
+  };
 }
 
 export function SupportExport() {
@@ -49,14 +84,14 @@ export function SupportExport() {
                 gsi:
                   gsi === null
                     ? null
-                    : booleans(gsi, [
-                        'detected',
-                        'installed',
-                        'conflict',
-                        'fileConflict',
-                        'endpointConflict',
-                      ]),
-                cs2: cs2 === null ? null : booleans(cs2, ['found', 'managed']),
+                    : { collectionStatus: gsi.collectionStatus, ...supportGsi(gsi.value) },
+                cs2:
+                  cs2 === null
+                    ? null
+                    : {
+                        collectionStatus: cs2.collectionStatus,
+                        ...booleans(cs2.value, ['found', 'managed']),
+                      },
               }
             : null,
         }),
