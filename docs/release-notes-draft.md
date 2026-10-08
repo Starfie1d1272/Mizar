@@ -1,6 +1,6 @@
 # Mizar 1.0 发布说明草案
 
-本文是正式发布前的草案。当前发布物为 [RC26](https://github.com/Starfie1d1272/Mizar/releases/tag/v1.0.0-rc.26)，不是正式1.0；现场验收由 [#35](https://github.com/Starfie1d1272/Mizar/issues/35)、发布门槛由 [#90](https://github.com/Starfie1d1272/Mizar/issues/90) 维护。发布步骤见[RC与发布](release-readiness.md)。
+本文是正式发布前的草案。本轮候选为 RC27，不是正式 1.0；Windows 实测与重新截图待完成。已发布候选及包身份以 [Releases](https://github.com/Starfie1d1272/Mizar/releases) 中的清单为准；现场验收由 [#35](https://github.com/Starfie1d1272/Mizar/issues/35)、发布门槛由 [#90](https://github.com/Starfie1d1272/Mizar/issues/90) 维护。发布步骤见[RC与发布](release-readiness.md)。
 
 > 让校园赛事，也有职业赛场的转播呈现。
 
@@ -8,14 +8,19 @@ Mizar 将自动节目流程、制播工作台、HUD与雷达、赛事连接组�
 
 ## 当前交付
 
-- 候选应用版本：`1.0.0-rc.26`，Windows x64完整便携ZIP与自解压包；下载及校验和以Release资产与清单为准。
-- 包源码：`c085ab0f5cb9d0a4ba5c93e07719d28c96ca82ad`。资格构建与原产物晋级均成功，没有重新构建或覆盖历史RC；后续发布说明修订不改变这个包的源码身份。
+- 候选应用版本：`1.0.0-rc.27`，Windows x64完整便携ZIP与自解压包；下载及校验和以Release资产与清单为准。
+- 包源码、ZIP / 自解压包摘要及自动化报告由指定 SHA 的资格构建生成；随候选发布的清单维护精确身份。本次通过原产物晋级交付，不覆盖历史 RC。
 - 正式版本、最终包源码与已验RC的对应关系：待正式发布门槛满足后冻结，不提前填写正式下载链接。
 - 当前分发采用未签名例外；Authenticode、安装器与自动更新按既有后续范围推进，不事后替换已发布二进制。
 
 RC26 默认以最高画质、60 帧上限启动受管理 CS2；画质新增高、中、保留原画质，帧率另提供 30 与不限帧及风险提示。启动时备份并有限调整 `fps_max` 的配置来源，避免 Steam 保存的启动 cfg 覆盖本次帧率，退出后恢复。原故障机的正式包以最高画质、60 帧、本机 HUD 和 OBS 1080p60 录制完成三个两分钟采样窗口，未出现超过 100ms 的雷达回调间隔；中画质／30 帧实际选项、原配置恢复及正常启动／退出入口已核验。构建身份、对照方法和边界见 [PR #176](https://github.com/Starfie1d1272/Mizar/pull/176)。这不是所有显示环境或完整真实赛事验收的替代。
 
 ## 本轮收敛的行为
+
+- 游戏设置按连接、启动偏好和可选头像分组；画质／帧率显式保存，下次从页头启动游戏并进入工作台。密钥使用固定长度掩码占位及更新操作，高级设置同时显示包版本与 Commit。
+- Next 预告与实际切场条件分开；赛果确认中仍预告结果，图间依据下一图计划预告赛前节目，同源短暂断流保留最近预告。比赛资料不足时说明原因。
+- 五套雷达保留从最早可信观测点开始的完整虚线飞行轨迹，以固定点数预算压缩历史；共享 HUD 补齐短时减员提示、低甲数值与未知队伍归属处理，各预设保持既有策略。
+- 赛事测试赛保留提供方标记、真实名单、BP 和既有输出链路；正式相邻赛程排除测试赛。服务端配套见 [RivalHub #840](https://github.com/Starfie1d1272/RivalHub/pull/840)，需要两端具备支持后进行实测。
 
 - 本机赛事与比赛支持 BO3 规则、游戏内决定决胜图阵营、既有 BP 恢复；BP 表单按实际容器宽度布局，避免窄侧栏控件溢出。保存与恢复的最终实机范围由 #35 记录。
 - 准备中心默认最大化，游戏配置检查和恢复入口显示稳定；受管理游戏按实际工作区尺寸启动，现场左栏、底栏与任务栏布局协调。
@@ -30,7 +35,7 @@ RC26 默认以最高画质、60 帧上限启动受管理 CS2；画质新增高�
 
 RC26 的默认 60 帧在原故障机三个两分钟采样中未出现超过 100ms 的雷达回调间隔；不限帧仍有风险，具体驱动内部机制和其他显示条件未穷举，跟踪保留在 [#149](https://github.com/Starfie1d1272/Mizar/issues/149)。不把历史 A/B 假设作为已证实的 GPU 根因，也不将旧包的实机结果转写为最终候选通过。
 
-剩余发布门槛是 [#177](https://github.com/Starfie1d1272/Mizar/issues/177) 的节目、雷达与 HUD 收尾和人工视觉审查，随后冻结 Final RC，完成短原生检查，并以同一候选完成一场真实 Play-in BO1 制作与 RivalHub 正式写回。最终版本只在 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 明确通过后按 [#133](https://github.com/Starfie1d1272/Mizar/issues/133) 晋级。完整三图 demo 和穷举显示矩阵不是新增硬门槛；首场正式 BO3 作为发布后生产验证。
+[#177](https://github.com/Starfie1d1272/Mizar/issues/177) 的代码收尾已合并，人工视觉审查尚待完成。RC27 重点复核设置保存与重载、启动／退出恢复、Next、五套 HUD 和轨迹，并重新截图；随后以同一最终候选完成一场真实 Play-in BO1 制作与 RivalHub 正式写回。临时证据删减已通过独立 PR #178 完成，保留缺陷复现与追溯资料。最终版本只在 [#35](https://github.com/Starfie1d1272/Mizar/issues/35) 明确通过后按 [#133](https://github.com/Starfie1d1272/Mizar/issues/133) 晋级。完整三图 demo 和穷举显示矩阵不是新增硬门槛；首场正式 BO3 作为发布后生产验证。
 
 RC26 的 [发布清单](https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0-rc.26/release-manifest.json) 与 [分发清单](https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0-rc.26/distribution-manifest.json) 提供源码、内容摘要、ZIP / 自解压包摘要和 release 构建配置；来源证明与原故障机恢复/性能摘要见 [PR #176](https://github.com/Starfie1d1272/Mizar/pull/176)。旧版本调查保存在[固定提交的历史证据](https://github.com/Starfie1d1272/Mizar/tree/ab787f93837c424e5cf2447696d906db28b758db/docs/evidence)，产品截图及其来源继续由[图集](screenshots/README.md)维护。
 
