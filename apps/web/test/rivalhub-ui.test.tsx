@@ -64,6 +64,7 @@ afterEach(() => {
   act(() => root?.unmount());
   container.remove();
   root = undefined;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -748,6 +749,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
   });
 
   it('supports explicit release and does not auto-re-claim after release', async () => {
+    vi.useFakeTimers();
     let sourceMatchId: string | null = 'match-101';
     let releaseCalled = false;
 
@@ -771,7 +773,6 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
           Response.json({
             paired: true,
             displayName: '主舞台制播机',
-            activeMatchId: 'match-101',
             activeSourceMatchId: null,
             activeDeviceName: null,
           }),
@@ -814,9 +815,28 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(releaseCalled).toBe(true);
     expect(container.textContent).toContain('当前暂无数据源');
 
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(container.textContent).toContain('当前暂无数据源');
+
     const claimCalls = fetchMock.mock.calls.filter((c) =>
       toUrlString(c[0]).includes('/operator/rivalhub/source/claim'),
     );
     expect(claimCalls.length).toBe(0);
+
+    const resumeButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === '成为本场数据源',
+    )!;
+    await act(async () => {
+      resumeButton.click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('本机正在提供实时数据');
+    expect(
+      fetchMock.mock.calls.filter((call) =>
+        toUrlString(call[0]).includes('/operator/rivalhub/source/claim'),
+      ),
+    ).toHaveLength(1);
   });
 });

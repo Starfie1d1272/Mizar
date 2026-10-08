@@ -194,7 +194,9 @@ export function RivalHubLiveSourcePanel({
         throw new Error(data?.message ?? '停止数据源未确认。');
       }
       const next = (await response.json()) as Connection;
-      setConnection(next);
+      // Commands return connection state, without the active match added by polling.
+      // Keep that context so release does not look like switching away from this match.
+      setConnection((old) => ({ ...old, ...next }));
       onMessage('已停止作为数据源。');
     });
 
