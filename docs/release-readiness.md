@@ -20,7 +20,7 @@ Final RC 的剩余门槛是受影响功能和视觉收敛、短 Windows 原生�
 ## 构建 RC
 
 - [ ] 操作入口、默认视觉、随包说明与拟发布功能一致。
-- [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的完整 CI；仅按差异跳过检查的成功记录不足以晋级，必要时在该 SHA 对应的 ref 手动运行 CI。
+- [ ] 从干净 checkout 的完整 SHA 构建，核对该 SHA 的完整 CI；仅按差异跳过检查的成功记录不足以晋级，必要时在该 SHA 对应的 ref 手动运行 CI。Final RC 纳入最后的功能与视觉修改后，重新核对精确候选 SHA 的完整质量、浏览器、协议、构建和 Release Qualification 证据；冻结后新增代码必须重新判定候选身份，不能沿用旧 RC 的证据。
 - [ ] 用 Release Qualification workflow 指定 SHA，或在 Windows x64 执行 `node scripts/qualification/build.mjs`，正式 RC 使用默认 `release` 桌面构建配置，可用 `--label RC0` 标记报告；产品文件名从应用版本生成。
 - [ ] 包含桌面 EXE、Node、Web、脚本、配置、素材与许可；核对解压启动及适用自动化报告。
 - [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，核对自动生成的外层 `.zip.sha256` 与 `release-manifest.json`；ZIP 摘要与包内内容摘要含义不同。
