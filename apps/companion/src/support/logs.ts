@@ -9,6 +9,7 @@ const HEADER_BYTES = 4096;
 const names = ['desktop.ndjson', 'supervisor.ndjson', 'companion.log', 'companion.stderr.log'];
 const stages = new Set([
   'process_start',
+  'powershell',
   'bundle_root_resolved',
   'mutex_acquired',
   'shutdown_scope',

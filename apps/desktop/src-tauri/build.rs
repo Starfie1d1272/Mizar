@@ -19,6 +19,7 @@ fn main() {
             "open_rivalhub_authorization",
             "open_rivalhub_workbench",
             "open_steam_api_key",
+            "open_issue_report",
             "save_support_bundle",
             "gsi_status",
             "configure_gsi",

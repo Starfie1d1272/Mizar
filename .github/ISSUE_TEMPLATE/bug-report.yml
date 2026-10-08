@@ -61,7 +61,7 @@ body:
     id: evidence
     attributes:
       label: 证据
-      description: 相关日志、会话/地图执行信息、测试样例、commit SHA、截图或采集说明。
+      description: 从「高级设置 → 运行诊断 / 导出诊断包」保存并附上诊断包，注明版本与发生时间。可附截图或最小复现；不要公开整个 state 目录、原始日志或密钥。
 
   - type: textarea
     id: invariants

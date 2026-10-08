@@ -11,6 +11,7 @@ try {
     $result.detected = $true
     $result.cfgPath = Join-Path $directory 'gamestate_integration_mizar.cfg'
 } catch {
+    [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String))
     $code = [string]$_.Exception.Data['MizarCode']
     if (-not $code) { $code = 'status-unreadable'; $result.readFailed = $true }
     $result.issueCodes += $code
@@ -32,7 +33,7 @@ if (Test-Path -LiteralPath $path -PathType Leaf) {
             $result.installed = (Get-FileHash -LiteralPath $cfgPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() -eq [string]$state.cfgFingerprint
             if (-not $result.installed) { $result.fileConflict = $true; $result.issueCodes += 'gsi-file-changed' }
         }
-    } catch { $result.readFailed = $true; $result.issueCodes += 'record-unreadable' }
+    } catch { [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String)); $result.readFailed = $true; $result.issueCodes += 'record-unreadable' }
 }
 if ($result.cfgPath) {
     $directory = Split-Path -Parent $result.cfgPath
@@ -43,7 +44,7 @@ if ($result.cfgPath) {
             $result.endpointConflict = $result.conflictCount -gt 0
             $result.conflictFiles = @($result.conflictFiles | Select-Object -First 32)
             if ($result.endpointConflict) { $result.issueCodes += 'endpoint-conflict' }
-        } catch { $result.readFailed = $true; $result.issueCodes += 'status-unreadable' }
+        } catch { [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String)); $result.readFailed = $true; $result.issueCodes += 'status-unreadable' }
     }
 }
 $failurePath = Join-Path $script:StateRoot 'data\cs2-last-error.json'

@@ -9,6 +9,7 @@ mod cs2_video;
 mod desktop_worker;
 mod geometry;
 mod managed_cs2;
+mod powershell;
 mod production_exit;
 mod startup_log;
 mod startup_wait;
@@ -772,6 +773,30 @@ fn open_steam_api_key() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_issue_report() -> Result<(), String> {
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> =
+        "https://github.com/Starfie1d1272/Mizar/issues/new?template=bug-report.yml\0"
+            .encode_utf16()
+            .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        Err("浏览器未能打开，请手动访问 https://github.com/Starfie1d1272/Mizar/issues/new?template=bug-report.yml。".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
 fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|_| "授权页面地址无效。")?;
     if parsed.scheme() != "https"
@@ -815,15 +840,14 @@ fn background_powershell() -> Command {
     command
 }
 
-fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
+fn gsi_script(
+    name: &str,
+    root: Option<&Path>,
+    timeout: Duration,
+    log: &DesktopLog,
+) -> Result<String, String> {
     let bundle = bundle_root()?;
-    let state_root = startup_log::writable_root(
-        &bundle,
-        std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
-    )
-    .map_err(|_| "运行数据目录不可用。")?;
     let mut command = background_powershell();
-    command.env("MIZAR_STATE_ROOT", state_root);
     command
         .args([
             "-NoProfile",
@@ -838,31 +862,16 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
         command.arg("-Product");
     }
     if let Some(path) = root {
-        command.arg("-Cs2Root").arg(path);
+        command.arg("-Cs2Root").arg(powershell::provider_path(path));
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|_| "GSI 配置工具未能启动。")?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child
-            .try_wait()
-            .map_err(|_| "GSI 配置读取失败。")?
-            .is_some()
-        {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("GSI 操作超时；请重新检测状态后再试。".into());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    let output = child.wait_with_output().map_err(|_| "GSI 配置读取失败。")?;
-    if !output.status.success() {
-        return Err(cs2_diagnostics::failure(&output.stdout));
-    }
-    String::from_utf8(output.stdout).map_err(|_| "GSI 状态读取失败。".into())
+    let operation = match name {
+        "gsi-status.ps1" => "CS2 与 GSI 检测",
+        "install-gsi.ps1" => "安装 GSI",
+        "restore-gsi.ps1" => "恢复 GSI",
+        "select-cs2-installation.ps1" => "保存 CS2 安装位置",
+        _ => "CS2 配置",
+    };
+    powershell::run(command, log, operation, timeout)
 }
 
 fn valid_workbench_path(path: &str) -> bool {
@@ -912,17 +921,14 @@ fn open_rivalhub_workbench(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn gsi_status() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn gsi_status(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
         let _guard = GSI_OPERATION_LOCK
             .lock()
             .map_err(|_| "GSI 操作状态不可用。")?;
-        let result: serde_json::Value = serde_json::from_str(&gsi_script(
-            "gsi-status.ps1",
-            None,
-            Duration::from_secs(20),
-        )?)
-        .map_err(|_| "GSI 状态无法识别。")?;
+        let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
+        let result = powershell::parse(&log, "GSI 检测", &output)?;
         // Paths are available only in the private desktop UI; exports redact them.
         Ok(cs2_diagnostics::gsi_status(&result))
     })
@@ -980,6 +986,7 @@ async fn select_cs2_installation(app: tauri::AppHandle, executable: bool) -> Res
             "select-cs2-installation.ps1",
             Some(&path),
             Duration::from_secs(20),
+            &app.state::<DesktopLog>(),
         )?;
         Ok(true)
     })
@@ -988,17 +995,14 @@ async fn select_cs2_installation(app: tauri::AppHandle, executable: bool) -> Res
 }
 
 #[tauri::command]
-async fn open_cs2_config_directory() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn open_cs2_config_directory(log: tauri::State<'_, DesktopLog>) -> Result<(), String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
         let _guard = GSI_OPERATION_LOCK
             .lock()
             .map_err(|_| "GSI 操作状态不可用。")?;
-        let result: serde_json::Value = serde_json::from_str(&gsi_script(
-            "gsi-status.ps1",
-            None,
-            Duration::from_secs(20),
-        )?)
-        .map_err(|_| "GSI 状态无法识别。")?;
+        let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
+        let result = powershell::parse(&log, "GSI 检测", &output)?;
         let path = result["cfgPath"]
             .as_str()
             .map(PathBuf::from)
@@ -1040,6 +1044,7 @@ async fn configure_gsi(app: tauri::AppHandle, restore: bool, choose: bool) -> Re
             },
             root.as_deref(),
             Duration::from_secs(45),
+            &app.state::<DesktopLog>(),
         )?;
         Ok(())
     })
@@ -1079,9 +1084,7 @@ fn run_desktop(
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(log.clone())
-        .manage(Mutex::new(managed_cs2::ManagedCs2::new(
-            log.state_root.clone(),
-        )))
+        .manage(Mutex::new(managed_cs2::ManagedCs2::new(log.clone())))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
         .manage(production_exit::VerifiedStop::default())
@@ -1103,6 +1106,7 @@ fn run_desktop(
             open_tool,
             open_rivalhub_authorization,
             open_steam_api_key,
+            open_issue_report,
             open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
@@ -1717,18 +1721,14 @@ mod startup_tests {
         let command = format!(
             ". '{common}'; Write-Output ([string]::Concat([char]0x539f,[char]0x914d,[char]0x7f6e)); (Get-FileHash -LiteralPath '{common}' -Algorithm SHA256).Algorithm"
         );
-        let output = background_powershell()
-            .args(["-NoProfile", "-NonInteractive", "-Command", &command])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .lines()
-                .collect::<Vec<_>>(),
-            ["原配置", "SHA256"]
-        );
+        let root = std::env::temp_dir().join(format!("mizar-gsi-boundary-{}", std::process::id()));
+        let log = DesktopLog::new(&root, None).unwrap();
+        assert!(log.state_root.to_string_lossy().starts_with(r"\\?\"));
+        let mut child = background_powershell();
+        child.args(["-NoProfile", "-NonInteractive", "-Command", &command]);
+        let output = powershell::run(child, &log, "GSI 检测回归", Duration::from_secs(20)).unwrap();
+        assert_eq!(output.lines().collect::<Vec<_>>(), ["原配置", "SHA256"]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
