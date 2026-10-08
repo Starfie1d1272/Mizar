@@ -113,6 +113,7 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和 `ci` / `release` 配置建立稳定基线；Cargo.lock 中的本地 Mizar 版本及 Cargo.toml 的 package.version 不参与缓存指纹，避免每次 RC 升版本制造冷缓存，其他依赖与编译配置变更仍会改变指纹；不再按提交 SHA 保存整份 target。相同基线命中后不重复上传，依赖或工具链变化建立新基线；GitHub 仍可能按容量和最近使用时间淘汰缓存。缓存命中与恢复键写入 Actions 摘要，构建分阶段耗时写入摘要和 `build-timings.json`，失败阶段也保留记录。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
+- `local-web-production-smoke.mjs` 验证生产 HTML、资源传输、样式表类型与构建内容一致性、CS2 资源摘要及真实 WebSocket 基线；它不执行浏览器页面，不证明最终 HUD 已渲染。
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
 - Windows 发布与 CI 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。
 - `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。 控制台采样遇到 Win32 5 时重新查询原 PID 与创建时间，只有确认原进程已退出才接受该采样；活进程检查失败与可见控制台仍判失败。

@@ -239,7 +239,13 @@ async function main() {
       const response = await globalThis.fetch(`${baseUrl}/product-shell.css`, requestOptions);
       const body = await response.text();
       assert(response.status === 200, `/product-shell.css returned HTTP ${response.status}`);
-      assert(/\.product-topbar\s*\{/.test(body), 'shared product topbar styles are missing');
+      assert(
+        response.headers.get('content-type')?.includes('text/css') === true,
+        '/product-shell.css did not return CSS',
+      );
+      const builtStyles = await readFile(join(webRoot, 'product-shell.css'), 'utf8');
+      assert(builtStyles.trim().length > 0, 'built product shell stylesheet is empty');
+      assert(body === builtStyles, '/product-shell.css did not return the built stylesheet');
     });
     await runPhase('CS2 assets', () => assertCs2Assets(baseUrl, requestOptions));
     await runPhase('WS baseline', () =>
