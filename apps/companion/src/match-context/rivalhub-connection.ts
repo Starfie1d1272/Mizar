@@ -467,8 +467,19 @@ export class RivalHubConnection {
     event: ReliableEventV1,
     current: LiveSnapshotV1 | null,
   ): Promise<ReliableDeliveryResult> {
+    const source = this.source;
+    // Durable recovery keeps the original producer evidence. A new claim cannot
+    // authorize that old producer, even when the live session was restored.
+    if (
+      source &&
+      (source.producerInstanceId !== event.cursor.producerInstanceId ||
+        source.liveSessionId !== event.cursor.liveSessionId)
+    )
+      return 'rejected';
     const sameExecution =
       current?.matchId === event.matchId &&
+      current.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+      current.cursor.liveSessionId === event.cursor.liveSessionId &&
       current.cursor.programSourceGeneration === event.cursor.programSourceGeneration &&
       current.cursor.mapEpoch === event.cursor.mapEpoch;
     const observed = sameExecution
@@ -479,7 +490,6 @@ export class RivalHubConnection {
           )
           .map((player) => player.sourcePlayerId)
       : [];
-    const source = this.source;
     const result = await this.upload(
       'reliable',
       { event, lineupSteam64: observed.length === 10 ? observed : [] },

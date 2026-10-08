@@ -76,7 +76,7 @@ C4 异步预测的普通实战更新可最多合并十六毫秒；等待期间�
 
 快照默认包含有效公共雷达。可靠事件带 `Idempotency-Key`。`2xx` 表示接受，`408/429/5xx`、网络错误和超时可重试，其他状态拒绝；快照失败丢弃旧值，发送前重新检查当前有效性。
 
-RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领不等于地图证据已建立：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](decisions/0050-live-after-map-start-acknowledgement.md)。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../apps/companion/src/output/)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
+RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领不等于地图证据已建立：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](decisions/0050-live-after-map-start-acknowledgement.md)。恢复队列保留事件原始生产实例；适配器只使用匹配该实例与会话的认领上传，旧事件在本机终止投递，不借用新认领或当前首发证据，见 [ADR-0051](decisions/0051-recovered-events-and-source-authority.md)。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../apps/companion/src/output/)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
 
 `POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
 
