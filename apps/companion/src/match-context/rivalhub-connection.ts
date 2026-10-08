@@ -21,12 +21,32 @@ type PendingPairing = {
   expiresAt: string;
 };
 export const OFFICIAL_RIVALHUB_URL = 'https://match.starfie1d.top';
+const CONTROL_TIMEOUT_MS = 15_000;
+type PairingStatus = 'idle' | 'pending' | 'expired' | 'authorized';
 type Source = {
   matchId: string;
   authorityRevision: number;
   producerInstanceId: string;
   liveSessionId: string;
+  acknowledgedExecution?: string;
 };
+
+function executionKey(cursor: LiveSnapshotV1['cursor']): string {
+  return JSON.stringify([
+    cursor.producerInstanceId,
+    cursor.liveSessionId,
+    cursor.programSourceGeneration,
+    cursor.mapEpoch,
+  ]);
+}
+
+function networkError(error: unknown): unknown {
+  if (error instanceof Error && error.name === 'TimeoutError')
+    return new Error('连接 RivalHub 超时，请检查网络后重试。', { cause: error });
+  if (error instanceof TypeError)
+    return new Error('连接 RivalHub 失败，请检查网络后重试。', { cause: error });
+  return error;
+}
 
 function normalizeBaseUrl(value: string): string {
   const url = new URL(value);
@@ -64,6 +84,7 @@ export class RivalHubConnection {
   }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;
+  private pairingPoll: Promise<PairingStatus> | null = null;
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
   private claimRevision = 0;
@@ -152,7 +173,8 @@ export class RivalHubConnection {
         ...init,
         redirect: 'manual',
         headers: { authorization: `Bearer ${this.installation.credential}`, ...init.headers },
-        signal: init.signal ?? AbortSignal.timeout(4000),
+        signal:
+          init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok) {
         const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
@@ -178,7 +200,7 @@ export class RivalHubConnection {
       return response;
     } catch (error) {
       this.onDiagnostic(operation, error);
-      throw error;
+      throw networkError(error);
     }
   }
 
@@ -187,7 +209,9 @@ export class RivalHubConnection {
     const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/start`, {
       method: 'POST',
       redirect: 'manual',
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+    }).catch((error: unknown) => {
+      throw networkError(error);
     });
     if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
     const value = (await response.json()) as {
@@ -225,7 +249,15 @@ export class RivalHubConnection {
     return { authorizeUrl: authorizeUrl.toString(), expiresAt: value.expiresAt };
   }
 
-  async pollPairing(): Promise<'idle' | 'pending' | 'expired' | 'authorized'> {
+  pollPairing(): Promise<PairingStatus> {
+    if (!this.pairingPoll)
+      this.pairingPoll = this.pollPairingOnce().finally(() => {
+        this.pairingPoll = null;
+      });
+    return this.pairingPoll;
+  }
+
+  private async pollPairingOnce(): Promise<PairingStatus> {
     const pending = this.pendingPairing;
     if (pending === null) return 'idle';
     if (Date.parse(pending.expiresAt) <= Date.now()) {
@@ -238,7 +270,9 @@ export class RivalHubConnection {
       redirect: 'manual',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pairingId: pending.pairingId, pollToken: pending.pollToken }),
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+    }).catch((error: unknown) => {
+      throw networkError(error);
     });
     if (!response.ok) throw new Error('授权状态暂时无法获取。');
     const value = (await response.json()) as {
@@ -392,20 +426,23 @@ export class RivalHubConnection {
   ): Promise<ReliableDeliveryResult> {
     if (!this.source) return 'retry';
     if (this.source.matchId !== matchId) return 'rejected';
+    const source = this.source;
     try {
       const response = await this.request(operation, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-rivalhub-authority': String(this.source.authorityRevision),
+          'x-rivalhub-authority': String(source.authorityRevision),
         },
         body: JSON.stringify(body),
       });
       await response.body?.cancel();
       if (response.ok) return 'accepted';
       if (response.status === 403) {
-        this.source = null;
-        this.activeDeviceName = '另一台制播设备';
+        if (this.source === source) {
+          this.source = null;
+          this.activeDeviceName = '另一台制播设备';
+        }
         return 'rejected';
       }
       return response.status === 408 || response.status === 429 || response.status >= 500
@@ -417,6 +454,11 @@ export class RivalHubConnection {
   }
 
   async sendLive(snapshot: LiveSnapshotV1): Promise<void> {
+    // Claiming a source does not establish the website's map/identity evidence.
+    // Keep the disposable lane behind the reliable start acknowledgement, also
+    // after re-claim, generation advance and map change. No old snapshot is queued.
+    if (this.source?.acknowledgedExecution !== executionKey(snapshot.cursor))
+      throw new Error('rivalhub_map_start_pending');
     if ((await this.upload('live', snapshot, snapshot.matchId)) !== 'accepted')
       throw new Error('rivalhub_live_unavailable');
   }
@@ -437,10 +479,14 @@ export class RivalHubConnection {
           )
           .map((player) => player.sourcePlayerId)
       : [];
-    return this.upload(
+    const source = this.source;
+    const result = await this.upload(
       'reliable',
       { event, lineupSteam64: observed.length === 10 ? observed : [] },
       event.matchId,
     );
+    if (result === 'accepted' && event.kind === 'map_started' && source && this.source === source)
+      source.acknowledgedExecution = executionKey(event.cursor);
+    return result;
   }
 }
