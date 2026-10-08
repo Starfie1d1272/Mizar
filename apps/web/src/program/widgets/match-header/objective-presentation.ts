@@ -10,6 +10,7 @@ export interface ObjectiveCenterPresentation {
   readonly hasKit: boolean;
   readonly playerName: string | null;
   readonly aliveCount: string | null;
+  readonly aliveSample: string | null;
 }
 
 function progress(
@@ -72,6 +73,7 @@ export function buildObjectiveCenterPresentation(
     T: t.filter((p) => p.lifeState === 'alive').length,
   };
   const showAlive =
+    payload.status.telemetry === 'fresh' &&
     complete &&
     !paused &&
     !terminal &&
@@ -79,8 +81,7 @@ export function buildObjectiveCenterPresentation(
     phase !== 'timeout_t' &&
     phase !== 'freezetime' &&
     payload.round?.phase !== 'freezetime' &&
-    (mode !== 'normal' || phase === 'live' || payload.round?.phase === 'live') &&
-    (alive.CT !== 5 || alive.T !== 5);
+    (mode !== 'normal' || phase === 'live' || payload.round?.phase === 'live');
   const action = bomb?.action;
   const players = payload.players.filter(
     (p) => p.sourcePlayerId === action?.sourcePlayerId && p.lineupEvidence === 'current',
@@ -100,8 +101,12 @@ export function buildObjectiveCenterPresentation(
       mode === 'defusing' && action?.kind === 'defuse' && players.length === 1
         ? players[0]!.displayName
         : null,
-    aliveCount:
+    aliveSample:
       showAlive && teamA.side !== null && teamB.side !== null
+        ? `${alive[teamA.side]}v${alive[teamB.side]}`
+        : null,
+    aliveCount:
+      showAlive && (alive.CT !== 5 || alive.T !== 5) && teamA.side !== null && teamB.side !== null
         ? `${alive[teamA.side]}v${alive[teamB.side]}`
         : null,
   };

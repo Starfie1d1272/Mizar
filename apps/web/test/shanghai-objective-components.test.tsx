@@ -18,11 +18,21 @@ it.each(['plant', 'defuse'] as const)(
     const render = (
       remainingSeconds: number | null,
       state: 'planting' | 'defusing' | 'planted' = kind === 'plant' ? 'planting' : 'defusing',
+      mapped = true,
     ) => {
       const frame: ProgramSnapshot = {
         ...snapshot,
         payload: {
           ...snapshot.payload,
+          series: mapped
+            ? snapshot.payload.series
+            : {
+                ...snapshot.payload.series!,
+                entrants: {
+                  a: { ...snapshot.payload.series!.entrants.a, entryId: 'unresolved-a' },
+                  b: { ...snapshot.payload.series!.entrants.b, entryId: 'unresolved-b' },
+                },
+              },
           bomb: {
             ...snapshot.payload.bomb!,
             state,
@@ -75,6 +85,9 @@ it.each(['plant', 'defuse'] as const)(
       expect((icon as HTMLElement).style.getPropertyValue('--objective-icon')).toContain(
         '/assets/cs2/objective/c4.',
       );
+      render(1.25, kind === 'plant' ? 'planting' : 'defusing', false);
+      expect(node.querySelector('.shanghai-event-panel')).toBeNull();
+      expect(node.querySelector('.shanghai-fuse')).toBeNull();
     } finally {
       act(() => root.unmount());
     }

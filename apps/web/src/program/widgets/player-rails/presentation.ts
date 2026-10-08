@@ -10,6 +10,8 @@ import {
   type PlayerStatusEffectState,
 } from '../player-status-effects/presentation';
 
+export const LOW_ARMOR_THRESHOLD = 25;
+
 export type PlayerRailSide = 'CT' | 'T';
 export type PlayerRailsPhase = 'freezetime' | 'live' | 'unknown';
 
@@ -62,6 +64,7 @@ export interface PlayerCardPresentation {
   readonly health: number | null;
   readonly healthPercent: number | null;
   readonly armorAsset: PlayerRailAsset | null;
+  readonly lowArmor: number | null;
   readonly defuserAsset: PlayerRailAsset | null;
   readonly c4Asset: PlayerRailAsset | null;
   readonly hasDefuser: boolean;
@@ -282,6 +285,16 @@ function playerPresentation(
     health: dead ? null : (player.state?.health ?? null),
     healthPercent: dead ? null : healthPercent(player.state?.health ?? null),
     armorAsset: dead ? null : armorAsset,
+    lowArmor:
+      player.lifeState === 'alive' &&
+      payload.status.telemetry === 'fresh' &&
+      player.lineupEvidence === 'current' &&
+      player.state?.armor != null &&
+      Number.isFinite(player.state.armor) &&
+      player.state.armor > 0 &&
+      player.state.armor <= LOW_ARMOR_THRESHOLD
+        ? player.state.armor
+        : null,
     defuserAsset:
       !dead && player.state?.hasDefuser === true
         ? assetForCanonicalKey('equipment.defuse-kit')

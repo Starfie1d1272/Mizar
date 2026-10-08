@@ -182,6 +182,11 @@ function Equipment({
           key={slot.key}
         >
           <EquipmentIcon className="player-rail__icon" asset={slot.asset} label={slot.label} />
+          {slot.key === 'armor' && player.lowArmor !== null && slot.motionPhase !== 'exit' ? (
+            <small className="player-rail__low-armor" aria-label={`剩余护甲 ${player.lowArmor}`}>
+              {player.lowArmor}
+            </small>
+          ) : null}
         </span>
       ))}
     </div>

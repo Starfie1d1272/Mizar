@@ -1,3 +1,5 @@
+import { useAliveMatchup } from './useAliveMatchup';
+import { presentationBoundaryKey } from '../../presentation-boundary';
 import { useBalancedTeamNames } from './useBalancedTeamNames';
 import { assetForCanonicalKey } from '../player-rails/presentation';
 import type { CSSProperties } from 'react';
@@ -225,7 +227,12 @@ export function TopScoreBar({
       ) : null}
       <MatchHeaderPanels
         key={`panels:${presentationRevision}:${options.showAliveMatchup}:${options.showTimeout}`}
-        aliveCount={!shanghai && options.showAliveMatchup ? p.objective.aliveCount : null}
+        aliveBoundary={`${presentationBoundaryKey(snapshot, undefined)}:${snapshot.payload.map.roundNumber}:${p.objective.aliveSample !== null}:${snapshot.payload.players
+          .map((player) => `${player.sourcePlayerId}:${player.side}`)
+          .sort()
+          .join(',')}`}
+        aliveCount={!shanghai && options.showAliveMatchup ? p.objective.aliveSample : null}
+        cursor={snapshot.cursor}
         teamASide={p.teamA.side}
         teamBSide={p.teamB.side}
         timeout={options.showTimeout ? timeout : null}
@@ -235,20 +242,22 @@ export function TopScoreBar({
 }
 
 function MatchHeaderPanels({
+  aliveBoundary,
   aliveCount,
+  cursor,
   teamASide,
   teamBSide,
   timeout,
 }: {
+  readonly aliveBoundary: string;
   readonly aliveCount: string | null;
+  readonly cursor: HudWidgetRendererProps['snapshot']['cursor'];
   readonly teamASide: MatchHeaderTeamPresentation['side'];
   readonly teamBSide: MatchHeaderTeamPresentation['side'];
   readonly timeout: ReturnType<typeof buildMatchHeaderPresentation>['timeoutPanel'];
 }) {
   const timeoutPresence = usePanelPresence(timeout);
-  const alivePresence = usePanelPresence(aliveCount);
   const visibleTimeout = timeoutPresence.value;
-  const visibleAlive = alivePresence.value;
 
   return (
     <>
@@ -268,19 +277,42 @@ function MatchHeaderPanels({
           timeout={visibleTimeout}
         />
       ) : null}
-      {visibleAlive === null ? null : (
-        <div
-          aria-hidden={alivePresence.phase === 'exit'}
-          aria-label={`存活人数 ${visibleAlive}`}
-          className="match-header__alive-matchup"
-          data-motion-phase={alivePresence.phase}
-        >
-          <strong data-side={teamASide ?? 'unknown'}>{visibleAlive.split('v')[0]}</strong>
-          <span>VS</span>
-          <strong data-side={teamBSide ?? 'unknown'}>{visibleAlive.split('v')[1]}</strong>
-        </div>
-      )}
+      <AliveMatchupPanel
+        key={aliveBoundary}
+        sample={aliveCount}
+        cursor={cursor}
+        teamASide={teamASide}
+        teamBSide={teamBSide}
+      />
     </>
+  );
+}
+
+function AliveMatchupPanel({
+  sample,
+  cursor,
+  teamASide,
+  teamBSide,
+}: {
+  readonly sample: string | null;
+  readonly cursor: HudWidgetRendererProps['snapshot']['cursor'];
+  readonly teamASide: MatchHeaderTeamPresentation['side'];
+  readonly teamBSide: MatchHeaderTeamPresentation['side'];
+}) {
+  const transientAlive = useAliveMatchup(sample, cursor);
+  const presence = usePanelPresence(transientAlive);
+  const visible = presence.value;
+  return visible === null ? null : (
+    <div
+      aria-hidden={presence.phase === 'exit'}
+      aria-label={`存活人数 ${visible}`}
+      className="match-header__alive-matchup"
+      data-motion-phase={presence.phase}
+    >
+      <strong data-side={teamASide ?? 'unknown'}>{visible.split('v')[0]}</strong>
+      <span>VS</span>
+      <strong data-side={teamBSide ?? 'unknown'}>{visible.split('v')[1]}</strong>
+    </div>
   );
 }
 
@@ -338,7 +370,8 @@ function ShanghaiPanels({
       player.sourcePlayerId === action?.sourcePlayerId && player.lineupEvidence === 'current',
   );
   const actionSide = action?.kind === 'defuse' ? 'CT' : 'T';
-  const actionOwner = p.teamA.side === actionSide ? 'a' : 'b';
+  const actionOwner = p.teamA.side === actionSide ? 'a' : p.teamB.side === actionSide ? 'b' : null;
+  const bombOwner = p.teamA.side === 'T' ? 'a' : p.teamB.side === 'T' ? 'b' : null;
   const winner =
     payload.round?.phase === 'over'
       ? [p.teamA, p.teamB].find(
@@ -349,6 +382,7 @@ function ShanghaiPanels({
   const remaining = action?.remainingSeconds;
   const timedAction =
     active &&
+    actionOwner !== null &&
     action != null &&
     remaining != null &&
     Number.isFinite(remaining) &&
@@ -364,12 +398,8 @@ function ShanghaiPanels({
             : `ROUND ${p.roundNumber}${p.roundNumber <= 24 ? '/24' : ''}`}
         </span>
       </div>
-      {options.showObjectiveAuxiliary && p.objective.fuse !== null ? (
-        <div
-          className="shanghai-fuse"
-          data-owner={p.teamA.side === 'T' ? 'a' : 'b'}
-          data-objective-track="fuse"
-        >
+      {options.showObjectiveAuxiliary && bombOwner !== null && p.objective.fuse !== null ? (
+        <div className="shanghai-fuse" data-owner={bombOwner} data-objective-track="fuse">
           <i style={{ width: `${p.objective.fuse * 100}%` }} />
         </div>
       ) : null}
