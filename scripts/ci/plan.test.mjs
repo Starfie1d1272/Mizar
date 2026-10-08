@@ -56,7 +56,7 @@ describe('changed-surface CI planner', () => {
       ['packages/core/src/projection/program.ts'],
       {
         runQuality: true,
-        runAcceptance: false,
+        runAcceptance: true,
         runPlatform: false,
         runQualification: false,
       },
@@ -66,7 +66,7 @@ describe('changed-surface CI planner', () => {
       ['packages/radar/src/map-geometry.ts'],
       {
         runQuality: true,
-        runAcceptance: false,
+        runAcceptance: true,
         runPlatform: false,
         runQualification: false,
       },
@@ -76,7 +76,7 @@ describe('changed-surface CI planner', () => {
       ['apps/companion/src/runtime/program-runtime.ts'],
       {
         runQuality: true,
-        runAcceptance: false,
+        runAcceptance: true,
         runPlatform: true,
         runQualification: false,
       },
@@ -148,6 +148,71 @@ describe('changed-surface CI planner', () => {
     expect(plan.runOfflineQualification).toBe(false);
   });
 
+  it.each(['pull_request', 'push'])(
+    '%s routes shared producers without extra packaging',
+    (eventName) => {
+      const packageSources = [
+        'packages/core/src/projection/program.ts',
+        'packages/radar/src/map-geometry.ts',
+        'packages/radar-view/src/render-cache.ts',
+        'packages/hud-config/src/index.ts',
+        'packages/protocol/src/program.ts',
+        'packages/protocol/src/version.ts',
+        'packages/protocol/src/index.ts',
+      ];
+      const companionSources = [
+        'runtime/program-runtime.ts',
+        'projections/projection-coordinator.ts',
+        'program-scenes/director.ts',
+        'local-protocol/channel-publisher.ts',
+        'hud-config/controller.ts',
+        'bp/controller.ts',
+        'match-context/controller.ts',
+        'series-progress/checkpoint-store.ts',
+        'replay/production-replay-composition.ts',
+        'output/projector.ts',
+        'app.ts',
+        'server.ts',
+      ].map((path) => `apps/companion/src/${path}`);
+      for (const path of [...packageSources, ...companionSources]) {
+        expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs, path).toEqual(
+          path.startsWith('apps/companion/')
+            ? ['quality', 'acceptance', 'platform']
+            : ['quality', 'acceptance'],
+        );
+      }
+    },
+  );
+
+  it.each([
+    ['packages/core/test/projection.test.ts', ['quality']],
+    ['packages/radar/test/map-geometry.test.ts', ['quality']],
+    ['packages/radar-view/test/render-cache.test.ts', ['quality']],
+    ['packages/hud-config/test/layout.test.ts', ['quality']],
+    ['packages/protocol/test/program.test.ts', ['quality']],
+    ['apps/companion/test/program-runtime.test.ts', ['quality', 'platform']],
+    ['apps/companion/src/support/logs.ts', ['quality', 'platform']],
+    ['packages/testkit/src/replay/clock.ts', ['quality']],
+    ['packages/radar-view/src/radar.css', ['quality']],
+    ['packages/core/src/README.md', []],
+    ['docs/development-validation.md', []],
+  ])('does not add browser or packaging gates for %s', (path, requiredJobs) => {
+    expect(createCiPlan({ changedFiles: [path] }).requiredJobs).toEqual(requiredJobs);
+  });
+
+  it('unions browser, platform and Windows qualification risks with ordinary docs', () => {
+    expect(
+      createCiPlan({
+        changedFiles: [
+          'packages/hud-config/src/index.ts',
+          'packages/telemetry-gsi/src/adapter.ts',
+          'apps/desktop/src-tauri/src/main.rs',
+          'docs/product.md',
+        ],
+      }).requiredJobs,
+    ).toEqual(['quality', 'acceptance', 'platform', 'qualification_windows']);
+  });
+
   it.each([
     ['package config', ['packages/core/package.json']],
     ['lockfile', ['pnpm-lock.yaml']],
@@ -170,6 +235,11 @@ describe('changed-surface CI planner', () => {
 
   it.each([
     ['D\tdocs/old.md\n', []],
+    ['D\tpackages/radar-view/src/render-cache.ts\n', ['quality', 'acceptance']],
+    [
+      'R100\tpackages/core/src/projection/program.ts\tdocs/archive/program.md\n',
+      ['quality', 'acceptance'],
+    ],
     ['R100\tdocs/old.md\tdocs/archive/new.md\n', []],
     ['R096\tdocs/design/old.md\tdocs/archive/old.md\n', ['design']],
     ['R80\tdocs/old.md\tapps/web/src/new.ts\n', ['quality', 'acceptance']],
@@ -177,7 +247,7 @@ describe('changed-surface CI planner', () => {
       'R100\tapps/desktop/src-tauri/src/old.rs\tdocs/archive/old.md\n',
       ['quality', 'qualification_windows'],
     ],
-    ['D\tapps/companion/src/output/service.ts\n', ['quality', 'platform']],
+    ['D\tapps/companion/src/output/service.ts\n', ['quality', 'acceptance', 'platform']],
   ])('classifies delete/rename risk union: %s', (diff, requiredJobs) => {
     expect(createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) }).requiredJobs).toEqual(
       requiredJobs,
