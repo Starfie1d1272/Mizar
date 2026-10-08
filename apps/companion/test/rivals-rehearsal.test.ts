@@ -119,8 +119,8 @@ describe('RivalsRehearsal', () => {
         resolve(import.meta.dirname, '../../../fixtures/epl-s24/rehearsal.generated.json'),
         'utf8',
       ),
-    );
-    input.observations['11'].map.name = 'de_ancient';
+    ) as { observations: Record<string, { map: { name: string } }> };
+    input.observations['11']!.map.name = 'de_ancient';
     const path = join(dir, 'fixture.json');
     await writeFile(path, JSON.stringify(input));
     const controller = new MatchContextController({

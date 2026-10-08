@@ -1,6 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
+import process from 'node:process';
+import console from 'node:console';
 import { resolve } from 'node:path';
 import { validateBroadcastManifest, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { localDocumentBindingManifest } from '../../src/match-context/local-document-adapter.ts';

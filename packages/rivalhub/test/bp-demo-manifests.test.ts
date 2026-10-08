@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import source from '../../../fixtures/epl-s24/match-document.json' with { type: 'json' };
 import { describe, expect, it } from 'vitest';
 import { inspectBp } from '@mizar/core/projection';
 import { getBpDemoManifest, toMatchContext, validateBroadcastManifest } from '../src/index.js';
@@ -30,12 +30,6 @@ describe('BP demo manifests', () => {
   );
 
   it('matches the sourced EPL match without inventing decider sides or revealing future results', () => {
-    const source = JSON.parse(
-      readFileSync(
-        new URL('../../../fixtures/epl-s24/match-document.json', import.meta.url),
-        'utf8',
-      ),
-    );
     const actual = getBpDemoManifest('bo3');
     expect(actual.match.matchId).toBe(source.matchId);
     expect(actual.match.scheduledAt).toBe(source.scheduledAt);
