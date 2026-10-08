@@ -24,7 +24,11 @@ export async function generateEplProgramFixtures() {
     await readFile(resolve(REPOSITORY_ROOT, 'fixtures/epl-s24/media.json'), 'utf8'),
   ) as { assets: { path: string; sha256: string }[] };
   for (const asset of media.assets) {
-    if (!/^apps\/web\/public\/fixture-media\/epl-s24\/7656119\d{10}\.jpg$/.test(asset.path))
+    if (
+      !/^apps\/web\/public\/fixture-media\/epl-s24\/(?:7656119\d{10}\.jpg|epl-falcons\.webp|epl-navi\.svg)$/.test(
+        asset.path,
+      )
+    )
       throw new Error('Invalid EPL media path');
     const bytes = await readFile(resolve(REPOSITORY_ROOT, asset.path));
     if (createHash('sha256').update(bytes).digest('hex') !== asset.sha256)

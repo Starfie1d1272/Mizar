@@ -18,6 +18,11 @@ describe('EPL editor samples', () => {
       expect(
         program.payload.players.every((p) => p.avatarUrl?.startsWith('/fixture-media/epl-s24/')),
       ).toBe(true);
+      expect(
+        Object.values(program.payload.series!.entrants).every((team) =>
+          team.logoUrl?.startsWith('/fixture-media/epl-s24/'),
+        ),
+      ).toBe(true);
       expect(radar.cursor).toEqual(program.cursor);
       expect(program.payload.series?.maps.map((map) => map.mapName)).toEqual([
         'de_inferno',

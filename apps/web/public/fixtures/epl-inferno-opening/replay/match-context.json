@@ -1,7 +1,7 @@
 {
   "manifest": {
     "schemaVersion": "rivalhub.broadcast-manifest.v1",
-    "revision": "local:c191fe7c6057f6fbfb43833c49ff1d38b022a6b559db0f369048387cdbf4e282",
+    "revision": "local:b60e90fa926bfc58f577e6494c0fbb0e7935abc1ff7df50c043a43a91c6fd7d8",
     "match": {
       "matchId": "hltv-2398745",
       "competition": {
@@ -42,7 +42,7 @@
       "a": {
         "entryId": "epl-falcons",
         "name": "Falcons",
-        "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+        "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
         "roster": {
           "rosterId": "epl-a-roster",
           "players": [
@@ -87,7 +87,7 @@
       "b": {
         "entryId": "epl-navi",
         "name": "Natus Vincere",
-        "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+        "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
         "roster": {
           "rosterId": "epl-b-roster",
           "players": [
@@ -255,7 +255,7 @@
       "a": {
         "entryId": "epl-falcons",
         "name": "Falcons",
-        "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+        "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
         "rosterId": "epl-a-roster",
         "players": [
           {
@@ -298,7 +298,7 @@
       "b": {
         "entryId": "epl-navi",
         "name": "Natus Vincere",
-        "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+        "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
         "rosterId": "epl-b-roster",
         "players": [
           {

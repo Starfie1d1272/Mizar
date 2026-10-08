@@ -1,5 +1,5 @@
 {
-  "usage": "选手 Steam 公开头像，仅用于这场比赛的展示；不改变名单身份。",
+  "usage": "选手 Steam 公开头像与队伍公开标识，仅用于这场比赛的展示；不改变名单身份。",
   "assets": [
     {
       "steam64": "76561199032006224",
@@ -70,6 +70,22 @@
       "fetchedAt": 1791426299869,
       "path": "apps/web/public/fixture-media/epl-s24/76561198246607476.jpg",
       "sha256": "464ea9ea67300d8b03d41ec23690bc81ffa61195d658f6b2b37cc8c00270efd5"
+    },
+    {
+      "entryId": "epl-falcons",
+      "source": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+      "fetchedAt": "2026-10-08T08:56:46.978Z",
+      "path": "apps/web/public/fixture-media/epl-s24/epl-falcons.webp",
+      "sha256": "1bc11351e7658fc25f40cee81899f4a934096f10c416a4f6c8f0e5436ad72ee5"
+    },
+    {
+      "entryId": "epl-navi",
+      "source": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+      "fetchedAt": "2026-10-08T08:56:47.115Z",
+      "path": "apps/web/public/fixture-media/epl-s24/epl-navi.svg",
+      "sha256": "ad2cca38fe4bdc2229c0bfe6f001fce2522736d923f4e1307cd809bfbaa3fd61",
+      "sourceSha256": "61b5ceaa537dcac7a7f8d7c0b49f5557553c094c8fcaca710bc7d50742485a3d",
+      "processing": "Normalize SVG line endings to LF; artwork unchanged"
     }
   ]
 }

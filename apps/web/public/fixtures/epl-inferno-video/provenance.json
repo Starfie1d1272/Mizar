@@ -1,7 +1,7 @@
 {
   "sourceLedgerSha256": "fc975491d5aa3735936b4b6af24cecb59c47f785321b746d93054c08de11be03",
   "originalPairedFramesSha256": "a46d0ef638b266d1b2b3435720b82efa54876ebb1218ef7bffaaded8243c8be3",
-  "sanitization": "Replace local Steam avatar endpoints with content-addressed offline assets; all gameplay fields and cursor identities preserved",
+  "sanitization": "Replace local Steam avatar endpoints and external team logo URLs with bundled offline assets; all gameplay fields and cursor identities preserved",
   "avatars": [
     "9d7d1bcf67dd70fb0743d6843b961f8585012f8de55fdc4c174bbb732f1e4a2d.jpg",
     "f395c0599d2acd50535459600da6d88918e96b5251f303920419f3f9ee552880.jpg",
@@ -28,5 +28,13 @@
     "resolution": [1920, 1080],
     "fps": 60,
     "note": "Full original retained locally; encoding only, no content, duration or timeline changes; full decode passed"
+  },
+  "teamLogoLocalization": {
+    "inputFramesSha256": "1fc2595fa6cf3a53073c1799fbc1404c570ecd5fcfdbab48a880bdbc740e97c7",
+    "replacements": {
+      "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c": "/fixture-media/epl-s24/epl-falcons.webp",
+      "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c": "/fixture-media/epl-s24/epl-navi.svg"
+    },
+    "assetManifest": "fixtures/epl-s24/media.json"
   }
 }
