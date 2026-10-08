@@ -390,12 +390,30 @@
 }
 
 .player-rail__equipment-slot {
+  position: relative;
   display: flex;
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
   align-items: center;
   justify-content: center;
+}
+
+.player-rail__low-armor {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: 0;
+  color: var(--mizar-hud-text-primary);
+  background: var(--mizar-hud-surface-strong);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.player-rail__card[data-physical-side='right'] .player-rail__low-armor {
+  inset-inline-end: auto;
+  inset-inline-start: 0;
 }
 
 .player-rail__equipment-slot[data-motion-phase='enter'],

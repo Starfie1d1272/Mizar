@@ -37,6 +37,42 @@ describe('Player Rails summary lifecycle', () => {
     vi.useRealTimers();
   });
 
+  it.each(['current', 'ewc', 'iem', 'esl', 'perfectworld'] as const)(
+    '%s shares low-armor semantics and clears unavailable/dead state',
+    (design) => {
+      const snapshot = structuredClone(getProgramFixture('real-live-rich')!);
+      const source = snapshot.payload.players[0]!;
+      source.lifeState = 'alive';
+      source.lineupEvidence = 'current';
+      snapshot.payload.status.telemetry = 'fresh';
+      const container = document.createElement('div');
+      root = createRoot(container);
+      const render = (armor: number | null, helmet = false) => {
+        source.state = { ...source.state!, armor, hasHelmet: helmet };
+        const player = buildPlayerRailsPresentation(snapshot.payload).ct.players.find(
+          (p) => p.sourcePlayerId === source.sourcePlayerId,
+        )!;
+        act(() => root!.render(<PlayerCard design={design} player={player} />));
+        return player;
+      };
+      for (const armor of [100, 26, 0, null]) {
+        expect(render(armor).lowArmor).toBeNull();
+        expect(container.querySelector('.player-rail__low-armor')).toBeNull();
+      }
+      for (const armor of [25, 7, 1]) {
+        expect(render(armor, true).armorAsset?.canonicalKey).toBe('equipment.armor-helmet');
+        expect(container.querySelector('.player-rail__low-armor')?.textContent).toBe(String(armor));
+      }
+      source.lifeState = 'dead';
+      expect(render(7).lowArmor).toBeNull();
+      expect(container.querySelector('.player-rail__low-armor')).toBeNull();
+      source.lifeState = 'unknown';
+      expect(render(7).lowArmor).toBeNull();
+      source.lifeState = 'alive';
+      snapshot.payload.status.telemetry = 'stale';
+      expect(render(7).lowArmor).toBeNull();
+    },
+  );
   it('holds economy for five seconds across live snapshots while keeping utility visible', () => {
     vi.useFakeTimers();
     const container = document.createElement('div');

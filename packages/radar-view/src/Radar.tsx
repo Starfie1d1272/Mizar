@@ -578,18 +578,22 @@ export function RadarView({
           ctx.strokeStyle = sideColor(marker.side);
           ctx.lineWidth = 2;
           ctx.lineCap = 'round';
-          ctx.setLineDash(appearance === 'esl' ? [] : [7, 6]);
-          for (let index = 1; index < marker.trail.length; index += 1) {
-            const before = pointAt(marker.trail[index - 1]!, marker.target.layer);
-            const after = pointAt(marker.trail[index]!, marker.target.layer);
-            if (before === null || after === null) continue;
-            const tailOpacity = 0.2 + 0.8 * (index / (marker.trail.length - 1));
-            ctx.globalAlpha = alpha * 0.72 * tailOpacity;
-            ctx.beginPath();
-            ctx.moveTo(before.x, before.y);
-            ctx.lineTo(after.x, after.y);
-            ctx.stroke();
+          ctx.setLineDash([7, 6]);
+          ctx.globalAlpha = alpha * 0.72;
+          ctx.beginPath();
+          let started = false;
+          for (const sample of marker.trail) {
+            const point = pointAt(sample, marker.target.layer);
+            if (point === null) {
+              started = false;
+              continue;
+            }
+            if (!started) ctx.moveTo(point.x, point.y);
+            else ctx.lineTo(point.x, point.y);
+            started = true;
           }
+          // A single path keeps the dash phase continuous across short segments.
+          ctx.stroke();
           ctx.restore();
         };
         for (const exit of model.exits.values()) {

@@ -676,6 +676,90 @@ describe('Radar renderer local lifecycle', () => {
     m.accept(c, 1000);
     expect([...m.players.values()][0]!.damageUntil).toBe(0);
   });
+  it('keeps the first observation and real reversals through bounded long-flight compression', () => {
+    const model = new RadarPresentation();
+    let snapshot = single();
+    model.accept(snapshot, 0);
+    const first = { ...[...model.grenades.values()][0]!.trail[0]! };
+    const turns: { x: number; y: number; at: number }[] = [];
+    for (let index = 1; index <= 600; index++) {
+      snapshot = next(snapshot);
+      // Six straight legs with exact backtracking, not just convex corners.
+      snapshot.payload.grenades[0]!.position!.x += Math.floor((index - 1) / 100) % 2 ? -2 : 2;
+      model.accept(snapshot, index * 10);
+      const marker = [...model.grenades.values()][0]!;
+      if (index % 100 === 0) turns.push({ ...marker.trail.at(-1)! });
+      expect(marker.trail.length).toBeLessThanOrEqual(RADAR_PRESENTATION.trailPoints);
+      expect(marker.trail[0]).toEqual(first);
+    }
+    const marker = [...model.grenades.values()][0]!;
+    for (const turn of turns) expect(marker.trail).toContainEqual(turn);
+    expect(marker.trail.at(-1)).toMatchObject({ x: marker.target.x, y: marker.target.y });
+    for (const autoZoom of [false, true]) {
+      model.tick(6000, autoZoom, true);
+      expect(marker.trail[0]).toEqual(first);
+    }
+    snapshot = next(snapshot);
+    snapshot.payload.grenades[0]!.position = null;
+    model.accept(snapshot, 6010);
+    expect([...model.grenades.values()].every((item) => item.trail.length === 0)).toBe(true);
+    expect(model.exits.size).toBe(0);
+  });
+  it('clears an airborne smoke path when effect evidence arrives without a position', () => {
+    const model = new RadarPresentation();
+    const a = single();
+    a.payload.grenades[0]!.kind = 'smoke';
+    model.accept(a, 0);
+    const b = next(a);
+    b.payload.grenades[0]!.position!.x += 2;
+    model.accept(b, 10);
+    expect([...model.grenades.values()][0]!.trail).toHaveLength(2);
+    const effect = next(b);
+    effect.payload.grenades[0]!.position = null;
+    effect.payload.grenades[0]!.effectTimeSeconds = 1;
+    model.accept(effect, 20);
+    expect([...model.grenades.values()].every((marker) => marker.trail.length === 0)).toBe(true);
+    expect(model.exits.size).toBe(0);
+  });
+  it('does not connect projectile history across Nuke floors', () => {
+    const model = new RadarPresentation();
+    const upper = single();
+    upper.payload.mapName = 'de_nuke';
+    model.accept(upper, 0);
+    const flying = next(upper);
+    flying.payload.grenades[0]!.position!.x += 2;
+    model.accept(flying, 10);
+    expect([...model.grenades.values()][0]!.trail).toHaveLength(2);
+    const lower = next(flying);
+    lower.payload.grenades[0]!.position!.z = -600;
+    model.accept(lower, 20);
+    expect([...model.grenades.values()][0]!.trail).toHaveLength(1);
+  });
+  it('bounds full histories for the maximum simultaneous projectile population', () => {
+    const model = new RadarPresentation();
+    let snapshot = single();
+    snapshot.payload.grenades = Array.from(
+      { length: RADAR_PRESENTATION.maxGrenades + 10 },
+      (_, index) => ({
+        ...snapshot.payload.grenades[0]!,
+        sourceEntityId: `stress-${index}`,
+        position: { x: -1000, y: index, z: 0 },
+      }),
+    );
+    for (let index = 0; index < 200; index++) {
+      snapshot = next(snapshot);
+      for (const grenade of snapshot.payload.grenades) grenade.position!.x += 1;
+      model.accept(snapshot, index * 10);
+      model.tick(index * 10, true);
+    }
+    expect(model.grenades.size).toBe(RADAR_PRESENTATION.maxGrenades);
+    expect(
+      [...model.grenades.values()].every(
+        (marker) =>
+          marker.trail.length <= RADAR_PRESENTATION.trailPoints && marker.trail[0]!.at === 0,
+      ),
+    ).toBe(true);
+  });
   it('bounds real-observation trails and starts ID reuse with new history', () => {
     const m = new RadarPresentation();
     let s = single();
