@@ -15,33 +15,29 @@ on:
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
+
+env:
+  RELEASE_LABEL: ${{ inputs.label }}
+  QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
 
 jobs:
-  release_qualification:
-    name: release_qualification
+  build:
     runs-on: windows-2025
     timeout-minutes: 30
-    env:
-      RELEASE_LABEL: ${{ inputs.label }}
-      QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
-
-      - name: Cache Cargo registry, git, and release target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-release-
-
+      - name: Pin checked-out source
+        id: source
+        shell: pwsh
+        run: |
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid source SHA' }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -50,6 +46,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
+
+      - name: Restore Cargo dependency and profile caches
+        id: cargo-cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -73,7 +75,67 @@ jobs:
           $artifact = Get-Content -Raw -LiteralPath $artifactPath | ConvertFrom-Json
           if ($artifact.desktopBuildProfile -ne 'release') { throw "Release Qualification 使用了错误 profile：$($artifact.desktopBuildProfile)" }
 
+      - name: Record candidate ZIP identity
+        id: candidate
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          "archive_sha256=$($manifest.archiveSha256)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload unqualified candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate
+          path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload build measurements
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-build-evidence
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
+          if-no-files-found: warn
+
+      - name: Save reusable main Cargo caches
+        if: ${{ github.ref == 'refs/heads/main' && steps.source.outputs.sha == github.sha }}
+        uses: ./.github/actions/save-cargo-cache
+        with:
+          profile: release
+          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
+          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
+          target-key: ${{ steps.cargo-cache.outputs.target-key }}
+          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
+
+  verify:
+    name: verify / ${{ matrix.lane }}
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [portable, sfx]
+    env:
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-candidate
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - name: Verify candidate transfer before extraction
+        run: node scripts/qualification/verify-candidate.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:SOURCE_SHA" "$env:ARCHIVE_SHA256"
       - name: Extract portable bundle and smoke test
+        if: ${{ matrix.lane == 'portable' }}
         shell: pwsh
         timeout-minutes: 5
         run: |
@@ -99,20 +161,8 @@ jobs:
             Pop-Location
           }
 
-      - name: Build and verify same-content LZMA2 self-extracting distribution
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'sfx extracted path'
-          & ./scripts/qualification/create-windows-sfx.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
-          $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          node scripts/qualification/product-smoke.mjs $extracted.FullName
-          if ($LASTEXITCODE -ne 0) { throw 'SFX portable smoke failed' }
-          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'sfx-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'SFX desktop GUI smoke failed' }
-
       - name: Measure installed C4 worker responsiveness
+        if: ${{ matrix.lane == 'portable' }}
         shell: pwsh
         run: |
           $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
@@ -120,6 +170,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed C4 worker probe failed' }
 
       - name: Run 3-map exact-artifact synthetic lifecycle soak
+        if: ${{ matrix.lane == 'portable' }}
         shell: pwsh
         run: |
           $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
@@ -128,6 +179,140 @@ jobs:
           $reportPath = Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json'
           node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
           if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
+
+      - name: Extract pristine candidate for SFX
+        if: ${{ matrix.lane == 'sfx' }}
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
+      - name: Build and verify same-content LZMA2 self-extracting distribution
+        if: ${{ matrix.lane == 'sfx' }}
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'sfx extracted path'
+          & ./scripts/qualification/create-windows-sfx.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
+          $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+          node scripts/qualification/product-smoke.mjs $extracted.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'SFX portable smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'sfx-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'SFX desktop GUI smoke failed' }
+
+      - name: Record successful lane identity
+        shell: pwsh
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          $extractRoot = if ($env:LANE -eq 'sfx') { Join-Path $env:RUNNER_TEMP 'sfx extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "$env:LANE-identity.json")
+          if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
+
+      - name: Upload verified distribution
+        if: ${{ matrix.lane == 'sfx' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-sfx
+          path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7z*-src.7z
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/7zip-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Collect qualification evidence
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
+          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'sfx-desktop-smoke.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'sfx-identity.json')) {
+            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
+            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
+          }
+          $extractedRoot = if ('${{ matrix.lane }}' -eq 'sfx') { Join-Path $env:RUNNER_TEMP 'sfx extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          if (Test-Path -LiteralPath $extractedRoot) {
+            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
+            if ($null -ne $bundle) {
+              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
+              $statePath = Join-Path $bundle.FullName 'state'
+              if (Test-Path -LiteralPath $statePath) {
+                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
+                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
+                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
+                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+                  Copy-Item -LiteralPath $_.FullName -Destination $target
+                }
+              }
+            }
+          }
+          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-${{ matrix.lane }}-evidence.zip'
+          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
+
+      - name: Upload release qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence-${{ matrix.lane }}
+          path: ${{ runner.temp }}/Mizar-*-evidence.zip
+          if-no-files-found: error
+
+  release_qualification:
+    name: release_qualification
+    needs: [build, verify]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-candidate
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-sfx
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-evidence-*
+          path: ${{ runner.temp }}/lane-evidence
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-build-evidence
+          path: ${{ runner.temp }}/release-evidence
+      - name: Verify all lane identities and assembled assets
+        shell: pwsh
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
+          foreach ($lane in @('portable', 'sfx')) {
+            $archive = Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-$env:RELEASE_LABEL-$lane-evidence.zip"
+            Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $evidenceRoot $lane)
+          }
+          node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $env:SOURCE_SHA $env:ARCHIVE_SHA256 $evidenceRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'final candidate'
+          Expand-Archive -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -DestinationPath $extractRoot
+          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $evidenceRoot 'qualified-identity.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
+          Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
+          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
 
       - name: Attest qualified portable ZIP provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
@@ -155,37 +340,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
           if-no-files-found: error
 
-      - name: Collect qualification evidence
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'sfx-desktop-smoke.json', 'c4-worker-benchmark.json')) {
-            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
-            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
-          }
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractedRoot) {
-            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-            if ($null -ne $bundle) {
-              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
-              $statePath = Join-Path $bundle.FullName 'state'
-              if (Test-Path -LiteralPath $statePath) {
-                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
-                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
-                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
-                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-                  Copy-Item -LiteralPath $_.FullName -Destination $target
-                }
-              }
-            }
-          }
-          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-evidence.zip'
-          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
-
       - name: Upload release qualification evidence
-        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-qualification-evidence

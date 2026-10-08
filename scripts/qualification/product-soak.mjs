@@ -102,7 +102,7 @@ const winsByMatch = [
     'B',
   ],
 ];
-const requireFromCompanion = createRequire(join(repositoryRoot, 'apps/companion/package.json'));
+const requireFromCompanion = createRequire(join(root, 'resources/app/package.json'));
 const websocketPackage = requireFromCompanion.resolve('@fastify/websocket');
 const WebSocket = createRequire(websocketPackage)('ws');
 

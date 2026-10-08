@@ -277,19 +277,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Cache Cargo registry, git, and CI target
-        id: cargo-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-${{ github.event.pull_request.head.sha || github.sha }}
-          restore-keys: |
-            cargo-${{ runner.os }}-ci-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', 'apps/desktop/src-tauri/build.rs', 'apps/desktop/src-tauri/tauri.conf.json', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}-
-            cargo-${{ runner.os }}-ci-
-
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -298,6 +285,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
+
+      - name: Restore Cargo dependency and profile caches
+        id: cargo-cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: ci
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -419,6 +412,7 @@ jobs:
           name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/cargo-benchmark.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/candidate-desktop-smoke.json
             ${{ runner.temp }}/qualification extracted path/**/state/desktop-smoke-*/*/logs/desktop*.ndjson
@@ -435,15 +429,15 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
           if-no-files-found: error
 
-      - name: Save reusable main Cargo cache
-        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Save reusable main Cargo caches
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: ./.github/actions/save-cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+          profile: ci
+          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
+          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
+          target-key: ${{ steps.cargo-cache.outputs.target-key }}
+          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
 
   qualification_offline:
     name: qualification / offline / ${{ matrix.name }}

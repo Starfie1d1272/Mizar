@@ -1,0 +1,34 @@
+name: Save Cargo caches
+description: Save each stable baseline once, after successful verification (caller restricts writes to main)
+inputs:
+  profile:
+    description: Cargo profile
+    required: true
+  registry-key:
+    description: Dependency cache key
+    required: true
+  registry-hit:
+    description: Exact dependency cache hit
+    required: true
+  target-key:
+    description: Profile cache key
+    required: true
+  target-hit:
+    description: Exact profile cache hit
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: ${{ inputs.registry-hit != 'true' }}
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: ${{ inputs.registry-key }}
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: ${{ inputs.target-hit != 'true' }}
+      with:
+        path: apps/desktop/src-tauri/target/${{ inputs.profile }}
+        key: ${{ inputs.target-key }}
