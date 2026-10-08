@@ -1,7 +1,7 @@
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { realProgramFixtures, type RealProgramProvenance } from './real-program-fixtures.js';
+import { eplProgramFixtures } from './epl-program-fixtures.js';
 import {
-  HUD_EDITOR_REAL_BP_FIXTURES,
   syntheticProgramFixtures,
   getPresentationFixtureReplaySource,
   SYNTHETIC_FIXTURE_PROVENANCE,
@@ -24,6 +24,9 @@ const aliases = {
   'gameplay-map-ended-gg': 'real-gameover',
 } as const;
 export const programFixtures = {
+  ...(Object.fromEntries(
+    Object.entries(eplProgramFixtures).map(([id, record]) => [id, record.snapshot]),
+  ) as { readonly [K in keyof typeof eplProgramFixtures]: ProgramSnapshot }),
   ...objectiveFocusedFixtures,
   ...syntheticProgramFixtures,
   ...(Object.fromEntries(
@@ -38,43 +41,34 @@ export const PROGRAM_FIXTURE_IDS = Object.keys(programFixtures) as ProgramFixtur
 // The operator preview stays small; the full registry remains available to visual/unit tests.
 export const HUD_EDITOR_FIXTURE_GROUPS = [
   {
-    label: '真实遥测回放 · BP 取自 2026 NJU Rivals',
+    label: 'EPL S24 · Falcons 对 NAVI',
     ids: [
-      'real-live-rich',
-      'real-bomb-dropped',
-      'real-planted',
-      'real-defusing',
-      'real-post-explosion-freezetime',
-      'real-timeout-ct',
-      'real-halftime-after',
-      'real-gameover',
-      'gameplay-map-ended-gg',
+      'epl-live',
+      'epl-freeze',
+      'epl-planting',
+      'epl-planted',
+      'epl-defusing',
+      'epl-timeout',
+      'epl-halftime',
+      'epl-map-result',
+      'epl-match-result',
     ],
   },
-  {
-    label: '真实 Rivals BP/赛果 · 游戏回放为独立样本',
-    ids: [
-      'bp-rivals-final-map4',
-      'bp-rivals-final-result',
-      'bp-rivals-semi-a-result',
-      'bp-rivals-semi-b-result',
-    ],
-  },
-  { label: '必要边界', ids: ['focused-avatar', 'awaiting-neutral'] },
+  { label: '必要边界', ids: ['awaiting-neutral'] },
 ] as const satisfies readonly {
   readonly label: string;
   readonly ids: readonly ProgramFixtureId[];
 }[];
-export const HUD_EDITOR_DEFAULT_FIXTURE_ID: ProgramFixtureId = 'real-live-rich';
-export const HUD_EDITOR_RIVALS_BP_FIXTURE_IDS = Object.keys(
-  HUD_EDITOR_REAL_BP_FIXTURES,
-) as (keyof typeof HUD_EDITOR_REAL_BP_FIXTURES)[];
+export const HUD_EDITOR_DEFAULT_FIXTURE_ID: ProgramFixtureId = 'epl-live';
 export type ProgramFixtureProvenance =
   | RealProgramProvenance
   | { readonly kind: 'synthetic-edge' | 'synthetic-presentation'; readonly reason: string };
 export const PROGRAM_FIXTURE_PROVENANCE: Readonly<
   Record<ProgramFixtureId, ProgramFixtureProvenance>
 > = {
+  ...(Object.fromEntries(
+    Object.entries(eplProgramFixtures).map(([id, record]) => [id, record.provenance]),
+  ) as { readonly [K in keyof typeof eplProgramFixtures]: RealProgramProvenance }),
   ...SYNTHETIC_FIXTURE_PROVENANCE,
   ...OBJECTIVE_FOCUSED_PROVENANCE,
   ...(Object.fromEntries(
@@ -100,6 +94,15 @@ export function getProgramFixtureReplaySource(id: string) {
 }
 
 export const PROGRAM_FIXTURE_LABELS: Readonly<Record<ProgramFixtureId, string>> = {
+  'epl-live': 'Inferno · 完整 5v5',
+  'epl-freeze': 'Inferno · 第 4 回合冻结',
+  'epl-planting': 'Inferno · 安装 C4',
+  'epl-planted': 'Inferno · C4 已安装',
+  'epl-defusing': 'Inferno · 拆弹',
+  'epl-timeout': 'Inferno · Falcons 战术暂停',
+  'epl-halftime': 'Inferno · 半场换边',
+  'epl-map-result': 'Inferno · 单图结果',
+  'epl-match-result': 'Mirage · 整场结果',
   'focused-avatar': '观察选手 · 显示头像',
   'focused-long-name': '观察选手 · 长名称与队徽',
   'focused-low-health-edge': '观察选手 · 低生命边界',
@@ -146,10 +149,6 @@ export const PROGRAM_FIXTURE_LABELS: Readonly<Record<ProgramFixtureId, string>> 
   'series-bo3-map1': 'BO3 · Map 1',
   'series-bo5': 'BO5 中盘',
   'series-bo5-pick-loss': 'BO5 · 选图方失利（合成）',
-  'bp-rivals-final-map4': 'Rivals 总决赛 · 第 4 图前',
-  'bp-rivals-final-result': 'Rivals 总决赛 · 完赛',
-  'bp-rivals-semi-a-result': 'Rivals 半决赛 · 大猛男队对 D’avenir',
-  'bp-rivals-semi-b-result': 'Rivals 半决赛 · Clarys 对 Plasma',
   'series-not-played': '系列赛未进行地图',
   'series-logo-mixed': '队伍 Logo 有/无',
   'series-halftime-swap': '半场换边',
@@ -171,9 +170,6 @@ export function getProgramFixture(id: string): ProgramSnapshot | null {
     : null;
 }
 export function getHudEditorFixture(id: string): ProgramSnapshot | null {
-  if (Object.prototype.hasOwnProperty.call(HUD_EDITOR_REAL_BP_FIXTURES, id)) {
-    return HUD_EDITOR_REAL_BP_FIXTURES[id as keyof typeof HUD_EDITOR_REAL_BP_FIXTURES];
-  }
   return getProgramFixture(id);
 }
 export function getProgramFixtureProvenance(id: string): ProgramFixtureProvenance | null {

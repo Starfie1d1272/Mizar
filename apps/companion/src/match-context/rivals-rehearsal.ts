@@ -43,6 +43,8 @@ type RehearsalFile = {
   };
   schedule: unknown;
   manifests: Record<string, unknown>;
+  stageIndices?: number[];
+  observations?: Record<string, Record<string, unknown>>;
 };
 
 export class RivalsRehearsal {
@@ -51,6 +53,8 @@ export class RivalsRehearsal {
     schedule: BroadcastScheduleWindowV1;
     manifests: Map<string, BroadcastManifest>;
     provenance: RehearsalFile['provenance'];
+    stageIndices: number[];
+    observations: RehearsalFile['observations'] | null;
   } | null = null;
   private selectedMatchId: string | null = null;
   private stageIndex = 0;
@@ -75,23 +79,60 @@ export class RivalsRehearsal {
   private async readFixture() {
     if (this.fixture) return this.fixture;
     const input = JSON.parse(await readFile(this.path, 'utf8')) as RehearsalFile;
-    if (input.schemaVersion !== 'mizar.rivals-rehearsal.v1')
-      throw new Error('Rivals 示例版本不兼容。');
+    const recorded = input.schemaVersion === 'mizar.rehearsal.v2';
+    if (!recorded && input.schemaVersion !== 'mizar.rivals-rehearsal.v1')
+      throw new Error('示例版本不兼容。');
     const schedule = validateBroadcastScheduleWindow(input.schedule);
-    if (!schedule.ok) throw new Error('Rivals 示例赛程无效。');
+    if (!schedule.ok) throw new Error('示例赛程无效。');
     const manifests = new Map<string, BroadcastManifest>();
     for (const match of schedule.value.matches) {
       const checked = validateBroadcastManifest(input.manifests[match.matchId]);
       if (!checked.ok || checked.value.match.matchId !== match.matchId)
-        throw new Error('Rivals 示例比赛资料无效。');
+        throw new Error('示例比赛资料无效。');
       manifests.set(match.matchId, checked.value);
     }
-    if (!manifests.has(input.focusMatchId)) throw new Error('Rivals 示例焦点比赛缺失。');
+    if (!manifests.has(input.focusMatchId)) throw new Error('示例焦点比赛缺失。');
+    const stageIndices = recorded ? input.stageIndices : STAGES.map((_, index) => index);
+    if (
+      !stageIndices?.length ||
+      stageIndices.some(
+        (index, position) =>
+          !Number.isInteger(index) ||
+          !STAGES[index] ||
+          (position > 0 && index <= stageIndices[position - 1]!),
+      ) ||
+      stageIndices[0] !== 0 ||
+      stageIndices.at(-1) !== STAGES.length - 1
+    )
+      throw new Error('示例阶段无效。');
+    if (recorded) {
+      for (const index of stageIndices) {
+        const stage = STAGES[index]!;
+        if (stage.scene !== 'gameplay' && stage.scene !== 'halftime') continue;
+        const payload = input.observations?.[index];
+        const expectedMap = manifests
+          .get(input.focusMatchId)!
+          .maps.find((map) => map.mapOrder === stage.targetMapOrder)?.mapName;
+        const map = payload?.map as { name?: unknown } | undefined;
+        if (
+          !payload ||
+          map?.name !== expectedMap ||
+          !adaptGsiPayload(payload, {
+            receivedAt: new Date().toISOString(),
+            receivedMonotonicMs: performance.now(),
+            sequence: 1,
+          }).ok
+        )
+          throw new Error('示例遥测与地图不匹配。');
+      }
+    }
     this.fixture = {
       focusMatchId: input.focusMatchId,
       schedule: schedule.value,
       manifests,
       provenance: input.provenance,
+      stageIndices,
+      observations: recorded ? (input.observations ?? {}) : null,
     };
     return this.fixture;
   }
@@ -102,7 +143,10 @@ export class RivalsRehearsal {
       focusMatchId: this.fixture?.focusMatchId ?? null,
       selectedMatchId: this.selectedMatchId,
       stageIndex: this.stageIndex,
-      stages: STAGES.map(({ label, scene }) => ({ label, scene })),
+      stages: (this.fixture?.stageIndices ?? STAGES.map((_, index) => index)).map((index) => {
+        const { label, scene } = STAGES[index]!;
+        return { label, scene };
+      }),
       provenance: this.fixture?.provenance ?? null,
     };
   }
@@ -195,7 +239,7 @@ export class RivalsRehearsal {
       this.selectedMatchId !== fixture.focusMatchId ||
       !Number.isInteger(index) ||
       index < 0 ||
-      index >= STAGES.length
+      index >= fixture.stageIndices.length
     )
       throw new Error('请先加载焦点比赛，再选择示例阶段。');
     const manifest = fixture.manifests.get(fixture.focusMatchId)!;
@@ -203,9 +247,23 @@ export class RivalsRehearsal {
     this.controller.activateFixture(stageManifest);
     this.fixtureSeriesDriver?.activateFixtureSeriesProgress(toMatchContext(stageManifest));
     this.stageIndex = index;
-    const stage = STAGES[index]!;
+    const stage = STAGES[fixture.stageIndices[index]!]!;
 
-    if (stage.scene === 'gameplay') {
+    if (fixture.observations !== null) {
+      const payload = fixture.observations?.[fixture.stageIndices[index]!];
+      if (payload !== undefined) {
+        const adapted = adaptGsiPayload(payload, {
+          receivedAt: new Date().toISOString(),
+          receivedMonotonicMs: performance.now(),
+          sequence: this.streamSequence++,
+        });
+        if (!adapted.ok) throw new Error('示例遥测无效。');
+        this.onObservation?.(
+          adapted.observation,
+          stage.targetMapOrder === null ? undefined : { mapOrder: stage.targetMapOrder },
+        );
+      }
+    } else if (stage.scene === 'gameplay') {
       const obs = await this.getGameplayObservation();
       if (obs && this.onObservation) {
         this.onObservation(
@@ -243,7 +301,8 @@ export class RivalsRehearsal {
   }
 
   private stageManifest(final: BroadcastManifest, index: number): BroadcastManifest {
-    const stage = STAGES[index]!;
+    const sourceIndex = this.fixture?.stageIndices[index] ?? index;
+    const stage = STAGES[sourceIndex]!;
     const completed = final.maps.slice(0, stage.completedMaps);
     const scoreA = completed.filter(
       (map) => map.scoreA !== null && map.scoreB !== null && map.scoreA > map.scoreB,
@@ -251,13 +310,13 @@ export class RivalsRehearsal {
     const scoreB = completed.filter(
       (map) => map.scoreA !== null && map.scoreB !== null && map.scoreB > map.scoreA,
     ).length;
-    const finished = index === STAGES.length - 1;
+    const finished = sourceIndex === STAGES.length - 1;
     return {
       ...final,
       revision: `${final.revision}:rehearsal:${index}`,
       match: {
         ...final.match,
-        status: finished ? 'finished' : index < 3 ? 'scheduled' : 'in_progress',
+        status: finished ? 'finished' : sourceIndex < 3 ? 'scheduled' : 'in_progress',
         scoreA: scoreA,
         scoreB: scoreB,
         completedAt: finished ? final.match.completedAt : null,
@@ -304,7 +363,7 @@ export function registerRivalsRehearsalRoutes(
       await options.beforeLoad?.();
       return await options.rehearsal.load();
     } catch {
-      return reply.code(409).send({ message: 'Rivals 示例暂时无法加载。' });
+      return reply.code(409).send({ message: '示例暂时无法加载。' });
     }
   });
   app.post('/operator/rivals-rehearsal/select', { bodyLimit: 256 }, async (request, reply) => {

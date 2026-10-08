@@ -1,0 +1,221 @@
+{
+  "schemaVersion": "mizar.match-document.v1",
+  "matchId": "hltv-2398745",
+  "competition": {
+    "competitionId": "hltv-event-8244",
+    "name": "ESL Pro League Season 24",
+    "logoUrl": "https://img-cdn.hltv.org/eventlogo/PhVPy7kXO_J_nfTng7a87h.png?ixlib=java-2.1.0&w=400&s=c0aedfdc29d3c83494b063e81e987cf6",
+    "themeColor": null
+  },
+  "status": "scheduled",
+  "format": "bo3",
+  "stage": "swiss",
+  "stageLabel": "瑞士轮 · 第4轮 · 2–1组",
+  "round": 4,
+  "roundLabel": "第 4 轮",
+  "entryRound": "2–1 组",
+  "matchLabel": "Falcons vs. Natus Vincere",
+  "stakesLabel": "胜者晋级淘汰赛",
+  "scheduledAt": "2026-10-06T19:00:00.000Z",
+  "startedAt": null,
+  "completedAt": null,
+  "scoreA": null,
+  "scoreB": null,
+  "resultDisposition": null,
+  "isForfeit": false,
+  "entrants": {
+    "a": {
+      "entryId": "epl-falcons",
+      "name": "Falcons",
+      "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
+      "rosterId": "epl-a-roster",
+      "players": [
+        {
+          "playerId": "steam-76561199032006224",
+          "steam64": "76561199032006224",
+          "displayName": "kyousuke",
+          "avatarUrl": "/fixture-media/epl-s24/76561199032006224.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561197996678278",
+          "steam64": "76561197996678278",
+          "displayName": "TeSeS",
+          "avatarUrl": "/fixture-media/epl-s24/76561197996678278.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561198041683378",
+          "steam64": "76561198041683378",
+          "displayName": "NiKo",
+          "avatarUrl": "/fixture-media/epl-s24/76561198041683378.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561197989430253",
+          "steam64": "76561197989430253",
+          "displayName": "karrigan",
+          "avatarUrl": "/fixture-media/epl-s24/76561197989430253.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561198074762801",
+          "steam64": "76561198074762801",
+          "displayName": "m0NESY",
+          "avatarUrl": "/fixture-media/epl-s24/76561198074762801.jpg",
+          "isStarter": true
+        }
+      ]
+    },
+    "b": {
+      "entryId": "epl-navi",
+      "name": "Natus Vincere",
+      "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
+      "rosterId": "epl-b-roster",
+      "players": [
+        {
+          "playerId": "steam-76561198050250233",
+          "steam64": "76561198050250233",
+          "displayName": "iM",
+          "avatarUrl": "/fixture-media/epl-s24/76561198050250233.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561199076189612",
+          "steam64": "76561199076189612",
+          "displayName": "makazze",
+          "avatarUrl": "/fixture-media/epl-s24/76561199076189612.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561199063068840",
+          "steam64": "76561199063068840",
+          "displayName": "w0nderful",
+          "avatarUrl": "/fixture-media/epl-s24/76561199063068840.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561198013243326",
+          "steam64": "76561198013243326",
+          "displayName": "Aleksib",
+          "avatarUrl": "/fixture-media/epl-s24/76561198013243326.jpg",
+          "isStarter": true
+        },
+        {
+          "playerId": "steam-76561198246607476",
+          "steam64": "76561198246607476",
+          "displayName": "b1t",
+          "avatarUrl": "/fixture-media/epl-s24/76561198246607476.jpg",
+          "isStarter": true
+        }
+      ]
+    }
+  },
+  "mapPool": [
+    "de_cache",
+    "de_dust2",
+    "de_mirage",
+    "de_inferno",
+    "de_nuke",
+    "de_ancient",
+    "de_anubis"
+  ],
+  "maps": [
+    {
+      "mapId": "epl-2398745-de_inferno",
+      "mapOrder": 1,
+      "mapName": "de_inferno",
+      "pickedByEntryId": "epl-navi",
+      "teamAStartSide": "CT",
+      "scoreA": null,
+      "scoreB": null,
+      "completedAt": null
+    },
+    {
+      "mapId": "epl-2398745-de_anubis",
+      "mapOrder": 2,
+      "mapName": "de_anubis",
+      "pickedByEntryId": "epl-falcons",
+      "teamAStartSide": "CT",
+      "scoreA": null,
+      "scoreB": null,
+      "completedAt": null
+    },
+    {
+      "mapId": "epl-2398745-de_mirage",
+      "mapOrder": 3,
+      "mapName": "de_mirage",
+      "pickedByEntryId": null,
+      "teamAStartSide": null,
+      "scoreA": null,
+      "scoreB": null,
+      "completedAt": null
+    }
+  ],
+  "veto": [
+    {
+      "stepOrder": 1,
+      "actionType": "ban",
+      "mapName": "de_dust2",
+      "entryId": "epl-navi",
+      "side": null
+    },
+    {
+      "stepOrder": 2,
+      "actionType": "ban",
+      "mapName": "de_cache",
+      "entryId": "epl-falcons",
+      "side": null
+    },
+    {
+      "stepOrder": 3,
+      "actionType": "pick",
+      "mapName": "de_inferno",
+      "entryId": "epl-navi",
+      "side": null
+    },
+    {
+      "stepOrder": 4,
+      "actionType": "side_pick",
+      "mapName": "de_inferno",
+      "entryId": "epl-falcons",
+      "side": "CT"
+    },
+    {
+      "stepOrder": 5,
+      "actionType": "pick",
+      "mapName": "de_anubis",
+      "entryId": "epl-falcons",
+      "side": null
+    },
+    {
+      "stepOrder": 6,
+      "actionType": "side_pick",
+      "mapName": "de_anubis",
+      "entryId": "epl-navi",
+      "side": "T"
+    },
+    {
+      "stepOrder": 7,
+      "actionType": "ban",
+      "mapName": "de_ancient",
+      "entryId": "epl-navi",
+      "side": null
+    },
+    {
+      "stepOrder": 8,
+      "actionType": "ban",
+      "mapName": "de_nuke",
+      "entryId": "epl-falcons",
+      "side": null
+    },
+    {
+      "stepOrder": 9,
+      "actionType": "decider",
+      "mapName": "de_mirage",
+      "entryId": null,
+      "side": null
+    }
+  ],
+  "commentators": []
+}

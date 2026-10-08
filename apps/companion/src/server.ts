@@ -167,8 +167,8 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   });
   const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
   const rehearsalCandidates = [
-    resolve(process.cwd(), 'fixtures/rivals-rehearsal/rivals-rehearsal.generated.json'),
-    resolve(process.cwd(), '../../fixtures/rivals-rehearsal/rivals-rehearsal.generated.json'),
+    resolve(process.cwd(), 'fixtures/epl-s24/rehearsal.generated.json'),
+    resolve(process.cwd(), '../../fixtures/epl-s24/rehearsal.generated.json'),
   ];
   const detectedRehearsalPath = rehearsalCandidates.find((candidate) => existsSync(candidate));
   const rehearsalFixturePath =

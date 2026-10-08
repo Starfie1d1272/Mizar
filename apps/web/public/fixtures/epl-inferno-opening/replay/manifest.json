@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "eventIndexSchemaVersion": 1,
+  "harnessVersion": 1,
+  "source": {
+    "id": "epl-inferno-opening",
+    "role": "primary",
+    "capturePath": "fixtures/epl-s24/captures/inferno-opening",
+    "sourceCaptureId": "20261007075825391-05e72b58",
+    "sourceFramesSha256": "b99117762d643f8d94300d986744e829260dee49ef5b6e452f253b4027329edf",
+    "sanitizerVersion": 2,
+    "sourceFrameSelection": { "kind": "sequence-range", "firstSequence": 13, "lastSequence": 650 },
+    "mapName": "de_inferno",
+    "humanRound": 1
+  },
+  "frameCount": 638,
+  "firstSequence": 13,
+  "lastSequence": 650,
+  "framesSha256": "3e475bfbdaddba4fd99ae7f6f4acab290d3b83129aa3cbf0b7db2aecaf379fbe",
+  "eventCount": 4,
+  "eventIndexSha256": "a83f5655bb9e7ddfe506846dfd3e5b474c876851909ca85750a7cadbbde20f2a",
+  "matchContextSha256": "775f2772baa87cac24c349c6357073d5bff6b0b765d86ad98d162dcf15a93d9a",
+  "captureManifestSha256": "84738e329b714831d2285ffae95719294ee6c4c0d5a729caacf622992050c0f7",
+  "coverage": [
+    { "kind": "round-phase", "status": "observed" },
+    { "kind": "weapon-ammo-decrease", "status": "not-observed-in-selected-window" },
+    { "kind": "health-decrease", "status": "unavailable-from-current-source" },
+    { "kind": "death", "status": "not-observed-in-selected-window" },
+    { "kind": "flash-rise-fall", "status": "not-observed-in-selected-window" },
+    { "kind": "grenade-airborne-terminal", "status": "not-observed-in-selected-window" },
+    { "kind": "smoke-start", "status": "not-observed-in-selected-window" },
+    { "kind": "smoke-end", "status": "not-observed-in-selected-window" },
+    { "kind": "inferno-start", "status": "not-observed-in-selected-window" },
+    { "kind": "inferno-end", "status": "not-observed-in-selected-window" },
+    { "kind": "he-detonation", "status": "unavailable-from-current-source" },
+    { "kind": "bomb-state", "status": "observed" },
+    { "kind": "observer-target-switch", "status": "not-observed-in-selected-window" },
+    { "kind": "round-boundary", "status": "not-observed-in-selected-window" },
+    { "kind": "round-accumulator-finalize", "status": "not-observed-in-selected-window" }
+  ]
+}

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +30,107 @@ const fixturePath = resolve(
 );
 
 describe('RivalsRehearsal', () => {
+  it('uses EPL map-specific recordings and hides unsupported telemetry stages', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-epl-rehearsal-'));
+    temporary.push(dir);
+    const runtime = createProgramRuntime('test-epl-rehearsal');
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      nowMonotonicMs: () => performance.now(),
+    });
+    const controller = new MatchContextController({
+      lkgStore: new MatchManifestLkgStore({ filePath: join(dir, 'lkg.json') }),
+      onBindingChanged: (binding) => coordinator.setMatchContextBinding(binding),
+    });
+    const observations: TelemetryObservation[] = [];
+    const scene = new ProgramSceneController(coordinator, {
+      get: () => ({ projection: null, state: 'hidden' }),
+    } as unknown as BpSession);
+    const rehearsal = new RivalsRehearsal(
+      resolve(import.meta.dirname, '../../../fixtures/epl-s24/rehearsal.generated.json'),
+      controller,
+      scene,
+      (observation, binding) => {
+        observations.push(observation);
+        const result = runtime.acceptObservation(observation);
+        if (binding)
+          runtime.executeOperatorCommand({
+            kind: 'bind-current-map-execution-to-series-map',
+            mapOrder: binding.mapOrder,
+            reason: 'EPL 示例地图执行绑定',
+          });
+        coordinator.afterRuntimeMutation(result);
+      },
+      {
+        activateFixtureSeriesProgress: (context) => {
+          runtime.activateFixtureSeriesProgress(context);
+          coordinator.refresh();
+        },
+        clearFixtureSeriesProgress: () => {
+          runtime.clearFixtureSeriesProgress();
+          coordinator.refresh();
+        },
+      },
+    );
+    const schedule = await rehearsal.schedule();
+    expect(schedule.competition.name).toBe('ESL Pro League Season 24');
+    expect(schedule.matches).toHaveLength(4);
+    expect(schedule.matches.find((match) => match.matchId === 'hltv-2398745')?.scoreA).toBeNull();
+    const loaded = await rehearsal.load();
+    expect(controller.getActiveBinding()?.manifest.match.scheduledAt).toBe(
+      '2026-10-06T19:00:00.000Z',
+    );
+    expect(loaded.stages.some((stage) => stage.label === '第二图 · 比赛中')).toBe(false);
+    for (const [label, mapName] of [
+      ['第一图 · 比赛中', 'de_inferno'],
+      ['第一图 · 半场', 'de_inferno'],
+      ['决胜图 · 比赛中', 'de_mirage'],
+    ]) {
+      const index = loaded.stages.findIndex((stage) => stage.label === label);
+      await rehearsal.stage(index);
+      expect(observations.at(-1)?.telemetry.map?.name).toBe(mapName);
+      expect(observations.at(-1)?.telemetry.allPlayers).toHaveLength(10);
+      const program = coordinator.getCurrent().program;
+      expect(program.status.telemetry).toBe('fresh');
+      expect(program.series?.bindingState).toBe('bound');
+      expect(program.series?.currentMapOrder).toBe(mapName === 'de_mirage' ? 3 : 1);
+      expect(scene.get().active).toBe(loaded.stages[index]!.scene);
+    }
+    await rehearsal.stage(loaded.stages.length - 1);
+    expect(controller.getActiveBinding()?.manifest.match).toMatchObject({
+      status: 'finished',
+      scoreA: 2,
+      scoreB: 1,
+    });
+    expect(scene.get().active).toBe('match_result');
+    expect(coordinator.getCurrent().program.series?.score).toEqual({ a: 2, b: 1 });
+    rehearsal.stop();
+    expect(controller.getActiveBinding()).toBeUndefined();
+    expect(runtime.getSeriesProgress()).toBeNull();
+    expect(scene.get().active).toBe('waiting');
+  });
+
+  it('rejects a recording from the wrong map before activating a fixture', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-epl-wrong-map-'));
+    temporary.push(dir);
+    const input = JSON.parse(
+      await readFile(
+        resolve(import.meta.dirname, '../../../fixtures/epl-s24/rehearsal.generated.json'),
+        'utf8',
+      ),
+    ) as { observations: Record<string, { map: { name: string } }> };
+    input.observations['11']!.map.name = 'de_ancient';
+    const path = join(dir, 'fixture.json');
+    await writeFile(path, JSON.stringify(input));
+    const controller = new MatchContextController({
+      lkgStore: new MatchManifestLkgStore({ filePath: join(dir, 'lkg.json') }),
+    });
+    const rehearsal = new RivalsRehearsal(path, controller);
+    await expect(rehearsal.load()).rejects.toThrow('遥测与地图不匹配');
+    expect(controller.getActiveBinding()).toBeUndefined();
+  });
+
   it('browses schedule window, switches matches, and advances stages', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-rehearsal-test-'));
     temporary.push(dir);

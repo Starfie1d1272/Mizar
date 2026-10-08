@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "eventIndexSchemaVersion": 1,
+  "harnessVersion": 1,
+  "source": {
+    "id": "epl-inferno-final-round",
+    "role": "supplemental",
+    "capturePath": "fixtures/epl-s24/captures/inferno-final-round",
+    "sourceCaptureId": "20261007075825391-05e72b58",
+    "sourceFramesSha256": "b99117762d643f8d94300d986744e829260dee49ef5b6e452f253b4027329edf",
+    "sanitizerVersion": 2,
+    "sourceFrameSelection": {
+      "kind": "sequence-range",
+      "firstSequence": 2200,
+      "lastSequence": 3160
+    },
+    "mapName": "de_inferno",
+    "humanRound": 19
+  },
+  "frameCount": 961,
+  "firstSequence": 2200,
+  "lastSequence": 3160,
+  "framesSha256": "2127bbbdbe0bae9b9f343632035542843b43a49cf283ad5a90e99df5b5ae857b",
+  "eventCount": 62,
+  "eventIndexSha256": "82de50d16e9b86e2f6a7a26960e95dfd9a7e1058c478dcdf6cd2e2ff92255b8b",
+  "matchContextSha256": "775f2772baa87cac24c349c6357073d5bff6b0b765d86ad98d162dcf15a93d9a",
+  "captureManifestSha256": "6d6126a3c688073d563139859ae68635b35b5517342ca7552ac60036f54cbd4e",
+  "coverage": [
+    { "kind": "round-phase", "status": "observed" },
+    { "kind": "weapon-ammo-decrease", "status": "observed" },
+    { "kind": "health-decrease", "status": "observed" },
+    { "kind": "death", "status": "observed" },
+    { "kind": "flash-rise-fall", "status": "not-observed-in-selected-window" },
+    { "kind": "grenade-airborne-terminal", "status": "observed" },
+    { "kind": "smoke-start", "status": "not-observed-in-selected-window" },
+    { "kind": "smoke-end", "status": "observed" },
+    { "kind": "inferno-start", "status": "not-observed-in-selected-window" },
+    { "kind": "inferno-end", "status": "observed" },
+    { "kind": "he-detonation", "status": "unavailable-from-current-source" },
+    { "kind": "bomb-state", "status": "observed" },
+    { "kind": "observer-target-switch", "status": "observed" },
+    { "kind": "round-boundary", "status": "observed" },
+    { "kind": "round-accumulator-finalize", "status": "not-observed-in-selected-window" }
+  ]
+}

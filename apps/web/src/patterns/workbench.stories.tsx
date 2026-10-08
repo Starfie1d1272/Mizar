@@ -1,4 +1,3 @@
-import { RIVALS_BP_RECORDS } from '../program/fixtures/rivals-bp-records.generated.js';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, within } from 'storybook/test';
 import { Button, Field, StatusBanner } from '../ui/index.js';
@@ -13,16 +12,15 @@ const args = {
   preview: (
     <PreviewFrame label="播出预览">
       <div>
-        <strong>{RIVALS_BP_RECORDS.final.entrants.a.name}</strong> 对阵{' '}
-        <strong>{RIVALS_BP_RECORDS.final.entrants.b.name}</strong>
-        <p>BO5</p>
+        <strong>{'Falcons'}</strong> 对阵 <strong>{'Natus Vincere'}</strong>
+        <p>BO3 · 瑞士轮 2–1 组</p>
       </div>
     </PreviewFrame>
   ),
   inspector: (
     <Inspector title="预览控制">
       <Field label="预览名称" />
-      <StatusBanner tone="info">2026 NJU Rivals 比赛资料</StatusBanner>
+      <StatusBanner tone="info">ESL Pro League Season 24 比赛资料</StatusBanner>
       <Button variant="primary">确认预览</Button>
     </Inspector>
   ),

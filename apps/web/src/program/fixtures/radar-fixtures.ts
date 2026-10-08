@@ -1,6 +1,7 @@
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { getProgramFixtureReplaySource } from './program-fixtures.js';
+import { eplFixture } from './epl-program-fixtures.js';
 import artifact from './generated/real-radar-fixtures.generated.json' with { type: 'json' };
 
 export const RADAR_VISUAL_FIXTURES = [
@@ -104,6 +105,8 @@ function sameCursor(program: ProgramSnapshot['cursor'], radar: RadarSnapshot['cu
 
 /** Return only the Radar projection derived from the exact Program replay frame. */
 export function radarSnapshotForProgramFixture(id: string): RadarSnapshot | null {
+  const epl = eplFixture(id);
+  if (epl) return radarSnapshotSchema.parse(structuredClone(epl.radarSnapshot));
   const source = getProgramFixtureReplaySource(id);
   if (source === null) return null;
 

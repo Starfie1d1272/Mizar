@@ -1,0 +1,91 @@
+{
+  "usage": "选手 Steam 公开头像与队伍公开标识，仅用于这场比赛的展示；不改变名单身份。",
+  "assets": [
+    {
+      "steam64": "76561199032006224",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300619,
+      "path": "apps/web/public/fixture-media/epl-s24/76561199032006224.jpg",
+      "sha256": "b23abb4180afea7699157a5f35c393f60d3ece213283ceaddc439a1edc8e2936"
+    },
+    {
+      "steam64": "76561197996678278",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300418,
+      "path": "apps/web/public/fixture-media/epl-s24/76561197996678278.jpg",
+      "sha256": "f395c0599d2acd50535459600da6d88918e96b5251f303920419f3f9ee552880"
+    },
+    {
+      "steam64": "76561198041683378",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300418,
+      "path": "apps/web/public/fixture-media/epl-s24/76561198041683378.jpg",
+      "sha256": "e3872fa32da9ab26d072703bc05d55de586ab5390703f3a9ffa3cab785c6ecfd"
+    },
+    {
+      "steam64": "76561197989430253",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426299967,
+      "path": "apps/web/public/fixture-media/epl-s24/76561197989430253.jpg",
+      "sha256": "9d7d1bcf67dd70fb0743d6843b961f8585012f8de55fdc4c174bbb732f1e4a2d"
+    },
+    {
+      "steam64": "76561198074762801",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300523,
+      "path": "apps/web/public/fixture-media/epl-s24/76561198074762801.jpg",
+      "sha256": "e5b2fd582ccab1ef422d7b65ee319ab8efb962f8ac6404bbe5ba1c8dcb1f12b0"
+    },
+    {
+      "steam64": "76561198050250233",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300515,
+      "path": "apps/web/public/fixture-media/epl-s24/76561198050250233.jpg",
+      "sha256": "05ea2b4e150ae91620a94638c57b3e1ac060c7d1f5c3df1a04e97eb31b90c673"
+    },
+    {
+      "steam64": "76561199076189612",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300320,
+      "path": "apps/web/public/fixture-media/epl-s24/76561199076189612.jpg",
+      "sha256": "790a79be82c51fb55012af421e50a0512b9cdeef8d7ec93b54eee7e13cb2aac2"
+    },
+    {
+      "steam64": "76561199063068840",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426300623,
+      "path": "apps/web/public/fixture-media/epl-s24/76561199063068840.jpg",
+      "sha256": "f83ddf56abbac9c050d2099e1da01b9c46439d0d156a9d9051d856f6ce4c6861"
+    },
+    {
+      "steam64": "76561198013243326",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426299850,
+      "path": "apps/web/public/fixture-media/epl-s24/76561198013243326.jpg",
+      "sha256": "84e7670796bf5dbe3cad9b9390586fd666ce01262deeee033568688254bddd73"
+    },
+    {
+      "steam64": "76561198246607476",
+      "source": "Steam Web API GetPlayerSummaries",
+      "fetchedAt": 1791426299869,
+      "path": "apps/web/public/fixture-media/epl-s24/76561198246607476.jpg",
+      "sha256": "464ea9ea67300d8b03d41ec23690bc81ffa61195d658f6b2b37cc8c00270efd5"
+    },
+    {
+      "entryId": "epl-falcons",
+      "source": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+      "fetchedAt": "2026-10-08T08:56:46.978Z",
+      "path": "apps/web/public/fixture-media/epl-s24/epl-falcons.webp",
+      "sha256": "1bc11351e7658fc25f40cee81899f4a934096f10c416a4f6c8f0e5436ad72ee5"
+    },
+    {
+      "entryId": "epl-navi",
+      "source": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+      "fetchedAt": "2026-10-08T08:56:47.115Z",
+      "path": "apps/web/public/fixture-media/epl-s24/epl-navi.svg",
+      "sha256": "ad2cca38fe4bdc2229c0bfe6f001fce2522736d923f4e1307cd809bfbaa3fd61",
+      "sourceSha256": "61b5ceaa537dcac7a7f8d7c0b49f5557553c094c8fcaca710bc7d50742485a3d",
+      "processing": "Normalize SVG line endings to LF; artwork unchanged"
+    }
+  ]
+}

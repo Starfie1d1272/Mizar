@@ -10,8 +10,25 @@ import { toMatchContext } from '@mizar/rivalhub';
 import { canonicalJsonLine } from '@mizar/testkit';
 
 import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-replay.js';
+import { localDocumentBindingManifest } from '../../src/match-context/local-document-adapter.js';
 
 const SOURCES = [
+  {
+    id: 'epl-inferno-opening',
+    capturePath: 'fixtures/epl-s24/captures/inferno-opening',
+    outputPath: 'apps/web/public/fixtures/epl-inferno-opening/replay',
+    mapName: 'de_inferno',
+    humanRound: 1,
+    role: 'primary',
+  },
+  {
+    id: 'epl-inferno-final-round',
+    capturePath: 'fixtures/epl-s24/captures/inferno-final-round',
+    outputPath: 'apps/web/public/fixtures/epl-inferno-final-round/replay',
+    mapName: 'de_inferno',
+    humanRound: 19,
+    role: 'supplemental',
+  },
   {
     id: 'ancient-round-03',
     capturePath: 'fixtures/gsi/acceptance/ancient-round-03',
@@ -453,8 +470,16 @@ async function generateSource(source: (typeof SOURCES)[number]) {
     throw new Error(`Expected sanitizer-v2 real sequence capture: ${source.capturePath}`);
 
   const frames: AtomicReplayFrame[] = [];
+  const eplManifest = source.id.startsWith('epl-')
+    ? localDocumentBindingManifest(
+        JSON.parse(
+          await readFile(resolve(REPOSITORY_ROOT, 'fixtures/epl-s24/match-document.json'), 'utf8'),
+        ),
+      )
+    : undefined;
   const replay = await replayRealProgram({
     capturePath: resolve(REPOSITORY_ROOT, source.capturePath),
+    ...(eplManifest ? { configureManifest: () => eplManifest } : {}),
     afterEvent: (event, { coordinator }) => {
       if (event.kind !== 'frame') return;
       const program = programSnapshotSchema.parse(coordinator.getPublisher('program').getCurrent());

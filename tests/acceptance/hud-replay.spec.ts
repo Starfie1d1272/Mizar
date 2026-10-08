@@ -158,12 +158,60 @@ async function readPlayerRailState(rail: Locator) {
 test.describe('HUD 编辑器 Replay acceptance', () => {
   test.describe.configure({ timeout: 90_000 });
 
+  test('defaults to EPL and rebuilds its selected real C4 event with matching identities', async ({
+    page,
+  }) => {
+    await page.goto('/operator/hud');
+    await page.getByLabel('预览来源').selectOption('replay');
+    await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-opening');
+    const replay = page.getByRole('region', { name: '重放控制' });
+    await expect(replay).toHaveAttribute('data-replay-cursor', '13');
+    await expect(page.locator('body')).toContainText('Falcons');
+    await expect(page.locator('body')).toContainText('Natus Vincere');
+    await expect(page.locator('[data-avatar-present="true"]')).toHaveCount(10);
+    const avatar = await page.request.get('/fixture-media/epl-s24/76561198074762801.jpg');
+    expect(avatar.ok()).toBe(true);
+    expect(avatar.headers()['content-type']).toContain('image/jpeg');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-final-round');
+    await expect(replay).toHaveAttribute('data-replay-cursor', '2200');
+    const response = await page.request.get(
+      '/fixtures/epl-inferno-final-round/replay/events.jsonl',
+    );
+    const events = parseJsonLines<ReplayEventFixture>(await response.text());
+    const planted = events.find(
+      (event) => event.kind === 'bomb-state' && event.detail.to === 'planted',
+    );
+    expect(planted).toBeDefined();
+    const rebuiltResponse = await page.request.post('/__local/replay-prefix', {
+      data: { sourceId: 'epl-inferno-final-round', targetSequence: planted!.sequence },
+    });
+    expect(rebuiltResponse.ok()).toBe(true);
+    const framesResponse = await page.request.get(
+      '/fixtures/epl-inferno-final-round/replay/frames.jsonl',
+    );
+    const recorded = parseJsonLines<ReplayFrameFixture & { program: unknown; radar: unknown }>(
+      await framesResponse.text(),
+    ).find((frame) => frame.cursor.sequence === planted!.sequence)!;
+    expect(await rebuiltResponse.json()).toEqual({
+      targetSequence: planted!.sequence,
+      program: recorded.program,
+      radar: recorded.radar,
+    });
+    await selectReplayEvent(page, replay, planted!);
+    await expect(page.locator('body')).toContainText('m0NESY');
+    await expect(page.locator('[data-hud-widget="radar"] canvas.radar')).toHaveAttribute(
+      'data-radar-state',
+      'live',
+    );
+  });
+
   test('shows the fixed real identities and locally frozen presentation assets', async ({
     page,
   }) => {
     await page.clock.install();
     await page.goto('/operator/hud');
     await page.getByLabel('预览来源').selectOption('replay');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
 
     const replay = page.getByRole('region', { name: '重放控制' });
     await expect(replay).toHaveAttribute('data-replay-cursor', '587');
@@ -188,6 +236,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     await page.goto('/operator/hud');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
     const replay = page.getByRole('region', { name: '重放控制' });
     await expect(replay).toHaveAttribute('data-replay-cursor', '587');
 
@@ -251,6 +300,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     await page.goto('/operator/hud');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
     const replay = page.getByRole('region', { name: '重放控制' });
     const radar = page.locator('[data-hud-widget="radar"] canvas.radar');
     const { events, frames } = await loadAncientReplay(page);
@@ -347,6 +397,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     await page.goto('/operator/hud');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
     const replay = page.getByRole('region', { name: '重放控制' });
     const { events, frames } = await loadAncientReplay(page);
     const planting = eventAt(events, 'bomb-state', 1016, (event) => event.detail.to === 'planting');
@@ -413,6 +464,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     await page.goto('/operator/hud', { waitUntil: 'domcontentloaded' });
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
     const replay = page.getByRole('region', { name: '重放控制' });
     const { events, frames } = await loadAncientReplay(page);
     const planted = eventAt(events, 'bomb-state', 1029, (event) => event.detail.to === 'planted');
@@ -464,6 +516,7 @@ test('Shanghai planting panel exits without a placeholder and planted C4 has red
     .getByRole('combobox', { name: '预设', exact: true })
     .selectOption('builtin:perfectworld-preset');
   await page.getByLabel('预览来源').selectOption('replay');
+  await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
   const replay = page.getByRole('region', { name: '重放控制' });
   const { events, frames } = await loadAncientReplay(page);
   await selectReplayEvent(

@@ -106,6 +106,8 @@ jobs:
         run: |
           pnpm cs2-assets:verify
           pnpm fixtures:program:verify
+          pnpm fixtures:epl:verify
+          pnpm fixtures:epl-rehearsal:verify
           pnpm fixtures:radar:verify
           pnpm fixtures:replay:verify
 

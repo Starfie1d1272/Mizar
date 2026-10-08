@@ -1,0 +1,40 @@
+{
+  "sourceLedgerSha256": "fc975491d5aa3735936b4b6af24cecb59c47f785321b746d93054c08de11be03",
+  "originalPairedFramesSha256": "a46d0ef638b266d1b2b3435720b82efa54876ebb1218ef7bffaaded8243c8be3",
+  "sanitization": "Replace local Steam avatar endpoints and external team logo URLs with bundled offline assets; all gameplay fields and cursor identities preserved",
+  "avatars": [
+    "9d7d1bcf67dd70fb0743d6843b961f8585012f8de55fdc4c174bbb732f1e4a2d.jpg",
+    "f395c0599d2acd50535459600da6d88918e96b5251f303920419f3f9ee552880.jpg",
+    "84e7670796bf5dbe3cad9b9390586fd666ce01262deeee033568688254bddd73.jpg",
+    "e3872fa32da9ab26d072703bc05d55de586ab5390703f3a9ffa3cab785c6ecfd.jpg",
+    "05ea2b4e150ae91620a94638c57b3e1ac060c7d1f5c3df1a04e97eb31b90c673.jpg",
+    "e5b2fd582ccab1ef422d7b65ee319ab8efb962f8ac6404bbe5ba1c8dcb1f12b0.jpg",
+    "464ea9ea67300d8b03d41ec23690bc81ffa61195d658f6b2b37cc8c00270efd5.jpg",
+    "b23abb4180afea7699157a5f35c393f60d3ece213283ceaddc439a1edc8e2936.jpg",
+    "f83ddf56abbac9c050d2099e1da01b9c46439d0d156a9d9051d856f6ce4c6861.jpg",
+    "790a79be82c51fb55012af421e50a0512b9cdeef8d7ec93b54eee7e13cb2aac2.jpg"
+  ],
+  "limitations": [
+    "Native CS2 replay notice remains in video",
+    "Synchronization and portable runtime acceptance pending"
+  ],
+  "videoEncoding": {
+    "sourceSha256": "684aadb549420eda619562414b9144d227b2356280b73b4b2642d1dc7a0836e7",
+    "sha256": "4b53e8328a37aa8eea2549527d06179502b9dc87745903932f359e94678921fc",
+    "bytes": 33440429,
+    "encoder": "libx264",
+    "preset": "fast",
+    "crf": 24,
+    "resolution": [1920, 1080],
+    "fps": 60,
+    "note": "Full original retained locally; encoding only, no content, duration or timeline changes; full decode passed"
+  },
+  "teamLogoLocalization": {
+    "inputFramesSha256": "1fc2595fa6cf3a53073c1799fbc1404c570ecd5fcfdbab48a880bdbc740e97c7",
+    "replacements": {
+      "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c": "/fixture-media/epl-s24/epl-falcons.webp",
+      "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c": "/fixture-media/epl-s24/epl-navi.svg"
+    },
+    "assetManifest": "fixtures/epl-s24/media.json"
+  }
+}

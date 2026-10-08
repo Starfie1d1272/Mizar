@@ -174,3 +174,5 @@ Program series-strip map scenes and CT/T side marks are Valve / Counter-Strike 2
 - `SourceHanSansCN-Regular.woff2` 从 [Adobe Source Han Sans 官方仓库](https://github.com/adobe-fonts/source-han-sans) 的 CN Regular OTF 无损压缩为 WOFF2。Copyright 2014–2021 Adobe，使用 SIL Open Font License 1.1；原文随包保留为 `SourceHanSans-LICENSE.txt`。
 - `playerBg.png`、`shootFire.png` 来自用户提供的 `HUD/overlay4.zip` 中 LexoRadar 展示资源，源文件未附独立许可证；权利属于原作者/相应权利人。仅复用方向与开火图案，未移植地图或数据适配实现。原件与哈希记录在 `packages/radar-view/assets/radar-reference/esl/`，Web 随包镜像位于 `apps/web/public/brand/hud/esl/`。
 - `texture.svg` 是本次新绘制的近似纹理，用来补足参考中缺失的 `text2.png`，并非该文件的原件。
+
+EPL 样例的 Falcons 与 Natus Vincere 队伍标识来自公开 HLTV 队伍图片，仅用于比赛身份展示；原始地址、获取时间与 SHA-256 记录在 `fixtures/epl-s24/media.json`。商标与图片权利仍归原权利人，不作为 Mizar 品牌或项目许可资产。

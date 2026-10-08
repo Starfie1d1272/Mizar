@@ -25,9 +25,9 @@
 
 Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
-![Mizar Pulse 半场数据画面](docs/screenshots/halftime.png)
+![RC27 Mizar Pulse 实机画面](docs/screenshots/windows-rc27/b-inferno-r4-pulse.png)
 
-_浏览器示例画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。_
+_RC27 真实 Inferno demo 画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。_
 
 ## 比赛进行到哪里，节目就呈现到哪里
 

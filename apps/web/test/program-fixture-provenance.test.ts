@@ -10,6 +10,7 @@ import {
   realProgramFixtures,
   parseRealProgramArtifact,
 } from '../src/program/fixtures/real-program-fixtures';
+import { eplProgramFixtures } from '../src/program/fixtures/epl-program-fixtures';
 import {
   derivePresentationStressFixture,
   type PresentationStressPatch,
@@ -46,7 +47,7 @@ describe('Program fixture provenance policy', () => {
       expect(programSnapshotSchema.safeParse(snapshot).success, id).toBe(true);
       if (provenance.kind === 'real-derived') {
         expect(
-          Object.values(realProgramFixtures).some(
+          [...Object.values(realProgramFixtures), ...Object.values(eplProgramFixtures)].some(
             (record) => record.snapshot === snapshot && record.provenance === provenance,
           ),
           id,
@@ -55,7 +56,7 @@ describe('Program fixture provenance policy', () => {
         expect(provenance.reason.trim().length, id).toBeGreaterThan(0);
         if (provenance.kind === 'synthetic-presentation') {
           expect(
-            Object.values(realProgramFixtures).some(
+            [...Object.values(realProgramFixtures), ...Object.values(eplProgramFixtures)].some(
               (record) =>
                 JSON.stringify(gameplay(record.snapshot)) === JSON.stringify(gameplay(snapshot)),
             ),
@@ -69,22 +70,24 @@ describe('Program fixture provenance policy', () => {
     expect(getProgramFixtureProvenance('unknown')).toBeNull();
   });
 
-  it('keeps the operator preview limited to real replay and declared BP or media boundaries', () => {
+  it('keeps the operator preview limited to EPL replay and the empty initial state', () => {
     const ids = HUD_EDITOR_FIXTURE_GROUPS.flatMap((group) => group.ids);
-    expect(ids).toHaveLength(15);
-    expect(ids).toContain('gameplay-map-ended-gg');
-    expect(getProgramFixtureProvenance('gameplay-map-ended-gg')?.kind).toBe('real-derived');
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'epl-live',
+        'epl-halftime',
+        'epl-map-result',
+        'epl-match-result',
+        'awaiting-neutral',
+      ]),
+    );
+    expect(ids.every((id) => id.startsWith('epl-') || id === 'awaiting-neutral')).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(
-      HUD_EDITOR_FIXTURE_GROUPS[0]?.ids.every(
-        (id) => getProgramFixtureProvenance(id)?.kind === 'real-derived',
-      ),
-    ).toBe(true);
-    expect(
-      HUD_EDITOR_FIXTURE_GROUPS[1]?.ids.every(
-        (id) => getProgramFixtureProvenance(id)?.kind === 'synthetic-presentation',
-      ),
-    ).toBe(true);
+    for (const id of ids) {
+      expect(getProgramFixtureProvenance(id)?.kind, id).toBe(
+        id === 'awaiting-neutral' ? 'synthetic-edge' : 'real-derived',
+      );
+    }
   });
 
   it('rejects gameplay patches, including nested series injection, without changing the base', () => {
