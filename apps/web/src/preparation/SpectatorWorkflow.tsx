@@ -43,7 +43,7 @@ export function SpectatorWorkflow({
               {production?.mode === 'preparation' && window.__TAURI_INTERNALS__
                 ? '启动游戏并打开工作台'
                 : '打开直播工作台'}
-              」，或在游戏数据设置中提前启动。
+              」。
             </span>
           </li>
           <li>

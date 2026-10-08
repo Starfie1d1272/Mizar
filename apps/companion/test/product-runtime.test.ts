@@ -13,6 +13,7 @@ describe('portable runtime management', () => {
       productRuntime: {
         artifactSha256: 'a'.repeat(64),
         gitSha: 'b'.repeat(40),
+        appVersion: '1.0.0-rc.27',
         instanceId: 'instance',
         controlToken: 'secret',
         stop,
@@ -23,6 +24,7 @@ describe('portable runtime management', () => {
       repository: 'Starfie1d1272/Mizar',
       artifactSha256: 'a'.repeat(64),
       gitSha: 'b'.repeat(40),
+      appVersion: '1.0.0-rc.27',
       instanceId: 'instance',
       mode: 'product',
     });
@@ -67,6 +69,7 @@ describe('portable runtime management', () => {
       productRuntime: {
         artifactSha256: 'a'.repeat(64),
         gitSha: 'b'.repeat(40),
+        appVersion: '1.0.0-rc.27',
         instanceId: 'instance',
         controlToken: 'secret',
         stop,

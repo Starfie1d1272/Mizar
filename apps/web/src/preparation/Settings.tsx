@@ -23,10 +23,9 @@ export function Settings({ tab }: { tab: string }) {
     cfgPath: string | null;
   } | null>(null);
   const [cs2, setCs2] = useState<{ found: boolean; managed: boolean } | null>(null);
-  const product = useLocalRead<{ product?: { gitSha?: string; artifactSha256?: string } }>(
-    '/health',
-    60_000,
-  );
+  const product = useLocalRead<{
+    product?: { appVersion?: string; gitSha?: string; artifactSha256?: string };
+  }>('/health', 60_000);
   const refreshGsi = async () => {
     if (window.__TAURI_INTERNALS__) {
       setGsi(await desktopInvoke('gsi_status'));
@@ -72,22 +71,45 @@ export function Settings({ tab }: { tab: string }) {
       {tab === 'rivalhub' ? (
         <RivalHubPreparationPanel mode="settings" />
       ) : tab === 'advanced' ? (
-        <Panel>
-          <h2>运行信息</h2>
-          <p>
-            Mizar 构建 ·{' '}
-            {product?.product?.gitSha
-              ? product.product.gitSha.slice(0, 12)
-              : '开发环境或版本信息不可用'}
-          </p>
-          {product?.product?.artifactSha256 ? (
-            <p>产品包摘要 · {product.product.artifactSha256.slice(0, 12)}</p>
-          ) : null}
-          <p>遇到异常时，可导出包含版本、运行状态和最近启动记录的诊断包，提交给维护者。</p>
-          <Button onClick={() => void action(() => openTool('diagnostics'))}>
-            运行诊断 / 导出诊断包
-          </Button>
-        </Panel>
+        <div className="settings-grid">
+          <Panel className="settings-card">
+            <h2>运行信息</h2>
+            <p>核对当前安装的 Mizar 版本与构建来源。</p>
+            <dl className="settings-identity">
+              <div>
+                <dt>版本号</dt>
+                <dd>
+                  {product?.product?.appVersion
+                    ? `v${product.product.appVersion}`
+                    : '开发环境或版本信息不可用'}
+                </dd>
+              </div>
+              <div>
+                <dt>Commit</dt>
+                <dd>
+                  <code title={product?.product?.gitSha}>
+                    {product?.product?.gitSha?.slice(0, 12) ?? '不可用'}
+                  </code>
+                </dd>
+              </div>
+            </dl>
+            {product?.product?.artifactSha256 ? (
+              <details className="settings-details">
+                <summary>产品包校验信息</summary>
+                <code>{product.product.artifactSha256}</code>
+              </details>
+            ) : null}
+          </Panel>
+          <Panel className="settings-card">
+            <h2>诊断与支持</h2>
+            <p>导出版本、运行状态和最近启动记录，便于定位问题。</p>
+            <div className="preparation-actions">
+              <Button onClick={() => void action(() => openTool('diagnostics'))}>
+                运行诊断 / 导出诊断包
+              </Button>
+            </div>
+          </Panel>
+        </div>
       ) : tab === 'obs' ? (
         <div className="obs-setup">
           <header className="obs-setup__heading">
@@ -271,9 +293,15 @@ export function Settings({ tab }: { tab: string }) {
           </details>
         </div>
       ) : (
-        <>
-          <Panel>
-            <h2>CS2 与 GSI</h2>
+        <div className="settings-grid">
+          <Panel className="settings-card settings-card--wide">
+            <div className="preparation-check-heading">
+              <h2>游戏连接</h2>
+              <StatusPill tone={gsi?.conflict ? 'warning' : gsi?.installed ? 'success' : 'info'}>
+                {gsi?.conflict ? '需检查' : gsi?.installed ? 'GSI 已安装' : '待安装 GSI'}
+              </StatusPill>
+            </div>
+            <p>安装 GSI 后，CS2 会向 Mizar 发送比赛与选手数据。</p>
             <p>
               {cs2?.found
                 ? cs2.managed
@@ -281,15 +309,13 @@ export function Settings({ tab }: { tab: string }) {
                   : '已检测到 CS2，打开工作台后安排窗口'
                 : '等待 CS2 窗口'}
             </p>
-            <p>
-              {gsi?.conflict
-                ? gsi.fileConflict
+            {gsi?.conflict ? (
+              <StatusBanner tone="warning">
+                {gsi.fileConflict
                   ? 'Mizar GSI 文件与安装记录不一致，请恢复原配置后重新安装'
-                  : '发现其它 GSI 配置也在发送数据，可能产生重复采集'
-                : gsi?.installed
-                  ? 'GSI 已安装'
-                  : 'GSI 尚未安装'}
-            </p>
+                  : '发现其它 GSI 配置也在发送数据，可能产生重复采集'}
+              </StatusBanner>
+            ) : null}
             {!window.__TAURI_INTERNALS__ ? (
               <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
             ) : (
@@ -299,7 +325,7 @@ export function Settings({ tab }: { tab: string }) {
                 </Button>
                 <Button
                   disabled={busy}
-                  variant="primary"
+                  variant={gsi?.installed ? 'secondary' : 'primary'}
                   onClick={() =>
                     void action(async () => {
                       await desktopInvoke('configure_gsi', { restore: false, choose: false });
@@ -344,7 +370,7 @@ export function Settings({ tab }: { tab: string }) {
           </Panel>
           <Cs2LaunchSettings />
           <SteamAvatarSettings />
-        </>
+        </div>
       )}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
     </>

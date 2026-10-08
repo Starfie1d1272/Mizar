@@ -255,6 +255,7 @@ export async function runProduct({
     QUALIFICATION_MODE: '0',
     GSI_TOKEN: gsiToken,
     MIZAR_COMMIT: artifact.gitSha,
+    MIZAR_APP_VERSION: typeof artifact.appVersion === 'string' ? artifact.appVersion : '',
     MIZAR_ARTIFACT_SHA256: artifact.artifactSha256,
     MIZAR_PRODUCT_INSTANCE: instanceId,
     MIZAR_RUNTIME_TOKEN: controlToken,

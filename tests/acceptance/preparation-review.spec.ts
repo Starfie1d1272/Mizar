@@ -71,8 +71,8 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
     // IPC fixture verifies browser interaction only, not Steam, Windows or CS2.
     await page.addInitScript(() => {
       const status = {
-        qualityPreset: 'very-high',
-        frameRateLimit: 60,
+        qualityPreset: localStorage.getItem('fixture-quality') ?? 'very-high',
+        frameRateLimit: Number(localStorage.getItem('fixture-frames') ?? 60),
         pending: false,
         running: false,
         message: null,
@@ -85,6 +85,8 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
             if (command === 'set_cs2_preferences') {
               status.qualityPreset = String(args?.qualityPreset);
               status.frameRateLimit = Number(args?.frameRateLimit);
+              localStorage.setItem('fixture-quality', status.qualityPreset);
+              localStorage.setItem('fixture-frames', String(status.frameRateLimit));
             }
             if (command === 'start_managed_cs2') {
               status.pending = true;
@@ -120,10 +122,12 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
     await frames.selectOption('30');
     await expect(frames).toHaveValue('30');
     await frames.selectOption('60');
-    await page.getByRole('button', { name: '启动 CS2', exact: true }).click();
-    await expect(quality).toBeDisabled();
-    await expect(frames).toBeDisabled();
-    await page.getByRole('button', { name: '退出 CS2 并恢复设置' }).click();
+    await expect(page.getByRole('button', { name: '启动 CS2', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '保存启动设置', exact: true }).click();
+    await expect(page.getByText('已保存，下次启动生效。', { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(quality).toHaveValue('preserve');
+    await expect(frames).toHaveValue('60');
     await expect(quality).toBeEnabled();
     await expect(page.getByRole('button', { name: '退出 CS2 并恢复设置' })).toHaveCount(0);
   } finally {
@@ -423,7 +427,7 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await page.goto('/');
   await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
-  await page.getByRole('link', { name: '游戏数据', exact: true }).click();
+  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
   await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
@@ -446,8 +450,45 @@ test('a starting operation reports progress while navigation remains usable', as
   );
   await page.goto('/');
   await expect(page.getByText('正在启动 CS2，等待 Steam…', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '游戏数据', exact: true }).click();
-  await expect(page.getByRole('button', { name: '启动 CS2', exact: true })).toBeDisabled();
+  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存启动设置', exact: true })).toBeDisabled();
   await page.getByRole('link', { name: 'OBS 连接', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'OBS 连接与配置' })).toBeVisible();
+});
+
+test('configured Steam key uses a non-secret mask and updates only with new input', async ({
+  page,
+}) => {
+  await page.route('**/local/v1/steam-avatars', (route) =>
+    route.fulfill({ json: { configured: true, cached: 3, unavailable: false } }),
+  );
+  const writes: unknown[] = [];
+  await page.route('**/operator/steam-avatars', (route) => {
+    writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/settings?tab=gsi');
+  const key = page.getByLabel('Steam Web API Key（可选，推荐填写）');
+  await expect(key).toHaveValue('');
+  await expect(key).toHaveAttribute('placeholder', '••••••••••••');
+  await expect(page.getByRole('button', { name: '更新密钥', exact: true })).toBeDisabled();
+  await key.fill('A'.repeat(32));
+  await page.getByRole('button', { name: '更新密钥', exact: true }).click();
+  await expect(key).toHaveValue('');
+  expect(writes).toEqual([{ action: 'configure', key: 'A'.repeat(32) }]);
+  await page.setViewportSize({ width: 900, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await expect(page.getByRole('button', { name: '更新密钥', exact: true })).toBeDisabled();
+});
+
+test('advanced settings show packaged version and commit separately', async ({ page }) => {
+  await page.route('**/health', (route) =>
+    route.fulfill({ json: { product: { appVersion: '1.0.0-rc.27', gitSha: 'a'.repeat(40) } } }),
+  );
+  await page.goto('/settings?tab=advanced');
+  await expect(page.getByText('v1.0.0-rc.27', { exact: true })).toBeVisible();
+  await expect(page.getByText('a'.repeat(12), { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '诊断与支持' })).toBeVisible();
 });

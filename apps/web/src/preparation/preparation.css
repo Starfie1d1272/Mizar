@@ -911,3 +911,56 @@
   font-weight: var(--mizar-type-weight-strong);
   cursor: pointer;
 }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
+  align-items: start;
+}
+.settings-card--wide {
+  grid-column: 1 / -1;
+}
+.preparation .settings-card {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+  min-width: 0;
+}
+.preparation .settings-card :is(h2, p) {
+  margin: 0;
+}
+.settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
+}
+.settings-save-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+}
+.settings-save-row span,
+.settings-identity dt {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
+.settings-details {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  overflow-wrap: anywhere;
+}
+.settings-identity {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+  margin: 0;
+}
+.settings-identity dd {
+  margin: var(--mizar-layout-compact) 0 0;
+  font-size: var(--mizar-type-size-readable);
+}
+@media (max-width: 1100px) {
+  .settings-grid,
+  .settings-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
