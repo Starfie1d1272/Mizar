@@ -38,12 +38,6 @@ jobs:
           $sha = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid source SHA' }
           "sha=$sha" >> $env:GITHUB_OUTPUT
-      - name: Restore Cargo dependency and profile caches
-        id: cargo-cache
-        uses: ./.github/actions/cargo-cache
-        with:
-          profile: release
-
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -52,6 +46,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
+      - name: Restore Cargo dependency and profile caches
+        id: cargo-cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -103,7 +103,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Save reusable main Cargo caches
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.source.outputs.sha == github.sha }}
         uses: ./.github/actions/save-cargo-cache
         with:
           profile: release

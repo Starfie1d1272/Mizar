@@ -28,6 +28,10 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'Cannot identify Rust compiler' }
         $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($version))).ToLowerInvariant()
         "fingerprint=$hash" >> $env:GITHUB_OUTPUT
+    - name: Fingerprint version-independent Cargo inputs
+      id: cargo-key
+      shell: pwsh
+      run: node scripts/ci/cargo-cache-key.mjs
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       id: registry
       with:
@@ -35,14 +39,14 @@ runs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-        key: cargo-v2-${{ runner.os }}-${{ runner.arch }}-registry-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-registry-${{ steps.cargo-key.outputs.lock }}
         restore-keys: |
-          cargo-v2-${{ runner.os }}-${{ runner.arch }}-registry-
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-registry-
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       id: target
       with:
         path: apps/desktop/src-tauri/target/${{ inputs.profile }}
-        key: cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/Cargo.toml', '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml') }}
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.cargo-key.outputs.lock }}-${{ steps.cargo-key.outputs.manifest }}-${{ hashFiles('.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml', 'apps/desktop/src-tauri/build.rs') }}
     - name: Record cache observations
       shell: pwsh
       env:

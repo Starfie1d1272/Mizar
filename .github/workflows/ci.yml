@@ -277,12 +277,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Restore Cargo dependency and profile caches
-        id: cargo-cache
-        uses: ./.github/actions/cargo-cache
-        with:
-          profile: ci
-
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -291,6 +285,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
+      - name: Restore Cargo dependency and profile caches
+        id: cargo-cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: ci
+
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
