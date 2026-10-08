@@ -142,25 +142,56 @@ describe('automatic Program choreography', () => {
       expect(r.director.get()).toMatchObject({ next: null, nextStatus: 'complete' });
     },
   );
-  it('distinguishes unconfirmed results and unknown next-map preparation from a scheduled Take', async () => {
+  it('predicts unconfirmed results and planned next-map preparation without taking early', async () => {
     const r = rig();
     Object.assign(r.program, sample('real-gameover'));
     const completed = r.program.series!.maps.find((map) => map.status === 'completed')!;
     const score = completed.finalScore;
+    r.program.series!.maps.push({
+      ...completed,
+      mapOrder: completed.mapOrder + 1,
+      mapName: 'de_mirage',
+      status: 'pending',
+      finalScore: null,
+    });
     completed.finalScore = null;
     await r.step();
     expect(r.director.get()).toMatchObject({
-      next: null,
-      nextStatus: 'awaiting',
+      next: 'map_result',
+      nextStatus: 'predicted',
       readyToTake: null,
     });
-    expect(r.director.get().nextReason).toContain('赛果');
+    expect(r.switchObs).not.toHaveBeenCalled();
     completed.finalScore = score;
     await r.step();
     expect(r.director.get().next).toBe('intermap');
     await r.pass(12_000);
     expect(r.scenes.get().active).toBe('intermap');
+    await r.step();
+    expect(r.director.get()).toMatchObject({ next: 'bp', readyToTake: null });
+    const calls = r.switchObs.mock.calls.length;
+    await r.pass(2000);
+    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+    r.setProduction(false);
+    r.program.series!.maps = [completed];
+    await r.step();
     expect(r.director.get()).toMatchObject({ next: null, nextStatus: 'awaiting' });
+  });
+  it('keeps a planned opening after warmup and in preparation mode', async () => {
+    const r = rig();
+    r.program.map.phase = 'warmup';
+    r.program.clock!.phase = 'warmup';
+    await r.step();
+    await r.pass(2000);
+    expect(r.scenes.get().active).toBe('waiting');
+    expect(r.director.get().next).toBe('matchup');
+    r.setProduction(false);
+    await r.step();
+    expect(r.director.get()).toMatchObject({
+      mode: 'preparation',
+      next: 'matchup',
+      readyToTake: null,
+    });
   });
   it('holds an observed trusted map end for 3s, never replays after recovery, and honors manual Take', async () => {
     const r = rig();
@@ -266,7 +297,7 @@ describe('automatic Program choreography', () => {
     expect(r.director.get().next).toBe('halftime');
     r.program.status.telemetry = 'stale';
     await r.step();
-    expect(r.director.get()).toMatchObject({ mode: 'manual', next: null });
+    expect(r.director.get()).toMatchObject({ mode: 'manual', next: 'halftime', readyToTake: null });
     expect(r.scenes.get().active).toBe('waiting');
     expect(r.switchObs).toHaveBeenCalledTimes(calls);
     r.program.status.telemetry = 'fresh';

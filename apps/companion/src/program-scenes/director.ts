@@ -35,6 +35,7 @@ export class ProgramDirector {
   private lastTime: number | null = null;
   private elapsed = 0;
   private scene: ProgramSceneId = 'waiting';
+  private predictionKey = '';
   private matchKey = '';
   private mapKey = '';
   private warmupPlayed = false;
@@ -98,23 +99,32 @@ export class ProgramDirector {
     return `${this.contextKey(p)}:${p.cursor.producerInstanceId}:${p.cursor.liveSessionId}:${p.cursor.programSourceGeneration}:${p.cursor.mapEpoch}:${p.series?.currentMapOrder}`;
   }
   private predict(p: ProgramProjection, active: ProgramSceneId): void {
+    const key = `${this.executionKey(p)}:${active}`;
+    const previous = key === this.predictionKey ? this.view.next : null;
+    this.predictionKey = key;
     this.view.next = null;
     this.view.nextStatus = 'awaiting';
     this.view.nextReason = '比赛阶段待确认。';
     this.view.readyToTake = null;
-    if (!this.safe(p)) {
-      this.view.nextReason = '等待有效比赛数据与归属确认。';
+    if (
+      !p.match ||
+      !p.series ||
+      p.status.context !== 'fresh' ||
+      p.status.identity === 'mismatch' ||
+      p.series.bindingState !== 'bound'
+    ) {
+      this.view.nextReason = '等待有效比赛上下文与归属确认。';
       return;
     }
-    const confirmedMap = p.series?.maps.some(
-      (map) => map.status === 'completed' && map.mapName === p.map.name && map.finalScore,
-    );
+    if (p.status.telemetry !== 'fresh') {
+      if (previous) {
+        this.setPrediction(previous);
+        this.view.nextReason = '沿用同一比赛阶段的最近预告，等待遥测恢复后才可自动切场。';
+      } else this.view.nextReason = '缺少当前比赛阶段资料，等待有效遥测。';
+      return;
+    }
     let next: ProgramSceneId | null = null;
     if (p.map.phase === 'gameover') {
-      if (!confirmedMap) {
-        this.view.nextReason = '等待单图赛果确认。';
-        return;
-      }
       if (active === 'match_result' && p.series?.status === 'completed') {
         this.view.nextStatus = 'complete';
         this.view.nextReason = '本场节目已结束。';
@@ -124,8 +134,17 @@ export class ProgramDirector {
         next = p.series?.status === 'completed' ? 'match_result' : 'intermap';
       else if (active === 'intermap') {
         if (p.series?.status === 'completed') next = 'match_result';
-        else {
-          this.view.nextReason = '等待下一图计划与比赛阶段确认。';
+        else if (
+          p.series.maps.some(
+            (map) =>
+              map.mapOrder > (p.series!.currentMapOrder ?? 0) &&
+              map.status === 'pending' &&
+              map.mapName,
+          )
+        ) {
+          next = this.projections.getBpAssessment().readiness === 'ready' ? 'bp' : 'matchup';
+        } else {
+          this.view.nextReason = '缺少下一图计划。';
           return;
         }
       } else next = 'map_result';
@@ -144,7 +163,7 @@ export class ProgramDirector {
       if (active === 'bp') next = 'waiting';
       else if (!this.warmupPlayed && this.projections.getBpAssessment().readiness === 'ready')
         next = 'bp';
-      else this.view.nextReason = '等待首回合冻结期确认开场安排。';
+      else next = 'matchup';
     }
     if (next) this.setPrediction(next);
   }
@@ -171,9 +190,6 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: 'preparation',
-        next: null,
-        nextStatus: 'awaiting',
-        nextReason: '准备中，等待正式比赛。',
         reason: null,
       };
       return;
@@ -219,7 +235,6 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
-        next: null,
         reason: '比赛数据过期或归属未确认，保持当前画面。',
       };
       return;
