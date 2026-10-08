@@ -83,7 +83,7 @@ test('GSI conflict guidance names files and keeps native installation selection 
                 {
                   code: 'endpoint-conflict',
                   message:
-                    '其他 GSI 配置也向 Mizar 的接收地址发送数据。请检查下列文件，备份后停用重复配置，再重新检查。',
+                    '其他 GSI 配置也向 Mizar 的接收地址发送数据。点击「一键安装 / 修复 GSI」自动备份并停用重复配置。',
                 },
               ],
             } as T);
@@ -108,7 +108,7 @@ test('GSI conflict guidance names files and keeps native installation selection 
   ).toBeVisible();
   await expect(
     page.getByText(
-      '其他 GSI 配置也向 Mizar 的接收地址发送数据。请检查下列文件，备份后停用重复配置，再重新检查。',
+      '其他 GSI 配置也向 Mizar 的接收地址发送数据。点击「一键安装 / 修复 GSI」自动备份并停用重复配置。',
     ),
   ).toBeVisible();
   await expect(page.getByText(/gamestate_integration_duplicate.cfg/)).toBeVisible();

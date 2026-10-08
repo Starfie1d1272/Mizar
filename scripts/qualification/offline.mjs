@@ -96,6 +96,9 @@ export async function assertGsiScriptContract(scriptsDir) {
     throw new Error('qualification gsi-discovery.ps1 缺少 Steam library / CS2 目录发现');
   if (
     !/^\s*function\s+Write-GsiEndpointConflictWarning\b/m.test(sources.get('common.ps1')) ||
+    !/^\s*function\s+Suspend-GsiEndpointConflicts\b/m.test(sources.get('common.ps1')) ||
+    !/\bSuspend-GsiEndpointConflicts\b/.test(sources.get('install-gsi.ps1')) ||
+    !/\bRestore-GsiEndpointConflicts\b/.test(sources.get('restore-gsi.ps1')) ||
     !/\bWrite-GsiEndpointConflictWarning\b/.test(sources.get('install-gsi.ps1'))
   )
     throw new Error('qualification GSI 安装缺少 endpoint 冲突检查');

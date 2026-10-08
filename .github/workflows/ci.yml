@@ -330,6 +330,9 @@ jobs:
           $fakeSteamLibrary = Join-Path $env:RUNNER_TEMP 'CS2 library with spaces'
           New-Item -ItemType Directory -Force -Path (Join-Path $fakeSteamRoot 'steamapps') | Out-Null
           New-Item -ItemType Directory -Force -Path (Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\csgo\cfg') | Out-Null
+          $fakeExecutable = Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\bin\win64\cs2.exe'
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fakeExecutable) | Out-Null
+          Set-Content -LiteralPath $fakeExecutable -Value 'CI fixture, not a runnable game'
           $conflictingCfgPath = Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\csgo\cfg\gamestate_integration_other.cfg'
           Set-Content -LiteralPath $conflictingCfgPath -Value @(
             '"Other sender"'
@@ -355,10 +358,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
             if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
-            $installOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 2>&1 | Out-String
+            $installOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 -Product 2>&1 | Out-String
             Write-Output $installOutput
             if ($LASTEXITCODE -ne 0) { throw 'install-gsi.ps1 执行失败' }
-            if ($installOutput -notmatch 'GSI 配置冲突') { throw '未输出 GSI 配置冲突预检警告' }
+            if ($installOutput -notmatch 'GSI 配置冲突已自动备份并停用') { throw '未自动处理 GSI 配置冲突' }
+            if (Test-Path -LiteralPath $conflictingCfgPath) { throw '冲突配置仍被 CS2 加载' }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\restore-gsi.ps1 -Product
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $conflictingCfgPath)) { throw '冲突配置未恢复' }
           } finally {
             Pop-Location
           }

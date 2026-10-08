@@ -108,6 +108,70 @@ function Write-GsiEndpointConflictWarning {
     return @($conflicts)
 }
 
+# Keep backups outside CS2's cfg directory. Persist the journal before removing
+# any sender, so retry/restore can recover even if the process stops halfway.
+function Read-GsiConflictJournal {
+    param([string]$CfgDirectory)
+    $journalPath = Join-Path $script:QualificationStateRoot 'conflicts.json'
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) { return @() }
+    $journal = Read-JsonFile $journalPath
+    if ([System.IO.Path]::GetFullPath([string]$journal.cfgDirectory) -ine [System.IO.Path]::GetFullPath($CfgDirectory)) { throw 'GSI 备份属于另一份安装，请先恢复原配置' }
+    $entries = @($journal.entries)
+    foreach ($entry in $entries) {
+        $original = [System.IO.Path]::GetFullPath([string]$entry.originalPath)
+        $backup = [System.IO.Path]::GetFullPath([string]$entry.backupPath)
+        if ((Split-Path -Parent $original) -ine [System.IO.Path]::GetFullPath($CfgDirectory) -or
+            (Split-Path -Leaf $original) -notlike 'gamestate_integration_*.cfg' -or
+            (Split-Path -Leaf $original) -ieq 'gamestate_integration_mizar.cfg' -or
+            (Split-Path -Parent $backup) -ine [System.IO.Path]::GetFullPath((Join-Path $script:QualificationStateRoot 'conflict-backups')) -or
+            [string]$entry.fingerprint -notmatch '^[a-fA-F0-9]{64}$' -or
+            -not (Test-Path -LiteralPath $backup -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash -ine [string]$entry.fingerprint) { throw 'GSI 冲突备份无法验证，已保留文件与记录' }
+        if ((Test-Path -LiteralPath $original) -and
+            (-not (Test-Path -LiteralPath $original -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash -ine [string]$entry.fingerprint)) { throw '原路径出现了新配置，已保留新文件和备份' }
+    }
+    return $entries
+}
+
+function Suspend-GsiEndpointConflicts {
+    param([string]$CfgDirectory, [string]$CanonicalCfgPath)
+    $entries = @(Read-GsiConflictJournal -CfgDirectory $CfgDirectory)
+    $conflicts = @(Get-GsiEndpointConflicts -CfgDirectory $CfgDirectory -CanonicalCfgPath $CanonicalCfgPath)
+    foreach ($path in $conflicts) {
+        if (@($entries | Where-Object { $_.originalPath -ieq $path }).Count -gt 0) { continue }
+        $backupPath = Join-Path (Join-Path $script:QualificationStateRoot 'conflict-backups') ([Guid]::NewGuid().ToString('N') + '.original')
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $backupPath) | Out-Null
+        Copy-Item -LiteralPath $path -Destination $backupPath
+        $fingerprint = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $fingerprint) { throw '配置在备份期间发生变化，请重试' }
+        $entries += [pscustomobject]@{ originalPath = $path; backupPath = $backupPath; fingerprint = $fingerprint }
+        $journalPath = Join-Path $script:QualificationStateRoot 'conflicts.json'
+        $pendingPath = $journalPath + '.pending'
+        Write-JsonFile -Path $pendingPath -Value @{ cfgDirectory = $CfgDirectory; entries = $entries }
+        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+            [System.IO.File]::Replace($pendingPath, $journalPath, [NullString]::Value)
+        } else { [System.IO.File]::Move($pendingPath, $journalPath) }
+    }
+    # Revalidate all copies and original paths before changing loaded senders.
+    $entries = @(Read-GsiConflictJournal -CfgDirectory $CfgDirectory)
+    foreach ($entry in $entries) {
+        if (Test-Path -LiteralPath $entry.originalPath -PathType Leaf) { Remove-Item -LiteralPath $entry.originalPath }
+    }
+    if ($conflicts.Count -gt 0) { Write-Output ('GSI 配置冲突已自动备份并停用：' + $conflicts.Count + ' 个；恢复原 GSI 配置可撤销。') }
+}
+
+function Restore-GsiEndpointConflicts {
+    param([string]$CfgDirectory)
+    $entries = @(Read-GsiConflictJournal -CfgDirectory $CfgDirectory)
+    foreach ($entry in $entries) {
+        # Never overwrite a file recreated by another application.
+        if (-not (Test-Path -LiteralPath $entry.originalPath)) {
+            Copy-Item -LiteralPath $entry.backupPath -Destination $entry.originalPath
+        }
+    }
+}
+
 function Invoke-QualificationApi {
     param(
         [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST')][string]$Method,

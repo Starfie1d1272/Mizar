@@ -6,7 +6,14 @@ if ($Product) {
     $script:QualificationStateRoot = Join-Path $script:StateRoot 'data\gsi-install'
     $script:InstallStatePath = Join-Path $script:QualificationStateRoot 'install.json'
 }
-Restore-InstalledGsiConfig -State (Read-InstallState)
+if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
+    $state = Read-InstallState
+    Restore-GsiEndpointConflicts -CfgDirectory (Split-Path -Parent ([string]$state.cfgPath))
+    Restore-InstalledGsiConfig -State $state
+} else {
+    $journal = Read-JsonFile (Join-Path $script:QualificationStateRoot 'conflicts.json')
+    Restore-GsiEndpointConflicts -CfgDirectory ([string]$journal.cfgDirectory)
+}
 Remove-Item -LiteralPath $script:QualificationStateRoot -Recurse -Force
 Write-Output '原 GSI 配置已恢复。'
 

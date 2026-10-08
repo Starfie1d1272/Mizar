@@ -12,7 +12,7 @@ pub fn message(code: &str) -> &'static str {
         "gsi-file-missing" => "已安装的 Mizar GSI 文件缺失。请恢复原 GSI 配置，再重新安装。",
         "gsi-file-changed" => "Mizar GSI 文件与安装记录不一致。请先备份当前文件，再恢复原 GSI 配置并重新安装。",
         "record-unreadable" => "GSI 安装记录或配置文件无法读取。请检查文件访问权限并导出诊断包，保留现有文件和备份。",
-        "endpoint-conflict" => "其他 GSI 配置也向 Mizar 的接收地址发送数据。请检查下列文件，备份后停用重复配置，再重新检查。",
+        "endpoint-conflict" => "其他 GSI 配置也向 Mizar 的接收地址发送数据。点击「一键安装 / 修复 GSI」自动备份并停用重复配置。",
         "status-unreadable" => "无法检查 GSI 配置。请检查配置文件夹的访问权限，再重新检查或导出诊断包。",
         "access-denied" => "无法访问 CS2 配置或运行数据。请检查文件访问权限，再重试。",
         "steam-not-running" => "请先打开 Steam 并登录，再启动 CS2。",

@@ -202,4 +202,47 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
     expect(missing.conflict).toBe(false);
     expect(missing.issueCodes).toContain('installation-not-found');
   });
+  it('automatically suspends duplicate senders, preserves other endpoints and restores without overwriting new files', async () => {
+    const root = await library();
+    const cfg = join(root, 'steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg');
+    const state = join(root, 'state/data/gsi-install');
+    const common = resolve(import.meta.dirname, 'bundle/common.ps1');
+    const canonical = join(cfg, 'gamestate_integration_mizar.cfg');
+    const duplicate = join(cfg, 'gamestate_integration_duplicate.cfg');
+    const other = join(cfg, 'gamestate_integration_other.cfg');
+    await writeFile(canonical, 'canonical');
+    await writeFile(duplicate, '"uri" "http://localhost:3000/"');
+    await writeFile(other, '"uri" "http://localhost:4000/"');
+    const invoke = (source) =>
+      run(`. ${quote(common)}; $script:QualificationStateRoot=${quote(state)}; ${source}`);
+    const suspend = `Suspend-GsiEndpointConflicts -CfgDirectory ${quote(cfg)} -CanonicalCfgPath ${quote(canonical)}`;
+    const restore = `Restore-GsiEndpointConflicts -CfgDirectory ${quote(cfg)}`;
+    invoke(suspend);
+    invoke(suspend); // Idempotent: the original backup survives a retry.
+    const { readFile, access } = await import('node:fs/promises');
+    await expect(access(duplicate)).rejects.toThrow();
+    expect(await readFile(other, 'utf8')).toContain('4000');
+    expect(await readFile(canonical, 'utf8')).toBe('canonical');
+    await writeFile(duplicate, 'new sender from another application');
+    expect(invoke(`try { ${restore}; 'unexpected success' } catch { 'preserved' }`)).toBe(
+      'preserved',
+    );
+    expect(await readFile(duplicate, 'utf8')).toBe('new sender from another application');
+    await rm(duplicate);
+    invoke(restore);
+    invoke(restore);
+    expect(await readFile(duplicate, 'utf8')).toBe('"uri" "http://localhost:3000/"');
+    // Simulate interruption after journaling but before the original was removed.
+    invoke(suspend);
+    invoke(restore);
+    invoke(suspend);
+    await expect(access(duplicate)).rejects.toThrow();
+    const journal = JSON.parse(await readFile(join(state, 'conflicts.json'), 'utf8'));
+    await writeFile(journal.entries[0].backupPath, 'corrupted backup');
+    expect(invoke(`try { ${restore}; 'unexpected success' } catch { 'preserved' }`)).toBe(
+      'preserved',
+    );
+    await expect(access(duplicate)).rejects.toThrow();
+    expect(await readFile(other, 'utf8')).toContain('4000');
+  });
 });

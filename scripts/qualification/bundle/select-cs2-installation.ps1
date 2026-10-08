@@ -10,6 +10,11 @@ if (Test-Path -LiteralPath $recordPath -PathType Leaf) {
     $target = Join-Path $installation.cfg 'gamestate_integration_mizar.cfg'
     if ($existing -ine $target) { Stop-Cs2Discovery 'restore-before-selection' }
 }
+$journalPath = Join-Path $script:StateRoot 'data\gsi-install\conflicts.json'
+if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+    try { $journal = Read-JsonFile $journalPath } catch { Stop-Cs2Discovery 'record-unreadable' }
+    if ([string]$journal.cfgDirectory -ine $installation.cfg) { Stop-Cs2Discovery 'restore-before-selection' }
+}
 $selectionPath = Get-Cs2SelectionPath
 $directory = Split-Path -Parent $selectionPath
 New-Item -ItemType Directory -Force -Path $directory | Out-Null

@@ -51,5 +51,10 @@ if (Test-Path -LiteralPath $failurePath -PathType Leaf) {
     try { $result.lastOperation = Read-JsonFile $failurePath } catch { }
 }
 $result.issueCodes = @($result.issueCodes | Select-Object -Unique)
+$pendingJournal = Join-Path $script:StateRoot 'data\gsi-install\conflicts.json'
+if (-not $result.installed -and (Test-Path -LiteralPath $pendingJournal -PathType Leaf)) {
+    $result.fileConflict = $true
+    $result.issueCodes += 'operation-failed'
+}
 $result.conflict = $result.fileConflict -or $result.endpointConflict
 $result | ConvertTo-Json -Depth 4 -Compress

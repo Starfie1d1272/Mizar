@@ -340,7 +340,8 @@ export function Settings({ tab }: { tab: string }) {
                   ))}
                 </ul>
                 <p>
-                  将重复文件备份到配置文件夹外，再移出或改名停用。保留其他软件使用不同接收地址的配置。
+                  点击「一键安装 / 修复 GSI」，自动备份并停用这些重复配置；可通过「恢复原 GSI
+                  配置」撤销。其他接收地址的配置会保留。
                 </p>
               </>
             ) : null}
@@ -371,7 +372,7 @@ export function Settings({ tab }: { tab: string }) {
                     })
                   }
                 >
-                  安装 / 修复 GSI
+                  一键安装 / 修复 GSI
                 </Button>
                 <Button
                   disabled={busy || (!gsi?.installed && !gsi?.conflict)}

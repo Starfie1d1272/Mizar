@@ -144,7 +144,7 @@ describe('CS2 installation and conflict guidance', () => {
     });
     expect(container.textContent).not.toContain('已保存 CS2 安装位置');
     await act(async () => {
-      buttons.find((button) => button.textContent === '安装 / 修复 GSI')!.click();
+      buttons.find((button) => button.textContent === '一键安装 / 修复 GSI')!.click();
       await Promise.resolve();
     });
     expect(container.textContent).not.toContain('GSI 已安装，请重新启动');

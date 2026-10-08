@@ -32,6 +32,7 @@ if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
             if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
                 Remove-Item -LiteralPath $legacyCfgPath -Force
             }
+            if ($Product) { Suspend-GsiEndpointConflicts -CfgDirectory $existingCfgDirectory -CanonicalCfgPath $existingCfgPath }
             Write-Output 'Mizar GSI 配置已安装且一致。'
             Clear-Cs2OperationError
             exit 0
@@ -51,7 +52,8 @@ if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
     Remove-Item -LiteralPath $legacyCfgPath -Force
 }
 if (Test-Path -LiteralPath $legacyCfgPath) { throw '旧 GSI 配置仍然存在' }
-Write-GsiEndpointConflictWarning -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath | Out-Null
+if ($Product) { Suspend-GsiEndpointConflicts -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath }
+else { Write-GsiEndpointConflictWarning -CfgDirectory $cfgDirectory -CanonicalCfgPath $cfgPath | Out-Null }
 
 $token = New-QualificationToken
 if ($Product) {
@@ -70,7 +72,6 @@ if ($Product) {
 $templatePath = Join-Path $script:BundleRoot 'config\gamestate_integration_mizar.cfg.template'
 $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
 $materialized = $template.Replace('REPLACE_WITH_GSI_TOKEN', $token)
-Write-Utf8NoBom -Path $cfgPath -Content $materialized
 
 $cs2RootForVersion = Split-Path (Split-Path (Split-Path $cfgDirectory -Parent) -Parent) -Parent
 $cs2ExecutableCandidates = @(
@@ -84,7 +85,8 @@ if ($cs2ExecutableCandidates.Count -gt 0) {
     if (-not [string]::IsNullOrWhiteSpace($reportedVersion)) { $cs2Version = $reportedVersion.Trim() }
 }
 
-$fingerprint = (Get-FileHash -LiteralPath $cfgPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$hasher = [System.Security.Cryptography.SHA256]::Create()
+try { $fingerprint = [BitConverter]::ToString($hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($materialized))).Replace('-', '').ToLowerInvariant() } finally { $hasher.Dispose() }
 $state = [ordered]@{
     schemaVersion = 1
     cfgPath = $cfgPath
@@ -95,7 +97,12 @@ $state = [ordered]@{
     cfgFingerprint = $fingerprint
     installedAt = (Get-Date).ToUniversalTime().ToString('o')
 }
-Write-JsonFile -Path $script:InstallStatePath -Value $state
+# Record the original before touching the canonical sender; an interrupted write
+# can then be undone by restore instead of losing the user's original config.
+$pendingState = $script:InstallStatePath + '.pending'
+Write-JsonFile -Path $pendingState -Value $state
+[System.IO.File]::Move($pendingState, $script:InstallStatePath)
+Write-Utf8NoBom -Path $cfgPath -Content $materialized
 
 Write-Output "GSI 配置已安装：$cfgPath"
 Write-Output "配置指纹（SHA-256）：$fingerprint"
