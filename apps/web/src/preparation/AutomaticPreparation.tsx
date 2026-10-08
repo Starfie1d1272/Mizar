@@ -60,7 +60,9 @@ export function AutomaticPreparation() {
           服务器设置」中启用服务器并在设置中填写有效密码。
         </StatusBanner>
       ) : null}
-      {obsMessage ? <StatusBanner tone="warning">{obsMessage}</StatusBanner> : null}
+      {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
+        <StatusBanner tone="warning">{obsMessage}</StatusBanner>
+      ) : null}
     </>
   );
 }
