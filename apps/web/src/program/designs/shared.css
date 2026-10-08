@@ -161,10 +161,6 @@
   display: none;
 }
 .hud-widget-design.hud-redraw .player-rail__kd {
-  display: grid;
-  grid-template-columns: 11px 2ch 11px 2ch;
-  align-items: center;
-  font-variant-numeric: tabular-nums;
   line-height: 18px;
   position: absolute;
   left: 10px;
@@ -175,10 +171,6 @@
   font-weight: 600;
   gap: 3px;
   opacity: 0.8;
-}
-.hud-widget-design.hud-redraw .player-rail__kd .player-rail__stat-glyph + span {
-  min-width: 0;
-  text-align: right;
 }
 .hud-widget-design.hud-redraw .player-rail--right .player-rail__kd {
   left: auto;
@@ -538,10 +530,10 @@
   background:
     repeating-linear-gradient(
       135deg,
-      transparent 0 5px,
-      color-mix(in srgb, var(--mizar-hud-text-primary) 14%, transparent) 5px 7px
+      transparent 0 4px,
+      color-mix(in srgb, var(--mizar-hud-surface-strong) 55%, transparent) 4px 7px
     ),
-    color-mix(in srgb, var(--mizar-hud-objective-bomb) 80%, transparent);
+    color-mix(in srgb, var(--mizar-hud-state-warning) 88%, transparent);
   clip-path: polygon(
     var(--prediction-start) 0,
     var(--prediction-end) 0,
@@ -566,4 +558,12 @@
 .hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='true'] {
   opacity: 1;
   color: var(--mizar-hud-text-primary);
+}
+
+.player-rail__round-kill-marks {
+  display: flex;
+  gap: 2px;
+}
+.player-rail--right .player-rail__round-kill-marks {
+  flex-direction: row-reverse;
 }

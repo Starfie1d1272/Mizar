@@ -6,6 +6,7 @@ test('plays real game background with live HUD and seeks both to the recorded C4
   test.setTimeout(90_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  await page.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
   await page.goto('/operator/hud');
   await page.getByLabel('预览来源').selectOption('replay');
   await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-video');
@@ -16,6 +17,15 @@ test('plays real game background with live HUD and seeks both to the recorded C4
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState))
     .toBeGreaterThan(1);
   await expect(page.locator('[data-avatar-present="true"]')).toHaveCount(10);
+  const logos = page.locator('.match-header__team-logo');
+  await expect(logos).toHaveCount(2);
+  await expect
+    .poll(() =>
+      logos.evaluateAll((images) =>
+        images.every((image) => (image as HTMLImageElement).naturalWidth > 0),
+      ),
+    )
+    .toBe(true);
   const events = (
     await (await page.request.get('/fixtures/epl-inferno-video/replay/events.jsonl')).text()
   )

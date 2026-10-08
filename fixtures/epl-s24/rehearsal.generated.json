@@ -2056,12 +2056,12 @@
         "entrantA": {
           "entryId": "epl-falcons",
           "name": "Falcons",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+          "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
         },
         "entrantB": {
           "entryId": "epl-navi",
           "name": "Natus Vincere",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+          "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
         }
       },
       {
@@ -2107,7 +2107,7 @@
         "entrantB": {
           "entryId": "epl-navi",
           "name": "Natus Vincere",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+          "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
         }
       }
     ]
@@ -2344,7 +2344,7 @@
         "a": {
           "entryId": "epl-falcons",
           "name": "Falcons",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+          "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
           "roster": {
             "rosterId": "epl-a-roster",
             "players": [
@@ -2389,7 +2389,7 @@
         "b": {
           "entryId": "epl-navi",
           "name": "Natus Vincere",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+          "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
           "roster": {
             "rosterId": "epl-b-roster",
             "players": [
@@ -2583,7 +2583,7 @@
         "b": {
           "entryId": "epl-navi",
           "name": "Natus Vincere",
-          "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+          "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
           "roster": {
             "rosterId": "epl-b-roster",
             "players": [

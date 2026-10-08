@@ -412,9 +412,6 @@
   height: 20px;
   align-items: center;
 }
-.hud-widget-design[data-hud-design='perfectworld'] .player-rail__bomb-prediction {
-  background: var(--mizar-hud-objective-bomb);
-}
 .hud-widget-design[data-hud-design='perfectworld']
   .focused-player__metrics
   .player-rail__stat-glyph {

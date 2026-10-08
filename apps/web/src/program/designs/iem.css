@@ -142,17 +142,14 @@
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-slot {
   left: 196px;
-  top: -8px;
+  top: -9px;
+  width: max-content;
+  height: 18px;
   z-index: 3;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__round-kill-slot {
   left: auto;
   right: 196px;
-}
-.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge,
-.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-badge svg {
-  width: 16px;
-  height: 16px;
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body::before {
   width: 256px;
@@ -255,4 +252,85 @@
   height: 18px;
   fill: var(--mizar-hud-text-primary);
   justify-self: center;
+}
+
+/* HP and C4 use the visible interval, excluding the outer avatar and hotkey strip. */
+.hud-widget-design[data-hud-design='iem'] .player-rail__health-bar,
+.hud-widget-design[data-hud-design='iem'] .player-rail__health-spacer {
+  left: 88px;
+  right: 0;
+  width: calc(100% - 88px);
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__health-bar,
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__health-spacer {
+  left: 0;
+  right: 88px;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card,
+.hud-widget-design[data-hud-design='iem'] .player-rail__body {
+  overflow: visible;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-avatar='false']
+  .player-rail__avatar {
+  display: none;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-avatar='false']
+  .player-rail__health-bar,
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-avatar='false']
+  .player-rail__health-spacer {
+  left: 12px;
+  right: 0;
+  width: calc(100% - 12px);
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']
+  .player-rail__health-bar,
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']
+  .player-rail__health-spacer {
+  left: 0;
+  right: 12px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-avatar='false']
+  .player-rail__identity {
+  left: 22px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card[data-avatar='false']
+  :is(.player-rail__kd, .player-rail__money) {
+  left: 22px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']
+  .player-rail__identity {
+  left: 8px;
+  right: 22px;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail--right
+  .player-rail__card[data-avatar='false']
+  :is(.player-rail__kd, .player-rail__money) {
+  left: auto;
+  right: 22px;
+}
+
+/* Reference stars have a dark keyline, not the thin shared decorative outline. */
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-marks {
+  gap: 0;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__round-kill-marks svg {
+  width: 14px;
+  height: 14px;
+  fill: var(--mizar-hud-text-primary);
+  stroke: var(--mizar-hud-surface-strong);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  paint-order: stroke fill;
 }

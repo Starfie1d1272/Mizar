@@ -54,14 +54,14 @@
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             }
           },
@@ -72,12 +72,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -1091,14 +1091,14 @@
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             }
           },
@@ -1109,12 +1109,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -2429,14 +2429,14 @@
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             }
           },
@@ -2447,12 +2447,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -3903,14 +3903,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             }
           },
@@ -3921,12 +3921,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -5007,14 +5007,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             }
           },
@@ -5025,12 +5025,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -6365,14 +6365,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             }
           },
@@ -6383,12 +6383,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -7630,14 +7630,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 0
             }
           },
@@ -7648,12 +7648,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 0, "b": 0 },
@@ -8638,14 +8638,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 0
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 1
             }
           },
@@ -8656,12 +8656,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 1, "b": 0 },
@@ -9615,14 +9615,14 @@
               "mode": "canonical",
               "entryId": "epl-navi",
               "name": "Natus Vincere",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c",
+              "logoUrl": "/fixture-media/epl-s24/epl-navi.svg",
               "seriesScore": 1
             },
             "t": {
               "mode": "canonical",
               "entryId": "epl-falcons",
               "name": "Falcons",
-              "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c",
+              "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp",
               "seriesScore": 2
             }
           },
@@ -9633,12 +9633,12 @@
               "a": {
                 "entryId": "epl-falcons",
                 "name": "Falcons",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/4eJSkDQINNM6Tbs4WvLzkN.png?ixlib=java-2.1.0&w=200&s=d4dd034c2c7786f7c75e51a3a3aa7b5c"
+                "logoUrl": "/fixture-media/epl-s24/epl-falcons.webp"
               },
               "b": {
                 "entryId": "epl-navi",
                 "name": "Natus Vincere",
-                "logoUrl": "https://img-cdn.hltv.org/teamlogo/9iMirAi7ArBLNU8p3kqUTZ.svg?ixlib=java-2.1.0&s=4dd8635be16122656093ae9884675d0c"
+                "logoUrl": "/fixture-media/epl-s24/epl-navi.svg"
               }
             },
             "score": { "a": 2, "b": 1 },

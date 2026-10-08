@@ -88,19 +88,36 @@
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-slot {
   top: -8px;
-  left: 118px;
-  width: 18px;
-  height: 16px;
+  left: 114px;
+  width: max-content;
+  height: 14px;
   z-index: 6;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__round-kill-slot {
   left: auto;
-  right: 118px;
+  right: 114px;
 }
-.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge,
-.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-badge svg {
-  width: 16px;
-  height: 16px;
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-marks {
+  display: flex;
+  gap: 0;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-marks svg {
+  width: 14px;
+  height: 12px;
+  fill: var(--mizar-hud-text-primary);
+  stroke: none;
+  filter: drop-shadow(0 0 1px var(--mizar-hud-surface-strong));
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__round-kill-marks svg:nth-child(even) {
+  transform: rotate(180deg);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__round-kill-marks {
+  flex-direction: row-reverse;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail__card[data-avatar='false']
+  .player-rail__avatar {
+  display: none;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__avatar,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__avatar img {
@@ -190,7 +207,7 @@
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-shell {
   left: 12px;
   width: 456px;
-  background: var(--mizar-hud-surface-strong);
+  background: transparent;
   clip-path: none;
   overflow: visible;
 }
@@ -202,7 +219,7 @@
   clip-path: polygon(0 0, 100% 0, calc(100% - 44px) 100%, 44px 100%);
 }
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo {
-  background: transparent;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 72%, transparent);
 }
 /* EWC's 473px shell at 1988px frame width becomes 457px at 1920px. */
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-zone--logo-b {
@@ -479,4 +496,24 @@
   color: var(--mizar-hud-text-primary);
   font: inherit;
   letter-spacing: 0;
+}
+
+/* Fine linework follows the reference's 60-degree interlocking field.
+ * It belongs to the live body, beneath type, equipment and transient effects. */
+.hud-widget-design[data-hud-design='ewc'] .player-rail__body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--mizar-hud-text-primary);
+  opacity: 0.1;
+  mask: url('/brand/hud/ewc/contour.svg') 0 0 / 63px 55px repeat;
+  clip-path: polygon(0 0, 100% 0, calc(100% - var(--ewc-half-taper) * 2) 100%, 0 100%);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body::after {
+  transform: scaleX(-1);
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::after {
+  display: none;
 }

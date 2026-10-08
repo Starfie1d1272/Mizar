@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="84" viewBox="0 0 96 84">
+  <defs>
+    <path id="mark" d="M12 0 22 14 15 14 9 8 8 6ZM8 7 11 11 8 20H0ZM12 15H21L24 20H10Z" fill="none" stroke="white" stroke-width="0.55"/>
+  </defs>
+  <use href="#mark" transform="translate(0 -21) scale(2)"/>
+  <use href="#mark" transform="translate(96 21) rotate(180) scale(2)"/>
+  <use href="#mark" transform="translate(48 63) rotate(180) scale(2)"/>
+  <use href="#mark" transform="translate(48 21) scale(2)"/>
+  <use href="#mark" transform="translate(0 63) scale(2)"/>
+  <use href="#mark" transform="translate(96 105) rotate(180) scale(2)"/>
+</svg>

@@ -11,11 +11,11 @@
     "sanitizerVersion": 1
   },
   "frameCount": 790,
-  "framesSha256": "1fc2595fa6cf3a53073c1799fbc1404c570ecd5fcfdbab48a880bdbc740e97c7",
+  "framesSha256": "fe47afc9091940f6a978d38346270507ebfb39684f590490e60880cf4ca0c0c6",
   "eventCount": 9,
   "eventIndexSha256": "26032360c2d234c8e4e23ae05f36b24fef1751ed775f55ec5191ce6532873354",
   "matchContextSha256": "a976bff6e95375ea37d41bfef77f61c70b55566d56a19e23ae2d81e21f1524ff",
-  "captureManifestSha256": "63349687516e3151f1c06345567cd266133b158e30ceb6b3af14a2db376dc9e3",
+  "captureManifestSha256": "06dd67f0f60efddba777f70ac6c9186b96ab864085c271cd6c5c767f72e9e52d",
   "video": {
     "file": "background.mp4",
     "sha256": "4b53e8328a37aa8eea2549527d06179502b9dc87745903932f359e94678921fc",

@@ -120,7 +120,7 @@
   background: currentColor;
 }
 .broadcast-pause[data-hud-design='ewc'] .broadcast-pause__team-logo {
-  background: var(--mizar-hud-surface-primary);
+  background: transparent;
   padding: 4px;
 }
 .broadcast-pause__timeout-slots {
