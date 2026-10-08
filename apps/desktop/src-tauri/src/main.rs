@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cs2_activity;
+mod cs2_diagnostics;
 mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
@@ -816,7 +817,13 @@ fn background_powershell() -> Command {
 
 fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<String, String> {
     let bundle = bundle_root()?;
+    let state_root = startup_log::writable_root(
+        &bundle,
+        std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
+    )
+    .map_err(|_| "运行数据目录不可用。")?;
     let mut command = background_powershell();
+    command.env("MIZAR_STATE_ROOT", state_root);
     command
         .args([
             "-NoProfile",
@@ -853,7 +860,7 @@ fn gsi_script(name: &str, root: Option<&Path>, timeout: Duration) -> Result<Stri
     }
     let output = child.wait_with_output().map_err(|_| "GSI 配置读取失败。")?;
     if !output.status.success() {
-        return Err("GSI 配置未完成；请核对安装目录与配置冲突后重试。".into());
+        return Err(cs2_diagnostics::failure(&output.stdout));
     }
     String::from_utf8(output.stdout).map_err(|_| "GSI 状态读取失败。".into())
 }
@@ -916,15 +923,8 @@ async fn gsi_status() -> Result<serde_json::Value, String> {
             Duration::from_secs(20),
         )?)
         .map_err(|_| "GSI 状态无法识别。")?;
-        // Explicit allowlist: installation records contain secrets and never cross IPC.
-        Ok(serde_json::json!({
-            "detected": result["detected"] == true,
-            "installed": result["installed"] == true,
-            "conflict": result["conflict"] == true,
-            "fileConflict": result["fileConflict"] == true,
-            "endpointConflict": result["endpointConflict"] == true,
-            "cfgPath": result["cfgPath"].as_str()
-        }))
+        // Paths are available only in the private desktop UI; exports redact them.
+        Ok(cs2_diagnostics::gsi_status(&result))
     })
     .await
     .map_err(|_| "GSI 状态读取失败。".to_string())?
@@ -953,6 +953,69 @@ async fn save_support_bundle(app: tauri::AppHandle, contents: String) -> Result<
     })
     .await
     .map_err(|_| "保存窗口未能打开，请重试。".to_string())?
+}
+
+#[tauri::command]
+async fn select_cs2_installation(app: tauri::AppHandle, executable: bool) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        if cs2.status()?["pending"] == true {
+            return Err("请先退出受管理 CS2 并恢复设置，再更改安装位置。".into());
+        }
+        let _guard = GSI_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "GSI 操作状态不可用。")?;
+        let dialog = app.dialog().file().set_title("选择 CS2 安装位置");
+        let file = if executable {
+            dialog.add_filter("CS2 程序", &["exe"]).blocking_pick_file()
+        } else {
+            dialog.blocking_pick_folder()
+        };
+        let Some(file) = file else {
+            return Ok(false);
+        };
+        let path = file.into_path().map_err(|_| "安装位置无效。")?;
+        gsi_script(
+            "select-cs2-installation.ps1",
+            Some(&path),
+            Duration::from_secs(20),
+        )?;
+        Ok(true)
+    })
+    .await
+    .map_err(|_| "安装位置选择未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn open_cs2_config_directory() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let _guard = GSI_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "GSI 操作状态不可用。")?;
+        let result: serde_json::Value = serde_json::from_str(&gsi_script(
+            "gsi-status.ps1",
+            None,
+            Duration::from_secs(20),
+        )?)
+        .map_err(|_| "GSI 状态无法识别。")?;
+        let path = result["cfgPath"]
+            .as_str()
+            .map(PathBuf::from)
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .filter(|path| path.is_dir())
+            .ok_or("尚未找到配置文件夹，请先选择 CS2 安装位置。")?;
+        let explorer =
+            PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?)
+                .join("explorer.exe");
+        Command::new(explorer)
+            .arg(path)
+            .spawn()
+            .map_err(|_| "配置文件夹无法打开。")?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "配置文件夹无法打开。".to_string())?
 }
 
 #[tauri::command]
@@ -1043,7 +1106,9 @@ fn run_desktop(
             open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
-            configure_gsi
+            configure_gsi,
+            select_cs2_installation,
+            open_cs2_config_directory
         ])
         .setup(move |app| {
             let handle = app.handle();

@@ -35,6 +35,8 @@
     "allow-open-steam-api-key",
     "allow-save-support-bundle",
     "allow-gsi-status",
-    "allow-configure-gsi"
+    "allow-configure-gsi",
+    "allow-select-cs2-installation",
+    "allow-open-cs2-config-directory"
   ]
 }

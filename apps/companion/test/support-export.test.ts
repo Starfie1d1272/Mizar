@@ -168,6 +168,60 @@ describe('support export', () => {
     }
   });
 
+  it('exports classified GSI failures and counts while rejecting local paths and arbitrary error text', async () => {
+    const app = buildApp();
+    const gsi = {
+      collectionStatus: 'available',
+      readFailed: true,
+      candidateCount: 2,
+      conflictCount: 1,
+      issueCodes: ['multiple-installations', 'endpoint-conflict'],
+      lastOperation: { code: 'restore-before-selection', stage: 'selection' },
+    };
+    try {
+      const response = await app.inject({ ...request, payload: { desktop: { gsi } } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ snapshot: { gsi: unknown } }>().snapshot.gsi).toMatchObject(gsi);
+      for (const collectionStatus of ['failed', 'timeout']) {
+        const unavailable = await app.inject({
+          ...request,
+          payload: { desktop: { gsi: { collectionStatus } } },
+        });
+        expect(unavailable.json<{ snapshot: { gsi: unknown } }>().snapshot.gsi).toMatchObject({
+          collectionStatus,
+          installed: null,
+          conflict: null,
+          candidateCount: null,
+        });
+      }
+      for (const extra of [
+        { cfgPath: 'C:\\Users\\private\\cfg' },
+        { conflictFiles: ['gamestate_integration_secret-token.cfg'] },
+      ]) {
+        const sanitized = await app.inject({
+          ...request,
+          payload: { desktop: { gsi: { ...gsi, ...extra } } },
+        });
+        expect(sanitized.statusCode).toBe(200);
+        expect(sanitized.body).not.toContain('private');
+        expect(sanitized.body).not.toContain('secret-token');
+        expect(sanitized.json<{ snapshot: { gsi: unknown } }>().snapshot.gsi).toMatchObject(gsi);
+      }
+      for (const extra of [
+        { issueCodes: ['private-token'] },
+        { lastOperation: { code: 'operation-failed', stage: 'private-text' } },
+      ]) {
+        const invalid = await app.inject({
+          ...request,
+          payload: { desktop: { gsi: { ...gsi, ...extra } } },
+        });
+        expect(invalid.statusCode).toBe(400);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it('caps large rotated logs and produces a usable export instead of persistent oversize failures', async () => {
     const dir = await directory();
     const line =
