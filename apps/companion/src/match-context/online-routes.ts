@@ -8,6 +8,7 @@ export function registerOnlineManifestRoutes(
   options: {
     readonly controller: MatchContextController | null;
     readonly config?: OnlineManifestConfig;
+    readonly isConnected?: () => boolean;
     readonly originPolicy: LocalWebOriginPolicy;
   },
 ) {
@@ -29,7 +30,7 @@ export function registerOnlineManifestRoutes(
   }
   app.get('/local/v1/match-context-source', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
-      configured: options.config !== undefined,
+      configured: options.config !== undefined || options.isConnected?.() === true,
       activeMatchId: options.controller?.getActiveBinding()?.context.matchId ?? null,
       pending:
         options.controller?.getPendingOnlineCandidate() === undefined

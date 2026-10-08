@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { desktopInvoke } from './client';
 import { Button } from '../ui/primitives';
+import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 
 type Connection = {
+  sourceReady?: boolean;
+  sourceBlockedReason?: string | null;
   paired: boolean;
   competitionId: string | null;
   displayName: string | null;
@@ -39,6 +43,7 @@ export function RivalHubLiveSourcePanel({
   });
   const inFlightRef = useRef(false);
   const userReleasedRef = useRef<string | null>(null);
+  const wasReadyRef = useRef(false);
 
   const activeMatchId = connection?.activeMatchId ?? null;
   const isSource = Boolean(activeMatchId && connection?.activeSourceMatchId === activeMatchId);
@@ -71,10 +76,16 @@ export function RivalHubLiveSourcePanel({
         const next = (await response.json()) as Connection;
         if (cancelled) return;
         setConnection(next);
+        if (next.sourceReady === true && !wasReadyRef.current && !userReleasedRef.current) {
+          autoClaimRef.current.attempts = 0;
+          autoClaimRef.current.settled = false;
+        }
+        wasReadyRef.current = next.sourceReady !== false;
 
         const targetMatchId = next.activeMatchId;
         if (
           !targetMatchId ||
+          next.sourceReady === false ||
           next.activeSourceMatchId === targetMatchId ||
           Boolean(next.activeDeviceName) ||
           userReleasedRef.current === targetMatchId ||
@@ -96,10 +107,16 @@ export function RivalHubLiveSourcePanel({
             headers: { 'content-type': 'application/json' },
             body: '{}',
           });
+          if (!claimResponse.ok && !cancelled) {
+            const failure = (await claimResponse.json().catch(() => null)) as {
+              message?: string;
+            } | null;
+            onMessage(failure?.message ?? '自动认领数据源失败，可手动重试。');
+          }
           if (claimResponse.ok && !cancelled) {
             const updated = (await claimResponse.json()) as Connection;
             if (cancelled) return;
-            setConnection(updated);
+            setConnection({ ...next, ...updated });
             autoClaimRef.current.settled = true;
             if (updated.activeSourceMatchId === targetMatchId) {
               onMessage('本机已成为本场实时数据源。');
@@ -134,7 +151,7 @@ export function RivalHubLiveSourcePanel({
         throw new Error(data?.message ?? '认领数据源失败。');
       }
       const next = (await response.json()) as Connection;
-      setConnection(next);
+      setConnection((old) => ({ ...old, ...next }));
       autoClaimRef.current.settled = true;
       if (targetMatchId !== null && next.activeSourceMatchId === targetMatchId) {
         userReleasedRef.current = null;
@@ -158,7 +175,7 @@ export function RivalHubLiveSourcePanel({
         throw new Error(data?.message ?? '接管数据源失败。');
       }
       const next = (await response.json()) as Connection;
-      setConnection(next);
+      setConnection((old) => ({ ...old, ...next }));
       autoClaimRef.current.settled = true;
       userReleasedRef.current = null;
       onMessage('已接管为本场数据源。');
@@ -181,20 +198,55 @@ export function RivalHubLiveSourcePanel({
       onMessage('已停止作为数据源。');
     });
 
-  if (!connection?.paired || !connection?.activeMatchId) {
-    return null;
+  if (!connection?.paired) {
+    return (
+      <a
+        href="/settings?tab=rivalhub"
+        onClick={(event) => {
+          if (!window.__TAURI_INTERNALS__) return;
+          event.preventDefault();
+          void action(() => desktopInvoke('open_main', { path: '/settings?tab=rivalhub' }));
+        }}
+      >
+        连接 RivalHub 以推送实时数据
+      </a>
+    );
   }
 
-  const isCurrentSource = connection.activeSourceMatchId === connection.activeMatchId;
+  const isCurrentSource = Boolean(
+    connection.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
+  );
 
   return (
-    <div className="workspace-rivalhub-source" aria-label="实时数据源状态">
+    <div className="workspace-rivalhub-source" data-compact={compact} aria-label="实时数据源状态">
+      {compact ? (
+        <Button
+          onClick={() =>
+            void action(async () => {
+              if (window.__TAURI_INTERNALS__)
+                await desktopInvoke('open_main', { path: '/matches' });
+              else window.open('/matches', 'mizar-match');
+            })
+          }
+        >
+          比赛同步
+        </Button>
+      ) : (
+        <RivalHubSyncControls />
+      )}
+      {connection.sourceBlockedReason ? (
+        <span role="status" title={connection.sourceBlockedReason}>
+          {compact ? '推送待恢复，请打开比赛同步' : connection.sourceBlockedReason}
+        </span>
+      ) : null}
       {!compact ? (
         <div className="workspace-rivalhub-source-status">
           {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
           <small>实时数据源</small>
           {isCurrentSource ? (
-            <p>本机正在提供实时数据</p>
+            <p>
+              {connection.sourceReady === false ? '本机已认领，推送暂停' : '本机正在提供实时数据'}
+            </p>
           ) : connection.activeDeviceName ? (
             <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
           ) : (
@@ -205,7 +257,7 @@ export function RivalHubLiveSourcePanel({
       {isCurrentSource ? (
         <Button
           variant="secondary"
-          title="本机正在提供实时数据"
+          title={connection.sourceReady === false ? '本机已认领，推送暂停' : '本机正在提供实时数据'}
           onClick={() => void handleRelease()}
         >
           停止作为数据源
@@ -219,7 +271,11 @@ export function RivalHubLiveSourcePanel({
           接管为本场数据源
         </Button>
       ) : (
-        <Button variant="primary" onClick={() => void handleClaim()}>
+        <Button
+          variant="primary"
+          disabled={connection.sourceReady === false || !connection.activeMatchId}
+          onClick={() => void handleClaim()}
+        >
           成为本场数据源
         </Button>
       )}

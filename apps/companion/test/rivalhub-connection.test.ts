@@ -3,6 +3,10 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import type { BroadcastManifest } from '@mizar/rivalhub';
+import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
+import { MatchContextController, MatchManifestLkgStore } from '../src/match-context/index.js';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import {
   RivalHubConnection,
@@ -18,6 +22,75 @@ const validPairingId = '00000000-0000-0000-0000-000000000001';
 const validPollToken = 'a'.repeat(64);
 const validAuthorizeUrl = `${OFFICIAL_RIVALHUB_URL}/integrations/mizar/connect?pairingId=${validPairingId}`;
 const validExpiresAt = new Date(Date.now() + 60_000).toISOString();
+
+it('refreshes the paired selected match through the local recovery endpoint and exposes its website without credentials', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-refresh-'));
+  temporary.push(directory);
+  const manifest = JSON.parse(
+    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
+  ) as BroadcastManifest;
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'private-refresh-token',
+      installationId: 'installation',
+      competitionId: manifest.match.competition!.competitionId,
+      displayName: 'Test',
+    }),
+  );
+  const request = vi.fn<typeof fetch>(() =>
+    Promise.resolve(Response.json({ ...manifest, revision: 'fresh-online' })),
+  );
+  const connection = new RivalHubConnection(path, request);
+  await connection.load();
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'manifest.json') }),
+  });
+  await controller.selectMatch(manifest.match.matchId, {
+    kind: 'online',
+    load: () => Promise.resolve(manifest),
+  });
+  const app = Fastify();
+  registerRivalHubConnectionRoutes(app, {
+    connection,
+    controller,
+    currentSnapshot: () => null,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+    canClaim: () => false,
+  });
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/refresh',
+      headers: { origin: 'http://127.0.0.1:3000' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(controller.getActiveBinding()?.manifest.revision).toBe('fresh-online');
+    const view = await app.inject('/local/v1/rivalhub-connection');
+    expect(view.json()).toMatchObject({
+      activeMatchId: manifest.match.matchId,
+      sourceReady: false,
+      websiteUrl: `${OFFICIAL_RIVALHUB_URL}/admin/m2-sample/matches/match-m2-01`,
+      refreshError: null,
+    });
+    expect(view.body).not.toContain('private-refresh-token');
+    expect(request).toHaveBeenCalledOnce();
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/refresh',
+      headers: { origin: 'https://unrelated.example' },
+    });
+    expect(forbidden.statusCode).toBe(403);
+  } finally {
+    await app.close();
+  }
+});
 
 it('pairs via browser authorization, persists only in Companion, and claims with observed starters', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-'));
@@ -578,9 +651,15 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     const connection = new RivalHubConnection(path, fetchImpl);
     await connection.load();
 
+    const diagnostics = vi.fn<(operation: string, error: unknown) => void>();
+    connection.setDiagnosticHandler(diagnostics);
     // First attempt fails: server returns 504
     await expect(connection.disconnect()).rejects.toThrow('断开连接失败，请稍后重试。');
 
+    expect(diagnostics).toHaveBeenCalledWith(
+      'disconnect',
+      expect.objectContaining({ message: 'RivalHub HTTP 504: {"error":"gateway_timeout"}' }),
+    );
     // Local file and state MUST be retained
     expect(existsSync(path)).toBe(true);
     expect(connection.view().paired).toBe(true);

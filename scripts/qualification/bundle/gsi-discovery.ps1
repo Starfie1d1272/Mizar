@@ -38,7 +38,7 @@ function Get-UniqueSteamPaths {
 }
 
 function Convert-VdfPath {
-    param([Parameter(Mandatory = $true)][string]$Value)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
     return $Value.Replace('\\', '\').Replace('\"', '"')
 }
 

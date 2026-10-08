@@ -45,6 +45,10 @@ function normalizeBaseUrl(value: string): string {
 
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {
+  private onDiagnostic: (operation: string, error: unknown) => void = () => {};
+  setDiagnosticHandler(handler: (operation: string, error: unknown) => void): void {
+    this.onDiagnostic = handler;
+  }
   private scheduleGeneration = 0;
   private scheduleCache: {
     competitionId: string;
@@ -143,12 +147,39 @@ export class RivalHubConnection {
 
   private async request(operation: string, init: RequestInit = {}): Promise<Response> {
     if (!this.installation) throw new Error('请先连接 RivalHub。');
-    return this.fetchImpl(`${this.installation.baseUrl}/api/mizar/${operation}`, {
-      ...init,
-      redirect: 'manual',
-      headers: { authorization: `Bearer ${this.installation.credential}`, ...init.headers },
-      signal: init.signal ?? AbortSignal.timeout(4000),
-    });
+    try {
+      const response = await this.fetchImpl(`${this.installation.baseUrl}/api/mizar/${operation}`, {
+        ...init,
+        redirect: 'manual',
+        headers: { authorization: `Bearer ${this.installation.credential}`, ...init.headers },
+        signal: init.signal ?? AbortSignal.timeout(4000),
+      });
+      if (!response.ok) {
+        const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
+        let detail = '';
+        if (reader) {
+          try {
+            const decoder = new TextDecoder();
+            while (detail.length < 4096) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              detail += decoder.decode(chunk.value.subarray(0, 4096), { stream: true });
+            }
+          } finally {
+            await reader.cancel();
+            reader.releaseLock();
+          }
+        }
+        this.onDiagnostic(
+          operation,
+          new Error(`RivalHub HTTP ${response.status}: ${detail.slice(0, 4096)}`),
+        );
+      }
+      return response;
+    } catch (error) {
+      this.onDiagnostic(operation, error);
+      throw error;
+    }
   }
 
   async startPairing(): Promise<{ authorizeUrl: string; expiresAt: string }> {
@@ -280,6 +311,7 @@ export class RivalHubConnection {
     return createOnlineManifestSource(matchId, {
       urlTemplate: `${this.installation.baseUrl}/api/mizar/match?matchId={matchId}`,
       readToken: this.installation.credential,
+      fetchImpl: this.fetchImpl,
     });
   }
 

@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import { checkObsAudio, setupObsAudio } from '../src/obs/audio.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import {
   checkObsConfiguration,
@@ -82,6 +83,10 @@ class FakeObs implements ObsRpc {
           inputKind: input.kind,
         })),
       };
+    if (type === 'GetSpecialInputs') return {};
+    if (type === 'GetInputMute') return { inputMuted: false };
+    if (type === 'GetInputVolume') return { inputVolumeMul: 1 };
+    if (type === 'GetInputAudioTracks') return { inputAudioTracks: { '1': true } };
     if (type === 'CreateInput') {
       this.inputs.set(String(data.inputName), {
         kind: String(data.inputKind),
@@ -151,6 +156,30 @@ class FakeObs implements ObsRpc {
 }
 
 const baseUrl = 'http://127.0.0.1:3000';
+
+it('detects silent scene collections and adds explicit audio once to all owned scenes without modifying active output', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  expect(await checkObsAudio(obs)).toEqual([expect.objectContaining({ code: 'audio_missing' })]);
+  obs.outputActive = true;
+  await expect(setupObsAudio(obs, baseUrl)).rejects.toThrow('正在输出');
+  expect(obs.inputs.has('Mizar · Microphone')).toBe(false);
+  obs.outputActive = false;
+  await setupObsAudio(obs, baseUrl);
+  await setupObsAudio(obs, baseUrl);
+  for (const scene of obsDesiredScenes(baseUrl)) {
+    const sources = obs.scenes.get(scene.sceneName)!;
+    expect(sources.filter((item) => item.sourceName === 'Mizar · Microphone')).toHaveLength(1);
+    expect(sources.filter((item) => item.sourceName === 'Mizar · Desktop Audio')).toHaveLength(1);
+  }
+  expect(await checkObsAudio(obs)).toEqual([]);
+  const call = obs.call.bind(obs);
+  obs.call = (type, data) =>
+    type === 'GetInputMute' ? Promise.resolve({ inputMuted: true }) : call(type, data);
+  expect((await checkObsAudio(obs)).map((item) => item.code)).toContain(
+    'audio_muted:Mizar · Microphone',
+  );
+});
 
 it('refreshes exact owned program URLs once without changing collection, scene, or non-Mizar inputs', async () => {
   const obs = new FakeObs();

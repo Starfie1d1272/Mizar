@@ -34,18 +34,26 @@ describe('startup evidence retention', () => {
     }
   });
 
-  it('bounds files and partial lines while draining output, and records truncation', async () => {
+  it('rotates during a session and continues recording the latest errors within bounded history', async () => {
     const root = await directory();
     const output = createCompanionLog(root, 'companion.log', 'bounded', { maxBytes: 512 });
     for (let index = 0; index < 100; index++) output.write(Buffer.alloc(64 * 1024, 'x'));
     output.write(Buffer.from('\n'));
+    expect(await readFile(join(root, 'logs/companion.log'), 'utf8')).toContain(
+      'oversized log line omitted',
+    );
     for (let index = 0; index < 100; index++) output.write(Buffer.from('normal output\n'));
+    output.write(Buffer.from('late match failure: HTTP 503\n'));
     output.end();
     const path = join(root, 'logs/companion.log');
     expect((await stat(path)).size).toBeLessThanOrEqual(512);
     const text = await readFile(path, 'utf8');
-    expect(text).toContain('oversized log line omitted');
-    expect(text).toContain('log size limit reached');
+    expect(text).toContain('late match failure: HTTP 503');
+    expect(text).toContain('bounded');
+    const files = await readdir(join(root, 'logs'));
+    expect(files).toHaveLength(4);
+    for (const file of files)
+      expect((await stat(join(root, 'logs', file))).size).toBeLessThanOrEqual(512);
   });
 
   it('redacts credentials even when chunks split the secret and preserves UTF-8', async () => {

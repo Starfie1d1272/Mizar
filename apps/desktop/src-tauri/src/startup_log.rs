@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub const LOG_LIMIT: u64 = 256 * 1024;
+pub const LOG_LIMIT: u64 = 25 * 1024 * 1024;
 const HISTORY: usize = 3;
 const MESSAGE_LIMIT: usize = 8192;
 
@@ -23,6 +23,7 @@ pub struct DesktopLog {
 struct LogFile {
     directory: PathBuf,
     identity: Value,
+    limit: u64,
 }
 
 fn normalized(path: &Path) -> PathBuf {
@@ -150,6 +151,7 @@ impl DesktopLog {
             inner: Arc::new(Mutex::new(LogFile {
                 directory: directory.clone(),
                 identity,
+                limit: LOG_LIMIT,
             })),
             directory,
             state_root,
@@ -187,7 +189,7 @@ impl DesktopLog {
         let mut bytes = serde_json::to_vec(&entry)?;
         bytes.push(b'\n');
         let current = rotated(&log.directory, 0);
-        if fs::metadata(&current).map_or(0, |m| m.len()) + bytes.len() as u64 > LOG_LIMIT {
+        if fs::metadata(&current).map_or(0, |m| m.len()) + bytes.len() as u64 > log.limit {
             rotate(&log.directory)?;
         }
         let mut file = OpenOptions::new().create(true).append(true).open(current)?;
@@ -284,6 +286,7 @@ mod tests {
     fn bounds_utf8_entries_total_files_and_preserves_parseable_ndjson() {
         let root = root("bounds");
         let log = DesktopLog::new(&root, None).unwrap();
+        log.inner.lock().unwrap().limit = 256 * 1024;
         for _ in 0..200 {
             log.event("failure_fixture", "failure", Some(&"错误".repeat(9000)));
         }

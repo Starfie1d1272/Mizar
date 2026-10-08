@@ -98,6 +98,13 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
     },
   );
 
+  it('accepts empty VDF scalar values used by Steam metadata', () => {
+    expect(
+      run(
+        "$value = Convert-VdfPath ''; if ($value -ne '') { throw 'invalid empty value' }; 'parsed'",
+      ),
+    ).toBe('parsed');
+  });
   it('deduplicates slash, case, trailing separator and VDF aliases of one installation', async () => {
     const root = await library();
     const alias = root.replaceAll('\\', '/').toUpperCase() + '/';
@@ -277,8 +284,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         run(`. ${quote(common)}; $script:QualificationStateRoot=${quote(state)}; ${source}`);
       const suspend = `Suspend-GsiEndpointConflicts -CfgDirectory ${quote(cfg)} -CanonicalCfgPath ${quote(canonical)}`;
       const restore = `Restore-GsiEndpointConflicts -CfgDirectory ${quote(cfg)}`;
-      invoke(suspend);
-      invoke(suspend); // Idempotent: the original backup survives a retry.
+      invoke(`${suspend}; ${suspend}`); // Idempotent: the original backup survives a retry.
       const { readFile, access } = await import('node:fs/promises');
       await expect(access(duplicate)).rejects.toThrow();
       expect(await readFile(other, 'utf8')).toContain('4000');
@@ -289,13 +295,10 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       );
       expect(await readFile(duplicate, 'utf8')).toBe('new sender from another application');
       await rm(duplicate);
-      invoke(restore);
-      invoke(restore);
+      invoke(`${restore}; ${restore}`);
       expect(await readFile(duplicate, 'utf8')).toBe('"uri" "http://localhost:3000/"');
       // Simulate interruption after journaling but before the original was removed.
-      invoke(suspend);
-      invoke(restore);
-      invoke(suspend);
+      invoke(`${suspend}; ${restore}; ${suspend}`);
       await expect(access(duplicate)).rejects.toThrow();
       const journal = JSON.parse(await readFile(join(state, 'conflicts.json'), 'utf8'));
       await writeFile(journal.entries[0].backupPath, 'corrupted backup');

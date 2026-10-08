@@ -51,12 +51,23 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
-  for (const action of ['check', 'ensure', 'repair', 'open', 'launch-target'] as const) {
+  for (const action of [
+    'check',
+    'ensure',
+    'audio-setup',
+    'repair',
+    'open',
+    'launch-target',
+  ] as const) {
     app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
         if (action === 'ensure') return { ok: true, findings: await options.adapter.ensure() };
+        if (action === 'audio-setup') {
+          await options.adapter.setupAudio();
+          return { ok: true };
+        }
         if (action === 'check') return { ok: true, findings: await options.adapter.check() };
         if (action === 'repair') {
           const findings = await options.adapter.repair(options.activeScene);
@@ -70,9 +81,11 @@ export function registerObsRoutes(
           return { ok: true, executablePath: await options.adapter.launchTarget() };
         }
       } catch (error: unknown) {
+        request.log.error({ err: error, action }, 'OBS operation failed');
         const message =
           error instanceof Error &&
-          (error.message.startsWith('OBS 正在输出') ||
+          (action === 'audio-setup' ||
+            error.message.startsWith('OBS 正在输出') ||
             ((action === 'open' || action === 'launch-target') &&
               ['未找到 OBS，请在设置中选择 obs64.exe。', 'OBS 程序未能打开。'].includes(
                 error.message,

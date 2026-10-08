@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ObsConfigStore, discoverObsExecutable } from './config.js';
+import { checkObsAudio, setupObsAudio } from './audio.js';
 import {
   checkObsConfiguration,
   ensureObsConfiguration,
@@ -203,7 +204,17 @@ export class ObsAdapter {
 
   check(): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
-      this.findings = await this.withObs((obs) => checkObsConfiguration(obs, this.browserBaseUrl));
+      this.findings = await this.withObs(async (obs) => {
+        const visual = await checkObsConfiguration(obs, this.browserBaseUrl);
+        return visual.some(
+          (item) =>
+            item.code === 'collection_missing' ||
+            item.code === 'collection_inactive' ||
+            item.code === 'scene_missing',
+        )
+          ? visual
+          : [...visual, ...(await checkObsAudio(obs))];
+      }, 12_000);
       return this.findings;
     });
   }
@@ -213,7 +224,15 @@ export class ObsAdapter {
       this.findings = await this.withObs(async (obs) => {
         const firstPreparation = !this.preparationStarted;
         this.preparationStarted = true;
-        return ensureObsConfiguration(obs, this.browserBaseUrl, firstPreparation);
+        const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, firstPreparation);
+        return visual.some(
+          (item) =>
+            item.code === 'collection_missing' ||
+            item.code === 'collection_inactive' ||
+            item.code === 'scene_missing',
+        )
+          ? visual
+          : [...visual, ...(await checkObsAudio(obs))];
       }, 12_000);
       return this.findings;
     });
@@ -223,13 +242,18 @@ export class ObsAdapter {
       this.findings = await this.withObs(async (obs) => {
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
-        return findings;
+        return [...findings, ...(await checkObsAudio(obs))];
       }, 12_000);
       return this.findings;
     });
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
+  }
+  setupAudio(): Promise<void> {
+    return this.serial(() =>
+      this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000),
+    );
   }
   async launchTarget(): Promise<string> {
     const config = await this.configStore.read();

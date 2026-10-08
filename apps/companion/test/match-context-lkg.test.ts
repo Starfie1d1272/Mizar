@@ -134,6 +134,78 @@ describe('Match Manifest last-known-good seam', () => {
     expect(result.binding.freshness).toBe('fresh');
   });
 
+  it('refreshes online roster and commentators, preserves a conflicting local BP, and restores an identical online plan', async () => {
+    const root = await temporaryDirectory();
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+    const store = new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') });
+    const controller = new MatchContextController({ lkgStore: store });
+    const stale = {
+      ...manifest,
+      commentators: [],
+      entrants: {
+        a: { ...manifest.entrants.a, roster: { ...manifest.entrants.a.roster, players: [] } },
+        b: { ...manifest.entrants.b, roster: { ...manifest.entrants.b.roster, players: [] } },
+      },
+    };
+    await controller.selectMatch(manifest.match.matchId, source('online', stale));
+    const changed = {
+      ...manifest,
+      revision: 'new-roster',
+      commentators: [],
+      entrants: { ...manifest.entrants, a: { ...manifest.entrants.a, name: 'Updated team' } },
+    };
+    expect((await controller.refreshOnlineMatch(source('online', changed))).ok).toBe(true);
+    expect(controller.getActiveBinding()?.manifest.entrants.a.name).toBe('Updated team');
+    expect(controller.getActiveBinding()?.manifest.entrants.a.roster.players).toHaveLength(
+      manifest.entrants.a.roster.players.length,
+    );
+    expect(controller.getActiveBinding()?.origin).toBe('online');
+    const local = { ...changed, revision: 'local-bp', veto: [] };
+    expect((await controller.selectLocalMatch(local, controller.getActiveRevision())).ok).toBe(
+      true,
+    );
+    const next = { ...changed, revision: 'new-commentators', commentators: manifest.commentators };
+    expect((await controller.refreshOnlineMatch(source('online', next))).ok).toBe(true);
+    expect(controller.getActiveBinding()?.origin).toBe('local');
+    expect(controller.getActiveBinding()?.manifest.veto).toEqual([]);
+    expect(controller.getActiveBinding()?.manifest.commentators).toEqual(manifest.commentators);
+    const pending = controller.getPendingOnlineCandidate();
+    await controller.refreshOnlineMatch({
+      kind: 'online',
+      load: () => Promise.reject(new SourceLoadError('HTTP 503')),
+    });
+    expect(controller.getPendingOnlineCandidate()?.revision).toBe(pending?.revision);
+    expect((await controller.refreshOnlineMatch(source('online', { ...next, veto: [] }))).ok).toBe(
+      true,
+    );
+    expect(controller.getActiveBinding()?.origin).toBe('online');
+    expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+    const restored = await store.read(manifest.match.matchId);
+    expect(restored.ok && restored.value.cachedFrom).toBe('online');
+  });
+
+  it('automatically applies online BP only before map execution, and does not overwrite a newer selection', async () => {
+    const root = await temporaryDirectory();
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+    const controller = new MatchContextController({
+      lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
+    });
+    await controller.selectMatch(
+      manifest.match.matchId,
+      source('online', { ...manifest, veto: [] }),
+    );
+    await controller.refreshOnlineMatch(source('online', manifest), () => false);
+    expect(controller.getActiveBinding()?.manifest.veto).toEqual([]);
+    await controller.refreshOnlineMatch(source('online', manifest), () => true);
+    expect(controller.getActiveBinding()?.manifest.veto).toEqual(manifest.veto);
+    const delayed = deferred<unknown>();
+    const refresh = controller.refreshOnlineMatch({ kind: 'online', load: () => delayed.promise });
+    controller.clearActive();
+    delayed.resolve({ ...manifest, revision: 'late' });
+    expect((await refresh).ok).toBe(false);
+    expect(controller.getActiveBinding()).toBeUndefined();
+  });
+
   it('does not overwrite a valid LKG with malformed or semantically invalid input', async () => {
     const root = await temporaryDirectory();
     const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');

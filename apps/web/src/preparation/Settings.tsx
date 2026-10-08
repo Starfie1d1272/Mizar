@@ -264,7 +264,27 @@ export function Settings({ tab }: { tab: string }) {
               >
                 修复 Mizar 场景
               </Button>
-              <p>修复前停止推流与录制。检查通过后，在 OBS 中核对游戏画面。</p>
+              <p>
+                修复前停止推流与录制。检查通过后，在 OBS
+                中核对游戏画面、音频电平和直播输出音轨，并录制试听。
+              </p>
+              <Button
+                disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
+                onClick={() =>
+                  void action(async () => {
+                    await obsCommand('audio-setup');
+                    await obsCommand('check');
+                    setMessage(
+                      '已添加系统默认桌面音频与麦克风。请在 OBS 选择实际设备，检查静音、直播音轨并录制试听。',
+                    );
+                  })
+                }
+              >
+                添加默认桌面音频与麦克风
+              </Button>
+              <small>
+                此操作会在 Mizar 场景中采集系统声音和默认麦克风；自定义设备在 OBS 来源属性中选择。
+              </small>
               {obs?.video ? (
                 <small>
                   画布 {obs.video.canvas} · 输出 {obs.video.output} · {obs.video.fps.toFixed(0)} fps
@@ -281,7 +301,7 @@ export function Settings({ tab }: { tab: string }) {
             <summary>游戏捕获说明</summary>
             <p>
               Mizar 会先建立场景，无需等待 CS2 启动；启动游戏后按 cs2.exe 核实窗口，并在 OBS
-              的游戏画面。
+              中检查游戏画面。
             </p>
             <p>
               若游戏捕获黑屏，检查 Steam 启动选项 -allow_third_party_software 。由 Mizar

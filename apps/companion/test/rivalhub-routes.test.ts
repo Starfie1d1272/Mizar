@@ -41,6 +41,11 @@ describe('RivalHub Fastify Routes', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
+        lastRefreshAt: null,
+        refreshError: null,
+        sourceReady: false,
+        sourceBlockedReason: '请先选择并确认加载赛事比赛。',
+        websiteUrl: null,
         paired: true,
         competitionId: 'comp-1',
         displayName: '星宇',

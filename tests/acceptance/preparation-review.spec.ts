@@ -219,7 +219,7 @@ for (const source of ['online', 'cache'] as const) {
   test(`Preparation displays the complete ${source} MatchDocument read-only`, async ({
     page,
     context,
-  }) => {
+  }, testInfo) => {
     const directory = await mkdtemp(join(tmpdir(), 'mizar-readonly-ui-'));
     // Contract fixture exercises provider ownership; the logo is an explicit presentation test asset.
     const fixture = JSON.parse(
@@ -263,6 +263,34 @@ for (const source of ['online', 'cache'] as const) {
         },
       );
       await page.goto('/matches');
+      if (source === 'online') {
+        await page.route('**/local/v1/rivalhub-connection', (route) =>
+          route.fulfill({
+            json: {
+              paired: true,
+              activeMatchId: match.matchId,
+              sourceReady: false,
+              websiteUrl: `https://match.starfie1d.top/admin/m2-sample/matches/${match.matchId}`,
+              lastRefreshAt: '2026-10-08T14:00:00Z',
+            },
+          }),
+        );
+        await page.route('**/operator/rivalhub/refresh', (route) =>
+          route.fulfill({ json: { message: '比赛资料已同步，包括 BP、名单与解说信息。' } }),
+        );
+        await page.reload();
+        const refresh = page.getByRole('button', { name: '刷新比赛资料与 BP', exact: true });
+        await expect(refresh).toBeVisible();
+        await refresh.focus();
+        await page.keyboard.press('Enter');
+        await expect(page.getByText('比赛资料已同步，包括 BP、名单与解说信息。')).toBeVisible();
+        await expect(page.getByRole('link', { name: '打开网站本场工作台' })).toHaveAttribute(
+          'href',
+          new RegExp(`/matches/${match.matchId}$`),
+        );
+        await expect(page.getByText('切换比赛', { exact: true })).toBeVisible();
+        await page.screenshot({ path: testInfo.outputPath('match-refresh.png'), fullPage: true });
+      }
       await expect(
         page.getByText(match.competition?.name ?? 'missing-event', { exact: true }),
       ).toBeVisible();

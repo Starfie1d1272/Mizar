@@ -78,6 +78,10 @@ C4 异步预测的普通实战更新可最多合并十六毫秒；等待期间�
 
 RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。公开上传速率、超时和队列限制以[输出实现](../apps/companion/src/output/)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
 
+`POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
+
+`POST /operator/obs/audio-setup` 在 OBS 输出停止且当前集合为 Mizar 时，显式添加默认桌面音频与麦克风到 Mizar 场景。已有自定义来源不自动替换；静音、音量、音轨与场景音频检查通过既有 OBS findings 返回。设备选择与实际试听在 OBS 完成。
+
 ## 本地实时通道
 
 WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。

@@ -9,6 +9,7 @@ import { setTimeout, clearTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { sameRuntime, verifyPayload } from './product-runtime.mjs';
+import { PRODUCT_LOG_BYTES } from './product-logs.mjs';
 
 export function assertNoNodeConsole(snapshot) {
   for (const node of snapshot.processes.filter((process) => process.packagedNode)) {
@@ -183,7 +184,7 @@ async function desktopLog(stateRoot) {
   for (const name of names) {
     assert.match(name, /^desktop(?:\.[123])?\.ndjson$/);
     const path = join(logs, name);
-    assert.ok((await stat(path)).size <= 256 * 1024, `${name} exceeded 256 KiB`);
+    assert.ok((await stat(path)).size <= PRODUCT_LOG_BYTES, `${name} exceeded 25 MiB`);
     const contents = await readFile(path, 'utf8');
     // The active writer may not yet have terminated its final JSONL record.
     for (const line of contents.split('\n').slice(0, -1).filter(Boolean)) {

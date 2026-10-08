@@ -292,7 +292,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   const app = Fastify({
     logger: options.logger ?? false,
+    logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
+  });
+  app.addHook('onResponse', async (request, reply) => {
+    if (
+      reply.statusCode >= 400 ||
+      (request.method !== 'GET' && request.url.startsWith('/operator/'))
+    )
+      request.log.info(
+        {
+          method: request.method,
+          route: request.routeOptions.url,
+          res: { statusCode: reply.statusCode },
+        },
+        'Local operation completed',
+      );
+  });
+  app.addHook('onError', async (request, _reply, error) => {
+    request.log.error({ err: error, route: request.routeOptions.url }, 'Local operation failed');
   });
   registerStaticHost(app, {
     ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
@@ -630,6 +648,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(localTournamentStore === null ? {} : { localTournamentStore }),
   });
   registerOnlineManifestRoutes(app, {
+    isConnected: () => options.rivalhubConnection?.view().paired === true,
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
     ...(options.onlineManifestConfig === undefined ? {} : { config: options.onlineManifestConfig }),
@@ -638,6 +657,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
       canClaim: () => production.get().mode === 'live',
+      canUpdatePlan: () => programRuntime.canUpdateSeriesPlan(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),

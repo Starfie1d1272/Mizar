@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
+import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
@@ -102,7 +103,11 @@ export function PreparationPage() {
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
     '/local/v1/rivalhub-connection',
   );
-  const rehearsal = useLocalRead<RivalsRehearsalView>('/local/v1/rivals-rehearsal');
+  const rehearsal = useLocalRead<RivalsRehearsalView>(
+    import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1'
+      ? '/local/v1/rivals-rehearsal'
+      : null,
+  );
 
   const hasSampleCapability =
     (import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1') && rehearsal !== null;
@@ -526,6 +531,7 @@ export function PreparationPage() {
           </div>
         ) : path === '/matches' ? (
           <>
+            <RivalHubSyncControls />
             <details
               className="preparation-switch"
               open={!match || createFromServer || openMatchSelection}

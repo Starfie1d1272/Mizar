@@ -26,7 +26,7 @@ Final RC 的剩余门槛是受影响功能和视觉收敛、短 Windows 原生�
 - [ ] 核对包内 `resources/metadata/artifact.json` 和 `SHA256SUMS`，核对自动生成的外层 `.zip.sha256` 与 `release-manifest.json`；ZIP 摘要与包内内容摘要含义不同。
 - [ ] 在实际解压包执行 `node scripts/qualification/verify-c4-resources.mjs <bundle-root>/resources/app`，检查 C4 地图与许可完整性。
 
-Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64.exe`，便携 ZIP 使用相同名称和 `.zip` 后缀。RC 保留版本中的 `-rc.N`，正式版本不带 RC 标记；文件名不附加提交 SHA、`portable` 或 `extract`，完整源码身份和摘要仍记录在包内 metadata 与发布清单中。GitHub 已发布的旧包保留原始名称、内容和验证记录；后续构建使用新规则。镜像可单独修改下载文件名，需核对文件大小与 SHA-256，确认内容与已验产物一致。
+Windows 完整包统一命名为 `Mizar-v<应用版本>-Windows-x64-Setup.exe`，便携 ZIP 命名为 `Mizar-v<应用版本>-Windows-x64.zip`。RC 保留版本中的 `-rc.N`，正式版本不带 RC 标记；文件名不附加提交 SHA、`portable` 或 `extract`，完整源码身份和摘要仍记录在包内 metadata 与发布清单中。GitHub 已发布的旧包保留原始名称、内容和验证记录；后续构建使用新规则。镜像可单独修改下载文件名，需核对文件大小与 SHA-256，确认内容与已验产物一致。
 
 产品 ZIP 与维护者 evidence ZIP 分开交付；Windows 资格构建使用固定 NSIS 3.11 从同一原始 ZIP 生成中文 Setup，在带空格目录实际安装、升级、卸载并确认用户数据保留，逐文件核对路径和 SHA-256，再对安装结果执行产品与 GUI smoke。`distribution-manifest.json` 记录独立下载摘要、编译器、安装脚本和许可证身份及与原始 ZIP 的内容关系；晋级核对身份、摘要和 provenance，不重新压缩。Setup 不重新构建 payload，也不替代 Windows 实机验收。公开预发布前统一 Desktop 的应用版本。用户完整解压产品 ZIP 到可写目录后运行 `Mizar.exe`。
 

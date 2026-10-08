@@ -242,17 +242,7 @@ export class ProgramRuntime {
         currentIdentity.entryBId !== contextIdentity.entryBId ||
         currentIdentity.mapPlanFingerprint !== contextIdentity.mapPlanFingerprint
       ) {
-        const pristine =
-          this.seriesProgress.currentMapOrder === null &&
-          this.seriesProgress.score.a === 0 &&
-          this.seriesProgress.score.b === 0 &&
-          this.seriesProgress.maps.every(
-            (map) =>
-              map.executionMapEpoch === null &&
-              map.status === 'pending' &&
-              map.finalScore === null &&
-              map.roundHistory.rounds.length === 0,
-          );
+        const pristine = this.canUpdateSeriesPlan();
         if (pristine) {
           this.seriesProgress = createSeriesProgress(context);
         } else
@@ -289,6 +279,22 @@ export class ProgramRuntime {
     if (reduced.changed && effectiveOrigin !== 'fixture') shouldPersist = true;
     if (shouldPersist && effectiveOrigin !== 'fixture') this.persistSeriesProgress();
     return this.seriesProgress;
+  }
+
+  canUpdateSeriesPlan(): boolean {
+    if (!this.seriesProgress) return true;
+    return (
+      this.seriesProgress.currentMapOrder === null &&
+      this.seriesProgress.score.a === 0 &&
+      this.seriesProgress.score.b === 0 &&
+      this.seriesProgress.maps.every(
+        (map) =>
+          map.executionMapEpoch === null &&
+          map.status === 'pending' &&
+          map.finalScore === null &&
+          map.roundHistory.rounds.length === 0,
+      )
+    );
   }
 
   getSeriesProgress(): SeriesProgress | null {

@@ -378,9 +378,7 @@ export function WorkspaceDock() {
           </span>
         ) : null}
         <div className="workspace-footer-actions">
-          {production?.mode === 'live' ? (
-            <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-          ) : null}
+          <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
           <small className="workspace-exit-help">关闭游戏并恢复配置</small>
           <Button
             className="workspace-exit"

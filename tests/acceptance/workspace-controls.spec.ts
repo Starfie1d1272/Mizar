@@ -115,6 +115,9 @@ test('OBS setup buttons launch the configured target, configure, check and repai
   await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/check', body: {} });
   await page.getByRole('button', { name: '修复 Mizar 场景', exact: true }).click();
   await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/repair', body: {} });
+  await page.getByRole('button', { name: '添加默认桌面音频与麦克风', exact: true }).click();
+  await expect.poll(() => requests).toContainEqual({ path: '/operator/obs/audio-setup', body: {} });
+  await expect(page.getByText('已添加系统默认桌面音频与麦克风。', { exact: false })).toBeVisible();
   await page.locator('summary').filter({ hasText: 'OBS 路径' }).click();
   await page.getByRole('button', { name: '更改 OBS 路径', exact: true }).click();
   await expect
@@ -128,6 +131,9 @@ test('OBS setup buttons launch the configured target, configure, check and repai
   streaming = true;
   await page.reload();
   await expect(page.getByRole('button', { name: '修复 Mizar 场景', exact: true })).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: '添加默认桌面音频与麦克风', exact: true }),
+  ).toBeDisabled();
 });
 
 test('map-pool checkboxes stay adjacent to their labels and saving reaches the real tournament service', async ({
