@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cs2_activity;
+mod cs2_frame_rate;
+mod cs2_preferences;
 mod cs2_session;
 mod cs2_video;
 mod desktop_worker;
@@ -10,10 +12,11 @@ mod production_exit;
 mod startup_log;
 mod startup_wait;
 mod support_export;
+mod window_frame;
+mod window_presentation;
 mod windows_host;
 mod windows_startup;
 mod workspace_shell;
-mod window_frame;
 
 use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
@@ -36,7 +39,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::DialogExt;
 use windows_host::GameTracker;
@@ -260,12 +263,7 @@ fn webview_preflight() -> Result<String, String> {
 }
 
 fn placement(window: &tauri::WebviewWindow, rect: Rect) {
-    if rect.width <= 0 || rect.height <= 0 {
-        let _ = window.hide();
-        return;
-    }
-    let _ = window.set_size(PhysicalSize::new(rect.width as u32, rect.height as u32));
-    let _ = window.set_position(PhysicalPosition::new(rect.x, rect.y));
+    let _ = window_presentation::place(window, rect);
 }
 
 fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
@@ -283,15 +281,23 @@ fn sync_workspace_shell(app: &tauri::AppHandle) {
     let mut windows = Vec::new();
     if visible {
         for label in ["workspace-left", "workspace-dock"] {
-            if let Some(hwnd) = app.get_webview_window(label).and_then(|window| window.hwnd().ok()) {
+            if let Some(hwnd) = app
+                .get_webview_window(label)
+                .and_then(|window| window.hwnd().ok())
+            {
                 windows.push(hwnd.0 as isize);
             }
         }
         if let Ok(tracker) = state.tracker.lock() {
-            if let Some(game) = tracker.window { windows.push(game.hwnd); }
+            if let Some(game) = tracker.window {
+                windows.push(game.hwnd);
+            }
         }
     }
-    let marked = state.fullscreen_scope.lock().is_ok_and(|mut scope| scope.synchronize(&windows));
+    let marked = state
+        .fullscreen_scope
+        .lock()
+        .is_ok_and(|mut scope| scope.synchronize(&windows));
     if let Ok(mut tracker) = state.tracker.lock() {
         tracker.fullscreen_layout = visible && marked;
     };
@@ -316,9 +322,9 @@ fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
     };
     if let Some(rect) = rect {
         placement(&overlay, rect);
-        let _ = overlay.show();
+        let _ = window_presentation::set_visible(&overlay, true);
     } else {
-        let _ = overlay.hide();
+        let _ = window_presentation::set_visible(&overlay, false);
     }
 }
 
@@ -481,16 +487,21 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn set_cs2_preferences(app: tauri::AppHandle, preserve_quality: bool) -> Result<(), String> {
+async fn set_cs2_preferences(
+    app: tauri::AppHandle,
+    quality_preset: String,
+    frame_rate_limit: u16,
+) -> Result<(), String> {
+    let preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(3);
-        cs2.preferences(preserve_quality)
+        cs2.preferences(preferences)
     })
     .await
-    .map_err(|_| "CS2 画质设置未保存。".to_string())?
+    .map_err(|_| "CS2 启动设置未保存。".to_string())?
 }
 
 #[tauri::command]
@@ -540,12 +551,14 @@ fn show_workspace(app: &tauri::AppHandle) {
     state.visible.store(true, Ordering::Relaxed);
     sync_workspace_shell(app);
     if let Ok(mut tracker) = state.tracker.lock() {
-        if let Some(layout) = tracker.restore_layout() { apply_layout(app, layout); }
+        if let Some(layout) = tracker.restore_layout() {
+            apply_layout(app, layout);
+        }
     }
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
-            let _ = window.show();
+            let _ = window_presentation::set_visible(&window, true);
             let _ = window.set_focus();
         }
     }
@@ -558,7 +571,7 @@ fn hide_workspace(app: &tauri::AppHandle) {
     sync_workspace_shell(app);
     for label in ["workspace-left", "workspace-dock", "program-overlay"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.hide();
+            let _ = window_presentation::set_visible(&window, false);
         }
     }
 }
@@ -592,7 +605,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
             )
             .map_err(|_| "无法打开 Mizar。")?;
         let _ = window.unminimize();
-        let _ = window.show();
+        let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
     }
     Ok(())
@@ -616,7 +629,7 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
         }
         show_workspace(&app);
         if let Some(main) = app.get_webview_window("main") {
-            let _ = main.hide();
+            let _ = window_presentation::set_visible(&main, false);
         }
     } else {
         open_main(app.clone(), None)?;
@@ -676,11 +689,15 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .on_navigation(trusted_navigation)
                 .build()
         })?;
+        let _ = window_presentation::sync_visibility(&overlay);
         log.step("overlay_cursor_passthrough", || {
             overlay.set_ignore_cursor_events(true)
         })?;
         for label in ["workspace-left", "workspace-dock", "program-overlay"] {
-            if let Some(hwnd) = app.get_webview_window(label).and_then(|window| window.hwnd().ok()) {
+            if let Some(hwnd) = app
+                .get_webview_window(label)
+                .and_then(|window| window.hwnd().ok())
+            {
                 window_frame::square_window(hwnd.0 as isize);
             }
         }
@@ -716,8 +733,8 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
                     .map_err(|_| "工具地址无法识别。")?,
             )
             .map_err(|_| "工具窗口未能恢复。")?;
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
         return Ok(());
     }
@@ -733,12 +750,24 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
 #[tauri::command]
 fn open_steam_api_key() -> Result<(), String> {
     let operation: Vec<u16> = "open\0".encode_utf16().collect();
-    let target: Vec<u16> = "https://steamcommunity.com/dev/apikey\0".encode_utf16().collect();
+    let target: Vec<u16> = "https://steamcommunity.com/dev/apikey\0"
+        .encode_utf16()
+        .collect();
     let result = unsafe {
-        ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
     };
-    if result <= 32 { Err("浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。".into()) }
-    else { Ok(()) }
+    if result <= 32 {
+        Err("浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -961,8 +990,7 @@ fn run_desktop(
     job: Arc<RuntimeJob>,
 ) -> Result<(), String> {
     let exit_request = Arc::new(
-        ExitRequest::new(&shutdown_scope(&bundle_root()?)?)
-            .map_err(|error| error.to_string())?,
+        ExitRequest::new(&shutdown_scope(&bundle_root()?)?).map_err(|error| error.to_string())?,
     );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
@@ -1065,7 +1093,7 @@ fn run_desktop(
                     .on_menu_event(move |app, event| match event.id().as_ref() {
                         "open_workspace" => {
                             if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
+                                let _ = window_presentation::set_visible(&window, true);
                                 let _ =
                                     window.eval("window.dispatchEvent(new Event('mizar-enter'))");
                             }
@@ -1192,6 +1220,7 @@ fn run_desktop(
                                         } else {
                                             present_overlay(&tick_host, None);
                                         }
+                                        window_presentation::sync_all(&tick_host);
                                     }
                                 }
                                 tick_pending.store(false, Ordering::Relaxed);
@@ -1211,6 +1240,11 @@ fn run_desktop(
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    let _ = window_presentation::sync_visibility(&webview);
+                }
+            }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. })
                 && matches!(
                     window.label(),
@@ -1251,6 +1285,11 @@ fn run_desktop(
                     }
                     _ => {
                         let _ = window.hide();
+                        if let Some(webview) =
+                            window.app_handle().get_webview_window(window.label())
+                        {
+                            let _ = window_presentation::sync_visibility(&webview);
+                        }
                     }
                 }
             }
@@ -1358,7 +1397,7 @@ fn run_desktop(
     });
     worker_guard.stop();
     // Tauri APIs must not be used after run_return has cleaned up the application.
-    let ready_error = ready_error.lock().ok().and_then(|mut error| error.take());
+    let ready_error = ready_error.lock().ok().and_then(|error| error.clone());
     if let Some(error) = ready_error {
         Err(error)
     } else if exit_code == 0 {

@@ -141,6 +141,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 ## 本地访问与安全
 
+桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
+
 默认监听 `127.0.0.1`，生产网页与 WebSocket 由同一本地服务提供。非回环访问必须显式设置 `LOCAL_WEB_LAN_MODE=1` 和精确 `LOCAL_WEB_ALLOWED_ORIGINS`；局域网模式禁止控制写入，即使来源在允许列表中。
 
 普通本机修改要求回环监听与有效本机 Origin，不另建普通操作令牌；GSI 认证、验收专用控制令牌与赛事平台凭据相互独立，不混用。高影响操作不离线排队后静默执行。

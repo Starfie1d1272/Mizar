@@ -1,4 +1,5 @@
 //! Lossless edits of the flat video.cfg object. Unknown fields and comments survive.
+use crate::cs2_preferences::Quality;
 use std::collections::BTreeMap;
 
 pub const DISPLAY_WIDTH: &str = "1920";
@@ -105,7 +106,16 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
     Ok((map, close))
 }
 
+#[cfg(test)]
 pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
+    quality_preset(if preserve_quality {
+        Quality::Preserve
+    } else {
+        Quality::VeryHigh
+    })
+}
+
+pub fn quality_preset(quality: Quality) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for (key, value) in [
         ("defaultres", DISPLAY_WIDTH),
@@ -117,20 +127,26 @@ pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
     ] {
         values.insert(format!("setting.{key}"), value.into());
     }
-    if !preserve_quality {
-        // CS2's Very High preset, not the numeric maximum of each field.
+    if quality != Quality::Preserve {
+        // CS2's native presets; numeric field maxima are not quality presets.
+        let (shader, filtering, msaa, shadow, texture, particle, ao, hdr, fsr) = match quality {
+            Quality::VeryHigh => ("1", "5", "8", "3", "2", "3", "3", "-1", "0"),
+            Quality::High => ("1", "3", "4", "2", "2", "2", "2", "-1", "0"),
+            Quality::Medium => ("0", "1", "2", "1", "1", "1", "0", "3", "2"),
+            Quality::Preserve => unreachable!(),
+        };
         for (key, value) in [
-            ("shaderquality", "1"),
-            ("r_texturefilteringquality", "5"),
-            ("msaa_samples", "8"),
+            ("shaderquality", shader),
+            ("r_texturefilteringquality", filtering),
+            ("msaa_samples", msaa),
             ("r_csgo_cmaa_enable", "0"),
-            ("videocfg_shadow_quality", "3"),
+            ("videocfg_shadow_quality", shadow),
             ("videocfg_dynamic_shadows", "1"),
-            ("videocfg_texture_detail", "2"),
-            ("videocfg_particle_detail", "3"),
-            ("videocfg_ao_detail", "3"),
-            ("videocfg_hdr_detail", "-1"),
-            ("videocfg_fsr_detail", "0"),
+            ("videocfg_texture_detail", texture),
+            ("videocfg_particle_detail", particle),
+            ("videocfg_ao_detail", ao),
+            ("videocfg_hdr_detail", hdr),
+            ("videocfg_fsr_detail", fsr),
         ] {
             values.insert(format!("setting.{key}"), value.into());
         }
@@ -138,8 +154,8 @@ pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
     values
 }
 
-pub fn sized_preset(preserve_quality: bool, size: VideoSize) -> BTreeMap<String, String> {
-    let mut values = preset(preserve_quality);
+pub fn sized_quality_preset(quality: Quality, size: VideoSize) -> BTreeMap<String, String> {
+    let mut values = quality_preset(quality);
     values.insert("setting.defaultres".into(), size.width.to_string());
     values.insert("setting.defaultresheight".into(), size.height.to_string());
     values
@@ -154,7 +170,14 @@ pub fn supported_preset(values: &BTreeMap<String, String>) -> bool {
         .ok()
     })();
     size.is_some_and(|size| {
-        *values == sized_preset(true, size) || *values == sized_preset(false, size)
+        [
+            Quality::VeryHigh,
+            Quality::High,
+            Quality::Medium,
+            Quality::Preserve,
+        ]
+        .into_iter()
+        .any(|quality| *values == sized_quality_preset(quality, size))
     })
 }
 
@@ -232,6 +255,39 @@ pub fn restore(
 mod tests {
     use super::*;
     const ORIGINAL: &str = "\u{feff}\"video.cfg\"\r\n{\r\n// user comment\r\n\"setting.defaultres\" \"1280\"\r\n\"setting.defaultresheight\" \"960\"\r\n\"setting.fullscreen\" \"1\"\r\n\"setting.videocfg_fsr_detail\" \"3\"\r\n\"unrelated\" \"keep\"\r\n}\r\n";
+    #[test]
+    fn every_native_quality_preset_is_recognized_and_restorable() {
+        for quality in [
+            Quality::VeryHigh,
+            Quality::High,
+            Quality::Medium,
+            Quality::Preserve,
+        ] {
+            let values = sized_quality_preset(quality, VideoSize::new(1440, 810).unwrap());
+            assert!(supported_preset(&values));
+            let applied = apply(ORIGINAL, &values).unwrap();
+            assert_eq!(
+                restore(ORIGINAL, &applied, &applied, &values).unwrap(),
+                ORIGINAL
+            );
+            let current = applied.replace("\"keep\"", "\"changed\"");
+            let restored = restore(ORIGINAL, &applied, &current, &values).unwrap();
+            let actual: BTreeMap<_, _> = fields(&restored)
+                .unwrap()
+                .0
+                .into_iter()
+                .map(|(k, v)| (k, v.value))
+                .collect();
+            let mut expected: BTreeMap<_, _> = fields(ORIGINAL)
+                .unwrap()
+                .0
+                .into_iter()
+                .map(|(k, v)| (k, v.value))
+                .collect();
+            expected.insert("unrelated".into(), "changed".into());
+            assert_eq!(actual, expected);
+        }
+    }
     #[test]
     fn exact_restoration_and_quality_choice() {
         for preserve in [true, false] {
