@@ -260,7 +260,7 @@ describe('BP demo state and command route', () => {
     try {
       const initial = bpWorkspaceSchema.parse((await app.inject('/local/v1/bp-workspace')).json());
       expect(initial.demo.active).toBeNull();
-      expect(initial.match?.entrants.b.name).toBe("Team D'avenir");
+      expect(initial.match?.entrants.b.name).toBe('Natus Vincere');
       const result = await app.inject({
         method: 'POST',
         url: '/operator/bp-demo',
@@ -285,7 +285,7 @@ describe('BP demo state and command route', () => {
       );
       expect(workspace.demo.active).toBe('bo1');
       expect(workspace.source).toBe('online');
-      expect(workspace.match?.entrants.b.name).toBe("Team D'avenir");
+      expect(workspace.match?.entrants.b.name).toBe('Natus Vincere');
       expect(workspace).not.toHaveProperty('match.matchId');
       expect(workspace).not.toHaveProperty('match.entrants.a.entryId');
       expect(workspace).not.toHaveProperty('match.entrants.b.entryId');

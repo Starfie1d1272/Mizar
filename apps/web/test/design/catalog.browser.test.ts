@@ -43,7 +43,10 @@ test('native option list supports keyboard selection with visible focus', async 
   await page.getByRole('textbox', { name: '队伍名称' }).click();
   await userEvent.tab();
   await expect.element(select).toHaveFocus();
+  await expect.element(select).toHaveValue('bo3');
   await userEvent.keyboard('[ArrowUp]');
+  await expect.element(select).toHaveValue('bo1');
+  await userEvent.keyboard('[ArrowDown]');
   await expect.element(select).toHaveValue('bo3');
 });
 

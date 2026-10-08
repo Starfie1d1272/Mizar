@@ -1,4 +1,3 @@
-import { RIVALS_BP_RECORDS } from '../program/fixtures/rivals-bp-records.generated.js';
 import { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, within } from 'storybook/test';
@@ -70,25 +69,20 @@ export const Fields: Story = {
       <Divider />
       <Field label="阶段" tone="warning" message="请确认阶段名称。" />
       <Divider />
-      <Field
-        label="队伍 A"
-        tone="success"
-        message="资料已保存。"
-        defaultValue={RIVALS_BP_RECORDS.final.entrants.a.name}
-      />
+      <Field label="队伍 A" tone="success" message="资料已保存。" defaultValue={'Falcons'} />
       <Divider />
       <Field label="队伍名称" tone="danger" message="请填写队伍名称。" required />
       <Divider />
-      <Field label="队伍 B" disabled value={RIVALS_BP_RECORDS.final.entrants.b.name} />
+      <Field label="队伍 B" disabled value={'Natus Vincere'} />
       <Divider />
-      <Select label="赛制" defaultValue={RIVALS_BP_RECORDS.final.format}>
+      <Select label="赛制" defaultValue={'bo3'}>
         <option value="bo1">BO1</option>
         <option value="bo3">BO3</option>
         <option value="bo5">BO5</option>
       </Select>
       <Divider />
-      <Select label="赛制（不可编辑）" disabled defaultValue={RIVALS_BP_RECORDS.final.format}>
-        <option value="bo5">BO5</option>
+      <Select label="赛制（不可编辑）" disabled defaultValue={'bo3'}>
+        <option value="bo3">BO3</option>
       </Select>
     </Panel>
   ),
@@ -97,8 +91,8 @@ export const Fields: Story = {
     await userEvent.tab();
     const field = canvas.getByRole('textbox', { name: '赛事名称' });
     await expect(field).toHaveFocus();
-    await userEvent.type(field, '2026 NJU Rivals');
-    await expect(field).toHaveValue('2026 NJU Rivals');
+    await userEvent.type(field, 'ESL Pro League Season 24');
+    await expect(field).toHaveValue('ESL Pro League Season 24');
     const warning = canvas.getByRole('textbox', { name: '阶段' });
     const success = canvas.getByRole('textbox', { name: '队伍 A' });
     await expect(getComputedStyle(warning).borderTopColor).not.toBe(
@@ -130,8 +124,8 @@ export const SelectionList: Story = {
   name: '选项列表',
   render: () => (
     <Panel>
-      <Field label="队伍名称" defaultValue={RIVALS_BP_RECORDS.final.entrants.a.name} />
-      <Select label="赛制选项" size={3} defaultValue={RIVALS_BP_RECORDS.final.format}>
+      <Field label="队伍名称" defaultValue={'Falcons'} />
+      <Select label="赛制选项" size={3} defaultValue={'bo3'}>
         <option value="bo1">BO1</option>
         <option value="bo3">BO3</option>
         <option value="bo5">BO5</option>

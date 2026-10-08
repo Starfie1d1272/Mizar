@@ -15,10 +15,12 @@ import { GameplayHud } from '../program/GameplayHud';
 import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
 import type { LocalChannelConnectionState } from '../realtime';
 import { getMapThumbnail } from '@mizar/cs2-assets';
+import type { ReactNode } from 'react';
 
 export interface HudCanvasPreviewProps {
   readonly gg?: boolean;
   readonly mapBackground?: boolean;
+  readonly videoBackground?: ReactNode;
   readonly radarClient?: RadarProps['client'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly resolvedPreset: HudResolvedPreset;
@@ -42,6 +44,7 @@ export interface HudCanvasPreviewProps {
 export function HudCanvasPreview({
   gg = false,
   mapBackground = false,
+  videoBackground,
   resolvedPreset,
   radarClient,
   radarSnapshot,
@@ -95,7 +98,8 @@ export function HudCanvasPreview({
         className="hud-console__canvas-logical"
         style={{ transform: `scale(${scale})` }}
       >
-        {mapImage ? <img className="hud-console__map-background" src={mapImage} alt="" /> : null}
+        {videoBackground ??
+          (mapImage ? <img className="hud-console__map-background" src={mapImage} alt="" /> : null)}
         {showGrid ? (
           <div className="hud-console__guide hud-console__guide--grid" style={guideStyle} />
         ) : null}

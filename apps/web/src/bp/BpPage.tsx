@@ -7,9 +7,9 @@ import { sendBpDemoCommand, switchToRivalhubBp, useBpSession, useBpWorkspace } f
 import './bp.css';
 
 const DEMO_MATCHES: Record<BpDemoFormat, { readonly teams: string; readonly title: string }> = {
-  bo1: { teams: 'Team Clarys vs Team Plasma', title: '单图 BP' },
-  bo3: { teams: "超级无敌大猛男队 vs Team D'avenir", title: '三图 BP' },
-  bo5: { teams: 'Team Plasma vs 車一进一宝贝队', title: '五图 BP' },
+  bo1: { teams: '示例队伍 A vs 示例队伍 B', title: '单图 BP（合成）' },
+  bo3: { teams: 'Falcons vs Natus Vincere', title: 'EPL · 三图 BP' },
+  bo5: { teams: '示例队伍 A vs 示例队伍 B', title: '五图 BP（合成）' },
 };
 
 function sourceLabel(source: 'none' | 'online' | 'local' | 'cache' | 'fixture') {

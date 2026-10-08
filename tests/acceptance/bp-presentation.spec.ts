@@ -211,10 +211,10 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
       );
       await expect(page.getByRole('region', { name: '当前 BP 演示' })).toContainText(
         format === 'bo1'
-          ? 'Team Clarys vs Team Plasma · BO1'
+          ? '示例队伍 A vs 示例队伍 B · BO1'
           : format === 'bo3'
-            ? "超级无敌大猛男队 vs Team D'avenir · BO3"
-            : 'Team Plasma vs 車一进一宝贝队 · BO5',
+            ? 'Falcons vs Natus Vincere · BO3'
+            : '示例队伍 A vs 示例队伍 B · BO5',
       );
       await expect(page.getByRole('button', { name: '退出演示' })).toBeVisible();
       await expect(page.getByText('退出演示后可修改真实比赛数据。')).toBeVisible();
@@ -249,7 +249,7 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         format === 'bo1' ? 0 : format === 'bo3' ? 2 : 4,
       );
       await expect(program.locator('.bp-card .bp-side-choice')).toHaveCount(
-        format === 'bo1' ? 1 : format === 'bo3' ? 3 : 4,
+        format === 'bo1' ? 1 : format === 'bo3' ? 2 : 4,
       );
       await expect(program.locator('.bp-scene')).not.toContainText(/DEMO|TEST|fixture/i);
       await expect(page.frameLocator('iframe[title="节目预览"]').locator('.bp-card')).toHaveCount(
@@ -271,17 +271,15 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
 
       const decider = program.locator('.bp-card[data-kind="decider"]');
       if (format === 'bo1') {
-        await expect(decider).toContainText('ANCIENT');
+        await expect(decider).toContainText('INFERNO');
         await expect(decider).toContainText('决胜地图');
-        await expect(decider.locator('.bp-side-choice')).toContainText('Team Plasma');
+        await expect(decider.locator('.bp-side-choice')).toContainText('示例队伍 B');
         await expect(decider.locator('.bp-side-choice')).toContainText('T 开');
       } else if (format === 'bo3') {
-        await expect(decider.locator('.bp-side-choice')).toHaveCount(1);
-        await expect(decider.locator('.bp-side-choice')).toContainText("Team D'avenir");
-        await expect(decider.locator('.bp-side-choice')).toContainText('T 开');
+        await expect(decider.locator('.bp-side-choice')).toHaveCount(0);
         await expect(decider.locator('.bp-side-choice[data-entrant="a"]')).toHaveCount(0);
       } else {
-        await expect(decider).toContainText('ANUBIS');
+        await expect(decider).toContainText('MIRAGE');
         await expect(decider).toContainText('决胜地图');
         await expect(decider.locator('.bp-side-choice')).toHaveCount(0);
         await expect(decider).not.toContainText(/SIDE TBD/i);

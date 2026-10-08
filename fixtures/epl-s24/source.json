@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-10-08",
+  "event": {
+    "name": "ESL Pro League Season 24",
+    "source": "https://www.hltv.org/results?event=8244"
+  },
+  "focusMatchId": "hltv-2398745",
+  "usage": "公开比赛资料；不是 GSI 或截图证据。回顾性预览隐藏焦点比赛与后续比赛的赛果。时间采用 HLTV 当前标注，经 UTC 赛程交叉核对后转换。",
+  "matches": [
+    {
+      "matchId": "hltv-2398742",
+      "source": "https://www.hltv.org/matches/2398742/spirit-vs-1win-esl-pro-league-season-24",
+      "relation": "same-record-group",
+      "teamA": "Spirit",
+      "teamB": "1win",
+      "format": "bo3",
+      "stage": "瑞士轮",
+      "round": 4,
+      "entryRecord": "2–1",
+      "stakes": "胜者晋级淘汰赛",
+      "scheduledAt": "2026-10-06T12:00:00.000Z",
+      "score": [
+        0,
+        2
+      ],
+      "maps": [
+        {
+          "name": "de_cache",
+          "pickedBy": "1win",
+          "score": [
+            5,
+            13
+          ]
+        },
+        {
+          "name": "de_anubis",
+          "pickedBy": "Spirit",
+          "score": [
+            9,
+            13
+          ]
+        },
+        {
+          "name": "de_dust2",
+          "pickedBy": null,
+          "score": null
+        }
+      ]
+    },
+    {
+      "matchId": "hltv-2398743",
+      "source": "https://www.hltv.org/matches/2398743/furia-vs-aurora-esl-pro-league-season-24",
+      "relation": "same-record-group",
+      "teamA": "FURIA",
+      "teamB": "Aurora",
+      "format": "bo3",
+      "stage": "瑞士轮",
+      "round": 4,
+      "entryRecord": "2–1",
+      "stakes": "胜者晋级淘汰赛",
+      "scheduledAt": "2026-10-06T15:40:00.000Z",
+      "score": [
+        1,
+        2
+      ],
+      "maps": [
+        {
+          "name": "de_dust2",
+          "pickedBy": "Aurora",
+          "score": [
+            13,
+            8
+          ]
+        },
+        {
+          "name": "de_mirage",
+          "pickedBy": "FURIA",
+          "score": [
+            9,
+            13
+          ]
+        },
+        {
+          "name": "de_nuke",
+          "pickedBy": null,
+          "score": [
+            9,
+            13
+          ]
+        }
+      ]
+    },
+    {
+      "matchId": "hltv-2398745",
+      "source": "https://www.hltv.org/matches/2398745/falcons-vs-natus-vincere-esl-pro-league-season-24",
+      "relation": "focus",
+      "teamA": "Falcons",
+      "teamB": "Natus Vincere",
+      "format": "bo3",
+      "stage": "瑞士轮",
+      "round": 4,
+      "entryRecord": "2–1",
+      "stakes": "胜者晋级淘汰赛",
+      "scheduledAt": "2026-10-06T19:00:00.000Z",
+      "score": [
+        2,
+        1
+      ],
+      "maps": [
+        {
+          "name": "de_inferno",
+          "pickedBy": "Natus Vincere",
+          "score": [
+            13,
+            6
+          ]
+        },
+        {
+          "name": "de_anubis",
+          "pickedBy": "Falcons",
+          "score": [
+            15,
+            19
+          ]
+        },
+        {
+          "name": "de_mirage",
+          "pickedBy": null,
+          "score": [
+            13,
+            8
+          ]
+        }
+      ],
+      "veto": [
+        {
+          "team": "Natus Vincere",
+          "action": "ban",
+          "map": "de_dust2"
+        },
+        {
+          "team": "Falcons",
+          "action": "ban",
+          "map": "de_cache"
+        },
+        {
+          "team": "Natus Vincere",
+          "action": "pick",
+          "map": "de_inferno"
+        },
+        {
+          "team": "Falcons",
+          "action": "pick",
+          "map": "de_anubis"
+        },
+        {
+          "team": "Natus Vincere",
+          "action": "ban",
+          "map": "de_ancient"
+        },
+        {
+          "team": "Falcons",
+          "action": "ban",
+          "map": "de_nuke"
+        },
+        {
+          "team": null,
+          "action": "decider",
+          "map": "de_mirage"
+        }
+      ]
+    },
+    {
+      "matchId": "hltv-2398748",
+      "source": "https://www.hltv.org/matches/2398748/parivision-vs-natus-vincere-esl-pro-league-season-24",
+      "relation": "later-navi-match",
+      "teamA": "PARIVISION",
+      "teamB": "Natus Vincere",
+      "format": "bo3",
+      "stage": "瑞士轮",
+      "round": 5,
+      "entryRecord": "2–2",
+      "stakes": "胜者晋级淘汰赛，败者淘汰",
+      "scheduledAt": "2026-10-07T14:30:00.000Z",
+      "score": [
+        2,
+        1
+      ],
+      "maps": [
+        {
+          "name": "de_inferno",
+          "pickedBy": "PARIVISION",
+          "score": [
+            8,
+            13
+          ]
+        },
+        {
+          "name": "de_cache",
+          "pickedBy": "Natus Vincere",
+          "score": [
+            13,
+            10
+          ]
+        },
+        {
+          "name": "de_mirage",
+          "pickedBy": null,
+          "score": [
+            13,
+            11
+          ]
+        }
+      ]
+    }
+  ],
+  "timeVerification": {
+    "method": "HLTV 页面显示时间与显式 UTC 赛程交叉核对，推定本次抓取显示时区为 UTC+2（CEST）；未获取原始 Unix 时间戳。",
+    "crossCheck": "https://rdy.gg/en/cs2/tournaments/117465",
+    "examples": [
+      "Spirit–1win：HLTV 10月6日14:00 / UTC 12:00",
+      "FURIA–Aurora：HLTV 10月6日17:40 / UTC 15:40"
+    ],
+    "displayTimeZone": "Asia/Shanghai",
+    "note": "使用 HLTV 当前标注时间；其他源实际开始时间可能相差数分钟，不混用。"
+  }
+}

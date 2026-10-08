@@ -8,6 +8,10 @@
     "pnpm": "12.x"
   },
   "scripts": {
+    "fixtures:epl-rehearsal:generate": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-epl-rehearsal.mjs --write",
+    "fixtures:epl-rehearsal:verify": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-epl-rehearsal.mjs --check",
+    "fixtures:epl:generate": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-epl-program-fixtures.ts --write",
+    "fixtures:epl:verify": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-epl-program-fixtures.ts --check",
     "fixtures:program:generate": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --write",
     "fixtures:program:verify": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm fixtures:rivals-bp:verify && pnpm --filter @mizar/companion exec tsx test/program-fixtures/generate-real-program-fixtures.ts --check",
     "fixtures:rivals-bp:sync": "pnpm --filter @mizar/rivalhub... --fail-if-no-match run build && node scripts/fixtures/sync-rivals-bp-program-records.mjs",

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "eventIndexSchemaVersion": 1,
+  "harnessVersion": 1,
+  "source": {
+    "id": "epl-inferno-video",
+    "kind": "recorded-projections",
+    "capturePath": "recorded Program/Radar channels",
+    "sourceCaptureId": "rc27-obs-inferno-20261008T050144Z",
+    "sourceFramesSha256": "fc975491d5aa3735936b4b6af24cecb59c47f785321b746d93054c08de11be03",
+    "sanitizerVersion": 1
+  },
+  "frameCount": 790,
+  "framesSha256": "1fc2595fa6cf3a53073c1799fbc1404c570ecd5fcfdbab48a880bdbc740e97c7",
+  "eventCount": 9,
+  "eventIndexSha256": "26032360c2d234c8e4e23ae05f36b24fef1751ed775f55ec5191ce6532873354",
+  "matchContextSha256": "a976bff6e95375ea37d41bfef77f61c70b55566d56a19e23ae2d81e21f1524ff",
+  "captureManifestSha256": "63349687516e3151f1c06345567cd266133b158e30ceb6b3af14a2db376dc9e3",
+  "video": {
+    "file": "background.mp4",
+    "sha256": "4b53e8328a37aa8eea2549527d06179502b9dc87745903932f359e94678921fc",
+    "timelineStartUs": 0
+  },
+  "coverage": [
+    {
+      "kind": "bomb-planted",
+      "status": "observed"
+    },
+    {
+      "kind": "bomb-defusing",
+      "status": "observed"
+    }
+  ]
+}

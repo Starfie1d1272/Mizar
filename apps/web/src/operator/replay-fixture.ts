@@ -1,5 +1,6 @@
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import type { ReplayVideoSource } from './ReplayVideoBackground';
 import {
   createReplaySession,
   type ReplaySession,
@@ -8,7 +9,13 @@ import {
   type ReplaySessionScheduler,
 } from '@mizar/replay';
 
-export type ReplaySourceId = 'ancient-round-03' | 'ancient-round-11-defuse' | 'nuke-demo-round-01';
+export type ReplaySourceId =
+  | 'epl-inferno-video'
+  | 'epl-inferno-opening'
+  | 'epl-inferno-final-round'
+  | 'ancient-round-03'
+  | 'ancient-round-11-defuse'
+  | 'nuke-demo-round-01';
 
 export interface AcceptanceReplayFrame extends ReplaySessionFrame {
   readonly program: ProgramSnapshot;
@@ -16,6 +23,7 @@ export interface AcceptanceReplayFrame extends ReplaySessionFrame {
 }
 
 interface CaptureManifest {
+  readonly kind?: 'recorded-projections';
   readonly captureId?: string;
   readonly demoSource?: { readonly kind: string; readonly demoSha256: string };
   readonly frameCount: number;
@@ -37,7 +45,7 @@ interface ReplayArtifactManifest {
   readonly harnessVersion: number;
   readonly source: {
     readonly id: ReplaySourceId;
-    readonly kind?: 'demo-derived';
+    readonly kind?: 'demo-derived' | 'recorded-projections';
     readonly capturePath: string;
     readonly sourceCaptureId: string;
     readonly sourceFramesSha256: string;
@@ -49,6 +57,11 @@ interface ReplayArtifactManifest {
   readonly eventIndexSha256: string;
   readonly matchContextSha256: string;
   readonly captureManifestSha256: string;
+  readonly video?: {
+    readonly file: string;
+    readonly sha256: string;
+    readonly timelineStartUs: number;
+  };
   readonly coverage: readonly {
     readonly kind: string;
     readonly status:
@@ -58,9 +71,22 @@ interface ReplayArtifactManifest {
 
 interface SourceFiles {
   readonly basePath: string;
+  readonly title?: string;
 }
 
 const sourceFiles: Record<ReplaySourceId, SourceFiles> = {
+  'epl-inferno-video': {
+    basePath: '/fixtures/epl-inferno-video/replay',
+    title: 'EPL · Inferno · 实景回放',
+  },
+  'epl-inferno-opening': {
+    basePath: '/fixtures/epl-inferno-opening/replay',
+    title: 'EPL · Inferno · 开局',
+  },
+  'epl-inferno-final-round': {
+    basePath: '/fixtures/epl-inferno-final-round/replay',
+    title: 'EPL · Inferno · 决胜回合',
+  },
   'nuke-demo-round-01': { basePath: '/fixtures/nuke-demo-round-01/replay' },
   'ancient-round-03': {
     basePath: '/fixtures/ancient-round-03/replay',
@@ -125,6 +151,7 @@ function cursorKey(snapshot: ProgramSnapshot | RadarSnapshot): string {
 }
 
 export interface LoadedReplayFixture {
+  readonly video?: ReplayVideoSource;
   readonly id: ReplaySourceId;
   readonly title: string;
   readonly session: ReplaySession<AcceptanceReplayFrame>;
@@ -200,7 +227,18 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     throw new Error('Replay source capture hash mismatch');
   }
   const demoDerived = manifest.source.kind === 'demo-derived';
-  if (demoDerived) {
+  const recordedProjections = manifest.source.kind === 'recorded-projections';
+  if (recordedProjections) {
+    if (
+      captureManifest.kind !== 'recorded-projections' ||
+      captureManifest.framesSha256 !== framesHash ||
+      captureManifest.provenance?.sourceCaptureId !== manifest.source.sourceCaptureId ||
+      captureManifest.provenance?.sourceFramesSha256 !== manifest.source.sourceFramesSha256 ||
+      captureManifest.provenance?.sanitizerVersion !== 1
+    ) {
+      throw new Error('Recorded projection provenance mismatch');
+    }
+  } else if (demoDerived) {
     if (
       import.meta.env.VITE_VISUAL_FIXTURES !== '1' ||
       !import.meta.env.DEV ||
@@ -236,18 +274,26 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     `${id}/events`,
   );
   JSON.parse(new TextDecoder().decode(contextBytes)) as unknown;
-  if (frames.length !== manifest.frameCount || events.length !== manifest.eventCount) {
+  if (
+    frames.length === 0 ||
+    frames.length !== manifest.frameCount ||
+    events.length !== manifest.eventCount
+  ) {
     throw new Error('Replay artifact count differs from its manifest');
   }
   for (let index = 0; index < frames.length; index += 1) {
     const frame = frames[index]!;
     if (
       frame.cursor.captureIndex !== index ||
-      frame.cursor.sequence !==
-        (demoDerived
-          ? 1
-          : (captureManifest.provenance?.sourceFrameSelection?.firstSequence ?? -1)) +
-          index ||
+      !Number.isFinite(frame.cursor.scheduledElapsedUs) ||
+      (index > 0 &&
+        frame.cursor.scheduledElapsedUs < frames[index - 1]!.cursor.scheduledElapsedUs) ||
+      (!recordedProjections &&
+        frame.cursor.sequence !==
+          (demoDerived
+            ? 1
+            : (captureManifest.provenance?.sourceFrameSelection?.firstSequence ?? -1)) +
+            index) ||
       frame.cursor.sequence !== frame.program.cursor.programReceiveSequence ||
       frame.cursor.sequence !== frame.radar.cursor.programReceiveSequence ||
       cursorKey(frame.program) !== cursorKey(frame.radar)
@@ -256,12 +302,35 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     }
   }
 
+  let video: ReplayVideoSource | undefined;
+  let videoObjectUrl: string | undefined;
+  if (manifest.video !== undefined) {
+    const media = manifest.video;
+    if (
+      !recordedProjections ||
+      !/^[a-z0-9-]+\.mp4$/.test(media.file) ||
+      !Number.isFinite(media.timelineStartUs)
+    )
+      throw new Error('Invalid replay video binding');
+    const response = await fetch(`${paths.basePath}/${media.file}`);
+    if (!response.ok) throw new Error('Replay video could not be loaded');
+    const bytes = await response.arrayBuffer();
+    if ((await sha256Hex(bytes)) !== media.sha256) throw new Error('Replay video hash mismatch');
+    videoObjectUrl = URL.createObjectURL(new Blob([bytes], { type: 'video/mp4' }));
+    video = { url: videoObjectUrl, timelineStartUs: media.timelineStartUs };
+  }
+
   const session = createReplaySession<AcceptanceReplayFrame>(
     {
       frames,
       events,
       rebuild: async (targetCaptureIndex, signal) => {
         const expected = frames[targetCaptureIndex]!;
+        // These are recorded production projections, not raw input prefix reconstructions.
+        if (recordedProjections) return expected;
+        // Bundled EPL projections are generated through the production replay adapter
+        // and validated above. Seeking selects that saved frame in offline builds too.
+        if (id === 'epl-inferno-opening' || id === 'epl-inferno-final-round') return expected;
         if (import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1') return expected;
         const response = await fetch('/__local/replay-prefix', {
           method: 'POST',
@@ -305,11 +374,21 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
   );
 
   return {
+    ...(video === undefined ? {} : { video }),
     id,
-    title: id === 'ancient-round-03' ? 'Ancient · 第 3 回合' : 'Ancient · 第 11 回合拆弹',
+    title:
+      sourceFiles[id].title ??
+      (id === 'ancient-round-03'
+        ? 'Ancient · 第 3 回合'
+        : id === 'nuke-demo-round-01'
+          ? 'Nuke · 第 1 回合'
+          : 'Ancient · 第 11 回合拆弹'),
     session,
     manifest,
     events,
-    dispose: () => session.dispose(),
+    dispose: () => {
+      session.dispose();
+      if (videoObjectUrl !== undefined) URL.revokeObjectURL(videoObjectUrl);
+    },
   };
 }

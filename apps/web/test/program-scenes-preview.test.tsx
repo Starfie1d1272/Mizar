@@ -70,7 +70,7 @@ describe('Program scenes preview and safety boundaries', () => {
   });
 
   it('applies the same preview variants to HUD teams, players and series without changing fixtures', () => {
-    const original = structuredClone(getProgramFixture('real-live-rich'));
+    const original = structuredClone(getProgramFixture('epl-live'));
     const noMedia = programPreviewSnapshot('gameplay', 'no-media').payload;
     expect(Object.values(noMedia.teams).every((team) => team.logoUrl === null)).toBe(true);
     expect(noMedia.players.every((player) => player.avatarUrl === null)).toBe(true);
@@ -91,7 +91,7 @@ describe('Program scenes preview and safety boundaries', () => {
       expect(snapshot.series?.requiredWins).toBe(wins);
       expect(snapshot.series?.maps).toHaveLength(maps);
     }
-    expect(getProgramFixture('real-live-rich')).toEqual(original);
+    expect(getProgramFixture('epl-live')).toEqual(original);
   });
 
   it('renders default visual for all program scenes in preview mode when no match is bound', async () => {
@@ -118,7 +118,7 @@ describe('Program scenes preview and safety boundaries', () => {
       );
       expect(main, `scene ${sceneId} should render default content in preview mode`).not.toBeNull();
       expect(container.textContent).toContain('示例画面');
-      expect(container.textContent).toContain(sceneId === 'waiting' ? '2026 NJU Rivals' : 'FURIA');
+      expect(container.textContent).toContain('Falcons');
     }
 
     // A preview query must never fabricate BP data or bypass the session.

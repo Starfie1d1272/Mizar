@@ -284,12 +284,12 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
   next = null;
   await expect(preview.locator('iframe')).toHaveCount(0);
   await expect(preview).toContainText('待确认');
-  await expect(preview).toContainText('等待编排数据');
+  await expect(preview.locator('small')).toHaveText('下一场景');
   next = 'halftime';
   mode = 'manual';
   await expect(page.getByText('手动保持', { exact: true })).toBeVisible();
   await expect(preview.locator('iframe')).toHaveAttribute('src', '/program/halftime');
-  await expect(preview).toContainText('恢复自动后建议进入');
+  await expect(preview.locator('small')).toHaveText('下一场景');
   expect(commands).toEqual([]);
   for (const scene of PROGRAM_SCENES) {
     await page.getByRole('button', { name: scene.title, exact: true }).click();

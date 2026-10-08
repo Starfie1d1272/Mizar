@@ -53,12 +53,13 @@ describe('paired Program and Radar editor fixtures', () => {
     }
   });
 
-  it('keeps the real Rivals BP cuts paired with their underlying GSI replay frame', () => {
+  it('pairs EPL editor stages with the same captured cursor', () => {
     for (const id of [
-      'bp-rivals-final-map4',
-      'bp-rivals-final-result',
-      'bp-rivals-semi-a-result',
-      'bp-rivals-semi-b-result',
+      'epl-live',
+      'epl-planted',
+      'epl-halftime',
+      'epl-map-result',
+      'epl-match-result',
     ]) {
       const program = getProgramFixture(id);
       const radar = radarSnapshotForProgramFixture(id);

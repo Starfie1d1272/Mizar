@@ -14,26 +14,15 @@ export function programPreviewSnapshot(
 ): ProgramSnapshot {
   const snapshot = getProgramFixture(
     scene === 'halftime'
-      ? 'real-halftime-after'
+      ? 'epl-halftime'
       : scene === 'waiting' || scene === 'matchup' || scene === 'gameplay'
-        ? 'real-live-rich'
-        : 'real-gameover',
+        ? 'epl-live'
+        : scene === 'match_result'
+          ? 'epl-match-result'
+          : 'epl-map-result',
   )!;
   const result = structuredClone(snapshot);
   const p = result.payload;
-  // Reuse the existing BO3 presentation plan, independently of the real telemetry.
-  // Never infer a production decider from its position in the series.
-  const bpPlan = getProgramFixture('series-bo3-map1')?.payload.series;
-  if (p.series && bpPlan) {
-    p.series.maps = p.series.maps.map((map) => {
-      const planned = bpPlan.maps.find(
-        (item) => item.mapOrder === map.mapOrder && item.mapName === map.mapName,
-      );
-      return map.selection.kind === 'unknown' && planned?.selection.kind === 'decider'
-        ? { ...map, selection: planned.selection }
-        : map;
-    });
-  }
   if (p.series && variant === 'no-media') {
     p.series.entrants.a.logoUrl = null;
     p.series.entrants.b.logoUrl = null;
@@ -157,8 +146,8 @@ export function presentationPreview(
     series: p.series,
     halftime: summary,
     completed: scene === 'halftime' ? [] : [summary],
-    eventLogoUrl: null,
-    scheduledAt: null,
+    eventLogoUrl: variant === 'no-media' ? null : waitingSchedule.competition.logoUrl,
+    scheduledAt: waitingSchedule.matches[1]?.scheduledAt ?? null,
     previous: null,
     next: null,
   };

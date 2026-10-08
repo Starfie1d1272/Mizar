@@ -69,6 +69,7 @@ import {
 } from './hud-console-state';
 import { type LocalChannelConnectionState, useLocalChannelClient } from '../realtime';
 import { loadReplayFixture, type LoadedReplayFixture, type ReplaySourceId } from './replay-fixture';
+import { ReplayVideoBackground } from './ReplayVideoBackground';
 import type { ReplaySessionSnapshot } from '@mizar/replay';
 import type { AcceptanceReplayFrame } from './replay-fixture';
 import {
@@ -187,7 +188,7 @@ export function HudConsolePage() {
     new URLSearchParams(window.location.search).get('mode') === 'replay' ? 'replay' : 'fixture',
   );
   const [fixtureId, setFixtureId] = useState<ProgramFixtureId>(HUD_EDITOR_DEFAULT_FIXTURE_ID);
-  const [replaySourceId, setReplaySourceId] = useState<ReplaySourceId>('ancient-round-03');
+  const [replaySourceId, setReplaySourceId] = useState<ReplaySourceId>('epl-inferno-opening');
   const [replayLoadState, setReplayLoadState] = useState<
     | {
         readonly sourceId: ReplaySourceId;
@@ -885,7 +886,7 @@ export function HudConsolePage() {
                 value={mapBackground ? 'map' : 'plain'}
                 onChange={(event) => setMapBackground(event.target.value === 'map')}
               >
-                <option value="map">静态地图</option>
+                <option value="map">{replayFixture?.video ? '游戏画面' : '静态地图'}</option>
                 <option value="plain">纯色底板</option>
               </Select>
               {document.fullscreenEnabled ? (
@@ -956,8 +957,17 @@ export function HudConsolePage() {
                       setReplaySourceId(event.target.value as ReplaySourceId);
                     }}
                   >
-                    <option value="ancient-round-03">Ancient · 第 3 回合</option>
-                    <option value="ancient-round-11-defuse">Ancient · 第 11 回合拆弹</option>
+                    <option value="epl-inferno-video">EPL · Inferno · 实景回放</option>
+                    <option value="epl-inferno-opening">EPL · Inferno · 开局</option>
+                    <option value="epl-inferno-final-round">EPL · Inferno · 决胜回合</option>
+                    {import.meta.env.DEV && (
+                      <>
+                        <option value="ancient-round-03">历史回归 · Ancient · 第 3 回合</option>
+                        <option value="ancient-round-11-defuse">
+                          历史回归 · Ancient · 第 11 回合拆弹
+                        </option>
+                      </>
+                    )}
                     {import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1' ? (
                       <option value="nuke-demo-round-01">
                         Nuke · Legacy / Falcons · Demo 回合 1
@@ -1112,6 +1122,15 @@ export function HudConsolePage() {
             ) : null}
 
             <HudCanvasPreview
+              videoBackground={
+                mapBackground && replayFixture?.video && replaySession ? (
+                  <ReplayVideoBackground
+                    key={replayFixture.video.url}
+                    source={replayFixture.video}
+                    session={replaySession}
+                  />
+                ) : undefined
+              }
               mapBackground={mapBackground}
               radarSnapshot={activeRadarSnapshot}
               radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}

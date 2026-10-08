@@ -1,0 +1,844 @@
+{
+  "classification": "Actual unmodified RC27 Windows/CS2/OBS captures; independent of development changes in this PR",
+  "version": "1.0.0-rc.27",
+  "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+  "artifactSha256": "e72209ed653949030ab68c864b6a73ae186ab91cfdde13dd0c89a5e02cb117e6",
+  "environment": {
+    "collectedAt": "2026-10-08T12:27:59.670134+08:00",
+    "windows": {
+      "revision": 9457,
+      "version": "10.0.26200",
+      "caption": "Microsoft Windows 11 专业工作站版",
+      "displayVersion": "25H2",
+      "build": "26200"
+    },
+    "webView2": {
+      "fileVersion": "154.0.4258.62"
+    },
+    "cs2": {
+      "executableVersion": null,
+      "steamInf": [
+        "ClientVersion=2000927",
+        "ServerVersion=2000927",
+        "PatchVersion=1.41.8.9",
+        "ProductName=cs2",
+        "appID=730",
+        "ServerAppID=2347773",
+        "SourceRevision=11087167",
+        "VersionDate=Oct 05 2026",
+        "VersionTime=15:17:28"
+      ]
+    },
+    "timeZone": "China Standard Time",
+    "desktopDpi": 144,
+    "desktopDpiStatus": "Verified in Windows Settings > System > Display: 150% scale, 2560x1440, only display 1 active; read-only Computer Use observation 2026-10-08",
+    "desktopResolution": [
+      2560,
+      1440
+    ],
+    "desktopScalePercent": 150
+  },
+  "scope": "User ended exhaustive capture before visual redesign; remaining matrix items are not release acceptance claims",
+  "records": [
+    {
+      "file": "a-inferno-r4-esl.png",
+      "sha256": "b28ef89255c9be723d42535105e8038f947086d2efc018be2c04f7263d7c7949",
+      "capturedAt": "2026-10-08T03:26:12.883Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:esl-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 26300,
+        "pauseAtServerTick": 99139,
+        "candidateDemoTick": 26883,
+        "mode": "normal playback through previous round end; automatic capture at freeze countdown 18s"
+      },
+      "clock": {
+        "phase": "freezetime",
+        "endsInSeconds": 18
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "a-inferno-r4-ewc.png",
+      "sha256": "9e2bde5effb9c03fd989d9f6821c1a48bd07fa7844c48fd5809e5cfb035a1ef1",
+      "capturedAt": "2026-10-08T03:18:31.296Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:ewc-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 26300,
+        "pauseAtServerTick": 99139,
+        "candidateDemoTick": 26883,
+        "mode": "normal playback through previous round end; automatic capture at freeze countdown 18s"
+      },
+      "clock": {
+        "phase": "freezetime",
+        "endsInSeconds": 18
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "a-inferno-r4-iem.png",
+      "sha256": "bb7075aaef514ab62fc200c000db4708b1df402fab60040e9efaeb66ca2045a2",
+      "capturedAt": "2026-10-08T03:21:17.035Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:iem-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 26300,
+        "pauseAtServerTick": 99139,
+        "candidateDemoTick": 26883,
+        "mode": "normal playback through previous round end; automatic capture at freeze countdown 18s"
+      },
+      "clock": {
+        "phase": "freezetime",
+        "endsInSeconds": 18
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "a-inferno-r4-pulse.png",
+      "sha256": "9704f86f5a56b77042287c904a68b743e20224fab32a4d829a2800ed10e3135e",
+      "capturedAt": "2026-10-08T03:15:23.498Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 26300,
+        "pauseAtServerTick": 99139,
+        "candidateDemoTick": 26883,
+        "mode": "normal playback through previous round end; automatic capture at freeze countdown 18s"
+      },
+      "clock": {
+        "phase": "freezetime",
+        "endsInSeconds": 18
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "a-inferno-r4-pw.png",
+      "sha256": "54a15c6025ed9bb34c6bb7b37987187417f2c79771de44afca92a68d82a5e6c5",
+      "capturedAt": "2026-10-08T03:23:46.415Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 26300,
+        "pauseAtServerTick": 99139,
+        "candidateDemoTick": 26883,
+        "mode": "normal playback through previous round end; automatic capture at freeze countdown 18s"
+      },
+      "clock": {
+        "phase": "freezetime",
+        "endsInSeconds": 18
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "b-inferno-r4-esl.png",
+      "sha256": "b85d419398235cfb536fea7de32af13e5fd2bd10d5aedbb504003cefdb324c1a",
+      "capturedAt": "2026-10-08T03:06:47.941Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:esl-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 27907,
+        "pauseAtServerTick": 100739,
+        "candidateDemoTick": 28483,
+        "verifiedClock": "1:48",
+        "alive": "5v5",
+        "mode": "normal playback from before round live; paused for static preset comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 108
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "b-inferno-r4-ewc.png",
+      "sha256": "cd421d10c7df3fa9748cabf6e73e032e3deaac69914a5b4d09c30f6fd4f41dd3",
+      "capturedAt": "2026-10-08T03:06:40.005Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:ewc-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 27907,
+        "pauseAtServerTick": 100739,
+        "candidateDemoTick": 28483,
+        "verifiedClock": "1:48",
+        "alive": "5v5",
+        "mode": "normal playback from before round live; paused for static preset comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 108
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "b-inferno-r4-iem.png",
+      "sha256": "7badc29a208d8f379bae434ceb60ee27dbf561b7f3175a2b7b060ee45a952750",
+      "capturedAt": "2026-10-08T03:06:42.624Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:iem-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 27907,
+        "pauseAtServerTick": 100739,
+        "candidateDemoTick": 28483,
+        "verifiedClock": "1:48",
+        "alive": "5v5",
+        "mode": "normal playback from before round live; paused for static preset comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 108
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "b-inferno-r4-pulse.png",
+      "sha256": "f858fcf7fdd60c5afbaa58845108cb16d715c04f5f4fb0f98145573956388c9d",
+      "capturedAt": "2026-10-08T03:06:37.394Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 27907,
+        "pauseAtServerTick": 100739,
+        "candidateDemoTick": 28483,
+        "verifiedClock": "1:48",
+        "alive": "5v5",
+        "mode": "normal playback from before round live; paused for static preset comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 108
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "b-inferno-r4-pw.png",
+      "sha256": "1dbabc04eccf0c62e3d3c906c235b020458b78d3134e9b64f1eaf7443d210bef",
+      "capturedAt": "2026-10-08T03:06:45.272Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 4,
+        "seekBeforeTick": 27907,
+        "pauseAtServerTick": 100739,
+        "candidateDemoTick": 28483,
+        "verifiedClock": "1:48",
+        "alive": "5v5",
+        "mode": "normal playback from before round live; paused for static preset comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 108
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "c-inferno-r5-esl.png",
+      "sha256": "10fca6433f18ef37780709d5c08d01bf0a2f64f3c58969a642b76cebef791804",
+      "capturedAt": "2026-10-08T04:03:51.354Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:esl-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 5,
+        "seekBeforeTick": 39362,
+        "pauseAtServerTick": 112156,
+        "firstKillDemoTick": 39554,
+        "captureDelayAfterFirstKillMs": 1500,
+        "mode": "normal playback from 5v5 before first kill; automatic capture 1.5 seconds after first 4v5 snapshot"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 75
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "c-inferno-r5-ewc.png",
+      "sha256": "ecde91f7661bd25b39161117c474b2972c4e7168cc4f6d8cda11b8f128077283",
+      "capturedAt": "2026-10-08T03:54:48.815Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:ewc-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 5,
+        "seekBeforeTick": 39362,
+        "pauseAtServerTick": 112156,
+        "firstKillDemoTick": 39554,
+        "captureDelayAfterFirstKillMs": 1500,
+        "mode": "normal playback from 5v5 before first kill; automatic capture 1.5 seconds after first 4v5 snapshot"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 75
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "c-inferno-r5-iem.png",
+      "sha256": "620e64edf8e7022a75c84d6d033a8bdd8433c40777b6b567c447e5ab93778f11",
+      "capturedAt": "2026-10-08T03:58:01.459Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:iem-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 5,
+        "seekBeforeTick": 39362,
+        "pauseAtServerTick": 112156,
+        "firstKillDemoTick": 39554,
+        "captureDelayAfterFirstKillMs": 1500,
+        "mode": "normal playback from 5v5 before first kill; automatic capture 1.5 seconds after first 4v5 snapshot"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 75
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "c-inferno-r5-pulse.png",
+      "sha256": "9cc40c409b82fc2b6b20ff3aff466a59925e8a41935cf6007879d0e6b904152e",
+      "capturedAt": "2026-10-08T03:51:52.105Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 5,
+        "seekBeforeTick": 39362,
+        "pauseAtServerTick": 112156,
+        "firstKillDemoTick": 39554,
+        "captureDelayAfterFirstKillMs": 1500,
+        "mode": "normal playback from 5v5 before first kill; automatic capture 1.5 seconds after first 4v5 snapshot"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 74.9
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "c-inferno-r5-pw.png",
+      "sha256": "a06c996a77daefa5f734675b4ce83e8ceb6bb6284b260c7f7fbb083af67924fd",
+      "capturedAt": "2026-10-08T04:01:02.195Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 5,
+        "seekBeforeTick": 39362,
+        "pauseAtServerTick": 112156,
+        "firstKillDemoTick": 39554,
+        "captureDelayAfterFirstKillMs": 1500,
+        "mode": "normal playback from 5v5 before first kill; automatic capture 1.5 seconds after first 4v5 snapshot"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 75
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "e-inferno-r6-esl.png",
+      "sha256": "f648764b4706f6c376f7d0f59f35c1db7a257bed14ccac6bf601638530689836",
+      "capturedAt": "2026-10-08T03:47:16.493Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:esl-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 6,
+        "seekBeforeTick": 44500,
+        "pauseAtServerTick": 118756,
+        "candidateDemoTick": null,
+        "mode": "normal playback from round 6 freeze into real CT tactical timeout; automatic capture at timeout countdown 25s"
+      },
+      "clock": {
+        "phase": "timeout_ct",
+        "endsInSeconds": 25
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "e-inferno-r6-ewc.png",
+      "sha256": "f72dcbbbeeac4c91a0469cb3064e53cb4368e1ccef00c87d29e99186a66af706",
+      "capturedAt": "2026-10-08T03:40:33.347Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:ewc-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 6,
+        "seekBeforeTick": 44500,
+        "pauseAtServerTick": 118756,
+        "candidateDemoTick": null,
+        "mode": "normal playback from round 6 freeze into real CT tactical timeout; automatic capture at timeout countdown 25s"
+      },
+      "clock": {
+        "phase": "timeout_ct",
+        "endsInSeconds": 25
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "e-inferno-r6-iem.png",
+      "sha256": "49f3404f39f5f231c17b4da6fc77654012576f47a4e94517d2442e887ddf4468",
+      "capturedAt": "2026-10-08T03:42:34.708Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:iem-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 6,
+        "seekBeforeTick": 44500,
+        "pauseAtServerTick": 118756,
+        "candidateDemoTick": null,
+        "mode": "normal playback from round 6 freeze into real CT tactical timeout; automatic capture at timeout countdown 25s"
+      },
+      "clock": {
+        "phase": "timeout_ct",
+        "endsInSeconds": 25
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "e-inferno-r6-pulse.png",
+      "sha256": "13102fcac2582d6a982e67efea3b11bceba953ae8d1658f54126e9008c9bfa13",
+      "capturedAt": "2026-10-08T03:38:11.344Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 6,
+        "seekBeforeTick": 44500,
+        "pauseAtServerTick": 118756,
+        "candidateDemoTick": null,
+        "mode": "normal playback from round 6 freeze into real CT tactical timeout; automatic capture at timeout countdown 25s"
+      },
+      "clock": {
+        "phase": "timeout_ct",
+        "endsInSeconds": 25
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "e-inferno-r6-pw.png",
+      "sha256": "481f2b902b44a81f5e3f7dfd2473ade63ca48090953fe6d99d87696637bda198",
+      "capturedAt": "2026-10-08T03:44:46.404Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 6,
+        "seekBeforeTick": 44500,
+        "pauseAtServerTick": 118756,
+        "candidateDemoTick": null,
+        "mode": "normal playback from round 6 freeze into real CT tactical timeout; automatic capture at timeout countdown 25s"
+      },
+      "clock": {
+        "phase": "timeout_ct",
+        "endsInSeconds": 25
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "d-inferno-r19-pulse.png",
+      "sha256": "82779ba54f0df7789ca70b2e82741bff6ef9b6c0f153114ae4a9aec63cc35bf6",
+      "capturedAt": "2026-10-08T04:23:07.151Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "pauseAtServerTick": 267696,
+        "candidateDemoTick": 195440,
+        "mode": "normal playback from before planting through last real defuse attempt; demo paused within defuse; automatic capture on actual defuse phase"
+      },
+      "clock": {
+        "phase": "defuse",
+        "endsInSeconds": 5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "d-inferno-r19-ewc.png",
+      "sha256": "b2cb42e8c606bce18ead8eb701159242e44da96f6ed195e8ba17cf63853d7bd1",
+      "capturedAt": "2026-10-08T04:26:12.079Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:ewc-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "pauseAtServerTick": 267696,
+        "candidateDemoTick": 195440,
+        "mode": "normal playback from before planting through last real defuse attempt; demo paused within defuse; automatic capture on actual defuse phase"
+      },
+      "clock": {
+        "phase": "defuse",
+        "endsInSeconds": 5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "d-inferno-r19-iem.png",
+      "sha256": "f625b18c544c48fd1353a8c1643d8a24b4fa0a56627d8b8311c22bc1a00d9b60",
+      "capturedAt": "2026-10-08T04:28:39.294Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:iem-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "pauseAtServerTick": 267696,
+        "candidateDemoTick": 195440,
+        "mode": "normal playback from before planting through last real defuse attempt; demo paused within defuse; automatic capture on actual defuse phase"
+      },
+      "clock": {
+        "phase": "defuse",
+        "endsInSeconds": 5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "d-inferno-r19-pw.png",
+      "sha256": "45af7d4780edad1ed6efc82fa2d2e08e13186e66e22ff61d6dc4801185e862cd",
+      "capturedAt": "2026-10-08T04:30:58.508Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "pauseAtServerTick": 267696,
+        "candidateDemoTick": 195440,
+        "mode": "normal playback from before planting through last real defuse attempt; demo paused within defuse; automatic capture on actual defuse phase"
+      },
+      "clock": {
+        "phase": "defuse",
+        "endsInSeconds": 5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "d-inferno-r19-esl.png",
+      "sha256": "ca4c2f1f9ae690b4ba99e64df579ec662213de269d0419d4f2cbe47b00f1adea",
+      "capturedAt": "2026-10-08T04:33:21.005Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:esl-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "pauseAtServerTick": 267696,
+        "candidateDemoTick": 195440,
+        "mode": "normal playback from before planting through last real defuse attempt; demo paused within defuse; automatic capture on actual defuse phase"
+      },
+      "clock": {
+        "phase": "defuse",
+        "endsInSeconds": 5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "workspace-inferno-first-half-auto.png",
+      "sha256": "2cb88eb47f2d3c3bc80bf457cccf07f5432dc8c6c85594aeba0e5d650030ffab",
+      "capturedAt": "2026-10-08T06:28:00.102Z",
+      "resolution": [
+        2560,
+        1440
+      ],
+      "presetId": null,
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 78.9
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "workspace-inferno-first-half-manual.png",
+      "sha256": "813cbecd1f6282141d472b97d087d1095c52971526ccc0055f1de64c228b64c2",
+      "capturedAt": "2026-10-08T06:29:39.966Z",
+      "resolution": [
+        2560,
+        1440
+      ],
+      "presetId": null,
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 78.9
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "workspace-inferno-second-half-auto.png",
+      "sha256": "7086827d4786cd76a699727cfb051e2b576ab766e117e9bbda566c86adec653e",
+      "capturedAt": "2026-10-08T06:34:29.607Z",
+      "resolution": [
+        2560,
+        1440
+      ],
+      "presetId": null,
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "seekBeforeTick": 137600,
+        "pauseAtServerTick": 211200,
+        "mode": "Forward seek, then continuous playback before fixed pause"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 88
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "supplement-pw-inferno-r19-planting.png",
+      "sha256": "2497d92a33fc4c0d0b84c776f2e2b6c574b1fa9f764bf8bedfb09e44ee76103a",
+      "capturedAt": "2026-10-08T04:39:02.067Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "humanRound": 19,
+        "seekBeforeTick": 192900,
+        "mode": "Normal continuous demo playback; screenshot triggered during actual planting, no pause"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 8.7
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "supplement-inferno-r4-landed-pulse.png",
+      "sha256": "86c6d59dfc21f8fe841e6e3f8240c65525e2ffdc929eff0b0aa31fd457c4be8f",
+      "capturedAt": "2026-10-08T05:54:40.205Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:mizar-default-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "seekBeforeTick": 28400,
+        "pauseAtServerTick": 101856,
+        "mode": "continuous playback before throws; paused for comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 90.5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    },
+    {
+      "file": "supplement-inferno-r4-landed-pw.png",
+      "sha256": "2e279b7a31a16cec590517f6a6eb3e5b805eb6de3d7351ecf0b632ddabe8d32c",
+      "capturedAt": "2026-10-08T05:54:42.577Z",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "presetId": "builtin:perfectworld-preset",
+      "demo": {
+        "file": "falcons-vs-natus-vincere-m1-inferno.dem",
+        "sha256": "4190f949ddc64aeec44ba7405c5f0d0adc14702946a3f3469ad504899f75138d",
+        "map": "de_inferno",
+        "seekBeforeTick": 28400,
+        "pauseAtServerTick": 101856,
+        "mode": "continuous playback before throws; paused for comparison"
+      },
+      "clock": {
+        "phase": "live",
+        "endsInSeconds": 90.5
+      },
+      "agentInspected": true,
+      "humanAestheticReview": "not-completed"
+    }
+  ]
+}
