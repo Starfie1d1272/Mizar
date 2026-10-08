@@ -44,6 +44,27 @@
   width: 100%;
   background: transparent;
 }
+/* The reference brightens toward the inner HP edge; mirror the light with the rail. */
+.hud-widget-design[data-hud-design='iem'] .player-rail__card {
+  --iem-fill-side: var(--mizar-side-ct);
+  --iem-fill-direction: 90deg;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__card[data-side='T'] {
+  --iem-fill-side: var(--mizar-side-t);
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail--right .player-rail__card {
+  --iem-fill-direction: 270deg;
+}
+.hud-widget-design[data-hud-design='iem']
+  .player-rail__card:not(.is-low-health)
+  .player-rail__health-bar
+  > span:first-child {
+  background: linear-gradient(
+    var(--iem-fill-direction),
+    color-mix(in srgb, var(--iem-fill-side) 62%, var(--mizar-hud-surface-strong)),
+    color-mix(in srgb, var(--iem-fill-side) 88%, var(--mizar-hud-surface-strong))
+  );
+}
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body {
   background: transparent;
 }
@@ -333,4 +354,12 @@
   stroke-width: 2;
   stroke-linejoin: round;
   paint-order: stroke fill;
+}
+
+.hud-widget-design[data-hud-design='iem'] .player-rail__kd {
+  grid-template-columns: 13px 2ch 13px 2ch;
+}
+.hud-widget-design[data-hud-design='iem'] .player-rail__kd .player-rail__stat-glyph {
+  width: 13px;
+  height: 13px;
 }

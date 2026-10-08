@@ -253,12 +253,18 @@ function UtilityIcons({
   );
 }
 
-function Kd({ player }: { readonly player: PlayerCardPresentation }) {
+function Kd({
+  player,
+  design,
+}: {
+  readonly player: PlayerCardPresentation;
+  readonly design: HudDesign;
+}) {
   return (
     <span className="player-rail__kd" aria-label="Kills and deaths" data-player-rail-row-part="kd">
       <StatGlyph kind="kills" />
       <span>{displayNumber(player.stats.kills)}</span>
-      <StatGlyph kind="deaths" />
+      <StatGlyph kind="deaths" filled={design === 'ewc' || design === 'iem'} />
       <span>{displayNumber(player.stats.deaths)}</span>
     </span>
   );
@@ -371,7 +377,9 @@ function PlayerBody({
         data-phase={player.mode}
         data-secondary={secondaryVisible}
       >
-        {!dead || options.deadInformation === 'stats' ? <Kd player={player} /> : null}
+        {!dead || options.deadInformation === 'stats' ? (
+          <Kd player={player} design={design} />
+        ) : null}
         <div className="player-rail__context" data-player-rail-row-part="context">
           {dead ? (
             <div className="player-rail__dead-stats" data-dead-stats="true">

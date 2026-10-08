@@ -507,8 +507,8 @@
   z-index: 0;
   pointer-events: none;
   background: var(--mizar-hud-text-primary);
-  opacity: 0.1;
-  mask: url('/brand/hud/ewc/contour.svg') 0 0 / 63px 55px repeat;
+  opacity: 0.08;
+  mask: url('/brand/hud/ewc/contour.svg') 0 0 / 94px 54.3px repeat;
   clip-path: polygon(0 0, 100% 0, calc(100% - var(--ewc-half-taper) * 2) 100%, 0 100%);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__body::after {
@@ -516,4 +516,12 @@
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::after {
   display: none;
+}
+
+.hud-widget-design[data-hud-design='ewc'] .player-rail__kd {
+  grid-template-columns: 13px 2ch 13px 2ch;
+}
+.hud-widget-design[data-hud-design='ewc'] .player-rail__kd .player-rail__stat-glyph {
+  width: 13px;
+  height: 13px;
 }
