@@ -188,7 +188,10 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
     const bpClock = createManualBpClock();
     const app = buildAppWithManualBpClock(bpClock);
     await routeCompanionApi(context, () => app);
-    await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
+    await context.route(
+      /^https:\/\/(?:sucokfotkypwqkckfynp\.supabase\.co|img-cdn\.hltv\.org)\//,
+      (route) => route.abort(),
+    );
     try {
       await page.setViewportSize({ width: 320, height: 844 });
       await page.goto('/preview?scene=bp');
@@ -314,7 +317,10 @@ test('BP demo remains stable while the real MatchContext updates and restores it
     matchManifestPath: manifestPath,
   });
   await routeCompanionApi(context, () => app);
-  await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
+  await context.route(
+    /^https:\/\/(?:sucokfotkypwqkckfynp\.supabase\.co|img-cdn\.hltv\.org)\//,
+    (route) => route.abort(),
+  );
   try {
     await page.goto('/preview?scene=bp');
     const program = await context.newPage();
@@ -325,7 +331,7 @@ test('BP demo remains stable while the real MatchContext updates and restores it
       .getByRole('button', { name: '开始演示' })
       .click();
     await playAndRevealBp(page, app, bpClock, [program]);
-    await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
+    await expect(program.locator('.bp-teams')).toContainText('Falcons');
 
     const before = JSON.parse((await app.inject('/local/v1/bp-workspace')).body) as {
       contextRevision: string;
@@ -353,7 +359,7 @@ test('BP demo remains stable while the real MatchContext updates and restores it
     });
     expect(updated.statusCode).toBe(200);
     await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');
-    await expect(program.locator('.bp-teams')).toContainText("Team D'avenir");
+    await expect(program.locator('.bp-teams')).toContainText('Falcons');
     await expect(program.locator('.bp-teams')).not.toContainText('真实比赛 B');
 
     await hideBp(page, app, bpClock, [program]);
@@ -397,7 +403,10 @@ for (const key of ['semifinalA', 'final'] as const) {
       () => app,
       (pathname) => offline && pathname === '/local/v1/bp',
     );
-    await context.route('https://sucokfotkypwqkckfynp.supabase.co/**', (route) => route.abort());
+    await context.route(
+      /^https:\/\/(?:sucokfotkypwqkckfynp\.supabase\.co|img-cdn\.hltv\.org)\//,
+      (route) => route.abort(),
+    );
     try {
       await page.goto('/preview?scene=bp');
       await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'online');

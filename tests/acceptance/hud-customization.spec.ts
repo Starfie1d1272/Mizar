@@ -104,6 +104,10 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await expect(page.getByRole('checkbox', { name: '显示 K/A/D/ADR', exact: true })).toHaveCount(
       0,
     );
+    // The default EPL live sample observes a knife; use the recorded AWP state for ammo.
+    await page
+      .getByRole('combobox', { name: '示例比赛', exact: true })
+      .selectOption('epl-defusing');
     const reserveControl = page.getByRole('checkbox', { name: '显示备用弹药', exact: true });
     await reserveControl.focus();
     await expect(reserveControl).toBeFocused();
@@ -378,9 +382,7 @@ test('preset files export, edit, import and activate without replacing resources
       .first();
     await expect(left).toHaveCSS('border-radius', '0px 4px 4px 0px');
     await expect(right).toHaveCSS('border-radius', '4px 0px 0px 4px');
-    await page
-      .getByRole('combobox', { name: '示例比赛', exact: true })
-      .selectOption('real-planted');
+    await page.getByRole('combobox', { name: '示例比赛', exact: true }).selectOption('epl-planted');
     await expect(page.locator('.player-rail__card--dead .player-rail__body').first()).toHaveCSS(
       'border-radius',
       '4px',
