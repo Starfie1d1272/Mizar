@@ -304,6 +304,21 @@ jobs:
       - name: Build exact-SHA Windows qualification bundle
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --desktop-profile ci
 
+      - name: Build and test Chinese Setup lifecycle
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          choco install nsis --version=3.11 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
+          $installed = Join-Path $env:RUNNER_TEMP 'setup installed path'
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed
+          $product = Get-ChildItem -LiteralPath $installed -Directory | Select-Object -First 1
+          node scripts/qualification/product-smoke.mjs $product.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Installed product smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $product.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed GUI smoke failed' }
+
       - name: Verify CI desktop profile metadata
         shell: pwsh
         run: |

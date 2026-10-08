@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { verifyCandidate } from './verify-candidate.mjs';
 import { createBuildTimer } from './build-timings.mjs';
 
-it('rejects changed transfers, mixed lane evidence and substituted SFX assets', async () => {
+it('rejects changed transfers, mixed lane evidence and substituted Setup assets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-candidate-'));
   const sha = 'a'.repeat(40);
   const digest = createHash('sha256').update('candidate ZIP').digest('hex');
@@ -37,17 +37,17 @@ it('rejects changed transfers, mixed lane evidence and substituted SFX assets', 
     await expect(verifyCandidate(root, sha, digest)).rejects.toThrow('身份');
     await writeManifest(manifest);
     await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow();
-    for (const lane of ['portable', 'sfx']) {
+    for (const lane of ['portable', 'setup']) {
       await mkdir(join(root, lane));
-      await writeIdentity(lane, { ...manifest, ...(lane === 'sfx' ? { distribution } : {}) });
+      await writeIdentity(lane, { ...manifest, ...(lane === 'setup' ? { distribution } : {}) });
     }
     await writeFile(join(root, 'distribution-manifest.json'), JSON.stringify(distribution));
     expect(await verifyCandidate(root, sha, digest, root)).toEqual(manifest);
     await writeIdentity('portable', { ...manifest, gitSha: 'd'.repeat(40) });
     await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('portable 验收身份');
     await writeIdentity('portable', manifest);
-    await writeIdentity('sfx', { ...manifest, distribution: { archiveSha256: 'd'.repeat(64) } });
-    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('SFX 验收身份');
+    await writeIdentity('setup', { ...manifest, distribution: { archiveSha256: 'd'.repeat(64) } });
+    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('Setup 验收身份');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

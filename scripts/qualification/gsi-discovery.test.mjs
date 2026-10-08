@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -48,6 +48,50 @@ async function library() {
 }
 
 describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery', () => {
+  it('automatically prepares only owned GSI, preserves its token, and refuses unknown senders', async () => {
+    const root = await library();
+    const product = join(root, 'product');
+    const resources = join(product, 'resources');
+    await cp(resolve(import.meta.dirname, 'bundle'), join(resources, 'scripts'), {
+      recursive: true,
+    });
+    await mkdir(join(resources, 'config'), { recursive: true });
+    await cp(
+      resolve(import.meta.dirname, '../../config/gamestate_integration_mizar.cfg.example'),
+      join(resources, 'config/gamestate_integration_mizar.cfg.template'),
+    );
+    const state = join(root, 'state');
+    const cfg = join(root, 'steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg');
+    const canonical = join(cfg, 'gamestate_integration_mizar.cfg');
+    const duplicate = join(cfg, 'gamestate_integration_other.cfg');
+    const ensure = join(resources, 'scripts/ensure-gsi.ps1');
+    const prepare = () =>
+      run(
+        `$env:MIZAR_STATE_ROOT=${quote(state)}; $env:STEAMROOT=${quote(root)}; & ${quote(ensure)} -Product`,
+        true,
+      );
+    await writeFile(duplicate, '"uri" "http://localhost:3000/"');
+    expect(prepare).toThrow();
+    expect(await readFile(duplicate, 'utf8')).toContain('3000');
+    await rm(duplicate);
+    await writeFile(canonical, 'operator-owned');
+    expect(prepare).toThrow();
+    expect(await readFile(canonical, 'utf8')).toBe('operator-owned');
+    await rm(canonical);
+    prepare();
+    const installed = await readFile(canonical, 'utf8');
+    const record = await readFile(join(state, 'data/gsi-install/install.json'), 'utf8');
+    prepare();
+    expect(await readFile(canonical, 'utf8')).toBe(installed);
+    expect(await readFile(join(state, 'data/gsi-install/install.json'), 'utf8')).toBe(record);
+    await rm(canonical);
+    prepare();
+    expect(await readFile(canonical, 'utf8')).toBe(installed);
+    await writeFile(canonical, 'operator-edited');
+    expect(prepare).toThrow();
+    expect(await readFile(canonical, 'utf8')).toBe('operator-edited');
+  });
+
   it('deduplicates slash, case, trailing separator and VDF aliases of one installation', async () => {
     const root = await library();
     const alias = root.replaceAll('\\', '/').toUpperCase() + '/';

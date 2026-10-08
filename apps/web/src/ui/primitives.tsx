@@ -186,11 +186,15 @@ export function Dialog({
   title,
   onClose,
   children,
+  className,
+  canClose,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
+  className?: string;
+  canClose?: () => boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -203,7 +207,10 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className="mizar-dialog"
+      className={['mizar-dialog', className].filter(Boolean).join(' ')}
+      onCancel={(event) => {
+        if (canClose && !canClose()) event.preventDefault();
+      }}
       aria-labelledby={id}
       onKeyDown={(event) => {
         if (event.key !== 'Tab') return;
@@ -227,7 +234,13 @@ export function Dialog({
     >
       <h2 id={id}>{title}</h2>
       {children}
-      <Button onClick={() => ref.current?.close()}>关闭</Button>
+      <Button
+        onClick={() => {
+          if (!canClose || canClose()) ref.current?.close();
+        }}
+      >
+        关闭
+      </Button>
     </dialog>
   );
 }

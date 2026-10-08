@@ -8,14 +8,20 @@ export interface ReplayVideoSource {
   readonly timelineStartUs: number;
 }
 
+const autoplayAttempted = new WeakSet<ReplaySession<AcceptanceReplayFrame>>();
+
 export function ReplayVideoBackground({
   source,
   session,
+  onFallback,
 }: {
   readonly source: ReplayVideoSource;
+  readonly onFallback?: () => void;
   readonly session: ReplaySession<AcceptanceReplayFrame>;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [ready, setReady] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -28,6 +34,17 @@ export function ReplayVideoBackground({
       if (!active) return;
       session.pause();
       setFailed(true);
+    };
+    const timeout = setTimeout(fail, 30_000);
+    const loaded = () => {
+      if (!active) return;
+      clearTimeout(timeout);
+      setReady(true);
+      if (!autoplayAttempted.has(session)) {
+        autoplayAttempted.add(session);
+        session.play();
+      }
+      sync();
     };
     const sync = () => {
       if (!active || video.readyState === 0) return;
@@ -48,6 +65,9 @@ export function ReplayVideoBackground({
         playPending = true;
         void video
           .play()
+          .then(() => {
+            if (active) setBlocked(false);
+          })
           .catch((error: unknown) => {
             // An intentional pause/source change can interrupt an outstanding play request.
             if (
@@ -55,7 +75,10 @@ export function ReplayVideoBackground({
               session.getSnapshot().isPlaying &&
               !(error instanceof DOMException && error.name === 'AbortError')
             )
-              fail();
+              if (error instanceof DOMException && error.name === 'NotAllowedError') {
+                session.pause();
+                setBlocked(true);
+              } else fail();
           })
           .finally(() => {
             playPending = false;
@@ -68,10 +91,14 @@ export function ReplayVideoBackground({
     };
     const unsubscribe = session.subscribe(sync);
     video.addEventListener('loadedmetadata', sync);
+    video.addEventListener('loadeddata', loaded);
+    if (video.readyState >= 2) loaded();
     video.addEventListener('error', fail);
     request = requestAnimationFrame(tick);
     return () => {
       active = false;
+      clearTimeout(timeout);
+      video.removeEventListener('loadeddata', loaded);
       cancelAnimationFrame(request);
       unsubscribe();
       video.removeEventListener('loadedmetadata', sync);
@@ -91,7 +118,18 @@ export function ReplayVideoBackground({
         preload="auto"
         aria-hidden="true"
       />
-      {failed ? <span role="alert">游戏背景加载失败，请重新载入回放。</span> : null}
+      {!ready && !failed ? <span role="status">正在加载实景回放</span> : null}
+      {blocked ? <span role="status">自动播放受阻，请点击「播放」。</span> : null}
+      {failed ? (
+        <div role="alert">
+          游戏背景加载失败，请重新载入回放。
+          {onFallback ? (
+            <button type="button" onClick={onFallback}>
+              切换静态样例
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 }

@@ -185,10 +185,10 @@ export function HudConsolePage() {
   const [lastValidTheme, setLastValidTheme] = useState<HudTheme>(themeDraft);
   const [selectedWidgetId, setSelectedWidgetId] = useState<HudWidgetId | null>(null);
   const [previewSource, setPreviewSource] = useState<'fixture' | 'replay' | 'current-live'>(() =>
-    new URLSearchParams(window.location.search).get('mode') === 'replay' ? 'replay' : 'fixture',
+    new URLSearchParams(window.location.search).get('mode') === 'fixture' ? 'fixture' : 'replay',
   );
   const [fixtureId, setFixtureId] = useState<ProgramFixtureId>(HUD_EDITOR_DEFAULT_FIXTURE_ID);
-  const [replaySourceId, setReplaySourceId] = useState<ReplaySourceId>('epl-inferno-opening');
+  const [replaySourceId, setReplaySourceId] = useState<ReplaySourceId>('epl-inferno-video');
   const [replayLoadState, setReplayLoadState] = useState<
     | {
         readonly sourceId: ReplaySourceId;
@@ -919,8 +919,8 @@ export function HudConsolePage() {
                     setPreviewSource(event.target.value as 'fixture' | 'replay' | 'current-live')
                   }
                 >
-                  <option value="fixture">示例比赛</option>
-                  <option value="replay">比赛回放</option>
+                  <option value="fixture">静态样例</option>
+                  <option value="replay">实景回放</option>
                   <option disabled={!previewSourceLive} value="current-live">
                     实时比赛
                   </option>
@@ -983,7 +983,9 @@ export function HudConsolePage() {
               >
                 {activePreviewSource === 'replay'
                   ? replayLoadError === null
-                    ? '比赛回放'
+                    ? replayLoading
+                      ? '正在加载实景回放'
+                      : '实景回放'
                     : '重放素材不可用'
                   : activePreviewSource === 'fixture'
                     ? '示例画面'
@@ -1088,7 +1090,12 @@ export function HudConsolePage() {
                   <span>序列 {replayFrame?.cursor.sequence ?? '—'}</span>
                   <span>{currentReplayEvent?.label ?? '当前窗口无语义事件'}</span>
                   {replayState.isSeeking ? <span>正在重建回放前缀…</span> : null}
-                  {replayLoadError !== null ? <span role="alert">{replayLoadError}</span> : null}
+                  {replayLoadError !== null ? (
+                    <>
+                      <span role="alert">{replayLoadError}</span>
+                      <Button onClick={() => setPreviewSource('fixture')}>切换静态样例</Button>
+                    </>
+                  ) : null}
                   {replayState.error !== null ? (
                     <span role="alert">重放未完成，请重新载入素材后重试。</span>
                   ) : null}
@@ -1128,6 +1135,7 @@ export function HudConsolePage() {
                     key={replayFixture.video.url}
                     source={replayFixture.video}
                     session={replaySession}
+                    onFallback={() => setPreviewSource('fixture')}
                   />
                 ) : undefined
               }

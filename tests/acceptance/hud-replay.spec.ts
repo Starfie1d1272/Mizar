@@ -158,12 +158,12 @@ async function readPlayerRailState(rail: Locator) {
 test.describe('HUD 编辑器 Replay acceptance', () => {
   test.describe.configure({ timeout: 90_000 });
 
-  test('defaults to EPL and rebuilds its selected real C4 event with matching identities', async ({
+  test('selects EPL and rebuilds its selected real C4 event with matching identities', async ({
     page,
   }) => {
-    await page.goto('/operator/hud');
+    await page.goto('/operator/hud?mode=fixture');
     await page.getByLabel('预览来源').selectOption('replay');
-    await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-opening');
+    await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-opening');
     const replay = page.getByRole('region', { name: '重放控制' });
     await expect(replay).toHaveAttribute('data-replay-cursor', '13');
     await expect(page.locator('body')).toContainText('Falcons');
@@ -209,7 +209,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     page,
   }) => {
     await page.clock.install();
-    await page.goto('/operator/hud');
+    await page.goto('/operator/hud?mode=fixture');
     await page.getByLabel('预览来源').selectOption('replay');
     await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
 
@@ -233,7 +233,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     page,
   }) => {
     await installReplayClock(page);
-    await page.goto('/operator/hud');
+    await page.goto('/operator/hud?mode=fixture');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
     await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
@@ -297,7 +297,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
     page,
   }, testInfo) => {
     await installReplayClock(page);
-    await page.goto('/operator/hud');
+    await page.goto('/operator/hud?mode=fixture');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
     await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
@@ -394,7 +394,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
   }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await installReplayClock(page);
-    await page.goto('/operator/hud');
+    await page.goto('/operator/hud?mode=fixture');
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
     await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
@@ -461,7 +461,7 @@ test.describe('HUD 编辑器 Replay acceptance', () => {
       }
       await route.continue();
     });
-    await page.goto('/operator/hud', { waitUntil: 'domcontentloaded' });
+    await page.goto('/operator/hud?mode=fixture', { waitUntil: 'domcontentloaded' });
     await pauseReplayClock(page);
     await page.getByLabel('预览来源').selectOption('replay');
     await page.getByLabel('回放来源', { exact: true }).selectOption('ancient-round-03');
@@ -510,7 +510,7 @@ test('Shanghai planting panel exits without a placeholder and planted C4 has red
   page,
 }) => {
   await installReplayClock(page);
-  await page.goto('/operator/hud');
+  await page.goto('/operator/hud?mode=fixture');
   await pauseReplayClock(page);
   await page
     .getByRole('combobox', { name: '预设', exact: true })
@@ -540,7 +540,7 @@ test('Shanghai planting panel exits without a placeholder and planted C4 has red
 test('IEM metrics opt-in is visible and contained in the existing focus envelope', async ({
   page,
 }) => {
-  await page.goto('/operator/hud');
+  await page.goto('/operator/hud?mode=fixture');
   await page
     .getByRole('combobox', { name: '预设', exact: true })
     .selectOption('builtin:iem-preset');

@@ -42,6 +42,7 @@ export interface MatchHeaderSeriesMapPresentation {
   readonly winner: MatchHeaderEntrantKey | null;
   readonly pickOutcome: 'win' | 'loss' | null;
   readonly winnerName: string | null;
+  readonly winnerLogoUrl: string | null;
 }
 
 export interface MatchHeaderRoundPresentation {
@@ -257,6 +258,10 @@ function buildSeriesMaps(
           ? picker === winner
             ? 'win'
             : 'loss'
+          : null,
+      winnerLogoUrl:
+        map.status === 'completed' && map.finalScore !== null && winner !== null
+          ? series.entrants[winner].logoUrl
           : null,
       winnerName:
         map.status === 'completed' && map.finalScore !== null && winner !== null

@@ -11,7 +11,7 @@
   min-height: calc(100dvh - 48px);
   align-content: start;
   font-size: var(--mizar-type-size-readable);
-  overflow: hidden;
+  overflow: clip;
   padding: clamp(1rem, 2.4vw, 2.25rem);
 }
 
@@ -783,4 +783,12 @@
   width: min(100%, calc((100dvh - 240px) * 16 / 9));
   align-self: center;
   flex-shrink: 0;
+}
+
+@media (min-width: 1200px) and (min-height: 900px) {
+  .hud-console__preview-column:not(:fullscreen) {
+    position: sticky;
+    top: 1rem;
+    align-self: start;
+  }
 }

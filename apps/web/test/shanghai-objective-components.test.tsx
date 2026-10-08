@@ -128,7 +128,10 @@ it('recovers a round-winner logo when its failed URL is replaced', () => {
     act(() => {
       logo.dispatchEvent(new Event('error'));
     });
-    expect(node.querySelector('.shanghai-winner-name')?.textContent).toBe(winner.name);
+    expect(node.querySelector('.shanghai-round-winner svg')?.getAttribute('aria-label')).toContain(
+      winner.name,
+    );
+    expect(node.querySelector('.shanghai-round-winner')?.textContent).not.toContain(winner.name);
     winner.logoUrl = '/replacement-logo.svg';
     render();
     expect(node.querySelector('.shanghai-round-winner img')?.getAttribute('src')).toBe(

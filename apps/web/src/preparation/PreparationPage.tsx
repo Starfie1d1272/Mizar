@@ -1,3 +1,4 @@
+import { AutomaticPreparation } from './AutomaticPreparation';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
@@ -183,6 +184,7 @@ export function PreparationPage() {
   return (
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
+        <AutomaticPreparation />
         <header className="preparation-heading">
           <div>
             <h1>

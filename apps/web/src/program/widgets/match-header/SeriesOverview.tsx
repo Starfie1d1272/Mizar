@@ -1,3 +1,4 @@
+import { TeamLogo } from './TeamLogo';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 import { buildMatchHeaderPresentation } from './presentation';
@@ -40,12 +41,16 @@ export function SeriesOverview({ snapshot }: Pick<HudWidgetRendererProps, 'snaps
             >
               <strong>{map.mapName}</strong>
             </div>
-            {map.pickerLogoUrl ? (
-              <img src={map.pickerLogoUrl} alt={map.pickerName ?? ''} />
+            {map.pickerName !== null ? (
+              <TeamLogo team={{ name: map.pickerName, logoUrl: map.pickerLogoUrl }} fallback />
             ) : (
               <span />
             )}
-            <strong>{map.status === 'current' ? map.statusText : (map.winnerName ?? '')}</strong>
+            {map.winnerName !== null ? (
+              <TeamLogo team={{ name: map.winnerName, logoUrl: map.winnerLogoUrl }} fallback />
+            ) : (
+              <strong>{map.status === 'current' ? map.statusText : ''}</strong>
+            )}
             <span>{map.finalScore ? `${map.finalScore.a}:${map.finalScore.b}` : ''}</span>
           </div>
         );

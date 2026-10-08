@@ -51,11 +51,12 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
-  for (const action of ['check', 'repair', 'open', 'launch-target'] as const) {
+  for (const action of ['check', 'ensure', 'repair', 'open', 'launch-target'] as const) {
     app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
+        if (action === 'ensure') return { ok: true, findings: await options.adapter.ensure() };
         if (action === 'check') return { ok: true, findings: await options.adapter.check() };
         if (action === 'repair') {
           const findings = await options.adapter.repair(options.activeScene);

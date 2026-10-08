@@ -35,6 +35,10 @@ if (Test-Path -LiteralPath $path -PathType Leaf) {
         }
     } catch { [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String)); $result.readFailed = $true; $result.issueCodes += 'record-unreadable' }
 }
+if ($result.detected -and -not (Test-Path -LiteralPath (Join-Path $script:StateRoot 'data\gsi-install\install.json')) -and (Test-Path -LiteralPath $result.cfgPath)) {
+    $result.fileConflict = $true
+    $result.issueCodes += 'gsi-file-changed'
+}
 if ($result.cfgPath) {
     $directory = Split-Path -Parent $result.cfgPath
     if (Test-Path -LiteralPath $directory -PathType Container) {

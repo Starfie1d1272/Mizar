@@ -8,8 +8,8 @@ test('plays real game background with live HUD and seeks both to the recorded C4
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
   await page.goto('/operator/hud');
-  await page.getByLabel('预览来源').selectOption('replay');
-  await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-video');
+  await expect(page.getByLabel('预览来源')).toHaveValue('replay');
+  await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-video');
   const replay = page.getByRole('region', { name: '重放控制' });
   const video = page.locator('video.hud-console__map-background');
   await expect(video).toHaveCount(1, { timeout: 30_000 });
@@ -26,6 +26,10 @@ test('plays real game background with live HUD and seeks both to the recorded C4
       ),
     )
     .toBe(true);
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.paused))
+    .toBe(false);
+  await replay.getByRole('button', { name: '暂停', exact: true }).click();
   const events = (
     await (await page.request.get('/fixtures/epl-inferno-video/replay/events.jsonl')).text()
   )
@@ -68,6 +72,9 @@ test('plays real game background with live HUD and seeks both to the recorded C4
       `builtin:${preset}-preset`,
     );
     await expect(replay).toHaveAttribute('data-replay-cursor', cursor!);
+    await page
+      .locator('.hud-console__canvas-frame')
+      .screenshot({ path: `.agent-tmp/rc-fixes/video-${preset}.png` });
     expect(await video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeCloseTo(
       stopped,
       2,
@@ -92,8 +99,8 @@ test('rejects a corrupt background before offering a playable replay and recover
     route.fulfill({ status: 200, contentType: 'video/mp4', body: 'corrupt' }),
   );
   await page.goto('/operator/hud');
-  await page.getByLabel('预览来源').selectOption('replay');
-  await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-video');
+  await expect(page.getByLabel('预览来源')).toHaveValue('replay');
+  await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-video');
   const replay = page.getByRole('region', { name: '重放控制' });
   await expect(replay.getByRole('alert')).toBeVisible();
   await expect(replay.getByRole('button', { name: '播放', exact: true })).toBeDisabled();

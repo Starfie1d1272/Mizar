@@ -21,7 +21,7 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
     manifest.archive,
   );
   if (manifest.archive !== currentArchive && !legacyArchive) throw new Error('非法产品文件名');
-  const sfxName = manifest.archive.replace(/\.zip$/, legacyArchive ? '-extract.exe' : '.exe');
+  const setupName = manifest.archive.replace(/\.zip$/, '-Setup.exe');
   const archive = join(product, manifest.archive);
   const digest = createHash('sha256')
     .update(await readFile(archive))
@@ -59,37 +59,34 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
       distribution.appVersion !== manifest.appVersion ||
       distribution.contentDigest !== manifest.contentDigest ||
       distribution.originalArchiveSha256 !== digest ||
-      distribution.format !== '7zip-gui-sfx-lzma2-solid' ||
-      distribution.archive !== sfxName
+      distribution.format !== 'nsis-setup' ||
+      distribution.archive !== setupName
     )
-      throw new Error('自解压包身份与已验 ZIP 不一致');
+      throw new Error('安装包身份与已验 ZIP 不一致');
     if (
-      distribution.extractorLicense !== '7zip-LICENSE.txt' ||
-      !/^7z\d{4}-src\.7z$/.test(distribution.extractorSourceArchive) ||
-      distribution.extractorSourceUrl !==
-        `https://www.7-zip.org/a/${distribution.extractorSourceArchive}`
+      distribution.installerLicense !== 'NSIS-LICENSE.txt' ||
+      distribution.installerVersion !== 'v3.11' ||
+      !/^[a-f0-9]{64}$/.test(distribution.installerCompilerSha256) ||
+      !/^[a-f0-9]{64}$/.test(distribution.installerScriptSha256)
     )
-      throw new Error('自解压工具许可或源码身份无效');
-    for (const [name, expected] of [
-      [distribution.extractorLicense, distribution.extractorLicenseSha256],
-      [distribution.extractorSourceArchive, distribution.extractorSourceSha256],
-    ]) {
-      const actual = createHash('sha256')
-        .update(await readFile(join(product, name)))
-        .digest('hex');
-      if (actual !== expected) throw new Error('自解压工具许可或源码摘要不一致');
-    }
-    const sfx = join(product, distribution.archive);
-    const bytes = await readFile(sfx);
-    const sfxDigest = createHash('sha256').update(bytes).digest('hex');
+      throw new Error('安装工具身份无效');
+    const licenseDigest = createHash('sha256')
+      .update(await readFile(join(product, distribution.installerLicense)))
+      .digest('hex');
+    if (licenseDigest !== distribution.installerLicenseSha256)
+      throw new Error('安装工具许可摘要不一致');
+    const setup = join(product, distribution.archive);
+    const bytes = await readFile(setup);
+    const setupDigest = createHash('sha256').update(bytes).digest('hex');
     if (
-      sfxDigest !== distribution.archiveSha256 ||
+      setupDigest !== distribution.archiveSha256 ||
       bytes.length !== distribution.archiveBytes ||
-      (await readFile(`${sfx}.sha256`, 'utf8')).trim() !== `${sfxDigest}  ${distribution.archive}`
+      (await readFile(`${setup}.sha256`, 'utf8')).trim() !==
+        `${setupDigest}  ${distribution.archive}`
     )
-      throw new Error('自解压包摘要不一致');
+      throw new Error('安装包摘要不一致');
   } else if (productFiles.some((name) => /^Mizar-.*\.exe$/.test(name))) {
-    throw new Error('自解压包缺少已验分发清单');
+    throw new Error('安装包缺少已验分发清单');
   }
   return {
     ...(distribution ? { distribution } : {}),

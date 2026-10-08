@@ -25,7 +25,7 @@ test('sidebar links and preparation tools open their actual destinations', async
     await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
   }
   for (const [label, path] of [
-    ['HUD 编辑器', '/operator/hud'],
+    ['HUD 编辑器', '/operator/hud?mode=fixture'],
     ['BP 工作台', '/preview?scene=bp'],
     ['节目预览', '/preview'],
     ['运行诊断', '/debug'],

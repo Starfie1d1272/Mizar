@@ -20,6 +20,10 @@ $ErrorActionPreference = 'Stop'
 $script:BundleRoot = Split-Path -Parent $PSScriptRoot
 $script:ProductRoot = Split-Path -Parent $script:BundleRoot
 $script:StateRoot = Join-Path $script:ProductRoot 'state'
+if (-not $env:MIZAR_STATE_ROOT -and (Test-Path -LiteralPath (Join-Path $script:ProductRoot 'installed.flag'))) {
+    if (-not $env:LOCALAPPDATA) { throw '用户数据目录不可用' }
+    $script:StateRoot = Join-Path $env:LOCALAPPDATA 'Mizar'
+}
 if ($env:MIZAR_STATE_ROOT) {
     if (-not [System.IO.Path]::IsPathRooted($env:MIZAR_STATE_ROOT)) { throw '运行数据目录必须是绝对路径' }
     $script:StateRoot = [System.IO.Path]::GetFullPath($env:MIZAR_STATE_ROOT)

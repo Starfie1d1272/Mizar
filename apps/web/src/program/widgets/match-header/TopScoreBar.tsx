@@ -1,3 +1,4 @@
+import { TeamLogo } from './TeamLogo';
 import { useAliveMatchup } from './useAliveMatchup';
 import { presentationBoundaryKey } from '../../presentation-boundary';
 import { useBalancedTeamNames } from './useBalancedTeamNames';
@@ -59,26 +60,6 @@ function usePanelPresence<T>(value: T | null, exitMs = PANEL_EXIT_MS) {
   return { phase, value: rendered } as const;
 }
 /* eslint-enable react-hooks/set-state-in-effect */
-
-function TeamLogo({
-  team,
-  fallback = false,
-}: {
-  readonly team: MatchHeaderTeamPresentation;
-  readonly fallback?: boolean;
-}) {
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (team.logoUrl === null || team.logoUrl === failedUrl)
-    return fallback ? <span className="shanghai-winner-name">{team.name}</span> : null;
-  return (
-    <img
-      alt=""
-      className="match-header__team-logo"
-      onError={() => setFailedUrl(team.logoUrl)}
-      src={team.logoUrl}
-    />
-  );
-}
 
 function Team({
   team,

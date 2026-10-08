@@ -205,9 +205,11 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
     const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
     const settings = capture.inputSettings as Record<string, unknown> | undefined;
+    const currentWindow = await cs2CaptureWindow(obs);
     if (
       settings?.capture_mode !== 'window' ||
       !isCs2Window(settings.window) ||
+      (currentWindow !== CS2_WINDOW_FALLBACK && settings.window !== currentWindow) ||
       settings.priority !== 2
     )
       findings.push({ code: 'capture_drift', message: 'Mizar 游戏采集来源未指向 CS2。' });
@@ -291,6 +293,9 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
 
 export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
+  const before = await checkObsConfiguration(obs, baseUrl);
+  if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
+    return before;
   if (await outputActive(obs)) throw new Error('OBS 正在输出；结束输出后可修复制播配置。');
   const collections = await obs.call('GetSceneCollectionList');
   const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
@@ -486,4 +491,29 @@ function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obs
   const scene = obsDesiredScenes('http://127.0.0.1:3000').find((item) => item.id === id);
   if (!scene || !ownedScene(scene.sceneName)) throw new Error('未知 OBS 场景。');
   return scene.sceneName;
+}
+
+/** Only the first preparation may reconcile; reconnects preserve operator changes. */
+export async function ensureObsConfiguration(
+  obs: ObsRpc,
+  baseUrl: string,
+  firstPreparation: boolean,
+): Promise<ObsFinding[]> {
+  const findings = await checkObsConfiguration(obs, baseUrl);
+  if (!firstPreparation || findings.some((finding) => finding.code === 'source_kind_conflict'))
+    return findings;
+  const repairable = new Set([
+    'collection_missing',
+    'collection_inactive',
+    'scene_missing',
+    'source_missing',
+    'url_drift',
+    'capture_drift',
+    'transform_drift',
+    'order_drift',
+    'source_disabled',
+  ]);
+  return findings.some((finding) => repairable.has(finding.code))
+    ? repairObsConfiguration(obs, baseUrl)
+    : findings;
 }

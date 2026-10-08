@@ -4,6 +4,7 @@ import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import {
   checkObsConfiguration,
   repairObsConfiguration,
+  ensureObsConfiguration,
   refreshObsBrowserSources,
   switchObsScene,
   type ObsRpc,
@@ -365,4 +366,22 @@ it('adopts an already on-air target without waiting for a transition event that 
   await switchObsScene(obs, 'halftime', { transition: { kind: 'fade', durationMs: 300 } });
   expect(obs.calls).not.toContain('SetCurrentProgramScene');
   expect(obs.listeners.size).toBe(0);
+});
+
+it('prepares without a running game, performs no repeated writes, and preserves edits on reconnect', async () => {
+  const obs = new FakeObs();
+  expect(await ensureObsConfiguration(obs, baseUrl, true)).toEqual([]);
+  obs.calls = [];
+  expect(await ensureObsConfiguration(obs, baseUrl, true)).toEqual([]);
+  expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+  const scene = obsDesiredScenes(baseUrl)[0]!;
+  obs.inputs.get(scene.browserInput)!.settings.url = 'https://operator.example';
+  obs.calls = [];
+  expect(
+    (await ensureObsConfiguration(obs, baseUrl, false)).some(
+      (finding) => finding.code === 'url_drift',
+    ),
+  ).toBe(true);
+  expect(obs.inputs.get(scene.browserInput)!.settings.url).toBe('https://operator.example');
+  expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
 });

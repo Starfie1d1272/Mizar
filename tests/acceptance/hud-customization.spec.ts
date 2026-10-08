@@ -56,7 +56,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await context.routeWebSocket(/\/local\/v1\/program$/, (socket) =>
       socket.send(JSON.stringify(snapshot)),
     );
-    await page.goto('/operator/hud?hud-config=companion');
+    await page.goto('/operator/hud?hud-config=companion&mode=fixture');
     await page.getByRole('button', { name: '预设', exact: true }).click();
     await page
       .getByRole('combobox', { name: '配置组件', exact: true })
@@ -197,7 +197,7 @@ test('four broadcast presets save, activate and reload through the shared Progra
       socket.send(JSON.stringify(snapshot));
     });
     for (const style of ['ewc', 'iem', 'perfectworld', 'esl']) {
-      await page.goto('/operator/hud?hud-config=companion');
+      await page.goto('/operator/hud?hud-config=companion&mode=fixture');
       await page
         .locator('select:has(option[value="builtin:ewc-preset"])')
         .selectOption(`builtin:${style}-preset`);
@@ -366,7 +366,7 @@ test('preset files export, edit, import and activate without replacing resources
     await context.routeWebSocket(/\/local\/v1\/program$/, (socket) =>
       socket.send(JSON.stringify(artifact.fixtures['real-live-rich']!.snapshot)),
     );
-    await page.goto('/operator/hud?hud-config=companion');
+    await page.goto('/operator/hud?hud-config=companion&mode=fixture');
     await page
       .getByRole('combobox', { name: '预设', exact: true })
       .selectOption('builtin:perfectworld-preset');
@@ -468,7 +468,7 @@ test('preset files export, edit, import and activate without replacing resources
 test('mixing Shanghai components with default layout uses one envelope for preview and layout editing', async ({
   page,
 }) => {
-  await page.goto('/operator/hud');
+  await page.goto('/operator/hud?mode=fixture');
   await page.getByRole('combobox', { name: '配置组件', exact: true }).selectOption('top-score-bar');
   await page.getByLabel('呈现方案', { exact: true }).selectOption('perfectworld');
   await expect(page.locator('[data-hud-widget="top-score-bar"]')).toHaveCSS('width', '800px');

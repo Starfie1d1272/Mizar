@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
 import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
@@ -38,57 +38,66 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
 
   const { workspace: bpWorkspace } = useBpWorkspace();
 
+  const [refreshing, setRefreshing] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const request = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
+    if (request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setRefreshing(true);
+    setLoadError(null);
+    const timeout = setTimeout(() => controller.abort('timeout'), 15_000);
     try {
-      const response = await fetch('/local/v1/rivalhub-connection', { cache: 'no-store' });
-      if (!response.ok) return;
+      const response = await fetch('/local/v1/rivalhub-connection', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error('无法读取赛事连接，请刷新重试。');
       const next = (await response.json()) as Connection;
+      if (controller.signal.aborted) return;
       setConnection(next);
-      if (next.pairing === 'pending') {
-        setPairing(true);
-      }
+      if (next.pairing === 'pending') setPairing(true);
       if (next.paired) {
-        const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', { cache: 'no-store' });
-        if (scheduleResponse.ok) {
-          setSchedule((await scheduleResponse.json()) as Schedule);
-        }
+        const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!scheduleResponse.ok) throw new Error('赛事赛程暂时无法获取，请刷新重试。');
+        const nextSchedule = (await scheduleResponse.json()) as Schedule;
+        if (!controller.signal.aborted) setSchedule(nextSchedule);
+      } else setSchedule(null);
+    } catch (reason) {
+      if (!controller.signal.aborted || controller.signal.reason === 'timeout')
+        setLoadError(
+          controller.signal.aborted
+            ? '获取赛程超时，请刷新重试。'
+            : reason instanceof Error
+              ? reason.message
+              : '获取赛程失败，请刷新重试。',
+        );
+    } finally {
+      clearTimeout(timeout);
+      if (request.current === controller) {
+        request.current = null;
+        setRefreshing(false);
       }
-    } catch {
-      // Background poll failure is quiet
     }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const response = await fetch('/local/v1/rivalhub-connection', { cache: 'no-store' });
-        if (!response.ok || cancelled) return;
-        const next = (await response.json()) as Connection;
-        if (cancelled) return;
-        setConnection(next);
-        if (next.pairing === 'pending') {
-          setPairing(true);
-        }
-        if (next.paired) {
-          const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', {
-            cache: 'no-store',
-          });
-          if (scheduleResponse.ok && !cancelled) {
-            setSchedule((await scheduleResponse.json()) as Schedule);
-          }
-        }
-      } catch {
-        // Quiet
-      }
-    }
-    void load();
-    const interval = setInterval(() => void load(), 10_000);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void refresh();
+    });
+    const timer = setInterval(() => void refresh(), 10_000);
     return () => {
-      cancelled = true;
-      clearInterval(interval);
+      active = false;
+      clearInterval(timer);
+      request.current?.abort();
+      request.current = null;
     };
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (!pairing) return;
@@ -186,7 +195,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
 
   return (
     <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
-      {!connection?.paired || (mode === 'settings' && rePairing) ? (
+      {connection === null ? (
+        <p role="status">{loadError ? '赛事连接尚未读取' : '正在读取赛事连接…'}</p>
+      ) : !connection.paired || (mode === 'settings' && rePairing) ? (
         mode === 'matches' ? (
           <Button
             onClick={() => {
@@ -263,7 +274,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           ) : null}
           {mode === 'matches' ? (
             <>
-              {schedule?.matches && schedule.matches.length > 0 ? (
+              {schedule === null ? (
+                <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
+              ) : schedule.matches.length > 0 ? (
                 <Select
                   label="选择比赛"
                   defaultValue=""
@@ -313,6 +326,22 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         </>
       )}
 
+      {mode === 'matches' || loadError ? (
+        <Button
+          aria-label="刷新比赛"
+          disabled={refreshing}
+          loading={refreshing}
+          onClick={() => void refresh()}
+        >
+          刷新比赛
+        </Button>
+      ) : null}
+      {loadError ? (
+        <StatusBanner tone="warning">
+          {loadError}
+          {schedule ? ' 当前保留上次赛程。' : ''}
+        </StatusBanner>
+      ) : null}
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
     </Panel>

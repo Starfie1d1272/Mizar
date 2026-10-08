@@ -43,7 +43,7 @@ export function useObsStatus(): ObsStatus | null {
 }
 
 export async function obsCommand(
-  action: 'open' | 'check' | 'repair' | 'configure',
+  action: 'open' | 'check' | 'ensure' | 'repair' | 'configure',
   body: Record<string, unknown> = {},
 ): Promise<unknown> {
   const nativeOpen = action === 'open' && Boolean(window.__TAURI_INTERNALS__);
@@ -51,7 +51,7 @@ export async function obsCommand(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(action === 'repair' ? 15_000 : 6000),
+    signal: AbortSignal.timeout(action === 'repair' || action === 'ensure' ? 15_000 : 6000),
   });
   const value = (await response.json().catch(() => null)) as {
     message?: string;

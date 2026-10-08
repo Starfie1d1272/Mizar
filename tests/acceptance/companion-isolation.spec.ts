@@ -3,7 +3,7 @@ import { expect, test } from './companion-isolation.js';
 test('unmocked Companion HTTP and WebSocket requests stay offline in the browser harness', async ({
   page,
 }) => {
-  const navigation = await page.goto('/operator/hud');
+  const navigation = await page.goto('/operator/hud?mode=fixture');
   expect(navigation?.status()).toBe(200);
   expect(navigation?.headers()['content-type']).toContain('text/html');
   const http = await page.evaluate(async () => {
