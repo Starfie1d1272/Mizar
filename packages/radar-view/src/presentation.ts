@@ -20,9 +20,7 @@ export const RADAR_PRESENTATION = Object.freeze({
   teleportBaseWorld: 160,
   teleportSpeedWorldPerSecond: 1100,
   sampleGapMs: 500,
-  trailPoints: 12,
-  trailDistanceThreshold: 0.002,
-  trailSampleIntervalMs: 100,
+  trailPoints: 64,
   projectileExitMs: 180,
   smokeEnterMs: 160,
   smokeExitMs: 200,
@@ -49,6 +47,32 @@ export interface TrailPoint {
   y: number;
   at: number;
 }
+/** Fixed-cost simplification: preserve endpoints and remove the least geometric
+ * information first. Distance to the segment (not its infinite line) retains
+ * reversals as well as corners. No synthetic points or future positions. */
+function compressTrail(trail: TrailPoint[]): void {
+  while (trail.length > RADAR_PRESENTATION.trailPoints) {
+    let remove = 1;
+    let smallestError = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < trail.length - 1; index++) {
+      const a = trail[index - 1]!;
+      const b = trail[index]!;
+      const c = trail[index + 1]!;
+      const dx = c.x - a.x;
+      const dy = c.y - a.y;
+      const length = dx * dx + dy * dy;
+      const t =
+        length === 0 ? 0 : Math.max(0, Math.min(1, ((b.x - a.x) * dx + (b.y - a.y) * dy) / length));
+      const error = (b.x - a.x - t * dx) ** 2 + (b.y - a.y - t * dy) ** 2;
+      if (error < smallestError) {
+        smallestError = error;
+        remove = index;
+      }
+    }
+    trail.splice(remove, 1);
+  }
+}
+
 export interface Motion {
   x: number;
   y: number;
@@ -587,11 +611,14 @@ export class RadarPresentation {
 
       const world = presentationPosition(source);
       if (world === null) {
-        if (!snapshot.payload.retainEffectAnchors) invalidGrenades.add(id);
+        if (!snapshot.payload.retainEffectAnchors || old?.phase !== 'effect') {
+          invalidGrenades.add(id);
+          this.exits.delete(id);
+        }
         if (snapshot.payload.retainEffectAnchors && sameSmokeLifecycle(old, source)) {
           currentGrenades.add(id);
           const phase = transitionSmokePhase(old.phase, source, 0);
-          if (old.phase !== phase) this.beginExit(id, old, now);
+          if (old.phase !== phase && old.phase !== 'projectile') this.beginExit(id, old, now);
           const activeExit = this.exits.get(id);
           if (activeExit && activeExit.marker.phase === phase) this.exits.delete(id);
           this.grenades.set(id, {
@@ -604,13 +631,16 @@ export class RadarPresentation {
             // omit one grenade position sample; retain the last trusted spatial anchor
             // instead of blinking the mature effect off for that frame.
             positionAvailable: phase === 'effect' ? old.positionAvailable : false,
-            trail: phase === 'projectile' ? old.trail : [],
+            trail: [],
           });
         }
         continue;
       }
       const point = world;
-      if (!point || point.outOfBounds) continue;
+      if (point.outOfBounds) {
+        invalidGrenades.add(id);
+        continue;
+      }
       currentGrenades.add(id);
       const side = smokeSide;
 
@@ -657,18 +687,16 @@ export class RadarPresentation {
         motionContinuous && old.phase === 'projectile' && phase === 'projectile'
           ? old.trail.slice()
           : [];
+      // Keep every distinct observation before simplifying; sampling by time or
+      // distance alone can erase a bounce that occurs between retained samples.
       const lastTrailPoint = trail.at(-1);
       if (
         phase === 'projectile' &&
-        (lastTrailPoint === undefined ||
-          Math.hypot(point.x - lastTrailPoint.x, point.y - lastTrailPoint.y) >
-            RADAR_PRESENTATION.trailDistanceThreshold ||
-          now - lastTrailPoint.at > RADAR_PRESENTATION.trailSampleIntervalMs)
+        (!lastTrailPoint || point.x !== lastTrailPoint.x || point.y !== lastTrailPoint.y)
       ) {
         trail.push({ x: point.x, y: point.y, at: now });
       }
-      if (trail.length > RADAR_PRESENTATION.trailPoints)
-        trail.splice(0, trail.length - RADAR_PRESENTATION.trailPoints);
+      compressTrail(trail);
       const restoredEffectEnterMs =
         restoringPresentationHistory && phase === 'effect'
           ? source.kind === 'smoke'
