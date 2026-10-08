@@ -40,9 +40,7 @@ describe('Cargo cache identity', () => {
     expect(changedLock).not.toBe(lock);
     expect(changedProfile).not.toBe(manifest);
     expect(cargoCacheFingerprints(manifest, changedLock).lock).not.toBe(original.lock);
-    expect(cargoCacheFingerprints(changedProfile, lock).manifest).not.toBe(
-      original.manifest,
-    );
+    expect(cargoCacheFingerprints(changedProfile, lock).manifest).not.toBe(original.manifest);
   });
 
   it('fails closed when the local package version cannot be identified', () => {
