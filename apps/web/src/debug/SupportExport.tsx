@@ -141,7 +141,26 @@ export function SupportExport() {
   return (
     <Panel>
       <h2>问题反馈</h2>
-      <p>导出运行状态与启动记录，便于排查问题。</p>
+      <p>导出运行状态与错误记录，反馈时附上版本、发生时间和操作步骤。</p>
+      <p>
+        <a
+          href="https://github.com/Starfie1d1272/Mizar/issues/new?template=bug-report.yml"
+          target="_blank"
+          rel="noreferrer"
+          onClick={(event) => {
+            if (!window.__TAURI_INTERNALS__) return;
+            event.preventDefault();
+            void desktopInvoke('open_issue_report').catch(() =>
+              setResult({
+                error: true,
+                message: '浏览器未能打开，请手动访问 github.com/Starfie1d1272/Mizar/issues。',
+              }),
+            );
+          }}
+        >
+          在 GitHub 反馈问题
+        </a>
+      </p>
       <Button
         loading={busy}
         onClick={() => void exportBundle()}

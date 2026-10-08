@@ -20,7 +20,7 @@ pub fn message(code: &str) -> &'static str {
         "steam-account-unavailable" => "无法读取当前 Steam 账号。请在 Steam 中重新登录，再重试。",
         "video-config-missing" => "当前 Steam 账号还没有 CS2 视频配置。请用该账号从 Steam 运行一次 CS2，正常退出后重试。",
         "video-config-ambiguous" => "当前 Steam 账号存在多份视频配置。请检查 Steam 安装位置并导出诊断包。",
-        _ => "配置操作未完成。请重新检查状态并导出诊断包；保留现有配置和备份。",
+        _ => "配置工具发生内部错误。请在高级设置中导出诊断包并反馈问题；保留现有配置和备份。",
     }
 }
 

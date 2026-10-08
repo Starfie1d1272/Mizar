@@ -65,8 +65,9 @@ describe('support export', () => {
       JSON.stringify({
         ...identity,
         startupSessionId: 'new-session',
-        stage: 'main_window',
-        result: 'success',
+        stage: 'powershell',
+        result: 'failure',
+        error: poison,
       }) + '\n',
     );
     await writeFile(
@@ -155,6 +156,11 @@ describe('support export', () => {
       expect(bundle.snapshot.runtime.gsiDiagnostics).toMatchObject({
         suppressedCount: 3,
         recent: [{ code: 'INVALID_FIELD', severity: 'warning' }],
+      });
+      expect(bundle.logs.find((log) => log.name === 'desktop.ndjson')?.events[0]).toMatchObject({
+        stage: 'powershell',
+        result: 'failure',
+        hasLocalError: true,
       });
       expect(bundle.logs).toHaveLength(16);
       expect(await readFile(join(dir, 'desktop.ndjson.1'), 'utf8')).toBe(desktop);

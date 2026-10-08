@@ -1,4 +1,18 @@
-﻿Set-StrictMode -Version Latest
+﻿# Export only bounded error codes; raw PowerShell errors never cross desktop IPC.
+function Write-Cs2OperationFailure {
+    param([System.Management.Automation.ErrorRecord]$Failure, [string]$Stage)
+    [Console]::Error.WriteLine(($Failure | Format-List * -Force | Out-String))
+    $code = [string]$Failure.Exception.Data['MizarCode']
+    if (-not $code) {
+        $code = if ($Failure.Exception -is [UnauthorizedAccessException] -or $Failure.CategoryInfo.Category -eq 'PermissionDenied') { 'access-denied' } else { 'operation-failed' }
+    }
+    $diagnostic = @{ code = $code; stage = $Stage }
+    try { Write-JsonFile -Path (Join-Path $script:StateRoot 'data\cs2-last-error.json') -Value $diagnostic } catch { }
+    @{ error = $diagnostic } | ConvertTo-Json -Compress
+}
+
+
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 # The desktop reads pipes as UTF-8 even when PowerShell has no console.
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -17,17 +31,6 @@ $script:QualificationStateRoot = Join-Path $script:StateRoot 'qualification'
 $script:InstallStatePath = Join-Path $script:QualificationStateRoot 'install.json'
 $script:RunStatePath = Join-Path $script:QualificationStateRoot 'run.json'
 
-# Export only bounded error codes; raw PowerShell errors never cross desktop IPC.
-function Write-Cs2OperationFailure {
-    param([System.Management.Automation.ErrorRecord]$Failure, [string]$Stage)
-    $code = [string]$Failure.Exception.Data['MizarCode']
-    if (-not $code) {
-        $code = if ($Failure.Exception -is [UnauthorizedAccessException] -or $Failure.CategoryInfo.Category -eq 'PermissionDenied') { 'access-denied' } else { 'operation-failed' }
-    }
-    $diagnostic = @{ code = $code; stage = $Stage }
-    try { Write-JsonFile -Path (Join-Path $script:StateRoot 'data\cs2-last-error.json') -Value $diagnostic } catch { }
-    @{ error = $diagnostic } | ConvertTo-Json -Compress
-}
 
 function Clear-Cs2OperationError {
     $path = Join-Path $script:StateRoot 'data\cs2-last-error.json'

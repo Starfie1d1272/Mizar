@@ -100,7 +100,7 @@ function Get-SteamLibraryRoots {
                 if ($path -is [string] -and (Test-Path -LiteralPath $path -PathType Container)) { $libraries += $path }
             }
             break
-        } catch { $script:Cs2MetadataFailed = $true }
+        } catch { [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String)); $script:Cs2MetadataFailed = $true }
     }
     return @(Get-UniqueSteamPaths -Paths $libraries)
 }
@@ -187,7 +187,7 @@ function Resolve-CfgDirectory {
                 }
                 $root = Join-Path $libraryRoot ('steamapps\common\' + $app['installdir'])
                 if (Get-Cs2Installation $root) { $candidates += $root; continue }
-            } catch { $script:Cs2MetadataFailed = $true }
+            } catch { [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String)); $script:Cs2MetadataFailed = $true }
         }
         foreach ($product in @('Counter-Strike 2', 'Counter-Strike Global Offensive')) {
             $root = Join-Path $libraryRoot "steamapps\common\$product"

@@ -10,16 +10,22 @@ afterEach(async () => {
 });
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 const script = resolve(import.meta.dirname, 'bundle/gsi-discovery.ps1');
-function run(source) {
+function run(source, isolatedSteam = false) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  const isolation = isolatedSteam
+    ? `function Get-ItemProperty { [CmdletBinding()] param([string]$LiteralPath) [pscustomobject]@{} }; $env:ProgramFiles=''; \${env:ProgramFiles(x86)}='';`
+    : '';
   return execFileSync(
     'powershell.exe',
     [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$ErrorActionPreference='Stop'; . ${quote(script)}; ${source}`,
+      `$ErrorActionPreference='Stop'; ${isolation} . ${quote(script)}; ${source}`,
     ],
     {
+      env,
       encoding: 'utf8',
       timeout: 15000,
     },
@@ -170,6 +176,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       JSON.parse(
         run(
           `$env:MIZAR_STATE_ROOT=${quote(state)}; $env:STEAMROOT=${quote(root)}; & ${quote(statusScript)}`,
+          true,
         ),
       );
     await mkdir(join(state, 'data/gsi-install'), { recursive: true });
