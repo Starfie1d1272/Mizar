@@ -21,6 +21,11 @@ export function Settings({ tab }: { tab: string }) {
     fileConflict: boolean;
     endpointConflict: boolean;
     cfgPath: string | null;
+    readFailed: boolean;
+    candidateCount: number;
+    issues: readonly { code: string; message: string }[];
+    conflictFiles: readonly string[];
+    lastOperation: { code: string; stage: string } | null;
   } | null>(null);
   const [cs2, setCs2] = useState<{ found: boolean; managed: boolean } | null>(null);
   const product = useLocalRead<{
@@ -62,6 +67,7 @@ export function Settings({ tab }: { tab: string }) {
       await run();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作未完成。');
+      if (tab === 'gsi') await refreshGsi().catch(() => {});
     } finally {
       setBusy(false);
     }
@@ -297,8 +303,18 @@ export function Settings({ tab }: { tab: string }) {
           <Panel className="settings-card settings-card--wide">
             <div className="preparation-check-heading">
               <h2>游戏连接</h2>
-              <StatusPill tone={gsi?.conflict ? 'warning' : gsi?.installed ? 'success' : 'info'}>
-                {gsi?.conflict ? '需检查' : gsi?.installed ? 'GSI 已安装' : '待安装 GSI'}
+              <StatusPill
+                tone={
+                  gsi?.readFailed || gsi?.conflict ? 'warning' : gsi?.installed ? 'success' : 'info'
+                }
+              >
+                {gsi?.readFailed
+                  ? '无法检查'
+                  : gsi?.conflict
+                    ? '需检查'
+                    : gsi?.installed
+                      ? 'GSI 已安装'
+                      : '待安装 GSI'}
               </StatusPill>
             </div>
             <p>安装 GSI 后，CS2 会向 Mizar 发送比赛与选手数据。</p>
@@ -309,28 +325,49 @@ export function Settings({ tab }: { tab: string }) {
                   : '已检测到 CS2，打开工作台后安排窗口'
                 : '等待 CS2 窗口'}
             </p>
-            {gsi?.conflict ? (
-              <StatusBanner tone="warning">
-                {gsi.fileConflict
-                  ? 'Mizar GSI 文件与安装记录不一致，请恢复原配置后重新安装'
-                  : '发现其它 GSI 配置也在发送数据，可能产生重复采集'}
+            {gsi?.issues?.map((issue) => (
+              <StatusBanner key={issue.code} tone={gsi.readFailed ? 'danger' : 'warning'}>
+                {issue.message}
               </StatusBanner>
+            ))}
+            {gsi?.endpointConflict ? (
+              <>
+                <ul className="settings-conflict-files">
+                  {gsi.conflictFiles.map((path) => (
+                    <li key={path}>
+                      <code>{path}</code>
+                    </li>
+                  ))}
+                </ul>
+                <p>
+                  将重复文件备份到配置文件夹外，再移出或改名停用。保留其他软件使用不同接收地址的配置。
+                </p>
+              </>
             ) : null}
             {!window.__TAURI_INTERNALS__ ? (
               <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
             ) : (
               <div className="preparation-actions">
                 <Button disabled={busy} onClick={() => void action(refreshGsi)}>
-                  自动检测 CS2
+                  重新检查 CS2 与 GSI
                 </Button>
                 <Button
                   disabled={busy}
                   variant={gsi?.installed ? 'secondary' : 'primary'}
                   onClick={() =>
                     void action(async () => {
-                      await desktopInvoke('configure_gsi', { restore: false, choose: false });
-                      await refreshGsi();
-                      setMessage('GSI 已安装，请重新启动 CS2 以加载配置。');
+                      try {
+                        await desktopInvoke('configure_gsi', { restore: false, choose: false });
+                        const next = await desktopInvoke<NonNullable<typeof gsi>>('gsi_status');
+                        setGsi(next);
+                        setMessage(
+                          next.installed && !next.conflict && !next.readFailed
+                            ? 'GSI 已安装，请重新启动 CS2 以加载配置。'
+                            : '已执行安装检查，请处理上方列出的问题后重新检查。',
+                        );
+                      } finally {
+                        await refreshGsi();
+                      }
                     })
                   }
                 >
@@ -348,24 +385,58 @@ export function Settings({ tab }: { tab: string }) {
                 >
                   恢复原 GSI 配置
                 </Button>
-                {!gsi?.detected ? (
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        await desktopInvoke('configure_gsi', { restore: false, choose: true });
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void action(async () => {
+                      const selected = await desktopInvoke<boolean>('select_cs2_installation', {
+                        executable: false,
+                      });
+                      if (selected) {
                         await refreshGsi();
-                      })
-                    }
-                  >
-                    选择 CS2 安装目录
-                  </Button>
-                ) : null}
+                        setMessage(
+                          '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
+                        );
+                      }
+                    })
+                  }
+                >
+                  选择 CS2 安装目录
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void action(async () => {
+                      const selected = await desktopInvoke<boolean>('select_cs2_installation', {
+                        executable: true,
+                      });
+                      if (selected) {
+                        await refreshGsi();
+                        setMessage(
+                          '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
+                        );
+                      }
+                    })
+                  }
+                >
+                  选择 cs2.exe
+                </Button>
+                <Button
+                  disabled={busy || !gsi?.cfgPath}
+                  onClick={() => void action(() => desktopInvoke('open_cs2_config_directory'))}
+                >
+                  打开配置文件夹
+                </Button>
               </div>
             )}
             <details>
               <summary>详细信息</summary>
-              <p>{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
+              <p>
+                支持选择 CS2 安装根目录、game\bin\win64 文件夹或
+                cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；受管理游戏退出并恢复设置后才能更换。
+              </p>
+              <p className="settings-conflict-files">{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
+              {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
             </details>
           </Panel>
           <Cs2LaunchSettings />

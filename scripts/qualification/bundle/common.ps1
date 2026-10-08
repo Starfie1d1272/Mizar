@@ -17,6 +17,23 @@ $script:QualificationStateRoot = Join-Path $script:StateRoot 'qualification'
 $script:InstallStatePath = Join-Path $script:QualificationStateRoot 'install.json'
 $script:RunStatePath = Join-Path $script:QualificationStateRoot 'run.json'
 
+# Export only bounded error codes; raw PowerShell errors never cross desktop IPC.
+function Write-Cs2OperationFailure {
+    param([System.Management.Automation.ErrorRecord]$Failure, [string]$Stage)
+    $code = [string]$Failure.Exception.Data['MizarCode']
+    if (-not $code) {
+        $code = if ($Failure.Exception -is [UnauthorizedAccessException] -or $Failure.CategoryInfo.Category -eq 'PermissionDenied') { 'access-denied' } else { 'operation-failed' }
+    }
+    $diagnostic = @{ code = $code; stage = $Stage }
+    try { Write-JsonFile -Path (Join-Path $script:StateRoot 'data\cs2-last-error.json') -Value $diagnostic } catch { }
+    @{ error = $diagnostic } | ConvertTo-Json -Compress
+}
+
+function Clear-Cs2OperationError {
+    $path = Join-Path $script:StateRoot 'data\cs2-last-error.json'
+    if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
+}
+
 function Write-Utf8NoBom {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -65,7 +82,7 @@ function Get-GsiEndpointConflicts {
     $canonicalFullPath = $null
     try { $canonicalFullPath = [System.IO.Path]::GetFullPath($CanonicalCfgPath) } catch { }
     $conflicts = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $CfgDirectory -Filter 'gamestate_integration_*.cfg' -File -ErrorAction SilentlyContinue)) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $CfgDirectory -Filter 'gamestate_integration_*.cfg' -File -ErrorAction Stop)) {
         $fileFullPath = $null
         try { $fileFullPath = [System.IO.Path]::GetFullPath($file.FullName) } catch { }
         if ($null -ne $canonicalFullPath -and [string]::Equals($fileFullPath, $canonicalFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -74,7 +91,7 @@ function Get-GsiEndpointConflicts {
         try {
             $contents = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
             if ([regex]::IsMatch($contents, $uriPattern)) { $conflicts += $file.FullName }
-        } catch { }
+        } catch { throw }
     }
     return @($conflicts)
 }

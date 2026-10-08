@@ -105,12 +105,15 @@ async function powershell(script, extra = []) {
 }
 try {
   // Use an isolated cfg directory; this does not imply real CS2 acceptance.
-  const cfgDirectory = join(stateRoot, 'gsi-migration-test', 'cfg');
+  const cfgDirectory = join(stateRoot, 'gsi-migration-test', 'game/csgo/cfg');
   const legacyCfgPath = join(cfgDirectory, LEGACY_GSI_CFG_NAME);
   const mizarCfgPath = join(cfgDirectory, MIZAR_GSI_CFG_NAME);
   const legacyContents = 'legacy GSI migration regression fixture\n';
   const installationPath = join(stateRoot, 'data/gsi-install/install.json');
   await mkdir(cfgDirectory, { recursive: true });
+  const fakeBin = join(stateRoot, 'gsi-migration-test/game/bin/win64');
+  await mkdir(fakeBin, { recursive: true });
+  await writeFile(join(fakeBin, 'cs2.exe'), 'discovery fixture; not a runnable CS2');
   await mkdir(join(stateRoot, 'data/gsi-install'), { recursive: true });
   await writeFile(legacyCfgPath, legacyContents, 'utf8');
   await writeFile(

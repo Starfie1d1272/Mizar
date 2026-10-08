@@ -49,6 +49,85 @@ test('optional Steam avatars explain key acquisition and open the fixed official
   await expect(page.getByRole('button', { name: '保存密钥', exact: true })).toBeDisabled();
 });
 
+test('GSI conflict guidance names files and keeps native installation selection available', async ({
+  page,
+}, testInfo) => {
+  // This IPC fixture proves browser guidance, not native dialogs or actual Windows files.
+  await page.addInitScript(() => {
+    const commands: string[] = [];
+    Object.assign(window, {
+      installationCommands: commands,
+      __TAURI_INTERNALS__: {
+        invoke: <T>(command: string): Promise<T> => {
+          commands.push(command);
+          if (command === 'gsi_status')
+            return Promise.resolve({
+              detected: true,
+              installed: false,
+              conflict: true,
+              fileConflict: true,
+              endpointConflict: true,
+              readFailed: false,
+              candidateCount: 1,
+              cfgPath:
+                'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\csgo\\cfg\\gamestate_integration_mizar.cfg',
+              conflictFiles: [
+                'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\csgo\\cfg\\gamestate_integration_duplicate.cfg',
+              ],
+              issues: [
+                {
+                  code: 'gsi-file-changed',
+                  message:
+                    'Mizar GSI 文件与安装记录不一致。请先备份当前文件，再恢复原 GSI 配置并重新安装。',
+                },
+                {
+                  code: 'endpoint-conflict',
+                  message:
+                    '其他 GSI 配置也向 Mizar 的接收地址发送数据。请检查下列文件，备份后停用重复配置，再重新检查。',
+                },
+              ],
+            } as T);
+          if (command === 'select_cs2_installation') return Promise.resolve(true as T);
+          if (command === 'cs2_config_status')
+            return Promise.resolve({
+              qualityPreset: 'high',
+              frameRateLimit: 60,
+              pending: false,
+              running: false,
+            } as T);
+          return Promise.resolve({ found: false, managed: false } as T);
+        },
+      },
+    });
+  });
+  await page.goto('/settings?tab=gsi');
+  await expect(
+    page.getByText(
+      'Mizar GSI 文件与安装记录不一致。请先备份当前文件，再恢复原 GSI 配置并重新安装。',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      '其他 GSI 配置也向 Mizar 的接收地址发送数据。请检查下列文件，备份后停用重复配置，再重新检查。',
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/gamestate_integration_duplicate.cfg/)).toBeVisible();
+  await page.getByRole('button', { name: '打开配置文件夹', exact: true }).click();
+  const selection = page.getByRole('button', { name: '选择 CS2 安装目录', exact: true });
+  await selection.focus();
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByText('已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。'),
+  ).toBeVisible();
+  const commands = await page.evaluate(
+    () => Reflect.get(window, 'installationCommands') as string[],
+  );
+  expect(commands).toContain('select_cs2_installation');
+  expect(commands).toContain('open_cs2_config_directory');
+  expect(commands).not.toContain('configure_gsi');
+  await page.screenshot({ path: testInfo.outputPath('gsi-conflict-guidance.png'), fullPage: true });
+});
+
 test('CS2 launch settings use desktop intents and expose pending recovery', async ({
   page,
   context,

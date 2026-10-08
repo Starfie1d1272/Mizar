@@ -86,3 +86,5 @@ C4 预测曾与制作提示同时使用 0019，现编号 0020。只修正索引�
 - [ADR-0045：受管理游戏的画质与帧率预算](0045-managed-game-quality-and-frame-budget.md)
 
 - [ADR-0046：赛事测试赛与节目衔接隔离](0046-event-test-matches.md)
+
+- [ADR-0047：CS2 安装选择、发现与故障引导](0047-shared-cs2-installation-discovery.md)

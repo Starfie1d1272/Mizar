@@ -22,6 +22,8 @@ fn main() {
             "save_support_bundle",
             "gsi_status",
             "configure_gsi",
+            "select_cs2_installation",
+            "open_cs2_config_directory",
         ]),
     ))
     .expect("Tauri build metadata");

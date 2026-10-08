@@ -128,31 +128,44 @@ test('desktop save reports cancellation, failure and success, omitting private H
   await expect(page.getByRole('status').filter({ hasText: '诊断包已保存' })).toBeVisible();
   expect(payloads).toHaveLength(3);
   expect(payloads[0]).toEqual({
-    desktop: { gsi: { installed: true }, cs2: { found: true, managed: false } },
+    desktop: {
+      gsi: { collectionStatus: 'available', installed: true, issueCodes: [], lastOperation: null },
+      cs2: { collectionStatus: 'available', found: true, managed: false },
+    },
   });
 });
 
-test('unresponsive Host status cannot block a diagnostic export', async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.assign(window, {
-      __TAURI_INTERNALS__: {
-        async invoke<T>(command: string): Promise<T> {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          if (command === 'save_support_bundle') return true as T;
-          return new Promise<T>(() => {});
+for (const collectionStatus of ['failed', 'timeout'] as const) {
+  test(`Host status ${collectionStatus} is recorded distinctly without blocking export`, async ({
+    page,
+  }) => {
+    await page.addInitScript((state) => {
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          async invoke<T>(command: string): Promise<T> {
+            if (command === 'save_support_bundle') return true as T;
+            if (state === 'failed') throw new Error('private-local-error');
+            return new Promise<T>(() => {});
+          },
         },
+      });
+    }, collectionStatus);
+    let payload: unknown;
+    await page.route('**/debug/support-bundle', (route) => {
+      payload = route.request().postDataJSON();
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(bundle) });
+    });
+    await page.goto('/debug');
+    await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '诊断包已保存' })).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(payload).toEqual({
+      desktop: {
+        gsi: { collectionStatus, issueCodes: [], lastOperation: null },
+        cs2: { collectionStatus },
       },
     });
+    expect(JSON.stringify(payload)).not.toContain('private-local-error');
   });
-  let payload: unknown;
-  await page.route('**/debug/support-bundle', (route) => {
-    payload = route.request().postDataJSON();
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(bundle) });
-  });
-  await page.goto('/debug');
-  await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
-  await expect(page.getByRole('status').filter({ hasText: '诊断包已保存' })).toBeVisible({
-    timeout: 8000,
-  });
-  expect(payload).toEqual({ desktop: { gsi: null, cs2: null } });
-});
+}

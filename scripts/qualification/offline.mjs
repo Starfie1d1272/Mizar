@@ -53,6 +53,7 @@ export async function assertGsiScriptContract(scriptsDir) {
     'gsi-discovery.ps1',
     'install-gsi.ps1',
     'gsi-status.ps1',
+    'select-cs2-installation.ps1',
     'restore-gsi.ps1',
   ];
   const sources = new Map();
@@ -61,7 +62,12 @@ export async function assertGsiScriptContract(scriptsDir) {
     await assertFile(path, name);
     sources.set(name, await readFile(path, 'utf8'));
   }
-  for (const name of ['install-gsi.ps1', 'gsi-status.ps1', 'restore-gsi.ps1']) {
+  for (const name of [
+    'install-gsi.ps1',
+    'gsi-status.ps1',
+    'restore-gsi.ps1',
+    'select-cs2-installation.ps1',
+  ]) {
     const source = sources.get(name);
     const imports = new Set(
       Array.from(
@@ -76,7 +82,9 @@ export async function assertGsiScriptContract(scriptsDir) {
     }
     for (const dependency of imports)
       await assertFile(join(scriptsDir, dependency), `${name} 依赖的 ${dependency}`);
-    if (name !== 'restore-gsi.ps1' && !/\bResolve-CfgDirectory\b/.test(source))
+    const resolver =
+      name === 'select-cs2-installation.ps1' ? /\bResolve-Cs2Input\b/ : /\bResolve-CfgDirectory\b/;
+    if (name !== 'restore-gsi.ps1' && !resolver.test(source))
       throw new Error(`qualification ${name} 未使用共享 GSI 目录发现`);
   }
   const discovery = sources.get('gsi-discovery.ps1');
@@ -116,6 +124,7 @@ async function assertBundleSmoke(outputRoot) {
     'scripts/common.ps1',
     'scripts/gsi-discovery.ps1',
     'scripts/gsi-status.ps1',
+    'scripts/select-cs2-installation.ps1',
     'scripts/install-gsi.ps1',
     'scripts/restore-gsi.ps1',
     'scripts/start-product.ps1',
