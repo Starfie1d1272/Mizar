@@ -187,10 +187,13 @@ public class UpdateFixture {
       assert.equal(report.code, success ? 'update_completed' : 'update_committed_payload_invalid');
       const recovery = await run([
         '-Command',
-        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'`,
+        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $expected = [IO.Path]::GetFullPath('${stage.replace(/'/g, "''")}').TrimEnd('\\'); $entry = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'; @{ present = [bool]$entry; targetsStage = [bool]($entry -and $entry.Contains(' -File "' + (Join-Path $expected 'update-install.ps1') + '" -Mode Recover -StageRoot "' + $expected + '"')) } | ConvertTo-Json -Compress`,
       ]);
-      assert.equal(recovery.output.includes(stage), !success);
-      assert.deepEqual(await readFile(join(stage, 'previous/Mizar.exe')), binary);
+      assert.equal(recovery.code, 0, recovery.errors);
+      // Compare the actual command with the OS-normalized target: Framework
+      // GetFullPath can expand the runner's RUNNER~1 temporary directory alias.
+      assert.deepEqual(JSON.parse(recovery.output), { present: !success, targetsStage: !success });
+      if (!success) assert.deepEqual(await readFile(join(stage, 'previous/Mizar.exe')), binary);
       assert.equal(
         await readFile(join(state, 'user-data.json'), 'utf8'),
         'untouched match and settings',
