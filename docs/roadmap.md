@@ -45,6 +45,8 @@ Mizar 的第一个正式版 [v1.0.0](https://github.com/Starfie1d1272/Mizar/rele
 - [#142 烟雾动效](https://github.com/Starfie1d1272/Mizar/issues/142)、[#143 C4 动效](https://github.com/Starfie1d1272/Mizar/issues/143)、[#144 选手状态动效](https://github.com/Starfie1d1272/Mizar/issues/144)：依赖真实播出反馈，优先信息正确性。
 - [#110 播出视觉包架构](https://github.com/Starfie1d1272/Mizar/issues/110)：长期架构方向，按明确需求拆安全声明式视觉包与专业展示扩展；**不整体作为 2.0 发布门槛**。
 
+仍保留**第三方 HUD 展示层复用**与**更多赛事平台适配**作为未排期候选：只有明确的外部消费者或赛事平台需求及可验证集成路径出现后，才拆分实施 Issue；它们不自动成为任何已命名版本的发布门槛。
+
 ## 2.0：高级制播与游戏内镜头控制
 
 目标从“自动包装比赛”扩展为“编排真实游戏内视角与高价值精确事件”。
@@ -70,7 +72,7 @@ Mizar 的第一个正式版 [v1.0.0](https://github.com/Starfie1d1272/Mizar/rele
 | 所属领域 | `area:bp` / `area:hud` / `area:program` / `area:distribution` / `area:desktop` / `area:telemetry` / `area:integration` / `area:observer` | 明确主要 owner，其他领域通过 Issue 链接协同 |
 | 优先级 | `priority:p1` / `priority:p2` / `priority:p3` | P1 优先解决实际风险，P2 明确价值，P3 非紧急打磨；P0 留给现场阻断和重大安全风险 |
 | 规划视野 | `horizon:now` / `horizon:next` / `horizon:later` / `horizon:research` | 表示投入顺序，不等于发布日期 |
-| 目标版本 | `target:v1.0.1` / `target:v1.1` / `target:v1.x` / `target:v2.0` / `target:v3.0-research` | **仅承诺可追踪的计划目标**；待实际发布日期确定再使用 GitHub Milestone |
+| 目标版本 | `target:v1.0.1` / `target:v1.1` / `target:v1.x` / `target:v2.0` / `target:v3.0-research` | **仅表示可追踪的计划目标**；待实际发布日期确定再使用 GitHub Milestone |
 
 历史内部里程碑“M2 — 本地制播内核”与产品 `2.0` **没有关系**，不再用于活跃规划。Issue 的现行分类以顶部“当前规划”和标签为准；旧 RC/1.0 的决策与验收正文保留以便追溯。已完成并拆出具体任务的 #79 视觉总表作为历史索引归档。
 
