@@ -41,6 +41,7 @@ export interface ResourceReceipt {
   publicationBase64: string;
   publicationBundleBase64: string;
   archiveBundleBase64: string;
+  catalog?: ResourceCatalogReceipt;
   trust: {
     schemaVersion: 'mizar.sigstore-cache.v1';
     rootChain: string[];
@@ -51,8 +52,80 @@ export interface ResourceReceipt {
 export function verifyResourceReceipt(options: {
   receipt: unknown;
   manifestBytes?: Buffer;
-  policy: ResourceTrustPolicy;
+  policy?: ResourceTrustPolicy;
+  expectedCore?: ResourceCatalogCorePin;
   purpose: 'install' | 'cache' | 'legacy' | 'rollback';
   tufCachePath?: string;
   signal?: AbortSignal;
 }): Promise<import('./index.mjs').ResourcePackManifest>;
+
+export interface ResourceCatalogCorePin {
+  appVersion: string;
+  gitSha: string;
+  archiveSha256?: string;
+}
+export interface ResourceCatalogReceipt {
+  schemaVersion: 'mizar.resource-catalog-receipt.v1';
+  descriptorBase64: string;
+  descriptorBundleBase64: string;
+  catalogBase64: string;
+  catalogBundleBase64: string;
+  trust: ResourceReceipt['trust'];
+}
+/** Opaque process-local handle, issued only after real fixed-root dual-proof authentication. */
+export interface ResourceCatalogAuthorization {
+  readonly schemaVersion: 'mizar.authenticated-resource-catalog.v1';
+}
+export interface ResourceCatalogIdentity {
+  core: ResourceCatalogCorePin & { archive: string; archiveSha256: string };
+  policy: ResourceTrustPolicy;
+  manifestSha256: string;
+  archive: ResourcePublication['archive'];
+  publication: {
+    name: string;
+    sequence: number;
+    issuedAt: string;
+    expiresAt: string;
+    sha256: string;
+  };
+  assets: Readonly<Record<string, string>>;
+  descriptorSha256: string;
+}
+export function getResourceAuthorization(
+  authorization: ResourceCatalogAuthorization,
+): Readonly<ResourceCatalogIdentity>;
+export function verifyResourceCatalogBytes(options: {
+  descriptorBytes: Buffer;
+  descriptorBundleBytes: Buffer;
+  catalogBytes: Buffer;
+  catalogBundleBytes: Buffer;
+  expectedCore: ResourceCatalogCorePin;
+  tufCachePath: string;
+  signal?: AbortSignal;
+}): Promise<ResourceCatalogAuthorization>;
+export function verifyResourceCatalogReceipt(options: {
+  receipt: unknown;
+  expectedCore: ResourceCatalogCorePin;
+  purpose?: 'install' | 'legacy' | 'cache' | 'rollback';
+  tufCachePath?: string;
+  signal?: AbortSignal;
+}): Promise<ResourceCatalogAuthorization>;
+export function verifyCatalogResourcePublicationBytes(options: {
+  authorization: ResourceCatalogAuthorization;
+  statementBytes: Buffer;
+  publicationBundleBytes: Buffer;
+  archiveBytes: Buffer;
+  archiveBundleBytes: Buffer;
+  tufCachePath: string;
+  signal?: AbortSignal;
+}): Promise<VerifiedPackContent & { statement: ResourcePublication; receipt: ResourceReceipt }>;
+
+export const RESOURCE_ASSET_NAMES: Readonly<{
+  descriptor: string;
+  descriptorQualification: string;
+  catalog: string;
+  catalogPromotion: string;
+  archiveQualification: string;
+  publication: string;
+  publicationPromotion: string;
+}>;

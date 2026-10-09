@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,13 +25,17 @@ const policy = {
 const app = buildApp({ resources: { root: join(root, 'assets'), policy } });
 const marker = join(coreRoot, 'installed.flag');
 // A temp-directory installed marker tests the completion boundary, not NSIS execution.
-await writeFile(marker, 'isolated qualification marker', { flag: 'wx' });
+const existingMarker = await access(marker).then(
+  () => true,
+  () => false,
+);
+if (!existingMarker) await writeFile(marker, 'isolated qualification marker', { flag: 'wx' });
 try {
   await app.ready();
   const store = app.getDecorator('getResourceStore')();
   await assert.rejects(
-    completeBootstrap({ app, coreRoot, corePlan, policy }),
-    /Official resource input/,
+    completeBootstrap({ app, coreRoot, corePlan }),
+    /Authenticated official resource cache/,
   );
   assert.equal(app.getDecorator('getResourceStore')(), store);
   assert.equal(store.getStatus('official:epl-default').activeVersion, null);
@@ -40,7 +44,6 @@ try {
       app,
       coreRoot,
       corePlan: { ...corePlan, contentDigest: '0'.repeat(64) },
-      policy,
     }),
     /Installed Core identity/,
   );
@@ -50,6 +53,6 @@ try {
   console.log('PASS: authenticated Core plan mismatch cannot reach resource completion');
 } finally {
   await app.close();
-  await rm(marker);
+  if (!existingMarker) await rm(marker);
   await rm(root, { recursive: true, force: true });
 }

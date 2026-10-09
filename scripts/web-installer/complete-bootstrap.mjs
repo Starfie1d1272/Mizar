@@ -1,6 +1,8 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { verifyPayload } from '../../../scripts/product-runtime.mjs';
+import { getResourceAuthorization } from '@mizar/resource-pack-contract/runtime';
+import { restoreResourceAuthorization } from './published-bootstrap.mjs';
 import { installOfficialPack } from './install-official-pack.mjs';
 
 /** Run in the authenticated deployed Core, using the existing Companion App. */
@@ -8,7 +10,7 @@ export async function completeBootstrap({
   app,
   coreRoot,
   corePlan,
-  policy,
+  authorization,
   inputs,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
@@ -16,7 +18,6 @@ export async function completeBootstrap({
 }) {
   signal.throwIfAborted();
   corePlan = { ...corePlan };
-  policy = { ...policy };
   // Reuse the product's real payload verifier, not NSIS's UI result or a supplied boolean.
   const artifact = await verifyPayload(coreRoot);
   signal.throwIfAborted();
@@ -24,8 +25,7 @@ export async function completeBootstrap({
   if (
     artifact.appVersion !== corePlan.version ||
     artifact.gitSha !== corePlan.gitSha ||
-    artifact.artifactSha256 !== corePlan.contentDigest ||
-    artifact.appVersion !== policy.coreVersion
+    artifact.artifactSha256 !== corePlan.contentDigest
   ) {
     throw new Error('Installed Core identity does not match the authenticated bootstrap plan');
   }
@@ -36,10 +36,18 @@ export async function completeBootstrap({
   const store = app.getDecorator('getResourceStore')();
   if (!store)
     throw new Error('Companion resource Store is unavailable; installation is incomplete');
+  authorization ??= await restoreResourceAuthorization({
+    store,
+    expectedCore: { appVersion: artifact.appVersion, gitSha: artifact.gitSha },
+    signal,
+  });
+  const identity = getResourceAuthorization(authorization);
+  if (identity.core.appVersion !== artifact.appVersion || identity.core.gitSha !== artifact.gitSha)
+    throw new Error('Resource catalog belongs to another authenticated Core');
   const resources = await installOfficialPack({
     store,
     inputs,
-    policy,
+    authorization,
     tufCachePath,
     signal,
     onProgress,

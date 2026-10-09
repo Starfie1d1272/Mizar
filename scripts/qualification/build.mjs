@@ -384,7 +384,11 @@ async function main() {
     if (hasResourceContract) {
       const bridgeDirectory = join(appDir, 'dist', 'web-installer');
       await mkdir(bridgeDirectory, { recursive: true });
-      for (const name of ['install-official-pack.mjs', 'complete-bootstrap.mjs']) {
+      for (const name of [
+        'install-official-pack.mjs',
+        'complete-bootstrap.mjs',
+        'published-bootstrap.mjs',
+      ]) {
         await cp(join(rootDir, 'scripts', 'web-installer', name), join(bridgeDirectory, name));
       }
     }

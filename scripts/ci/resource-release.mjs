@@ -11,22 +11,18 @@ import { releaseAttestationArgs } from '../qualification/release-identity.mjs';
 import { validateReleaseTag } from '../qualification/app-version.mjs';
 import {
   LIMITS,
-  PACK_ID,
   requireValue,
   assertCompatibility,
   isSourceSha,
 } from '../../packages/resource-pack-contract/index.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
-const names = Object.freeze({
-  descriptor: 'resource-descriptor.json',
-  descriptorQualification: 'resource-descriptor-qualification-provenance.json',
-  catalog: 'resource-catalog.json',
-  catalogPromotion: 'resource-catalog-promotion-provenance.json',
-  archiveQualification: 'resource-pack-provenance.json',
-  publication: 'resource-publication.json',
-  publicationPromotion: 'resource-publication-provenance.json',
-});
+import {
+  RESOURCE_ASSET_NAMES as names,
+  createResourceDescriptor,
+  createResourceCatalog,
+} from '../../packages/resource-pack-contract/catalog.mjs';
+
 const equal = (a, b, message) => requireValue(JSON.stringify(a) === JSON.stringify(b), message);
 const coreIdentity = (manifest) => {
   requireValue(
@@ -64,28 +60,15 @@ export function makeResourceDescriptor(pack, manifest, parameters) {
   };
   // Also check actual Core compatibility; makePublication checks only the lower bound.
   assertCompatibility(pack.manifest.compatibility, policy.coreVersion);
-  const assetNames = [publication.archive.name, ...Object.values(names)];
-  const prefix = `https://github.com/${repository}/releases/download/v${core.appVersion}/`;
-  return {
-    schemaVersion: 'mizar.resource-descriptor.v1',
-    repository,
+  return createResourceDescriptor({
     core,
-    resources: [
-      {
-        packId: PACK_ID,
-        policy,
-        archive: publication.archive,
-        manifestSha256: pack.manifestSha256,
-        publication: {
-          name: names.publication,
-          sequence: publication.sequence,
-          issuedAt: publication.issuedAt,
-          expiresAt: publication.expiresAt,
-        },
-        assets: Object.fromEntries(assetNames.map((name) => [name, prefix + name])),
-      },
-    ],
-  };
+    packVersion: policy.packVersion,
+    archive: publication.archive,
+    manifestSha256: pack.manifestSha256,
+    sequence: publication.sequence,
+    issuedAt: publication.issuedAt,
+    expiresAt: publication.expiresAt,
+  });
 }
 
 export function makePublishedCatalog(candidate, promotionSha) {
@@ -94,19 +77,12 @@ export function makePublishedCatalog(candidate, promotionSha) {
     ...candidate.entry.publication,
     promotionSha,
   });
-  return {
-    ...candidate.descriptor,
-    schemaVersion: 'mizar.resource-catalog.v1',
-    descriptorSha256: sha256(candidate.bytes),
+  return createResourceCatalog(
+    candidate.descriptor,
+    candidate.bytes,
     promotionSha,
-    resources: [
-      {
-        ...candidate.entry,
-        policy: { ...candidate.entry.policy, promotionSha },
-        publication: { ...candidate.entry.publication, sha256: sha256(jsonBytes(publication)) },
-      },
-    ],
-  };
+    sha256(jsonBytes(publication)),
+  );
 }
 
 export async function prepareResourceCandidate(

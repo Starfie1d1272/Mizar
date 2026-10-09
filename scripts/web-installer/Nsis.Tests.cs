@@ -45,6 +45,22 @@ namespace Mizar.WebInstaller {
         var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
+        // Only the qualification harness invokes the actual deployed Node bridge.
+        string bridgeScript=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_SCRIPT");
+        if (!String.IsNullOrEmpty(bridgeScript)) {
+          string bridgeModule=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_MODULE");
+          string planPath=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_PLAN");
+          string node=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_NODE");
+          foreach(string argument in new[]{bridgeScript,bridgeModule,planPath,node,target})
+            if(String.IsNullOrEmpty(argument) || argument.IndexOfAny(new char[]{'"','\r','\n'})>=0)
+              throw new IOException("Invalid qualification bridge arguments");
+          using(var bridge=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+            FileName=node, Arguments="\""+bridgeScript+"\" \""+bridgeModule+"\" \""+target+"\" \""+planPath+"\"", UseShellExecute=false, CreateNoWindow=true
+          })) {
+            if(!bridge.WaitForExit(120000) || bridge.ExitCode!=0) throw new IOException("Real installed Core bootstrap boundary failed");
+          }
+          Console.WriteLine("PASS: real NSIS-installed Core and deployed App bridge deny incomplete official resource installation");
+        }
         // A second fresh attempt must not overwrite this installation or user registration.
         bool refused=false; try { await Nsis.Install(plan,installer,target,CancellationToken.None); } catch(IOException) { refused=true; }
         Assert(refused);

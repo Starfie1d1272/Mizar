@@ -631,6 +631,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           verifyTrustedPack: createRuntimeVerifier(
             options.resources!.policy,
             options.resources!.cacheHistory,
+            options.productRuntime?.appVersion
+              ? {
+                  appVersion: options.productRuntime.appVersion,
+                  gitSha: options.productRuntime.gitSha,
+                }
+              : undefined,
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
         });

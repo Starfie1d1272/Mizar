@@ -15,27 +15,9 @@ let installs = 0;
 let verifications = 0;
 const store = {
   getStatus: () => ({ phase: 'ready', activeVersion: '1.0.0', preparedVersion: null }),
-  reuseActive: async (_packId, verifyIdentity, { signal }) => {
+  reuseActive: async () => {
     verifications += 1;
-    const statement = {
-      schemaVersion: 'mizar.resource-publication.v1',
-      repository: 'Starfie1d1272/Mizar',
-      packId: 'official:epl-default',
-      packVersion: '1.0.0',
-      sourceRef: 'refs/heads/main',
-      sourceSha: '3'.repeat(40),
-      promotionSha: '2'.repeat(40),
-      contentKind: 'recorded-replay',
-    };
-    // Real SDK authorization must reject this same-version, wrong-source receipt.
-    return verifyIdentity({
-      receipt: {
-        schemaVersion: 'mizar.resource-receipt.v1',
-        publicationBase64: Buffer.from(JSON.stringify(statement)).toString('base64'),
-        manifestBase64: Buffer.from('{}').toString('base64'),
-      },
-      signal,
-    });
+    throw new Error('Unauthenticated cache lookup');
   },
   read: async () => {
     reads += 1;
@@ -50,17 +32,20 @@ await assert.rejects(
   installOfficialPack({
     store,
     inputs: {},
-    policy: {
-      packVersion: '1.0.0',
-      sourceSha: '1'.repeat(40),
-      promotionSha: '2'.repeat(40),
-      coreVersion: '1.1.0',
-      minimumSequence: 0,
+    authorization: {
+      schemaVersion: 'mizar.authenticated-resource-catalog.v1',
+      policy: {
+        packVersion: '1.0.0',
+        sourceSha: '1'.repeat(40),
+        promotionSha: '2'.repeat(40),
+        coreVersion: '1.1.0',
+        minimumSequence: 0,
+      },
     },
   }),
-  /发行声明身份/,
+  /必须先认证/,
 );
-assert.equal(verifications, 1, 'Store must invoke real target identity verification');
+assert.equal(verifications, 0, 'Unverified catalog policy must not reach Store');
 assert.equal(reads, 0, 'Same-version bytes must not bypass target authorization');
 assert.equal(installs, 0, 'No unverified inputs may reach Store installation');
 console.log('PASS: ready same-version status cannot bypass target authorization');

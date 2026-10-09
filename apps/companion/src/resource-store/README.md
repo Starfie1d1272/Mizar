@@ -41,3 +41,5 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 `apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。`app-integration.test.ts` 用真实 SDK 和公开 TUF snapshot 验证离线密码学拒绝且不调用网络，并验证真实 App 单例/Full 回退、异步制作互斥和原 URL 的 Range/损坏拒绝。原 URL 的活动版本正例是明确的 HTTP 授权 fixture，不是正式签名通过证据。正式签名正例仍须用真实发布包跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
 
 跨分支接线可执行 `pnpm --filter @mizar/companion exec tsx test/resource-store/verify-real-pack.mts <Pack/Trust-checkout>`。该脚本使用实际 producer、shared parser 和运行时 SDK，把真实 EPL 的未签反例送入 Store；必须到达 bundle/签名拒绝才通过，TUF 网络初始化失败明确不能冒充密码学拒绝。它不声明新资源包的正式签发成功，也不代替签名 receipt 的离线缓存验证。
+
+客户端目录集成保留原 Qualification descriptor / Promotion catalog 双证明在同一 resource receipt 的 `catalog` 字段中。App 将已认证 productRuntime 的 appVersion/gitSha 传入 SDK；没有裸 policy 时，只有该 Core 绑定的真实目录双证据才能恢复离线策略。安装器传入的是 shared SDK 的进程内授权句柄，不接受镜像自报 trusted。此适配不新增 Store、缓存、监听器或发布权限；旧 Full 回退与已批准旧 receipt 策略路径继续保留。

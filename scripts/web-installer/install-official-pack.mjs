@@ -2,7 +2,10 @@ import { Buffer } from 'node:buffer';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { PACK_ID, REPLAY_IDS, LIMITS } from '@mizar/resource-pack-contract';
-import { verifyResourcePublicationBytes } from '@mizar/resource-pack-contract/runtime';
+import {
+  getResourceAuthorization,
+  verifyCatalogResourcePublicationBytes,
+} from '@mizar/resource-pack-contract/runtime';
 import {
   createActivePolicyVerifier,
   isOfficialWebResource,
@@ -17,13 +20,14 @@ import {
 export async function installOfficialPack({
   store,
   inputs,
-  policy,
+  authorization,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
   onProgress = () => {},
 }) {
   signal.throwIfAborted();
-  const pinnedPolicy = { ...policy };
+  const identity = getResourceAuthorization(authorization);
+  const pinnedPolicy = { ...identity.policy, manifestSha256: identity.manifestSha256 };
   const verifyActive = createActivePolicyVerifier(pinnedPolicy);
   let cached;
   try {
@@ -54,9 +58,9 @@ export async function installOfficialPack({
       return [name, Buffer.from(bytes)];
     }),
   );
-  const verified = await verifyResourcePublicationBytes({
+  const verified = await verifyCatalogResourcePublicationBytes({
     ...frozenInputs,
-    policy: { ...pinnedPolicy, now: Date.now() },
+    authorization,
     tufCachePath,
     signal,
   });

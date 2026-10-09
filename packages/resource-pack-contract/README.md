@@ -11,6 +11,10 @@
 - `@mizar/resource-pack-contract/runtime`：无需外部 `gh` 的真实 Sigstore 发行授权。
 - `@mizar/resource-pack-contract/attestation`：固定 Mizar signer 策略与已配置验签器的公共证据判定，供现有 StableSource 后续提取复用。
 
-运行时与既有 Companion 使用同一精确版本的 Sigstore 与相同公开 TUF 根。当前没有修改 Companion；其原有验签入口的提取/接线由父会话协调，不能让 Store 复制另一份资源 schema。构建脚本只将原生 ESM 与手写公开声明转换为仓库规定的 dist 扩展名，不编译 Core，也不产生资源副本。
+运行时与既有 Companion 使用同一精确版本的 Sigstore 与相同公开 TUF 根。Companion 的 Store 适配器直接消费公共 receipt 入口；不能在 Store 复制另一份资源 schema。构建脚本只将原生 ESM 与手写公开声明转换为仓库规定的 dist 扩展名，不编译 Core，也不产生资源副本。
 
 `runtime` 还导出 `verifyResourceReceipt`，供无 ZIP 的缓存启动/回退。原安装结果 `.receipt` 保存签名声明、原始 manifest、双证明和从固定 Sigstore seed 认证的离线证据；没有自报可信字段。缓存用途绝不联网，首次安装/升级用途保持当前授权有效期和防重放门禁。具体接线与材料持久化见[发行授权](../../scripts/qualification/resource-provenance/README.md#store-的离线-receipt-接线)。
+
+`verifyResourceCatalogBytes` 先验证原 Qualification descriptor 与 Promotion catalog 的双证据，要求原始规范字节、descriptor SHA、Core 与固定八个 GitHub 下载地址一致，返回进程内授权句柄。`getResourceAuthorization` 拒绝 JSON 克隆、裸 policy 或自报 trusted；`verifyCatalogResourcePublicationBytes` 只接受此句柄，核对 catalog 绑定的原声明／archive／manifest，并将原目录双证据加入真实 `.receipt.catalog`。不接受外部 verifier、用户 gh 或另一组签发根。
+
+`verifyResourceCatalogReceipt` 用固定 seed 认证的 snapshot 离线重建同一授权。`verifyResourceReceipt` 的新 catalog 路径需要当前已认证 Core 的版本与源码；已有固定策略还须匹配目录身份。缓存不联网，首次安装保持当前 TUF、签发有效期与 publication 门禁。原始目录字节和四个证明均保存在同一 Store receipt 中；未签结构测试、既有正式签名的错误 subject 拒绝测试不构成新资源生产签名正例。
