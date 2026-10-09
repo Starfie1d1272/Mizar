@@ -18,6 +18,8 @@ export function platformTestFiles(platform = process.platform) {
     'apps/companion/test/capture-recorder.test.ts',
     'apps/companion/test/gsi-capture.integration.test.ts',
     'apps/companion/test/local-web-host.integration.test.ts',
+    'apps/companion/test/resource-store/store.test.ts',
+    'apps/companion/test/resource-store/app-integration.test.ts',
     'apps/companion/test/local-tournament-store.test.ts',
     'apps/companion/test/hud-config-store.test.ts',
     'apps/companion/test/reliable-outbox.test.ts',

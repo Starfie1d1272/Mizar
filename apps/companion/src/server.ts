@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
+import { defaultResourceRoot } from './resource-store/store.js';
 import { version as osVersion } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -203,6 +205,31 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     await updates.load();
   }
   const app = buildApp({
+    resources: {
+      root: defaultResourceRoot(),
+      // This optional pin is inside the authenticated Core bundle, not mirror metadata.
+      ...(process.env.MIZAR_BUNDLE_ROOT
+        ? await (async () => {
+            try {
+              const policy = JSON.parse(
+                await readFile(
+                  join(process.env.MIZAR_BUNDLE_ROOT!, 'resource-policy.json'),
+                  'utf8',
+                ),
+              ) as ResourceTrustPolicy & { cacheHistory?: ResourceTrustPolicy[] };
+              if (policy.coreVersion !== process.env.MIZAR_APP_VERSION) return {};
+              return {
+                policy,
+                ...(Array.isArray(policy.cacheHistory)
+                  ? { cacheHistory: policy.cacheHistory }
+                  : {}),
+              };
+            } catch {
+              return {};
+            }
+          })()
+        : {}),
+    },
     ...(updates ? { updates } : {}),
     steamAvatars,
     ...(productInstance === undefined

@@ -79,6 +79,27 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    withResourceActivation: async (commit: () => Promise<void>): Promise<boolean> => {
+      if (
+        mode !== 'preparation' ||
+        busy ||
+        shuttingDown ||
+        updatePending ||
+        options.scenes.get().active !== 'waiting' ||
+        options.scenes.get().preparing !== undefined
+      )
+        return false;
+      // Share the same lifecycle exclusion as enter/hide/finish/shutdown and Host updates.
+      busy = true;
+      options.scenes.setResourceActivationPending(true);
+      try {
+        await commit();
+        return true;
+      } finally {
+        options.scenes.setResourceActivationPending(false);
+        busy = false;
+      }
+    },
     reserveUpdate: () => {
       if (mode !== 'preparation' || busy || shuttingDown || updatePending) return false;
       updatePending = true;

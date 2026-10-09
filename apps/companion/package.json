@@ -15,6 +15,7 @@
     "@mizar/hud-config": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
+    "@mizar/resource-pack-contract": "workspace:*",
     "@mizar/rivalhub": "workspace:*",
     "@mizar/telemetry-cstv": "workspace:*",
     "@mizar/telemetry-gsi": "workspace:*",

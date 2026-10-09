@@ -304,6 +304,9 @@ importers:
       '@mizar/radar':
         specifier: workspace:*
         version: link:../../packages/radar
+      '@mizar/resource-pack-contract':
+        specifier: workspace:*
+        version: link:../../packages/resource-pack-contract
       '@mizar/rivalhub':
         specifier: workspace:*
         version: link:../../packages/rivalhub

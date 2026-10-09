@@ -16,6 +16,16 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 
 export class ProgramSceneController {
   private updatePending = false;
+  private resourceActivationPending = false;
+  private deferredResourceScene: ProgramSceneId | undefined;
+  setResourceActivationPending(pending: boolean): void {
+    this.resourceActivationPending = pending;
+    if (!pending && this.deferredResourceScene !== undefined) {
+      const target = this.deferredResourceScene;
+      this.deferredResourceScene = undefined;
+      this.forceScene(target);
+    }
+  }
   setUpdatePending(pending: boolean): void {
     this.updatePending = pending;
   }
@@ -24,7 +34,7 @@ export class ProgramSceneController {
     this.director = director;
   }
   resumeAutomatic(expectedRevision: string): boolean {
-    if (this.updatePending) return false;
+    if (this.updatePending || this.resourceActivationPending) return false;
     if (expectedRevision !== this.revision) return false;
     this.director?.resume();
     this.revision = randomUUID();
@@ -46,6 +56,7 @@ export class ProgramSceneController {
   ) {}
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
+    if (this.resourceActivationPending) return '官方素材正在激活，请完成后再切换场景。';
     if (this.updatePending && id !== 'waiting')
       return 'Mizar 正在准备升级，请完成升级后再开始制作。';
     const { operator, program } = this.projections.getCurrent();
@@ -114,6 +125,10 @@ export class ProgramSceneController {
   forceScene(id: ProgramSceneId): void {
     this.automaticSwitch?.abort();
     this.director?.hold();
+    if (this.resourceActivationPending) {
+      this.deferredResourceScene = id;
+      return;
+    }
     this.active = id;
     this.revision = randomUUID();
   }
