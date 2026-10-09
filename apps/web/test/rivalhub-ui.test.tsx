@@ -399,7 +399,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(container.textContent).toContain('打开网站本场工作台');
     expect(
       [...container.querySelectorAll('button')].find(
-        (button) => button.textContent === '成为本场数据源',
+        (button) => button.textContent === '恢复提供网站数据',
       )?.disabled,
     ).toBe(true);
     expect(
@@ -407,7 +407,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     ).toBe(false);
   });
 
-  it('auto-claims when entering workspace with an unowned active match', async () => {
+  it('claims an unowned match only after explicit source control', async () => {
     let sourceMatchId: string | null = null;
     const fetchMock = vi.fn((url: string | URL | Request) => {
       const u = toUrlString(url);
@@ -446,6 +446,15 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
+    expect(
+      fetchMock.mock.calls.some((call) => toUrlString(call[0]).includes('/source/claim')),
+    ).toBe(false);
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === '恢复提供网站数据')!
+        .click();
+      await Promise.resolve();
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       '/operator/rivalhub/source/claim',
       expect.objectContaining({ method: 'POST' }),
@@ -459,7 +468,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(claimCalls.length).toBe(1);
   });
 
-  it('recovers from first-round transient 409 failure and claims on subsequent check', async () => {
+  it('a transient claim failure does not retry on polling and can be retried explicitly', async () => {
     let attempts = 0;
     const fetchMock = vi.fn((url: string | URL | Request) => {
       const u = toUrlString(url);
@@ -502,11 +511,28 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
 
     await act(async () => {
       root!.render(
-        <RivalHubLiveSourcePanel action={async (fn) => void (await fn())} onMessage={() => {}} />,
+        <RivalHubLiveSourcePanel
+          action={async (fn) => {
+            await fn().catch(() => {});
+          }}
+          onMessage={() => {}}
+        />,
       );
       await Promise.resolve();
     });
 
+    expect(attempts).toBe(0);
+    // The caller owns persistent command errors; polling does not submit commands.
+    await act(async () => {
+      try {
+        [...container.querySelectorAll('button')]
+          .find((b) => b.textContent === '恢复提供网站数据')!
+          .click();
+        await Promise.resolve();
+      } catch {
+        /* Caller presents the failed command without retrying. */
+      }
+    });
     expect(attempts).toBe(1);
     expect(container.textContent).toContain('当前暂无数据源');
 
@@ -515,6 +541,13 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
+    expect(attempts).toBe(1);
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === '恢复提供网站数据')!
+        .click();
+      await Promise.resolve();
+    });
     expect(attempts).toBe(2);
     expect(container.textContent).toContain('本机正在提供实时数据');
 
@@ -522,7 +555,6 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
   });
 
   it('does not report manual claim success when another device wins the race', async () => {
-    let claimAttempt = 0;
     const fetchMock = vi.fn((url: string | URL | Request) => {
       const u = toUrlString(url);
       if (u.includes('/local/v1/rivalhub-connection')) {
@@ -537,15 +569,6 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
         );
       }
       if (u.includes('/operator/rivalhub/source/claim')) {
-        claimAttempt++;
-        if (claimAttempt === 1) {
-          return Promise.resolve(
-            new Response(JSON.stringify({ message: '当前暂未准备好认领。' }), {
-              status: 409,
-              headers: { 'content-type': 'application/json' },
-            }),
-          );
-        }
         return Promise.resolve(
           Response.json({
             paired: true,
@@ -569,7 +592,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     });
 
     const claimBtn = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('成为本场数据源'),
+      button.textContent?.includes('恢复提供网站数据'),
     );
     expect(claimBtn).not.toBeUndefined();
 
@@ -642,6 +665,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     )!;
     expect(takeoverBtn).not.toBeUndefined();
 
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await act(async () => {
       takeoverBtn.click();
       await Promise.resolve();
@@ -657,7 +681,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(container.textContent).toContain('本机正在提供实时数据');
   });
 
-  it('resets auto-claim state on match change', async () => {
+  it('changing match and rerendering never implicitly claims a source', async () => {
     let currentMatch = 'match-101';
     const claimCalls: string[] = [];
 
@@ -697,7 +721,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
-    expect(claimCalls).toEqual(['match-101']);
+    expect(claimCalls).toEqual([]);
 
     currentMatch = 'match-102';
 
@@ -708,7 +732,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
-    expect(claimCalls).toEqual(['match-101', 'match-102']);
+    expect(claimCalls).toEqual([]);
   });
 
   it('supports explicit release and does not auto-re-claim after release', async () => {
@@ -766,7 +790,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
 
     expect(container.textContent).toContain('本机正在提供实时数据');
     const releaseBtn = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('停止作为数据源'),
+      b.textContent?.includes('停止提供网站数据'),
     )!;
     expect(releaseBtn).not.toBeUndefined();
 
@@ -789,7 +813,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
     expect(claimCalls.length).toBe(0);
 
     const resumeButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === '成为本场数据源',
+      (button) => button.textContent === '恢复提供网站数据',
     )!;
     await act(async () => {
       resumeButton.click();

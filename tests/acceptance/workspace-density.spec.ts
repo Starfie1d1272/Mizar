@@ -99,7 +99,7 @@ for (const [width, height] of [
         height: Math.floor((workHeight - gameHeight) / scale),
       });
       await page.goto('/workspace/dock');
-      await expect(page.getByRole('button', { name: '停止作为数据源' })).toBeVisible();
+      await expect(page.getByRole('button', { name: '现场恢复' })).toBeVisible();
       const measureDock = () =>
         page.locator('.workspace-dock').evaluate((root) => {
           const bounds = root.getBoundingClientRect();
@@ -136,25 +136,9 @@ for (const [width, height] of [
           };
         });
       expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
-      await page.getByRole('button', { name: '恢复布局', exact: true }).click();
-      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
-      await page.getByRole('button', { name: '复制隐藏命令', exact: true }).click();
-      await expect(page.locator('.workspace-feedback')).toBeVisible();
-      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
+      await page.getByRole('button', { name: '观战 / 本机 HUD', exact: true }).click();
+      await expect(page.getByRole('button', { name: '复制隐藏命令', exact: true })).toBeVisible();
       expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
-      const feedbackOverlap = await page.locator('.workspace-feedback').evaluate((toast) => {
-        const t = toast.getBoundingClientRect();
-        return Array.from(document.querySelectorAll('.workspace-dock > section button'))
-          .filter((button) => {
-            const b = button.getBoundingClientRect();
-            return t.left < b.right && t.right > b.left && t.top < b.bottom && t.bottom > b.top;
-          })
-          .map((button) => button.textContent);
-      });
-      expect(feedbackOverlap).toEqual([]);
-      await page.getByRole('button', { name: '查看错误详情' }).click();
-      await expect(page.getByRole('dialog')).toContainText('请使用窗口模式后重试恢复布局');
-      await page.getByRole('button', { name: '关闭详情' }).click();
       await page.setViewportSize({
         width: Math.floor((width - gameWidth) / scale),
         height: Math.floor(workHeight / scale),
@@ -215,7 +199,7 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       return route.fulfill({ json: { ok: true } });
     });
     await page.goto('/');
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
     if (connection === 'connected') {
       await expect(page).toHaveURL(/\/workspace$/);
       expect(entered).toBe(1);
@@ -247,7 +231,7 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+  await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
   expect(entered).toBe(0);
@@ -276,7 +260,7 @@ for (const gsi of [
       route.fulfill({ json: { mode: 'preparation', revision: 'preflight', canEnter: true } }),
     );
     await page.goto('/');
-    await page.getByRole('button', { name: '启动游戏并打开工作台', exact: true }).click();
+    await page.getByRole('button', { name: '启动新制作并进入现场', exact: true }).click();
     await expect(page).toHaveURL(/settings\?tab=gsi&prepare=1$/);
   });
 }

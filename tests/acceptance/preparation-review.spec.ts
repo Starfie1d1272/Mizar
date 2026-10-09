@@ -1,11 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  validateBroadcastManifest,
-  toMatchContext,
-  toMatchDocumentV1,
-} from '../../packages/rivalhub/src/index.js';
+import { validateBroadcastManifest, toMatchContext } from '../../packages/rivalhub/src/index.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
@@ -436,21 +432,15 @@ for (const source of ['online', 'cache'] as const) {
           'href',
           new RegExp(`/matches/${match.matchId}$`),
         );
-        await expect(page.getByText('切换比赛', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '选择 / 切换本场' })).toBeVisible();
         await page.screenshot({ path: testInfo.outputPath('match-refresh.png'), fullPage: true });
       }
       await expect(
         page.getByText(match.competition?.name ?? 'missing-event', { exact: true }),
       ).toBeVisible();
       await expect(page.getByText('计划开始', { exact: true })).toBeVisible();
-      await expect(page.getByText('RivalHub 比赛资料', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '保存比赛资料' })).toHaveCount(0);
-      if (source === 'online')
-        await expect(page.getByRole('link', { name: '在网站管理' })).toHaveAttribute(
-          'href',
-          new RegExp(`/matches/${match.matchId}$`),
-        );
-      await page.getByRole('link', { name: '队伍与名单', exact: true }).click();
+      await page.getByRole('link', { name: '双方与首发', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: match.entrants.a.name, exact: true }),
       ).toBeVisible();
@@ -466,7 +456,7 @@ for (const source of ['online', 'cache'] as const) {
       await page.getByText('Steam 身份', { exact: true }).first().click();
       await expect(page.getByText('76561198000000001', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '从当前服务器识别首发' })).toHaveCount(0);
-      await page.getByRole('link', { name: '地图与 BP', exact: true }).click();
+      await page.getByRole('link', { name: '地图与正式 BP', exact: true }).click();
       await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('DUST2');
       await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('禁用');
       await expect(page.getByRole('article', { name: /ANCIENT/ })).toContainText('16 : 12');
@@ -580,64 +570,41 @@ test('server quick create requires an explicit saved Team decision and sends onl
     });
 });
 
-test('Overview attention contains recovery actions rather than duplicating optional capability failures', async ({
+test('returning to an existing production and read-only previews never repeat device preparation', async ({
   page,
+  context,
 }) => {
-  const fixture: unknown = JSON.parse(
-    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
-  );
-  await page.route('**/local/v1/match-document', (route) =>
-    route.fulfill({
-      json: { document: toMatchDocumentV1(fixture), source: 'rivalhub', freshness: 'fresh' },
+  const commands: string[] = [];
+  await page.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (name: string) => {
+          (Reflect.get(window, 'audit') as (name: string) => void)(name);
+          return Promise.resolve({});
+        },
+      },
     }),
   );
-  await page.route('**/local/v1/readiness', (route) =>
-    route.fulfill({
-      json: [
-        {
-          label: 'BP 画面',
-          ready: false,
-          reason: '等待 BP',
-          href: '/matches?tab=maps',
-          action: null,
-        },
-        {
-          label: '比赛画面',
-          ready: false,
-          reason: '等待比赛数据',
-          href: '/settings?tab=gsi',
-          action: null,
-        },
-        {
-          label: '对阵画面',
-          ready: false,
-          reason: '等待比赛资料',
-          href: '/matches?tab=roster',
-          action: null,
-        },
-        {
-          label: 'OBS',
-          ready: false,
-          reason: '浏览器源地址需要修复',
-          href: '/settings?tab=obs',
-          action: '检查 OBS 连接与配置',
-        },
-      ],
-    }),
+  await page.exposeFunction('audit', (name: string) => commands.push(name));
+  await page.route('**/local/v1/production', (route) =>
+    route.fulfill({ json: { mode: 'hidden', revision: 'existing', canEnter: true } }),
   );
-  await page.goto('/');
-  const attention = page
-    .locator('.mizar-panel')
-    .filter({ has: page.getByRole('heading', { name: '开播检查', exact: true }) });
-  const recovery = attention.locator('.preparation-readiness');
-  await expect(recovery).toHaveCount(1);
-  await expect(recovery).toHaveAccessibleName('检查 OBS 连接与配置');
-  await expect(recovery).toContainText('配置');
-  await expect(recovery).toHaveAttribute('href', '/settings?tab=obs');
-  await expect(attention.locator('.preparation-pending summary')).toHaveText('待确认 · 3 项');
-  await expect(page.locator('.preparation-readiness').filter({ hasText: 'OBS' })).toContainText(
-    '浏览器源地址需要修复',
-  );
+  const writes: string[] = [];
+  await context.route(/\/operator\/(?:obs|production|program-scene|bp-command)/, (route) => {
+    writes.push(route.request().url());
+    return route.fulfill({ json: {} });
+  });
+  for (const path of ['/', '/?tab=details', '/settings?tab=obs', '/preview?scene=bp']) {
+    await page.goto(path);
+    await page.waitForTimeout(150);
+  }
+  expect(
+    commands.filter((name) =>
+      ['ensure_gsi', 'configure_gsi', 'launch_obs', 'start_managed_cs2'].includes(name),
+    ),
+  ).toEqual([]);
+  expect(writes).toEqual([]);
+  await expect(page.getByRole('button', { name: '播放 BP', exact: true })).toHaveCount(0);
 });
 
 test('uncertain Steam launch recovery stays visible after navigation and requires cancellation acknowledgement', async ({
@@ -677,7 +644,7 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await page.goto('/');
   await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
-  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
+  await page.goto('/settings?tab=gsi');
   await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
@@ -700,9 +667,9 @@ test('a starting operation reports progress while navigation remains usable', as
   );
   await page.goto('/');
   await expect(page.getByText('正在启动 CS2，等待 Steam…', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
+  await page.goto('/settings?tab=gsi');
   await expect(page.getByRole('button', { name: '保存启动设置', exact: true })).toBeDisabled();
-  await page.getByRole('link', { name: 'OBS 连接', exact: true }).click();
+  await page.goto('/settings?tab=obs');
   await expect(page.getByRole('heading', { name: 'OBS 连接与配置' })).toBeVisible();
 });
 

@@ -35,18 +35,19 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await form.locator('input').nth(0).fill('甲队');
     await form.locator('input').nth(1).fill('乙队');
     await form.getByRole('button', { name: '创建本地比赛' }).click();
-    await expect(page.locator('.workspace-local-match select').last()).toContainText(
-      '甲队 vs 乙队',
-    );
+    await expect(page.getByRole('region', { name: '本场上下文' })).toContainText('甲队 vs 乙队');
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     await page.getByLabel('阶段名称').fill('决赛');
     await page.getByRole('button', { name: '保存比赛资料' }).click();
-    await expect(page.getByRole('status')).toContainText('比赛资料已保存。');
+    await expect(page.getByText('比赛资料已保存。', { exact: true })).toBeVisible();
+    await page.goto('/resources?tab=event');
     await page.getByLabel('赛事名称').fill('验收赛事');
     await page.getByRole('button', { name: '保存赛事资料' }).click();
-    await expect(page.getByRole('status')).toContainText('赛事资料已保存。');
+    await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
+    await page.goto('/?tab=details');
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
+    await page.goto('/resources?tab=event');
     await expect(page.getByLabel('赛事名称')).toHaveValue('验收赛事');
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');

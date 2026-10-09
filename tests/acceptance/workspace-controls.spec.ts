@@ -5,41 +5,22 @@ import { buildApp } from '../../apps/companion/src/app.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
 
-test('sidebar links and preparation tools open their actual destinations', async ({
+test('three product entries lead to production, reusable resources and machine settings', async ({
   page,
-  context,
 }) => {
   await page.goto('/');
-  for (const [label, path, heading] of [
-    ['比赛资料', '/matches', '比赛资料'],
-    ['播出画面', '/picture', '播出画面'],
-    ['游戏设置', '/settings?tab=gsi', '游戏设置'],
-    ['OBS 连接', '/settings?tab=obs', 'OBS 连接'],
-    ['赛事平台', '/settings?tab=rivalhub', '赛事平台'],
-    ['高级设置', '/settings?tab=advanced', '高级设置'],
-    ['总览', '/', '总览'],
+  for (const [label, path, title] of [
+    ['资源', '/resources', '资源'],
+    ['设置', '/settings', '本机设置'],
+    ['制播', '/', '本场制播'],
   ] as const) {
-    await page.locator('.product-sidebar').getByRole('link', { name: label, exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`${path.replace('?', '\\?')}$`));
-    await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
+    await page
+      .getByRole('navigation', { name: '制作导航' })
+      .getByRole('link', { name: label, exact: true })
+      .click();
+    expect(new URL(page.url()).pathname).toBe(path);
+    await expect(page.getByRole('heading', { name: title, level: 1, exact: true })).toBeVisible();
   }
-  for (const [label, path] of [
-    ['HUD 编辑器', '/operator/hud'],
-    ['BP 工作台', '/preview?scene=bp'],
-    ['节目预览', '/preview'],
-    ['运行诊断', '/debug'],
-  ] as const) {
-    const opened = context.waitForEvent('page');
-    await page.getByRole('button', { name: label, exact: true }).click();
-    const tool = await opened;
-    await tool.waitForLoadState('domcontentloaded');
-    expect(new URL(tool.url()).pathname + new URL(tool.url()).search).toBe(path);
-    await expect(tool.locator('body')).not.toBeEmpty();
-    await tool.close();
-  }
-  await page.getByRole('button', { name: '新建本地比赛', exact: true }).click();
-  await expect(page).toHaveURL(/\/matches\?createLocal=1#local-match$/);
-  await expect(page.getByRole('button', { name: '创建本地比赛', exact: true })).toBeVisible();
 });
 
 test('OBS setup buttons launch the configured target, configure, check and repair with the correct commands', async ({
@@ -65,10 +46,11 @@ test('OBS setup buttons launch the configured target, configure, check and repai
     });
   });
   let streaming = false;
+  let connection = 'connected';
   await page.route('**/local/v1/obs', (r) =>
     r.fulfill({
       json: {
-        connection: 'connected',
+        connection,
         currentScene: 'Mizar · 比赛中',
         port: 4455,
         passwordConfigured: true,
@@ -98,11 +80,18 @@ test('OBS setup buttons launch the configured target, configure, check and repai
       command: 'launch_obs',
       args: { executablePath: 'C:\\ConfiguredOBS\\obs64.exe' },
     });
-  await expect.poll(() => requests).toContainEqual({ path: '/operator/obs/ensure', body: {} });
+  expect(requests.some((request) => request.path.endsWith('/ensure'))).toBe(false);
   await expect(page.getByRole('button', { name: '检查配置', exact: true })).toHaveCount(0);
   await page.locator('summary').filter({ hasText: 'WebSocket 连接设置' }).click();
   await page.getByLabel('WebSocket 端口').fill('4466');
   await page.getByLabel('WebSocket 密码').fill('ui-test-password');
+  await page.getByLabel('WebSocket 密码').focus();
+  connection = 'unavailable';
+  await page.waitForTimeout(3200);
+  connection = 'connected';
+  await page.waitForTimeout(3200);
+  await expect(page.getByLabel('WebSocket 密码')).toBeFocused();
+  await expect(page.getByLabel('WebSocket 密码')).toHaveValue('ui-test-password');
   await page.getByRole('button', { name: '保存并测试', exact: true }).click();
   await expect
     .poll(() => requests)
@@ -165,12 +154,14 @@ test('map-pool saving reaches the real tournament service', async ({ page, conte
         contentType: 'application/json',
       });
     });
-    await page.goto('/matches?tab=maps');
+    await page.goto('/resources?tab=event');
+    await page.getByRole('combobox', { name: '资源编辑区域' }).selectOption('maps');
     const train = page.getByRole('checkbox', { name: 'Train', exact: true });
     await train.check();
     await page.getByRole('button', { name: '保存赛事资料', exact: true }).click();
     await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
+    await page.getByRole('combobox', { name: '资源编辑区域' }).selectOption('maps');
     await expect(train).toBeChecked();
   } finally {
     await app.close();
@@ -205,6 +196,7 @@ test('local HUD toggles use the real service, preserve independence and leave on
       },
     );
     await page.goto('/workspace/dock');
+    await page.getByRole('button', { name: '观战 / 本机 HUD', exact: true }).click();
     const radar = page.getByRole('button', { name: '雷达', exact: true });
     const hud = page.getByRole('button', { name: '其他 HUD', exact: true });
     await expect(radar).toHaveAttribute('aria-pressed', 'false');
@@ -231,6 +223,7 @@ test('HUD command copy confirms copying, and clipboard failure retains the exact
 }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '观战 / 本机 HUD', exact: true }).click();
   for (const [label, value] of [
     ['复制隐藏命令', '1'],
     ['复制恢复命令', '0'],
@@ -275,19 +268,18 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
     return r.fulfill({ json: { ok: true } });
   });
   await page.goto('/workspace/dock');
-  const preview = page.locator('.workspace-next-preview');
-  await expect(preview.locator('iframe')).toHaveAttribute('src', '/program/halftime');
-  await expect(preview.frameLocator('iframe').locator('.program-scene--halftime')).toBeVisible();
+  const preview = page.locator('.workspace-next-summary');
+  await expect(preview).toContainText('半场');
   expect(commands).toEqual([]);
   next = null;
   await expect(preview.locator('iframe')).toHaveCount(0);
   await expect(preview).toContainText('待确认');
-  await expect(preview.locator('small')).toHaveText('下一场景');
+  await expect(preview).toContainText('预计下一节目');
   next = 'halftime';
   mode = 'manual';
   await expect(page.getByText('手动保持', { exact: true })).toBeVisible();
-  await expect(preview.locator('iframe')).toHaveAttribute('src', '/program/halftime');
-  await expect(preview.locator('small')).toHaveText('下一场景');
+  await expect(preview).toContainText('半场');
+  await expect(preview).toContainText('预计下一节目');
   expect(commands).toEqual([]);
   for (const scene of PROGRAM_SCENES) {
     await page.getByRole('button', { name: scene.title, exact: true }).click();
@@ -324,11 +316,8 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
   for (const [label, command, args] of [
     ['比赛资料', 'open_main', { path: '/matches' }],
     ['检查游戏连接', 'open_main', { path: '/settings?tab=gsi' }],
-    ['OBS 配置', 'open_main', { path: '/settings?tab=obs' }],
     ['HUD 编辑器', 'open_tool', { tool: 'hud' }],
-    ['运行诊断', 'open_tool', { tool: 'diagnostics' }],
-    ['BP 工作台', 'open_tool', { tool: 'bp' }],
-    ['恢复布局', 'restore_layout', null],
+    ['正式 BP', 'open_tool', { tool: 'bp' }],
   ] as const) {
     await page.getByRole('button', { name: label, exact: true }).click();
     await expect
@@ -337,9 +326,49 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
   }
   for (const [label, action] of [
     ['隐藏工作区', 'hide'],
-    ['退出工作台', 'finish'],
+    ['结束制播', 'finish'],
   ] as const) {
     await page.getByRole('button', { name: label, exact: true }).click();
+    if (action === 'finish') await page.getByRole('button', { name: '确认结束并恢复配置' }).click();
     await expect.poll(() => lifecycle.at(-1)).toEqual({ action, expectedRevision: 'production-1' });
   }
+});
+
+test('local recovery preserves scene controls and website source is never automatically reclaimed after stop or remount', async ({
+  page,
+}) => {
+  let source: string | null = 'match-1';
+  const commands: string[] = [];
+  await page.route('**/local/v1/rivalhub-connection', (route) =>
+    route.fulfill({
+      json: {
+        paired: true,
+        activeMatchId: 'match-1',
+        activeSourceMatchId: source,
+        sourceReady: true,
+      },
+    }),
+  );
+  await page.route('**/operator/rivalhub/source/*', (route) => {
+    const name = new URL(route.request().url()).pathname;
+    commands.push(name);
+    if (name.endsWith('release')) source = null;
+    else source = 'match-1';
+    return route.fulfill({ json: { paired: true, activeSourceMatchId: source } });
+  });
+  await page.goto('/workspace');
+  await page.getByRole('button', { name: '现场恢复', exact: true }).click();
+  await expect(page.getByRole('region', { name: '原位恢复面板' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '对阵', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '停止提供网站数据', exact: true }).click();
+  await expect(page.getByRole('button', { name: '恢复提供网站数据', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '返回雷达' }).click();
+  await page.getByRole('button', { name: '现场恢复', exact: true }).click();
+  await expect(page.getByRole('button', { name: '恢复提供网站数据', exact: true })).toBeVisible();
+  expect(commands).toEqual(['/operator/rivalhub/source/release']);
+  await page.getByRole('button', { name: '恢复提供网站数据', exact: true }).click();
+  expect(commands).toEqual([
+    '/operator/rivalhub/source/release',
+    '/operator/rivalhub/source/claim',
+  ]);
 });
