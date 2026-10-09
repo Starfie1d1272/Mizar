@@ -148,7 +148,7 @@ export function Settings({ tab }: { tab: string }) {
           <section className="obs-connection-summary" aria-label="OBS 连接摘要">
             <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
             <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
-            <Button onClick={() => setConnectionEditing(!connectionEditing)}>编辑连接</Button>
+            <Button onClick={() => setConnectionEditing(true)}>编辑连接</Button>
             <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
               重新检查
             </Button>

@@ -1070,6 +1070,7 @@
 @media (min-width: 1400px) and (min-height: 800px) {
   .mizar-dialog.bp-editor-dialog {
     width: min(96vw, calc(var(--mizar-layout-target) * 52));
+    max-height: calc(100dvh - var(--mizar-layout-padding) * 2);
   }
   .bp-editor-dialog .bp-local-editor {
     display: grid;

@@ -125,3 +125,13 @@
 .production-page .obs-setup__cards {
   grid-template-rows: auto 1fr;
 }
+@media (min-width: 1400px) and (min-height: 800px) {
+  .production-page .preparation-editor[data-section='roster'] > form > fieldset {
+    max-height: calc(100dvh - 620px);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .production-page .preparation-editor[data-section='roster'] fieldset:has(details[open]) > ul {
+    display: none;
+  }
+}
