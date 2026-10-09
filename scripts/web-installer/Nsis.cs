@@ -9,7 +9,7 @@ namespace Mizar.WebInstaller {
   public sealed class FreshInstallResult {
     internal FreshInstallResult(string directory) { Directory = directory; CoreInstalled = true; }
     public string Directory { get; private set; }
-    public Task RollbackAsync() { return Nsis.RollbackOwnedFresh(Directory, TimeSpan.FromMinutes(10)); }
+    public Task RollbackAsync() { return Nsis.RollbackFreshExclusive(Directory); }
     // Core installation is never the Core + default resource completion signal.
     public bool CoreInstalled { get; private set; }
     public bool ResourcesReady { get { return false; } }
@@ -63,6 +63,20 @@ namespace Mizar.WebInstaller {
       using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
         if (key != null && !String.Equals(Path.GetFullPath(Convert.ToString(key.GetValue("InstallDir"))), target, StringComparison.OrdinalIgnoreCase))
           throw new IOException("安装登记已被其他安装更改，保留现场供修复。");
+      }
+    }
+    internal static async Task RollbackFreshExclusive(string target) {
+      string leasePath = Path.Combine(Path.GetDirectoryName(PendingPath()), "fresh-install.lock");
+      Downloader.NoReparse(leasePath);
+      using (var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+        string pending = PendingPath(); Downloader.NoReparse(pending);
+        using (var marker = new FileStream(pending, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(marker)) { writer.WriteLine(target); writer.Flush(); marker.Flush(true); }
+        bool finished = false;
+        try {
+          await RollbackOwnedFresh(target, TimeSpan.FromMinutes(10));
+          finished = true;
+        } finally { if (finished) File.Delete(pending); }
       }
     }
     internal static async Task RollbackOwnedFresh(string target, TimeSpan deadline) {
