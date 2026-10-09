@@ -144,11 +144,28 @@ public class UpdateFixture {
     let result;
     if (scenario === 'interrupted') {
       await cp(installed, join(stage, 'previous'), { recursive: true });
-      await writeFile(join(stage, 'registration.json'), '[]');
+      // Independently describe both NSIS registration locations in this clean
+      // fixture. A real backup records their absence too, rather than omitting
+      // the registration snapshot that recovery needs to restore.
+      await writeFile(
+        join(stage, 'registration.json'),
+        JSON.stringify([
+          { key: 'HKCU:\\Software\\Mizar', exists: false, values: [] },
+          {
+            key: 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar',
+            exists: false,
+            values: [],
+          },
+        ]),
+      );
       await writeFile(join(stage, 'journal.json'), JSON.stringify({ phase: 'installing' }));
       await rm(installed, { recursive: true });
       result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
-      assert.equal(result.code, 0, result.errors);
+      assert.equal(
+        result.code,
+        0,
+        `${result.errors}\n${await readFile(join(state, 'updates/result.json'), 'utf8')}`,
+      );
     } else if (scenario === 'remaining-process') {
       const owned = spawn(join(installed, 'Mizar.exe'), ['--hold'], {
         windowsHide: true,
