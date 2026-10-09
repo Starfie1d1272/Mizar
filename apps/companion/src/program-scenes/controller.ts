@@ -17,8 +17,14 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 export class ProgramSceneController {
   private updatePending = false;
   private resourceActivationPending = false;
+  private deferredResourceScene: ProgramSceneId | undefined;
   setResourceActivationPending(pending: boolean): void {
     this.resourceActivationPending = pending;
+    if (!pending && this.deferredResourceScene !== undefined) {
+      const target = this.deferredResourceScene;
+      this.deferredResourceScene = undefined;
+      this.forceScene(target);
+    }
   }
   setUpdatePending(pending: boolean): void {
     this.updatePending = pending;
@@ -119,6 +125,10 @@ export class ProgramSceneController {
   forceScene(id: ProgramSceneId): void {
     this.automaticSwitch?.abort();
     this.director?.hold();
+    if (this.resourceActivationPending) {
+      this.deferredResourceScene = id;
+      return;
+    }
     this.active = id;
     this.revision = randomUUID();
   }

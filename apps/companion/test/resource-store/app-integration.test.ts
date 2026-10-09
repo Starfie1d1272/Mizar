@@ -101,6 +101,9 @@ it('holds production, scene and Host-update exclusion for the entire asynchronou
     production.releaseUpdate();
     scenes.setUpdatePending(false);
     expect(scenes.resumeAutomatic(scenes.get().revision)).toBe(false);
+    scenes.forceScene('matchup');
+    scenes.forceScene('gameplay');
+    expect(scenes.get().active).toBe('waiting');
     expect((await scenes.select('gameplay', scenes.get().revision)).ok).toBe(false);
     const enter = await app.inject({
       method: 'POST',
@@ -112,6 +115,8 @@ it('holds production, scene and Host-update exclusion for the entire asynchronou
     expect(production.get().mode).toBe('preparation');
     release();
     expect(await activation).toBe(true);
+    expect(scenes.get().active).toBe('gameplay');
+    scenes.forceScene('waiting');
     expect(production.reserveUpdate()).toBe(true);
     production.releaseUpdate();
     const sceneChange = scenes.select('gameplay', scenes.get().revision);

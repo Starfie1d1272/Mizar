@@ -6,7 +6,7 @@ Companion 的 App 在启动钩子打开唯一 Store，安装器桥通过 `app.ge
 
 Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bundle 内可选 `resource-policy.json` 读取固定策略；`coreVersion` 必须匹配当前 Core，不能用镜像 receipt 推导策略。缺少固定策略时拒绝缓存授权，保留旧 Full 随包 URL。该文件可携带经同一 Core/bootstrap 授权的 `cacheHistory`，供离线旧版恢复；未批准的历史版本不能仅凭 receipt 自报身份进入允许列表。独立素材更新的策略必须由认证的 bootstrap/catalog 提供，不能写入未签镜像字段。
 
-原 `fixtures/epl-*` 和 `fixture-media/epl-s24` URL 在有活动缓存时通过 Store 验证读取；活动缓存的错误或缺失成员明确失败，不混入 Full 的另一个版本。没有活动缓存时继续使用原 Full 随包素材。制作中的下载只准备；激活与 production 的 enter/hide/finish/shutdown、Host 更新共用互斥区，并在提交期间阻断场景切换。
+原 `fixtures/epl-*` 和 `fixture-media/epl-s24` URL 在有活动缓存时通过 Store 验证读取；活动缓存的错误或缺失成员明确失败，不混入 Full 的另一个版本。没有活动缓存时继续使用原 Full 随包素材。制作中的下载只准备；激活与 production 的 enter/hide/finish/shutdown、Host 更新共用互斥区，并在提交期间阻断场景切换。内部演练的强制场景请求保留最后一个目标，在提交结束后应用，避免绕过安全场景或丢失正常演练操作。
 
 ## 接入边界
 
