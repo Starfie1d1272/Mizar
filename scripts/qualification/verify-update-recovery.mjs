@@ -12,6 +12,7 @@ if (process.platform !== 'win32') throw new Error('此验证需要 Windows Power
 const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'bundle/update-install.ps1');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+let ownsRegistration = false;
 async function run(args) {
   // The Host also removes an inherited PowerShell 7 module path before
   // launching Windows PowerShell 5.1, so its built-in modules load normally.
@@ -70,13 +71,14 @@ try {
   // verification is run outside the clean Windows runner.
   const pristine = await run([
     '-Command',
-    "if ((Test-Path 'HKCU:\\Software\\Mizar') -or (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk')) -or (Test-Path (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\\Mizar'))) { exit 1 }",
+    "if ((Test-Path 'HKCU:\\Software\\Mizar') -or (Test-Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar') -or (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk')) -or (Test-Path (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\\Mizar'))) { exit 1 }",
   ]);
   assert.equal(
     pristine.code,
     0,
     'Native recovery verification requires no existing Mizar installation',
   );
+  ownsRegistration = true;
   const compiler = join(root, 'compile.ps1'),
     binaryPath = join(root, 'Stub.exe');
   await writeFile(
@@ -86,6 +88,7 @@ Add-Type -OutputAssembly $Output -OutputType ConsoleApplication -TypeDefinition 
 using System;
 using System.IO;
 using System.Threading;
+using Microsoft.Win32;
 public class UpdateFixture {
   static void Copy(string source, string target) {
     Directory.CreateDirectory(target);
@@ -99,6 +102,8 @@ public class UpdateFixture {
     var mode = File.ReadAllText(Path.Combine(stage, "mode.txt"));
     var command = String.Join(" ", args);
     var target = command.Substring(command.IndexOf("/D=") + 3);
+    using (var app = Registry.CurrentUser.CreateSubKey(@"Software\Mizar")) app.SetValue("InstallDir", target);
+    using (var uninstall = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar")) uninstall.SetValue("DisplayVersion", "1.1.0");
     if (mode == "success") { Copy(Path.Combine(stage, "new-payload"), target); return; }
     if (mode == "failure") File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation");
     Environment.Exit(2);
@@ -118,6 +123,11 @@ public class UpdateFixture {
     await mkdir(join(state, 'updates/download-test'), { recursive: true });
     await writeFile(join(state, 'user-data.json'), 'untouched match and settings');
     const previous = await payload(installed, '1.0.0', binary);
+    const registered = await run([
+      '-Command',
+      `New-Item 'HKCU:\\Software\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Mizar' -Name InstallDir -Value '${installed.replace(/'/g, "''")}' -PropertyType String -Force | Out-Null; New-Item 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Name DisplayVersion -Value '1.0.0' -PropertyType String -Force | Out-Null`,
+    ]);
+    assert.equal(registered.code, 0, registered.errors);
     const nextPath = join(area, 'next payload'),
       next = await payload(nextPath, '1.1.0', binary);
     const installer = join(state, 'updates/download-test/Mizar-v1.1.0-Windows-x64-Setup.exe');
@@ -144,17 +154,19 @@ public class UpdateFixture {
     let result;
     if (scenario === 'interrupted') {
       await cp(installed, join(stage, 'previous'), { recursive: true });
-      // Independently describe both NSIS registration locations in this clean
-      // fixture. A real backup records their absence too, rather than omitting
-      // the registration snapshot that recovery needs to restore.
+      // Independent expectations for the original installation registration.
       await writeFile(
         join(stage, 'registration.json'),
         JSON.stringify([
-          { key: 'HKCU:\\Software\\Mizar', exists: false, values: [] },
+          {
+            key: 'HKCU:\\Software\\Mizar',
+            exists: true,
+            values: [{ name: 'InstallDir', kind: 'String', value: installed }],
+          },
           {
             key: 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar',
-            exists: false,
-            values: [],
+            exists: true,
+            values: [{ name: 'DisplayVersion', kind: 'String', value: '1.0.0' }],
           },
         ]),
       );
@@ -220,6 +232,15 @@ public class UpdateFixture {
       'untouched match and settings',
     );
     assert.deepEqual(await readFile(join(installed, 'Mizar.exe')), binary);
+    const registration = await run([
+      '-Command',
+      "$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); @{ directory = (Get-ItemProperty 'HKCU:\\Software\\Mizar').InstallDir; version = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar').DisplayVersion } | ConvertTo-Json -Compress",
+    ]);
+    assert.equal(registration.code, 0, registration.errors);
+    assert.deepEqual(JSON.parse(registration.output), {
+      directory: installed,
+      version: scenario === 'success' ? '1.1.0' : '1.0.0',
+    });
     process.stdout.write(`Native update ${scenario}: PASS\n`);
   }
 } finally {
@@ -227,5 +248,10 @@ public class UpdateFixture {
     '-Command',
     "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue",
   ]);
+  if (ownsRegistration)
+    await run([
+      '-Command',
+      "Remove-Item 'HKCU:\\Software\\Mizar', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Recurse -Force -ErrorAction SilentlyContinue",
+    ]);
   await rm(root, { force: true, recursive: true });
 }

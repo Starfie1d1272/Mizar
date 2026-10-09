@@ -103,7 +103,16 @@ function Save-Registration {
   }
 }
 function Restore-Registration {
-  foreach ($entry in @(Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'registration.json') -Raw | ConvertFrom-Json)) {
+  # PowerShell 5.1 emits a JSON array as one pipeline object. Assign it first
+  # so foreach visits individual registry records rather than the outer array.
+  $snapshot = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'registration.json') -Raw | ConvertFrom-Json
+  $expectedKeys = @('HKCU:\Software\Mizar', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar')
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  if ($null -eq $snapshot -or $snapshot.Count -ne 2) { throw 'update_registration_snapshot_invalid' }
+  foreach ($entry in $snapshot) {
+    if ($entry.key -notin $expectedKeys -or $entry.exists -isnot [bool] -or !$seen.Add($entry.key)) { throw 'update_registration_snapshot_invalid' }
+  }
+  foreach ($entry in $snapshot) {
     Remove-Item -LiteralPath $entry.key -Recurse -Force -ErrorAction SilentlyContinue
     if ($entry.exists) {
       New-Item -Path $entry.key -Force | Out-Null
