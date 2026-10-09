@@ -19,6 +19,9 @@ namespace Mizar.WebInstaller {
     public InstallerRecoveryRequired(string directory, string reason) : base(reason) { InstallDirectory = directory; }
   }
   public static class Nsis {
+    static string PendingPath() {
+      return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar", "bootstrap-cache", "fresh-install.pending");
+    }
     static void ValidateDestination(string directory) {
       string target = Path.GetFullPath(directory);
       string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs") + Path.DirectorySeparatorChar;
@@ -27,6 +30,8 @@ namespace Mizar.WebInstaller {
           target.IndexOfAny(new char[] { '"', '\r', '\n' }) >= 0)
         throw new IOException("安装位置不受允许。");
       Downloader.NoReparse(target);
+      string pending = PendingPath(); Downloader.NoReparse(pending);
+      if (File.Exists(pending)) throw new IOException("前一次安装尚未确认停止，请先使用原安装器恢复；禁止并发重试。");
       if (Directory.Exists(target) || File.Exists(target)) throw new IOException("安装位置已存在，请使用既有更新或修复入口。");
       using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
         if (key != null) throw new IOException("检测到已有 Mizar，请使用应用内更新。");
@@ -102,6 +107,13 @@ namespace Mizar.WebInstaller {
           using (var locked = new FileStream(installer, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true)) {
             if (!await Downloader.MatchesStream(locked, plan, token)) throw new IOException("安装文件已变化。");
             token.ThrowIfCancellationRequested();
+            string pending = PendingPath(); Downloader.NoReparse(pending);
+            // A crash or timeout must not release the right to launch a second NSIS.
+            // This marker is cleared only after the writer and required cleanup stop.
+            using (var marker = new FileStream(pending, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(marker)) { writer.WriteLine(destination); writer.Flush(); marker.Flush(true); }
+            bool finished = false;
+            try {
             int code;
             using (var child = Process.Start(new ProcessStartInfo {
               FileName = installer, Arguments = "/S /MIZARUPDATE /D=" + destination,
@@ -113,6 +125,7 @@ namespace Mizar.WebInstaller {
             }
             if (code != 0 || token.IsCancellationRequested) {
               await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
+              finished = true;
               token.ThrowIfCancellationRequested(); throw new IOException("核心安装未完成，原卸载器已清理本次安装。");
             }
             Exception validationFailure = null;
@@ -127,9 +140,12 @@ namespace Mizar.WebInstaller {
             } catch (Exception error) { validationFailure = error; }
             if (validationFailure != null) {
               await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
+              finished = true;
               throw validationFailure;
             }
+            finished = true;
             return new FreshInstallResult(destination);
+            } finally { if (finished) File.Delete(pending); }
           }
       }
     }

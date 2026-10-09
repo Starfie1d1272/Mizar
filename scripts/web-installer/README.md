@@ -13,7 +13,7 @@
 ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer
 ```
 
-独立工作流只读 contents，无发布、签发、Box 写入或凭据权限。生成的 EXE 是 POC，禁止正式发布；固定引导计划编译进程序，下载源不能更改预期摘要。样例只下载 v1.1.0 的 NSIS 许可文件，所有可执行计划均拒绝。缓存使用 `%LOCALAPPDATA%/Mizar/bootstrap-cache`，按已固定摘要和名称存放；它只保存下载字节，不承担 Resource Store 状态或资产激活。
+独立工作流只读 contents，无发布、签发、Box 写入或凭据权限。生成的 EXE 是 POC，禁止正式发布；固定引导计划编译进程序，下载源不能更改预期摘要。样例只下载 v1.1.0 的 NSIS 许可文件，该窗口不接收可执行安装计划。缓存使用 `%LOCALAPPDATA%/Mizar/bootstrap-cache`，按已固定摘要和名称存放；它只保存下载字节，不承担 Resource Store 状态或资产激活。
 
 下载限制 HTTPS、地址白名单、五跳以内重定向、每源五分钟、最多四源和 512 MiB。禁止来源携带用户名、密码或非默认端口，不发送授权头或 Cookie；系统验证 TLS 证书。完整大小与 SHA-256 通过后原子落盘，复用缓存前再次验证，不联网即可命中。文件锁避免同身份并发写入，拒绝目录链接；失败和取消删除半成品。当前不支持 Range 断点续传：中断后重新下载，避免未经证明的片段拼接；这仍是 #244 后续验收项。不能把缓存摘要检查当发布者来源证明。
 
@@ -25,7 +25,7 @@
 
 ## 证据边界
 
-`capture-poc.ps1` 从实际原生 EXE 窗口截屏，保存 ready/result 和 Windows 信息，不生成 HTML 原型。测试处理器证明网络失败边界和缓存契约；实际 HTTPS 下载由独立窗口步骤证明。GitHub runner Windows Server 的结果不代替 Windows 10/11 与 125%/150% DPI 实机验收，也不证明真实 NSIS 安装、资源入库或断网 EPL 播放。体积以 `build.json` 为准；Web 的 ZIP 测量不代替完整 Setup 体积或 Quick/Full/Release wall-time。
+`capture-poc.ps1` 从实际原生 EXE 窗口截屏，保存 ready/result 和 Windows 信息，不生成 HTML 原型。测试处理器证明网络失败边界和缓存契约；实际 HTTPS 下载由独立窗口步骤证明。GitHub runner Windows Server 的结果不代替 Windows 10/11 与 125%/150% DPI 实机验收，窗口截图本身也不证明真实 NSIS 安装、资源入库或断网 EPL 播放。体积以 `build.json` 为准；Web 的 ZIP 测量不代替完整 Setup 体积或 Quick/Full/Release wall-time。
 
 本次 Linux 工作区同源码 Web 实测（既有依赖缓存，先 Full 后 Core；不是冷／热对照）：Full 98,144,273 bytes，ZIP 44,534,530 bytes，构建 1.378s、压缩 2.162s；Core 12,527,012 bytes，ZIP 10,117,650 bytes，构建 1.081s、压缩 0.382s。ZIP 减少约 77.3%。没有重编译 Rust、生成 Setup 或发行，因此不能由此宣称 Full<=180s 或 Release<=600s。
 
@@ -35,7 +35,7 @@
 
 `pin-stable-core.mjs` 复用已构建 Companion 的 `StableSource`，认证真实 Stable 后生成固定 NSIS 下载／执行输入；不接受镜像自报摘要或另一个信任根。`legacy-stable-plan.json` 与实际认证的 v1.1.0 输出完全一致，只用于原安装器资格验证，不是新 Core-only 发行。
 
-`Nsis.Install` 在同一个只读锁定 fd 上复核大小／摘要，再直接调用既有 NSIS；固定 `/S /MIZARUPDATE /D=` 参数，不经过 shell，也不接收网页命令。只允许全新当前用户程序目录或隔离资格目录；既有目录、登记、快捷方式或 Mizar 进程均拒绝。写入开始后的取消先等 NSIS 退出，再调用它生成的原卸载器清理；不强杀写入进程，不递归删除用户目录。超时仍在运行时明确返回需要恢复的目录并保留现场，禁止并发重试。完成只表示 Core 安装及身份核对，不表示默认资源就绪。默认 POC 窗口仍固定许可下载，不启用实际用户安装。
+`Nsis.Install` 在同一个只读锁定 fd 上复核大小／摘要，再直接调用既有 NSIS；固定 `/S /MIZARUPDATE /D=` 参数，不经过 shell，也不接收网页命令。只允许全新当前用户程序目录或隔离资格目录；既有目录、登记、快捷方式或 Mizar 进程均拒绝。写入开始后的取消先等 NSIS 退出，再调用它生成的原卸载器清理；不强杀写入进程，不递归删除用户目录。超时仍在运行时明确返回需要恢复的目录并保留现场；持久 `fresh-install.pending` 标记在 NSIS 启动前写入，只有写入与所需清理均结束才删除，崩溃／超时后拒绝再次安装。未完成标记需要随原安装器恢复一并处理，当前预览不提供自动恢复入口。完成只表示 Core 安装及身份核对，不表示默认资源就绪。默认 POC 窗口仍固定许可下载，不启用实际用户安装。
 
 `installOfficialPack` 是安装桥，运行位置为产品 `resources/app/dist/web-installer/install-official-pack.mjs`，从 Companion 的真实依赖解析 `@mizar/resource-pack-contract/runtime`。先认证并冻结全部原输入，再只把验证器返回的文件字节交给传入的唯一 Store；保存原声明、证明与 manifest，供其真实离线 receipt 适配器复验。无 activation provider、未 active、不可读取默认三份 EPL 清单或视频时均不能返回完成。已有相同 ready 版本时直接通过 Store 复验读取，不联网验证远端。`readOfficialWebResource(store,path,range)` 为既有 `/fixtures/...` 与 `/fixture-media/epl-s24/...` 提供映射，所有字节及 Range 仍由唯一 Store 负责，不新增监听器或第二缓存。
 

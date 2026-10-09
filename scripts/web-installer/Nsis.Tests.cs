@@ -45,7 +45,7 @@ namespace Mizar.WebInstaller {
         bool identityRejected=false;
         try { await Nsis.Install(badIdentity,installer,failedTarget,CancellationToken.None); } catch(IOException) { identityRejected=true; }
         Assert(identityRejected && !Directory.Exists(failedTarget));
-        Console.WriteLine("PASS: post-install identity mismatch invokes original uninstaller and preserves user data");
+        Console.WriteLine("PASS: post-install identity mismatch invokes original uninstaller and cleans the fresh target");
         var progress=new CancelNsisProgress();
         bool cancelled=false;
         string cancelledTarget=Path.Combine(root,"cancelled NSIS path");
