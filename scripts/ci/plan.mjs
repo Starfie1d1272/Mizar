@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
+import { verifyMergeEvidence } from './verify-merge-evidence.mjs';
 import { pathToFileURL } from 'node:url';
 
 export const CI_JOB_IDS = Object.freeze([
@@ -298,8 +300,9 @@ export function createCiPlan(options = {}) {
       : { path: normalizePath(entry.path), status: entry.status ?? 'M' },
   );
 
-  const includeOfflineQualification =
-    eventName === 'push' || changedFiles.some(({ path }) => isOfflineQualificationPath(path));
+  const includeOfflineQualification = true;
+  // Unverified direct pushes must execute Full, even for apparent docs changes.
+  if (eventName === 'push') return fullPlan('main requires full source evidence', true);
 
   if (changedFiles.length === 0)
     return fullPlan(`forced full: missing ${eventName} changed paths`, includeOfflineQualification);
@@ -373,11 +376,56 @@ function outputPlan(plan) {
   };
 }
 
+// Compare the tested merge tree directly to its base. Two fetched parents are
+// enough; PR head merge-base history is neither needed nor the tested subject.
+export function collectGitChanges(base, subject, cwd = process.cwd()) {
+  if (!/^[a-f0-9]{40}$/.test(base ?? '') || !/^[a-f0-9]{40}$/.test(subject ?? ''))
+    return [{ path: '', status: 'X' }];
+  try {
+    return parseGitDiffNameStatus(
+      execFileSync('git', ['diff', '--name-status', '-z', '--find-renames', base, subject], {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    );
+  } catch {
+    return [{ path: '', status: 'X' }];
+  }
+}
+
 function runPlanner() {
   const changedFiles = process.env.CHANGED_FILES_FILE
     ? parseGitDiffNameStatus(readFileSync(process.env.CHANGED_FILES_FILE, 'utf8'))
-    : [];
-  const plan = createCiPlan({ eventName: process.env.GITHUB_EVENT_NAME, changedFiles });
+    : process.env.GITHUB_EVENT_NAME === 'pull_request'
+      ? collectGitChanges(process.env.PLAN_BASE_SHA, process.env.GITHUB_SHA)
+      : [];
+  let plan;
+  if (process.env.GITHUB_EVENT_NAME === 'push' && process.env.CI_MERGE_REUSE_ENABLED === 'true') {
+    try {
+      const evidence = verifyMergeEvidence(
+        process.env.GITHUB_REPOSITORY,
+        process.env.GITHUB_SHA,
+        undefined,
+        undefined,
+        process.env.BEFORE_SHA,
+      );
+      plan = {
+        runQuality: false,
+        runDesign: false,
+        runAcceptance: false,
+        runPlatform: false,
+        runQualification: false,
+        runOfflineQualification: false,
+        requiredJobs: [],
+        reason: `trusted PR merge tree: run ${evidence.runId} attempt ${evidence.runAttempt}`,
+      };
+    } catch (error) {
+      console.log(`Full fallback: ${error.message}`);
+    }
+  }
+  plan ??= createCiPlan({ eventName: process.env.GITHUB_EVENT_NAME, changedFiles });
   const outputs = outputPlan(plan);
   const output = Object.entries(outputs)
     .map(([key, value]) => `${key}=${value}`)

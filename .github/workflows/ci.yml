@@ -9,11 +9,6 @@ on:
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
-    inputs:
-      benchmark_desktop:
-        description: 'A/B benchmark CI-only Cargo profiles after the normal bundle smoke'
-        type: boolean
-        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
@@ -21,6 +16,9 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
+  checks: read
+  pull-requests: read
 
 jobs:
   plan:
@@ -38,31 +36,36 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: 2
 
-      - name: Collect pull request or main push changed paths
+      - name: Record GitHub simulation identity before executing repository code
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
-              printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
-            elif git diff --name-status -z --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.tsv"; then
-              :
-            else
-              printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
-            fi
-          else
-            : > "$RUNNER_TEMP/changed-files.tsv"
-          fi
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const identity = { repository: process.env.GITHUB_REPOSITORY, event: process.env.GITHUB_EVENT_NAME,
+            runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            pr: process.env.PR_NUMBER, base: process.env.PR_BASE, head: process.env.PR_HEAD,
+            commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}') };
+          if (identity.commit !== process.env.GITHUB_SHA) throw new Error('checkout differs from GitHub tested commit');
+          console.log('CI_SOURCE_IDENTITY=' + JSON.stringify(identity));
+          NODE
 
       - name: Plan changed-surface evidence
         id: plan
         run: node scripts/ci/plan.mjs
         env:
-          CHANGED_FILES_FILE: ${{ runner.temp }}/changed-files.tsv
+          PLAN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          BEFORE_SHA: ${{ github.event.before }}
+          # Remains off until a trusted-main PR proves live merge-tree reuse.
+          CI_MERGE_REUSE_ENABLED: 'false'
 
   quality:
     name: quality / ${{ matrix.lane }}
@@ -76,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -127,7 +130,7 @@ jobs:
         if: ${{ matrix.lane == 'build' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: radar-view-${{ github.event.pull_request.head.sha || github.sha }}
+          name: radar-view-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: .agent-tmp/radar-package/
           if-no-files-found: error
           retention-days: 30
@@ -142,9 +145,14 @@ jobs:
     if: ${{ needs.plan.outputs.run_design == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
+    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
+    container:
+      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -168,8 +176,8 @@ jobs:
           pnpm architecture:check
           pnpm design:contracts:test
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify locked Playwright version matches the native image
+        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
 
       - name: Build canonical component catalog
         run: pnpm design:catalog:build
@@ -178,17 +186,22 @@ jobs:
         run: pnpm design:components:test
 
   acceptance:
-    name: acceptance / ${{ matrix.shard }} of 4
+    name: acceptance / ${{ matrix.shard }} of 8
     if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
+    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
+    container:
+      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -202,14 +215,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify locked Playwright version matches the native image
+        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
 
       - name: Run HUD Replay browser acceptance
-        run: pnpm acceptance:ci --shard=${{ matrix.shard }}/4
+        run: pnpm acceptance:ci --shard=${{ matrix.shard }}/8
+        env:
+          MIZAR_BROWSER_SHARDING: balanced
 
       - name: Build and run production Companion to Chromium closure
-        if: ${{ matrix.shard == 1 }}
+        if: ${{ matrix.shard == 8 }}
         timeout-minutes: 2
         run: |
           pnpm --filter @mizar/companion... --filter @mizar/web... --fail-if-no-match run build
@@ -219,7 +234,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: browser-evidence-${{ matrix.shard }}
+          name: browser-evidence-${{ github.run_attempt }}-${{ matrix.shard }}
           include-hidden-files: true
           path: |
             .agent-tmp/test-evidence/**
@@ -230,7 +245,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-acceptance-diagnostics-${{ matrix.shard }}
+          name: playwright-acceptance-diagnostics-${{ matrix.shard }}-${{ github.run_attempt }}
           path: |
             playwright-acceptance-report/**
             test-results/**
@@ -244,13 +259,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS
-            runner: macos-15
-          - name: Windows
-            runner: windows-2025
+        # Offline already owns the same macOS build/type/consumer contracts.
+        include: ${{ fromJSON(needs.plan.outputs.run_offline_qualification == 'true' && '[{"name":"Windows","runner":"windows-2025"}]' || '[{"name":"macOS","runner":"macos-15"},{"name":"Windows","runner":"windows-2025"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -264,51 +278,41 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build production packages
-        run: pnpm build
+      - name: Check platform types and build production packages
+        run: |
+          pnpm typecheck
+          pnpm build
 
       - name: Test OS-sensitive filesystem, process and transport behavior
-        run: >-
-          pnpm exec vitest run --config vitest.config.ts
-          packages/telemetry-gsi
-          packages/telemetry-cstv
-          scripts/qualification/product-runtime.test.mjs
-          scripts/qualification/gsi-discovery.test.mjs
-          scripts/qualification/product-logs.test.mjs
-          scripts/qualification/supervisor.test.mjs
-          scripts/qualification/offline.test.mjs
-          apps/companion/test/capture-recorder.test.ts
-          apps/companion/test/gsi-capture.integration.test.ts
-          apps/companion/test/local-web-host.integration.test.ts
-          apps/companion/test/local-websocket-transport.test.ts
-          apps/companion/test/local-tournament-store.test.ts
-          apps/companion/test/hud-config-store.test.ts
-          apps/companion/test/reliable-outbox.test.ts
-          apps/companion/test/support-export.test.ts
+        run: node scripts/ci/platform-contracts.mjs
+
+      - name: Preserve platform consumer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-evidence-${{ matrix.name }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          path: .agent-tmp/platform-evidence/**
+          if-no-files-found: error
 
       - name: Production Web host smoke
         timeout-minutes: 2
         run: pnpm local-web:production-smoke
 
   qualification_windows:
-    name: qualification / Windows bundle
+    name: native / Windows
     if: ${{ needs.plan.outputs.run_qualification == 'true' }}
     needs: [plan]
     runs-on: windows-2025
-    env:
-      QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
           install: false
 
       - name: Restore Cargo dependency and profile caches
@@ -317,175 +321,14 @@ jobs:
         with:
           profile: ci
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Restore committed lockfile after Windows install
+      - name: Compile and test the actual Windows host
         shell: pwsh
-        run: git checkout -- pnpm-lock.yaml
-
-      - name: Build exact-SHA Windows qualification bundle
-        run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --desktop-profile ci
+        run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Verify native update cancellation and recovery
         shell: pwsh
         timeout-minutes: 5
         run: node scripts/qualification/verify-update-recovery.mjs
-
-      - name: Build and test Chinese Setup lifecycle
-        shell: pwsh
-        timeout-minutes: 15
-        run: |
-          choco install nsis --version=3.11 -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
-          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
-          $installed = Join-Path $env:RUNNER_TEMP 'setup installed path'
-          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -CaptureUi
-          $product = Get-ChildItem -LiteralPath $installed -Directory | Select-Object -First 1
-          node scripts/qualification/product-smoke.mjs $product.FullName
-          if ($LASTEXITCODE -ne 0) { throw 'Installed product smoke failed' }
-          node scripts/qualification/desktop-smoke.mjs $product.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Installed GUI smoke failed' }
-
-      - name: Verify CI desktop profile metadata
-        shell: pwsh
-        run: |
-          $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
-          if ($null -eq $bundle) { throw '未生成 qualification bundle 目录' }
-          $artifactPath = Join-Path $bundle.FullName 'resources/metadata/artifact.json'
-          $artifact = Get-Content -Raw -LiteralPath $artifactPath | ConvertFrom-Json
-          if ($artifact.desktopBuildProfile -ne 'ci') { throw "Windows qualification 使用了错误 profile：$($artifact.desktopBuildProfile)" }
-
-      - name: Test Desktop Host geometry and window policy
-        shell: pwsh
-        run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
-
-      - name: Extract and smoke-test the portable bundle without CS2
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
-          if ($null -eq $archive) { throw '未生成 qualification ZIP' }
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
-          & ./scripts/qualification/extract-windows-shell.ps1 -Archive $archive.FullName -Destination $extractRoot
-          $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
-          $fakeSteamRoot = Join-Path $env:RUNNER_TEMP 'Steam root with spaces'
-          $fakeSteamLibrary = Join-Path $env:RUNNER_TEMP 'CS2 library with spaces'
-          New-Item -ItemType Directory -Force -Path (Join-Path $fakeSteamRoot 'steamapps') | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\csgo\cfg') | Out-Null
-          $fakeExecutable = Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\bin\win64\cs2.exe'
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fakeExecutable) | Out-Null
-          Set-Content -LiteralPath $fakeExecutable -Value 'CI fixture, not a runnable game'
-          $conflictingCfgPath = Join-Path $fakeSteamLibrary 'steamapps\common\Counter-Strike 2\game\csgo\cfg\gamestate_integration_other.cfg'
-          Set-Content -LiteralPath $conflictingCfgPath -Value @(
-            '"Other sender"'
-            '{'
-            '    "uri" "http://127.0.0.1:3000/"'
-            '}'
-          ) -Encoding ASCII
-          $escapedLibraryPath = $fakeSteamLibrary.Replace('\', '\\')
-          $libraryVdf = @(
-            '"libraryfolders"'
-            '{'
-            '    "1"'
-            '    {'
-            ('        "path" "' + $escapedLibraryPath + '"')
-            '    }'
-            '}'
-          ) -join [Environment]::NewLine
-          Set-Content -LiteralPath (Join-Path $fakeSteamRoot 'steamapps\libraryfolders.vdf') -Value $libraryVdf -Encoding ASCII
-          $env:STEAMROOT = $fakeSteamRoot
-          Push-Location $bundleRoot.FullName
-          try {
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName
-            if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
-            $installOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\install-gsi.ps1 -Product 2>&1 | Out-String
-            Write-Output $installOutput
-            if ($LASTEXITCODE -ne 0) { throw 'install-gsi.ps1 执行失败' }
-            if ($installOutput -notmatch 'GSI 配置冲突已自动备份并停用') { throw '未自动处理 GSI 配置冲突' }
-            if (Test-Path -LiteralPath $conflictingCfgPath) { throw '冲突配置仍被 CS2 加载' }
-            & powershell -NoProfile -ExecutionPolicy Bypass -File .\resources\scripts\restore-gsi.ps1 -Product
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $conflictingCfgPath)) { throw '冲突配置未恢复' }
-          } finally {
-            Pop-Location
-          }
-
-      - name: Benchmark CI desktop profiles
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_desktop }}
-        run: node scripts/ci/benchmark-desktop.mjs
-
-      - name: Build and smoke benchmark candidate
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_desktop }}
-        shell: pwsh
-        env:
-          CARGO_PROFILE_CI_OPT_LEVEL: '0'
-          CARGO_PROFILE_CI_INCREMENTAL: 'true'
-          CARGO_PROFILE_CI_CODEGEN_UNITS: '256'
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP 'cargo-profile-candidate'
-          node scripts/qualification/build.mjs --skip-build --desktop-profile ci --output $output
-          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate build failed' }
-          $archive = Get-ChildItem -LiteralPath $output -Filter '*.zip' -File | Select-Object -First 1
-          $extract = Join-Path $env:RUNNER_TEMP 'candidate extracted path'
-          New-Item -ItemType Directory -Force -Path $extract | Out-Null
-          tar -xf $archive.FullName -C $extract
-          $bundle = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
-          node scripts/qualification/product-smoke.mjs $bundle.FullName
-          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate portable smoke failed' }
-          node scripts/qualification/desktop-smoke.mjs $bundle.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'candidate-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'benchmark candidate GUI smoke failed' }
-
-      - name: Show Desktop and Companion diagnostics on smoke failure
-        if: ${{ failure() }}
-        shell: pwsh
-        run: |
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $logs = @(Get-ChildItem -LiteralPath $extractedRoot -Recurse -File -Include 'desktop*.ndjson', 'supervisor*.ndjson*', 'companion*.log*', 'supervisor.log', 'supervisor.stderr.log' -ErrorAction SilentlyContinue)
-          $state = Get-ChildItem -LiteralPath $extractedRoot -Directory -Recurse -Filter state -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -ne $state) {
-            Write-Output "--- state tree $($state.FullName)"
-            Get-ChildItem -LiteralPath $state.FullName -Force -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName,Length
-          }
-          if ($logs.Count -eq 0) { Write-Output '未生成 Desktop / Companion 日志。'; exit 0 }
-          foreach ($log in $logs) {
-            Write-Output "--- $($log.FullName)"
-            Get-Content -LiteralPath $log.FullName
-          }
-
-      - name: Upload normal Desktop smoke diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
-          path: |
-            ${{ github.workspace }}/.agent-tmp/installer-ui/**
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/setup-desktop-smoke.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/cargo-benchmark.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/candidate-desktop-smoke.json
-            ${{ runner.temp }}/qualification extracted path/**/state/desktop-smoke-*/*/logs/desktop*.ndjson
-            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/supervisor*.ndjson*
-            ${{ runner.temp }}/qualification extracted path/**/state/**/logs/companion*.log*
-          if-no-files-found: warn
-
-      - name: Upload exact-SHA qualification artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mizar-qualification-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*-Setup.exe
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*-Setup.exe.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
-          if-no-files-found: error
 
       - name: Save reusable main Cargo caches
         if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
@@ -513,7 +356,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -530,15 +373,19 @@ jobs:
       - name: Run offline qualification
         run: >-
           node scripts/qualification/offline.mjs
-          ${{ needs.plan.outputs.run_quality == 'true' && '--quality-owned-static-checks' || '' }}
+          ${{ needs.plan.outputs.run_quality == 'true' && '--platform-only --quality-owned-static-checks' || '' }}
+
+      - name: Production Web host smoke
+        timeout-minutes: 2
+        run: pnpm local-web:production-smoke
 
       - name: Preserve offline phase measurements
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: offline-evidence-${{ matrix.name }}
+          name: offline-evidence-${{ matrix.name }}-${{ github.run_attempt }}
           include-hidden-files: true
-          path: .agent-tmp/offline-evidence/build-timings.json
+          path: .agent-tmp/offline-evidence/**
           if-no-files-found: error
 
   ci-gate:
@@ -549,17 +396,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Download browser identity evidence
         if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: browser-evidence-*
+          pattern: browser-evidence-${{ github.run_attempt }}-*
           path: .agent-tmp/browser-shards
 
       - name: Verify all browser shards cover FULL exactly once
         if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
-        run: node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 4
+        run: node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 8 ${{ github.run_attempt }}
 
       - name: Validate planner-selected jobs
         run: node scripts/ci/plan.mjs --gate

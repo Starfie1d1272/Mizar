@@ -1,29 +1,13 @@
-import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Full CI, including the stable aggregate gate; a docs-only push is insufficient.
-export const requiredJobs = [
-  'plan',
-  ...['static', 'unit', 'fixtures', 'build'].map((lane) => `quality / ${lane}`),
-  'design',
-  ...[1, 2, 3, 4].map((shard) => `acceptance / ${shard} of 4`),
-  'platform / macOS',
-  'platform / Windows',
-  'qualification / Windows bundle',
-  'qualification / offline / Linux',
-  'qualification / offline / macOS',
-  'ci-gate',
-];
+import { fullSourceJobs, assertSuccessfulJobs } from '../ci/source-contract.mjs';
+import { verifyMergeEvidence, githubApi } from '../ci/verify-merge-evidence.mjs';
 
-function githubPages(endpoint) {
-  return JSON.parse(
-    execFileSync('gh', ['api', '--paginate', '--slurp', endpoint], { encoding: 'utf8' }),
-  );
-}
+export const requiredJobs = fullSourceJobs;
 
-export function verifySourceCi(repository, sourceSha, api = githubPages) {
+export function verifySourceCi(repository, sourceSha, api = githubApi, options = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f0-9]{40}$/.test(sourceSha)) {
     throw new Error('无效的 CI 仓库或源码 SHA');
   }
@@ -35,6 +19,7 @@ export function verifySourceCi(repository, sourceSha, api = githubPages) {
       (run) =>
         run.head_sha === sourceSha &&
         run.head_repository?.full_name === repository &&
+        run.head_branch === 'main' &&
         run.path === '.github/workflows/ci.yml' &&
         ['push', 'workflow_dispatch', 'schedule'].includes(run.event),
     )
@@ -46,12 +31,16 @@ export function verifySourceCi(repository, sourceSha, api = githubPages) {
   const jobs = api(
     `repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
   ).flatMap((page) => page.jobs);
-  for (const name of requiredJobs) {
+  const incomplete = requiredJobs.some((name) => {
     const matches = jobs.filter((job) => job.name === name);
-    if (matches.length !== 1 || matches[0].conclusion !== 'success') {
-      throw new Error(`缺少完整 CI 成功证据：${name}；请在该 SHA 上手动运行完整 CI`);
-    }
+    return matches.length !== 1 || matches[0].conclusion !== 'success';
+  });
+  if (incomplete && options.allowMergeReuse) {
+    // Even reuse requires a successful exact-main run and aggregate gate.
+    assertSuccessfulJobs(jobs, ['plan', 'ci-gate'], run);
+    return verifyMergeEvidence(repository, sourceSha, api, options.logs);
   }
+  assertSuccessfulJobs(jobs, requiredJobs, run);
   return { gitSha: sourceSha, runId: run.id, runAttempt: run.run_attempt, url: run.html_url };
 }
 

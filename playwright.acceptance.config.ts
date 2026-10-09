@@ -1,9 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
 const acceptancePort = Number(process.env.PLAYWRIGHT_PORT ?? '4173');
+const selectedFiles = process.env.MIZAR_BROWSER_FILES
+  ? (JSON.parse(process.env.MIZAR_BROWSER_FILES) as string[])
+  : undefined;
 
 export default defineConfig({
   testDir: 'tests/acceptance',
+  ...(selectedFiles ? { testMatch: selectedFiles.map((file) => `**/${file}`) } : {}),
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   failOnFlakyTests: true,

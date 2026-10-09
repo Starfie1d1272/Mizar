@@ -78,16 +78,16 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 - 普通文档只运行计划器和汇总检查；`docs/design/**` 另运行设计检查。
 - 代码运行基础质量检查，Web 语义与验收路径增加浏览器验收，平台相关路径增加对应平台检查。
 - Core、Radar、Radar View、HUD Config、Protocol、Telemetry GSI 的 `src/`，以及 Companion 的运行时、投影、场景、协议发布、配置、BP、比赛资料、系列进展、重放、公开输出与应用组装入口，保守增加完整的既有浏览器验收。精确前缀由计划器维护；这些规则保障消费者回归范围；本地服务与浏览器的完整链路另由集成检查验证。
-- 浏览器验收映射适用于上述实现路径；普通文档、CSS 和包外部测试按各自规则分类。基础质量、平台与 Windows 资格构建分别判定，多文件变更取风险并集。
+- 浏览器验收映射适用于上述实现路径；普通文档、CSS 和包外部测试按各自规则分类。基础质量、平台与 Windows 原生检查分别判定，多文件变更取风险并集。
 - 未知路径、无法确定的差异、工作流、锁文件、工具链或计划器改动默认完整验证。
-- Box 镜像工具及其测试由基础质量任务负责：校验已发布资产身份、远端字节、授权和失败时不发布更新清单；这两个明确路径不进入产品载荷，无需重编译 Desktop 或重复安装。与安装器、更新恢复、候选来源、Desktop 或其它路径混合时仍取所有风险并集；Windows 打包、安装和恢复消费者按明确的已知文件清单保持真实 Windows 验证，不对 bundle、installer-assets 或 evidence 目录作整目录豁免；资格证据完整性及新增未知文件回退完整验证；候选、晋级、Stable 信任协议与未知 qualification 工具完整验证，工作流仍保守回退。
-- 仅改动 `offline.mjs` 或其测试时，由基础质量与 Linux/macOS 离线资格验证负责；这些脚本不进入 Windows 产品载荷，不触发 Windows 安装器。混合载荷、安装或恢复改动仍按风险并集增加真实 Windows 验证；未知脚本保守完整验证。
+- Box 镜像工具及其测试由基础质量任务负责：校验已发布资产身份、远端字节、授权和失败时不发布更新清单；这两个明确路径不进入产品载荷，无需重编译 Desktop 或重复安装。与安装器、更新恢复、候选来源、Desktop 或其它路径混合时仍取所有风险并集；Windows 脚本和宿主消费者按明确的已知文件清单保持真实 Windows 原生验证；完整打包及安装生命周期由 Release Qualification 负责，不对 bundle、installer-assets 或 evidence 目录作整目录豁免；资格证据完整性及新增未知文件回退完整验证；候选、晋级、Stable 信任协议与未知 qualification 工具完整验证，工作流仍保守回退。
+- 仅改动 `offline.mjs` 或其测试时，由基础质量与 Linux/macOS 离线平台验证负责；这些脚本不进入 Windows 产品载荷。混合载荷、安装或恢复改动仍按风险并集增加真实 Windows 验证；未知脚本保守完整验证。
 - 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
 - 基础质量检查（`quality`）分为静态检查、单元测试、样例、类型与构建四路并行任务；全部选中任务通过后汇总成功。
-- 浏览器验收按文件分成四个独立任务，每个任务使用一个工作进程串行执行；全部分片通过后，ci-gate 核对四份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`pnpm acceptance:ci --shard=N/4` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
+- 浏览器验收按实测文件耗时均衡分成八个独立任务，每个任务使用与锁文件版本一致、固定官方镜像 digest 的浏览器及完整原生依赖，使用一个工作进程串行执行；全部分片通过后，ci-gate 核对八份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`MIZAR_BROWSER_SHARDING=balanced pnpm acceptance:ci --shard=N/8` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
 - 基础质量已选中时，设计任务只执行自身的 token 检查，架构和设计契约由基础质量统一执行；仅设计任务选中时仍执行这些门禁。
-- Windows/macOS 验证生产构建、文件系统、进程、传输与宿主启动；完整 JavaScript 单元测试在 Ubuntu 执行，Windows 包另有 Rust 测试和桌面启动检查。
-- 主分支推送与 PR 按差异选择检查；主分支的未知路径或工具链差异执行完整验证与离线验收。定时和手动验证始终完整；桌面、打包或 GSI 配置变化需要 Windows 资格构建。候选版使用独立的 Release Qualification 工作流和 `release` 构建配置。
+- Windows/macOS 验证本平台类型、生产构建、文件系统、进程与传输；完整 JavaScript 单元测试由 Ubuntu Quality 负责。平台消费者清单由 `scripts/ci/platform-contracts.mjs` 维护，执行报告拒绝缺失文件、失败、空执行与新增跳过。Windows 原生任务编译并执行真实 Rust/Tauri 宿主测试和更新取消/恢复检查；完整包、EXE GUI 与安装器验收由 Release Qualification 负责。Full 的 macOS 消费者统一由 offline 任务执行，不再重复另起同 OS 平台任务。
+- PR 按差异选择检查，所有任务 checkout 同一 GitHub 模拟合并 SHA。Full、定时和手动验证包含离线平台消费者；主分支推送保守执行 Full。可信 PR 复用实现由 `verify-merge-evidence.mjs` 维护，开关默认关闭，须先取得受信任 main 工作流下的真实正向证明再启用。复用要求最终 squash tree、模拟 merge 的 base/head、同仓库、未改动的工作流/执行脚本、GitHub 最新成功 run/attempt 和全部必需 jobs 一致；证据来自可信 plan job 日志与 GitHub metadata，拒绝 PR artifact 自证。直接 push、漂移、错树、失败或缺证据回退 Full。发行来源默认仍要求最终 main exact-SHA Full CI；PR 构建不作为发行产物。候选版使用独立的 Release Qualification 工作流和 `release` 构建配置。
 
 不要为了避免检查改变分类或恢复旧锁文件。执行过的检查如实写入 PR，未执行的不得记为通过。
 
@@ -128,22 +128,24 @@ BP 内置 BO3 演示使用同场 EPL 公开禁选和已确认的 UTC 开赛时�
 
 ## 便携包自动化
 
-离线验收单独运行时保留完整静态检查。CI 已选择同一源码的质量任务时，通过 `--quality-owned-static-checks` 将格式、lint 和架构检查交给质量任务；聚合门禁仍要求质量与离线任务都成功。Linux/macOS 继续分别运行类型、完整单测、构建和本平台包可移植性检查，不跨 OS 复用产物。离线脚本自身变化同时选择 Linux/macOS 验收；阶段耗时和失败保留于 `.agent-tmp/offline-evidence/build-timings.json`。
+离线验收单独运行时保留完整静态检查。CI 已选择同一源码的质量任务时，通过 `--quality-owned-static-checks` 将格式、lint 和架构检查交给质量任务；聚合门禁仍要求质量与离线任务都成功。独立 offline 命令保留类型、完整单测、构建和可移植性检查；CI 选中必需 Quality 时，`--platform-only --quality-owned-static-checks` 保留本 OS 类型、构建、真实平台消费者和包完整性，由 Quality 唯一负责通用单测和静态检查。不跨 OS 复用构建产物。离线脚本自身变化同时选择 Linux/macOS 验收；阶段耗时和失败保留于 `.agent-tmp/offline-evidence/build-timings.json`。
 
 离线验收与构建器共用应用版本和发布包命名函数，检查同一版本的目录及 ZIP；不接受其他版本的归档替代本次产物。检查整个应用目录中残留的开发文件和符号链接，不仅凭依赖目录名为 `test` 就删除可能被运行入口引用的资源。发布名称规范见[发布流程](release-readiness.md)。
 
 Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 使用 EPL Inferno 开局与决胜回合回放，包含本地头像；历史 Ancient 与 Nuke 回放只用于开发回归，不进入生产包。每次产品构建校验资源边界。
 
-常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置，降低编译优化并保留增量。CI 的手工入口可选 `benchmark_desktop`，在同一 Windows runner 对照 Host 重编译与完整启动 smoke；Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和 `ci` / `release` 配置建立稳定基线；Cargo.lock 中的本地 Mizar 版本及 Cargo.toml 的 package.version 不参与缓存指纹，避免每次 RC 升版本制造冷缓存，其他依赖与编译配置变更仍会改变指纹；不再按提交 SHA 保存整份 target。相同基线命中后不重复上传，依赖或工具链变化建立新基线；GitHub 仍可能按容量和最近使用时间淘汰缓存。缓存命中与恢复键写入 Actions 摘要，构建分阶段耗时写入摘要和 `build-timings.json`，失败阶段也保留记录。正式 RC 使用默认 `release` 配置，构建身份记录该差异。`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
+常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置执行 Rust/Tauri 原生编译与测试，不构建完整 ZIP / NSIS。Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和配置建立稳定基线，不按提交 SHA 保存整份 target。缓存命中与恢复键写入 Actions 摘要。正式 RC 继续使用 `release` 配置，由 Release Qualification 执行真实打包、GUI、安装、恢复与身份检查；`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
+
+使用 `node scripts/ci/measure-run.mjs owner/repository run-id` 记录终态 CI 的 `created_at → ci-gate.completed_at` wall time、初始排队与各 job/step 时长；缓存冷热根据当次 Actions cache 输出分别报告；浏览器容器拉取与初始化也计入 job 和总 wall time。等待、下载和后置门禁均属于 wall time，超标如实记录。
 
 - `local-web-production-smoke.mjs` 验证生产 HTML、资源传输、样式表类型与构建内容一致性、CS2 资源摘要及真实 WebSocket 基线；它不执行浏览器页面，不证明最终 HUD 已渲染。
 - `pnpm local-web:production-browser-smoke` 在已构建的 Companion 与 Web 上执行真实 HTTP GSI → 运行时／投影 → WebSocket → Chromium，使用已保存 Ancient 回合的 628 帧并核对摘要。它检查队伍、十名选手、雷达实际绘制、C4 阶段与回合结束比分，不拦截 HTTP 或 WebSocket；比赛资料与接收时钟由回放夹具提供。先通过 pnpm 构建图构建 Companion 与 Web，并安装 Chromium；不要在浏览器运行期间重建共享包。此回合片段不证明完整现场制播或 Windows／OBS 性能。
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
-- Windows 发布与 CI 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。
+- Windows Release Qualification 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。
 - `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。 控制台采样遇到 Win32 5 时重新查询原 PID 与创建时间，只有确认原进程已退出才接受该采样；活进程检查失败与可见控制台仍判失败。
 - `product-soak.mjs` 在同一进程运行合成比赛流程，检查连续更新和有界投递，不冒充真实整场比赛。
 - 原生另存为、DPI、多显示器、真实 CS2 与 OBS 仍在 RC 上实测。
-- Windows CI 与资格构建运行 `verify-update-recovery.mjs`，使用明确的独立安装器样例验证成功、取消、写入失败、宿主残留和中断后的旧版恢复及资料保留。签名测试使用真实正式发布证明，离线验证证书、签名与透明日志；浏览器验证更新日志优先展示、单次明确操作衔接安装、取消与延迟安装意图、制作保护及错误反馈。实际旧版到新 Stable 的 NSIS 升级、登录恢复入口及 CS2 / OBS 制作保护仍需 Windows 实机验收。
+- Windows 原生 CI 与资格构建运行 `verify-update-recovery.mjs`，使用明确的独立安装器样例验证成功、取消、写入失败、宿主残留和中断后的旧版恢复及资料保留。签名测试使用真实正式发布证明，离线验证证书、签名与透明日志；浏览器验证更新日志优先展示、单次明确操作衔接安装、取消与延迟安装意图、制作保护及错误反馈。实际旧版到新 Stable 的 NSIS 升级、登录恢复入口及 CS2 / OBS 制作保护仍需 Windows 实机验收。
 - PowerShell 检测回归从 DesktopLog 的真实规范化目录进入同一后台执行器，覆盖 Windows 逐字路径前缀；故障注入核对原始 stderr、退出码、超时、无效 JSON、输出限额和凭据脱敏。不能仅直接运行脚本代替桌面调用边界验证。
 - Windows Steam 路径发现先规范化绝对路径、斜杠、大小写与尾部分隔符，再核对唯一安装；注册信息和库清单重复引用同一路径不算多个安装，真正不同的安装仍拒绝自动选择。候选按 AppID 730 清单定位并验证程序及新版 cfg；旧版 cfg 不产生第二份安装。原生手动选择与 GSI、启动共用安装位置，读取失败与真实配置冲突分别举证。重复接收地址自动备份／停用与恢复须覆盖重试、中断及原路径被其他软件重新创建的情况；不同地址配置保持不变。后台 CS2 巡检的锁竞争不表示人工操作正在执行，配置进度只展示启动、恢复与设置变更。
 
@@ -156,7 +158,7 @@ pnpm qualification:verify <evidence-dir-or-zip>
 
 ## 证据与结果
 
-Windows CI 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，实际操作中文向导、选择桌面快捷方式、完成后启动 Mizar 并正常停止，保存欢迎、目录、快捷方式、进度和完成页截图，以及安装包摘要、系统版本和实际 DPI。截图在 Desktop smoke 诊断资产的 `installer-ui` 中供维护者签收；截图与自动化通过不代替审美判断。125% / 150% 缩放必须在对应实际 DPI 下复核中文和控件边界；报告未覆盖的缩放仍待实机验收。验收者可在对应 Windows 显示缩放下运行 `scripts/qualification/capture-setup-ui.ps1`，指定同一安装包、全新安装目录和证据目录。
+Release Qualification 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，实际操作中文向导、选择桌面快捷方式、完成后启动 Mizar 并正常停止，保存欢迎、目录、快捷方式、进度和完成页截图，以及安装包摘要、系统版本和实际 DPI。截图在 Setup 资格证据包的 `installer-ui` 中供维护者签收；截图与自动化通过不代替审美判断。125% / 150% 缩放必须在对应实际 DPI 下复核中文和控件边界；报告未覆盖的缩放仍待实机验收。验收者可在对应 Windows 显示缩放下运行 `scripts/qualification/capture-setup-ui.ps1`，指定同一安装包、全新安装目录和证据目录。
 
 安装器素材清单记录原标志来源、许可、SVG 与 BMP 的大小和 SHA-256。Setup 构建先核对清单与原标志，再将素材清单、图标和素材摘要记录到 `distribution-manifest.json`；这些是安装器构建输入，不进入被安装内容的身份。正式构建缺少素材或摘要不符时停止；直接编译 NSIS 脚本未指定素材目录时可使用 MUI2 默认画面。
 

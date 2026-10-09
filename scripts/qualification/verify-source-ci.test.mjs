@@ -7,6 +7,7 @@ const run = {
   id: 10,
   run_attempt: 2,
   head_sha: sha,
+  head_branch: 'main',
   head_repository: { full_name: repository },
   path: '.github/workflows/ci.yml',
   event: 'workflow_dispatch',
@@ -14,7 +15,13 @@ const run = {
   conclusion: 'success',
   html_url: 'https://github.com/Starfie1d1272/Mizar/actions/runs/10',
 };
-const jobs = requiredJobs.map((name) => ({ name, conclusion: 'success' }));
+const jobs = requiredJobs.map((name) => ({
+  name,
+  conclusion: 'success',
+  status: 'completed',
+  run_id: 10,
+  head_sha: sha,
+}));
 const apiFor = (runs = [run], jobList = jobs) =>
   vi.fn((endpoint) =>
     endpoint.includes('/jobs?')
@@ -39,6 +46,7 @@ it.each([
   { head_repository: { full_name: 'fork/Mizar' } },
   { path: '.github/workflows/other.yml' },
   { event: 'pull_request' },
+  { head_branch: 'feature' },
   { status: 'in_progress', conclusion: null },
   { conclusion: 'failure' },
   { conclusion: 'cancelled' },
@@ -88,4 +96,31 @@ it('fails closed on API errors and invalid SHA', () => {
       throw new Error('API unavailable');
     }),
   ).toThrow('API unavailable');
+});
+
+it.each([{ run_id: 9 }, { head_sha: 'b'.repeat(40) }, { status: 'in_progress' }])(
+  'rejects incorrect job metadata: %j',
+  (override) => {
+    expect(() =>
+      verifySourceCi(
+        repository,
+        sha,
+        apiFor(
+          [run],
+          jobs.map((job, index) => (index === 1 ? { ...job, ...override } : job)),
+        ),
+      ),
+    ).toThrow('缺少完整 CI');
+  },
+);
+
+it('optional reuse cannot bypass failed latest main CI or missing aggregate gate', () => {
+  expect(() =>
+    verifySourceCi(repository, sha, apiFor([{ ...run, conclusion: 'failure' }]), {
+      allowMergeReuse: true,
+    }),
+  ).toThrow('最新 CI');
+  expect(() =>
+    verifySourceCi(repository, sha, apiFor([run], []), { allowMergeReuse: true }),
+  ).toThrow('缺少完整 CI');
 });
