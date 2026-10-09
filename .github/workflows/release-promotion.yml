@@ -1,5 +1,5 @@
 name: Release Promotion
-run-name: 发布 Mizar ${{ inputs.tag }}
+run-name: Release Promotion
 on:
   workflow_dispatch:
     inputs:
