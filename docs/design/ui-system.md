@@ -45,7 +45,7 @@
 | 游戏阵营 | `--mizar-side-ct` / `--mizar-side-t` |
 | 成功、警告、危险、信息 | `status.success/warning/danger/info` |
 
-参赛方 A 不等于 CT，参赛方 B 不等于 T。赛事强调色不表示成功或警告，Mizar Blue 不表示比赛进行中或错误状态。
+参赛方 A / B 按比赛身份映射 CT / T。赛事强调色服务赛事身份，Mizar Blue 服务产品操作；成功、警告、比赛进度与错误使用各自的状态表达。
 
 动态颜色由既有的赛事来源、配置或呈现模块提供并校验，只设置在消费它的局部元素树上，不从颜色反推业务状态。页面不得新增动态颜色通道。旧 BP 变量列入精确迁移清单，迁移后删除。Gameplay 的旧 `rh-hud` 语义变量已迁移。
 
@@ -67,7 +67,7 @@ Program、Gameplay、Radar 可以拥有固定几何与特定画面风格，但�
 
 现有 BP 全屏画面的网格纹理、双侧视觉处理、地图卡构图和展示字体属于现有参考。通用 Program 和 Gameplay 的旧主题列入迁移清单，不作为新功能的组件样式来源。
 
-架构检查对 `apps/web/src/program/` 不采用产品界面的原始几何/颜色禁令，但仍检查变量声明来源、旧命名空间、删除变量引用和原始值层引用。其它源码中的旧值按精确声明数量保留。新增一次性播出样式必须记录具体渲染器、视觉目的、颜色职责和可复核画面，并更新精确例外测试，不能用整目录忽略代替。Gameplay 始终遵守 [ADR-0007](../decisions/0007-gameplay-hud-presentation-invariants.md)。
+架构检查对 `apps/web/src/program/` 不采用产品界面的原始几何/颜色禁令，但仍检查变量声明来源、旧命名空间、删除变量引用和原始值层引用。其它源码中的旧值按精确声明数量保留。新增一次性播出样式必须记录具体渲染器、视觉目的、颜色职责和可复核画面，并更新精确例外测试，不能用整目录忽略代替。Gameplay 始终遵守 [ADR-0007](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0007-gameplay-hud-presentation-invariants.md)。
 
 ## 无障碍与状态验证
 
@@ -94,7 +94,7 @@ ADR-0013 允许既有 `HudResolvedPreset.theme.semantic` 通过局部变量消�
 
 1080p、1440p 的 100% / 125% / 150% 缩放检查完整控件边界和溢出，不能只检查元素存在。浏览器模拟仅证明布局；Windows 原生贴边、阴影、DPI 和多显示器仍在指定 RC 上实测。
 
-Windows 现场工作区的全屏 Shell 标记成功后使用完整显示器边界：左栏及其 OBS 画面延伸、贴齐屏幕底部，受管理 CS2 使用无边框窗口，游戏、左栏和底栏连续平铺。游戏未接受无边框时保留原生外框避让，但不能记为无缝布局通过。任务栏在现场活动时退到窗口后，隐藏/退出现场或切换其它应用恢复正常层次；不更改全局自动隐藏偏好。Shell 不可用时沿用工作区，不能把被任务栏或游戏边框遮挡的控件记为布局通过。实现职责见 [ADR-0030](../decisions/0030-workspace-fullscreen-shell.md)与[ADR-0031](../decisions/0031-borderless-workspace-game.md)。
+Windows 现场工作区的全屏 Shell 标记成功后使用完整显示器边界：左栏及其 OBS 画面延伸、贴齐屏幕底部，受管理 CS2 使用无边框窗口，游戏、左栏和底栏连续平铺。游戏未接受无边框时保留原生外框避让，但不能记为无缝布局通过。任务栏在现场活动时退到窗口后，隐藏/退出现场或切换其它应用恢复正常层次；不更改全局自动隐藏偏好。Shell 不可用时沿用工作区，不能把被任务栏或游戏边框遮挡的控件记为布局通过。实现职责见 [ADR-0030](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0030-workspace-fullscreen-shell.md)与[ADR-0031](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0031-borderless-workspace-game.md)。
 
 正常退出入口位于工作台右下角，使用危险状态色与「退出工作台」文字，旁边保留「关闭游戏并恢复配置」提示。复制等临时反馈与持续编排状态分别显示；必需的「在 CS2 控制台执行」说明在低高度窗口中保留。总览串起首次安装 GSI、配置 OBS 服务器、Mizar 启动、连接 GOTV、核对数据、执行 HUD 命令与确认真实播出画面。恢复提示直接读取 Host 状态，不建立第二份制作状态。
 

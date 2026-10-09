@@ -1,6 +1,6 @@
 # 目标计时专项验收
 
-本页维护计时测量与独立参考规则。输入解释见[游戏数据语义](../telemetry.md#目标计时)，整场 RC 验收见[发布流程](../release-readiness.md)。
+本页维护计时测量与独立参考规则。输入解释见[游戏数据语义](../reference/telemetry.md#目标计时)，整场 RC 验收见[发布流程](../development/release-readiness.md)。
 
 ## 输入与执行
 
@@ -42,4 +42,4 @@ Windows 标记示例：`mark.ps1 objective-plant-abort -Phase before`，操作�
 
 参考事件使用受支持的 `bomb-begin-plant / bomb-abort-plant / bomb-planted / bomb-begin-defuse / bomb-abort-defuse / bomb-defused / bomb-exploded`。记录参考身份、采集身份、相对微秒时间、数据源角色/代际/序号/tick/UTC/单调时刻/地图/tick 率，以及来源身份和 SHA-256。
 
-发生时间按清单的单调时钟原点对齐，无法重现共同时间基准则证据不足。在线地址身份摘要不等于离线 demo 文件内容摘要。精确格式与校验维护在[验收证据工具](../../scripts/qualification/evidence/)，原始帧、清单、标记和独立参考保留完整性摘要。
+发生时间按清单的单调时钟原点对齐，无法重现共同时间基准则证据不足。在线地址摘要记录数据源身份，离线 demo 摘要校验文件内容。精确格式与校验维护在[验收证据工具](../../scripts/qualification/evidence)，原始帧、清单、标记和独立参考保留完整性摘要。

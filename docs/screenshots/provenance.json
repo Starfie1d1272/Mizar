@@ -1,0 +1,65 @@
+{
+  "description": "产品图集来源与完整性",
+  "records": [
+    {
+      "file": "workspace-pulse.png",
+      "sha256": "2cd7bca4b16263e8a5aa91e818f31190bbd8cf398df1160f58222a72dedd6a2f",
+      "appVersion": "1.0.0-rc.33",
+      "gitSha": "3b187e168ad755ede595eb8371bfaf5933c044fa",
+      "capturedAt": "2026-10-09T03:19:58.638Z",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno 本地回放",
+      "capture": "通过 OBS 临时显示器来源截取的完整 Windows 工作台，原始像素",
+      "resolution": [
+        2560,
+        1440
+      ],
+      "hud": "builtin:mizar-default-preset",
+      "visualReview": "比赛数据正常；默认 Pulse HUD、雷达与制作控制完整显示"
+    },
+    {
+      "file": "hud-pulse.png",
+      "sha256": "f858fcf7fdd60c5afbaa58845108cb16d715c04f5f4fb0f98145573956388c9d",
+      "appVersion": "1.0.0-rc.27",
+      "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
+      "capture": "Windows / CS2 / OBS 原始截图",
+      "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-pulse.png"
+    },
+    {
+      "file": "hud-ewc.png",
+      "sha256": "cd421d10c7df3fa9748cabf6e73e032e3deaac69914a5b4d09c30f6fd4f41dd3",
+      "appVersion": "1.0.0-rc.27",
+      "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
+      "capture": "Windows / CS2 / OBS 原始截图",
+      "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-ewc.png"
+    },
+    {
+      "file": "hud-iem.png",
+      "sha256": "7badc29a208d8f379bae434ceb60ee27dbf561b7f3175a2b7b060ee45a952750",
+      "appVersion": "1.0.0-rc.27",
+      "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
+      "capture": "Windows / CS2 / OBS 原始截图",
+      "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-iem.png"
+    },
+    {
+      "file": "hud-pw.png",
+      "sha256": "1dbabc04eccf0c62e3d3c906c235b020458b78d3134e9b64f1eaf7443d210bef",
+      "appVersion": "1.0.0-rc.27",
+      "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
+      "capture": "Windows / CS2 / OBS 原始截图",
+      "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-pw.png"
+    },
+    {
+      "file": "hud-esl.png",
+      "sha256": "b85d419398235cfb536fea7de32af13e5fd2bd10d5aedbb504003cefdb324c1a",
+      "appVersion": "1.0.0-rc.27",
+      "gitSha": "ba200270035dce193ed85f7f40d3f8670fdf8d39",
+      "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
+      "capture": "Windows / CS2 / OBS 原始截图",
+      "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-esl.png"
+    }
+  ]
+}

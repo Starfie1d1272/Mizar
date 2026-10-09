@@ -10,7 +10,7 @@ Mizar Pulse 统一默认 HUD 与赛前、半场、图间、结果等节目画面
 - 头像与地图保留原素材，低对比纹理与弧面不穿过主要读数、不抢赛事身份。
 - 阵营色随真实 CT/T 改变，不由物理左右决定；危险红只表达危险事实。
 
-精确值由 [设计变量](../../packages/design-tokens/src/) 的 `color.pulse → brand.pulse → broadcast.pulse` 和 [默认外观方案](../../packages/hud-config/src/presets/default-theme.ts)维护。字体、几何由对应组件与布局定义，不在文档复制像素表。
+精确值由 [设计变量](../../packages/design-tokens/src) 的 `color.pulse → brand.pulse → broadcast.pulse` 和 [默认外观方案](../../packages/hud-config/src/presets/default-theme.ts)维护。字体、几何由对应组件与布局定义，不在文档复制像素表。
 
 ## HUD
 

@@ -1,6 +1,6 @@
 # 设计系统
 
-这里维护当前视觉、界面与文案规则。产品目标见[产品定位](../product.md)，历史取舍见[设计审查归档](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)。
+这里维护当前视觉、界面与文案规则。产品目标见[产品定位](../guide/product.md)，历史取舍见[设计审查归档](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)。
 
 | 文档 | 唯一负责的内容 |
 | --- | --- |
@@ -11,7 +11,7 @@
 | [节目编排与展示](program-direction-v1.md) | 场景衔接、统计范围、预览语义 |
 | [产品文案](product-language.md) | 用户可见名称、操作与状态表达 |
 
-中文写作见[术语规范](../terminology.md)，验证方法见[开发验证](../development-validation.md)。精确视觉值以设计变量和组件源码为准，不在多篇文档重复维护数值表。
+中文写作见[术语规范](../development/terminology.md)，验证方法见[开发验证](../development/development-validation.md)。精确视觉值以设计变量和组件源码为准，不在多篇文档重复维护数值表。
 
 ## 修改流程
 
@@ -29,7 +29,7 @@
 - 是否检查键盘、焦点、减少动效、禁用、加载、错误、长文本和缺失媒体？
 - 是否需要 Windows / OBS 实机证据，当前图像实际证明了什么？
 
-视觉调整不改变产品语义时无需新增 ADR；品牌归属、状态职责或架构变化按[决策规则](../decisions/README.md)处理。禁止为单页建立新主题、复制共享组件或为了截图改变正确的比赛语义。
+视觉调整不改变产品语义时无需在 Issue / PR 记录决定；品牌归属、状态职责或架构变化按[决策规则](../decisions/README.md)处理。禁止为单页建立新主题、复制共享组件或为了截图改变正确的比赛语义。
 
 ## 组件目录与参考
 

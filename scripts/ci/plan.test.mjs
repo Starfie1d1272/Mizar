@@ -23,7 +23,7 @@ describe('changed-surface CI planner', () => {
   it.each([
     [
       'docs-only',
-      ['docs/product.md', 'README.md', 'THIRD-PARTY-NOTICES.md'],
+      ['docs/guide/product.md', 'README.md', 'THIRD-PARTY-NOTICES.md'],
       {
         runQuality: false,
         runAcceptance: false,
@@ -195,7 +195,7 @@ describe('changed-surface CI planner', () => {
     ['packages/testkit/src/replay/clock.ts', ['quality']],
     ['packages/radar-view/src/radar.css', ['quality']],
     ['packages/core/src/README.md', []],
-    ['docs/development-validation.md', []],
+    ['docs/development/development-validation.md', []],
   ])('does not add browser or packaging gates for %s', (path, requiredJobs) => {
     expect(createCiPlan({ changedFiles: [path] }).requiredJobs).toEqual(requiredJobs);
   });
@@ -207,7 +207,7 @@ describe('changed-surface CI planner', () => {
           'packages/hud-config/src/index.ts',
           'packages/telemetry-gsi/src/adapter.ts',
           'apps/desktop/src-tauri/src/main.rs',
-          'docs/product.md',
+          'docs/guide/product.md',
         ],
       }).requiredJobs,
     ).toEqual(['quality', 'acceptance', 'platform', 'qualification_windows']);
@@ -313,7 +313,7 @@ describe('changed-surface CI planner', () => {
   );
 
   it.each(['schedule', 'workflow_dispatch'])('%s forces full CI', (eventName) => {
-    const plan = createCiPlan({ eventName, changedFiles: ['docs/product.md'] });
+    const plan = createCiPlan({ eventName, changedFiles: ['docs/guide/product.md'] });
     expect(plan).toMatchObject(full);
     expect(plan.requiredJobs).toContain('qualification_offline');
     expect(plan.runOfflineQualification).toBe(true);
