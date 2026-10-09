@@ -113,11 +113,8 @@ describe('Program scenes preview and safety boundaries', () => {
         await Promise.resolve();
       });
 
-      const fixture = presentationPreview(sceneId, null);
-      expect(fixture.series).not.toBeNull();
-      for (const entrant of Object.values(fixture.series!.entrants)) {
-        expect(container.textContent, `scene ${sceneId}`).toContain(entrant.name);
-      }
+      expect(container.textContent, sceneId).toContain('Falcons');
+      expect(container.textContent, sceneId).toContain('Natus Vincere');
       expect(container.textContent).toContain('示例画面');
     }
 

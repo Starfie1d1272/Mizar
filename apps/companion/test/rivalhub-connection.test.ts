@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,11 @@ import Fastify from 'fastify';
 import type { BroadcastManifest } from '@mizar/rivalhub';
 import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
 import { MatchContextController, MatchManifestLkgStore } from '../src/match-context/index.js';
-import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
+import {
+  liveSnapshotV1Schema,
+  type LiveSnapshotV1,
+  type ReliableEventV1,
+} from '@mizar/protocol/output';
 import {
   RivalHubConnection,
   OFFICIAL_RIVALHUB_URL,
@@ -22,6 +26,30 @@ const validPairingId = '00000000-0000-0000-0000-000000000001';
 const validPollToken = 'a'.repeat(64);
 const validAuthorizeUrl = `${OFFICIAL_RIVALHUB_URL}/integrations/mizar/connect?pairingId=${validPairingId}`;
 const validExpiresAt = new Date(Date.now() + 60_000).toISOString();
+
+const claimSnapshot = liveSnapshotV1Schema.parse(
+  JSON.parse(readFileSync('packages/protocol/test/fixtures/live-snapshot-v1.json', 'utf8')),
+);
+
+function claimFixture(connection: RivalHubConnection, matchId: string, competitionId: string) {
+  return connection.claim(
+    {
+      ...claimSnapshot,
+      matchId,
+      competitionId,
+      cursor: {
+        ...claimSnapshot.cursor,
+        producerInstanceId: 'prod',
+        liveSessionId: 'sess',
+        programSourceGeneration: 0,
+        mapEpoch: 1,
+      },
+      players: [],
+    },
+    'context',
+    false,
+  );
+}
 
 it('refreshes the paired selected match through the local recovery endpoint and exposes its website without credentials', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-refresh-'));
@@ -711,6 +739,8 @@ it('persists new installation when re-pairing even if old source release fails (
         }),
       );
     }
+    if (requestUrl.endsWith('/claim'))
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
     if (requestUrl.endsWith('/release')) {
       releaseCalls++;
       // Simulate remote failure when releasing prior source
@@ -722,23 +752,19 @@ it('persists new installation when re-pairing even if old source release fails (
   }) as typeof fetch;
 
   const path = join(directory, 'connection.json');
-  // Pre-seed an existing connection with an active source
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: initialCredential,
+      installationId: 'inst-old',
+      competitionId: 'comp-old',
+      displayName: '旧操作员',
+    }),
+  );
   const connection = new RivalHubConnection(path, fetchImpl);
-  // @ts-expect-error test setup
-  connection.installation = {
-    baseUrl: OFFICIAL_RIVALHUB_URL,
-    credential: initialCredential,
-    installationId: 'inst-old',
-    competitionId: 'comp-old',
-    displayName: '旧操作员',
-  };
-  // @ts-expect-error test setup
-  connection.source = {
-    matchId: 'match-old',
-    authorityRevision: 1,
-    producerInstanceId: 'prod',
-    liveSessionId: 'sess',
-  };
+  await connection.load();
+  await claimFixture(connection, 'match-old', 'comp-old');
 
   await connection.startPairing();
   const pollResult = await connection.pollPairing();
@@ -785,6 +811,8 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
         headers: new Headers(init.headers),
         body: init.body,
       });
+      if (requestUrl.endsWith('/claim'))
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 2 }));
       if (requestUrl.endsWith('/release')) {
         return Promise.resolve(Response.json({ released: true }));
       }
@@ -796,13 +824,7 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
 
     const connection = new RivalHubConnection(path, fetchImpl);
     await connection.load();
-    // @ts-expect-error test setup active source
-    connection.source = {
-      matchId: 'match-1',
-      authorityRevision: 2,
-      producerInstanceId: 'prod',
-      liveSessionId: 'sess',
-    };
+    await claimFixture(connection, 'match-1', 'comp-1');
 
     expect(connection.view().paired).toBe(true);
     expect(connection.view().activeSourceMatchId).toBe('match-1');
@@ -826,14 +848,7 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     expect(discReq!.headers.get('authorization')).toBe(`Bearer ${credential}`);
 
     expect(existsSync(path)).toBe(false);
-    expect(connection.view()).toEqual({
-      paired: false,
-      competitionId: null,
-      displayName: null,
-      activeSourceMatchId: null,
-      activeDeviceName: null,
-      pairing: 'idle',
-    });
+    expect(connection.view()).toMatchObject({ paired: false, activeSourceMatchId: null });
   });
 
   it('proceeds with disconnect best-effort even if active source release fails', async () => {
@@ -861,6 +876,8 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
         url: requestUrl,
         method: (init.method ?? 'GET').toUpperCase(),
       });
+      if (requestUrl.endsWith('/claim'))
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
       if (requestUrl.endsWith('/release')) {
         releaseAttempts++;
         return Promise.resolve(
@@ -875,13 +892,7 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
 
     const connection = new RivalHubConnection(path, fetchImpl);
     await connection.load();
-    // @ts-expect-error test setup active source
-    connection.source = {
-      matchId: 'match-1',
-      authorityRevision: 1,
-      producerInstanceId: 'prod',
-      liveSessionId: 'sess',
-    };
+    await claimFixture(connection, 'match-1', 'comp-1');
 
     await connection.disconnect();
 

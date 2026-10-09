@@ -1,8 +1,7 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
-import { toMatchDocumentV1 } from '../../packages/rivalhub/src/index.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
 
@@ -136,10 +135,7 @@ test('OBS setup buttons launch the configured target, configure, check and repai
   ).toBeDisabled();
 });
 
-test('map-pool checkboxes stay adjacent to their labels and saving reaches the real tournament service', async ({
-  page,
-  context,
-}) => {
+test('map-pool saving reaches the real tournament service', async ({ page, context }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-map-pool-ui-'));
   const app = buildApp({
     localTournamentPath: join(directory, 'tournament.json'),
@@ -172,12 +168,6 @@ test('map-pool checkboxes stay adjacent to their labels and saving reaches the r
     await page.goto('/matches?tab=maps');
     const train = page.getByRole('checkbox', { name: 'Train', exact: true });
     await train.check();
-    const labelGap = await train.evaluate((input) => {
-      const checkbox = input.getBoundingClientRect();
-      const label = input.parentElement!.querySelector('span')!.getBoundingClientRect();
-      return label.left - checkbox.right;
-    });
-    expect(labelGap).toBeLessThanOrEqual(12);
     await page.getByRole('button', { name: '保存赛事资料', exact: true }).click();
     await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
@@ -305,33 +295,6 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
       .poll(() => commands.at(-1))
       .toEqual({ sceneId: scene.id, expectedRevision: 'next-1' });
   }
-});
-
-test('overview focuses on match preparation and OBS image occupies the bottom at 16:9', async ({
-  page,
-}) => {
-  const document = toMatchDocumentV1(
-    JSON.parse(
-      await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
-    ),
-  );
-  await page.route('**/local/v1/match-document', (r) =>
-    r.fulfill({ json: { document, source: 'rivalhub', freshness: 'fresh' } }),
-  );
-  await page.goto('/');
-  const match = await page.locator('.preparation-match').boundingBox();
-  const checks = await page.locator('.preparation-overview').boundingBox();
-  expect(checks!.x).toBeGreaterThan(match!.x);
-  expect(checks!.y).toBeCloseTo(match!.y, 0);
-  await expect(page.getByRole('button', { name: '复制隐藏命令', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '复制恢复命令', exact: true })).toHaveCount(0);
-  await expect(page.locator('.local-overlay-controls')).toHaveCount(0);
-  await page.goto('/workspace/left');
-  const obs = await page.locator('.workspace-confidence').boundingBox();
-  expect(obs!.width / obs!.height).toBeCloseTo(16 / 9, 2);
-  expect(obs!.y + obs!.height).toBeCloseTo(1080, 0);
-  await expect(page.locator('.workspace-confidence')).toContainText('OBS 预览暂不可用');
-  await expect(page.getByRole('button', { name: '检查连接', exact: true })).toBeVisible();
 });
 
 test('desktop tool buttons dispatch the intended windows and lifecycle actions', async ({

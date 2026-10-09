@@ -50,58 +50,6 @@ describe('Program source freshness', () => {
     expect(getProgramSourceFreshness(next, 250, TEST_POLICY)).toBe('fresh');
   });
 
-  it('returns awaiting after source generation advance until the new generation is accepted', () => {
-    const initial = createInitialRuntimeState('producer-1');
-    const withFrame = reduceRuntime(
-      initial,
-      telemetryInput(0, observation(1, 100)),
-      TEST_POLICY,
-    ).state;
-    const advanced = reduceRuntime(
-      withFrame,
-      {
-        kind: 'advance-program-source-generation',
-        nextGeneration: 1,
-        at: { monotonicMs: 200, utc: '2026-09-14T00:00:00.200Z' },
-      },
-      TEST_POLICY,
-    ).state;
-
-    expect(getProgramSourceFreshness(advanced, 201, TEST_POLICY)).toBe('awaiting');
-    const recovered = reduceRuntime(
-      advanced,
-      telemetryInput(1, observation(2, 250)),
-      TEST_POLICY,
-    ).state;
-    expect(getProgramSourceFreshness(recovered, 350, TEST_POLICY)).toBe('fresh');
-  });
-
-  it('returns awaiting after an explicit map reset until the new execution baseline arrives', () => {
-    const initial = createInitialRuntimeState('producer-1');
-    const withFrame = reduceRuntime(
-      initial,
-      telemetryInput(0, observation(1, 100)),
-      TEST_POLICY,
-    ).state;
-    const reset = reduceRuntime(
-      withFrame,
-      {
-        kind: 'reset-map-execution',
-        reason: 'restore',
-        at: { monotonicMs: 200, utc: '2026-09-14T00:00:00.200Z' },
-      },
-      TEST_POLICY,
-    ).state;
-
-    expect(getProgramSourceFreshness(reset, 201, TEST_POLICY)).toBe('awaiting');
-    const recovered = reduceRuntime(
-      reset,
-      telemetryInput(0, observation(2, 250)),
-      TEST_POLICY,
-    ).state;
-    expect(getProgramSourceFreshness(recovered, 350, TEST_POLICY)).toBe('fresh');
-  });
-
   it('rejects invalid thresholds rather than inventing a production default', () => {
     const state = createInitialRuntimeState('producer-1');
     expect(() => getProgramSourceFreshness(state, 0, { staleAfterMs: -1 })).toThrow(

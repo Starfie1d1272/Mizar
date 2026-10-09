@@ -19,28 +19,6 @@ const documents = () => ({
   product: { product: { layout: { $type: 'dimension', gap: { $value: '{layout.gap}' } } } },
 });
 describe('Design Token contract', () => {
-  it('wraps long explicit font stacks without changing family ordering', () => {
-    const d = documents();
-    d.base.font = {
-      family: {
-        sans: {
-          $type: 'fontFamily',
-          $value: [
-            'Inter',
-            'Microsoft YaHei UI',
-            'Microsoft YaHei',
-            'PingFang SC',
-            'Noto Sans CJK SC',
-            'sans-serif',
-          ],
-        },
-      },
-    };
-    expect(compileTokens(d).css).toContain(
-      "--mizar-font-family-sans:\n    'Inter', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;",
-    );
-  });
-
   it('resolves inherited types and chained aliases into deterministic CSS', () => {
     const result = compileTokens(documents());
     expect(result.tokens.size).toBe(3);

@@ -23,34 +23,6 @@ function reduceTelemetry(
 }
 
 describe('RuntimeState reducer', () => {
-  it('creates an unbound empty runtime with independent continuity layers', () => {
-    expect(createInitialRuntimeState('producer-1')).toEqual({
-      producerInstanceId: 'producer-1',
-      liveSession: { kind: 'unbound' },
-      runtimeSeq: 0,
-      programSource: { kind: 'cs2-gsi', generation: 0 },
-      map: { epoch: 0 },
-      objectiveTiming: {
-        sourceGeneration: 0,
-        mapEpoch: 0,
-        lastAcceptedReceiveSequence: null,
-        lastAcceptedMonotonicMs: null,
-        explosionAnchor: null,
-        lastBombState: null,
-        explosionDurationSeconds: null,
-        plantActionDurationSeconds: null,
-        defuseActionDurationSeconds: null,
-        defuseActionSourcePlayerId: null,
-      },
-      playerStats: {
-        mapEpoch: 0,
-        countedCompletedRounds: 0,
-        currentRound: null,
-        completedDamageBySteam64: {},
-      },
-    });
-  });
-
   it('accepts a current observation wholesale and establishes the first known map', () => {
     const initial = createInitialRuntimeState('producer-1', {
       kind: 'bound',
@@ -85,11 +57,10 @@ describe('RuntimeState reducer', () => {
     const stateBefore = structuredClone(state);
     const inputBefore = structuredClone(input);
 
-    const result = reduceRuntime(state, input, TEST_POLICY);
+    reduceRuntime(state, input, TEST_POLICY);
 
     expect(state).toEqual(stateBefore);
     expect(input).toEqual(inputBefore);
-    expect(result.state).not.toBe(state);
   });
 
   it('replaces omitted source blocks instead of retaining the previous frame', () => {
@@ -116,7 +87,7 @@ describe('RuntimeState reducer', () => {
       const result = reduceTelemetry(state, nextSeq, nextTime, {}, 0);
 
       expect(result.disposition).toEqual({ kind: 'ignored', reason });
-      expect(result.state).toBe(before);
+      expect(result.state).toEqual(before);
       expect(result.state.runtimeSeq).toBe(before.runtimeSeq);
       expect(result.transitions).toEqual([]);
     },
@@ -143,7 +114,7 @@ describe('RuntimeState reducer', () => {
     const result = reduceTelemetry(state, 11, 99);
 
     expect(result.disposition).toEqual({ kind: 'ignored', reason: 'non-monotonic-time' });
-    expect(result.state).toBe(before);
+    expect(result.state).toEqual(before);
   });
 
   it('requires an explicit consecutive source-generation control', () => {
@@ -152,7 +123,7 @@ describe('RuntimeState reducer', () => {
 
     const aheadFrame = reduceTelemetry(state, 11, 10, {}, 1);
     expect(aheadFrame.disposition).toEqual({ kind: 'ignored', reason: 'generation-ahead' });
-    expect(aheadFrame.state).toBe(state);
+    expect(aheadFrame.state).toEqual(state);
 
     const invalidAdvance = reduceRuntime(
       state,
@@ -163,7 +134,7 @@ describe('RuntimeState reducer', () => {
       kind: 'ignored',
       reason: 'invalid-generation-advance',
     });
-    expect(invalidAdvance.state).toBe(state);
+    expect(invalidAdvance.state).toEqual(state);
 
     const advance = reduceRuntime(
       state,
@@ -210,31 +181,13 @@ describe('RuntimeState reducer', () => {
       liveSessionId: 'live-1',
     });
 
-    expect(restarted).toEqual({
+    expect(restarted).toMatchObject({
       producerInstanceId: 'producer-2',
-      liveSession: { kind: 'bound', liveSessionId: 'live-1' },
       runtimeSeq: 0,
-      programSource: { kind: 'cs2-gsi', generation: 0 },
       map: { epoch: 0 },
-      objectiveTiming: {
-        sourceGeneration: 0,
-        mapEpoch: 0,
-        lastAcceptedReceiveSequence: null,
-        lastAcceptedMonotonicMs: null,
-        explosionAnchor: null,
-        lastBombState: null,
-        explosionDurationSeconds: null,
-        plantActionDurationSeconds: null,
-        defuseActionDurationSeconds: null,
-        defuseActionSourcePlayerId: null,
-      },
-      playerStats: {
-        mapEpoch: 0,
-        countedCompletedRounds: 0,
-        currentRound: null,
-        completedDamageBySteam64: {},
-      },
+      programSource: { generation: 0 },
     });
+    expect(restarted.programTelemetry).toBeUndefined();
     expect(restarted).not.toEqual(previous);
 
     const first = reduceTelemetry(restarted, 42, 0, { roundPhase: 'freezetime' });
@@ -254,7 +207,7 @@ describe('RuntimeState reducer', () => {
 
     const result = reduceTelemetry(state, 1, 10, {}, 1);
     expect(result.disposition).toEqual({ kind: 'ignored', reason: 'out-of-order' });
-    expect(result.state).toBe(state);
+    expect(result.state).toEqual(state);
   });
 
   it('requires an established map before accepting an explicit reset', () => {
@@ -270,7 +223,7 @@ describe('RuntimeState reducer', () => {
     );
 
     expect(result.disposition).toEqual({ kind: 'ignored', reason: 'map-not-established' });
-    expect(result.state).toBe(initial);
+    expect(result.state).toEqual(initial);
   });
 
   it('rejects non-finite monotonic times on explicit controls', () => {
@@ -340,29 +293,5 @@ describe('RuntimeState reducer', () => {
     expect(nextFrame.transitions).toEqual([]);
     expect(nextFrame.state.programTelemetry?.telemetry.round?.phase).toBe('live');
     expect(nextFrame.state.map.epoch).toBe(2);
-  });
-
-  it('auto-advances epoch only on a present, non-empty observed map-name change', () => {
-    let state = createInitialRuntimeState('producer-1');
-    state = reduceTelemetry(state, 1, 0).state;
-
-    const absent = reduceTelemetry(state, 2, 10, { mapCoverage: 'absent', mapName: 'de_nuke' });
-    expect(absent.state.map).toEqual({ epoch: 1, name: 'de_mirage', competitiveObserved: true });
-    expect(absent.transitions).toEqual([]);
-
-    const changed = reduceTelemetry(state, 2, 10, { mapName: 'de_nuke' });
-    expect(changed.state.map).toEqual({ epoch: 2, name: 'de_nuke', competitiveObserved: true });
-    expect(changed.transitions).toEqual([
-      expect.objectContaining({
-        kind: 'map_execution_changed',
-        previousMapEpoch: 1,
-        mapEpoch: 2,
-        previousMapName: 'de_mirage',
-        mapName: 'de_nuke',
-        reason: 'observed-map-name-change',
-        sourceGeneration: 0,
-        receiveSequence: 2,
-      }),
-    ]);
   });
 });

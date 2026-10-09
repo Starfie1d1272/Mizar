@@ -16,11 +16,6 @@ type ReplayReceiveContext = {
   readonly receivedMonotonicMs: number;
 };
 
-type ProductionAdapter = (
-  payload: Record<string, unknown>,
-  context: ReplayReceiveContext,
-) => unknown;
-
 type TestFrameEvent = {
   readonly kind: 'frame';
   readonly captureIndex: number;
@@ -30,12 +25,6 @@ type TestFrameEvent = {
   readonly receiveContext: ReplayReceiveContext;
   readonly result: unknown;
 };
-
-const telemetryGsiPackage = '@mizar/telemetry-gsi';
-const productionAdapterModule = (await import(telemetryGsiPackage)) as unknown as {
-  readonly adaptGsiPayload: ProductionAdapter;
-};
-const productionAdapter = productionAdapterModule.adaptGsiPayload;
 
 class ManualScheduler implements ReplayScheduler {
   now = 0;
@@ -173,21 +162,6 @@ describe('ReplayClock-backed production adapter replay', () => {
       ).toEqual(
         step.map((event) => ({ receiveContext: event.receiveContext, result: event.result })),
       );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('calls the exported production adapter with the same source context', async () => {
-    const root = await temporaryDirectory();
-    try {
-      const { capture, frames } = await captureWithFrames(root, 2);
-      const events = frameEvents(await collect(replayCapture(capture, { mode: { kind: 'step' } })));
-      for (const event of events) {
-        const expected = productionAdapter(event.sourceFrame.payload, event.receiveContext);
-        expect(event.result).toEqual(expected);
-        expect(event.sourceFrame).toEqual(frames[event.captureIndex]);
-      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

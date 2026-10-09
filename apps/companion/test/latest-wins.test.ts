@@ -155,7 +155,7 @@ describe('latest-wins consumer', () => {
 
     consumer.offer('A');
     const closing = consumer.close();
-    expect(consumer.close()).toBe(closing);
+    const secondClose = consumer.close();
     consumer.offer('B');
     expect(consumer.getHealth()).toMatchObject({
       state: 'closing',
@@ -165,7 +165,7 @@ describe('latest-wins consumer', () => {
     });
 
     blocked.resolve();
-    await closing;
+    await Promise.all([closing, secondClose]);
     expect(sent).toEqual(['A']);
     expect(consumer.getHealth()).toMatchObject({ state: 'closed', inFlight: false });
   });

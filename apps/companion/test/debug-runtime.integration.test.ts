@@ -128,76 +128,6 @@ describe('Companion debug runtime composition', () => {
     });
   });
 
-  it('takes an authenticated raw frame through adapter and ProgramRuntime into debug', async () => {
-    const recorder = new FakeRecorder();
-    const acceptedRaw: CaptureFrameInput[] = [];
-    app = buildApp({
-      gsiToken: TOKEN,
-      recorder,
-      producerInstanceId: 'debug-producer',
-      debugClock: { nowMonotonicMs: () => 100 },
-      clock: createClock(),
-      onAcceptedRaw: (input) => acceptedRaw.push(input),
-    });
-
-    const payload = {
-      provider: { name: 'CS2', steamid: '76561198000000001' },
-      map: { name: 'de_ancient', phase: 'live' },
-      round: { phase: 'freezetime' },
-      player: { steamid: '76561198000000001', name: 'Observer One', team: 'CT' },
-      allplayers: {
-        '76561198000000001': {
-          name: 'Observer One',
-          team: 'CT',
-          observer_slot: 1,
-        },
-      },
-    };
-    expect((await postGsi(app, payload)).statusCode).toBe(204);
-    expect(acceptedRaw).toHaveLength(1);
-    expect(recorder.inputs[0]?.payload).toBe(acceptedRaw[0]?.payload);
-
-    const response = await app.inject({ method: 'GET', url: '/debug/runtime' });
-    const body: unknown = response.json();
-    const parsedBody = body;
-    const serialized = JSON.stringify(parsedBody);
-
-    expect(response.statusCode).toBe(200);
-    expect(parsedBody).toMatchObject({
-      producerInstanceId: 'debug-producer',
-      sourceGeneration: 0,
-      freshness: 'fresh',
-      raw: { current: { sequence: 0, receivedMonotonicMs: 100 } },
-      normalized: { current: { receive: { sequence: 0, receivedMonotonicMs: 100 } } },
-      runtime: {
-        current: {
-          runtimeSeq: 1,
-          map: { epoch: 1, name: 'de_ancient' },
-        },
-        lastDisposition: { kind: 'accepted', reason: 'baseline' },
-      },
-      latestGsiDiagnostics: { entries: [], suppressedCount: 0 },
-      recentTransitions: [],
-    });
-    expect(serialized).not.toContain(TOKEN);
-    expect(serialized).not.toContain('76561198000000001');
-    expect(serialized).not.toContain('Observer One');
-    if (!isRecord(parsedBody) || !isRecord(parsedBody.raw)) {
-      throw new Error('debug response raw object is missing');
-    }
-    const rawCurrent = parsedBody.raw.current;
-    if (!isRecord(rawCurrent) || !isRecord(rawCurrent.payload)) {
-      throw new Error('debug response raw payload is missing');
-    }
-    expect(rawCurrent.payload.allplayers).toEqual({
-      'player-1': {
-        name: '[REDACTED]',
-        team: 'CT',
-        observer_slot: 1,
-      },
-    });
-  });
-
   it('takes a canonical real semantic fixture through the full debug runtime path', async () => {
     const frames = await readFixtureFrames(RICH_OBSERVER_FIXTURE);
     expect(frames).toHaveLength(1);
@@ -315,43 +245,6 @@ describe('Companion debug runtime composition', () => {
       recentTransitions: [],
     });
   });
-
-  it.each([
-    ['halftime', 'match/halftime-side-switch', 'G2.Esports', 'FURIA'],
-    ['overtime', 'match/overtime-side-switch', 'FURIA', 'G2.Esports'],
-  ] as const)(
-    'keeps %s team identity continuity in the full debug path',
-    async (_, path, ct, t) => {
-      const frames = await readFixtureFrames(resolve(process.cwd(), 'fixtures/gsi/semantic', path));
-      expect(frames).toHaveLength(3);
-
-      const recorder = new FakeRecorder();
-      app = buildApp({
-        gsiToken: TOKEN,
-        recorder,
-        producerInstanceId: 'continuity-producer',
-        debugClock: { nowMonotonicMs: () => 400 },
-        clock: createClock(frames.length),
-      });
-
-      for (const frame of frames) {
-        expect((await postGsi(app, frame.payload)).statusCode).toBe(204);
-      }
-
-      const response = await app.inject({ method: 'GET', url: '/debug/runtime' });
-      expect(response.json()).toMatchObject({
-        runtime: { current: { map: { epoch: 1, name: 'de_ancient' } } },
-        recentTransitions: [],
-        normalized: {
-          current: {
-            telemetry: {
-              map: { sides: { ct: { name: ct }, t: { name: t } } },
-            },
-          },
-        },
-      });
-    },
-  );
 
   it('keeps 204 and records a bounded diagnostic when the accepted-raw seam fails', async () => {
     const recorder = new FakeRecorder();

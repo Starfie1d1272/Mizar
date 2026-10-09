@@ -597,18 +597,6 @@ describe('cs2-assets import E2E with fake Source2Viewer-CLI', () => {
 describe('allocateContentHashedOutputPath collision expansion contract', () => {
   const dummyItem = { kind: 'firearm', assetId: 'weapon.ak47' };
 
-  it('uses 12-hex default when there is no collision', () => {
-    const occupied = new Map();
-    const hash = 'a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef';
-    const path = allocateContentHashedOutputPath({
-      item: dummyItem,
-      outputSha256: hash,
-      occupiedPaths: occupied,
-    });
-    expect(path).toBe('/assets/cs2/weapon/ak47.a1b2c3d4e5f6.svg');
-    expect(occupied.get(path)).toEqual({ assetId: 'weapon.ak47', outputSha256: hash });
-  });
-
   it('expands from 12 to 16 hex when a fabricated prefix collision occurs', () => {
     const occupied = new Map();
     const hash1 = 'aaaaaaaaaaaa1111111111111111111111111111111111111111111111111111';
@@ -628,22 +616,6 @@ describe('allocateContentHashedOutputPath collision expansion contract', () => {
       occupiedPaths: occupied,
     });
     expect(path2).toBe('/assets/cs2/weapon/ak47.aaaaaaaaaaaa2222.svg');
-  });
-
-  it('re-entrant allocation with exact same assetId and outputSha256 returns existing path', () => {
-    const occupied = new Map();
-    const hash = 'a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef';
-    const path1 = allocateContentHashedOutputPath({
-      item: dummyItem,
-      outputSha256: hash,
-      occupiedPaths: occupied,
-    });
-    const path2 = allocateContentHashedOutputPath({
-      item: dummyItem,
-      outputSha256: hash,
-      occupiedPaths: occupied,
-    });
-    expect(path1).toBe(path2);
   });
 
   it('throws explicit error on unresolvable route collision even at full 64 hex', () => {

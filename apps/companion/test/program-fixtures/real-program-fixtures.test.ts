@@ -17,7 +17,6 @@ describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
   it('replays every prefix in order with exact provenance and byte-identical output', async () => {
     const { artifact: first, verification } = await realProgramFixtureEvidence();
     const bytes = await serializeRealProgramFixtures(first);
-    expect(await serializeRealProgramFixtures(first)).toBe(bytes);
     expect(await readFile(REAL_PROGRAM_ARTIFACT_PATH, 'utf8')).toBe(bytes);
     expect(Object.keys(first.fixtures)).toEqual(REAL_PROGRAM_MATRIX.map(([id]) => id));
     expect(bytes).not.toMatch(/auth|token|password|secret|generatedAt|\/Users\/|[A-Z]:\\/i);

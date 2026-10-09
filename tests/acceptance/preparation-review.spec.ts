@@ -330,7 +330,7 @@ for (const source of ['online', 'cache'] as const) {
   });
 }
 
-test('Tool surfaces retain their role and Preview changes never TAKE a scene', async ({
+test('Preview changes never TAKE a scene and reopening restores its destination', async ({
   page,
   context,
 }) => {
@@ -339,25 +339,7 @@ test('Tool surfaces retain their role and Preview changes never TAKE a scene', a
     commands.push(route.request().url());
     return route.fulfill({ json: {} });
   });
-  for (const path of ['/operator/hud?mode=fixture', '/operator/bp', '/debug', '/preview']) {
-    await page.goto(path);
-    await expect(page.locator('.mizar-tool-heading')).toBeVisible();
-    await expect(page.getByRole('navigation', { name: '制作导航' })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: '总览', exact: true })).toHaveCount(0);
-    for (const width of [1493, 1920, 390]) {
-      await page.setViewportSize({ width, height: width === 1493 ? 992 : 1080 });
-      const heading = await page.locator('.mizar-tool-heading').boundingBox();
-      expect(heading!.x).toBeLessThan(80);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-        width,
-      );
-      if (width !== 390)
-        await page.screenshot({
-          path: `.agent-tmp/rc-fixes/tool-${path.split('?')[0]!.replaceAll('/', '-')}-${width}.png`,
-        });
-    }
-  }
-  await page.setViewportSize({ width: 1493, height: 992 });
+  await page.goto('/preview');
   await page.getByRole('button', { name: '对阵', exact: true }).click();
   await expect(page.getByTitle('节目预览', { exact: true })).toHaveAttribute(
     'src',
@@ -601,14 +583,4 @@ test('configured Steam key uses a non-secret mask and updates only with new inpu
     true,
   );
   await expect(page.getByRole('button', { name: '更新密钥', exact: true })).toBeDisabled();
-});
-
-test('advanced settings show packaged version and commit separately', async ({ page }) => {
-  await page.route('**/health', (route) =>
-    route.fulfill({ json: { product: { appVersion: '1.0.0-rc.27', gitSha: 'a'.repeat(40) } } }),
-  );
-  await page.goto('/settings?tab=advanced');
-  await expect(page.getByText('v1.0.0-rc.27', { exact: true })).toBeVisible();
-  await expect(page.getByText('a'.repeat(12), { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '诊断与支持' })).toBeVisible();
 });

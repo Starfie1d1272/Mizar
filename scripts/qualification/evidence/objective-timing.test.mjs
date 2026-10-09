@@ -182,6 +182,61 @@ function analyzedRunCapture(captureId, observedScenarios = [], markerEvidence = 
   };
 }
 
+function completeRunEvidence() {
+  const captureA = analyzedRunCapture(
+    'capture-a',
+    [
+      'freezetime-live',
+      'plant-abort',
+      'planted-explode',
+      'defuse-kit-abort-restart',
+      'defuse-no-kit-abort-restart',
+      'too-late-defuse',
+      'fast-defuse-missing-planted-sample',
+    ],
+    [
+      {
+        kind: 'objective-reconnect-restart',
+        phase: 'before',
+        captured: true,
+        bombState: 'planted',
+        sourceGeneration: 0,
+      },
+    ],
+  );
+  const captureB = analyzedRunCapture(
+    'capture-b',
+    [],
+    [
+      {
+        kind: 'objective-reconnect-restart',
+        phase: 'after',
+        captured: true,
+        bombState: 'planted',
+        sourceGeneration: 1,
+      },
+    ],
+  );
+  const markers = [
+    ...[
+      'freezetime-live',
+      'plant-abort',
+      'planted-explode',
+      'defuse-kit-abort-restart',
+      'defuse-no-kit-abort-restart',
+      'too-late-defuse',
+      'fast-defuse-missing-planted-sample',
+    ].flatMap((scenario, index) => [
+      objectiveMarker(scenario, 'before', index * 100, 'capture-a'),
+      objectiveMarker(scenario, 'after', index * 100 + 50, 'capture-a'),
+    ]),
+    objectiveMarker('reconnect-restart', 'before', 800, 'capture-a'),
+    objectiveMarker('reconnect-restart', 'after', 900, 'capture-b'),
+  ];
+
+  return { captureA, captureB, markers };
+}
+
 describe('objective timing capture analyzer', () => {
   it('measures active cadence, semantic clock residuals, transitions, and terminals', async () => {
     const run = await createCapture([
@@ -499,56 +554,7 @@ describe('objective timing capture analyzer', () => {
   });
 
   it('makes one run-level decision from complete multi-capture evidence', () => {
-    const captureA = analyzedRunCapture(
-      'capture-a',
-      [
-        'freezetime-live',
-        'plant-abort',
-        'planted-explode',
-        'defuse-kit-abort-restart',
-        'defuse-no-kit-abort-restart',
-        'too-late-defuse',
-        'fast-defuse-missing-planted-sample',
-      ],
-      [
-        {
-          kind: 'objective-reconnect-restart',
-          phase: 'before',
-          captured: true,
-          bombState: 'planted',
-          sourceGeneration: 0,
-        },
-      ],
-    );
-    const captureB = analyzedRunCapture(
-      'capture-b',
-      [],
-      [
-        {
-          kind: 'objective-reconnect-restart',
-          phase: 'after',
-          captured: true,
-          bombState: 'planted',
-          sourceGeneration: 1,
-        },
-      ],
-    );
-    const markers = [
-      ...[
-        'freezetime-live',
-        'plant-abort',
-        'planted-explode',
-        'defuse-kit-abort-restart',
-        'defuse-no-kit-abort-restart',
-        'too-late-defuse',
-        'fast-defuse-missing-planted-sample',
-      ].flatMap((scenario, index) => [
-        objectiveMarker(scenario, 'before', index * 100, 'capture-a'),
-        objectiveMarker(scenario, 'after', index * 100 + 50, 'capture-a'),
-      ]),
-      objectiveMarker('reconnect-restart', 'before', 800, 'capture-a'),
-      objectiveMarker('reconnect-restart', 'after', 900, 'capture-b'),
-    ];
+    const { captureA, captureB, markers } = completeRunEvidence();
 
     const complete = evaluateObjectiveTimingRun([captureA, captureB], markers);
     expect(complete.captureIds).toEqual(['capture-a', 'capture-b']);
@@ -587,40 +593,7 @@ describe('objective timing capture analyzer', () => {
   });
 
   it('does not let a sparse reconnect capture poison run-level semantic or lease evidence', () => {
-    const captureA = analyzedRunCapture(
-      'capture-a',
-      [
-        'freezetime-live',
-        'plant-abort',
-        'planted-explode',
-        'defuse-kit-abort-restart',
-        'defuse-no-kit-abort-restart',
-        'too-late-defuse',
-        'fast-defuse-missing-planted-sample',
-      ],
-      [
-        {
-          kind: 'objective-reconnect-restart',
-          phase: 'before',
-          captured: true,
-          bombState: 'planted',
-          sourceGeneration: 0,
-        },
-      ],
-    );
-    const captureB = analyzedRunCapture(
-      'capture-b',
-      [],
-      [
-        {
-          kind: 'objective-reconnect-restart',
-          phase: 'after',
-          captured: true,
-          bombState: 'planted',
-          sourceGeneration: 1,
-        },
-      ],
-    );
+    const { captureA, captureB, markers } = completeRunEvidence();
     for (const key of [
       'phaseSemanticsConsistent',
       'roundBombSemanticsConsistent',
@@ -644,23 +617,6 @@ describe('objective timing capture analyzer', () => {
       p99: null,
     };
     captureB.objectiveTiming.metrics.lease.requiredMinimumLeaseMs = null;
-
-    const markers = [
-      ...[
-        'freezetime-live',
-        'plant-abort',
-        'planted-explode',
-        'defuse-kit-abort-restart',
-        'defuse-no-kit-abort-restart',
-        'too-late-defuse',
-        'fast-defuse-missing-planted-sample',
-      ].flatMap((scenario, index) => [
-        objectiveMarker(scenario, 'before', index * 100, 'capture-a'),
-        objectiveMarker(scenario, 'after', index * 100 + 50, 'capture-a'),
-      ]),
-      objectiveMarker('reconnect-restart', 'before', 800, 'capture-a'),
-      objectiveMarker('reconnect-restart', 'after', 900, 'capture-b'),
-    ];
 
     const result = evaluateObjectiveTimingRun([captureA, captureB], markers);
     expect(result.qualification.sourceSemantics.result).toBe('PASS');

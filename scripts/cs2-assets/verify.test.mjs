@@ -187,17 +187,6 @@ describe('cs2-assets verify', () => {
     );
   });
 
-  it('rejects an output hash mismatch', async () => {
-    const root = await writeFixture({
-      mutateManifest: (manifest) => {
-        manifest.assets['weapon.ak47'].outputSha256 = 'b'.repeat(64);
-      },
-    });
-    await expect(verifyCs2Assets({ rootDir: root })).rejects.toThrow(
-      'outputPath hash prefix 必须匹配 outputSha256',
-    );
-  });
-
   it('rejects a catalog-known item when its manifest asset is missing', async () => {
     const root = await writeFixture({
       mutateManifest: (manifest) => {

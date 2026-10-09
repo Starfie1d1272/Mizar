@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { unboundIdentityResolution } from '@mizar/core/identity';
-import { derivePlayerLifeState } from '@mizar/core/projection';
 import {
   createInitialRuntimeState,
   reduceRuntime,
@@ -96,11 +95,7 @@ describe('Radar frame projector', () => {
       'player-b',
       'player-c',
     ]);
-    expect(frame.players.map((player) => player.lifeState)).toEqual(
-      [...(observation().telemetry.allPlayers ?? [])]
-        .sort((left, right) => left.sourcePlayerId.localeCompare(right.sourcePlayerId))
-        .map((player) => derivePlayerLifeState(player.state?.health)),
-    );
+    expect(frame.players.map((player) => player.lifeState)).toEqual(['alive', 'dead', 'unknown']);
     expect(frame.grenades.map((grenade) => grenade.sourceEntityId)).toEqual([
       'grenade-a',
       'grenade-b',

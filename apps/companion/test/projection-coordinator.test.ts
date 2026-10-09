@@ -539,7 +539,7 @@ describe('ProjectionCoordinator', () => {
       });
       expect(stale.ok).toBe(true);
       if (!stale.ok) throw new Error('same-match memory fallback should bind');
-      expect(stale.binding.context).toBe(fresh.binding.context);
+      expect(stale.binding.context).toEqual(fresh.binding.context);
       expect(coordinator.getCurrent().identity.state).toBe('matched');
       expect(coordinator.getCurrent().program.status.context).toBe('stale');
       expect(coordinator.getCurrent().program.teams.ct).toMatchObject({

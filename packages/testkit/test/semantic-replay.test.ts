@@ -20,128 +20,38 @@ const WARMUP_SOURCE_FRAMES_SHA256 =
 const BOT_SOURCE_CAPTURE_ID = '20260913T162802Z-3f41d8df';
 const BOT_SOURCE_FRAMES_SHA256 = 'e34505e2626dfa6f0941b8b4ed675dbea38e2ff53e29e3240c36ad7a2673d218';
 
+const SOURCES = {
+  match: [RECOVERED_MATCH_SOURCE_CAPTURE_ID, RECOVERED_MATCH_SOURCE_FRAMES_SHA256],
+  warmup: [WARMUP_SOURCE_CAPTURE_ID, WARMUP_SOURCE_FRAMES_SHA256],
+  bot: [BOT_SOURCE_CAPTURE_ID, BOT_SOURCE_FRAMES_SHA256],
+} as const;
 const SEMANTIC_FIXTURES = [
-  {
-    name: 'observer/rich-live-state',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 727,
-    lastSequence: 727,
-    frameCount: 1,
-  },
-  {
-    name: 'observer/missing-player-identity',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 3,
-    lastSequence: 14,
-    frameCount: 12,
-  },
-  {
-    name: 'bomb/plant',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 1015,
-    lastSequence: 1029,
-    frameCount: 15,
-  },
-  {
-    name: 'bomb/dropped',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 260,
-    lastSequence: 260,
-    frameCount: 1,
-  },
-  {
-    name: 'bomb/defuse',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 5522,
-    lastSequence: 5544,
-    frameCount: 23,
-  },
-  {
-    name: 'bomb/explode-reset',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 1193,
-    lastSequence: 1214,
-    frameCount: 22,
-  },
-  {
-    name: 'match/halftime-side-switch',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 6145,
-    lastSequence: 6147,
-    frameCount: 3,
-  },
-  {
-    name: 'match/regulation-to-overtime',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 13096,
-    lastSequence: 13130,
-    frameCount: 35,
-  },
-  {
-    name: 'match/overtime-side-switch',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 14461,
-    lastSequence: 14463,
-    frameCount: 3,
-  },
-  {
-    name: 'match/gameover',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 16260,
-    lastSequence: 16261,
-    frameCount: 2,
-  },
-  {
-    name: 'match/paused',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 3605,
-    lastSequence: 3605,
-    frameCount: 1,
-  },
-  {
-    name: 'match/timeout-ct',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 2109,
-    lastSequence: 2109,
-    frameCount: 1,
-  },
-  {
-    name: 'match/timeout-t',
-    sourceCaptureId: RECOVERED_MATCH_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: RECOVERED_MATCH_SOURCE_FRAMES_SHA256,
-    firstSequence: 4489,
-    lastSequence: 4489,
-    frameCount: 1,
-  },
-  {
-    name: 'warmup/observer',
-    sourceCaptureId: WARMUP_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: WARMUP_SOURCE_FRAMES_SHA256,
-    firstSequence: 45,
-    lastSequence: 45,
-    frameCount: 1,
-  },
-  {
-    name: 'local-bot/numeric-player-id',
-    sourceCaptureId: BOT_SOURCE_CAPTURE_ID,
-    sourceFramesSha256: BOT_SOURCE_FRAMES_SHA256,
-    firstSequence: 540,
-    lastSequence: 540,
-    frameCount: 1,
-  },
+  ['observer/rich-live-state', 'match', 727, 727, 1],
+  ['observer/missing-player-identity', 'match', 3, 14, 12],
+  ['bomb/plant', 'match', 1015, 1029, 15],
+  ['bomb/dropped', 'match', 260, 260, 1],
+  ['bomb/defuse', 'match', 5522, 5544, 23],
+  ['bomb/explode-reset', 'match', 1193, 1214, 22],
+  ['match/halftime-side-switch', 'match', 6145, 6147, 3],
+  ['match/regulation-to-overtime', 'match', 13096, 13130, 35],
+  ['match/overtime-side-switch', 'match', 14461, 14463, 3],
+  ['match/gameover', 'match', 16260, 16261, 2],
+  ['match/paused', 'match', 3605, 3605, 1],
+  ['match/timeout-ct', 'match', 2109, 2109, 1],
+  ['match/timeout-t', 'match', 4489, 4489, 1],
+  ['warmup/observer', 'warmup', 45, 45, 1],
+  ['local-bot/numeric-player-id', 'bot', 540, 540, 1],
 ] as const;
+const fixtureCases = SEMANTIC_FIXTURES.map(
+  ([name, source, firstSequence, lastSequence, frameCount]) => ({
+    name,
+    sourceCaptureId: SOURCES[source][0],
+    sourceFramesSha256: SOURCES[source][1],
+    firstSequence,
+    lastSequence,
+    frameCount,
+  }),
+);
 
 function semanticCapturePath(name: string): string {
   return resolve(process.cwd(), 'fixtures/gsi/semantic', name);
@@ -187,7 +97,7 @@ function sideNames(observation: ReturnType<typeof successfulObservation>) {
 }
 
 describe('semantic real-evidence capture replay', () => {
-  it.each(SEMANTIC_FIXTURES)(
+  it.each(fixtureCases)(
     '$name verifies capture integrity, provenance, and selected boundaries',
     async (fixture) => {
       const capture = await verifyCapture(semanticCapturePath(fixture.name));
@@ -457,7 +367,7 @@ describe('semantic real-evidence capture replay', () => {
   });
 
   it('preserves public identity and excludes secrets from committed semantic fixture bytes', async () => {
-    for (const fixture of SEMANTIC_FIXTURES) {
+    for (const fixture of fixtureCases) {
       const dir = semanticCapturePath(fixture.name);
       const [manifest, frames] = await Promise.all([
         readFile(resolve(dir, 'manifest.json'), 'utf8'),

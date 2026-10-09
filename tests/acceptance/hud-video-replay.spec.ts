@@ -72,9 +72,6 @@ test('plays real game background with live HUD and seeks both to the recorded C4
       `builtin:${preset}-preset`,
     );
     await expect(replay).toHaveAttribute('data-replay-cursor', cursor!);
-    await page
-      .locator('.hud-console__canvas-frame')
-      .screenshot({ path: `.agent-tmp/rc-fixes/video-${preset}.png` });
     expect(await video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeCloseTo(
       stopped,
       2,
@@ -86,7 +83,6 @@ test('plays real game background with live HUD and seeks both to the recorded C4
   await expect
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
     .toBeCloseTo(stopped, 2);
-  await page.screenshot({ path: '.agent-tmp/rc27-acceptance/evidence/editor-live-video.png' });
   await page.getByLabel('回放来源', { exact: true }).selectOption('epl-inferno-opening');
   await expect(video).toHaveCount(0);
   expect(errors).toEqual([]);

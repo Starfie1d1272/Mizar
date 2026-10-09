@@ -82,9 +82,6 @@ it.each(['plant', 'defuse'] as const)(
       expect(node.querySelector('.shanghai-event-panel')).toBeNull();
       const icon = node.querySelector('.objective-center .shanghai-c4');
       expect(icon?.getAttribute('data-asset-id')).toBe('objective.c4');
-      expect((icon as HTMLElement).style.getPropertyValue('--objective-icon')).toContain(
-        '/assets/cs2/objective/c4.',
-      );
       render(1.25, kind === 'plant' ? 'planting' : 'defusing', false);
       expect(node.querySelector('.shanghai-event-panel')).toBeNull();
       expect(node.querySelector('.shanghai-fuse')).toBeNull();

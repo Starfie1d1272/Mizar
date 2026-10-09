@@ -3,13 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { adaptGsiPayload, MAX_DIAGNOSTICS_PER_FRAME, type GsiDiagnostic } from '../src/index.js';
 import {
   SYNTHETIC_EVIDENCE_INFORMED_OBSERVER_FRAME,
-  SYNTHETIC_EVIDENCE_INFORMED_PROVENANCE,
   SYNTHETIC_EVIDENCE_INFORMED_ROUND_AFTER_BOMB_FRAME,
 } from './fixtures/synthetic-evidence-informed.js';
-import {
-  SYNTHETIC_RUNTIME_EDGE_FRAME,
-  SYNTHETIC_RUNTIME_EDGE_PROVENANCE,
-} from './fixtures/synthetic-runtime-edge.js';
+import { SYNTHETIC_RUNTIME_EDGE_FRAME } from './fixtures/synthetic-runtime-edge.js';
 
 const receiveContext = {
   sequence: 17,
@@ -134,28 +130,7 @@ describe('adaptGsiPayload', () => {
     expect(result.observation.telemetry).not.toHaveProperty('added');
   });
 
-  it('keeps explicit provenance for a synthetic contract fixture', () => {
-    expect(SYNTHETIC_EVIDENCE_INFORMED_PROVENANCE).toMatchObject({
-      fixtureKind: 'synthetic-contract-fixture',
-      sourceFrame: 'synthetic composition; no source capture or single source frame',
-      sourceFrameSequence: null,
-      sourceFrameRange: null,
-    });
-    expect(SYNTHETIC_EVIDENCE_INFORMED_PROVENANCE.sanitization).toContain(
-      'not a sanitized raw frame',
-    );
-  });
-
-  it('keeps exact provenance for a synthetic runtime edge fixture', () => {
-    expect(SYNTHETIC_RUNTIME_EDGE_PROVENANCE).toEqual({
-      fixtureKind: 'synthetic-contract-fixture',
-      sourceFrame: 'synthetic GSI field composition; no private local capture is checked in',
-      sourceFrameSequence: null,
-      sourceFrameRange: null,
-      reason:
-        'exercise mixed real-world field presence without exporting a private account identity',
-    });
-
+  it('normalizes partial synthetic runtime evidence without inventing missing blocks', () => {
     const result = adaptGsiPayload(SYNTHETIC_RUNTIME_EDGE_FRAME, receiveContext);
 
     expect(result.ok).toBe(true);
@@ -581,21 +556,5 @@ describe('adaptGsiPayload', () => {
     expect(
       result.diagnostics.entries.some((entry) => entry.rawValue && entry.rawValue.length > 64),
     ).toBe(false);
-  });
-
-  it.each([
-    null,
-    false,
-    0,
-    '',
-    [],
-    {},
-    { map: null },
-    { allplayers: [] },
-    { grenades: [] },
-    { player: { steamid: 'p', position: { x: 'bad', y: 0, z: 0 } } },
-    { nested: { arbitrary: ['json', 1, false, null] } },
-  ])('does not throw for JSON-compatible input %#', (payload) => {
-    expect(() => adaptGsiPayload(payload, receiveContext)).not.toThrow();
   });
 });

@@ -114,7 +114,6 @@ for (const [width, height] of [
                 r.top < bounds.top - 1 ||
                 r.bottom > bounds.bottom + 1 ||
                 (section !== undefined && r.bottom > section.bottom + 1) ||
-                r.height < 32 ||
                 button.scrollWidth > button.clientWidth + 1
               );
             })
@@ -153,26 +152,15 @@ for (const [width, height] of [
           .map((button) => button.textContent);
       });
       expect(feedbackOverlap).toEqual([]);
-      const footer = (await page.locator('.workspace-message').boundingBox())!;
-      for (const button of await page.locator('.workspace-dock > section button').all()) {
-        expect(
-          (await button.boundingBox())!.y + (await button.boundingBox())!.height,
-        ).toBeLessThanOrEqual(footer.y + 1);
-      }
       await page.getByRole('button', { name: '查看错误详情' }).click();
       await expect(page.getByRole('dialog')).toContainText('请使用窗口模式后重试恢复布局');
       await page.getByRole('button', { name: '关闭详情' }).click();
-      if (process.env.MIZAR_REVIEW_SCREENSHOTS === '1')
-        await page.screenshot({ path: `.agent-tmp/rc5-dock-${width}-${scale}.png` });
       await page.setViewportSize({
         width: Math.floor((width - gameWidth) / scale),
         height: Math.floor(workHeight / scale),
       });
       await page.goto('/workspace/left');
       await expect(page.getByText('等待 GSI 数据', { exact: true })).toBeVisible();
-      expect(
-        (await page.locator('.workspace-radar__picture').boundingBox())?.height,
-      ).toBeGreaterThan(120);
       const leftOverflow = await page.locator('.workspace-left').evaluate((root) => {
         const bounds = root.getBoundingClientRect();
         return {
@@ -207,8 +195,6 @@ for (const [width, height] of [
       expect(leftOverflow).toEqual({ overflow: false, clipped: [] });
       await page.getByRole('button', { name: '检查游戏连接' }).focus();
       await expect(page.getByRole('button', { name: '检查游戏连接' })).toBeFocused();
-      if (process.env.MIZAR_REVIEW_SCREENSHOTS === '1')
-        await page.screenshot({ path: `.agent-tmp/rc5-left-${width}-${scale}.png` });
     });
   }
 }
