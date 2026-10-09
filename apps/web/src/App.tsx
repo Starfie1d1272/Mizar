@@ -3,7 +3,7 @@ import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
-import { BpPage } from './bp/BpPage';
+import { BpWorkspaceControls, BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -603,7 +603,7 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
-  if (['/', '/operator', '/matches', '/picture', '/settings'].includes(pathname))
+  if (['/', '/operator', '/matches', '/picture', '/settings', '/resources'].includes(pathname))
     return <PreparationPage />;
   if (pathname === '/qualification')
     return (
@@ -657,7 +657,16 @@ export function App() {
     return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp') return <LegacyBpPreviewRedirect />;
+  if (pathname === '/operator/bp')
+    return (
+      <ToolShell title="正式 BP 控制">
+        <main className="preparation">
+          <h1>正式 BP 控制</h1>
+          <p>影响正式播出；赛前可用，无需启动 CS2 或等待 GSI。</p>
+          <BpWorkspaceControls />
+        </main>
+      </ToolShell>
+    );
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (
@@ -677,13 +686,4 @@ export function App() {
   if (surface.id === 'program') return <ProgramRoute />;
   if (surface.id === 'hud') return <HudConsolePage />;
   return <SurfacePage surface={surface} />;
-}
-
-function LegacyBpPreviewRedirect() {
-  useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    query.set('scene', 'bp');
-    window.location.replace(`/preview?${query}`);
-  }, []);
-  return null;
 }

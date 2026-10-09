@@ -80,7 +80,9 @@ export function LocalTournamentEditor({
   refresh,
   action,
   section = 'details',
+  scope = 'match',
 }: {
+  readonly scope?: 'match' | 'resources';
   readonly document: MatchDocumentV1;
   readonly section?: 'details' | 'roster' | 'maps';
   readonly view: LocalTournamentView | null;
@@ -95,7 +97,12 @@ export function LocalTournamentEditor({
   const [eventPool, setEventPool] = useState<readonly string[]>(event?.mapPool ?? []);
   const [eventBo3Rules, setEventBo3Rules] = useState(event?.bo3Rules ?? DEFAULT_BO3_BP_RULES);
   const [savedMessage, setSavedMessage] = useState('');
-  if (draft === null || event === undefined || view?.activeLocalMatchId !== draft.matchId)
+  if (
+    view === null ||
+    draft === null ||
+    event === undefined ||
+    (scope === 'match' && view?.activeLocalMatchId !== draft.matchId)
+  )
     return null;
 
   const updateEntrant = (side: 'a' | 'b', patch: Partial<MatchDocumentV1['entrants']['a']>) =>
@@ -113,7 +120,7 @@ export function LocalTournamentEditor({
   return (
     <div className="preparation-editor">
       {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
-      {section !== 'maps' ? (
+      {scope === 'match' && section !== 'maps' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
@@ -302,7 +309,7 @@ export function LocalTournamentEditor({
           <Button type="submit">保存比赛资料</Button>
         </form>
       ) : null}
-      {section !== 'roster' ? (
+      {scope === 'resources' && section !== 'roster' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
@@ -398,7 +405,7 @@ export function LocalTournamentEditor({
           <Button type="submit">保存赛事资料</Button>
         </form>
       ) : null}
-      {section === 'details' && event.matchIds.length > 1 ? (
+      {scope === 'resources' && section === 'details' && event.matchIds.length > 1 ? (
         <div className="workspace-local-schedule">
           <strong>比赛顺序</strong>
           {event.matchIds.map((id, index) => {

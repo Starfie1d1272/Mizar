@@ -71,6 +71,13 @@ describe('managed CS2 production entry and cleanup', () => {
     await expect(productionAction('enter', preparation)).rejects.toThrow('请先退出');
     expect(calls).toEqual(['gsi_status', '/local/v1/obs', 'start_managed_cs2']);
   });
+  it('redisplays existing live or hidden production without readiness or game launch', async () => {
+    for (const mode of ['live', 'hidden'] as const) {
+      const calls = setup();
+      await productionAction('enter', { ...preparation, mode });
+      expect(calls).toEqual(['/operator/production', 'present_production']);
+    }
+  });
   it('hides the workspace without closing the game', async () => {
     const calls = setup();
     await productionAction('hide', { ...preparation, mode: 'live' });

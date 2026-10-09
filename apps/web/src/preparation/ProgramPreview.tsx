@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBpSession } from '../bp/client';
 import { ScenePreviewViewport, type PreviewFrame } from './ScenePreviewViewport';
-import { BpWorkspaceControls } from '../bp/BpPage';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { Button, Panel, Select } from '../ui';
 import { ToolShell } from '../patterns';
@@ -29,7 +28,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
       src:
         PROGRAM_SCENES.find((scene) => scene.id === preview)!.path +
         (preview === 'bp'
-          ? ''
+          ? '?preview=1'
           : `?preview=1&variant=${variant}&background=${background}&intro=${intro}`),
       immediate,
     }),
@@ -77,7 +76,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
   }, [demo, demoIndex, settledKey, frame.key, preview, intro]);
   return (
     <Panel className="program-preview-panel">
-      {standalone ? null : <h2>节目预览</h2>}
+      {standalone ? null : <h2>画面检查 · 只读</h2>}
       <div className="preparation-scenes">
         {PROGRAM_SCENES.map((scene) => (
           <Button
@@ -154,10 +153,6 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
       </div>
       <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
         <ScenePreviewViewport frame={frame} onSettled={onSettled} />
-        <div hidden={preview !== 'bp' || demo !== null}>
-          <p>操作将同步到 BP 播出画面。</p>
-          <BpWorkspaceControls />
-        </div>
       </div>
       {standalone ? null : (
         <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>

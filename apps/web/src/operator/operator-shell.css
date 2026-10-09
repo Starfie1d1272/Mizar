@@ -302,3 +302,16 @@
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }
+
+.product-obs-status {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  padding: var(--mizar-layout-gap);
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.product-obs-status span {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}

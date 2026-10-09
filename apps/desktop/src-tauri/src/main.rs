@@ -612,6 +612,10 @@ fn main_path_allowed(path: &str) -> bool {
         "/settings",
         "/settings?tab=gsi",
         "/settings?tab=obs",
+        "/settings?tab=rivalhub",
+        "/resources",
+        "/?tab=finish",
+        "/?tab=roster",
     ]
     .contains(&path)
 }
@@ -749,7 +753,7 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
     app.state::<updates::PendingUpdate>().check()?;
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
-        "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),
+        "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
         "preview" => ("tool-preview", "节目预览", "/preview"),
         _ => return Err("工具无法识别。".into()),
@@ -1827,6 +1831,10 @@ mod startup_tests {
     fn live_settings_open_only_known_preparation_sections() {
         for path in [
             "/settings?tab=obs",
+        "/settings?tab=rivalhub",
+        "/resources",
+        "/?tab=finish",
+        "/?tab=roster",
             "/settings?tab=gsi",
             "/picture?tab=overlay",
         ] {
