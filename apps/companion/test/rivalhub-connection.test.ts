@@ -1143,6 +1143,7 @@ it('new production waits for its observed lineup, stops pending claims on releas
     expect(connection.view().activeSourceMatchId).toBeNull();
     expect(calls.slice(-2)).toEqual(['claim', 'release']);
     slowClaim = false;
+    controller.clearActive();
     await controller.selectMatch(manifest.match.matchId, {
       kind: 'online',
       load: () => Promise.resolve(manifest),
