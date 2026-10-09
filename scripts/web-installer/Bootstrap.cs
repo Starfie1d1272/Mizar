@@ -192,13 +192,15 @@ namespace Mizar.WebInstaller {
     async Task Start() {
       cancellation = new CancellationTokenSource(); action.Enabled = false; cancel.Text = "取消";
       heading.Text = "正在下载与校验"; detail.Text = "只使用受限 HTTPS 地址。校验通过前不会使用下载内容。";
-      bar.Value = 0;
+      bar.Style=ProgressBarStyle.Continuous; bar.Value = 0;
       try {
         var progress = new Progress<long>(n => { bar.Value = (int)Math.Min(100, n * 100 / plan.bytes); amount.Text = String.Format("{0:N0} / {1:N0} 字节", n, plan.bytes); });
         if(plan.allowExecute) {
           string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
           if(installedCore==null && Directory.Exists(target)) installedCore=target;
           var stages=new Progress<string>(phase=>{
+            if(finished) return;
+            bar.Style=ProgressBarStyle.Marquee; amount.Text=phase=="installing-resources" ? "正在验证与缓存素材" : "等待安装操作安全结束";
             heading.Text=phase=="installing-resources" ? "正在准备默认 EPL 素材" : phase=="waiting-for-installer" ? "正在等待安全停止" : "正在安装核心";
             detail.Text="仅通过验证的内容会用于安装。取消时会等待写入安全结束。";
           });
@@ -214,7 +216,7 @@ namespace Mizar.WebInstaller {
           cancellation.Token.ThrowIfCancellationRequested();
           Nsis.StartVerifiedProduct(plan,installedCore);
           heading.Text="Mizar 已就绪"; detail.Text="核心与默认 EPL 素材已通过验证。素材保存在本机，离线也可使用。";
-          finished=true; action.Text="已启动";
+          finished=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=100; amount.Text="核心与默认素材已就绪"; action.Text="已启动";
         } else {
           using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
           using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
@@ -227,7 +229,7 @@ namespace Mizar.WebInstaller {
         recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="写入尚未确认结束。请使用原安装器恢复，暂不能重试。";
       } catch {
         heading.Text = "下载未完成"; detail.Text = installedCore==null ? "网络或文件验证失败。请检查网络后重试，或使用完整离线安装包。" : "核心已保留，默认素材未完成；重试只继续素材准备。当前版本不支持时请使用完整离线安装包。"; action.Text = "重试";
-      } finally { cancellation.Dispose(); cancellation = null; action.Enabled = !finished && !recoveryRequired; cancel.Text = "关闭"; }
+      } finally { if(plan.allowExecute && !finished) {bar.Style=ProgressBarStyle.Continuous; bar.Value=0;} cancellation.Dispose(); cancellation = null; action.Enabled = !finished && !recoveryRequired; cancel.Text = "关闭"; }
     }
   }
   static class Program {
