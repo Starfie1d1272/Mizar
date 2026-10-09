@@ -1,0 +1,41 @@
+{
+  "name": "@mizar/resource-pack-contract",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./content": {
+      "types": "./dist/content.d.ts",
+      "import": "./dist/content.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./attestation": {
+      "types": "./dist/attestation.d.ts",
+      "import": "./dist/attestation.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "sigstore": "5.0.0",
+    "@sigstore/tuf": "5.0.0",
+    "@tufjs/models": "5.0.0",
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/verify": "4.1.2"
+  },
+  "devDependencies": {
+    "@typescript/native": "catalog:"
+  },
+  "files": [
+    "dist"
+  ]
+}
