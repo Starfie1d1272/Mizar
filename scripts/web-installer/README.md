@@ -39,7 +39,7 @@
 
 `installOfficialPack` 是安装桥，运行位置为产品 `resources/app/dist/web-installer/install-official-pack.mjs`，从 Companion 的真实依赖解析 `@mizar/resource-pack-contract/runtime`。策略只来自共享 SDK 双证据验签产生的进程内授权句柄，裸 policy 或自报 trusted 均拒绝。先认证并冻结全部原输入，再只把验证器返回的文件字节交给传入的唯一 Store；直接保存 shared verifier 返回的 `verified.receipt`，由共享模块唯一拥有 schema 与离线信任材料。无 activation provider、未 active、不可读取默认三份 EPL 清单或视频时均不能返回完成。版本号本身不证明当前 sourceSha／promotionSha／manifest 身份；安装桥通过 #250 的 `store.reuseActive(packId,createActivePolicyVerifier(policy),{signal})` 在互斥内复验当前 receipt、完整目标策略和所有实际文件。缓存命中无需归档或网络，默认 EPL 可读后再次确认同一活动身份。新安装也使用该接口确认实际激活的 manifest 等于本次验证结果，不把 prepared 或同版本旧内容当完成。`readOfficialWebResource(store,path,range)` 为既有 `/fixtures/...` 与 `/fixture-media/epl-s24/...` 提供映射，所有字节及 Range 仍由唯一 Store 负责，不新增监听器或第二缓存。
 
-本 PR 已同步最新 main `cc49b9c`，其中 #248/#250/#254 已由父会话合并；堆叠提交已清除，diff 仅保留 #247 自己的改动。共享 `catalog.mjs` 唯一拥有八文件目录的规范结构，CI producer 与客户端共同使用；目录验签沿用真实 SDK signer@main / 精确源码 OID / Sigstore seed，不接受外部 verifier。
+本 PR 复用 main 中父会话已合并的 #248/#250/#254；堆叠提交已清除，diff 仅保留 #247 自己的改动。共享 `catalog.mjs` 唯一拥有八文件目录的规范结构，CI producer 与客户端共同使用；目录验签沿用真实 SDK signer@main / 精确源码 OID / Sigstore seed，不接受外部 verifier。
 
 `authenticatePublishedBootstrap({version,tufCachePath,signal})` 先复用既有 StableSource 认证 Core，按固定同版本地址获取原 Qualification descriptor、证明和 Promotion catalog、证明。两证明成功后才导出不可伪造的 `authorization` 句柄；绑定原 descriptor SHA、Core ZIP 身份、Pack archive/manifest、公示声明 SHA、八个固定下载地址与公开资产大小／摘要。返回 `{corePlan,authorization,inputs}`，不依赖用户 gh。新资源 receipt 由 SDK 保留 `catalog` 双证据与信任材料；不新增缓存或状态。
 
@@ -55,7 +55,7 @@
 
 `build-poc.ps1 -CoreBootstrap` 通过既有 StableSource 实际认证当前 Stable Core 计划，嵌入 developmentOnly 的 `Mizar-WebInstaller-Core-Development.exe`；不接受 caller 裸摘要作为签发身份。默认 EXE 仍只验证许可。Core 入口窗口调用真实 Downloader / NSIS，随后运行安装后 Core 自带的 Node 与 `installed-entry.mjs`；不是资格 harness 的外部脚本。执行前将 Core 清单摘要绑定固定计划，并在同一只读锁内核对 Node、入口和其静态依赖摘要。SDK 双签名与资源路径规则仍由共享模块唯一负责。
 
-`installed-entry.mjs` 由正式构建脚本与另外三个桥模块一同打包进 Core 校验清单。入口先验证全部实际 payload 和 Native 固定 Core 身份，再从此 Core 动态导入真实 App，不创建第二 Store/listener；使用产品默认持久素材目录与现有 updates/trust 目录。先尝试同一 Store 离线双证明复验，失败时才通过认证目录在线准备。完成后关闭该 App 释放写锁，Native 核对完成 Core 身份后启动已验证的 Mizar.exe。取消通过 stdin 传给实际 AbortController，等待子进程安全结束；素材失败保留 Core，同一窗口重试只继续素材，重新打开也仅在已安装 Core 精确匹配计划时继续。
+`installed-entry.mjs` 由正式构建脚本与另外四个桥模块一同打包进 Core 校验清单。入口先验证全部实际 payload 和 Native 固定 Core 身份，再从此 Core 动态导入真实 App，不创建第二 Store/listener；使用产品默认持久素材目录与现有 updates/trust 目录。先尝试同一 Store 离线双证明复验，失败时才通过认证目录在线准备。完成后关闭该 App 释放写锁，Native 核对完成 Core 身份后启动已验证的 Mizar.exe。取消通过 stdin 传给实际 AbortController，等待子进程安全结束；素材失败保留 Core，同一窗口重试只继续素材，重新打开也仅在已安装 Core 精确匹配计划时继续。
 
 代码具备原生入口 → 固定 Core/NSIS → Core 内入口 → 实际 App 唯一 Store → 完成启动的调用链。当前公开 v1.1 Core 没有新增入口，实际 Native 桥会在执行任何 Node 前拒绝；不能通过注入外部脚本替代。仍缺带该入口的新受信任 Core/Setup 与有效目录/资源双证明的真实正向发行证据，首次成功缓存、断网 EPL、完整安装后启动未实证。开发入口准备截图只证明实际窗口存在，不证明安装完成。
 
