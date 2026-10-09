@@ -49,7 +49,7 @@ function Wait-UI([scriptblock]$Check, [string]$Stage) {
   $deadline = [DateTime]::UtcNow.AddSeconds(120)
   do {
     $result = & $Check
-    if ($result) { return $result }
+    if ($result -ne [IntPtr]::Zero) { return $result }
     if ($process.HasExited) { throw "Installer exited during $Stage" }
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
