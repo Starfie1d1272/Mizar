@@ -207,7 +207,7 @@ jobs:
         run: |
           $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
           $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
-          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot -CaptureUi
           $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
           node scripts/qualification/product-smoke.mjs $extracted.FullName
           if ($LASTEXITCODE -ne 0) { throw 'Setup portable smoke failed' }
@@ -263,6 +263,10 @@ jobs:
                 }
               }
             }
+          }
+          if ('${{ matrix.lane }}' -eq 'setup') {
+            $installerUi = Join-Path (Split-Path $env:QUALIFICATION_BUILD_ROOT -Parent) 'installer-ui'
+            if (Test-Path -LiteralPath $installerUi) { Copy-Item -LiteralPath $installerUi -Destination (Join-Path $evidenceRoot 'installer-ui') -Recurse }
           }
           $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-${{ matrix.lane }}-evidence.zip'
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
