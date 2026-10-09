@@ -62,7 +62,7 @@
   padding-block: var(--mizar-layout-gap);
 }
 .production-page .program-preview-panel .preparation-program-preview {
-  width: min(100%, calc((100dvh - 610px) * 16 / 9));
+  width: min(100%, calc((100dvh - 680px) * 16 / 9));
   max-width: none;
 }
 .production-page .production-preflight {
