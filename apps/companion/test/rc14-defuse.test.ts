@@ -18,6 +18,7 @@ function adapted(frame: (typeof evidence.defuse.frames)[number]) {
 
 it('recovers a ten-second ring from actual pistol inputs without inventing a kit field', () => {
   let runtime = createInitialRuntimeState('rc14-regression');
+  const witnessedDefuseSequences: number[] = [];
   for (const frame of evidence.defuse.frames) {
     const observation = adapted(frame);
     runtime = reduceRuntime(
@@ -37,8 +38,10 @@ it('recovers a ten-second ring from actual pistol inputs without inventing a kit
       continuityPolicy: policy,
     });
     if (program.bomb?.state === 'defusing') {
+      witnessedDefuseSequences.push(frame.sequence);
       expect(program.bomb.action).toMatchObject({ durationSeconds: 10, hasDefuseKit: null });
       expect(program.bomb.action!.remainingSeconds).toBeGreaterThan(9);
     }
   }
+  expect(witnessedDefuseSequences).toEqual([26457, 26458, 26459, 26460]);
 });

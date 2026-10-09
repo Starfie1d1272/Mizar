@@ -86,7 +86,7 @@ describe('changed-surface CI planner', () => {
       ['packages/telemetry-gsi/src/adapter.ts'],
       {
         runQuality: true,
-        runAcceptance: false,
+        runAcceptance: true,
         runPlatform: true,
         runQualification: false,
       },
@@ -159,6 +159,7 @@ describe('changed-surface CI planner', () => {
         'packages/protocol/src/program.ts',
         'packages/protocol/src/version.ts',
         'packages/protocol/src/index.ts',
+        'scripts/local-web-production-browser-smoke.mjs',
       ];
       const companionSources = [
         'runtime/program-runtime.ts',
@@ -211,6 +212,20 @@ describe('changed-surface CI planner', () => {
         ],
       }).requiredJobs,
     ).toEqual(['quality', 'acceptance', 'platform', 'qualification_windows']);
+  });
+
+  it('adding a test cannot shrink producer or harness evidence', () => {
+    for (const producer of [
+      'packages/telemetry-gsi/src/adapter.ts',
+      'tests/acceptance/companion-isolation.ts',
+    ]) {
+      const original = createCiPlan({ changedFiles: [producer] }).requiredJobs;
+      const mixed = createCiPlan({
+        changedFiles: [producer, 'packages/core/test/new.test.ts'],
+      }).requiredJobs;
+      expect(mixed).toEqual(expect.arrayContaining(original));
+      expect(mixed).toContain('acceptance');
+    }
   });
 
   it.each([

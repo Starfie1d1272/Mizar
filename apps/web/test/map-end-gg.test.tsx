@@ -12,7 +12,7 @@ it.each([
   'builtin:iem-preset',
   'builtin:esl-preset',
   'builtin:perfectworld-preset',
-])('%s shows a shared GG cue without moving team scores, and clears it immediately', (id) => {
+])('%s shows and clears the GG cue while retaining team score content', (id) => {
   const preset = getBuiltinResolvedPreset(id);
   const placement = preset.layout.widgets['top-score-bar'];
   const node = document.createElement('div');

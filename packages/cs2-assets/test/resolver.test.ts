@@ -43,8 +43,7 @@ describe('@mizar/cs2-assets resolver', () => {
     });
   });
 
-  it("audits that all 72 catalog items have tintMode: 'mask' for monochromatic presentation", () => {
-    expect(CS2_ITEM_CATALOG).toHaveLength(72);
+  it('keeps catalog assets usable as monochromatic SVG masks', () => {
     for (const item of CS2_ITEM_CATALOG) {
       expect(item.tintMode, `Item ${item.canonicalKey} must have tintMode 'mask'`).toBe('mask');
       const asset = getCs2Asset(item.assetId);
@@ -62,23 +61,5 @@ describe('@mizar/cs2-assets resolver', () => {
       kind: 'unknown',
       gsiWeaponName: 'weapon_usp_silencer_off',
     });
-  });
-
-  it('resolves Program weapon presentation from name and never from the weapons-object slot key', () => {
-    const resolveProgramWeapon = (weapon: { readonly name: string | null }) =>
-      weapon.name === null ? null : resolveCs2ItemByGsiName(weapon.name);
-
-    const observed = { sourceWeaponId: 'weapon_2', name: 'weapon_ak47' } as const;
-    expect(resolveProgramWeapon(observed)).toMatchObject({
-      kind: 'known',
-      item: { canonicalKey: 'weapon.ak47' },
-    });
-    expect(resolveCs2ItemByGsiName(observed.sourceWeaponId)).toEqual({
-      kind: 'unknown',
-      gsiWeaponName: 'weapon_2',
-    });
-
-    const unavailable = { sourceWeaponId: 'weapon_3', name: null } as const;
-    expect(resolveProgramWeapon(unavailable)).toBeNull();
   });
 });

@@ -96,8 +96,8 @@ describe('Rivals BP preview records', () => {
     }
 
     for (const id of ['real-live-rich', 'real-planted', 'real-defusing', 'real-timeout-ct']) {
-      expect(getHudEditorFixture(id)).toBe(getProgramFixture(id));
-      expect(getProgramFixtureReplaySource(id)?.snapshot).toBe(getProgramFixture(id));
+      expect(getHudEditorFixture(id)).toEqual(getProgramFixture(id));
+      expect(getProgramFixtureReplaySource(id)?.snapshot).toEqual(getProgramFixture(id));
     }
   });
 });

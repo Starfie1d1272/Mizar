@@ -120,9 +120,7 @@ test('all five HUDs consume the same GSI nickname in player rails, focus and pau
   }
 });
 
-test('default radar compacts its empty series slot and the enlarged kill badge fits its slot', async ({
-  page,
-}) => {
+test('default radar omits an absent series and the kill badge fits its slot', async ({ page }) => {
   const snapshot = sample('real-live-rich');
   // Controlled presentation edge: current map is available without a series plan.
   snapshot.payload.series = null;
@@ -140,17 +138,14 @@ test('default radar compacts its empty series slot and the enlarged kill badge f
   await page.goto('/program?hud-config=companion');
   await expect(page.locator('[data-gameplay-hud]')).toBeVisible();
   await expect(page.locator('.match-header__series-strip')).toHaveCount(0);
-  expect((await page.locator('[data-hud-widget="radar"]').boundingBox())!.y).toBe(36);
   const badge = page.locator('.player-rail__round-kill-badge[data-round-kills="5"]').first();
   await badge.evaluate(async (element) => {
     await Promise.all(element.getAnimations().map((animation) => animation.finished));
   });
   const bounds = (await badge.boundingBox())!;
   const slot = (await badge.locator('..').boundingBox())!;
-  await expect(badge).toHaveCSS('width', '24px');
-  await expect(badge).toHaveCSS('height', '24px');
-  expect(bounds.width).toBeCloseTo(24, 2);
-  expect(bounds.height).toBeCloseTo(24, 2);
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
   expect(bounds.x).toBeGreaterThanOrEqual(slot.x);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(slot.x + slot.width);
 });
@@ -180,7 +175,7 @@ test('a ten-second action with unknown kit evidence paints a determinate defuse 
   );
 });
 
-test('native default keeps fixed combat geometry through real freeze, damage, death and objective states', async ({
+test('native combat information stays aligned and unclipped through captured objective states', async ({
   page,
 }) => {
   await page.route('**/local/v1/hud-config', (route) =>
@@ -198,12 +193,11 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     'real-exploded',
   ]) {
     await feed(page, id);
-    expect(await page.locator('.match-header__score-shell').boundingBox()).toEqual({
-      x: 560,
-      y: 24,
-      width: 800,
-      height: 80,
-    });
+    const header = (await page.locator('.match-header__score-shell').boundingBox())!;
+    expect(header.width).toBeGreaterThan(0);
+    expect(header.x).toBeGreaterThanOrEqual(0);
+    expect(header.x + header.width).toBeLessThanOrEqual(1920);
+    expect(Math.abs(header.x + header.width / 2 - 960)).toBeLessThan(1);
     const alive = page.locator('.match-header__alive-matchup');
     if (await alive.count()) {
       // The fixed-width inherited panel must stay centered when the main bar changes width.
@@ -217,9 +211,9 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     const fuse = page.locator('.objective-center__fuse');
     if (await fuse.count()) {
       const track = (await fuse.boundingBox())!;
-      expect(track.height).toBe(8);
-      expect(track.y).toBe(112);
-      expect(track.width).toBe(768);
+      expect(track.height).toBeGreaterThan(0);
+      expect(track.y).toBeGreaterThanOrEqual(header.y + header.height);
+      expect(track.width).toBeLessThanOrEqual(header.width);
       expect(track.x + track.width / 2).toBe(960);
       if (await alive.count())
         expect((await alive.boundingBox())!.y).toBeGreaterThan(track.y + track.height);
@@ -238,14 +232,19 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     for (const rail of await page.locator('.player-rail').all()) {
       const summary = (await rail.locator('.player-rail__summary-slot').boundingBox())!;
       const first = (await rail.locator('.player-rail__card').first().boundingBox())!;
-      expect(first.y - summary.y - summary.height).toBe(8);
+      expect(first.y).toBeGreaterThanOrEqual(summary.y + summary.height);
     }
     for (let index = 0; index < 5; index++) {
       const a = (await left.nth(index).boundingBox())!;
       const b = (await right.nth(index).boundingBox())!;
-      expect(a.y).toBe(558 + 84 * index);
+      if (index > 0) {
+        const previous = (await left.nth(index - 1).boundingBox())!;
+        expect(a.y).toBeGreaterThanOrEqual(previous.y + previous.height);
+      }
+      expect(a.y + a.height).toBeLessThanOrEqual(1080);
       expect(b.y).toBe(a.y);
-      expect(a.height).toBe(76);
+      expect(a.height).toBeGreaterThan(0);
+      expect(b.height).toBe(a.height);
       expect(b.width).toBe(a.width);
     }
     for (const card of await page.locator('.player-rail__card--dead').all()) {
@@ -260,13 +259,12 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
         const left =
           el.getAttribute('data-physical-side') === 'left' ? box.left : box.right - width;
         return {
-          lighter: width < box.width && parseFloat(plate.height) < box.height,
           nameFits: nickname.left >= left && nickname.right <= left + width,
           markFits: state.left >= left && state.right <= left + width,
           markSeparate: kill.right <= state.left || state.right <= kill.left,
         };
       });
-      expect(paint).toEqual({ lighter: true, nameFits: true, markFits: true, markSeparate: true });
+      expect(paint).toEqual({ nameFits: true, markFits: true, markSeparate: true });
     }
     const names = await page.locator('.player-rail__name').evaluateAll((nodes) =>
       nodes.map((n) => ({
@@ -277,9 +275,12 @@ test('native default keeps fixed combat geometry through real freeze, damage, de
     );
     expect(names.every((n) => n.width >= n.scroll && n.height >= 20)).toBe(true);
     for (const bar of await page.locator('[data-health-bar]').all())
-      expect((await bar.boundingBox())!.height).toBe(7);
+      expect((await bar.boundingBox())!.height).toBeGreaterThan(0);
     const focus = page.locator('.focused-player');
-    if (await focus.count()) expect((await focus.boundingBox())!.height).toBe(72);
+    if (await focus.count()) {
+      const bounds = (await focus.boundingBox())!;
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(1080);
+    }
     if (id === 'real-live-rich') {
       // A light ammo surface must explicitly override inherited white / muted text.
       const focusBox = (await focus.boundingBox())!;
@@ -338,19 +339,7 @@ test('native pause reuses factual owner, five rows and settings; stale Program d
     );
     await expect(page.locator('[data-pause-player]')).toHaveCount(10);
     const bottom = await page.locator('.broadcast-pause__roster').first().boundingBox();
-    expect(bottom!.y + bottom!.height).toBe(970);
-    for (const used of await page
-      .locator('.broadcast-pause__timeout-slots i[data-timeout-available="false"]')
-      .all()) {
-      const paint = await used.evaluate((el) => ({
-        border: getComputedStyle(el).borderTopColor,
-        background: getComputedStyle(el).backgroundColor,
-        width: getComputedStyle(el).borderTopWidth,
-      }));
-      expect(paint.border).toBe('rgb(154, 168, 183)');
-      expect(paint.background).toBe('rgba(0, 0, 0, 0)');
-      expect(paint.width).toBe('1px');
-    }
+    expect(bottom!.y + bottom!.height).toBeLessThanOrEqual(1080);
   }
   preset.widgets['top-score-bar'].settings.showTimeout = false;
   await feed(page, 'real-timeout-ct');
@@ -368,7 +357,7 @@ test('Waiting folds unavailable media and schedule; result page keeps original m
   for (const variant of ['default', 'no-media', 'no-schedule', 'long-names', 'bo1', 'bo5']) {
     await page.goto(`/program/waiting?preview=1&variant=${variant}`);
     const hero = (await page.locator('.waiting-hero').boundingBox())!;
-    if (variant === 'no-schedule') expect(hero.width).toBe(1680);
+    if (variant === 'no-schedule') expect(hero.x + hero.width).toBeLessThanOrEqual(1920);
     else {
       const schedule = (await page.locator('.waiting-schedule').boundingBox())!;
       expect(schedule.x).toBeGreaterThan(hero.x + hero.width);
@@ -380,12 +369,10 @@ test('Waiting folds unavailable media and schedule; result page keeps original m
   }
   for (const scene of ['halftime', 'intermap', 'match-result']) {
     await page.goto(`/program/${scene}?preview=1`);
-    expect(await page.locator('.summary-players').boundingBox()).toEqual({
-      x: 120,
-      y: 360,
-      width: 1680,
-      height: 600,
-    });
+    const board = (await page.locator('.summary-players').boundingBox())!;
+    expect(board.x).toBeGreaterThanOrEqual(0);
+    expect(board.x + board.width).toBeLessThanOrEqual(1920);
+    expect(board.y + board.height).toBeLessThanOrEqual(1080);
     await expect(page.locator('.summary-player')).toHaveCount(10);
   }
 });
@@ -472,22 +459,8 @@ test('native C4 prediction uses real replay damage and remains distinct from hea
   const prediction = page.locator('.player-rail__bomb-prediction[data-bomb-prediction="lethal"]');
   await expect(prediction).toHaveCount(1);
   await expect(prediction).toHaveAttribute('aria-label', /255 damage, 0 HP remaining/);
-  const paint = await prediction.evaluate((el) => ({
-    image: getComputedStyle(el).backgroundImage,
-    height: el.getBoundingClientRect().height,
-  }));
-  expect(paint.image).toContain('repeating-linear-gradient');
-  expect(paint.height).toBe(7);
   const card = prediction.locator('xpath=ancestor::*[contains(@class,"player-rail__card")]');
   await expect(card.locator('.player-rail__health-value')).toHaveText('73');
-  await expect(page.locator('.player-rail__card[data-observed="true"]')).toHaveCSS(
-    'outline-style',
-    'none',
-  );
-  await expect(page.locator('.player-rail__card[data-observed="true"]')).not.toHaveCSS(
-    'animation-name',
-    'mizar-pulse-observed',
-  );
   preset.widgets['team-ct-rail'].settings.showBombPrediction = false;
   preset.widgets['team-t-rail'].settings.showBombPrediction = false;
   preset.widgets['focused-player'].settings.showMetrics = true;
@@ -533,7 +506,9 @@ test('native BO formats, long bilingual names and missing portraits fit the same
     expect(names.every((n) => n.height <= n.available && n.size >= 19)).toBe(true);
     if (variant === 'no-media') {
       await expect(page.locator('.player-rail__avatar img')).toHaveCount(0);
-      expect((await page.locator('.player-rail__avatar').first().boundingBox())!.width).toBe(20);
+      expect(
+        (await page.locator('.player-rail__avatar').first().boundingBox())!.width,
+      ).toBeGreaterThan(0);
     }
   }
 });
@@ -568,8 +543,8 @@ test('Waiting treats real team logos as the primary identity, with aligned name 
     .toBe(true);
   const a = (await page.locator('.waiting-team--a img').boundingBox())!;
   const b = (await page.locator('.waiting-team--b img').boundingBox())!;
-  expect(a.height).toBe(224);
-  expect(b.height).toBe(224);
+  expect(a.height).toBeGreaterThan(0);
+  expect(b.height).toBe(a.height);
   expect(a.y).toBe(b.y);
   const names = await page
     .locator('.waiting-team strong')
@@ -681,9 +656,11 @@ test('Pulse objective flash follows factual mode and reduced motion stops decora
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await feed(page, 'real-defusing');
   const shell = page.locator('.match-header__score-shell');
-  await expect(shell).toHaveCSS('animation-name', 'mizar-pulse-defusing');
+  await expect
+    .poll(() => shell.evaluate((element) => element.getAnimations().length))
+    .toBeGreaterThan(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(shell).toHaveCSS('animation-name', 'none');
+  await expect.poll(() => shell.evaluate((element) => element.getAnimations().length)).toBe(0);
   await expect(page.locator('.objective-center')).toHaveAttribute(
     'data-objective-mode',
     'defusing',

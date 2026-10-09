@@ -70,8 +70,7 @@ it.each(['current', 'ewc', 'iem', 'esl', 'perfectworld'] as const)(
     });
     r.frame.payload.players[1]!.lifeState = 'dead';
     r.render();
-    expect(r.panel()).toBe(panel);
-    expect(panel?.textContent).toBe('4VS4');
+    expect(r.panel()?.textContent).toBe('4VS4');
     act(() => {
       vi.advanceTimersByTime(ALIVE_MATCHUP_HOLD_MS - 1);
     });

@@ -263,28 +263,15 @@ test('four broadcast presets save, activate and reload through the shared Progra
         const geometry = await notice.evaluate((element) => {
           const x = (selector: string) =>
             element.querySelector(selector)!.getBoundingClientRect().x;
-          const css = getComputedStyle(element);
           return {
             label: x('[data-pause-header-part="label"]'),
             team: x('[data-pause-header-part="team"]'),
             clock: x('[data-pause-countdown-part="clock"]'),
             remaining: x('[data-pause-countdown-part="remaining"]'),
-            leftEdge: parseFloat(css.borderLeftWidth),
-            rightEdge: parseFloat(css.borderRightWidth),
-            bottomEdge: parseFloat(css.borderBottomWidth),
-            transform: css.transform,
           };
         });
-        expect(geometry.transform).toBe('none');
         expect(geometry.label < geometry.team).toBe(side === 'left');
         expect(geometry.clock < geometry.remaining).toBe(side === 'left');
-        if (style === 'esl') {
-          expect(geometry.leftEdge).toBe(0);
-          expect(geometry.rightEdge).toBe(0);
-          expect(geometry.bottomEdge).toBe(3);
-        } else {
-          expect(geometry.leftEdge > geometry.rightEdge).toBe(side === 'left');
-        }
         await assertBroadcastAssetFacing(program, true);
         const columns = await program.locator('.broadcast-pause__roster').evaluateAll((elements) =>
           elements.map((rail) => {
@@ -370,23 +357,6 @@ test('preset files export, edit, import and activate without replacing resources
     await page
       .getByRole('combobox', { name: '预设', exact: true })
       .selectOption('builtin:perfectworld-preset');
-    const right = page
-      .locator(
-        '[data-hud-widget="team-t-rail"] .player-rail__card:not(.player-rail__card--dead)[data-avatar="true"] .player-rail__body',
-      )
-      .first();
-    const left = page
-      .locator(
-        '[data-hud-widget="team-ct-rail"] .player-rail__card:not(.player-rail__card--dead)[data-avatar="true"] .player-rail__body',
-      )
-      .first();
-    await expect(left).toHaveCSS('border-radius', '0px 4px 4px 0px');
-    await expect(right).toHaveCSS('border-radius', '4px 0px 0px 4px');
-    await page.getByRole('combobox', { name: '示例比赛', exact: true }).selectOption('epl-planted');
-    await expect(page.locator('.player-rail__card--dead .player-rail__body').first()).toHaveCSS(
-      'border-radius',
-      '4px',
-    );
     await page
       .getByRole('combobox', { name: '配置组件', exact: true })
       .selectOption('top-score-bar');

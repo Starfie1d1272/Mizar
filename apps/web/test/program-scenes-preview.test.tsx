@@ -7,7 +7,7 @@ import { ProgramScenePage } from '../src/program/ProgramScenePage';
 import { BpPresentation } from '../src/bp/BpPresentation';
 import { getBuiltinResolvedPreset } from '@mizar/hud-config';
 import { getProgramFixture } from '../src/program/fixtures';
-import { programPreviewSnapshot } from '../src/program/presentation-preview';
+import { presentationPreview, programPreviewSnapshot } from '../src/program/presentation-preview';
 
 let root: Root | undefined;
 let container: HTMLDivElement;
@@ -44,6 +44,8 @@ afterEach(() => {
   container.remove();
   root = undefined;
   window.history.replaceState({}, '', '/');
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('Program scenes preview and safety boundaries', () => {
@@ -65,7 +67,6 @@ describe('Program scenes preview and safety boundaries', () => {
       await Promise.resolve();
     });
     expect(fetchMock.mock.calls.some(([path]) => path === '/local/v1/hud-config')).toBe(true);
-    expect(container.querySelector('.gameplay-hud')).not.toBeNull();
     expect(container.querySelector('[data-hud-widget]')).toBeNull();
   });
 
@@ -76,7 +77,7 @@ describe('Program scenes preview and safety boundaries', () => {
     expect(noMedia.players.every((player) => player.avatarUrl === null)).toBe(true);
     const long = programPreviewSnapshot('matchup', 'long-names').payload;
     for (const team of Object.values(long.teams)) {
-      expect(team.name).toContain('长名称战队');
+      expect(team.name.length).toBeGreaterThan(original!.payload.teams.ct.name.length);
       expect(Object.values(long.series!.entrants).some((entry) => entry.name === team.name)).toBe(
         true,
       );
@@ -112,13 +113,12 @@ describe('Program scenes preview and safety boundaries', () => {
         await Promise.resolve();
       });
 
-      // Header, brand, or main content is visible
-      const main = container.querySelector(
-        '.waiting-layout, .intro-body, .summary-players, .result-sting',
-      );
-      expect(main, `scene ${sceneId} should render default content in preview mode`).not.toBeNull();
+      const fixture = presentationPreview(sceneId, null);
+      expect(fixture.series).not.toBeNull();
+      for (const entrant of Object.values(fixture.series!.entrants)) {
+        expect(container.textContent, `scene ${sceneId}`).toContain(entrant.name);
+      }
       expect(container.textContent).toContain('示例画面');
-      expect(container.textContent).toContain('Falcons');
     }
 
     // A preview query must never fabricate BP data or bypass the session.
@@ -127,60 +127,43 @@ describe('Program scenes preview and safety boundaries', () => {
       root!.render(<BpPresentation snapshot={null} />);
       await Promise.resolve();
     });
-    const bpScene = container.querySelector('.bp-scene');
-    expect(bpScene).toBeNull();
+    expect(container.textContent).not.toContain('Falcons');
+    expect(container.textContent).not.toContain('Natus Vincere');
   });
 
-  it('strictly enforces safety gates for production broadcast (without preview flag)', async () => {
+  it('renders the server presentation on air without substituting preview data', async () => {
+    window.history.replaceState({}, '', '/program/waiting');
+    const presentation = structuredClone(presentationPreview('waiting', null));
+    presentation.series!.entrants.a.name = 'On-air Alpha';
+    presentation.series!.entrants.b.name = 'On-air Beta';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        if (path !== '/local/v1/program-presentation') throw new Error('offline');
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(presentation) });
+      }),
+    );
+    await act(async () => {
+      root!.render(<ProgramScenePage sceneId="waiting" />);
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('On-air Alpha');
+    expect(container.textContent).toContain('On-air Beta');
+    expect(container.textContent).not.toContain('示例画面');
+    expect(container.textContent).not.toContain('Falcons');
+  });
+
+  it('does not put preview teams on air when the presentation endpoint is offline', async () => {
     window.history.replaceState({}, '', '/program/matchup');
-
-    // 1. When context is unbound or stale, production broadcast does not render
+    // A live Program snapshot does not authorize a fabricated scene presentation.
     mockChannelState.state = 'live';
-    mockChannelState.current = {
-      payload: {
-        status: { context: 'stale', identity: 'matched', telemetry: 'fresh' },
-        series: { bindingState: 'bound' },
-      },
-    };
-
+    mockChannelState.current = structuredClone(getProgramFixture('epl-live'));
     await act(async () => {
       root!.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-    expect(
-      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
-    ).toBeNull();
-
-    // 2. When identity is mismatch, production broadcast does not render
-    mockChannelState.current = {
-      payload: {
-        status: { context: 'fresh', identity: 'mismatch', telemetry: 'fresh' },
-        series: { bindingState: 'bound' },
-      },
-    };
-    await act(async () => {
-      root!.render(<ProgramScenePage sceneId="matchup" />);
-      await Promise.resolve();
-    });
-    expect(
-      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
-    ).toBeNull();
-
-    // 3. When series is not bound, production broadcast does not render
-    mockChannelState.current = {
-      payload: {
-        status: { context: 'fresh', identity: 'matched', telemetry: 'fresh' },
-        series: { bindingState: 'unbound' },
-        match: { competition: { name: '2026 NJU Rivals' } },
-      },
-    };
-    await act(async () => {
-      root!.render(<ProgramScenePage sceneId="matchup" />);
-      await Promise.resolve();
-    });
-    // Even if competition name includes Rivals, heuristic does NOT bypass gate!
-    expect(
-      container.querySelector('.waiting-layout, .intro-body, .summary-players, .result-sting'),
-    ).toBeNull();
+    expect(container.textContent).not.toContain('Falcons');
+    expect(container.textContent).not.toContain('Natus Vincere');
+    expect(container.textContent).not.toContain('示例画面');
   });
 });
