@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -75,6 +75,100 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 describe('controlled update lifecycle', () => {
+  it.each(['installed', 'restored', 'cancelled'])(
+    'only shows a completed %s attempt while its resulting payload is still installed',
+    async (status) => {
+      const { manager, root } = await setup();
+      const updates = join(root, 'updates');
+      const recoveryDirectory = `install-${'1'.repeat(32)}`;
+      await mkdir(join(updates, recoveryDirectory));
+      const result = { status, version: '1.1.0', recoveryDirectory };
+      await writeFile(join(updates, 'result.json'), JSON.stringify(result));
+      const plan = {
+        version: '1.1.0',
+        contentDigest: status === 'installed' ? 'c'.repeat(64) : 'b'.repeat(64),
+        previousContentDigest: status === 'installed' ? 'b'.repeat(64) : 'c'.repeat(64),
+      };
+      await writeFile(join(updates, recoveryDirectory, 'plan.json'), JSON.stringify(plan));
+      await manager.load();
+      expect(manager.status().lastResult).toBe(status);
+
+      // A manual install may use the same version number but a different qualified payload.
+      const upgraded = new UpdateManager({
+        stateRoot: root,
+        bundleRoot: join(root, 'program'),
+        currentContentDigest: 'd'.repeat(64),
+        version: '1.1.0',
+        installed: true,
+      });
+      managers.push(upgraded);
+      await upgraded.load();
+      expect(upgraded.status().lastResult).toBeNull();
+      expect(JSON.parse(await readFile(join(updates, 'result.json'), 'utf8'))).toEqual(result);
+      expect(
+        JSON.parse(await readFile(join(updates, recoveryDirectory, 'plan.json'), 'utf8')),
+      ).toEqual(plan);
+    },
+  );
+  it('keeps unresolved recovery warnings even when the installed payload has changed', async () => {
+    const { manager, root } = await setup();
+    const recoveryDirectory = `install-${'2'.repeat(32)}`;
+    await mkdir(join(root, 'updates', recoveryDirectory));
+    await writeFile(
+      join(root, 'updates', recoveryDirectory, 'plan.json'),
+      JSON.stringify({
+        version: '1.1.0',
+        contentDigest: 'a'.repeat(64),
+        previousContentDigest: 'b'.repeat(64),
+      }),
+    );
+    await writeFile(
+      join(root, 'updates/result.json'),
+      JSON.stringify({ status: 'recovery-required', version: '1.1.0', recoveryDirectory }),
+    );
+    await manager.load();
+    expect(manager.status().lastResult).toBe('recovery-required');
+    await writeFile(
+      join(root, 'updates/result.json'),
+      JSON.stringify({ status: 'recovery-required', version: 42, recoveryDirectory: null }),
+    );
+    const restarted = new UpdateManager({
+      stateRoot: root,
+      bundleRoot: join(root, 'program'),
+      currentContentDigest: 'c'.repeat(64),
+      version: '1.0.0',
+      installed: true,
+    });
+    managers.push(restarted);
+    await restarted.load();
+    expect(restarted.status().lastResult).toBe('recovery-required');
+  });
+  it.each(['missing', 'wrong-version', 'outside-updates'])(
+    'keeps the recovery result when its payload cannot be established: %s',
+    async (scenario) => {
+      const { manager, root } = await setup();
+      const recoveryDirectory =
+        scenario === 'outside-updates' ? '../outside' : `install-${'3'.repeat(32)}`;
+      const directory = join(root, 'updates', recoveryDirectory);
+      if (scenario !== 'missing') {
+        await mkdir(directory);
+        await writeFile(
+          join(directory, 'plan.json'),
+          JSON.stringify({
+            version: scenario === 'wrong-version' ? '1.2.0' : '1.1.0',
+            contentDigest: 'a'.repeat(64),
+            previousContentDigest: 'b'.repeat(64),
+          }),
+        );
+      }
+      await writeFile(
+        join(root, 'updates/result.json'),
+        JSON.stringify({ status: 'restored', version: '1.1.0', recoveryDirectory }),
+      );
+      await manager.load();
+      expect(manager.status().lastResult).toBe('restored');
+    },
+  );
   it('falls back to identical GitHub bytes, keeps a ready download across restart and rechecks before preparing', async () => {
     const { manager, root, source } = await setup();
     await manager.check();
