@@ -135,8 +135,9 @@ function Restore-Previous {
   Assert-Stopped
   # Recover may run after the helper died immediately after Start-Process.
   # Inspect the staged executable directly; a journal PID is not reliable evidence.
-  foreach ($running in @(Get-Process -Name Installer -ErrorAction SilentlyContinue)) {
-    if (!$running.Path -or $running.Path -eq (Join-Path $StageRoot 'Installer.exe')) { throw 'update_installer_remaining' }
+  foreach ($running in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+    if ($running.ExecutablePath -eq (Join-Path $StageRoot 'Installer.exe') -or
+      ($running.Name -eq 'Installer.exe' -and !$running.ExecutablePath)) { throw 'update_installer_remaining' }
   }
   $backup = Join-Path $StageRoot 'previous'
   Assert-Payload $backup $plan.previousContentDigest

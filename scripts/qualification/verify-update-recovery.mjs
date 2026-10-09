@@ -202,10 +202,14 @@ public class UpdateFixture {
           await new Promise((done) => setTimeout(done, 50));
         }
         const blocked = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
+        const processEvidence = await run([
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "ProcessId = ${installer.pid}" | Select-Object ProcessId, Name, ExecutablePath | ConvertTo-Json -Compress`,
+        ]);
         assert.equal(
           blocked.code,
           1,
-          'running installer must block recovery without a journal PID',
+          `running installer must block recovery without a journal PID: ${processEvidence.output}; ${blocked.errors}`,
         );
         await assert.rejects(readFile(join(installed, 'Mizar.exe')), { code: 'ENOENT' });
       } finally {
