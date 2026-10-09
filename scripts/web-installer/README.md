@@ -39,7 +39,7 @@
 
 `installOfficialPack` 是安装桥，运行位置为产品 `resources/app/dist/web-installer/install-official-pack.mjs`，从 Companion 的真实依赖解析 `@mizar/resource-pack-contract/runtime`。策略只来自共享 SDK 双证据验签产生的进程内授权句柄，裸 policy 或自报 trusted 均拒绝。先认证并冻结全部原输入，再只把验证器返回的文件字节交给传入的唯一 Store；直接保存 shared verifier 返回的 `verified.receipt`，由共享模块唯一拥有 schema 与离线信任材料。无 activation provider、未 active、不可读取默认三份 EPL 清单或视频时均不能返回完成。版本号本身不证明当前 sourceSha／promotionSha／manifest 身份；安装桥通过 #250 的 `store.reuseActive(packId,createActivePolicyVerifier(policy),{signal})` 在互斥内复验当前 receipt、完整目标策略和所有实际文件。缓存命中无需归档或网络，默认 EPL 可读后再次确认同一活动身份。新安装也使用该接口确认实际激活的 manifest 等于本次验证结果，不把 prepared 或同版本旧内容当完成。`readOfficialWebResource(store,path,range)` 为既有 `/fixtures/...` 与 `/fixture-media/epl-s24/...` 提供映射，所有字节及 Range 仍由唯一 Store 负责，不新增监听器或第二缓存。
 
-本 PR 的集成基线为最新 main `cbd14ea`，保留 #248、#250 `b10747a` 和 #254 `f3e7714` 的原提交关系，未复制或 cherry-pick 对方提交。共享 `catalog.mjs` 唯一拥有八文件目录的规范结构，#254 CI producer 与客户端共同使用；目录验签沿用 #248 的真实 SDK signer@main / 精确源码 OID / Sigstore seed，不接受外部 verifier。
+本 PR 已同步最新 main `cc49b9c`，其中 #248/#250/#254 已由父会话合并；堆叠提交已清除，diff 仅保留 #247 自己的改动。共享 `catalog.mjs` 唯一拥有八文件目录的规范结构，CI producer 与客户端共同使用；目录验签沿用真实 SDK signer@main / 精确源码 OID / Sigstore seed，不接受外部 verifier。
 
 `authenticatePublishedBootstrap({version,tufCachePath,signal})` 先复用既有 StableSource 认证 Core，按固定同版本地址获取原 Qualification descriptor、证明和 Promotion catalog、证明。两证明成功后才导出不可伪造的 `authorization` 句柄；绑定原 descriptor SHA、Core ZIP 身份、Pack archive/manifest、公示声明 SHA、八个固定下载地址与公开资产大小／摘要。返回 `{corePlan,authorization,inputs}`，不依赖用户 gh。新资源 receipt 由 SDK 保留 `catalog` 双证据与信任材料；不新增缓存或状态。
 
