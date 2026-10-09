@@ -492,6 +492,7 @@ async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(1);
         app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
         cs2.start()
     })
     .await
@@ -640,6 +641,7 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
 async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
         app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
@@ -743,6 +745,8 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),

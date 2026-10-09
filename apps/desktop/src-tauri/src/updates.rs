@@ -26,6 +26,15 @@ impl PendingUpdate {
             preparing: AtomicBool::new(false),
         }
     }
+    pub fn check(&self) -> Result<(), String> {
+        if self.preparing.load(Ordering::Acquire)
+            || self.stage.lock().map_err(|_| "更新状态不可用。")?.is_some()
+        {
+            Err("Mizar 正在准备升级，请完成升级后再打开制作工具。".into())
+        } else {
+            Ok(())
+        }
+    }
 }
 fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
     let state_path = log.state_root.join("data/runtime.json");
@@ -129,11 +138,9 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
     let host = app.clone();
     let result: Result<(), String> = tauri::async_runtime::spawn_blocking(move || {
         host.state::<crate::production_exit::ExitGate>().check()?;
-        if host
-            .webview_windows()
-            .keys()
-            .any(|label| label.starts_with("tool-"))
-        {
+        if host.webview_windows().iter().any(|(label, window)| {
+            label.starts_with("tool-") && window.is_visible().unwrap_or(true)
+        }) {
             return Err("请先保存修改并关闭 HUD、BP、预览和诊断工具，再升级。".into());
         }
         if host
