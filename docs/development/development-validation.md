@@ -147,6 +147,10 @@ pnpm qualification:verify <evidence-dir-or-zip>
 
 ## 证据与结果
 
+Windows CI 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，实际操作中文向导、选择桌面快捷方式、完成后启动 Mizar 并正常停止，保存欢迎、目录、快捷方式、进度和完成页截图，以及安装包摘要、系统版本和实际 DPI。截图在 Desktop smoke 诊断资产的 `installer-ui` 中供维护者签收；截图与自动化通过不代替审美判断。125% / 150% 缩放必须在对应实际 DPI 下复核中文和控件边界；报告未覆盖的缩放仍待实机验收。验收者可在对应 Windows 显示缩放下运行 `scripts/qualification/capture-setup-ui.ps1`，指定同一安装包、全新安装目录和证据目录。
+
+安装器素材清单记录原标志来源、许可、SVG 与 BMP 的大小和 SHA-256。Setup 构建先核对清单与原标志，再将素材清单、图标和素材摘要记录到 `distribution-manifest.json`；这些是安装器构建输入，不进入被安装内容的身份。正式构建缺少素材或摘要不符时停止；直接编译 NSIS 脚本未指定素材目录时可使用 MUI2 默认画面。
+
 报告使用 `PASS / FAIL / INCONCLUSIVE`，分别为通过、失败、证据不足。记录源码 SHA、构建包身份、环境、场景、时间、报告与完整性摘要；环境恢复结果与核心验收结果分开。
 
 数据停止与人工确认 CS2 退出是两条不同证据，不能相互推断。最终校验器重新核对采集、标记、运行状态和摘要，不仅依赖页面状态。

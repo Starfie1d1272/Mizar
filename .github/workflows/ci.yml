@@ -313,7 +313,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
           $bundle = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Directory | Select-Object -First 1
           $installed = Join-Path $env:RUNNER_TEMP 'setup installed path'
-          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -CaptureUi
           $product = Get-ChildItem -LiteralPath $installed -Directory | Select-Object -First 1
           node scripts/qualification/product-smoke.mjs $product.FullName
           if ($LASTEXITCODE -ne 0) { throw 'Installed product smoke failed' }
@@ -435,6 +435,9 @@ jobs:
         with:
           name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/installer-ui/**
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/setup-desktop-smoke.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/cargo-benchmark.json
@@ -450,6 +453,10 @@ jobs:
           name: mizar-qualification-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*-Setup.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*-Setup.exe.sha256
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/host-soak.json
           if-no-files-found: error
 
