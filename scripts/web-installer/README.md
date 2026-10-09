@@ -50,3 +50,11 @@
 尚缺有效新资源签名和正式 Core-only Setup，无法宣称首次成功入库、真实 receipt 断网命中或最终原生窗口完整安装已通过。默认构建仍 Full；Core-only 仍 developmentOnly。
 
 定向 Windows run 37991657925 已实际下载原 83,607,477-byte NSIS、在带空格的全新目录安装、拒绝覆盖既有安装，并证明安装过程中取消等待退出后由原卸载器清理。临时合并 #248/#250 的真实代码、注册真实依赖后，真实 producer 生成了 34,367,014-byte/43-file EPL 归档；真实 Sigstore 入口拒绝已有正式发行但 subject 错误的证明，实际 Store 保持 missing，未伪报 resourcesReady。这仍不替代有效新资源签名、首次成功入库、断网 EPL 和最终 Core-only 产品启动证据。
+
+## 实际原生入口与产品打包
+
+`build-poc.ps1 -CoreBootstrap` 通过既有 StableSource 实际认证当前 Stable Core 计划，嵌入 developmentOnly 的 `Mizar-WebInstaller-Core-Development.exe`；不接受 caller 裸摘要作为签发身份。默认 EXE 仍只验证许可。Core 入口窗口调用真实 Downloader / NSIS，随后运行安装后 Core 自带的 Node 与 `installed-entry.mjs`；不是资格 harness 的外部脚本。执行前将 Core 清单摘要绑定固定计划，并在同一只读锁内核对 Node、入口和其静态依赖摘要。SDK 双签名与资源路径规则仍由共享模块唯一负责。
+
+`installed-entry.mjs` 由正式构建脚本与另外三个桥模块一同打包进 Core 校验清单。入口先验证全部实际 payload 和 Native 固定 Core 身份，再从此 Core 动态导入真实 App，不创建第二 Store/listener；使用产品默认持久素材目录与现有 updates/trust 目录。先尝试同一 Store 离线双证明复验，失败时才通过认证目录在线准备。完成后关闭该 App 释放写锁，Native 核对完成 Core 身份后启动已验证的 Mizar.exe。取消通过 stdin 传给实际 AbortController，等待子进程安全结束；素材失败保留 Core，同一窗口重试只继续素材，重新打开也仅在已安装 Core 精确匹配计划时继续。
+
+代码具备原生入口 → 固定 Core/NSIS → Core 内入口 → 实际 App 唯一 Store → 完成启动的调用链。当前公开 v1.1 Core 没有新增入口，实际 Native 桥会在执行任何 Node 前拒绝；不能通过注入外部脚本替代。仍缺带该入口的新受信任 Core/Setup 与有效目录/资源双证明的真实正向发行证据，首次成功缓存、断网 EPL、完整安装后启动未实证。开发入口准备截图只证明实际窗口存在，不证明安装完成。

@@ -1,8 +1,8 @@
-﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory)
+﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory, [switch]$CoreBootstrapReady)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes
 $output = [IO.Path]::GetFullPath($OutputDirectory)
-$exe = Join-Path $output 'Mizar-WebInstaller-POC.exe'
+$exe = Join-Path $output $(if ($CoreBootstrapReady) { 'Mizar-WebInstaller-Core-Development.exe' } else { 'Mizar-WebInstaller-POC.exe' })
 # Native screen capture of the actual executable. No HTML or synthetic UI is used.
 Add-Type @'
 using System;
@@ -30,6 +30,10 @@ $process = Start-Process -FilePath $exe -PassThru
 try {
   if (!$process.WaitForInputIdle(15000)) { throw 'Native UI did not become ready' }
   Start-Sleep -Milliseconds 1000
+  if ($CoreBootstrapReady) {
+    Save-Window $process 'native-core-ready.png'
+    [ordered]@{ native=$true; developmentOnly=$true; installationExecuted=$false; readyOnly=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'native-core-evidence.json') -Encoding UTF8
+  } else {
   Save-Window $process 'native-ready.png'
   $window = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
   $button = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, '开始验证')))
@@ -49,6 +53,7 @@ try {
   $dpi = $screen.DpiX
   $screen.Dispose()
   [ordered]@{ dpi=$dpi; result='PASS'; os=[Environment]::OSVersion.VersionString; native=$true; appVersion='POC'; installationExecuted=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'native-evidence.json') -Encoding UTF8
+  }
 } finally {
   if (!$process.HasExited) { $process.CloseMainWindow() | Out-Null; if (!$process.WaitForExit(5000)) { $process.Kill() } }
 }

@@ -388,6 +388,7 @@ async function main() {
         'install-official-pack.mjs',
         'complete-bootstrap.mjs',
         'published-bootstrap.mjs',
+        'installed-entry.mjs',
       ]) {
         await cp(join(rootDir, 'scripts', 'web-installer', name), join(bridgeDirectory, name));
       }

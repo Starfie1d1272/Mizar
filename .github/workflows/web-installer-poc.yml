@@ -52,6 +52,12 @@ jobs:
           $env:MIZAR_BRIDGE_MODULE = [IO.Path]::GetFullPath('.agent-tmp/web-installer/bridge/resources/app/dist/web-installer/complete-bootstrap.mjs')
           $env:MIZAR_BRIDGE_PLAN = [IO.Path]::GetFullPath('scripts/web-installer/legacy-stable-plan.json')
           ./scripts/web-installer/test-nsis.ps1 -OutputDirectory .agent-tmp/web-installer
+      - name: Compile actual development Core bootstrap entry with authenticated StableSource plan
+        shell: powershell
+        run: ./scripts/web-installer/build-poc.ps1 -OutputDirectory .agent-tmp/web-installer -CoreBootstrap
+      - name: Capture actual Core installation entry without changing an installation
+        shell: powershell
+        run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer -CoreBootstrapReady
       - name: Verify public HTTPS download and capture actual native UI
         shell: powershell
         run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
@@ -105,6 +106,102 @@ namespace Mizar.WebInstaller {
       // No recursive delete: NSIS alone owns payload removal; user assets remain outside.
       if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length != 0)
         throw new InstallerRecoveryRequired(target, "仍有文件残留，保留现场供修复。");
+    }
+    // Data identity only: the fixed authenticated NSIS plan owns this Core digest.
+    // Sigstore/catalog authorization remains exclusively in the installed shared SDK.
+    static System.Collections.Generic.SortedDictionary<string,string> VerifiedRuntime(Plan plan, string target) {
+      plan.Validate();
+      if (!plan.allowExecute || plan.kind != "nsis-setup") throw new IOException("缺少固定核心授权。");
+      target=Path.GetFullPath(target); Downloader.NoReparse(target); AssertOwnedRegistration(target);
+      if (!File.Exists(Path.Combine(target,"installed.flag"))) throw new IOException("核心尚未安装。");
+      string sumsPath=Path.Combine(target,"resources","metadata","SHA256SUMS");
+      Downloader.NoReparse(sumsPath);
+      if (new FileInfo(sumsPath).Length>4*1024*1024) throw new IOException("核心清单超限。");
+      var entries=new System.Collections.Generic.SortedDictionary<string,string>(StringComparer.Ordinal);
+      foreach(string line in File.ReadAllLines(sumsPath)) {
+        if(line.Length<67 || line.Substring(64,2)!="  " || !System.Text.RegularExpressions.Regex.IsMatch(line.Substring(0,64),"^[a-f0-9]{64}$")) throw new IOException("核心清单无效。");
+        string name=line.Substring(66);
+        if(Path.IsPathRooted(name) || name.Contains("\\") || name.Contains(":") || name.Split('/').Any(part=>part=="" || part=="." || part=="..") || entries.ContainsKey(name)) throw new IOException("核心路径无效。");
+        entries.Add(name,line.Substring(0,64));
+      }
+      string digest;
+      using(var hash=System.Security.Cryptography.SHA256.Create()) {
+        foreach(var entry in entries) if(entry.Key!="resources/metadata/artifact.json") {
+          var bytes=System.Text.Encoding.UTF8.GetBytes(entry.Key+"\0"+entry.Value+"\n");
+          hash.TransformBlock(bytes,0,bytes.Length,bytes,0);
+        }
+        hash.TransformFinalBlock(new byte[0],0,0);
+        digest=BitConverter.ToString(hash.Hash).Replace("-","").ToLowerInvariant();
+      }
+      if(digest!=plan.contentDigest) throw new IOException("核心清单不属于固定安装计划。");
+      const string entryName="resources/app/dist/web-installer/installed-entry.mjs";
+      if(!entries.ContainsKey(entryName)) throw new IOException("此 Core 缺少在线安装入口，请使用完整离线安装或新版 Core。");
+      foreach(string name in new[]{"resources/runtime/node.exe",entryName,"resources/scripts/product-runtime.mjs","resources/scripts/product-logs.mjs","Mizar.exe"}) {
+        string expected;
+        if(!entries.TryGetValue(name,out expected)) throw new IOException("核心缺少安装运行文件。");
+        string path=Path.Combine(target,name.Replace('/',Path.DirectorySeparatorChar)); Downloader.NoReparse(path);
+        using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))
+        using(var hash=System.Security.Cryptography.SHA256.Create())
+          if(BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant()!=expected) throw new IOException("核心安装运行文件已改变。");
+      }
+      return entries;
+    }
+    static async Task<string> ReadBridgeOutput(StreamReader reader) {
+      var result=new System.Text.StringBuilder(); var buffer=new char[1024];
+      for(;;) {
+        int count=await reader.ReadAsync(buffer,0,buffer.Length);
+        if(count==0) return result.ToString();
+        if(result.Length+count>65536) throw new IOException("安装入口输出超限。");
+        result.Append(buffer,0,count);
+      }
+    }
+    internal static async Task RunResourceBridge(Plan plan,string target,CancellationToken token,IProgress<string> progress=null) {
+      token.ThrowIfCancellationRequested();
+      if(Process.GetProcessesByName("Mizar").Length!=0) throw new IOException("请正常退出 Mizar 后再准备素材。");
+      var expected=VerifiedRuntime(plan,target);
+      string entry=Path.Combine(target,"resources","app","dist","web-installer","installed-entry.mjs"), node=Path.Combine(target,"resources","runtime","node.exe");
+      if(progress!=null) progress.Report("installing-resources");
+      using(var nodeLock=new FileStream(node,FileMode.Open,FileAccess.Read,FileShare.Read))
+      using(var entryLock=new FileStream(entry,FileMode.Open,FileAccess.Read,FileShare.Read))
+      using(var runtimeLock=new FileStream(Path.Combine(target,"resources","scripts","product-runtime.mjs"),FileMode.Open,FileAccess.Read,FileShare.Read))
+      using(var logsLock=new FileStream(Path.Combine(target,"resources","scripts","product-logs.mjs"),FileMode.Open,FileAccess.Read,FileShare.Read)) {
+        AssertLocked(nodeLock,expected["resources/runtime/node.exe"]);
+        AssertLocked(entryLock,expected["resources/app/dist/web-installer/installed-entry.mjs"]);
+        AssertLocked(runtimeLock,expected["resources/scripts/product-runtime.mjs"]);
+        AssertLocked(logsLock,expected["resources/scripts/product-logs.mjs"]);
+        var start=new ProcessStartInfo {
+        FileName=node, Arguments="\""+entry+"\" "+plan.version+" "+plan.gitSha+" "+plan.contentDigest,
+        UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=target,
+        RedirectStandardInput=true, RedirectStandardOutput=true, RedirectStandardError=true
+        };
+        start.EnvironmentVariables.Remove("NODE_OPTIONS"); start.EnvironmentVariables.Remove("NODE_PATH");
+        using(var child=Process.Start(start)) {
+        var stdout=ReadBridgeOutput(child.StandardOutput); var stderr=ReadBridgeOutput(child.StandardError);
+        using(token.Register(()=>{try {child.StandardInput.WriteLine("cancel"); child.StandardInput.Flush();} catch(IOException) {} catch(InvalidOperationException) {}})) {
+          try { await Wait(child,TimeSpan.FromMinutes(10),progress,token); }
+          catch(TimeoutException e) { throw new InstallerRecoveryRequired(target,e.Message); }
+        }
+        string output=await stdout; await stderr;
+        token.ThrowIfCancellationRequested();
+        if(child.ExitCode!=0) throw new IOException("默认 EPL 素材尚未就绪；核心已保留，可重试素材或使用完整离线安装。");
+        var result=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(output);
+        var core=result["core"] as System.Collections.Generic.Dictionary<string,object>;
+        if(Convert.ToString(result["schemaVersion"])!="mizar.bootstrap-result.v1" || !Object.Equals(result["coreInstalled"],true) || !Object.Equals(result["resourcesReady"],true) || core==null || Convert.ToString(core["version"])!=plan.version || Convert.ToString(core["gitSha"])!=plan.gitSha || Convert.ToString(core["contentDigest"])!=plan.contentDigest) throw new IOException("核心与素材完成身份不一致。");
+        }
+      }
+    }
+    static void AssertLocked(FileStream file,string expected) {
+      file.Position=0;
+      using(var hash=System.Security.Cryptography.SHA256.Create())
+        if(BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant()!=expected) throw new IOException("安装执行文件已改变。");
+    }
+    internal static void StartVerifiedProduct(Plan plan,string target) {
+      var expected=VerifiedRuntime(plan,target);
+      string executable=Path.Combine(target,"Mizar.exe");
+      using(var file=new FileStream(executable,FileMode.Open,FileAccess.Read,FileShare.Read)) {
+        AssertLocked(file,expected["Mizar.exe"]);
+        Process.Start(new ProcessStartInfo {FileName=executable,WorkingDirectory=target,UseShellExecute=false});
+      }
     }
     public static async Task<FreshInstallResult> Install(Plan plan, string installer, string destination,
       CancellationToken token, IProgress<string> progress = null, TimeSpan? deadline = null) {

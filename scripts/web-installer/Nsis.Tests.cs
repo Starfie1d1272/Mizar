@@ -45,7 +45,14 @@ namespace Mizar.WebInstaller {
         var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
-        // Only the qualification harness invokes the actual deployed Node bridge.
+        // Exercise the real native production call: historical Core cannot supply
+        // a new executable entry from an external qualification directory.
+        bool missingEntry=false;
+        try { await Nsis.RunResourceBridge(plan,target,CancellationToken.None); }
+        catch(IOException error) { missingEntry=error.Message.Contains("缺少在线安装入口"); }
+        Assert(missingEntry);
+        Console.WriteLine("PASS: native production bridge refuses historical Core without its authenticated packaged entry");
+        // Separately verify current App/SDK integration against these real Core bytes.
         string bridgeScript=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_SCRIPT");
         if (!String.IsNullOrEmpty(bridgeScript)) {
           string bridgeModule=Environment.GetEnvironmentVariable("MIZAR_BRIDGE_MODULE");
