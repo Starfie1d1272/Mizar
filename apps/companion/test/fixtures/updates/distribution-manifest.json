@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "gitSha": "e46dcf7ff5bf01703da2ee40491f503d1fc4d76b",
+  "appVersion": "1.0.0",
+  "contentDigest": "29ef1e599e51ad44fec868ad608b14e1c5df662b9b6aa5c6f577630f1454d5c7",
+  "originalArchiveSha256": "845ea7daa1255875a2d9ad08219d2325dacb46d463d2e0623e25d4a4cbb9c225",
+  "archive": "Mizar-v1.0.0-Windows-x64-Setup.exe",
+  "archiveSha256": "bbda0935d743cec628e6d980d86aee7e7143a55b548fb738021e2cabaa56c4cf",
+  "archiveBytes": 83155309,
+  "format": "nsis-setup",
+  "installerVersion": "v3.11",
+  "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+  "installerScriptSha256": "c56900123b99e226ac1ff3e01caff54a9e91fb078e8c3e9b0ed7de6d8ab5a86b",
+  "installerLicense": "NSIS-LICENSE.txt",
+  "installerLicenseSha256": "e7dd514003ab96cb3ddccbc028fe5c795fccf57dc41f21cfb9d4dd16ead23bf5",
+  "verifiedFiles": 3607
+}

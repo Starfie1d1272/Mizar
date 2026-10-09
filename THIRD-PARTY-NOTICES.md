@@ -26,6 +26,8 @@
 | `prettier`                               |    3.9.9 | 代码格式化                       | MIT                                    |
 | `react`                                  |   19.3.0 | Web 渲染                         | MIT                                    |
 | `react-dom`                              |   19.3.0 | Web DOM 渲染                     | MIT                                    |
+| `sigstore`                               |    5.0.0 | 更新来源、证书与透明日志验证     | Apache-2.0                             |
+| `@sigstore/bundle` / `@sigstore/verify` / `@sigstore/protobuf-specs` | 5.0.0 / 4.1.2 / 0.5.2 | 离线真实签名回归测试 | Apache-2.0 |
 | `tsx`                                    |  4.23.15 | 开发脚本运行                     | MIT                                    |
 | `typescript` → `@typescript/typescript6` |    6.0.2 | TypeScript tooling API 兼容层    | Apache-2.0                             |
 | `typescript-eslint`                      |   8.71.0 | TypeScript-aware ESLint          | MIT                                    |

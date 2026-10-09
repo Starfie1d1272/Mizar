@@ -17,13 +17,19 @@ export function registerProductionRoutes(
   let revision = randomUUID();
   let busy = false;
   let shuttingDown = false;
-  const view = () => ({ mode, revision, canEnter: !shuttingDown && options.hasContext() });
+  let updatePending = false;
+  const view = () => ({
+    mode,
+    revision,
+    canEnter: !shuttingDown && !updatePending && options.hasContext(),
+  });
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
   );
   async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
     if (
       busy ||
+      (updatePending && body?.action !== 'shutdown') ||
       (shuttingDown && body?.action !== 'shutdown') ||
       body?.expectedRevision !== revision
     )
@@ -71,5 +77,16 @@ export function registerProductionRoutes(
     );
     return reply.code(result.code).send(result.value);
   });
-  return { get: view, shutdown: () => change({ action: 'shutdown', expectedRevision: revision }) };
+  return {
+    get: view,
+    reserveUpdate: () => {
+      if (mode !== 'preparation' || busy || shuttingDown || updatePending) return false;
+      updatePending = true;
+      return true;
+    },
+    releaseUpdate: () => {
+      updatePending = false;
+    },
+    shutdown: () => change({ action: 'shutdown', expectedRevision: revision }),
+  };
 }

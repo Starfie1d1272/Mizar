@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import {
   digest,
   syncStable,
+  syncStableRelease,
   validateRelease,
   BoxClient,
   probe,
@@ -78,6 +79,38 @@ const run = (box, identity = next) =>
   syncStable({ box, identity, bytes: identity.bytes, resolveIdentity: async () => previous });
 
 describe('云盘稳定版同步', () => {
+  it('完成安装包校验与归档才发布 Updates 清单，失败保留原清单，重试幂等', async () => {
+    const oldIndex = Buffer.from('old signed index');
+    const updateIndex = Buffer.from('new signed index');
+    const box = fakeBox({
+      [`/Stable/${previous.name}`]: previous.bytes,
+      '/Updates/latest.json': oldIndex,
+    });
+    const move = box.move;
+    box.move = async () => {
+      throw Error('archival failed');
+    };
+    const sync = () =>
+      syncStableRelease({
+        box,
+        identity: next,
+        bytes: next.bytes,
+        resolveIdentity: async () => previous,
+        updateIndex,
+      });
+    await expect(sync()).rejects.toThrow('archival failed');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    expect(box.stored.has(`/Stable/${previous.name}`)).toBe(true);
+    box.move = move;
+    await sync();
+    expect((await box.list('/Stable')).map((e) => e.name)).toEqual([next.name]);
+    expect(box.stored.get(`/Archive/${previous.name}`)).toEqual(previous.bytes);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(updateIndex);
+    expect(box.operations.slice(-2)).toEqual(['move', 'upload']);
+    box.operations = [];
+    await sync();
+    expect(box.operations).toEqual([]);
+  });
   it('先上传验证再归档，并保留人工回滚文件；同版本重试幂等', async () => {
     const old = `/Stable/${previous.name}`,
       backup = '/Archive/manual-keep.exe';

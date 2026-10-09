@@ -152,6 +152,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 ## 本地访问与安全
 
+`GET /local/v1/updates` 返回有限更新状态、中文说明和制作阻断原因，不返回暂存路径或凭据；`POST /operator/updates` 仅允许本机操作者发起检查、下载、取消、后台检查偏好及结束制作后的恢复自动编排。安装计划只能由持有每次启动私有控制令牌的 Host 调用，拒绝网页 Origin，不接受网页提供的路径或安装参数；原生命令 `install_update` 只允许制作中心主窗口发起。元数据与安装恢复契约见[应用内更新](updates.md)。
+
 桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
 
 桌面私有命令 `select_cs2_installation` 仅接受 `executable` 布尔选项，由 Host 打开原生选择框并验证、保存安装根目录；取消返回 false，不安装 GSI。`open_cs2_config_directory` 不接受路径，重新解析当前配置位置后打开文件夹。`gsi_status` 在既有布尔状态外返回 `readFailed`、有限问题列表、候选数、冲突文件与最近操作阶段。路径仅供本机设置页显示；支持包只允许有限问题码、数量和阶段，不导出路径、文件名或配置内容。

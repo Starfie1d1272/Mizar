@@ -10,6 +10,9 @@ import { registerProductionRoutes } from '../src/program-scenes/production.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import type { ContextEnvelope, MatchDocumentV1 } from '@mizar/core/match-context';
 import { buildApp } from '../src/app.js';
+import { registerUpdateRoutes } from '../src/updates/routes.js';
+import type { UpdateManager } from '../src/updates/manager.js';
+import type { ObsStatus } from '../src/obs/adapter.js';
 
 it('requires only match context, preserves match through hide/resume/finish, and rejects stale commands', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
@@ -260,6 +263,115 @@ it('idle Host shutdown needs no OBS scene and failed safety keeps live cleanup r
     expect((await send('shutdown')).statusCode).toBe(200);
     expect(select).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+  } finally {
+    await app.close();
+  }
+});
+
+it('requires the private Host and idle production, then prevents entry until upgrade preparation is released', async () => {
+  // Trust and download lifecycle have their own owner; this seam exercises the control boundary only.
+  const prepare = vi.fn(() => Promise.resolve({ schemaVersion: 1 }));
+  const manager = {
+    status: () => ({ phase: 'ready' }),
+    prepare,
+    release: vi.fn(),
+    start: vi.fn(),
+    close: () => Promise.resolve(),
+  } as unknown as UpdateManager;
+  const projections = {
+    getCurrent: () => ({
+      operator: { runtime: {}, matchContext: {}, identity: {} },
+      program: {},
+    }),
+    getBpAssessment: () => ({ readiness: 'missing' }),
+  } as unknown as ProjectionCoordinator;
+  const scenes = new ProgramSceneController(projections, {} as BpSession);
+  const app = Fastify();
+  const originPolicy = createLocalWebOriginPolicy();
+  const production = registerProductionRoutes(app, {
+    originPolicy,
+    scenes,
+    hasContext: () => true,
+    release: () => Promise.resolve(),
+  });
+  let obs = { connection: 'connected', streaming: false, recording: false } as ObsStatus;
+  registerUpdateRoutes(app, {
+    manager,
+    production,
+    scenes,
+    originPolicy,
+    controlToken: 'private-test-token',
+    obs: () => Promise.resolve(obs),
+  });
+  const host = (action: string, headers = { 'x-runtime-token': 'private-test-token' }) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/updates/install-plan',
+      headers,
+      payload: { action },
+    });
+  const enter = () =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'enter', expectedRevision: production.get().revision },
+    });
+  try {
+    expect((await host('prepare', { 'x-runtime-token': '' })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/updates/install-plan',
+          headers: { origin: 'http://127.0.0.1:3000', 'x-runtime-token': 'private-test-token' },
+          payload: { action: 'prepare', installer: 'attacker.exe' },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(prepare).not.toHaveBeenCalled();
+    const initialRevision = (await app.inject('/local/v1/updates')).json<{
+      productionRevision: string;
+    }>().productionRevision;
+    expect(initialRevision).toBe(production.get().revision);
+    await enter();
+    expect((await host('prepare')).statusCode).toBe(409);
+    await app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'hide', expectedRevision: production.get().revision },
+    });
+    expect((await host('prepare')).statusCode).toBe(409);
+    await app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'finish', expectedRevision: production.get().revision },
+    });
+    expect(
+      (await app.inject('/local/v1/updates')).json<{ productionRevision: string }>()
+        .productionRevision,
+    ).not.toBe(initialRevision);
+    for (const state of [
+      { connection: 'unavailable', streaming: false, recording: false },
+      { connection: 'connected', streaming: true, recording: false },
+      { connection: 'connected', streaming: false, recording: true },
+    ]) {
+      obs = state as ObsStatus;
+      expect((await host('prepare')).statusCode).toBe(409);
+      expect(
+        (await app.inject('/local/v1/updates')).json<{ installBlockedReason: string | null }>()
+          .installBlockedReason,
+      ).toBeTruthy();
+    }
+    obs = { connection: 'connected', streaming: false, recording: false } as ObsStatus;
+    expect((await host('prepare')).statusCode).toBe(200);
+    expect(production.get().canEnter).toBe(false);
+    expect((await enter()).statusCode).toBe(409);
+    expect(scenes.resumeAutomatic(scenes.get().revision)).toBe(false);
+    expect((await host('release')).statusCode).toBe(200);
+    expect((await enter()).statusCode).toBe(200);
   } finally {
     await app.close();
   }

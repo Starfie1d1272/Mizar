@@ -85,6 +85,16 @@ jobs:
             gh attestation verify $distributionPath --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
             if ($LASTEXITCODE -ne 0) { throw 'Setup manifest provenance verification failed' }
           }
+          $updatePath = 'product/update-manifest.json'
+          if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+$') {
+            if (!(Test-Path -LiteralPath $updatePath)) { throw 'Stable update manifest is required' }
+            gh attestation verify $updatePath --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            if ($LASTEXITCODE -ne 0) { throw 'Stable update provenance verification failed' }
+            gh attestation verify $updatePath --bundle product/update-provenance.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
+            node scripts/qualification/update-manifest.mjs product --check
+            if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
+          }
       - name: Publish exact qualified assets
         shell: pwsh
         run: |

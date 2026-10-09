@@ -15,3 +15,7 @@ pnpm-lock.yaml text eol=lf
 *.ico binary
 *.zip binary
 *.gz binary
+
+# Keep the actual signed subject/provenance bytes on every platform.
+apps/companion/test/fixtures/updates/distribution-manifest.json -text
+apps/companion/test/fixtures/updates/distribution.attestation.json -text

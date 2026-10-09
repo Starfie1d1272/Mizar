@@ -327,6 +327,11 @@ jobs:
       - name: Build exact-SHA Windows qualification bundle
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --desktop-profile ci
 
+      - name: Verify native update cancellation and recovery
+        shell: pwsh
+        timeout-minutes: 5
+        run: node scripts/qualification/verify-update-recovery.mjs
+
       - name: Build and test Chinese Setup lifecycle
         shell: pwsh
         timeout-minutes: 15

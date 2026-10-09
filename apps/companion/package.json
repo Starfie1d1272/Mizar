@@ -20,10 +20,15 @@
     "@mizar/telemetry-gsi": "workspace:*",
     "cs2-c4-damage": "0.1.1",
     "fastify": "catalog:",
-    "obs-websocket-js": "5.0.8"
+    "obs-websocket-js": "5.0.8",
+    "sigstore": "5.0.0",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@mizar/testkit": "workspace:*",
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/verify": "4.1.2",
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "@typescript/native": "catalog:",

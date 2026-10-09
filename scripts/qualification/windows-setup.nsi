@@ -1,6 +1,9 @@
 Unicode true
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "WinMessages.nsh"
 ManifestDPIAware true
+Var ControlledUpdate
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -28,7 +31,9 @@ SetCompressor /SOLID lzma
 !define MUI_UNCONFIRMPAGE_TEXT_TOP "卸载 Mizar 程序和快捷方式。比赛资料、设置与日志将保留。"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Mizar.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 Mizar"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalled
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_PRE UpdateDirectoryPre
 !insertmacro MUI_PAGE_DIRECTORY
 !define MUI_PAGE_HEADER_TEXT "快捷方式"
 !define MUI_PAGE_HEADER_SUBTEXT "选择是否创建桌面快捷方式。"
@@ -37,6 +42,7 @@ SetCompressor /SOLID lzma
 !define MUI_COMPONENTSPAGE_TEXT_TOP "Mizar 主程序将自动安装。按需勾选桌面快捷方式，随后点击“安装”。"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShown
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -45,7 +51,29 @@ SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
 
 Function .onInit
   SetShellVarContext current
+  StrCpy $ControlledUpdate "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/MIZARUPDATE" $1
+  IfErrors +2 0
+  StrCpy $ControlledUpdate "1"
   Call CheckRunning
+FunctionEnd
+Function UpdateDirectoryPre
+  StrCmp $ControlledUpdate "1" 0 done
+  Abort
+  done:
+FunctionEnd
+Function FinishShown
+  StrCmp $ControlledUpdate "1" 0 done
+  SendMessage $mui.FinishPage.Run ${BM_SETCHECK} ${BST_UNCHECKED} 0
+  EnableWindow $mui.FinishPage.Run 0
+  done:
+FunctionEnd
+Function LaunchInstalled
+  StrCmp $ControlledUpdate "1" done
+  Exec '"$INSTDIR\Mizar.exe"'
+  done:
 FunctionEnd
 Function CheckRunning
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name Mizar -ErrorAction SilentlyContinue) { exit 1 }"'

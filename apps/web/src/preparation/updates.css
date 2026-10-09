@@ -1,0 +1,47 @@
+.settings-update-header,
+.settings-update-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mizar-layout-padding);
+}
+.settings-update-header > div {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.settings-update-version,
+.settings-update-options {
+  color: var(--mizar-fg-secondary);
+}
+.settings-update-options summary {
+  cursor: pointer;
+}
+.settings-update-options[open] {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.settings-update-release {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.settings-update-release h3 {
+  margin: 0;
+}
+.settings-update-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+}
+.settings-update-progress progress {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--mizar-accent-primary);
+}
+.settings-update-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: calc(var(--mizar-layout-padding) * 24);
+  overflow: auto;
+  color: var(--mizar-fg-secondary);
+}
