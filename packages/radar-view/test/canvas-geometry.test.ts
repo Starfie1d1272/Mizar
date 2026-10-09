@@ -3,7 +3,7 @@ import {
   radarCanvasPoint,
   radarCanvasRadius,
   radarBroadcastPlacement,
-} from '@mizar-hud/radar-view/geometry';
+} from '../src/canvas-geometry.js';
 
 describe('Radar shared overview canvas', () => {
   it('maps every floor through the same 1024 overview transform', () => {

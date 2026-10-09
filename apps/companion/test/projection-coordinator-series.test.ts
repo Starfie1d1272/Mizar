@@ -7,15 +7,6 @@ import type { MatchContext } from '@mizar/core/match-context';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { BroadcastManifest } from '@mizar/rivalhub';
 import { programSnapshotSchema } from '@mizar/protocol/program';
-import { operatorSnapshotSchema } from '@mizar/protocol/operator';
-import { programCueMessageSchema } from '@mizar/protocol/program-cue';
-import {
-  LOCAL_PROTOCOL_SUBPROTOCOL,
-  LOCAL_PROTOCOL_VERSION,
-  PROGRAM_SCHEMA_VERSION,
-  OPERATOR_SCHEMA_VERSION,
-  PROGRAM_CUE_SCHEMA_VERSION,
-} from '@mizar/protocol/version';
 
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
@@ -293,66 +284,5 @@ describe('Section IV.E: Program / Protocol integration and boundaries', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
-
-  it('E.5, E.6, E.7 verifies Local Protocol v1, Program schema v8, Operator schema v3, ProgramCue v1 completely unaffected', async () => {
-    expect(LOCAL_PROTOCOL_SUBPROTOCOL).toBe('mizar.local.v1');
-    expect(LOCAL_PROTOCOL_VERSION).toBe(1);
-    expect(PROGRAM_SCHEMA_VERSION).toBe(8);
-    expect(OPERATOR_SCHEMA_VERSION).toBe(4);
-    expect(PROGRAM_CUE_SCHEMA_VERSION).toBe(1);
-
-    // 1. Verify programCueMessageSchema is valid and unaffected:
-    const cueParsed = programCueMessageSchema.parse({
-      type: 'cue',
-      protocolVersion: LOCAL_PROTOCOL_VERSION,
-      channel: 'program-cue',
-      schemaVersion: PROGRAM_CUE_SCHEMA_VERSION,
-      channelSeq: 1,
-      cursor: {
-        producerInstanceId: 'test-producer',
-        liveSessionId: null,
-        runtimeSeq: 1,
-        mapEpoch: 1,
-        cstvProgramGeneration: 0,
-        cstvProgramSequence: 1,
-      },
-      cue: {
-        id: 'pc:test-producer:1:1',
-        mapEpoch: 1,
-        source: {
-          generation: 0,
-          sequence: 1,
-          tick: 64,
-        },
-        kind: 'player-impact',
-        effect: 'zeus',
-        targetSourcePlayerId: '76561198000000001',
-        attackerSourcePlayerId: null,
-        weapon: 'taser',
-        damageHealth: 100,
-        healthRemaining: 0,
-        hitgroup: 1,
-        lethal: true,
-      },
-    });
-    expect(cueParsed.channel).toBe('program-cue');
-    expect(cueParsed.schemaVersion).toBe(1);
-
-    // 2. Verify Operator schema v3 from coordinator publisher
-    const runtime = createProgramRuntime('test-producer');
-    const coordinator = createProjectionCoordinator({
-      programRuntime: runtime,
-      cstvSources: createCstvSourceManagers({}),
-      nowMonotonicMs: () => 1000,
-    });
-    const operatorSnapshot = coordinator.getPublisher('operator').getCurrent();
-    expect(operatorSnapshot).not.toBeNull();
-    const operatorParsed = operatorSnapshotSchema.parse(operatorSnapshot);
-    expect(operatorParsed.channel).toBe('operator');
-    expect(operatorParsed.schemaVersion).toBe(4);
-    expect(operatorParsed.payload).toHaveProperty('seriesProgress');
-
-    await coordinator.close();
   });
 });

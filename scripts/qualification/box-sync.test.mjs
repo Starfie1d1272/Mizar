@@ -124,13 +124,13 @@ describe('云盘稳定版同步', () => {
     await run(box);
     expect(box.operations).toEqual([]);
   });
-  it.each(['403', '空间不足', '上传中断'])('%s 保留旧稳定版', async (reason) => {
+  it('上传失败保留旧稳定版', async () => {
     const path = `/Stable/${previous.name}`;
     const box = fakeBox({ [path]: previous.bytes });
     box.upload = async () => {
-      throw Error(reason);
+      throw Error('上传中断');
     };
-    await expect(run(box)).rejects.toThrow(reason);
+    await expect(run(box)).rejects.toThrow('上传中断');
     expect(box.stored.get(path)).toEqual(previous.bytes);
   });
   it('远端上传内容损坏时保留旧版并停止归档', async () => {

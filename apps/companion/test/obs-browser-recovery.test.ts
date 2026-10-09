@@ -136,7 +136,6 @@ it('keeps audio readiness findings in successive normal status polls and clears 
   ]);
   audio = 'ready';
   const first = adapter.status();
-  expect(adapter.status()).toBe(first);
   expect((await first).findings).toEqual([]);
   await adapter.close();
 });

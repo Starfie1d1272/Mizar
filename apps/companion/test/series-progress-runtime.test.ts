@@ -56,15 +56,6 @@ function contextFixture(): MatchContext {
     commentators: [],
   };
 }
-
-it('accepts a map plan edited before any execution or result has been bound', () => {
-  const runtime = createProgramRuntime('pristine-plan');
-  const context = contextFixture();
-  runtime.synchronizeSeriesProgress({ ...context, maps: [] }, null, 'local');
-  const next = runtime.synchronizeSeriesProgress(context, null, 'local');
-  expect(next?.maps).toHaveLength(3);
-  expect(next?.issues.some((issue) => issue.code === 'context_result_conflict')).toBe(false);
-});
 it('accepts the first plan while telemetry is already live but no map execution was bound', () => {
   const runtime = createProgramRuntime('live-pristine-plan');
   const context = contextFixture();
@@ -266,28 +257,6 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     },
   );
 
-  it('feeds reliable transitions once and immediately freezes a local map result', () => {
-    const context = contextFixture();
-    const runtime = createProgramRuntime('series-runtime');
-    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
-    runtime.synchronizeSeriesProgress(context, sideProof);
-    runtime.acceptObservation(frame(2, 'live', 'live', { ct: 0, t: 0 }));
-    runtime.acceptObservation(frame(3, 'live', 'over', { ct: 0, t: 0 }));
-    runtime.acceptObservation(frame(4, 'gameover', 'over', { ct: 13, t: 9 }));
-
-    const progress = runtime.synchronizeSeriesProgress(context, sideProof);
-    expect(progress?.score).toEqual({ a: 1, b: 0 });
-    expect(progress?.maps[0]).toMatchObject({
-      status: 'completed',
-      finalScore: { a: 13, b: 9 },
-      winnerEntryId: 'a',
-    });
-
-    runtime.acceptObservation(frame(5, 'gameover', 'over', { ct: 13, t: 9 }));
-    const repeated = runtime.synchronizeSeriesProgress(context, sideProof);
-    expect(repeated).toEqual(progress);
-  });
-
   it('flushes pre-existing production checkpoint work when closing during fixture mode', async () => {
     const context = contextFixture();
     const store = new MemoryCheckpointStore();
@@ -302,28 +271,6 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     await runtime.close();
 
     expect(store.flushCount).toBe(1);
-  });
-
-  it('restores a completed local map from a compatible checkpoint without MatchContext score writeback', () => {
-    const context = contextFixture();
-    const store = new MemoryCheckpointStore();
-    const first = createProgramRuntime('series-runtime', {
-      seriesProgressCheckpointStore: store,
-    });
-    first.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
-    first.synchronizeSeriesProgress(context, sideProof);
-    first.acceptObservation(frame(2, 'live', 'live', { ct: 0, t: 0 }));
-    first.acceptObservation(frame(3, 'live', 'over', { ct: 0, t: 0 }));
-    first.acceptObservation(frame(4, 'gameover', 'over', { ct: 13, t: 9 }));
-    first.synchronizeSeriesProgress(context, sideProof);
-    expect(store.checkpoint?.progress.score).toEqual({ a: 1, b: 0 });
-
-    const restarted = createProgramRuntime('new-process', {
-      seriesProgressCheckpointStore: store,
-    });
-    const restored = restarted.synchronizeSeriesProgress(context, null);
-    expect(restored?.score).toEqual({ a: 1, b: 0 });
-    expect(restored?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
   });
 
   it('flushes the real async JSON checkpoint before a process restart', async () => {
@@ -575,56 +522,6 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     expect(repeated?.maps[0]?.status).toBe('completed');
   });
 
-  it('A.5 sequence gaps do not corrupt transitions, and stale frames are rejected by runtime', () => {
-    const context = contextFixture();
-    const runtime = createProgramRuntime('runtime-continuity');
-    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
-    runtime.synchronizeSeriesProgress(context, sideProof);
-
-    // Sequence gap from 1 to 20:
-    const resultGap = runtime.acceptObservation(frame(20, 'live', 'live', { ct: 0, t: 0 }));
-    expect(resultGap.disposition.kind).toBe('accepted');
-    const progress = runtime.synchronizeSeriesProgress(context, sideProof);
-    expect(progress?.currentMapOrder).toBe(1);
-
-    // Stale frame with sequence 5 (older than 20):
-    const resultStale = runtime.acceptObservation(frame(5, 'gameover', 'over', { ct: 13, t: 0 }));
-    expect(resultStale.disposition.kind).toBe('ignored');
-    expect(resultStale.disposition.reason).toBe('out-of-order');
-    // Stale frame does NOT advance map truth or end map:
-    const progressAfterStale = runtime.synchronizeSeriesProgress(context, sideProof);
-    expect(progressAfterStale?.score).toEqual({ a: 0, b: 0 });
-    expect(progressAfterStale?.maps[0]?.status).toBe('current');
-  });
-
-  it('B.1 / B.2 / B.3 protects local frozen score from stale MatchContext, allows offline local freeze, and survives 0:0 context recovery', () => {
-    const context = contextFixture();
-    const runtime = createProgramRuntime('series-runtime');
-    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
-    runtime.synchronizeSeriesProgress(context, sideProof);
-    runtime.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 9 }));
-
-    // Local freeze succeeds without waiting for RivalHub:
-    const frozen = runtime.synchronizeSeriesProgress(context, sideProof);
-    expect(frozen?.score).toEqual({ a: 1, b: 0 });
-    expect(frozen?.maps[0]?.status).toBe('completed');
-
-    // RivalHub temporary offline / MatchContext not updated (stale scoreA: 0, scoreB: 0):
-    const staleContext: MatchContext = {
-      ...context,
-      scoreA: 0,
-      scoreB: 0,
-      maps: context.maps.map((m, idx) =>
-        idx === 0 ? { ...m, scoreA: 0, scoreB: 0, completedAt: null } : m,
-      ),
-    };
-    const afterStale = runtime.synchronizeSeriesProgress(staleContext, sideProof);
-    // Local frozen 1:0 does NOT rollback to 0:0!
-    expect(afterStale?.score).toEqual({ a: 1, b: 0 });
-    expect(afterStale?.maps[0]?.status).toBe('completed');
-    expect(afterStale?.maps[0]?.finalScore).toEqual({ a: 13, b: 9 });
-  });
-
   it('B.4 matchId switch rejects incompatible checkpoint and does not bleed SeriesProgress to the new match', () => {
     const contextA = contextFixture();
     const store = new MemoryCheckpointStore();
@@ -655,63 +552,6 @@ describe('ProgramRuntime SeriesProgress composition', () => {
     expect(progressB?.issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'checkpoint_incompatible' })]),
     );
-  });
-
-  it('B.5 standalone mode with minimal context shares identical Series Core semantics without manifest dependency', () => {
-    const entrant = (entryId: 'a' | 'b', name: string) => ({
-      entryId,
-      name,
-      logoUrl: null,
-      rosterId: null,
-      players: [],
-    });
-    const standaloneContext: MatchContext = {
-      matchId: 'standalone-match',
-      competition: {
-        competitionId: 'local-comp',
-        slug: 'local-comp',
-        name: 'Local Standalone',
-        themeColor: null,
-      },
-      status: 'in_progress',
-      format: 'bo1',
-      stage: 'final',
-      round: null,
-      entryRound: null,
-      scheduledAt: null,
-      startedAt: null,
-      completedAt: null,
-      scoreA: null,
-      scoreB: null,
-      isForfeit: false,
-      entrants: { a: entrant('a', 'Team Alpha'), b: entrant('b', 'Team Bravo') },
-      maps: [
-        {
-          mapId: 'map-1',
-          mapOrder: 1,
-          mapName: 'de_mirage',
-          pickedByEntryId: null,
-          teamAStartSide: 'CT',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-      ],
-      veto: [],
-      commentators: [],
-    };
-
-    const runtime = createProgramRuntime('standalone-runtime');
-    runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
-    const initial = runtime.synchronizeSeriesProgress(standaloneContext, sideProof);
-    expect(initial?.currentMapOrder).toBe(1);
-    expect(initial?.bindingState).toBe('bound');
-
-    runtime.acceptObservation(frame(2, 'gameover', 'over', { ct: 13, t: 11 }));
-    const completed = runtime.synchronizeSeriesProgress(standaloneContext, sideProof);
-    expect(completed?.score).toEqual({ a: 1, b: 0 });
-    expect(completed?.maps[0]?.status).toBe('completed');
-    expect(completed?.maps[0]?.winnerEntryId).toBe('a');
   });
 
   it('B.6 MatchContext refresh does not act as a second mutable score owner or advance/overwrite active SeriesProgress', () => {

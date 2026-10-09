@@ -20,6 +20,7 @@ const ACCEPTANCE_SOURCE_PREFIXES = [
   'packages/radar-view/src/',
   'packages/hud-config/src/',
   'packages/protocol/src/',
+  'packages/telemetry-gsi/src/',
   'apps/companion/src/runtime/',
   'apps/companion/src/projections/',
   'apps/companion/src/program-scenes/',
@@ -111,6 +112,7 @@ function isAcceptancePath(path) {
       ACCEPTANCE_SOURCE_PREFIXES.some((prefix) => path.startsWith(prefix))) ||
     path === 'apps/companion/src/app.ts' ||
     path === 'apps/companion/src/server.ts' ||
+    path.startsWith('scripts/local-web-production') ||
     path.includes('program-fixtures/')
   );
 }

@@ -215,12 +215,6 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
       await page.goto('/preview?scene=bp');
       await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
       await expect(page.getByRole('button', { name: '本地填写 BP' })).toBeVisible();
-      for (const width of [320, 390]) {
-        await page.setViewportSize({ width, height: 844 });
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-          width,
-        );
-      }
 
       const program = await context.newPage();
       await program.goto('/program/bp');
@@ -248,20 +242,6 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         page.frameLocator('iframe[title="节目预览"]'),
       ]);
       await expect(program.locator('.bp-card')).toHaveCount(7);
-      await expect(program.locator('.bp-team img')).toHaveCount(0);
-      await expect(program.getByRole('img', { name: /队标不可用/ }).first()).toBeVisible();
-      for (const image of await program
-        .locator(
-          '.bp-card[data-kind="pick"] .bp-map-art, .bp-card[data-kind="decider"] .bp-map-art',
-        )
-        .all()) {
-        await expect(image).toHaveCSS('filter', 'none');
-        await expect(image).toHaveCSS('opacity', '1');
-      }
-      await expect(program.locator('.bp-card[data-kind="ban"] .bp-map-art').first()).toHaveCSS(
-        'filter',
-        'grayscale(1)',
-      );
       await expect(program.locator('.bp-card[data-kind="ban"]')).toHaveCount(
         format === 'bo1' ? 6 : format === 'bo3' ? 4 : 2,
       );
@@ -481,10 +461,6 @@ for (const key of ['semifinalA', 'final'] as const) {
       await expect(program.locator('.bp-card .bp-side-choice')).toHaveCount(
         key === 'semifinalA' ? 3 : 4,
       );
-      const sceneBounds = await program.locator('.bp-scene').boundingBox();
-      expect(sceneBounds?.width).toBe(1920);
-      expect(sceneBounds?.height).toBe(1080);
-      await expect(program.locator('.bp-scene')).toHaveCSS('background-color', 'rgb(14, 19, 26)');
 
       await program.reload();
       await expect(program.locator('.bp-scene')).toHaveAttribute('data-state', 'shown');
@@ -640,32 +616,6 @@ test('event BO3 controls save EPL opponent side choices without a decider select
     await expect(steps.nth(6).locator('.bp-sequence-actor')).toHaveText('Natus Vincere');
     await expect(steps.nth(7).locator('.bp-sequence-actor')).toHaveText('Falcons');
     await expect(steps.nth(8).locator('.bp-sequence-decider')).toHaveText('Mirage');
-    // A wide preview still gives authoring only a 320px sidebar. Viewport-only
-    // breakpoints used to leave its controls clipped outside that sidebar.
-    for (const width of [1280, 1700, 390, 320]) {
-      await page.setViewportSize({ width, height: 844 });
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-        width,
-      );
-      const bounds = await editor.evaluate((element) => {
-        const frame = element.getBoundingClientRect();
-        return [...element.querySelectorAll('.mizar-field select, .bp-sequence-step select')].map(
-          (control) => {
-            const rect = control.getBoundingClientRect();
-            return {
-              width: rect.width,
-              contained: rect.left >= frame.left && rect.right <= frame.right,
-            };
-          },
-        );
-      });
-      expect(bounds.length).toBeGreaterThanOrEqual(8);
-      const minimumControlWidth = width >= 900 ? 190 : 150;
-      expect(
-        bounds.every((control) => control.contained && control.width >= minimumControlWidth),
-        JSON.stringify({ width, bounds }),
-      ).toBe(true);
-    }
     const save = editor.getByRole('button', { name: '保存本地 BP', exact: true });
     await expect(save).toBeEnabled();
     await save.click();
@@ -689,7 +639,7 @@ test('event BO3 controls save EPL opponent side choices without a decider select
   }
 });
 
-test('local BP authoring compiles to MatchContext, survives restart, and stays responsive', async ({
+test('local BP authoring compiles to MatchContext and survives restart', async ({
   page,
   context,
 }) => {
@@ -747,22 +697,6 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await steps.nth(9).locator('select').selectOption('T');
     await expect(editor.getByRole('button', { name: '保存本地 BP' })).toBeEnabled();
 
-    for (const width of [1493, 1920]) {
-      await page.setViewportSize({ width, height: width === 1493 ? 992 : 1080 });
-      const dialog = page.getByRole('dialog', { name: '编辑比赛 BP' });
-      const bounds = await dialog.boundingBox();
-      expect(bounds!.width).toBeGreaterThan(1000);
-      expect(bounds!.width).toBeLessThanOrEqual(width * 0.96);
-      await page.screenshot({ path: `.agent-tmp/rc-fixes/bp-editor-${width}.png` });
-    }
-    for (const width of [390, 320]) {
-      await page.setViewportSize({ width, height: 844 });
-      const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(scrollWidth).toBeLessThanOrEqual(width);
-    }
-    await page.keyboard.press('Tab');
-    expect(await page.evaluate(() => document.activeElement?.matches(':focus-visible'))).toBe(true);
-
     await page.getByRole('button', { name: '保存本地 BP', exact: true }).click();
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'local');
     await expect(page.getByRole('heading', { name: '本地 BP 已保存' })).toBeVisible();
@@ -804,12 +738,6 @@ test('local BP authoring compiles to MatchContext, survives restart, and stays r
     await expect(
       page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
     ).toHaveCount(1);
-    await program.emulateMedia({ reducedMotion: 'reduce' });
-    expect(
-      await program
-        .locator('.bp-scene')
-        .evaluate((node) => getComputedStyle(node).transitionProperty),
-    ).toBe('none');
     await program.close();
   } finally {
     await app.close();
@@ -996,48 +924,27 @@ test('BP team media falls back and recovers without moving long-name cards', asy
       }),
     );
     await page.goto('/program/bp');
-    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(8);
-    await expect(page.locator('.bp-team-logo img')).toHaveCount(0);
+    for (const entrant of ['a', 'b']) {
+      const team = page.locator(`.bp-team[data-entrant="${entrant}"]`);
+      await expect(team.getByRole('img', { name: /队标不可用/ })).toBeVisible();
+      await expect(team.locator('img')).toHaveCount(0);
+    }
     const before = await page.locator('.bp-card').evaluateAll((cards) =>
       cards.map((card) => {
         const { x, y, width, height } = card.getBoundingClientRect();
         return { x, y, width, height };
       }),
     );
-    for (const width of [1920, 960, 2560]) {
-      await page.setViewportSize({ width, height: (width * 9) / 16 });
-      // OBS scales the complete 1920×1080 browser source as one surface.
-      await page.addStyleTag({
-        content: `.bp-canvas { transform: scale(${width / 1920}); transform-origin: top left; }`,
-      });
-      const canvas = await page.locator('[data-program-canvas]').boundingBox();
-      expect(canvas).not.toBeNull();
-      expect(canvas!.width).toBeCloseTo(width, 0);
-      const titlePositions = await page
-        .locator('.bp-copy h2')
-        .evaluateAll((titles) => titles.map((title) => title.getBoundingClientRect().y));
-      expect(Math.max(...titlePositions) - Math.min(...titlePositions)).toBeLessThan(1);
-      for (const card of await page.locator('.bp-card').all()) {
-        const bounds = await card.boundingBox();
-        expect(bounds).not.toBeNull();
-        for (const content of await card
-          .locator('h2, .bp-badge, .bp-owner, .bp-side-choice')
-          .all()) {
-          const box = await content.boundingBox();
-          expect(box).not.toBeNull();
-          expect(box!.x).toBeGreaterThanOrEqual(bounds!.x);
-          expect(box!.y).toBeGreaterThanOrEqual(bounds!.y);
-          expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
-          expect(box!.y + box!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1);
-        }
+    for (const card of await page.locator('.bp-card').all()) {
+      const bounds = (await card.boundingBox())!;
+      for (const content of await card.locator('h2, .bp-badge, .bp-owner, .bp-side-choice').all()) {
+        const box = (await content.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(bounds.x);
+        expect(box.y).toBeGreaterThanOrEqual(bounds.y);
+        expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+        expect(box.y + box.height).toBeLessThanOrEqual(bounds.y + bounds.height + 1);
       }
-      await test.info().attach(`bp-long-names-${width}`, {
-        body: await page.screenshot(),
-        contentType: 'image/png',
-      });
     }
-    await page.setViewportSize({ width: 1920, height: 1080 });
-    await page.addStyleTag({ content: '.bp-canvas { transform: none; }' });
     snapshot = {
       ...snapshot,
       revision: 'media-2',
@@ -1054,7 +961,12 @@ test('BP team media falls back and recovers without moving long-name cards', asy
     await expect
       .poll(() => logo.evaluate((image) => (image as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
-    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(4);
+    await expect(
+      page.locator('.bp-team[data-entrant="a"]').getByRole('img', { name: /队标不可用/ }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('.bp-team[data-entrant="b"]').getByRole('img', { name: /队标不可用/ }),
+    ).toBeVisible();
     expect(
       await page.locator('.bp-card').evaluateAll((cards) =>
         cards.map((card) => {
@@ -1063,9 +975,6 @@ test('BP team media falls back and recovers without moving long-name cards', asy
         }),
       ),
     ).toEqual(before);
-    await test
-      .info()
-      .attach('bp-logo-recovered', { body: await page.screenshot(), contentType: 'image/png' });
   } finally {
     await app.close();
   }

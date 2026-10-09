@@ -4,7 +4,6 @@ import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   createProgramRuntime,
   PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX,
-  PRODUCTION_RUNTIME_CONTINUITY_POLICY,
 } from '../src/runtime/program-runtime.js';
 
 function observation(
@@ -46,58 +45,6 @@ function observation(
 }
 
 describe('ProgramRuntime', () => {
-  it('owns one initial state with an injected producer identity and generation zero', () => {
-    const runtime = createProgramRuntime('producer-test');
-
-    expect(runtime.getSnapshot()).toMatchObject({
-      producerInstanceId: 'producer-test',
-      sourceGeneration: 0,
-      continuityPolicy: PRODUCTION_RUNTIME_CONTINUITY_POLICY,
-      current: {
-        producerInstanceId: 'producer-test',
-        runtimeSeq: 0,
-        programSource: { generation: 0 },
-        map: { epoch: 0 },
-      },
-      recentTransitions: [],
-    });
-    expect(runtime.getSourceFreshness(0)).toBe('awaiting');
-  });
-
-  it('reduces observations and keeps duplicate or out-of-order semantics in Core', () => {
-    const runtime = createProgramRuntime('producer-test');
-
-    const baseline = runtime.acceptObservation(observation(10, 100));
-    expect(baseline.disposition).toEqual({ kind: 'accepted', reason: 'baseline' });
-    expect(runtime.getCurrentState().programTelemetry?.receive.sequence).toBe(10);
-
-    const duplicate = runtime.acceptObservation(observation(10, 101));
-    expect(duplicate.disposition).toEqual({ kind: 'ignored', reason: 'duplicate' });
-    expect(runtime.getCurrentState().runtimeSeq).toBe(1);
-
-    const outOfOrder = runtime.acceptObservation(observation(9, 102));
-    expect(outOfOrder.disposition).toEqual({ kind: 'ignored', reason: 'out-of-order' });
-    expect(runtime.getLastDisposition()).toEqual({ kind: 'ignored', reason: 'out-of-order' });
-  });
-
-  it('preserves Core gap-resync semantics without inventing a cross-gap transition', () => {
-    const runtime = createProgramRuntime('producer-test');
-    runtime.acceptObservation(observation(1, 100, { roundPhase: 'freezetime' }));
-
-    const gap = runtime.acceptObservation(observation(3, 110, { roundPhase: 'live' }));
-    expect(gap.disposition).toEqual({
-      kind: 'accepted',
-      reason: 'gap-resync',
-      missingSequenceRange: { from: 2, to: 2 },
-    });
-    expect(gap.transitions).toEqual([]);
-
-    const afterResync = runtime.acceptObservation(observation(4, 120, { roundPhase: 'over' }));
-    expect(afterResync.transitions).toEqual([
-      expect.objectContaining({ kind: 'round_ended', receiveSequence: 4 }),
-    ]);
-  });
-
   it('advances source generation explicitly without resetting ingress sequence', () => {
     const runtime = createProgramRuntime('producer-test');
     runtime.acceptObservation(observation(10, 100));

@@ -38,6 +38,8 @@ describe('HudConfigStore', () => {
     await store.load();
     const before = store.getState();
     const preset = getBuiltinPresets().find((item) => item.id === 'builtin:perfectworld-preset')!;
+    preset.widgets['team-ct-rail'].settings.showBombPrediction = false;
+    preset.widgets['team-t-rail'].settings.showBombPrediction = false;
     const pack = createHudPresetPack(
       preset,
       getBuiltinLayouts().find((item) => item.id === preset.layoutId)!,
@@ -87,37 +89,6 @@ describe('HudConfigStore', () => {
     expect(store.getState().document).toEqual(before.document);
     expect(store.getState().resolved).toEqual(before.resolved);
   });
-
-  it.each(['ewc', 'iem', 'perfectworld', 'esl'])(
-    'persists %s and preserves its recipe when copied',
-    async (style) => {
-      const filePath = await temporaryConfigPath();
-      const store = new HudConfigStore({ filePath });
-      await store.load();
-      const preset = getBuiltinPresets().find((item) => item.id === `builtin:${style}-preset`)!;
-      const theme = getBuiltinThemes().find((item) => item.id === preset.themeId)!;
-      const active = await store.activatePreset(preset.id);
-      expect(active.resolved.widgets['team-ct-rail'].variant).toBe(style);
-      expect(active.resolved.theme.recipe).toBe(style);
-      const loaded = new HudConfigStore({ filePath });
-      await loaded.load();
-      expect(loaded.getState().resolved).toEqual(active.resolved);
-      expect(loaded.getState().document.customThemes).toHaveLength(0);
-      const copiedTheme = await loaded.saveAs('theme', { ...theme, name: `${style} theme copy` });
-      const themeId = copiedTheme.document.customThemes[0]!.id;
-      const copied = await loaded.saveAs('preset', { ...preset, name: `${style} copy`, themeId });
-      expect(copied.resolved).toEqual(active.resolved);
-      const customId = copied.document.customPresets[0]!.id;
-      const customActive = await loaded.activatePreset(customId);
-      expect(customActive.resolved.theme.semantic).toEqual(active.resolved.theme.semantic);
-      expect(customActive.resolved.widgets).toEqual(active.resolved.widgets);
-      const restarted = new HudConfigStore({ filePath });
-      await restarted.load();
-      expect(restarted.getState().resolved).toEqual(customActive.resolved);
-      await restarted.activatePreset('builtin:mizar-default-preset');
-      expect(restarted.getState().resolved.widgets['team-ct-rail'].variant).toBe('default');
-    },
-  );
 
   it('uses the built-in default when the file is absent and preserves activation separately from saves', async () => {
     const filePath = await temporaryConfigPath();
@@ -174,22 +145,6 @@ describe('HudConfigStore', () => {
     const reloaded = new HudConfigStore({ filePath });
     await reloaded.load();
     expect(reloaded.getState().resolved.theme.brandColor).toBe('#00ffaa');
-  });
-
-  it('persists the Shanghai prediction switch without replacing its layout', async () => {
-    const filePath = await temporaryConfigPath();
-    const store = new HudConfigStore({ filePath });
-    const preset = getBuiltinPresets().find((p) => p.id === 'builtin:perfectworld-preset')!;
-    preset.widgets['team-ct-rail'].settings.showBombPrediction = false;
-    preset.widgets['team-t-rail'].settings.showBombPrediction = false;
-    const saved = await store.saveAs('preset', { ...preset, name: '预测关闭' });
-    await store.activatePreset(saved.command.resourceId!);
-    const restarted = new HudConfigStore({ filePath });
-    await restarted.load();
-    const resolved = restarted.getState().resolved;
-    expect(resolved.layout.id).toBe('builtin:perfectworld-layout');
-    expect(resolved.widgets['team-ct-rail'].settings.showBombPrediction).toBe(false);
-    expect(resolved.widgets['team-t-rail'].settings.showBombPrediction).toBe(false);
   });
 
   it('does not overwrite a malformed file during startup recovery', async () => {

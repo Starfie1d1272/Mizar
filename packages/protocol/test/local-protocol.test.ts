@@ -160,15 +160,6 @@ describe('Local Protocol V1 and channel schema acceptance', () => {
     }
   });
 
-  it('fails closed on the retired Program v6 envelope', () => {
-    expect(() =>
-      programSnapshotSchema.parse({
-        ...snapshot(1),
-        schemaVersion: 6,
-      }),
-    ).toThrow();
-  });
-
   it('accepts monotonic snapshots, ignores duplicates, and emits epoch reset signals', () => {
     const first = acceptSnapshot(
       snapshot(1),
@@ -219,27 +210,20 @@ describe('Local Protocol V1 and channel schema acceptance', () => {
   });
 
   it('rejects wrong protocol, schema, and channel literals', () => {
-    expect(
-      acceptSnapshot(
-        snapshot(1, { protocolVersion: 2 }),
-        programSnapshotSchema,
-        createSnapshotAcceptanceState(),
-      ),
-    ).toMatchObject({ kind: 'rejected', reason: 'schema-invalid' });
-    expect(
-      acceptSnapshot(
-        snapshot(1, { schemaVersion: 1 }),
-        programSnapshotSchema,
-        createSnapshotAcceptanceState(),
-      ),
-    ).toMatchObject({ kind: 'rejected', reason: 'schema-invalid' });
-    expect(
-      acceptSnapshot(
-        snapshot(1, { channel: 'radar' }),
-        programSnapshotSchema,
-        createSnapshotAcceptanceState(),
-      ),
-    ).toMatchObject({ kind: 'rejected', reason: 'schema-invalid' });
+    for (const overrides of [
+      { protocolVersion: 2 },
+      { schemaVersion: 1 },
+      { schemaVersion: 6 },
+      { channel: 'radar' },
+    ]) {
+      expect(
+        acceptSnapshot(
+          snapshot(1, overrides),
+          programSnapshotSchema,
+          createSnapshotAcceptanceState(),
+        ),
+      ).toMatchObject({ kind: 'rejected', reason: 'schema-invalid' });
+    }
   });
 
   it('rejects runtime regressions and producer changes on the same socket', () => {

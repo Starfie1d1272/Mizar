@@ -128,32 +128,48 @@ describe('shared ReplaySession', () => {
     session.dispose();
   });
 
-  it('rebuilds seeks, restarts, and steps through frames', async () => {
-    const scheduler = new ManualScheduler();
-    const sourceFrames = frames([0, 100, 200]);
+  it('seeks semantic events, steps and restarts with reconstructed cursor validation', async () => {
+    const sourceFrames = frames([0, 100, 200, 300]);
+    const events = [1, 3].map((captureIndex) => ({
+      id: `event-${captureIndex}`,
+      kind: 'damage',
+      label: 'damage',
+      captureIndex,
+      sequence: 100 + captureIndex,
+      scheduledElapsedUs: captureIndex * 100_000,
+    }));
     const rebuilt: number[] = [];
     const session = createReplaySession(
       {
         frames: sourceFrames,
-        events: [],
-        rebuild: (captureIndex) => {
-          rebuilt.push(captureIndex);
-          return sourceFrames[captureIndex]!;
+        events,
+        rebuild: (index) => {
+          rebuilt.push(index);
+          return sourceFrames[index]!;
         },
       },
-      scheduler,
+      new ManualScheduler(),
     );
-
-    expect(session.getSnapshot().presentationRevision).toBe(0);
+    await session.seekEvent('event-3');
+    expect(session.getSnapshot().currentIndex).toBe(3);
+    await session.stepEvent(-1);
+    expect(session.getSnapshot().currentIndex).toBe(1);
     await session.stepFrame(1);
-    expect(session.getSnapshot().presentationRevision).toBe(1);
-    await session.seekElapsedUs(200_000);
     await session.restart();
-
-    expect(rebuilt).toEqual([1, 2, 0]);
-    expect(session.getSnapshot().currentIndex).toBe(0);
-    expect(session.getSnapshot().presentationRevision).toBe(3);
+    expect(rebuilt).toEqual([3, 1, 2, 0]);
+    expect(session.getSnapshot().presentationRevision).toBe(4);
     session.dispose();
+    await expect(session.restart()).rejects.toThrow('disposed');
+    const invalid = createReplaySession(
+      {
+        frames: sourceFrames,
+        events,
+        rebuild: () => sourceFrames[1]!,
+      },
+      new ManualScheduler(),
+    );
+    await expect(invalid.seekCaptureIndex(2)).rejects.toThrow('mismatched capture cursor');
+    invalid.dispose();
   });
 
   it('catches up to the latest eligible frame after a delayed callback', () => {

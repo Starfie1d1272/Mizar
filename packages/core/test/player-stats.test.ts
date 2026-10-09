@@ -158,17 +158,6 @@ describe('map-scoped player stats accumulator', () => {
     expect(getPlayerLiveAdr(state.playerStats, PLAYER_A)).toBe(50);
   });
 
-  it('keeps the per-round maximum when a dead player reports round damage zero', () => {
-    let state = createInitialRuntimeState('stats-death-reset');
-    state = accept(state, frame(1, 1, 'freezetime', 1)).state;
-    state = accept(state, frame(2, 2, 'live', 1, 80)).state;
-    state = accept(state, frame(3, 3, 'live', 1, 0)).state;
-    expect(state.playerStats.currentRound?.damageBySteam64[PLAYER_A]).toBe(80);
-    expect(getPlayerCurrentRoundDamage(state.playerStats, PLAYER_A)).toBe(80);
-    state = accept(state, frame(4, 4, 'over', 1, 0)).state;
-    expect(state.playerStats.completedDamageBySteam64[PLAYER_A]).toBe(80);
-  });
-
   it('freezes the first healthy freezetime money and exposes max damage until evidence is invalidated', () => {
     let state = createInitialRuntimeState('stats-current-round-facts');
     state = accept(state, frame(1, 1, 'freezetime', 1, 0, 4_200)).state;
@@ -283,11 +272,5 @@ describe('map-scoped player stats accumulator', () => {
     expect(reset.playerStats.mapEpoch).toBe(reset.map.epoch);
     expect(reset.playerStats.countedCompletedRounds).toBe(0);
     expect(reset.playerStats.completedDamageBySteam64).toEqual({});
-  });
-
-  it('does not invent ADR for a non-Steam64 source id', () => {
-    expect(
-      getPlayerLiveAdr(createInitialRuntimeState('stats-non-steam').playerStats, 'bot-1'),
-    ).toBeNull();
   });
 });

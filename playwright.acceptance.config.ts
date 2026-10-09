@@ -5,6 +5,9 @@ const acceptancePort = Number(process.env.PLAYWRIGHT_PORT ?? '4173');
 export default defineConfig({
   testDir: 'tests/acceptance',
   fullyParallel: false,
+  forbidOnly: Boolean(process.env.CI),
+  failOnFlakyTests: true,
+  retries: 0,
   workers: 1,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-acceptance-report' }]],
   projects: [

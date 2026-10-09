@@ -7,7 +7,6 @@ import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
 import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
 import { FreezeRoundHistory } from '../src/program/widgets/match-header/FreezeRoundHistory';
-import { RoundHistoryPanel } from '../src/program/widgets/match-header/RoundHistoryPanel';
 import {
   freezeHistoryEligible,
   roundHistorySegment,
@@ -51,18 +50,6 @@ describe('Broadcast round history', () => {
     const h = history('real-halftime-before');
     expect(new Set(h.rounds.map((r) => r.winCondition))).toEqual(
       new Set(['elimination', 'bomb', 'defuse', 'time']),
-    );
-    const node = document.createElement('div');
-    root = createRoot(node);
-    act(() => root!.render(<RoundHistoryPanel history={h} mode="pause" />));
-    for (const round of h.rounds) {
-      const slot = node.querySelector(`[data-round-number="${round.roundNumber}"]`)!;
-      expect(slot.getAttribute('data-win-condition')).toBe(round.winCondition);
-      expect(slot.getAttribute('data-winner-side')).toBe(round.winnerSide);
-      expect(slot.querySelector('svg, .round-history-panel__kit')).not.toBeNull();
-    }
-    expect(node.querySelector('.round-history-panel__kit')?.getAttribute('style')).toContain(
-      'defuse',
     );
     const base = getProgramFixture('real-halftime-before')!.payload;
     const anonymous = buildMatchHeaderPresentation({

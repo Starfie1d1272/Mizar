@@ -47,11 +47,11 @@ describe('Program fixture provenance policy', () => {
       expect(programSnapshotSchema.safeParse(snapshot).success, id).toBe(true);
       if (provenance.kind === 'real-derived') {
         expect(
-          [...Object.values(realProgramFixtures), ...Object.values(eplProgramFixtures)].some(
-            (record) => record.snapshot === snapshot && record.provenance === provenance,
+          [...Object.values(realProgramFixtures), ...Object.values(eplProgramFixtures)].map(
+            (record) => ({ snapshot: record.snapshot, provenance: record.provenance }),
           ),
           id,
-        ).toBe(true);
+        ).toContainEqual({ snapshot, provenance });
       } else {
         expect(provenance.reason.trim().length, id).toBeGreaterThan(0);
         if (provenance.kind === 'synthetic-presentation') {

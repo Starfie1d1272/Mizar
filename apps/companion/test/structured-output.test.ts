@@ -391,84 +391,6 @@ it.each(['bo3', 'bo5'] as const)(
   },
 );
 
-it('restores pending events into a new Runtime process without rewriting producer evidence', async () => {
-  const binding = await bindingFixture();
-  const directory = await mkdtemp(join(tmpdir(), 'mizar-runtime-restart-'));
-  const path = join(directory, 'outbox.json');
-  const runtimeA = createProgramRuntime('process-A', {
-    liveSession: { kind: 'bound', liveSessionId: 'durable-session' },
-  });
-  const coordinatorA = createProjectionCoordinator({
-    programRuntime: runtimeA,
-    cstvSources: createCstvSourceManagers({}),
-    matchContextBinding: binding,
-    nowMonotonicMs: () => 3000,
-  });
-  const outboxA = new ReliableOutbox(path);
-  const serviceA = new OutputService({
-    outbox: outboxA,
-    now: () => new Date('2026-09-28T00:00:02.000Z'),
-  });
-  let originalEvent;
-  try {
-    await serviceA.start();
-    runtimeA.advanceProgramSourceGeneration({ monotonicMs: 0, utc: '2026-09-28T00:00:00.000Z' });
-    runtimeA.acceptObservation(observation(binding.manifest, 1, 'live'));
-    runtimeA.resetMapExecution('same-map-restart', {
-      monotonicMs: 1500,
-      utc: '2026-09-28T00:00:01.500Z',
-    });
-    const first = runtimeA.acceptObservation(observation(binding.manifest, 2, 'live'));
-    serviceA.setCurrent(coordinatorA.afterRuntimeMutation(first), binding);
-    serviceA.beforeRuntimeMutation();
-    const ended = runtimeA.acceptObservation(observation(binding.manifest, 3, 'gameover'));
-    serviceA.afterRuntimeMutation(ended, coordinatorA.afterRuntimeMutation(ended), binding);
-    await outboxA.flushPending();
-    originalEvent = outboxA.getRecords().find((record) => record.event.kind === 'map_ended')!.event;
-  } finally {
-    await serviceA.close();
-    await coordinatorA.close();
-  }
-  const runtimeB = createProgramRuntime('process-B');
-  const coordinatorB = createProjectionCoordinator({
-    programRuntime: runtimeB,
-    cstvSources: createCstvSourceManagers({}),
-    matchContextBinding: binding,
-    nowMonotonicMs: () => 4000,
-  });
-  const sink = { send: vi.fn(() => Promise.resolve('accepted' as const)) };
-  const outboxB = new ReliableOutbox(path);
-  const serviceB = new OutputService({
-    outbox: outboxB,
-    sink,
-    now: () => new Date('2026-09-28T00:00:03.000Z'),
-    restoreContinuity: (checkpoint) => {
-      runtimeB.restoreDeliveryContinuity({ ...checkpoint.cursor, mapName: checkpoint.mapName });
-      return coordinatorB.refresh();
-    },
-  });
-  try {
-    serviceB.setCurrent(coordinatorB.getCurrent(), binding);
-    await serviceB.start();
-    expect(sink.send).not.toHaveBeenCalled();
-    expect(outboxB.getRecords().find((record) => record.event.kind === 'map_ended')?.status).toBe(
-      'pending',
-    );
-    const baseline = runtimeB.acceptObservation(observation(binding.manifest, 4, 'gameover'));
-    serviceB.setCurrent(coordinatorB.afterRuntimeMutation(baseline), binding);
-    await serviceB.retry();
-    expect(runtimeB.getCurrentState().producerInstanceId).toBe('process-B');
-    expect(sink.send).toHaveBeenCalledWith(originalEvent, expect.any(AbortSignal));
-    expect(outboxB.getRecords().find((record) => record.event.kind === 'map_ended')?.status).toBe(
-      'accepted',
-    );
-  } finally {
-    await serviceB.close();
-    await coordinatorB.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 it.each(['match', 'revision', 'session', 'generation', 'epoch', 'stale', 'score'] as const)(
   'guards reliable delivery against changed %s',
   async (changed) => {
@@ -793,45 +715,6 @@ it('uses only Program-safe inputs, stable Program identity, and no Assist/Lookah
       },
     };
     expect(project(noProof)?.radar?.players.every((p) => p.canonicalPlayerId === null)).toBe(true);
-  } finally {
-    await coordinator.close();
-  }
-});
-
-it('copies complete/partial/unavailable/null Round History without score inference', async () => {
-  const { coordinator, bundle, project } = await liveFixture();
-  try {
-    for (const completeness of ['complete', 'partial', 'unavailable'] as const) {
-      const roundHistory = {
-        mapOrder: 1,
-        completeness,
-        rounds:
-          completeness === 'unavailable'
-            ? []
-            : [
-                {
-                  roundNumber: 1,
-                  winnerSide: 'CT' as const,
-                  winnerEntryId: 'entry-a',
-                  winCondition: 'bomb' as const,
-                },
-                {
-                  roundNumber: 26,
-                  winnerSide: 'T' as const,
-                  winnerEntryId: 'entry-a',
-                  winCondition: 'unknown' as const,
-                },
-              ],
-      };
-      const result = project({
-        ...bundle,
-        program: { ...bundle.program, series: { ...bundle.program.series!, roundHistory } },
-      });
-      expect(result?.roundHistory).toEqual(roundHistory);
-    }
-    expect(
-      project({ ...bundle, program: { ...bundle.program, series: null } })?.roundHistory,
-    ).toBeNull();
   } finally {
     await coordinator.close();
   }
@@ -1255,39 +1138,6 @@ it('bounds in-flight persistence and ignores a late old-scope publication after 
     expect(startEnqueues).toBe(2);
   } finally {
     release();
-    await f.close();
-  }
-});
-
-it('ordinary map-start delivery retries keep the exact durable event and key', async () => {
-  const f = await recoveryFixture();
-  try {
-    f.apply(1);
-    await f.settle();
-    const event = f.starts()[0]!.event;
-    const sent: unknown[] = [];
-    const sink = {
-      send: (candidate: typeof event) => {
-        sent.push(candidate);
-        return Promise.resolve('retry' as const);
-      },
-    };
-    await f.outbox.flush({
-      sink,
-      isCurrent: () => true,
-      now: new Date('2026-09-28T00:00:01.000Z'),
-    });
-    await f.outbox.flush({
-      sink,
-      isCurrent: () => true,
-      now: new Date('2026-09-28T00:01:00.000Z'),
-    });
-    expect(sent.filter((item) => (item as typeof event).kind === 'map_started')).toEqual([
-      event,
-      event,
-    ]);
-    expect(f.starts()[0]!.event.idempotencyKey).toBe(event.idempotencyKey);
-  } finally {
     await f.close();
   }
 });

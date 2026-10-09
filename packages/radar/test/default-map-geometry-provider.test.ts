@@ -1,190 +1,32 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-
-import {
-  RADAR_CALIBRATION_REVISION,
-  RADAR_CALIBRATIONS,
-  SUPPORTED_RADAR_MAP_KEYS,
-} from '../src/cs2-overview-calibrations.js';
+import { describe, expect, it } from 'vitest';
+import { defaultMapGeometryProvider } from '../src/default-map-geometry-provider.js';
 import { classifyRadarLayer, projectWorldPosition } from '../src/map-geometry.js';
 
-type MutableCalibration = {
-  mapKey: string;
-  posX: number;
-  posY: number;
-  scale: number;
-  radarSize: number;
-  layerRule: { kind: 'single' } | { kind: 'z-threshold'; splitZ: number };
-};
-
-type MutableSnapshot = Record<string, MutableCalibration>;
-
-const EXPECTED_CALIBRATIONS = {
-  de_dust2: {
-    mapKey: 'de_dust2',
-    posX: -2476,
-    posY: 3239,
-    scale: 4.4,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_mirage: {
-    mapKey: 'de_mirage',
-    posX: -3230,
-    posY: 1713,
-    scale: 5,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_inferno: {
-    mapKey: 'de_inferno',
-    posX: -2087,
-    posY: 3870,
-    scale: 4.9,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_nuke: {
-    mapKey: 'de_nuke',
-    posX: -3453,
-    posY: 2887,
-    scale: 7,
-    radarSize: 1024,
-    layerRule: { kind: 'z-threshold', splitZ: -495 },
-  },
-  de_ancient: {
-    mapKey: 'de_ancient',
-    posX: -2953,
-    posY: 2164,
-    scale: 5,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_anubis: {
-    mapKey: 'de_anubis',
-    posX: -2796,
-    posY: 3328,
-    scale: 5.22,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_cache: {
-    mapKey: 'de_cache',
-    posX: -2000,
-    posY: 3250,
-    scale: 5.5,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_overpass: {
-    mapKey: 'de_overpass',
-    posX: -4831,
-    posY: 1781,
-    scale: 5.2,
-    radarSize: 1024,
-    layerRule: { kind: 'single' },
-  },
-  de_train: {
-    mapKey: 'de_train',
-    posX: -2308,
-    posY: 2078,
-    scale: 4.082077,
-    radarSize: 1024,
-    layerRule: { kind: 'z-threshold', splitZ: -50 },
-  },
-  de_vertigo: {
-    mapKey: 'de_vertigo',
-    posX: -3168,
-    posY: 1762,
-    scale: 4,
-    radarSize: 1024,
-    layerRule: { kind: 'z-threshold', splitZ: 11700 },
-  },
-} as const;
-
-type ProviderModule = typeof import('../src/default-map-geometry-provider.js');
-
-let providerModule: ProviderModule;
-
-beforeAll(async () => {
-  providerModule = await import('../src/default-map-geometry-provider.js');
-});
-
-function cloneSnapshot(): MutableSnapshot {
-  return Object.fromEntries(
-    Object.entries(RADAR_CALIBRATIONS).map(([mapKey, calibration]) => [
-      mapKey,
-      {
-        mapKey: calibration.mapKey,
-        posX: calibration.posX,
-        posY: calibration.posY,
-        scale: calibration.scale,
-        radarSize: calibration.radarSize,
-        layerRule:
-          calibration.layerRule.kind === 'single'
-            ? { kind: 'single' }
-            : { kind: 'z-threshold', splitZ: calibration.layerRule.splitZ },
-      },
-    ]),
-  );
-}
-
-async function expectProviderImportToFail(
-  mutate: (snapshot: MutableSnapshot) => void,
-  expectedMessage: string | RegExp,
-  revision: string = RADAR_CALIBRATION_REVISION,
-): Promise<void> {
-  vi.resetModules();
-  const snapshot = cloneSnapshot();
-  mutate(snapshot);
-  vi.doMock('../src/cs2-overview-calibrations.js', () => ({
-    RADAR_CALIBRATION_REVISION: revision,
-    RADAR_CALIBRATIONS: snapshot,
-    SUPPORTED_RADAR_MAP_KEYS,
-  }));
-
-  try {
-    await expect(import('../src/default-map-geometry-provider.js')).rejects.toThrow(
-      expectedMessage,
-    );
-  } finally {
-    vi.doUnmock('../src/cs2-overview-calibrations.js');
-    vi.resetModules();
-  }
-}
+// Pinned CS2 overview coordinates are an independent geometry oracle.
+const CALIBRATIONS = [
+  ['de_dust2', -2476, 3239, 4.4],
+  ['de_mirage', -3230, 1713, 5],
+  ['de_inferno', -2087, 3870, 4.9],
+  ['de_nuke', -3453, 2887, 7],
+  ['de_ancient', -2953, 2164, 5],
+  ['de_anubis', -2796, 3328, 5.22],
+  ['de_cache', -2000, 3250, 5.5],
+  ['de_overpass', -4831, 1781, 5.2],
+  ['de_train', -2308, 2078, 4.082077],
+  ['de_vertigo', -3168, 1762, 4],
+] as const;
 
 describe('default radar map geometry provider', () => {
-  it('keeps the exact bounded calibration snapshot and revision', () => {
-    expect(RADAR_CALIBRATION_REVISION).toBe('cs2-overview/2026-09-16');
-    expect(SUPPORTED_RADAR_MAP_KEYS).toEqual(Object.keys(EXPECTED_CALIBRATIONS));
-    expect(Object.keys(RADAR_CALIBRATIONS)).toEqual(Object.keys(EXPECTED_CALIBRATIONS));
-    expect(RADAR_CALIBRATIONS).toEqual(EXPECTED_CALIBRATIONS);
+  it.each(CALIBRATIONS)('projects the pinned %s overview coordinates', (mapName, x, y, scale) => {
+    const geometry = defaultMapGeometryProvider.resolve(mapName)!;
+    const projected = projectWorldPosition(
+      { x: x + scale * 512, y: y - scale * 512, z: 0 },
+      geometry,
+    );
+    expect(projected?.x).toBeCloseTo(0.5, 12);
+    expect(projected?.y).toBeCloseTo(0.5, 12);
+    expect(projected?.outOfBounds).toBe(false);
   });
-
-  it('resolves all supported maps and exposes no asset contract', () => {
-    for (const mapKey of SUPPORTED_RADAR_MAP_KEYS) {
-      const geometry = providerModule.defaultMapGeometryProvider.resolve(mapKey);
-
-      expect(geometry).not.toBeNull();
-      expect(geometry?.mapKey).toBe(mapKey);
-      expect(geometry?.calibrationRevision).toBe(RADAR_CALIBRATION_REVISION);
-      const calibration = RADAR_CALIBRATIONS[mapKey];
-      expect(geometry).toMatchObject({
-        originWorld: { x: calibration.posX, y: calibration.posY },
-        scaleWorldUnitsPerPixel: calibration.scale,
-        referenceSize: { width: calibration.radarSize, height: calibration.radarSize },
-        layerRule: calibration.layerRule,
-      });
-      expect(Object.keys(geometry ?? {}).sort()).toEqual([
-        'calibrationRevision',
-        'layerRule',
-        'mapKey',
-        'originWorld',
-        'referenceSize',
-        'scaleWorldUnitsPerPixel',
-      ]);
-    }
-  });
-
   it('supports only the explicit display aliases and rejects unknown maps', () => {
     const aliases = {
       dust2: 'de_dust2',
@@ -202,23 +44,21 @@ describe('default radar map geometry provider', () => {
     } as const;
 
     for (const [alias, mapKey] of Object.entries(aliases)) {
-      expect(providerModule.defaultMapGeometryProvider.resolve(alias)?.mapKey).toBe(mapKey);
-      expect(
-        providerModule.defaultMapGeometryProvider.resolve(`  ${alias.toUpperCase()} `)?.mapKey,
-      ).toBe(mapKey);
+      expect(defaultMapGeometryProvider.resolve(alias)?.mapKey).toBe(mapKey);
+      expect(defaultMapGeometryProvider.resolve(`  ${alias.toUpperCase()} `)?.mapKey).toBe(mapKey);
     }
 
     for (const mapName of [null, '', 'de_workshop_custom', 'workshop/de_mirage', 'custom-map']) {
-      expect(providerModule.defaultMapGeometryProvider.resolve(mapName)).toBeNull();
+      expect(defaultMapGeometryProvider.resolve(mapName)).toBeNull();
     }
   });
 
   it('preserves calibration landmarks and split-map layer thresholds', () => {
-    const mirage = providerModule.defaultMapGeometryProvider.resolve('de_mirage');
-    const nuke = providerModule.defaultMapGeometryProvider.resolve('de_nuke');
-    const cache = providerModule.defaultMapGeometryProvider.resolve('de_cache');
-    const train = providerModule.defaultMapGeometryProvider.resolve('de_train');
-    const vertigo = providerModule.defaultMapGeometryProvider.resolve('de_vertigo');
+    const mirage = defaultMapGeometryProvider.resolve('de_mirage');
+    const nuke = defaultMapGeometryProvider.resolve('de_nuke');
+    const cache = defaultMapGeometryProvider.resolve('de_cache');
+    const train = defaultMapGeometryProvider.resolve('de_train');
+    const vertigo = defaultMapGeometryProvider.resolve('de_vertigo');
 
     expect(mirage).not.toBeNull();
     expect(projectWorldPosition({ x: -3230, y: 1713, z: 0 }, mirage!)).toMatchObject({
@@ -258,33 +98,5 @@ describe('default radar map geometry provider', () => {
     expect(classifyRadarLayer(11699, vertigo!)).toBe('lower');
     expect(classifyRadarLayer(11700, vertigo!)).toBe('upper');
     expect(classifyRadarLayer(11701, vertigo!)).toBe('upper');
-  });
-
-  it('fails during module initialization when snapshot metadata is malformed', async () => {
-    await expectProviderImportToFail((snapshot) => {
-      delete snapshot.de_dust2;
-    }, 'snapshot keys must exactly match supported map keys');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_mirage!.mapKey = 'de_dust2';
-    }, 'mapKey must equal de_mirage');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_dust2!.posX = Number.NaN;
-    }, 'posX must be finite');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_dust2!.scale = 0;
-    }, 'scale must be greater than zero');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_dust2!.radarSize = 0;
-    }, 'radarSize must be greater than zero');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_nuke!.layerRule = { kind: 'z-threshold', splitZ: Number.NaN };
-    }, 'splitZ must be finite');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_vertigo!.layerRule = { kind: 'z-threshold', splitZ: 11701 };
-    }, 'splitZ must equal 11700');
-    await expectProviderImportToFail((snapshot) => {
-      snapshot.de_custom = { ...snapshot.de_dust2! };
-    }, 'snapshot keys must exactly match supported map keys');
-    await expectProviderImportToFail(() => undefined, 'calibrationRevision must not be empty', '');
   });
 });

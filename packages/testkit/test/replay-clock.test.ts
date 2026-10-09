@@ -6,7 +6,7 @@ describe('ReplayClock', () => {
   it('starts at zero and never moves backwards', () => {
     const clock = new ReplayClock();
     expect(clock.virtualElapsedUs).toBe(0);
-    expect(clock.advanceTo(12_000)).toBeUndefined();
+    clock.advanceTo(12_000);
     expect(clock.virtualElapsedUs).toBe(12_000);
     expect(() => clock.advanceTo(8_000)).toThrow(RangeError);
     expect(clock.virtualElapsedUs).toBe(12_000);

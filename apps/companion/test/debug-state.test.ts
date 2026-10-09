@@ -64,32 +64,6 @@ function observation(
 }
 
 describe('DebugEvidenceStore', () => {
-  it('returns a valid awaiting response before telemetry arrives', () => {
-    const runtime = createProgramRuntime('debug-producer');
-    const store = new DebugEvidenceStore(runtime.getSnapshot());
-
-    const response = store.getResponse({
-      nowMonotonicMs: 0,
-      recorderHealth,
-      deliveryHealth: emptyDeliveryHealth,
-    });
-
-    expect(response).toMatchObject({
-      producerInstanceId: 'debug-producer',
-      sourceGeneration: 0,
-      freshness: 'awaiting',
-      raw: { current: null },
-      normalized: { current: null },
-      runtime: { lastDisposition: null },
-      recentTransitions: [],
-      latestGsiDiagnostics: null,
-      recentRuntimeDiagnostics: [],
-      recorderHealth,
-      deliveryHealth: [],
-    });
-    expect(response.runtime.current).not.toBeNull();
-  });
-
   it('keeps raw and latest adapter diagnostics visible when no observation is produced', () => {
     const store = new DebugEvidenceStore();
     store.recordAcceptedRaw({

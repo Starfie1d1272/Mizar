@@ -65,82 +65,38 @@ describe('architecture checker', () => {
 
   it('rejects forbidden runtime manifest dependencies without source imports', () => {
     const cases = [
-      {
-        manifestPath: 'packages/core/package.json',
-        dependencies: { fastify: '5.0.0' },
-        ruleId: 'ARCH_CORE_BOUNDARY',
-        target: 'fastify',
-      },
-      {
-        manifestPath: 'packages/core/package.json',
-        dependencies: { '@mizar/rivalhub': 'workspace:*' },
-        ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@mizar/rivalhub',
-      },
-      {
-        manifestPath: 'packages/core/package.json',
-        dependencies: { '@mizar/web': 'workspace:*' },
-        ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@mizar/web',
-      },
-      {
-        manifestPath: 'packages/core/package.json',
-        dependencies: { '@mizar/companion': 'workspace:*' },
-        ruleId: 'ARCH_CORE_BOUNDARY',
-        target: '@mizar/companion',
-      },
-      {
-        manifestPath: 'packages/protocol/package.json',
-        dependencies: { '@mizar/core': 'workspace:*' },
-        ruleId: 'ARCH_PROTOCOL_BOUNDARY',
-        target: '@mizar/core',
-      },
-      {
-        manifestPath: 'packages/radar/package.json',
-        dependencies: { react: '19.0.0' },
-        ruleId: 'ARCH_RADAR_BOUNDARY',
-        target: 'react',
-      },
-      {
-        manifestPath: 'packages/telemetry-gsi/package.json',
-        dependencies: { '@mizar/protocol': 'workspace:*' },
-        ruleId: 'ARCH_TELEMETRY_GSI_BOUNDARY',
-        target: '@mizar/protocol',
-      },
-      {
-        manifestPath: 'packages/telemetry-gsi/package.json',
-        dependencies: { fastify: '5.0.0' },
-        ruleId: 'ARCH_TELEMETRY_GSI_BOUNDARY',
-        target: 'fastify',
-      },
-      {
-        manifestPath: 'packages/telemetry-cstv/package.json',
-        dependencies: { '@mizar/companion': 'workspace:*' },
-        ruleId: 'ARCH_TELEMETRY_CSTV_BOUNDARY',
-        target: '@mizar/companion',
-      },
-      {
-        manifestPath: 'apps/web/package.json',
-        dependencies: { '@mizar/telemetry-gsi': 'workspace:*' },
-        ruleId: 'ARCH_WEB_BOUNDARY',
-        target: '@mizar/telemetry-gsi',
-      },
-      {
-        manifestPath: 'packages/rivalhub/package.json',
-        dependencies: { '@supabase/supabase-js': '2.0.0' },
-        ruleId: 'ARCH_RIVALHUB_BOUNDARY',
-        target: '@supabase/supabase-js',
-      },
+      ['packages/core/package.json', 'fastify', '5.0.0', 'ARCH_CORE_BOUNDARY'],
+      ['packages/core/package.json', '@mizar/rivalhub', 'workspace:*', 'ARCH_CORE_BOUNDARY'],
+      ['packages/core/package.json', '@mizar/web', 'workspace:*', 'ARCH_CORE_BOUNDARY'],
+      ['packages/core/package.json', '@mizar/companion', 'workspace:*', 'ARCH_CORE_BOUNDARY'],
+      ['packages/protocol/package.json', '@mizar/core', 'workspace:*', 'ARCH_PROTOCOL_BOUNDARY'],
+      ['packages/radar/package.json', 'react', '19.0.0', 'ARCH_RADAR_BOUNDARY'],
+      [
+        'packages/telemetry-gsi/package.json',
+        '@mizar/protocol',
+        'workspace:*',
+        'ARCH_TELEMETRY_GSI_BOUNDARY',
+      ],
+      ['packages/telemetry-gsi/package.json', 'fastify', '5.0.0', 'ARCH_TELEMETRY_GSI_BOUNDARY'],
+      [
+        'packages/telemetry-cstv/package.json',
+        '@mizar/companion',
+        'workspace:*',
+        'ARCH_TELEMETRY_CSTV_BOUNDARY',
+      ],
+      ['apps/web/package.json', '@mizar/telemetry-gsi', 'workspace:*', 'ARCH_WEB_BOUNDARY'],
+      [
+        'packages/rivalhub/package.json',
+        '@supabase/supabase-js',
+        '2.0.0',
+        'ARCH_RIVALHUB_BOUNDARY',
+      ],
     ];
 
-    for (const testCase of cases) {
-      const manifest = packageManifest(testCase.manifestPath);
-      manifest.dependencies = { ...manifest.dependencies, ...testCase.dependencies };
-      expectRule(
-        withFiles({ [testCase.manifestPath]: JSON.stringify(manifest) }),
-        testCase.ruleId,
-        testCase.target,
-      );
+    for (const [manifestPath, target, version, ruleId] of cases) {
+      const manifest = packageManifest(manifestPath);
+      manifest.dependencies = { ...manifest.dependencies, [target]: version };
+      expectRule(withFiles({ [manifestPath]: JSON.stringify(manifest) }), ruleId, target);
     }
 
     const devOnlyManifest = packageManifest('packages/core/package.json');
@@ -170,77 +126,65 @@ describe('architecture checker', () => {
   });
 
   it('enforces high-confidence package boundaries', () => {
-    expectRule(
-      withFiles({ 'packages/core/src/boundary.ts': "import 'fastify';\n" }),
-      'ARCH_CORE_BOUNDARY',
-      'fastify',
-    );
-    expectRule(
-      withFiles({ 'packages/core/src/boundary.ts': "import 'node:fs';\n" }),
-      'ARCH_CORE_BOUNDARY',
-      'node:fs',
-    );
-    expectRule(
-      withFiles({
-        'packages/protocol/src/boundary.ts': "import type { RuntimeState } from '@mizar/core';\n",
-      }),
-      'ARCH_PROTOCOL_BOUNDARY',
-      '@mizar/core',
-    );
-    expectRule(
-      withFiles({ 'packages/radar/src/boundary.ts': "import React from 'react';\nvoid React;\n" }),
-      'ARCH_RADAR_BOUNDARY',
-      'react',
-    );
-    expectRule(
-      withFiles({ 'packages/telemetry-gsi/src/boundary.ts': "import 'node:fs';\n" }),
-      'ARCH_TELEMETRY_GSI_BOUNDARY',
-      'node:fs',
-    );
-    expectRule(
-      withFiles({
-        'packages/core/src/cstv-edge.ts':
-          "import { create } from '@mizar/telemetry-cstv';\nvoid create;\n",
-      }),
-      'ARCH_CORE_BOUNDARY',
-      '@mizar/telemetry-cstv',
-    );
-    expectRule(
-      withFiles({ 'packages/telemetry-cstv/src/boundary.ts': "import 'node:fs';\n" }),
-      'ARCH_TELEMETRY_CSTV_BOUNDARY',
-      'node:fs',
-    );
-    expectRule(
-      withFiles({
-        'packages/telemetry-cstv/src/boundary.ts':
-          "import { adapt } from '@mizar/telemetry-gsi';\nvoid adapt;\n",
-      }),
-      'ARCH_TELEMETRY_CSTV_BOUNDARY',
-      '@mizar/telemetry-gsi',
-    );
-    expectRule(
-      withFiles({
-        'packages/telemetry-gsi/src/boundary.ts':
-          "import { value } from '@mizar/protocol';\nvoid value;\n",
-      }),
-      'ARCH_TELEMETRY_GSI_BOUNDARY',
-      '@mizar/protocol',
-    );
-    expectRule(
-      withFiles({
-        'apps/web/src/boundary.ts': "import { parse } from '@mizar/telemetry-gsi';\nvoid parse;\n",
-      }),
-      'ARCH_WEB_BOUNDARY',
-      '@mizar/telemetry-gsi',
-    );
-    expectRule(
-      withFiles({
-        'packages/rivalhub/src/boundary.ts':
-          "import { createClient } from '@supabase/supabase-js';\nvoid createClient;\n",
-      }),
-      'ARCH_RIVALHUB_BOUNDARY',
-      '@supabase/supabase-js',
-    );
+    for (const [path, contents, rule, target] of [
+      ['packages/core/src/boundary.ts', "import 'fastify';\n", 'ARCH_CORE_BOUNDARY', 'fastify'],
+      ['packages/core/src/boundary.ts', "import 'node:fs';\n", 'ARCH_CORE_BOUNDARY', 'node:fs'],
+      [
+        'packages/protocol/src/boundary.ts',
+        "import type { RuntimeState } from '@mizar/core';\n",
+        'ARCH_PROTOCOL_BOUNDARY',
+        '@mizar/core',
+      ],
+      [
+        'packages/radar/src/boundary.ts',
+        "import React from 'react';\nvoid React;\n",
+        'ARCH_RADAR_BOUNDARY',
+        'react',
+      ],
+      [
+        'packages/telemetry-gsi/src/boundary.ts',
+        "import 'node:fs';\n",
+        'ARCH_TELEMETRY_GSI_BOUNDARY',
+        'node:fs',
+      ],
+      [
+        'packages/core/src/cstv-edge.ts',
+        "import { create } from '@mizar/telemetry-cstv';\nvoid create;\n",
+        'ARCH_CORE_BOUNDARY',
+        '@mizar/telemetry-cstv',
+      ],
+      [
+        'packages/telemetry-cstv/src/boundary.ts',
+        "import 'node:fs';\n",
+        'ARCH_TELEMETRY_CSTV_BOUNDARY',
+        'node:fs',
+      ],
+      [
+        'packages/telemetry-cstv/src/boundary.ts',
+        "import { adapt } from '@mizar/telemetry-gsi';\nvoid adapt;\n",
+        'ARCH_TELEMETRY_CSTV_BOUNDARY',
+        '@mizar/telemetry-gsi',
+      ],
+      [
+        'packages/telemetry-gsi/src/boundary.ts',
+        "import { value } from '@mizar/protocol';\nvoid value;\n",
+        'ARCH_TELEMETRY_GSI_BOUNDARY',
+        '@mizar/protocol',
+      ],
+      [
+        'apps/web/src/boundary.ts',
+        "import { parse } from '@mizar/telemetry-gsi';\nvoid parse;\n",
+        'ARCH_WEB_BOUNDARY',
+        '@mizar/telemetry-gsi',
+      ],
+      [
+        'packages/rivalhub/src/boundary.ts',
+        "import { createClient } from '@supabase/supabase-js';\nvoid createClient;\n",
+        'ARCH_RIVALHUB_BOUNDARY',
+        '@supabase/supabase-js',
+      ],
+    ])
+      expectRule(withFiles({ [path]: contents }), rule, target);
   }, 15_000);
 
   it('rejects Core imports of Web and Companion even with legal workspace declarations', () => {

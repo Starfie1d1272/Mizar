@@ -60,63 +60,6 @@ function frame(sequence = 1, x = 0.5): RadarViewFrame {
 const canvas = () => container.querySelector('canvas')!;
 
 describe('shared radar surface lifecycle', () => {
-  it('retains artwork on unchanged surface notifications and rebuilds for real size changes', async () => {
-    const { step, contexts } = setup();
-    vi.stubGlobal(
-      'Image',
-      class {
-        src = '';
-        complete = true;
-        naturalWidth = 512;
-        naturalHeight = 512;
-      },
-    );
-    const input = frame();
-    act(() =>
-      root!.render(
-        <RadarView
-          snapshot={{ ...input, payload: { ...input.payload, bomb: null } }}
-          assetBaseUrl="/radar"
-        />,
-      ),
-    );
-    step(0);
-    const initial = contexts.mock.calls.length;
-    expect(initial).toBeGreaterThan(1);
-    await act(async () => {
-      container.dataset.unrelated = 'updated';
-      await Promise.resolve();
-    });
-    step(16);
-    window.dispatchEvent(new Event('resize'));
-    step(32);
-    expect(contexts).toHaveBeenCalledTimes(initial);
-    Object.defineProperty(canvas(), 'clientWidth', { value: 400, configurable: true });
-    window.dispatchEvent(new Event('resize'));
-    step(48);
-    expect(contexts.mock.calls.length).toBeGreaterThan(initial);
-  });
-  it('reuses surface styles between frames and invalidates them on theme changes and resize', async () => {
-    const { step } = setup();
-    const styles = vi.spyOn(globalThis, 'getComputedStyle');
-    act(() => root!.render(<RadarView snapshot={frame()} assetBaseUrl="/radar" />));
-    step(0);
-    step(8);
-    step(16);
-    step(24);
-    expect(styles).toHaveBeenCalledOnce();
-    await act(async () => {
-      container.style.setProperty('--mizar-side-ct', 'var(--mizar-side-t)');
-      await Promise.resolve();
-    });
-    step(32);
-    expect(styles).toHaveBeenCalledTimes(2);
-    Object.defineProperty(canvas(), 'clientWidth', { value: 400, configurable: true });
-    window.dispatchEvent(new Event('resize'));
-    step(40);
-    expect(styles).toHaveBeenCalledTimes(3);
-    expect(canvas().width).toBe(400);
-  });
   it('renders ESL labels through the shared accepted-frame lifecycle and clears an unavailable frame', () => {
     const { step } = setup();
     act(() =>

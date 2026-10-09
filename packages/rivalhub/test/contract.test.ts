@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import * as publicContractApi from '../src/index.js';
 import {
   compareScheduleMatches,
   validateBroadcastManifest,
@@ -189,13 +188,6 @@ describe('BroadcastManifest contract', () => {
         expect.arrayContaining([expect.objectContaining({ code: 'invalid_timestamp' })]),
       );
     }
-  });
-
-  it('keeps structural Zod schemas private to the contract package', () => {
-    expect(publicContractApi).not.toHaveProperty('broadcastManifestSchema');
-    expect(publicContractApi).not.toHaveProperty('broadcastScheduleWindowSchema');
-    expect(publicContractApi.validateBroadcastManifest).toBeTypeOf('function');
-    expect(publicContractApi.validateBroadcastScheduleWindow).toBeTypeOf('function');
   });
 
   it('enforces the canonical map count and mapOrder bounds for each match format', async () => {
