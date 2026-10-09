@@ -14,7 +14,7 @@ await verifyResourcePublication({
 });
 ```
 
-这些 policy 值必须来自受信任安装器/已认证 Core 清单或控制面；不能把未签镜像声明里的值复制成 policy。`minimumSequence` 持久保留已接受最高序号，允许同序号离线修复，拒绝回退；精确版本及两份源码固定可防止同序号替换。首次启动的受信任资源描述符和后续更新目录仍需由发行集成提供。声明过期时拒绝新安装/升级；已有核验缓存的正常启动由 Store 本地复验，不要求联网或重复验签有效期。
+这些 policy 值必须来自受信任安装器/已认证 Core 清单或控制面；不能把未签镜像声明里的值复制成 policy。安装阶段的 `minimumSequence` 持久保留已接受最高序号，允许同序号修复，拒绝降序安装；精确版本及两份源码固定可防止同序号替换。首次启动的受信任资源描述符和后续更新目录仍需由发行集成提供。声明过期时拒绝新安装/升级；已有核验缓存的正常启动与已管理版本回退使用下述离线 receipt 入口。
 
 返回 `{ statement, manifest, manifestSha256, archive, entries }`。`entries` 是被内容与来源校验实际冻结的字节；消费方安装这些字节，不重新打开原下载路径，避免校验与使用间替换。输入有字节上限，全部复制到私有临时目录后执行现有 `releaseAttestationArgs`，不允许注入假可信验证器：
 
@@ -42,7 +42,7 @@ node scripts/qualification/resource-provenance/create.mjs \
 
 ## 无外部 CLI 的运行时入口
 
-Store 使用 `@mizar/resource-pack-contract/runtime` 的 `verifyResourcePublicationBytes`，传入同一策略和四份下载字节：`statementBytes`、`publicationBundleBytes`、`archiveBytes`、`archiveBundleBytes`，另可传 `tufCachePath` 与 `signal`。返回值与 CLI 相同。输入在 await 前冻结，双证据始终经过 Sigstore 真实签名、证书 issuer、固定 main signer、CT 与 tlog 门槛，再核对 SLSA subject、main ref 和精确源码。生产入口不接受外部 verifier，不运行子进程或依赖用户安装 `gh`。
+Store 使用 `@mizar/resource-pack-contract/runtime` 的 `verifyResourcePublicationBytes`，传入同一策略、应用持有的持久 `tufCachePath` 和四份下载字节：`statementBytes`、`publicationBundleBytes`、`archiveBytes`、`archiveBundleBytes`，可另传 `signal`。返回 CLI 的内容与授权结果，以及下述持久化 `receipt`。输入在 await 前冻结，双证据始终经过 Sigstore 真实签名、证书 issuer、固定 main signer、CT 与 tlog 门槛，再核对 SLSA subject、main ref 和精确源码。生产入口不接受外部 verifier，不运行子进程或依赖用户安装 `gh`。
 
 正式 v1.0.0 的现有签名与公开根样例独立验证真实密码学成功和反例；它们不冒充新资源包的已签发行声明。新资源的完整签发与首次安装仍须父会话集成。`attestation` 子入口提供与现有 `StableSource` 相同的证据判定，便于父会话将既有更新入口提取共用；当前本分支不越界修改 Companion。
 
