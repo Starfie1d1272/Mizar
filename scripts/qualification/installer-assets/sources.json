@@ -10,7 +10,7 @@
     },
     {
       "path": "header.bmp",
-      "sha256": "33fdc1a6971e388de34045216f6bc7fd434f4713809b5ae012e432539e9fac11",
+      "sha256": "da708c8132a92e15b247bd3b728864b42795cdf5f62c01aced64df8dc41d196c",
       "bytes": 231246
     },
     {
@@ -20,8 +20,8 @@
     },
     {
       "path": "header.svg",
-      "sha256": "3eb8d449c309553031ac08907e5f6d6f324293d4a1dfc1955f78362d4f75863c",
-      "bytes": 2822
+      "sha256": "1a956279ddbca132c1db3e1cbe5efe3f1faae72430c227066971bc92229015a3",
+      "bytes": 2826
     }
   ]
 }
