@@ -1,6 +1,6 @@
 # 节目编排与展示
 
-本文维护节目顺序、展示范围与预览含义。组件视觉见 [Mizar Pulse](mizar-pulse.md)，控制接口见[协议](../protocol.md#制作控制与场景)，决策理由见 [ADR-0017](../decisions/0017-program-direction-and-presentation.md)。
+本文维护节目顺序、展示范围与预览含义。组件视觉见 [Mizar Pulse](mizar-pulse.md)，控制接口见[协议](../reference/protocol.md#制作控制与场景)，决策理由见 [ADR-0017](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0017-program-direction-and-presentation.md)。
 
 ## 自动流程
 

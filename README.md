@@ -6,28 +6,28 @@
 
 <p align="center">
   <a href="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml"><img src="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI 检查状态" /></a>
-  <a href="docs/quick-start.md"><img src="https://img.shields.io/badge/Windows-0078D4" alt="桌面平台：Windows" /></a>
-  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/badge/Preview-E9A23B" alt="版本状态：开发预览" /></a>
+  <a href="docs/guide/quick-start.md"><img src="https://img.shields.io/badge/Windows-0078D4" alt="桌面平台：Windows" /></a>
+  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/github/v/release/Starfie1d1272/Mizar" alt="最新发布版本" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0--only-2563EB" alt="许可证：AGPL-3.0-only" /></a>
 </p>
 
 <p align="center">
-  <a href="https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/">下载 Windows 完整包</a> ·
-  <a href="docs/quick-start.md">开始使用</a> ·
+  <a href="https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/">下载 Windows 安装包</a> ·
+  <a href="docs/guide/quick-start.md">开始使用</a> ·
   <a href="docs/screenshots/README.md">画面预览</a> ·
   <a href="docs/README.md">使用文档</a> ·
   <a href="CONTRIBUTING.md">参与开发</a>
 </p>
 
-**[下载 Windows 完整包（南大云盘）](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)** · [GitHub 备用下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
+**[下载 Windows 安装包（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
 
-当前候选为 RC33 开发预览版；已发布资产与版本说明见 GitHub Releases。候选使用中文 Windows Setup 安装包，保留完整便携 ZIP；已有 RC 下载方式以对应 Release 为准。完整操作见[快速开始](docs/quick-start.md)。
+首次使用请选择名称以 `-Setup.exe` 结尾的 Windows x64 中文安装包，按向导完成安装。便携 ZIP 供解压后运行、自行管理程序目录使用；历史版本和校验文件见 GitHub Releases。安装与升级步骤见[快速开始](docs/guide/quick-start.md)。
 
 Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
-![RC27 Mizar Pulse 实机画面](docs/screenshots/windows-rc27/b-inferno-r4-pulse.png)
+![Mizar Pulse 制播工作台](docs/screenshots/workspace-pulse.png)
 
-_RC27 真实 Inferno demo 画面，更多截图与来源见[画面预览](docs/screenshots/README.md)。_
+_比赛画面、大雷达与制作控制尽在眼前。[查看更多画面](docs/screenshots/README.md)。_
 
 ## 比赛进行到哪里，节目就呈现到哪里
 
@@ -55,10 +55,10 @@ _RC27 真实 Inferno demo 画面，更多截图与来源见[画面预览](docs/s
 
 HUD、雷达与节目使用同一份比赛信息，减少重复录入；编辑与预览独立于正式播出，调整画面时更安心。连接中断后尝试恢复当前状态，缺少数据时明确提示，帮助制作人员判断下一步。
 
-准备开始？查看[快速开始](docs/quick-start.md)，了解环境要求与第一场比赛的设置。适用范围见[产品说明](docs/product.md)，后续计划见[路线图](docs/roadmap.md)。
+准备开始？查看[快速开始](docs/guide/quick-start.md)，了解环境要求与第一场比赛的设置。适用范围见[产品说明](docs/guide/product.md)，后续计划见[路线图](docs/roadmap.md)。
 
 ## 开源与致谢
 
 Mizar 使用 [AGPL-3.0-only](LICENSE) 许可证，欢迎试用、[反馈问题](https://github.com/Starfie1d1272/Mizar/issues)和[参与开发](CONTRIBUTING.md)。
 
-感谢开源社区的 HUD、雷达与制播实践；CS2 资源处理使用 [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)。项目与相关赛事品牌无隶属或背书关系。依赖、字体和素材权利见[第三方说明](THIRD-PARTY-NOTICES.md)，研究来源见[参考项目](docs/references.md)。
+感谢开源社区的 HUD、雷达与制播实践；CS2 资源处理使用 [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)。项目与相关赛事品牌无隶属或背书关系。依赖、字体和素材权利见[第三方说明](THIRD-PARTY-NOTICES.md)，研究来源见[参考项目](docs/reference/references.md)。

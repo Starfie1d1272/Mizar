@@ -1,6 +1,6 @@
 # HUD 风格与展示规则
 
-HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归属见[架构](../architecture.md#雷达与展示配置)，操作见[预设使用](../quick-start.md#hud-预设与文件分享)。
+HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归属见[架构](../reference/architecture.md#雷达与展示配置)，操作见[预设使用](../guide/quick-start.md#hud-预设与文件分享)。
 
 ## 内置风格
 
@@ -12,7 +12,7 @@ HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归�
 | 类 Perfect World | 矩形生命带、状态附加面板与上海参考构图 | `presets/perfectworld.ts` |
 | 类 ESL | 荧光绿强调、独立字体与纹理 | `presets/esl.ts` |
 
-定义位于 [packages/hud-config/src](../../packages/hud-config/src/)，对应渲染样式位于 [apps/web/src/program/designs](../../apps/web/src/program/designs/)。四套参考是 HUD 风格，完整默认节目包装由 Pulse 提供。参考来源与取舍见[历史审查](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)，许可见[第三方说明](../../THIRD-PARTY-NOTICES.md)。
+定义位于 [packages/hud-config/src](../../packages/hud-config/src)，对应渲染样式位于 [apps/web/src/program/designs](../../apps/web/src/program/designs)。四套参考是 HUD 风格，完整默认节目包装由 Pulse 提供。参考来源与取舍见[历史审查](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)，许可见[第三方说明](../../THIRD-PARTY-NOTICES.md)。
 
 ## 共同规则
 
@@ -29,7 +29,7 @@ HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归�
 
 剩余暂停数字来自游戏，格子容量是展示约定，不能当成游戏提供的总次数。回合历史保留缺失和未知胜因，不从比分补造；暂停竖向历史与冻结期横向历史分别管理展示，实战及时收起。
 
-C4 目标动作、爆炸计时与伤害估算各消费自己的投影。最后十秒内，包括仍处于已安放状态的零秒帧，显示当前合格估算。连续收到爆炸帧而生命尚未变化时，五套 HUD 共用爆炸前估算的视觉衔接，最多保留半秒；爆炸帧中的回合计数保持或推进一位均允许衔接，之后再变化立即清除。这段残影不是当前预测，不更新估算、血量、计时或回合事实。生命变化、选手/地图/展示边界、缺段、断流、暂停与拆弹完成立即清除。动画不回写血量、不补猜行动时长；能力边界见[数据源说明](../data-source-capabilities.md#c4-爆炸伤害估算)。
+C4 目标动作、爆炸计时与伤害估算各消费自己的投影。最后十秒内，包括仍处于已安放状态的零秒帧，显示当前合格估算。连续收到爆炸帧而生命尚未变化时，五套 HUD 共用爆炸前估算的视觉衔接，最多保留半秒；爆炸帧中的回合计数保持或推进一位均允许衔接，之后再变化立即清除。这段残影不是当前预测，不更新估算、血量、计时或回合事实。生命变化、选手/地图/展示边界、缺段、断流、暂停与拆弹完成立即清除。动画不回写血量、不补猜行动时长；能力边界见[数据源说明](../guide/data-source-capabilities.md#c4-爆炸伤害估算)。
 
 选手 K/D 使用固定图标列与等宽数字列，给两位数预留位置；总宽跟随实际字号，不保留旧的固定宽度，不因数字变化移动相邻统计。回合击杀另行表达：EWC 使用三片切口组成、上下交错的三角，IEM 使用带深色外轮廓的独立星星，ESL 保留原始 overlay4 的星形字形及生死位置差异，默认与 Perfect World 保留圆形徽标；跨卡片上缘的标记不受主体裁剪。
 

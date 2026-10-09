@@ -1,38 +1,36 @@
-# 文档
+# Mizar 文档
 
-按需要阅读，无需从头读完。
+## 使用 Mizar
 
-| 我要做什么 | 入口 |
+| 需要 | 入口 |
 | --- | --- |
-| 了解产品与适用范围 | [产品定位](product.md) · [数据源能力与限制](data-source-capabilities.md) |
-| 安装、准备比赛、现场制播、处理故障 | [快速开始与操作手册](quick-start.md) |
-| 看当前画面 | [预览图集](screenshots/README.md) |
-| 参与开发 | [贡献指南](../CONTRIBUTING.md) · [开发与验证](development-validation.md) |
-| 理解系统 | [架构](architecture.md) · [接口协议](protocol.md) · [游戏数据语义](telemetry.md) |
-| 修改视觉或文案 | [设计系统](design/README.md) · [中文与术语](terminology.md) |
-| 准备 RC、实机验收与发布 | [发布流程](release-readiness.md) · [发布说明草案](release-notes-draft.md) |
-| 查看未来方向和决策理由 | [路线图](roadmap.md) · [架构决策](decisions/README.md) · [研究提案](rfcs/README.md) |
-| 核对来源与维护依赖 | [参考项目](references.md) · [第三方说明](../THIRD-PARTY-NOTICES.md) · [依赖维护](dependency-maintenance.md) |
+| 了解产品 | [产品介绍](guide/product.md) · [1.0 发布说明](releases/1.0.md) |
+| 安装与制作第一场比赛 | [快速开始与操作手册](guide/quick-start.md) |
+| 查看画面和 HUD 风格 | [产品图集](screenshots/README.md) |
+| 了解适用范围 | [数据源能力](guide/data-source-capabilities.md) |
+| 提出问题或参与讨论 | [GitHub Issues](https://github.com/Starfie1d1272/Mizar/issues) · [后续方向](roadmap.md) |
+
+## 开发与维护
+
+| 需要 | 入口 |
+| --- | --- |
+| 参与开发 | [贡献指南](../CONTRIBUTING.md) · [开发验证](development/development-validation.md) |
+| 理解实现与接入 | [架构](reference/architecture.md) · [协议](reference/protocol.md) · [游戏数据语义](reference/telemetry.md) |
+| 修改视觉与文案 | [设计系统](design/README.md) · [中文与术语](development/terminology.md) |
+| 维护依赖与发布版本 | [依赖维护](development/dependency-maintenance.md) · [发布流程](development/release-readiness.md) |
+| 查阅来源与决策 | [参考项目](reference/references.md) · [第三方说明](../THIRD-PARTY-NOTICES.md) · [决策维护](decisions/README.md) |
 
 ## 内容归属
 
-一条规则只有一个当前权威出处。其他文档写必要摘要并链接，不复制完整步骤、字段表或限制清单。
+`guide/` 服务使用者，`reference/` 维护技术契约，`design/` 维护视觉与交互，`development/` 维护开发和发布方法，`releases/` 保存面向用户的版本说明，`screenshots/` 提供精选产品画面及来源。
 
-- 产品文档维护用户、价值与能力边界；操作手册维护使用步骤。
-- 架构维护职责与依赖；协议维护交互契约；遥测文档维护输入解释。
-- 设计系统维护视觉与文案；代码维护精确版本、默认值、字段和资源清单。
-- 开发验证维护验证方法；发布流程维护 RC 到正式发布的顺序；具体执行状态与报告放 Issue / PR。
-- ADR 保存决策理由与演变。当前文档给出有效规则，历史 ADR 通过替代关系解释旧规则。
-- 历史截图、设计审查与一次性调查材料不再随主线维护，可从 [Git 历史](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs)追溯；当前只保留 [RC27 实机图集](screenshots/windows-rc27/README.md)及其来源记录。
+每条规则维护一个权威出处，其他入口用摘要和链接引导阅读。精确字段、默认值与资源清单由代码维护。过程记录、验收报告、研究提案和后续任务集中在 Issue / PR，历史原件可通过 Git 提交与已发布资产追溯。生产素材、许可和回归样例继续随代码维护。
 
 ## 写作与维护
 
-1. 中文优先，具体边界见[术语规范](terminology.md)。
-2. 每篇文档服务明确读者，章节按任务或概念组织，不以工作单编号命名。
-3. 修改行为时更新原章节，删除旧说法，不在末尾追加同一功能的补丁说明。
-4. 当前说明用现在时；未来计划进路线图，单次实施经过留在 Issue / PR。
-5. 精确值优先引用代码来源；需要可复制示例时只保留一份，并检查与解析器一致。
-6. 改变已接受决策时新增 ADR 说明替代范围；非语义勘误显式记录，不抹去历史理由。
-7. 改名、移动或删文档时同步内部链接、工具引用与索引。新增文档先说明现有入口为何无法承载。
-
-精简的标准是读者能更快完成任务，必要的操作、恢复办法、接口语义和来源信息不能丢失。
+1. 使用自然中文，以读者的任务组织内容，保留必要的专名、命令和标识符。
+2. 优先说明产品能做什么、操作如何进行，以及需要满足的条件。
+3. 行为变化时直接更新对应章节，同步目录、链接和工具引用。
+4. 用户页面展示产品体验；版本来源和验证方法放在对应技术材料中。
+5. 修改长期决定时，在 Issue / PR 记录理由和替代范围，同时更新当前规范。
+6. 精简时保留完成任务所需的操作、恢复方法、接口语义和来源信息。

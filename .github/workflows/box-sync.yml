@@ -1,0 +1,40 @@
+name: Box Sync
+on:
+  workflow_run:
+    workflows: [Release Promotion]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 正式版本标签（同步时必填，例如 v1.0.0）
+        type: string
+      mode:
+        description: 同步正式安装包，或在私有路径探测接口
+        type: choice
+        default: sync
+        options: [sync, probe]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: mizar-box-stable
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: 同步与校验云盘
+        env:
+          # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
+          NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+          GH_TOKEN: ${{ github.token }}
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
+        run: node scripts/qualification/box-sync.mjs
