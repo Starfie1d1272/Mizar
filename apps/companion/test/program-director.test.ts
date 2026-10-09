@@ -103,10 +103,11 @@ describe('automatic Program choreography', () => {
     r.program.clock!.phase = 'timeout_ct';
     await r.step();
     expect(r.director.get()).toMatchObject({ mode: 'blocked', next, readyToTake: null });
-    await r.scenes.select('gameplay', r.scenes.get().revision);
+    expect((await r.scenes.select('gameplay', r.scenes.get().revision)).ok).toBe(true);
+    expect(r.switchObs).toHaveBeenCalledTimes(calls + 1); // Explicit re-TAKE confirms OBS.
     await r.step();
     expect(r.director.get()).toMatchObject({ mode: 'manual', next, readyToTake: null });
-    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+    expect(r.switchObs).toHaveBeenCalledTimes(calls + 1); // Prediction still never takes.
   });
   it('keeps halftime prediction while waiting for the second half and rejects stale/source facts', async () => {
     const r = rig();

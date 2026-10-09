@@ -333,3 +333,106 @@ test('HUD summaries distinguish loading, unavailable and last confirmed configur
     await app.close();
   }
 });
+
+test('HUD resource directory targets the single editor by ID, preserves dirty drafts and explains activation', async ({
+  page,
+  context,
+}) => {
+  const app = buildApp();
+  let available = true;
+  try {
+    await app.ready();
+    await context.route(
+      /\/(?:operator\/hud-config|local\/v1\/hud-config(?:\/editor)?)$/,
+      async (route) => {
+        if (!available) return route.fulfill({ status: 503 });
+        const response = await app.inject({
+          method: route.request().method() as 'GET' | 'POST',
+          url: new URL(route.request().url()).pathname,
+          headers: { origin: 'http://127.0.0.1:3000' },
+          ...(route.request().method() === 'POST'
+            ? { payload: route.request().postDataJSON() as Record<string, unknown> }
+            : {}),
+        });
+        await route.fulfill({
+          status: response.statusCode,
+          body: response.body,
+          contentType: 'application/json',
+        });
+      },
+    );
+    const opened: unknown[] = [];
+    await page.exposeFunction('recordHudOpen', (value: unknown) => {
+      opened.push(value);
+    });
+    await page.addInitScript(() => {
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          invoke: async (command: string, args?: unknown) => {
+            if (command === 'open_tool')
+              await (
+                window as unknown as { recordHudOpen: (value: unknown) => Promise<void> }
+              ).recordHudOpen({ command, args });
+            return false;
+          },
+        },
+      });
+    });
+    await page.goto('/resources?tab=hud');
+    const directory = page.getByRole('list', { name: 'HUD 预设目录' });
+    await expect(directory).toContainText('内置只读');
+    await expect(directory).toContainText('当前启用');
+    await expect(directory).toContainText('布局');
+    if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+      await page.screenshot({ path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/hud-directory.png` });
+    await directory.getByRole('button', { name: /编辑.*EWC/ }).click();
+    expect(opened).toContainEqual({
+      command: 'open_tool',
+      args: { tool: 'hud', presetId: 'builtin:ewc-preset' },
+    });
+    // Direct link also remains compatible with production Companion authoring mode.
+    await page.goto('/operator/hud?hud-config=companion&mode=fixture&preset=builtin:ewc-preset');
+    await expect(page.getByRole('combobox', { name: '预设', exact: true })).toHaveValue(
+      'builtin:ewc-preset',
+    );
+    const originalOnAir = (await app.inject('/local/v1/hud-config')).body;
+    await page.getByRole('button', { name: '布局', exact: true }).click();
+    await page.getByLabel('名称', { exact: true }).fill('未保存布局草稿');
+    await expect(page.getByRole('button', { name: '启用当前预设', exact: true })).toBeDisabled();
+    await expect(page.getByLabel('启用条件与引用')).toContainText('布局有未保存更改');
+    await expect(page.getByLabel('启用条件与引用')).toContainText('共享外观引用');
+    await page.getByRole('button', { name: '定位需处理编辑区' }).click();
+    await expect(page.getByRole('button', { name: '布局', exact: true })).toBeFocused();
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        new CustomEvent('mizar:hud-select-preset', { detail: 'builtin:mizar-default-preset' }),
+      ),
+    );
+    await expect(page.getByLabel('名称', { exact: true })).toHaveValue('未保存布局草稿');
+    await expect(
+      page.getByText('当前 HUD 布局有未保存草稿；切换预设会覆盖它，请先保存或放弃布局改动。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    available = false;
+    await expect(page.getByLabel('启用条件与引用')).toContainText('配置连接未就绪');
+    await expect(page.getByLabel('名称', { exact: true })).toHaveValue('未保存布局草稿');
+    expect((await app.inject('/local/v1/hud-config')).body).toBe(originalOnAir);
+    if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+      await page.screenshot({
+        path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/hud-draft-connection-error.png`,
+      });
+    available = true;
+    await page.getByRole('button', { name: '布局', exact: true }).click();
+    // Avoid discarding a dirty draft through navigation; a new isolated page checks an invalid link.
+    const missing = await context.newPage();
+    await missing.goto('/operator/hud?hud-config=companion&mode=fixture&preset=missing-preset');
+    await expect(
+      missing.getByText('请求的 HUD 预设不存在；保留当前资源，未启用任何新预设。', { exact: true }),
+    ).toBeVisible();
+    expect((await app.inject('/local/v1/hud-config')).body).toBe(originalOnAir);
+    await missing.close();
+  } finally {
+    await app.close();
+  }
+});

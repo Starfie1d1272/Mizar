@@ -748,7 +748,11 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
+async fn open_tool(
+    app: tauri::AppHandle,
+    tool: String,
+    preset_id: Option<String>,
+) -> Result<(), String> {
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let (label, title, path) = match tool.as_str() {
@@ -758,20 +762,37 @@ async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
         "preview" => ("tool-preview", "节目预览", "/preview"),
         _ => return Err("工具无法识别。".into()),
     };
+    let mut target = format!("{BASE}{path}")
+        .parse::<tauri::Url>()
+        .map_err(|_| "工具地址无法识别。")?;
+    if tool == "hud" {
+        if let Some(id) = preset_id.as_deref() {
+            if id.len() > 256 || id.is_empty() {
+                return Err("HUD 预设标识无效。".into());
+            }
+            target.query_pairs_mut().append_pair("preset", id);
+        }
+    }
     if let Some(window) = app.get_webview_window(label) {
-        window
-            .navigate(
-                format!("{BASE}{path}")
-                    .parse()
-                    .map_err(|_| "工具地址无法识别。")?,
-            )
-            .map_err(|_| "工具窗口未能恢复。")?;
+        if tool == "hud" {
+            // The existing editor owns dirty-draft navigation; never reload it to select a resource.
+            if let Some(id) = preset_id.as_deref() {
+                let detail = serde_json::to_string(id).map_err(|_| "HUD 预设标识无效。")?;
+                window
+                    .eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
+                    .map_err(|_| "HUD 预设未能打开。")?;
+            }
+        } else {
+            window
+                .navigate(target.clone())
+                .map_err(|_| "工具窗口未能恢复。")?;
+        }
         let _ = window.unminimize();
         let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, label, local_url(path))
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
         .title(format!("Mizar · {title}"))
         .inner_size(1280.0, 800.0)
         .on_navigation(trusted_navigation)
@@ -1831,10 +1852,10 @@ mod startup_tests {
     fn live_settings_open_only_known_preparation_sections() {
         for path in [
             "/settings?tab=obs",
-        "/settings?tab=rivalhub",
-        "/resources",
-        "/?tab=finish",
-        "/?tab=roster",
+            "/settings?tab=rivalhub",
+            "/resources",
+            "/?tab=finish",
+            "/?tab=roster",
             "/settings?tab=gsi",
             "/picture?tab=overlay",
         ] {

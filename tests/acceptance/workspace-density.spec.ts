@@ -100,10 +100,19 @@ for (const [width, height] of [
       });
       await page.goto('/workspace/dock');
       await expect(page.getByRole('button', { name: '现场恢复' })).toBeVisible();
+      await expect(page.locator('.workspace-next-summary')).toContainText('预告尚未执行');
+      if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+        await page.screenshot({
+          path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/dock-${height}-${scale * 100}.png`,
+        });
       const measureDock = () =>
         page.locator('.workspace-dock').evaluate((root) => {
           const bounds = root.getBoundingClientRect();
-          const clipped = Array.from(root.querySelectorAll('button'))
+          const clipped = Array.from(
+            root.querySelectorAll(
+              'button,.workspace-next-summary,.workspace-direction > header,.workspace-obs-scene',
+            ),
+          )
             .filter((button) => {
               if (!button.getClientRects().length) return false;
               const r = button.getBoundingClientRect();
@@ -114,7 +123,8 @@ for (const [width, height] of [
                 r.top < bounds.top - 1 ||
                 r.bottom > bounds.bottom + 1 ||
                 (section !== undefined && r.bottom > section.bottom + 1) ||
-                button.scrollWidth > button.clientWidth + 1
+                (button.tagName === 'BUTTON' && button.scrollWidth > button.clientWidth + 1) ||
+                r.height < 1
               );
             })
             .map((button) => button.textContent);
@@ -136,6 +146,23 @@ for (const [width, height] of [
           };
         });
       expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      let finishTake: (() => void) | undefined;
+      await page.route('**/operator/program-scene', async (route) => {
+        await new Promise<void>((resolve) => {
+          finishTake = resolve;
+        });
+        await route.fulfill({ json: { ok: true } });
+      });
+      await page.getByRole('button', { name: '赛前等待', exact: true }).click();
+      await expect(page.getByRole('button', { name: '赛前等待', exact: true })).toBeDisabled();
+      await expect(page.locator('.workspace-next-summary')).toContainText('预告尚未执行');
+      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+        await page.screenshot({
+          path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/dock-${height}-${scale * 100}-busy.png`,
+        });
+      finishTake?.();
+      await expect(page.getByRole('button', { name: '赛前等待', exact: true })).toBeEnabled();
       await page.getByRole('button', { name: '观战 / 本机 HUD', exact: true }).click();
       await expect(page.getByRole('button', { name: '复制隐藏命令', exact: true })).toBeVisible();
       expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });

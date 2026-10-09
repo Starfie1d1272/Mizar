@@ -59,15 +59,22 @@ export function AutomaticPreparation() {
   if (!window.__TAURI_INTERNALS__) return null;
   return (
     <>
-      {gsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
+      {gsiMessage ? (
+        <StatusBanner tone="info">
+          {gsiMessage} <a href="/settings?tab=gsi">重查 GSI / 配置恢复</a>
+        </StatusBanner>
+      ) : null}
       {obsLaunchMessage && obs?.connection !== 'connected' ? (
         <StatusBanner tone="info">
           {obsLaunchMessage} 请在 OBS「工具 → WebSocket
           服务器设置」中启用服务器并在设置中填写有效密码。
+          <a href="/settings?tab=obs">重查 OBS 连接</a>
         </StatusBanner>
       ) : null}
       {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
-        <StatusBanner tone="warning">{obsMessage}</StatusBanner>
+        <StatusBanner tone="warning">
+          {obsMessage} <a href="/settings?tab=obs">查看 OBS 诊断 / 重查</a>
+        </StatusBanner>
       ) : null}
     </>
   );

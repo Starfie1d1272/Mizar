@@ -153,6 +153,13 @@ export function RosterCapture({
                   (candidate.teamOptions?.t.length > 0 && !teamBId)))
             }
             onClick={() => {
+              if (
+                create &&
+                !window.confirm(
+                  '将识别到的名单创建为新的本地比赛并应用为本场？现有比赛资料会保留。',
+                )
+              )
+                return;
               setBusy(true);
               void command(`/operator/local-match/${create ? 'create-from-server' : 'capture'}`, {
                 candidateRevision: candidate.revision,

@@ -8,13 +8,15 @@ import { desktopInvoke } from './client';
 import { obsCommand, useObsStatus } from './obs-client';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 
-/** Local recovery occupies the radar area; native game and scene controls stay available. */
+/** Local recovery occupies the thumbnail area; native game and scene controls stay available. */
 export function RecoveryPanel({
   onClose,
   operator = null,
+  detail = '',
 }: {
   onClose: () => void;
   operator?: OperatorPayload | null;
+  detail?: string;
 }) {
   const obs = useObsStatus();
   const production = useLocalRead<Production>('/local/v1/production');
@@ -36,8 +38,13 @@ export function RecoveryPanel({
     <section className="workspace-recovery" aria-label="原位恢复面板">
       <header className="workspace-section-heading">
         <strong>现场恢复</strong>
-        <Button onClick={onClose}>返回雷达</Button>
+        <Button onClick={onClose}>收起恢复</Button>
       </header>
+      {detail ? (
+        <p className="workspace-recovery__detail" role="status" tabIndex={0}>
+          {detail}
+        </p>
+      ) : null}
       <p>游戏与正式切场控制继续可用。先检查，再执行必要的恢复。</p>
       <strong>
         {operator?.matchContext.summary
@@ -80,6 +87,15 @@ export function RecoveryPanel({
       <p>
         制作 · {production?.mode ?? '无法确认'} · OBS ·{' '}
         {obs?.connection === 'connected' ? '已连接' : '无法确认连接'}
+      </p>
+      <p>
+        OBS 实际场景 ·{' '}
+        {obs?.connection === 'connected' ? (obs.currentScene ?? '场景未知') : '无法确认'} ·{' '}
+        {obs?.connection !== 'connected' || obs.sceneAligned == null
+          ? '对齐未知'
+          : obs.sceneAligned
+            ? '已对齐'
+            : '与 Mizar 不一致'}
       </p>
       <p>
         推流 / 录制 ·{' '}

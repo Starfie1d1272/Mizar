@@ -79,6 +79,12 @@ export function BpWorkspaceControls() {
 
   async function returnToRivalhub() {
     if (!workspace || sourceBusy || !workspace.pendingRivalhub) return;
+    if (
+      !window.confirm(
+        `将本场切换为 ${workspace.pendingRivalhub.entrants.a.name} vs ${workspace.pendingRivalhub.entrants.b.name} 的 RivalHub 资料？未提交的修改不会保存，确认应用？`,
+      )
+    )
+      return;
     setSourceBusy(true);
     setWorkspaceMessage('');
     try {

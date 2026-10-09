@@ -14,11 +14,17 @@ export function LocalMatchControls({
   const [a, setA] = useState({ name: '', id: '' });
   const [b, setB] = useState({ name: '', id: '' });
   const [format, setFormat] = useState('bo3');
+  const [eventId, setEventId] = useState('');
+  const currentEvent = view?.events.find((event) =>
+    event.matchIds.includes(view.activeLocalMatchId ?? ''),
+  );
   return (
     <div className="workspace-local-match">
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          if (!window.confirm(`创建 ${a.name} vs ${b.name} 并应用为本场？现有比赛资料会保留。`))
+            return;
           void action(async () => {
             await command('/operator/local-match/create', {
               teamA: a.name,
@@ -26,6 +32,7 @@ export function LocalMatchControls({
               ...(a.id ? { teamAId: a.id } : {}),
               ...(b.id ? { teamBId: b.id } : {}),
               format,
+              ...(eventId ? { eventId } : {}),
             });
             setA({ name: '', id: '' });
             setB({ name: '', id: '' });
@@ -34,6 +41,24 @@ export function LocalMatchControls({
           });
         }}
       >
+        <Select
+          label="创建比赛所属赛事"
+          value={eventId}
+          onChange={(event) => setEventId(event.target.value)}
+        >
+          <option value="">快速创建新本地赛事</option>
+          {view?.events.map((event) => (
+            <option key={event.eventId} value={event.eventId}>
+              {event.name}
+            </option>
+          ))}
+        </Select>
+        {currentEvent ? (
+          <Button onClick={() => setEventId(currentEvent.eventId)}>
+            沿用当前本地赛事 · {currentEvent.name}
+          </Button>
+        ) : null}
+        <p>沿用赛事品牌、地图池与默认规则；新比赛不复制旧比分、BP 或网站控制权。</p>
         {[
           { label: '队伍 A', value: a, set: setA, other: b.id },
           { label: '队伍 B', value: b, set: setB, other: a.id },
@@ -91,9 +116,14 @@ export function LocalMatchControls({
           label="已保存比赛"
           value={view.activeLocalMatchId ?? ''}
           onChange={(event) => {
-            if (event.target.value)
+            const matchId = event.target.value;
+            const match = view.matches.find((item) => item.matchId === matchId);
+            if (
+              match &&
+              window.confirm(`将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？`)
+            )
               void action(async () => {
-                await command('/operator/local-match/select', { matchId: event.target.value });
+                await command('/operator/local-match/select', { matchId });
                 await refresh();
                 onSelected?.();
               });

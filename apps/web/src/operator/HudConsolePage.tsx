@@ -162,6 +162,11 @@ export function HudConsolePage() {
   const configDocument = authoritativeDocument ?? fixtureDocument;
   const editorReady = authoritativeDocument !== null;
   const editorStatus = visualFixtureMode ? 'ready' : hudEditor.status;
+  const requestedPresetId = new URLSearchParams(window.location.search).get('preset');
+  const requestedPresetMissing =
+    editorReady &&
+    requestedPresetId !== null &&
+    resourceFor(configDocument, 'preset', requestedPresetId) === undefined;
   const initialDocument = fixtureDocument;
   const [workspace, setWorkspace] = useState<HudWorkspace>('preset');
   const [mapBackground, setMapBackground] = useState(true);
@@ -347,6 +352,25 @@ export function HudConsolePage() {
   };
   const hasDirtyDraft = presetDirty || layoutDirty || themeDirty;
   const activationStale = hudEditor.activationStale;
+  const activationReasons = [
+    ...(busy ? ['正在处理上一项操作，请稍候。'] : []),
+    ...(!editorReady || (!visualFixtureMode && hudEditor.status !== 'ready')
+      ? ['配置连接未就绪；保留草稿，连接恢复后再启用。']
+      : []),
+    ...(presetDirty ? ['预设有未保存更改，请在预设区保存或另存。'] : []),
+    ...(layoutDirty ? ['布局有未保存更改，请在布局区保存或另存。'] : []),
+    ...(themeDirty ? ['外观有未保存更改，请先处理外观资源。'] : []),
+    ...(selectedLayoutId !== presetDraft.layoutId
+      ? ['预览布局与预设引用不匹配，请在预设区核对布局引用。']
+      : []),
+    ...(selectedThemeId !== presetDraft.themeId
+      ? ['预览外观与预设引用不匹配，请核对预设引用。']
+      : []),
+    ...(Object.values(draftConflicts).some(Boolean)
+      ? ['资源已在另一页面更新，请先处理冲突。']
+      : []),
+  ];
+
   const currentReplayEvent = replayFixture?.events.find(
     (event) => event.id === replayState.currentEventId,
   );
@@ -384,6 +408,24 @@ export function HudConsolePage() {
       nextRevision,
       committed: pendingMutationRef.current,
     });
+
+    const requestedPreset = new URLSearchParams(window.location.search).get('preset');
+    if (authoritativeDocumentRef.current === null && requestedPreset) {
+      const requested = resourceFor(nextDocument, 'preset', requestedPreset) as
+        HudPreset | undefined;
+      if (requested) {
+        Object.assign(merged.ids, {
+          preset: requested.id,
+          layout: requested.layoutId,
+          theme: requested.themeId,
+        });
+        Object.assign(merged.drafts, {
+          preset: clone(requested),
+          layout: clone(resourceFor(nextDocument, 'layout', requested.layoutId) as HudLayout),
+          theme: clone(resourceFor(nextDocument, 'theme', requested.themeId) as HudTheme),
+        });
+      }
+    }
 
     authoritativeDocumentRef.current = nextDocument;
     observedRevisionRef.current = nextRevision;
@@ -501,7 +543,11 @@ export function HudConsolePage() {
   function selectResource(kind: HudWorkspace, id: string): void {
     if (!editorReady) return;
     const resource = resourceFor(configDocument, kind, id);
-    if (resource === undefined) return;
+    if (resource === undefined) {
+      setCommandError(true);
+      setCommandState('请求的 HUD 资源不存在；保留当前草稿。');
+      return;
+    }
     const blockReason = hudResourceNavigationBlockReason(
       kind,
       resource,
@@ -534,6 +580,15 @@ export function HudConsolePage() {
     setCommandState(null);
     setCommandError(false);
   }
+
+  useEffect(() => {
+    const select = (event: Event) => {
+      const id: unknown = (event as CustomEvent<unknown>).detail;
+      if (typeof id === 'string') selectResource('preset', id);
+    };
+    window.addEventListener('mizar:hud-select-preset', select);
+    return () => window.removeEventListener('mizar:hud-select-preset', select);
+  });
 
   function changeWorkspace(next: HudWorkspace): void {
     if (next === workspace) return;
@@ -686,7 +741,7 @@ export function HudConsolePage() {
   }
 
   async function activateSelectedPreset(): Promise<void> {
-    if (busy || !editorReady || hudEditor.revision === null) return;
+    if (activationReasons.length > 0 || hudEditor.revision === null) return;
     setBusy(true);
     setCommandState(null);
     setCommandError(false);
@@ -893,6 +948,9 @@ export function HudConsolePage() {
           </div>
         </header>
 
+        {requestedPresetMissing ? (
+          <p role="alert">请求的 HUD 预设不存在；保留当前资源，未启用任何新预设。</p>
+        ) : null}
         <section className="hud-console__versions" aria-label="编辑与正式播出版本">
           <div>
             <strong>正在编辑 · {presetDraft.name}</strong>
@@ -920,19 +978,42 @@ export function HudConsolePage() {
             </span>
           </div>
           <Button
-            disabled={
-              busy ||
-              !editorReady ||
-              hasDirtyDraft ||
-              selectedLayoutId !== presetDraft.layoutId ||
-              selectedThemeId !== presetDraft.themeId
-            }
+            disabled={activationReasons.length > 0}
             onClick={() => {
               void activateSelectedPreset();
             }}
           >
             启用当前预设
           </Button>
+          <div aria-label="启用条件与引用">
+            <span>
+              共享布局引用 · {savedLayout?.name ?? selectedLayoutId}；共享外观引用 ·{' '}
+              {savedTheme?.name ?? selectedThemeId}。保存引用资源可影响其他使用它的预设；保存 /
+              另存与正式启用分开。
+            </span>
+            {activationReasons.length ? (
+              <ul>
+                {activationReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : (
+              <span>资源已保存，可明确启用上屏。</span>
+            )}
+            {activationReasons.length ? (
+              <Button
+                onClick={() => {
+                  changeWorkspace(layoutDirty ? 'layout' : 'preset');
+                  const buttons = document.querySelectorAll<HTMLButtonElement>(
+                    '.hud-console__tabs button',
+                  );
+                  buttons[layoutDirty ? 1 : 0]?.focus();
+                }}
+              >
+                定位需处理编辑区
+              </Button>
+            ) : null}
+          </div>
         </section>
         <div className="hud-console__layout">
           <div className="hud-console__preview-column" ref={reviewFrameRef}>
@@ -982,6 +1063,13 @@ export function HudConsolePage() {
                   </option>
                 </select>
               </label>
+              <p className="hud-console__hint">
+                {activePreviewSource === 'fixture'
+                  ? '静态样例名单与比分仅用于检查版式，不代表本场已核实。'
+                  : activePreviewSource === 'replay'
+                    ? '实景回放来自已记录的示例比赛，不代表本场名单或实时状态。'
+                    : '当前观战数据只读预览；是否属于本场及首发身份需在制播中核对。'}
+              </p>
               {activePreviewSource === 'fixture' ? (
                 <label>
                   场景

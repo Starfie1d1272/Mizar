@@ -29,6 +29,7 @@ import { ProgramPreview } from './ProgramPreview';
 import { useCs2Status } from './cs2-status';
 import { Cs2Recovery } from './Cs2Recovery';
 import { SpectatorWorkflow } from './SpectatorWorkflow';
+import { HudPresetDirectory } from './HudPresetDirectory';
 import './preparation.css';
 import './production.css';
 
@@ -328,6 +329,7 @@ export function PreparationPage() {
                 <p>
                   五套预设、布局引用、导入和导出均在真实编辑器管理。选择与保存资源不会自动应用到播出。
                 </p>
+                <HudPresetDirectory action={action} />
                 <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
               </Panel>
             ) : (
@@ -340,6 +342,11 @@ export function PreparationPage() {
               <div>
                 <Panel>
                   <h2>开播检查</h2>
+                  <p>
+                    本场资料预览与赛前 BP 可先准备，无需启动
+                    CS2。进入真实现场前需确认比赛资料、无冲突的 GSI 配置与 OBS 连接 /
+                    场景；比赛画面、雷达与首发身份依赖进入观战后的实时数据。待确认不等于全部阻止预览。
+                  </p>
                   {capabilities ? (
                     capabilities.map((item) => (
                       <a className="preparation-readiness" key={item.label} href={item.href}>
@@ -462,7 +469,9 @@ export function PreparationPage() {
             )}
             <p>
               结束制播会收起节目、释放本机网站源、关闭受管理 CS2 并恢复配置。OBS
-              推流和录制继续由你在 OBS 中操作；网站官方结果需另行提交。
+              推流和录制继续由你在 OBS
+              中操作；网站官方结果需另行提交。重试会重新执行整个收尾流程，请分别核对节目、网站数据源与
+              Host 回执。
             </p>
             <p>
               Host 游戏与配置 ·{' '}

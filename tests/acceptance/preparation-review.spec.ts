@@ -554,6 +554,7 @@ test('server quick create requires an explicit saved Team decision and sends onl
   await capture.getByLabel('CT 队伍资料', { exact: true }).selectOption('saved-alpha');
   await capture.getByLabel('T 队伍资料', { exact: true }).selectOption('new');
   await expect(create).toBeEnabled();
+  page.once('dialog', (dialog) => dialog.accept());
   await create.click();
   await expect
     .poll(() => submitted)

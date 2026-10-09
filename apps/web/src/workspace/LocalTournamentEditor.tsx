@@ -124,6 +124,12 @@ export function LocalTournamentEditor({
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            if (
+              !window.confirm(
+                '保存将更新本场资料，并同步队伍库中的队名、队标与名单，影响今后复用。当前节目可能刷新，确认保存？',
+              )
+            )
+              return;
             setSavedMessage('');
             void action(async () => {
               await command('/operator/local-match/save', {
@@ -306,6 +312,9 @@ export function LocalTournamentEditor({
                 </fieldset>
               ))
             : null}
+          <p>
+            保存本场同时同步队伍库的队名、队标与名单；已有其他比赛快照不改写，今后复用使用更新后的队伍。
+          </p>
           <Button type="submit">保存比赛资料</Button>
         </form>
       ) : null}
@@ -313,6 +322,14 @@ export function LocalTournamentEditor({
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            const affectsCurrent = event.matchIds.includes(view.activeLocalMatchId ?? '');
+            if (
+              affectsCurrent &&
+              !window.confirm(
+                '保存将传播赛事品牌至所有同赛事比赛；仍沿用旧默认的地图池同步更新。包含当前本场，节目可能立即刷新。确认保存？',
+              )
+            )
+              return;
             setSavedMessage('');
             void action(async () => {
               await command('/operator/local-event/save', {
@@ -328,6 +345,10 @@ export function LocalTournamentEditor({
             });
           }}
         >
+          <p>
+            保存会传播赛事名称、Logo 与品牌色至同赛事所有比赛；仅仍沿用旧默认的比赛同步地图池。BO3
+            默认规则供 BP 准备使用；已保存禁选步骤不改写。包含当前本场时可能立即刷新节目。
+          </p>
           {section === 'details' ? (
             <>
               <label>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useBpSession } from '../bp/client';
+import { useBpSession, useBpWorkspace } from '../bp/client';
 import { ScenePreviewViewport, type PreviewFrame } from './ScenePreviewViewport';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { Button, Panel, Select } from '../ui';
@@ -21,6 +21,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
   const [demo, setDemo] = useState<readonly ProgramSceneId[] | null>(null);
   const [demoIndex, setDemoIndex] = useState(0);
   const { snapshot: bp } = useBpSession();
+  const { workspace } = useBpWorkspace();
   const frame = useMemo<PreviewFrame>(
     () => ({
       key: `${preview}:${variant}:${version}:${background}:${intro}`,
@@ -98,7 +99,13 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
           <span role="status">
             {demo
               ? `演示 ${demoIndex + 1} / ${demo.length} · ${PROGRAM_SCENES.find((scene) => scene.id === preview)!.title}`
-              : '示例画面'}
+              : preview === 'bp'
+                ? workspace?.demo.active || workspace?.source === 'fixture'
+                  ? 'BP 样例只读预览 · 不切换播出'
+                  : workspace?.match
+                    ? '本场 BP 只读预览 · 不切换播出'
+                    : 'BP 来源待确认 · 只读预览'
+                : '版式样例 · 名单与比分不是本场核实资料'}
           </span>
         </div>
         {demo && (!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding') ? (

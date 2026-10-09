@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import type { WebSocketRoute } from '@playwright/test';
+import { radarSnapshotSchema } from '../../packages/protocol/src/radar.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -158,6 +161,7 @@ test('map-pool saving reaches the real tournament service', async ({ page, conte
     await page.getByRole('combobox', { name: '资源编辑区域' }).selectOption('maps');
     const train = page.getByRole('checkbox', { name: 'Train', exact: true });
     await train.check();
+    page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: '保存赛事资料', exact: true }).click();
     await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
@@ -362,7 +366,7 @@ test('local recovery preserves scene controls and website source is never automa
   await expect(page.getByRole('button', { name: '对阵', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '停止提供网站数据', exact: true }).click();
   await expect(page.getByRole('button', { name: '恢复提供网站数据', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '返回雷达' }).click();
+  await page.getByRole('button', { name: '收起恢复' }).click();
   await page.getByRole('button', { name: '现场恢复', exact: true }).click();
   await expect(page.getByRole('button', { name: '恢复提供网站数据', exact: true })).toBeVisible();
   expect(commands).toEqual(['/operator/rivalhub/source/release']);
@@ -371,4 +375,160 @@ test('local recovery preserves scene controls and website source is never automa
     '/operator/rivalhub/source/release',
     '/operator/rivalhub/source/claim',
   ]);
+});
+
+for (const outcome of ['true', 'false', 'reject'] as const) {
+  test(`scene confirmation survives focus restoration ${outcome} and BP never steals focus`, async ({
+    page,
+  }) => {
+    const calls: string[] = [];
+    await page.exposeFunction('recordFocus', (command: string) => {
+      calls.push(command);
+    });
+    await page.addInitScript((result) => {
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          invoke: async (command: string) => {
+            await (
+              window as unknown as { recordFocus: (command: string) => Promise<void> }
+            ).recordFocus(command);
+            if (command === 'restore_cs2_focus') {
+              if (result === 'reject') throw new Error('窗口不可用，请手动切回游戏。');
+              return result === 'true';
+            }
+            return true;
+          },
+        },
+      });
+    }, outcome);
+    await page.route('**/local/v1/program-scenes', (route) =>
+      route.fulfill({
+        json: {
+          schemaVersion: 'mizar.program-scenes.v1',
+          active: 'waiting',
+          revision: 'focus-1',
+          available: PROGRAM_SCENES.map((scene) => scene.id),
+          blocked: {},
+        },
+      }),
+    );
+    await page.route('**/operator/program-scene', (route) => route.fulfill({ json: { ok: true } }));
+    await page.goto('/workspace');
+    await page.getByRole('button', { name: '比赛中', exact: true }).click();
+    await expect(page.locator('.workspace-message')).toContainText('节目切换已确认');
+    await expect(page.locator('.workspace-message [role="alert"]')).toHaveCount(0);
+    await expect(page.locator('.workspace-message')).toContainText(
+      outcome === 'true' ? '焦点已恢复' : outcome === 'false' ? '未接受焦点恢复' : '焦点恢复未完成',
+    );
+    expect(calls.filter((command) => command === 'restore_cs2_focus')).toHaveLength(1);
+    await page.getByRole('button', { name: 'BP', exact: true }).click();
+    expect(calls.filter((command) => command === 'restore_cs2_focus')).toHaveLength(1);
+  });
+}
+
+test('recovery preserves the radar area and makes the complete long command error keyboard accessible', async ({
+  page,
+}) => {
+  const message = 'OBS 场景切换与回退均未能确认；实际播出场景无法确认，请检查 OBS。'.repeat(6);
+  await page.route('**/local/v1/program-scenes', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 'mizar.program-scenes.v1',
+        active: 'waiting',
+        revision: 'error-1',
+        available: PROGRAM_SCENES.map((scene) => scene.id),
+        blocked: {},
+      },
+    }),
+  );
+  await page.route('**/operator/program-scene', (route) =>
+    route.fulfill({ status: 409, json: { message } }),
+  );
+  const artifact = JSON.parse(
+    readFileSync(
+      'apps/web/src/program/fixtures/generated/real-radar-fixtures.generated.json',
+      'utf8',
+    ),
+  ) as { fixtures: Record<string, { samples: { snapshot: unknown }[] }> };
+  const snapshot = radarSnapshotSchema.parse(
+    artifact.fixtures['dense-utility']!.samples[0]!.snapshot,
+  );
+  let socket: WebSocketRoute | undefined;
+  await page.routeWebSocket('**/local/v1/radar', (route) => {
+    socket = route;
+    route.send(JSON.stringify(snapshot));
+  });
+  await page.goto('/workspace');
+  await expect(page.getByText('比赛数据正常', { exact: true })).toBeVisible();
+  const canvas = page.locator('.workspace-radar canvas').first();
+  await expect(canvas).toBeVisible();
+  await canvas.evaluate((element) => element.setAttribute('data-review-mounted', 'true'));
+  const radar = page.getByRole('region', { name: '比赛雷达' });
+  const marker = await radar.evaluate((element) => {
+    element.setAttribute('data-review-mounted', 'true');
+    return element.getBoundingClientRect().height;
+  });
+  await page.getByRole('button', { name: '对阵', exact: true }).click();
+  await expect(page.locator('.workspace-message')).toContainText(message);
+  await page.getByRole('button', { name: '现场恢复', exact: true }).click();
+  await expect(radar).toHaveAttribute('data-review-mounted', 'true');
+  await expect(canvas).toHaveAttribute('data-review-mounted', 'true');
+  expect(await radar.evaluate((element) => element.getBoundingClientRect().height)).toBe(marker);
+  const detail = page.locator('.workspace-recovery__detail');
+  await expect(detail).toHaveText(message);
+  await detail.focus();
+  await expect(detail).toBeFocused();
+  await expect(page.getByRole('button', { name: '比赛中', exact: true })).toBeVisible();
+  if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+    await page.screenshot({
+      path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/recovery-long-error.png`,
+    });
+  snapshot.channelSeq += 1;
+  snapshot.payload.telemetryFreshness = 'stale';
+  socket?.send(JSON.stringify(snapshot));
+  await expect(page.locator('.workspace-radar canvas')).toHaveCount(0);
+  await expect(page.getByText('等待 GSI 数据', { exact: true })).toBeVisible();
+});
+
+test('OBS actual scene and recording use service truth, and read failure never means stopped output', async ({
+  page,
+}) => {
+  let connected = true;
+  await page.route('**/local/v1/program-scenes', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 'mizar.program-scenes.v1',
+        active: 'waiting',
+        revision: 'obs-1',
+        available: PROGRAM_SCENES.map((scene) => scene.id),
+        blocked: {},
+      },
+    }),
+  );
+  await page.route('**/local/v1/obs', (route) =>
+    connected
+      ? route.fulfill({
+          json: {
+            connection: 'connected',
+            currentScene: 'Emergency · 人工应急画面',
+            sceneAligned: false,
+            streaming: true,
+            recording: true,
+            port: 4455,
+            passwordConfigured: true,
+            findings: [],
+            video: null,
+          },
+        })
+      : route.fulfill({ status: 503 }),
+  );
+  await page.goto('/workspace/dock');
+  await expect(page.locator('.workspace-direction')).toContainText('Mizar 确认 · 赛前等待');
+  await expect(page.locator('.workspace-obs-scene')).toContainText('Emergency · 人工应急画面');
+  await expect(page.locator('.workspace-obs-scene')).toContainText('与 Mizar 不一致');
+  await expect(page.locator('.workspace-production')).toContainText('推流中 / 录制中');
+  connected = false;
+  await expect(page.locator('.workspace-production')).toContainText('输出无法确认');
+  await expect(page.locator('.workspace-obs-scene')).toContainText('对齐未知');
+  await expect(page.locator('.workspace-production')).not.toContainText('未推流');
 });

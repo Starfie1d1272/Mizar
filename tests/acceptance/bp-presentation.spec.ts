@@ -563,6 +563,7 @@ test('local BP shows a bounded RivalHub candidate summary and sends both revisio
     const candidate = page.getByRole('region', { name: '待确认的 RivalHub 比赛' });
     await expect(candidate).toContainText('NAVI vs Vitality · BO3');
     await expect(candidate).toContainText('哥本哈根 Major · 四分之一决赛');
+    page.once('dialog', (dialog) => dialog.accept());
     await candidate.getByRole('button', { name: '切回 RivalHub BP' }).click();
     await expect
       .poll(() => switchCommand)

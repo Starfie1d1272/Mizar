@@ -69,9 +69,22 @@ const toolPaths = {
   diagnostics: '/debug',
   preview: '/preview',
 };
-export async function openTool(tool: Tool) {
-  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool });
-  else window.open(toolPaths[tool], `mizar-${tool === 'bp' ? 'preview' : tool}`);
+export async function openTool(tool: Tool, presetId?: string) {
+  if (window.__TAURI_INTERNALS__)
+    await desktopInvoke('open_tool', { tool, ...(tool === 'hud' && presetId ? { presetId } : {}) });
+  else if (tool !== 'hud')
+    window.open(toolPaths[tool], `mizar-${tool === 'bp' ? 'preview' : tool}`);
+  else {
+    const path = toolPaths.hud + (presetId ? `?preset=${encodeURIComponent(presetId)}` : '');
+    // A same-origin named editor preserves its in-flight drafts through its own selection gate.
+    const existing = window.open('', 'mizar-hud');
+    if (!existing) throw new Error('工具窗口未能打开，请允许本机弹出窗口。');
+    if (existing.location.pathname === toolPaths.hud) {
+      if (presetId)
+        existing.dispatchEvent(new CustomEvent('mizar:hud-select-preset', { detail: presetId }));
+      existing.focus();
+    } else existing.location.assign(new URL(path, window.location.origin).href);
+  }
 }
 export async function openRivalHubAuthorization(url: string, popup?: Window | null) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_rivalhub_authorization', { url });

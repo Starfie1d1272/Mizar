@@ -11,7 +11,6 @@ import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './mod
 import { useObsStatus } from './obs-client';
 import {
   useLocalRead,
-  useLocalReadWithTime,
   openTool,
   productionAction,
   type Production,
@@ -80,7 +79,7 @@ function ContextPanel({
 }
 
 export function ObsConfidence() {
-  const { value: result, updatedAt } = useLocalReadWithTime<{
+  const result = useLocalRead<{
     preview: { scene: string; image: string } | null;
   }>('/local/v1/obs/confidence', 2000);
   return (
@@ -88,12 +87,7 @@ export function ObsConfidence() {
       {result?.preview ? (
         <>
           <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
-          <small className="workspace-confidence__time">
-            缩略图 · 无声音 ·{' '}
-            {updatedAt
-              ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })
-              : '更新中'}
-          </small>
+          <small className="workspace-confidence__time">缩略图 · 无声音</small>
         </>
       ) : (
         <div className="workspace-confidence__empty">
@@ -107,10 +101,24 @@ export function ObsConfidence() {
 
 export function WorkspaceLeft() {
   const [recovering, setRecovering] = useState(false);
+  const [detail, setDetail] = useState('');
   useEffect(() => {
     const channel = new BroadcastChannel('mizar-workspace-ui');
-    channel.onmessage = (event) => {
-      if (event.data === 'recovery') setRecovering(true);
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      if (event.data === 'recovery') {
+        setDetail('');
+        setRecovering(true);
+      } else if (
+        event.data &&
+        typeof event.data === 'object' &&
+        'type' in event.data &&
+        event.data.type === 'recovery'
+      ) {
+        setDetail(
+          'detail' in event.data && typeof event.data.detail === 'string' ? event.data.detail : '',
+        );
+        setRecovering(true);
+      }
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setRecovering(false);
@@ -155,47 +163,43 @@ export function WorkspaceLeft() {
           </StatusPill>
         </header>
         <section className="workspace-radar" aria-label="比赛雷达">
-          {recovering ? (
-            <RecoveryPanel operator={payload} onClose={() => setRecovering(false)} />
-          ) : (
-            <>
-              <header className="workspace-section-heading">
-                <small>比赛雷达</small>
-                <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
-              </header>
-              <div className="workspace-radar__picture">
-                {liveRadar ? (
-                  <Radar client={radar} zoomMode="full-map" />
-                ) : (
-                  <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
-                    {artwork ? (
-                      <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
-                    ) : (
-                      <div className="workspace-radar-grid" aria-hidden="true">
-                        <i />
-                        <i />
-                      </div>
-                    )}
-                    <div className="workspace-empty">
-                      <strong>
-                        {payload?.identity.state === 'mismatch'
-                          ? '等待核对比赛名单'
-                          : '等待 GSI 数据'}
-                      </strong>
-                      <p>
-                        {artwork
-                          ? '地图底图 · 实时位置尚不可用'
-                          : '进入 CS2 观战后显示地图与选手位置'}
-                      </p>
-                      <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
-                        检查游戏连接
-                      </Button>
+          <>
+            <header className="workspace-section-heading">
+              <small>比赛雷达</small>
+              <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
+            </header>
+            <div className="workspace-radar__picture">
+              {liveRadar ? (
+                <Radar client={radar} zoomMode="full-map" />
+              ) : (
+                <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
+                  {artwork ? (
+                    <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
+                  ) : (
+                    <div className="workspace-radar-grid" aria-hidden="true">
+                      <i />
+                      <i />
                     </div>
+                  )}
+                  <div className="workspace-empty">
+                    <strong>
+                      {payload?.identity.state === 'mismatch'
+                        ? '等待核对比赛名单'
+                        : '等待 GSI 数据'}
+                    </strong>
+                    <p>
+                      {artwork
+                        ? '地图底图 · 实时位置尚不可用'
+                        : '进入 CS2 观战后显示地图与选手位置'}
+                    </p>
+                    <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
+                      检查游戏连接
+                    </Button>
                   </div>
-                )}
-              </div>
-            </>
-          )}
+                </div>
+              )}
+            </div>
+          </>
         </section>
         <ContextPanel
           operator={payload}
@@ -203,7 +207,13 @@ export function WorkspaceLeft() {
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
       </div>
-      <ObsConfidence />
+      <div className="workspace-left__secondary">
+        {recovering ? (
+          <RecoveryPanel operator={payload} detail={detail} onClose={() => setRecovering(false)} />
+        ) : (
+          <ObsConfidence />
+        )}
+      </div>
     </main>
   );
 }
@@ -236,7 +246,20 @@ export function WorkspaceDock() {
     setError('');
     try {
       await run();
-      if (focus && window.__TAURI_INTERNALS__) await desktopInvoke('restore_cs2_focus');
+      if (focus && window.__TAURI_INTERNALS__) {
+        try {
+          const restored = await desktopInvoke<boolean>('restore_cs2_focus');
+          setMessage(
+            restored
+              ? '节目切换已确认；CS2 焦点已恢复。'
+              : '节目切换已确认；CS2 未接受焦点恢复，请手动切回游戏。',
+          );
+        } catch (reason) {
+          setMessage(
+            `节目切换已确认；CS2 焦点恢复未完成：${reason instanceof Error ? reason.message : '请手动切回游戏。'}`,
+          );
+        }
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '操作未完成。');
     } finally {
@@ -245,17 +268,20 @@ export function WorkspaceDock() {
   }
   function recover() {
     const channel = new BroadcastChannel('mizar-workspace-ui');
-    channel.postMessage('recovery');
+    channel.postMessage({
+      type: 'recovery',
+      detail: error || message || scenes?.director?.reason || '',
+    });
     channel.close();
   }
   const mode = scenes?.director?.mode;
   const next = PROGRAM_SCENES.find((scene) => scene.id === scenes?.director?.next);
   return (
-    <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
+    <main className="workspace-dock mizar-surface" aria-label="现场控制底栏" aria-busy={busy}>
       <section className="workspace-direction" aria-label="正式节目控制">
         <header className="workspace-section-heading">
           <strong>
-            已确认 ·{' '}
+            Mizar 确认 ·{' '}
             {PROGRAM_SCENES.find((scene) => scene.id === scenes?.active)?.title ?? '等待同步'}
           </strong>
           <StatusPill tone={mode === 'blocked' ? 'warning' : 'info'}>
@@ -293,7 +319,7 @@ export function WorkspaceDock() {
                 scenes &&
                 void action(
                   () => selectProgramScene(scene.id, scenes.revision),
-                  scene.id === 'gameplay' || scene.id === 'bp',
+                  scene.id === 'gameplay',
                 )
               }
             >
@@ -317,9 +343,20 @@ export function WorkspaceDock() {
           </Button>
           <span>
             OBS ·{' '}
-            {obs?.connection === 'connected' ? (obs.streaming ? '推流中' : '已连接') : '无法确认'}
+            {obs?.connection === 'connected'
+              ? `${obs.streaming ? '推流中' : '未推流'} / ${obs.recording ? '录制中' : '未录制'}`
+              : '输出无法确认'}
           </span>
         </div>
+        <p className="workspace-obs-scene">
+          OBS 实际 ·{' '}
+          {obs?.connection === 'connected' ? (obs.currentScene ?? '场景未知') : '无法确认'} ·{' '}
+          {obs?.connection !== 'connected' || obs.sceneAligned == null
+            ? '对齐未知'
+            : obs.sceneAligned
+              ? '已对齐'
+              : '与 Mizar 不一致'}
+        </p>
         {tools === 'spectator' ? (
           <>
             <SpectatorHudCommands compact onMessage={setMessage} />
@@ -351,9 +388,15 @@ export function WorkspaceDock() {
           title={error || message || scenes?.director?.reason || ''}
           role={error ? 'alert' : 'status'}
         >
-          {error || message || scenes?.director?.reason || '正式切场后保持手动；网站数据源独立控制'}
+          {error ||
+            message ||
+            (busy
+              ? '正在确认操作…'
+              : scenes?.director?.reason || '正式切场后保持手动；网站数据源独立控制')}
         </span>
-        <Button onClick={recover}>现场恢复</Button>
+        <Button aria-label="现场恢复" onClick={recover}>
+          {error || message || scenes?.director?.reason ? '恢复 / 详情' : '现场恢复'}
+        </Button>
         <Button
           className="workspace-exit"
           disabled={busy || !production}
@@ -365,7 +408,8 @@ export function WorkspaceDock() {
       <Dialog open={finishOpen} title="结束本场制播" onClose={() => setFinishOpen(false)}>
         <p>
           收起节目、释放本机网站数据源、关闭受管理 CS2 并恢复配置。OBS 推流 /
-          录制不会自动停止；不会提交网站官方结果。
+          录制不会自动停止；不会提交网站官方结果。重试会重新执行整个收尾流程，请分别核对节目、数据源与
+          Host 回执。
         </p>
         <Button
           disabled={busy || !production}
