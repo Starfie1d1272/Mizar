@@ -89,7 +89,13 @@ export function RivalHubLiveSourcePanel({
       }
       const next = (await response.json()) as Connection;
       setConnection((old) => ({ ...old, ...next }));
-      onMessage('已接管为本场数据源。');
+      onMessage(
+        connection?.activeMatchId && next.activeSourceMatchId === connection.activeMatchId
+          ? '已接管为本场数据源。'
+          : next.activeDeviceName
+            ? `当前由 ${next.activeDeviceName} 提供实时数据。`
+            : '接管结果待确认，请重新核对数据源状态。',
+      );
     });
 
   const handleRelease = () =>

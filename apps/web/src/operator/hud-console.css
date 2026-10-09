@@ -825,7 +825,7 @@
     margin-block: 0;
   }
   .hud-console__canvas-frame {
-    width: min(100%, calc((100dvh - 580px) * 16 / 9));
+    width: min(100%, calc((100dvh - 650px) * 16 / 9));
     margin-inline: auto;
   }
   .hud-console__editor-fieldset {
