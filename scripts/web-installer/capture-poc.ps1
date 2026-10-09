@@ -34,8 +34,9 @@ try {
   $window = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
   $button = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, '开始验证')))
   if (!$button) { throw 'Start button missing' }
-  $invoke = $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-  $invoke.Invoke()
+  # .NET Framework WinForms uses legacy accessibility; exercise the real keyboard action.
+  [CaptureWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+  [Windows.Forms.SendKeys]::SendWait("{ENTER}")
   $deadline = (Get-Date).AddSeconds(60)
   do {
     Start-Sleep -Milliseconds 500
