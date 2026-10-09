@@ -336,6 +336,14 @@ describe('Preparation: RivalHubPreparationPanel', () => {
     )!;
     expect(confirmBtn).not.toBeUndefined();
 
+    const approval = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await act(async () => {
+      confirmBtn.click();
+      await Promise.resolve();
+    });
+    expect(mockSwitchToRivalhubBp).not.toHaveBeenCalled();
+    expect(approval).toHaveBeenCalledWith(expect.stringContaining('南京大学 vs 东南大学'));
+    approval.mockReturnValue(true);
     await act(async () => {
       confirmBtn.click();
       await Promise.resolve();
