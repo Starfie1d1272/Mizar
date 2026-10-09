@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "5f26047c4f6a538c8d4889e742f3bffbda40fb59",
+  "environment": {
+    "platform": "Linux 6.18.44",
+    "node": "24.19.0",
+    "pnpm": "12.9.1",
+    "playwright": "1.63.0",
+    "chromiumRevision": "1243"
+  },
+  "fullIdentitiesSha256": "ba4a8871f4ad9bc08f41f8f9d5ad1cc3a757b9b26b42e8ce11f4ce5c72cfa6c4",
+  "full": 101,
+  "measurement": {
+    "scope": "Sequential local harness wall time including FULL/selected discovery, Vite/Chromium startup and actual tests; package build/install and independent production closure excluded",
+    "cache": "Dependencies and Chromium cached, package outputs prepared; Vite cache not purged between lanes/runs",
+    "trials": 1,
+    "limitations": "Local single trials on shared workspace; does not establish cold CI full-workflow wall time or repeated-run flake rate"
+  },
+  "baseline": {
+    "mode": "baseline",
+    "count": 4,
+    "full": 101,
+    "passed": 101,
+    "maxWallMs": 178839.379658,
+    "timings": [
+      {
+        "shard": "1/4",
+        "wallMs": 178839.379658,
+        "status": 0
+      },
+      {
+        "shard": "2/4",
+        "wallMs": 116622.432826,
+        "status": 0
+      },
+      {
+        "shard": "3/4",
+        "wallMs": 82296.66261900001,
+        "status": 0
+      },
+      {
+        "shard": "4/4",
+        "wallMs": 72175.41483700002,
+        "status": 0
+      }
+    ],
+    "files": {
+      "bp-presentation.spec.ts": 86839,
+      "companion-isolation.spec.ts": 1914,
+      "hud-code-polish.spec.ts": 12502,
+      "hud-customization.spec.ts": 12689,
+      "hud-replay.spec.ts": 56413,
+      "hud-video-replay.spec.ts": 15280,
+      "local-tournament.spec.ts": 6081,
+      "native-broadcast.spec.ts": 32468,
+      "preparation-review.spec.ts": 55137,
+      "product-closure.spec.ts": 16505,
+      "product-shell.spec.ts": 1071,
+      "program-direction.spec.ts": 22011,
+      "program-transitions.spec.ts": 21035,
+      "support-export.spec.ts": 15413,
+      "workspace-controls.spec.ts": 28938,
+      "workspace-density.spec.ts": 27679,
+      "workspace-scenes.spec.ts": 9149
+    }
+  },
+  "balanced": {
+    "mode": "balanced",
+    "count": 8,
+    "full": 101,
+    "passed": 101,
+    "maxWallMs": 83387.528263,
+    "timings": [
+      {
+        "shard": "1/8",
+        "wallMs": 83387.528263,
+        "status": 0
+      },
+      {
+        "shard": "2/8",
+        "wallMs": 58095.210416,
+        "status": 0
+      },
+      {
+        "shard": "3/8",
+        "wallMs": 58362.15187,
+        "status": 0
+      },
+      {
+        "shard": "4/8",
+        "wallMs": 43330.15569099999,
+        "status": 0
+      },
+      {
+        "shard": "5/8",
+        "wallMs": 46125.52949800002,
+        "status": 0
+      },
+      {
+        "shard": "6/8",
+        "wallMs": 46218.23008000001,
+        "status": 0
+      },
+      {
+        "shard": "7/8",
+        "wallMs": 51848.243709,
+        "status": 0
+      },
+      {
+        "shard": "8/8",
+        "wallMs": 48591.90135300002,
+        "status": 0
+      }
+    ],
+    "files": {
+      "bp-presentation.spec.ts": 77139,
+      "hud-replay.spec.ts": 53561,
+      "preparation-review.spec.ts": 52276,
+      "hud-code-polish.spec.ts": 11850,
+      "native-broadcast.spec.ts": 26588,
+      "companion-isolation.spec.ts": 1991,
+      "hud-customization.spec.ts": 12592,
+      "workspace-controls.spec.ts": 25813,
+      "hud-video-replay.spec.ts": 13734,
+      "product-shell.spec.ts": 1012,
+      "workspace-density.spec.ts": 26930,
+      "program-direction.spec.ts": 21339,
+      "support-export.spec.ts": 15450,
+      "workspace-scenes.spec.ts": 9160,
+      "local-tournament.spec.ts": 5772,
+      "product-closure.spec.ts": 16702,
+      "program-transitions.spec.ts": 20338
+    }
+  },
+  "slowestLaneReductionPercent": 53.372949278584784,
+  "routing": {
+    "baseline": [
+      {
+        "shard": "1/4",
+        "passed": 31,
+        "files": [
+          "bp-presentation.spec.ts",
+          "companion-isolation.spec.ts",
+          "hud-code-polish.spec.ts",
+          "hud-customization.spec.ts",
+          "hud-replay.spec.ts"
+        ]
+      },
+      {
+        "shard": "2/4",
+        "passed": 27,
+        "files": [
+          "hud-video-replay.spec.ts",
+          "local-tournament.spec.ts",
+          "native-broadcast.spec.ts",
+          "preparation-review.spec.ts"
+        ]
+      },
+      {
+        "shard": "3/4",
+        "passed": 19,
+        "files": [
+          "product-closure.spec.ts",
+          "product-shell.spec.ts",
+          "program-direction.spec.ts",
+          "program-transitions.spec.ts",
+          "support-export.spec.ts"
+        ]
+      },
+      {
+        "shard": "4/4",
+        "passed": 24,
+        "files": [
+          "workspace-controls.spec.ts",
+          "workspace-density.spec.ts",
+          "workspace-scenes.spec.ts"
+        ]
+      }
+    ],
+    "balanced": [
+      {
+        "shard": "1/8",
+        "passed": 15,
+        "files": ["bp-presentation.spec.ts"]
+      },
+      {
+        "shard": "2/8",
+        "passed": 8,
+        "files": ["hud-replay.spec.ts"]
+      },
+      {
+        "shard": "3/8",
+        "passed": 15,
+        "files": ["preparation-review.spec.ts"]
+      },
+      {
+        "shard": "4/8",
+        "passed": 13,
+        "files": ["hud-code-polish.spec.ts", "native-broadcast.spec.ts"]
+      },
+      {
+        "shard": "5/8",
+        "passed": 10,
+        "files": [
+          "companion-isolation.spec.ts",
+          "hud-customization.spec.ts",
+          "workspace-controls.spec.ts"
+        ]
+      },
+      {
+        "shard": "6/8",
+        "passed": 18,
+        "files": ["hud-video-replay.spec.ts", "product-shell.spec.ts", "workspace-density.spec.ts"]
+      },
+      {
+        "shard": "7/8",
+        "passed": 14,
+        "files": ["program-direction.spec.ts", "support-export.spec.ts", "workspace-scenes.spec.ts"]
+      },
+      {
+        "shard": "8/8",
+        "passed": 8,
+        "files": [
+          "local-tournament.spec.ts",
+          "product-closure.spec.ts",
+          "program-transitions.spec.ts"
+        ]
+      }
+    ]
+  },
+  "evidenceRoots": [
+    ".agent-tmp/browser-benchmark/baseline-4",
+    ".agent-tmp/browser-benchmark/balanced-8"
+  ],
+  "commands": [
+    "pnpm build:packages",
+    "PLAYWRIGHT_PORT=4273 node scripts/ci/benchmark-browser-shards.mjs baseline 4 .agent-tmp/browser-benchmark/baseline-4",
+    "PLAYWRIGHT_PORT=4273 node scripts/ci/benchmark-browser-shards.mjs balanced 8 .agent-tmp/browser-benchmark/balanced-8"
+  ],
+  "recommendedIntegration": {
+    "shards": 8,
+    "environment": {
+      "MIZAR_BROWSER_SHARDING": "balanced"
+    },
+    "command": "pnpm acceptance:ci --shard=N/8",
+    "gate": "node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 8",
+    "productionClosureShard": 8,
+    "reason": "Lane8 measured48.59s leaves substantial room below83.39s slowest lane; retain independent production Companion-to-Chromium consumer evidence"
+  }
+}

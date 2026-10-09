@@ -16,7 +16,7 @@ export function balanceBrowserFiles(full, count, durations = {}) {
     assert(Number.isFinite(weight) && weight > 0, `invalid browser duration: ${file}`);
     return { file, weight };
   });
-  jobs.sort((a, b) => b.weight - a.weight || a.file.localeCompare(b.file));
+  jobs.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   const shards = Array.from({ length: count }, () => ({ files: [], estimatedMs: 0 }));
   for (const job of jobs) {
     const lane = shards.reduce((best, candidate) =>

@@ -163,6 +163,9 @@ jobs:
     if: ${{ needs.plan.outputs.run_design == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
+    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
+    container:
+      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -191,20 +194,8 @@ jobs:
           pnpm architecture:check
           pnpm design:contracts:test
 
-      - name: Restore versioned Chromium cache
-        id: chromium-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: chromium-shell-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Playwright Chromium and native dependencies
-        run: pnpm exec playwright install --with-deps --only-shell chromium
-
-      - name: Record Chromium cache state
-        env:
-          CHROMIUM_CACHE_HIT: ${{ steps.chromium-cache.outputs.cache-hit }}
-        run: echo "Chromium cache exact hit = $CHROMIUM_CACHE_HIT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify locked Playwright version matches the native image
+        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
 
       - name: Build canonical component catalog
         run: pnpm design:catalog:build
@@ -217,6 +208,9 @@ jobs:
     if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
     needs: [plan]
     runs-on: ubuntu-24.04
+    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
+    container:
+      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -239,20 +233,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Restore versioned Chromium cache
-        id: chromium-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: chromium-shell-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Playwright Chromium and native dependencies
-        run: pnpm exec playwright install --with-deps --only-shell chromium
-
-      - name: Record Chromium cache state
-        env:
-          CHROMIUM_CACHE_HIT: ${{ steps.chromium-cache.outputs.cache-hit }}
-        run: echo "Chromium cache exact hit = $CHROMIUM_CACHE_HIT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify locked Playwright version matches the native image
+        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
 
       - name: Run HUD Replay browser acceptance
         run: pnpm acceptance:ci --shard=${{ matrix.shard }}/8

@@ -84,7 +84,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 - 仅改动 `offline.mjs` 或其测试时，由基础质量与 Linux/macOS 离线平台验证负责；这些脚本不进入 Windows 产品载荷。混合载荷、安装或恢复改动仍按风险并集增加真实 Windows 验证；未知脚本保守完整验证。
 - 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
 - 基础质量检查（`quality`）分为静态检查、单元测试、样例、类型与构建四路并行任务；全部选中任务通过后汇总成功。
-- 浏览器验收按实测文件耗时均衡分成八个独立任务，每个任务使用一个工作进程串行执行；全部分片通过后，ci-gate 核对八份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`MIZAR_BROWSER_SHARDING=balanced pnpm acceptance:ci --shard=N/8` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
+- 浏览器验收按实测文件耗时均衡分成八个独立任务，每个任务使用与锁文件版本一致、固定官方镜像 digest 的浏览器及完整原生依赖，使用一个工作进程串行执行；全部分片通过后，ci-gate 核对八份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`MIZAR_BROWSER_SHARDING=balanced pnpm acceptance:ci --shard=N/8` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
 - 基础质量已选中时，设计任务只执行自身的 token 检查，架构和设计契约由基础质量统一执行；仅设计任务选中时仍执行这些门禁。
 - Windows/macOS 验证本平台类型、生产构建、文件系统、进程与传输；完整 JavaScript 单元测试由 Ubuntu Quality 负责。平台消费者清单由 `scripts/ci/platform-contracts.mjs` 维护，执行报告拒绝缺失文件、失败、空执行与新增跳过。Windows 原生任务编译并执行真实 Rust/Tauri 宿主测试和更新取消/恢复检查；完整包、EXE GUI 与安装器验收由 Release Qualification 负责。Full 的 macOS 消费者统一由 offline 任务执行，不再重复另起同 OS 平台任务。
 - PR 按差异选择检查，所有任务 checkout 同一 GitHub 模拟合并 SHA。Full、定时和手动验证包含离线平台消费者；主分支推送保守执行 Full。可信 PR 复用实现由 `verify-merge-evidence.mjs` 维护，开关默认关闭，须先取得受信任 main 工作流下的真实正向证明再启用。复用要求最终 squash tree、模拟 merge 的 base/head、同仓库、未改动的工作流/执行脚本、GitHub 最新成功 run/attempt 和全部必需 jobs 一致；证据来自可信 plan job 日志与 GitHub metadata，拒绝 PR artifact 自证。直接 push、漂移、错树、失败或缺证据回退 Full。发行来源默认仍要求最终 main exact-SHA Full CI；PR 构建不作为发行产物。候选版使用独立的 Release Qualification 工作流和 `release` 构建配置。
@@ -136,7 +136,7 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置执行 Rust/Tauri 原生编译与测试，不构建完整 ZIP / NSIS。Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和配置建立稳定基线，不按提交 SHA 保存整份 target。缓存命中与恢复键写入 Actions 摘要。正式 RC 继续使用 `release` 配置，由 Release Qualification 执行真实打包、GUI、安装、恢复与身份检查；`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
-使用 `node scripts/ci/measure-run.mjs owner/repository run-id` 记录终态 CI 的 `created_at → ci-gate.completed_at` wall time、初始排队与各 job/step 时长；缓存冷热根据当次 Actions cache 输出分别报告。等待、下载和后置门禁均属于 wall time，超标如实记录。
+使用 `node scripts/ci/measure-run.mjs owner/repository run-id` 记录终态 CI 的 `created_at → ci-gate.completed_at` wall time、初始排队与各 job/step 时长；缓存冷热根据当次 Actions cache 输出分别报告；浏览器容器拉取与初始化也计入 job 和总 wall time。等待、下载和后置门禁均属于 wall time，超标如实记录。
 
 - `local-web-production-smoke.mjs` 验证生产 HTML、资源传输、样式表类型与构建内容一致性、CS2 资源摘要及真实 WebSocket 基线；它不执行浏览器页面，不证明最终 HUD 已渲染。
 - `pnpm local-web:production-browser-smoke` 在已构建的 Companion 与 Web 上执行真实 HTTP GSI → 运行时／投影 → WebSocket → Chromium，使用已保存 Ancient 回合的 628 帧并核对摘要。它检查队伍、十名选手、雷达实际绘制、C4 阶段与回合结束比分，不拦截 HTTP 或 WebSocket；比赛资料与接收时钟由回放夹具提供。先通过 pnpm 构建图构建 Companion 与 Web，并安装 Chromium；不要在浏览器运行期间重建共享包。此回合片段不证明完整现场制播或 Windows／OBS 性能。
