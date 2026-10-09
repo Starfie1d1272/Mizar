@@ -125,9 +125,48 @@ export class UpdateManager {
     }
     try {
       const result = z
-        .object({ status: z.enum(['installed', 'restored', 'recovery-required', 'cancelled']) })
+        .object({
+          status: z.enum(['installed', 'restored', 'recovery-required', 'cancelled']),
+          version: z.unknown().optional(),
+          recoveryDirectory: z.unknown().optional(),
+        })
         .parse(JSON.parse(await readFile(join(this.root, 'result.json'), 'utf8')));
       this.lastResult = result.status;
+      // Completed attempts describe a particular installed payload, not all future
+      // installations using this state directory. Keep uncertain recovery visible.
+      const recoveryDirectory = result.recoveryDirectory;
+      if (
+        result.status !== 'recovery-required' &&
+        typeof recoveryDirectory === 'string' &&
+        /^install-[a-f0-9]{32}$/.test(recoveryDirectory)
+      ) {
+        try {
+          const stage = join(this.root, recoveryDirectory);
+          const stageInfo = await lstat(stage);
+          const planPath = join(stage, 'plan.json');
+          const planInfo = await lstat(planPath);
+          if (
+            !stageInfo.isDirectory() ||
+            stageInfo.isSymbolicLink() ||
+            !planInfo.isFile() ||
+            planInfo.isSymbolicLink()
+          )
+            throw new Error('update_result_plan_invalid');
+          const plan = z
+            .object({
+              version: z.string().regex(/^\d+\.\d+\.\d+$/),
+              contentDigest: z.string().regex(/^[a-f0-9]{64}$/),
+              previousContentDigest: z.string().regex(/^[a-f0-9]{64}$/),
+            })
+            .parse(JSON.parse(await readFile(planPath, 'utf8')));
+          if (plan.version !== result.version) throw new Error('update_result_plan_mismatch');
+          const resultDigest =
+            result.status === 'installed' ? plan.contentDigest : plan.previousContentDigest;
+          if (resultDigest !== this.options.currentContentDigest) this.lastResult = null;
+        } catch {
+          /* No reliable payload identity: retain the recorded result. */
+        }
+      }
     } catch {
       /* No completed attempt. */
     }
