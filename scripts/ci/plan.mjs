@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { verifyMergeEvidence } from './verify-merge-evidence.mjs';
 import { pathToFileURL } from 'node:url';
@@ -375,10 +376,31 @@ function outputPlan(plan) {
   };
 }
 
+// Compare the tested merge tree directly to its base. Two fetched parents are
+// enough; PR head merge-base history is neither needed nor the tested subject.
+export function collectGitChanges(base, subject, cwd = process.cwd()) {
+  if (!/^[a-f0-9]{40}$/.test(base ?? '') || !/^[a-f0-9]{40}$/.test(subject ?? ''))
+    return [{ path: '', status: 'X' }];
+  try {
+    return parseGitDiffNameStatus(
+      execFileSync('git', ['diff', '--name-status', '-z', '--find-renames', base, subject], {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    );
+  } catch {
+    return [{ path: '', status: 'X' }];
+  }
+}
+
 function runPlanner() {
   const changedFiles = process.env.CHANGED_FILES_FILE
     ? parseGitDiffNameStatus(readFileSync(process.env.CHANGED_FILES_FILE, 'utf8'))
-    : [];
+    : process.env.GITHUB_EVENT_NAME === 'pull_request'
+      ? collectGitChanges(process.env.PLAN_BASE_SHA, process.env.GITHUB_SHA)
+      : [];
   let plan;
   if (process.env.GITHUB_EVENT_NAME === 'push' && process.env.CI_MERGE_REUSE_ENABLED === 'true') {
     try {

@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 2
 
       - name: Record GitHub simulation identity before executing repository code
         shell: bash
@@ -57,29 +57,11 @@ jobs:
           console.log('CI_SOURCE_IDENTITY=' + JSON.stringify(identity));
           NODE
 
-      - name: Collect pull request or main push changed paths
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
-              printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
-            elif git diff --name-status -z --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.tsv"; then
-              :
-            else
-              printf 'X\t\n' > "$RUNNER_TEMP/changed-files.tsv"
-            fi
-          else
-            : > "$RUNNER_TEMP/changed-files.tsv"
-          fi
-
       - name: Plan changed-surface evidence
         id: plan
         run: node scripts/ci/plan.mjs
         env:
-          CHANGED_FILES_FILE: ${{ runner.temp }}/changed-files.tsv
+          PLAN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
           BEFORE_SHA: ${{ github.event.before }}
           # Remains off until a trusted-main PR proves live merge-tree reuse.
