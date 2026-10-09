@@ -1,8 +1,7 @@
 name: Box Sync
 on:
   workflow_run:
-    # GitHub 的完成事件可能以 run-name 中的发布标题匹配流程。
-    workflows: [Release Promotion, '发布 Mizar v*']
+    workflows: [Release Promotion]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -22,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
