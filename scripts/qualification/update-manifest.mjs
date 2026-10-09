@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readReleaseNotes } from './release-notes.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const stableVersion = (value) =>
@@ -66,8 +67,6 @@ export async function qualifiedUpdateManifest(product) {
   const policy = JSON.parse(
     await readFile(join(root, 'scripts/qualification/update-release.json'), 'utf8'),
   );
-  if (!/^docs\/releases\/[A-Za-z0-9.-]+\.md$/.test(policy.notesFile))
-    throw new Error('更新说明必须来自随源码维护的版本文档');
   const distribution = JSON.parse(
     await readFile(join(product, 'distribution-manifest.json'), 'utf8'),
   );
@@ -75,7 +74,7 @@ export async function qualifiedUpdateManifest(product) {
     release,
     distribution,
     policy,
-    await readFile(join(root, policy.notesFile), 'utf8'),
+    (await readReleaseNotes(release.appVersion)).text,
   );
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

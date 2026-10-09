@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const UPDATE_REPOSITORY = 'Starfie1d1272/Mizar';
 export const UPDATE_WORKFLOW = `https://github.com/${UPDATE_REPOSITORY}/.github/workflows/release-qualification.yml@refs/heads/main`;
+export const PUBLICATION_WORKFLOW = `https://github.com/${UPDATE_REPOSITORY}/.github/workflows/release-promotion.yml@refs/heads/main`;
 export const RELEASES_URL = `https://github.com/${UPDATE_REPOSITORY}/releases`;
 export const MIRROR_SHARE = '91dec4c27e5d47f38fcf';
 // Public distribution credential: the Mizar library contains public releases only,
@@ -34,6 +35,16 @@ const version = z
     }
   });
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const updatePublicationSchema = z.strictObject({
+  schemaVersion: z.literal('mizar.update-publication.v1'),
+  repository: z.literal(UPDATE_REPOSITORY),
+  version,
+  gitSha: z.string().regex(/^[a-f0-9]{40}$/),
+  manifestSha256: digest,
+  releaseId: z.number().int().positive(),
+  publishedAt: z.iso.datetime(),
+  promotionSha: z.string().regex(/^[a-f0-9]{40}$/),
+});
 export const updateManifestSchema = z
   .strictObject({
     schemaVersion: z.literal('mizar.update.v1'),

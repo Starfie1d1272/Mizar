@@ -42,8 +42,9 @@ export function assertQualificationRun(run, sourceSha) {
     throw new Error('资格任务必须是 main 上产品精确源码的成功签发任务');
 }
 
-export function releaseAttestationArgs(file, sourceSha, bundle) {
+export function releaseAttestationArgs(file, sourceSha, bundle, workflow = 'qualification') {
   if (!isSha(sourceSha)) throw new Error('来源证明必须绑定有效产品源码 SHA');
+  if (!['qualification', 'promotion'].includes(workflow)) throw new Error('非法签发工作流');
   return [
     'attestation',
     'verify',
@@ -51,7 +52,7 @@ export function releaseAttestationArgs(file, sourceSha, bundle) {
     '--repo',
     REPOSITORY,
     '--signer-workflow',
-    `${REPOSITORY}/${QUALIFICATION_WORKFLOW}@${MAIN_REF}`,
+    `${REPOSITORY}/.github/workflows/release-${workflow}.yml@${MAIN_REF}`,
     '--source-ref',
     MAIN_REF,
     '--source-digest',

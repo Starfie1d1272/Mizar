@@ -127,8 +127,10 @@ public class UpdateFixture {
     'failure',
     'interrupted',
     'remaining-process',
+    'committed-valid',
+    'committed-corrupt',
   ]) {
-    const success = scenario.startsWith('success');
+    const success = scenario.startsWith('success') || scenario === 'committed-valid';
     const area = join(root, scenario),
       installed = join(area, 'installed path'),
       state = join(area, 'user state');
@@ -169,7 +171,37 @@ public class UpdateFixture {
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
     await writeFile(join(stage, 'mode.txt'), success ? 'success' : scenario);
     let result;
-    if (scenario === 'interrupted') {
+    if (scenario.startsWith('committed-')) {
+      await cp(installed, join(stage, 'previous'), { recursive: true });
+      await cp(nextPath, installed, { recursive: true });
+      await writeFile(join(stage, 'journal.json'), JSON.stringify({ phase: 'committed' }));
+      if (scenario === 'committed-corrupt')
+        await writeFile(
+          join(installed, 'resources/app/dist/server.js'),
+          'corrupt committed payload',
+        );
+      result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
+      assert.equal(result.code, success ? 0 : 1, result.errors);
+      const report = JSON.parse(await readFile(join(state, 'updates/result.json'), 'utf8'));
+      assert.equal(report.status, success ? 'installed' : 'recovery-required');
+      assert.equal(report.code, success ? 'update_completed' : 'update_committed_payload_invalid');
+      const recovery = await run([
+        '-Command',
+        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $expected = [IO.Path]::GetFullPath('${stage.replace(/'/g, "''")}').TrimEnd('\\'); $entry = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'; @{ present = [bool]$entry; targetsStage = [bool]($entry -and $entry.Contains(' -File "' + (Join-Path $expected 'update-install.ps1') + '" -Mode Recover -StageRoot "' + $expected + '"')) } | ConvertTo-Json -Compress`,
+      ]);
+      assert.equal(recovery.code, 0, recovery.errors);
+      // Compare the actual command with the OS-normalized target: Framework
+      // GetFullPath can expand the runner's RUNNER~1 temporary directory alias.
+      assert.deepEqual(JSON.parse(recovery.output), { present: !success, targetsStage: !success });
+      if (!success) assert.deepEqual(await readFile(join(stage, 'previous/Mizar.exe')), binary);
+      assert.equal(
+        await readFile(join(state, 'user-data.json'), 'utf8'),
+        'untouched match and settings',
+      );
+      await rm(shortcut, { force: true });
+      process.stdout.write(`Stub-installer recovery ${scenario}: PASS\n`);
+      continue;
+    } else if (scenario === 'interrupted') {
       await cp(installed, join(stage, 'previous'), { recursive: true });
       // Independent expectations for the original installation registration.
       await writeFile(

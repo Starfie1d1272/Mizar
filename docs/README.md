@@ -22,7 +22,7 @@
 
 ## 内容归属
 
-`guide/` 服务使用者，`reference/` 维护技术契约，`design/` 维护视觉与交互，`development/` 维护开发和发布方法，`releases/` 保存面向用户的版本说明，`screenshots/` 提供精选产品画面及来源。
+`guide/` 服务使用者，`reference/` 维护技术契约，`design/` 维护视觉与交互，`development/` 维护开发和发布方法，[CHANGELOG](../CHANGELOG.md) 保存面向用户的版本变更与升级说明，`screenshots/` 提供精选产品画面及来源。
 
 每条规则维护一个权威出处，其他入口用摘要和链接引导阅读。**长期文档描述稳定能力、行为约束与设计原则，不逐项转抄近期 Issue、候选版本清单、PR 状态或本次发布数据。**精确字段、默认值与资源清单由代码维护。具体任务、进度与研究提案集中在 Issue / PR；已确定的版本交付由 Milestone 管理，已交付事实由 GitHub Releases 记录。历史原件通过 Git 提交与已发布资产追溯。生产素材、许可和回归样例继续随代码维护。
 
