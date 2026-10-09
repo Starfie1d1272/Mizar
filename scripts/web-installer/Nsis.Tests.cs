@@ -30,6 +30,17 @@ namespace Mizar.WebInstaller {
         using (var handler=new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false })
         using (var client=new HttpClient(handler) { Timeout=Timeout.InfiniteTimeSpan })
           installer=await new Downloader(client).Download(plan,cache,new IgnoreProgress(),CancellationToken.None);
+        string pending=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache","fresh-install.pending");
+        Directory.CreateDirectory(Path.GetDirectoryName(pending));
+        using (var marker=new FileStream(pending,FileMode.CreateNew,FileAccess.Write,FileShare.None)) { marker.Flush(true); }
+        try {
+          bool pendingRejected=false;
+          string guardedTarget=Path.Combine(root,"pending recovery path");
+          try { await Nsis.Install(plan,installer,guardedTarget,CancellationToken.None); }
+          catch(IOException error) { pendingRejected=error.Message.Contains("前一次安装"); }
+          Assert(pendingRejected && !Directory.Exists(guardedTarget) && File.Exists(pending));
+          Console.WriteLine("PASS: persistent unfinished-install marker rejects a new writer and remains intact");
+        } finally { File.Delete(pending); } // Only this test's exclusively created marker.
         string target=Path.Combine(root,"real NSIS path");
         var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
