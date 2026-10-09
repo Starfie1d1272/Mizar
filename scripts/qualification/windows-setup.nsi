@@ -2,6 +2,7 @@ Unicode true
 !include "MUI2.nsh"
 ManifestDPIAware true
 Name "Mizar"
+BrandingText "Mizar"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Mizar"
 InstallDirRegKey HKCU "Software\Mizar" "InstallDir"
@@ -32,6 +33,7 @@ SetCompressor /SOLID lzma
 !define MUI_PAGE_HEADER_TEXT "快捷方式"
 !define MUI_PAGE_HEADER_SUBTEXT "选择是否创建桌面快捷方式。"
 !define MUI_COMPONENTSPAGE_NODESC
+!define MUI_COMPONENTSPAGE_TEXT_COMPLIST "可选项目："
 !define MUI_COMPONENTSPAGE_TEXT_TOP "Mizar 主程序将自动安装。按需勾选桌面快捷方式，随后点击“安装”。"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
@@ -39,6 +41,7 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
+SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
 
 Function .onInit
   SetShellVarContext current
