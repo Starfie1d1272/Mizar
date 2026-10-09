@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +13,7 @@ if (!modulePath || !corePath || !planPath)
 const { completeBootstrap } = await import(pathToFileURL(resolve(modulePath)).href);
 const coreRoot = resolve(corePath);
 const corePlan = JSON.parse(await readFile(resolve(planPath), 'utf8'));
-const root = await mkdtemp(join(tmpdir(), 'mizar-bootstrap-boundary-'));
+const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-bootstrap-boundary-'));
 const policy = {
   packVersion: '1.0.0',
   sourceSha: '1'.repeat(40),

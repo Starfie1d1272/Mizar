@@ -143,9 +143,11 @@ export async function verifyResourceReceipt({
     catalogIdentity = pinned;
     if (policy)
       requireValue(
-        ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'].every(
-          (key) => policy[key] === pinned.policy[key],
-        ),
+        Number.isSafeInteger(policy.minimumSequence) &&
+          policy.minimumSequence >= 0 &&
+          ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'].every(
+            (key) => policy[key] === pinned.policy[key],
+          ),
         '资源缓存目录不等于当前受信任策略',
       );
     policy = {
