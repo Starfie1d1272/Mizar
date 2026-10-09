@@ -91,12 +91,12 @@ export function registerProductionRoutes(
         return false;
       // Share the same lifecycle exclusion as enter/hide/finish/shutdown and Host updates.
       busy = true;
-      options.scenes.setUpdatePending(true);
+      options.scenes.setResourceActivationPending(true);
       try {
         await commit();
         return true;
       } finally {
-        options.scenes.setUpdatePending(false);
+        options.scenes.setResourceActivationPending(false);
         busy = false;
       }
     },

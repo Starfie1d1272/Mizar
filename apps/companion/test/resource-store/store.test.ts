@@ -88,6 +88,60 @@ describe('Resource Store', () => {
     expect((await restored.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
   });
 
+  it('atomically reuses active only after current-policy identity and actual-byte verification', async () => {
+    const { store, options } = await setup();
+    const identity = {
+      sourceSha: 'approved-source',
+      promotionSha: 'approved-promotion',
+      manifestSha256: 'approved-manifest',
+    };
+    const authorize = vi.fn(() => Promise.resolve({ descriptor: fixture('1'), identity }));
+    expect(await store.reuseActive(packId, authorize)).toBeNull();
+    expect(authorize).not.toHaveBeenCalled();
+    await store.installVerified(packId, prepare());
+    let release!: () => void;
+    let notify!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+    const reuse = store.reuseActive(packId, async ({ receipt, signal }) => {
+      expect(receipt).toBe('v1');
+      expect(signal.aborted).toBe(false);
+      notify();
+      await pending;
+      return { descriptor: fixture('1'), identity };
+    });
+    await entered;
+    await expect(store.repair(packId, prepare('v2', 'abcdefghij'))).rejects.toThrow(
+      'resource_operation_conflict',
+    );
+    await expect(store.rollback(packId)).rejects.toThrow('resource_operation_conflict');
+    expect(store.getStatus(packId).activeVersion).toBe('1');
+    release();
+    expect(await reuse).toMatchObject({ status: { activeVersion: '1', phase: 'ready' }, identity });
+    await expect(
+      store.reuseActive(packId, () => Promise.reject(new Error('current source pin mismatch'))),
+    ).rejects.toThrow('current source pin mismatch');
+    expect(store.getStatus(packId).activeVersion).toBe('1');
+    await expect(
+      store.reuseActive(packId, () =>
+        Promise.resolve({ descriptor: fixture('2', 'abcdefghij'), identity }),
+      ),
+    ).rejects.toThrow('resource_descriptor_changed');
+    const cached = await store.resolveReadOnlyPath(packId, 'replay/video.mp4');
+    await chmod(cached, 0o600);
+    await writeFile(cached, 'XXXXXXXXXX');
+    await expect(store.reuseActive(packId, authorize)).rejects.toThrow('resource_integrity_failed');
+    expect(store.getStatus(packId)).toMatchObject({ phase: 'failed', activeVersion: '1' });
+    await store.close();
+    const reopened = await ResourceStore.open(options);
+    stores.push(reopened);
+    expect(reopened.getStatus(packId).activeVersion).toBeNull();
+  });
+
   it('keeps the active version on bad hashes, untrusted sources, wrong versions and incompatible packs', async () => {
     const { store } = await setup();
     await store.installVerified(packId, prepare());

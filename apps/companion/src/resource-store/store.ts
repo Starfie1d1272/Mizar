@@ -9,6 +9,7 @@ import {
   type ResourceInstallOptions,
   type StoreOptions,
   type TrustedPack,
+  type ActivePackVerification,
 } from './contract.js';
 import {
   atomicJson,
@@ -468,6 +469,69 @@ export class ResourceStore {
     options: { signal?: AbortSignal; packVersion?: string } = {},
   ): Promise<ResourceStatus> {
     return this.installVerified(packId, prepare, { ...options, force: true });
+  }
+
+  /** Reuse only the same active snapshot authenticated against the installer's current policy. */
+  async reuseActive<Identity>(
+    packId: string,
+    verifyIdentity: ActivePackVerification<Identity>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ status: ResourceStatus; identity: Identity } | null> {
+    return this.exclusive(async () => {
+      const entry = this.entry(packId);
+      const active = entry.active;
+      if (!active) return null;
+      const controller = new AbortController();
+      const signal = options.signal
+        ? AbortSignal.any([options.signal, controller.signal])
+        : controller.signal;
+      this.controllers.set(packId, controller);
+      try {
+        signal.throwIfAborted();
+        const directory = this.content(packId, active.id);
+        const receipt = await readJson(dirname(directory), 'receipt.json');
+        const descriptor = await this.verify(packId, directory, receipt, signal, 'cache');
+        const verified = await verifyIdentity({ receipt: structuredClone(receipt), signal });
+        const pinned = checkDescriptor(verified.descriptor, packId);
+        if (!pinned.compatible) throw new ResourceStoreError('resource_incompatible');
+        if (
+          JSON.stringify(descriptor) !== JSON.stringify(pinned) ||
+          JSON.stringify(active.descriptor) !== JSON.stringify(pinned)
+        )
+          throw new ResourceStoreError('resource_descriptor_changed');
+        try {
+          await checkTree(directory);
+          for (const file of pinned.files) await verifiedRead(directory, file, signal, () => {});
+        } catch (error) {
+          if (!signal.aborted) {
+            this.failed(entry, error);
+            await this.persist(
+              packId,
+              {
+                active: active.id,
+                prepared: entry.prepared?.id ?? null,
+                previous: entry.previous?.id ?? null,
+              },
+              entry.status.failure,
+            ).catch(() => undefined);
+          }
+          throw error;
+        }
+        signal.throwIfAborted();
+        const clearFailure = entry.status.failure !== null;
+        entry.status.phase = 'ready';
+        entry.status.failure = null;
+        if (clearFailure)
+          await this.persist(packId, {
+            active: active.id,
+            prepared: entry.prepared?.id ?? null,
+            previous: entry.previous?.id ?? null,
+          });
+        return { status: this.getStatus(packId), identity: structuredClone(verified.identity) };
+      } finally {
+        this.controllers.delete(packId);
+      }
+    });
   }
 
   /** Import only authorized members; never alter or remove the existing bundled materials. */

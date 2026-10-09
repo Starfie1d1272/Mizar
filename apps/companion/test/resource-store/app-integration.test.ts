@@ -6,7 +6,10 @@ import { expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { registerStaticHost } from '../../src/local-web/static-host.js';
 import { buildApp } from '../../src/app.js';
-import { createRuntimeVerifier } from '../../src/resource-store/runtime-adapter.js';
+import {
+  createActivePolicyVerifier,
+  createRuntimeVerifier,
+} from '../../src/resource-store/runtime-adapter.js';
 import { ResourceStore } from '../../src/resource-store/store.js';
 import { ProgramSceneController } from '../../src/program-scenes/controller.js';
 import { registerProductionRoutes } from '../../src/program-scenes/production.js';
@@ -94,6 +97,10 @@ it('holds production, scene and Host-update exclusion for the entire asynchronou
     });
     await started;
     expect(production.reserveUpdate()).toBe(false);
+    // Host prepare failure/release clears its own flag while the resource commit is pending.
+    production.releaseUpdate();
+    scenes.setUpdatePending(false);
+    expect(scenes.resumeAutomatic(scenes.get().revision)).toBe(false);
     expect((await scenes.select('gameplay', scenes.get().revision)).ok).toBe(false);
     const enter = await app.inject({
       method: 'POST',
@@ -183,14 +190,18 @@ it('calls actual offline receipt cryptography and refuses qualification proof as
   });
   vi.stubGlobal('fetch', network);
   try {
-    const verify = createRuntimeVerifier({
+    const policy = {
       packVersion: '1.0.0',
       sourceSha: sha,
       promotionSha: sha,
       coreVersion: '1.1.0',
       minimumSequence: 99,
       now: 0,
-    });
+    };
+    const verify = createRuntimeVerifier(policy);
+    await expect(
+      createActivePolicyVerifier(policy)({ receipt, signal: new AbortController().signal }),
+    ).rejects.toThrow(/certificate identity/);
     await expect(
       verify({
         packId: 'official:epl-default',

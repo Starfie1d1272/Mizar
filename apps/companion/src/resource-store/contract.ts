@@ -34,6 +34,14 @@ export interface ResourceInstallOptions {
   force?: boolean;
 }
 
+/** Native installer supplies its current authenticated policy verifier; no renderer input. */
+export interface ActivePackVerification<Identity> {
+  (input: { receipt: unknown; signal: AbortSignal }): Promise<{
+    descriptor: TrustedPack;
+    identity: Identity;
+  }>;
+}
+
 export interface StoreOptions {
   root: string;
   packs?: readonly { packId: string; optional?: boolean }[];

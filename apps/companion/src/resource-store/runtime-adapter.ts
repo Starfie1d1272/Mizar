@@ -9,7 +9,8 @@ import {
   verifyResourceReceipt,
   type ResourceTrustPolicy,
 } from '@mizar/resource-pack-contract/runtime';
-import { ResourceStoreError, type StoreOptions } from './contract.js';
+import { createHash } from 'node:crypto';
+import { ResourceStoreError, type StoreOptions, type ActivePackVerification } from './contract.js';
 import { createManifestVerifier } from './manifest-adapter.js';
 
 /** Policy pins come from authenticated Core/bootstrap inputs, never from the receipt or a mirror. */
@@ -54,6 +55,43 @@ export function createRuntimeVerifier(
 }
 
 export { PACK_ID };
+
+export interface ResourceIdentity {
+  packId: string;
+  packVersion: string;
+  sourceSha: string;
+  promotionSha: string;
+  manifestSha256: string;
+}
+
+/** Verify current pins offline; historical cache pins cannot authorize an installer shortcut. */
+export function createActivePolicyVerifier(
+  policy: ResourceTrustPolicy,
+): ActivePackVerification<ResourceIdentity> {
+  const pinned = { ...policy };
+  const verify = createRuntimeVerifier(pinned);
+  return async ({ receipt, signal }) => {
+    const descriptor = await verify({
+      packId: PACK_ID,
+      directory: '',
+      receipt,
+      signal,
+      purpose: 'cache',
+    });
+    // The SDK has authenticated these exact manifest bytes and fixed policy pins above.
+    const manifest = (receipt as { manifestBase64: string }).manifestBase64;
+    return {
+      descriptor,
+      identity: {
+        packId: descriptor.packId,
+        packVersion: descriptor.packVersion,
+        sourceSha: pinned.sourceSha,
+        promotionSha: pinned.promotionSha,
+        manifestSha256: createHash('sha256').update(Buffer.from(manifest, 'base64')).digest('hex'),
+      },
+    };
+  };
+}
 export function isOfficialWebResource(path: string): boolean {
   return (
     REPLAY_IDS.some((id) => path.startsWith(`fixtures/${id}/`)) ||

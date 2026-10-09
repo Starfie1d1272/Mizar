@@ -22,6 +22,8 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 
 `installVerified(packId, prepare, {packVersion?, signal?, force?})` 默认复验并复用 active；请求不同版本时必须传 `packVersion`。`repair` 强制重新准备。`cancel(packId)` 取消正在运行的安装。并发安装/删除/切换明确拒绝，不创建并行状态机。
 
+`reuseActive(packId, createActivePolicyVerifier(currentPolicy), {signal?})` 是原生安装桥的离线重装入口。现有互斥保护覆盖当前 active 的 receipt、本次认证策略和全部文件复验，期间安装/回退不能切换身份。没有 active 返回 null；通过返回 `{status, identity: {packId, packVersion, sourceSha, promotionSha, manifestSha256}}`，没有下载器或网络调用。身份与实际字节不符明确拒绝，不能仅凭 activeVersion 相等复用。该原生回调不暴露给 renderer。
+
 安装流程为临时目录 → 外部授权 → 逐文件尺寸/摘要校验并复制 → 对实际副本复验授权 → 同文件系统版本目录 rename → 原子持久化指针。活动版本和上一个版本保留，失败不会删除现有内容；重启清除未发布的临时目录。启动复验发现活动版本损坏时，恢复仍能通过完整复验的上一版并保留失败诊断。`activatePrepared` 在安全制作时机切换，`rollback` 经同样的外部复验和制作锁回退。历史文件保留供恢复，`removeOptional` 只允许显式配置为 optional 的素材，且须安全切换；默认 EPL 素材不可删除。
 
 `reuseLegacy(packId, {directory, receipt}, options)` 仅复制经外部授权及逐文件校验的旧内容，不修改原随包文件。集成层提供已有 v1.1 素材的授权证据，不能用旧目录自算摘要冒充来源验证。
