@@ -31,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: 同步与校验云盘
         env:
+          # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
+          NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
           GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
