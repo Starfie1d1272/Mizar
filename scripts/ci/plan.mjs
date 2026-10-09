@@ -70,8 +70,6 @@ const WINDOWS_QUALIFICATION_PATHS = new Set([
   'scripts/qualification/installer-assets/sources.json',
   'scripts/qualification/installer-assets/wizard.bmp',
   'scripts/qualification/installer-assets/wizard.svg',
-  'scripts/qualification/offline.mjs',
-  'scripts/qualification/offline.test.mjs',
   'scripts/qualification/portable-files.mjs',
   'scripts/qualification/portable-files.test.mjs',
   'scripts/qualification/product-logs.mjs',
@@ -101,6 +99,7 @@ const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
   if (DISTRIBUTION_TOOL_PATHS.has(path)) return false;
+  if (isOfflineQualificationPath(path)) return false;
   return (
     PORTABLE_SMOKE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     path === 'packages/telemetry-gsi/src/production-config.json' ||
@@ -128,6 +127,7 @@ function isForcedFullPath(path) {
     (!isDocsOnlyPath(path) &&
       path.startsWith('scripts/qualification/') &&
       !DISTRIBUTION_TOOL_PATHS.has(path) &&
+      !isOfflineQualificationPath(path) &&
       !WINDOWS_QUALIFICATION_PATHS.has(path)) ||
     path.startsWith('.github/') ||
     path.startsWith('scripts/ci/') ||
