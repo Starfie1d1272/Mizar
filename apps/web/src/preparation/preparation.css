@@ -221,7 +221,6 @@
 .preparation .preparation-task-panel.mizar-panel {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
-  min-height: calc(var(--mizar-layout-target) * 10);
   padding: calc(var(--mizar-layout-padding) * 2.5);
   align-items: center;
 }
@@ -405,14 +404,13 @@
 }
 .obs-setup__cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--mizar-layout-padding);
 }
 .obs-setup__cards .mizar-panel {
   display: flex;
   flex-direction: column;
   gap: var(--mizar-layout-gap);
-  min-height: calc(var(--mizar-layout-target) * 10);
 }
 .obs-setup__cards > .mizar-panel:first-child > .mizar-button,
 .obs-setup__cards > .mizar-panel:last-child > .mizar-button:first-of-type {
@@ -854,7 +852,6 @@
 .preparation-match {
   display: flex;
   flex-direction: column;
-  min-height: calc(var(--mizar-layout-target) * 10);
 }
 .preparation-match > .preparation-actions {
   margin-top: auto;
@@ -870,9 +867,6 @@
 .preparation-dashboard,
 .preparation {
   gap: calc(var(--mizar-layout-padding) * 1.5);
-}
-.obs-setup__cards .mizar-panel {
-  min-height: calc(var(--mizar-layout-target) * 11);
 }
 
 .spectator-workflow ol {

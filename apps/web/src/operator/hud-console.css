@@ -792,3 +792,25 @@
     align-self: start;
   }
 }
+
+.hud-console__versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-padding);
+  padding: var(--mizar-layout-padding);
+  margin-block: var(--mizar-layout-padding);
+  background: var(--mizar-bg-surface);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.hud-console__versions > div {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hud-console__versions span {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}

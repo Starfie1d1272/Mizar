@@ -6,6 +6,7 @@ import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
+import { ObsConfidence } from '../workspace/WorkspacePage';
 import { UpdateSettings } from './UpdateSettings';
 
 export function Settings({ tab }: { tab: string }) {
@@ -15,6 +16,8 @@ export function Settings({ tab }: { tab: string }) {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [connectionEditing, setConnectionEditing] = useState(false);
+  const [messageTone, setMessageTone] = useState<'info' | 'danger'>('info');
   const [gsi, setGsi] = useState<{
     detected: boolean;
     installed: boolean;
@@ -67,9 +70,11 @@ export function Settings({ tab }: { tab: string }) {
     if (busy) return;
     setBusy(true);
     setMessage('');
+    setMessageTone('info');
     try {
       await run();
     } catch (error) {
+      setMessageTone('danger');
       setMessage(error instanceof Error ? error.message : '操作未完成。');
       if (tab === 'gsi') await refreshGsi().catch(() => {});
     } finally {
@@ -139,6 +144,14 @@ export function Settings({ tab }: { tab: string }) {
                     : '未连接'}
             </StatusPill>
           </header>
+          <section className="obs-connection-summary" aria-label="OBS 连接摘要">
+            <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
+            <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
+            <Button onClick={() => setConnectionEditing((value) => !value)}>编辑连接</Button>
+            <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
+              重新检查
+            </Button>
+          </section>
           <div className="obs-setup__cards">
             <Panel>
               <h3>打开 OBS</h3>
@@ -167,7 +180,10 @@ export function Settings({ tab }: { tab: string }) {
                 </details>
               ) : null}
             </Panel>
-            <details open={obs?.connection !== 'connected'}>
+            <details
+              open={connectionEditing}
+              onToggle={(event) => setConnectionEditing(event.currentTarget.open)}
+            >
               <summary>WebSocket 连接设置</summary>
               <Panel>
                 <h3>连接控制</h3>
@@ -230,7 +246,8 @@ export function Settings({ tab }: { tab: string }) {
               </Panel>
             </details>
             <Panel>
-              <h3>检查画面</h3>
+              <h3>实际画面与输出检查</h3>
+              <ObsConfidence />
               <div className="obs-setup__signals">
                 <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
                 <span>
@@ -461,7 +478,7 @@ export function Settings({ tab }: { tab: string }) {
           <SteamAvatarSettings />
         </div>
       )}
-      {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
+      {message ? <StatusBanner tone={messageTone}>{message}</StatusBanner> : null}
     </>
   );
 }

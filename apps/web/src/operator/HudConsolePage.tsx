@@ -76,6 +76,7 @@ import {
   HudConfigMutationError,
   mutateHudConfig,
   useHudConfigEditorClient,
+  useHudConfigClient,
   type HudConfigMutation,
   type HudConfigMutationResponse,
 } from '../realtime/hud-config-client';
@@ -147,6 +148,7 @@ export function HudConsolePage() {
     import.meta.env.VITE_VISUAL_FIXTURES === '1' &&
     new URLSearchParams(window.location.search).get('hud-config') !== 'companion';
   const hudEditor = useHudConfigEditorClient(!visualFixtureMode);
+  const onAir = useHudConfigClient(!visualFixtureMode);
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');
   const radar = useSyncExternalStore(
@@ -211,6 +213,7 @@ export function HudConsolePage() {
   const [showSafeArea, setShowSafeArea] = useState(false);
   const [snapToGridEnabled, setSnapToGridEnabled] = useState(true);
   const [commandState, setCommandState] = useState<string | null>(null);
+  const [commandError, setCommandError] = useState(false);
   const [busy, setBusy] = useState(false);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
   const authoritativeDocumentRef = useRef<HudConfigDocument | null>(null);
@@ -394,6 +397,7 @@ export function HudConsolePage() {
     setThemeDraft(merged.drafts.theme);
     setDraftConflicts(merged.conflicts);
     if (Object.values(merged.conflicts).some(Boolean)) {
+      setCommandError(true);
       setCommandState('已在另一页面更新，请先处理冲突。');
     }
   }, [
@@ -528,12 +532,14 @@ export function HudConsolePage() {
       setThemeDraftValue(clone(resource as HudTheme));
     }
     setCommandState(null);
+    setCommandError(false);
   }
 
   function changeWorkspace(next: HudWorkspace): void {
     if (next === workspace) return;
     setWorkspace(next);
     setCommandState(null);
+    setCommandError(false);
   }
 
   function updatePresetReference(kind: 'layout' | 'theme', id: string): void {
@@ -599,6 +605,7 @@ export function HudConsolePage() {
     };
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const response = await mutateHudConfig(command);
       applyResponse(response);
@@ -614,8 +621,10 @@ export function HudConsolePage() {
       if (kind === 'theme') setSelectedThemeId(nextId);
       setCommandState(saveAs ? `已另存为「${saved.name}」。` : '已保存。');
     } catch (error: unknown) {
+      setCommandError(true);
       if (error instanceof HudConfigMutationError && error.status === 409) {
         setDraftConflicts((current) => ({ ...current, [kind]: true }));
+        setCommandError(true);
         setCommandState('已在另一页面更新，请先处理冲突。');
       } else {
         setCommandState('HUD 操作未完成，请检查配置连接后重试。');
@@ -630,6 +639,7 @@ export function HudConsolePage() {
     const expectedEditorRevision = hudEditor.revision;
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const value = await readHudPresetFile(file);
       const response = await mutateHudConfig({
@@ -643,6 +653,7 @@ export function HudConsolePage() {
         `已导入「${value.preset.name.trim()}」。请在预设列表中选择并预览，启用后才会上屏。`,
       );
     } catch (error: unknown) {
+      setCommandError(true);
       setCommandState(
         error instanceof HudConfigMutationError && error.status === 409
           ? '已在另一页面更新，请重新读取后导入。'
@@ -668,6 +679,7 @@ export function HudConsolePage() {
       downloadHudPresetFile(presetDraft, layoutDraft, themeDraft);
       setCommandState('已导出预设文件，包含组件方案、布局与外观。');
     } catch {
+      setCommandError(true);
       setCommandState('预设文件未导出，请检查当前配置。');
     }
   }
@@ -676,6 +688,7 @@ export function HudConsolePage() {
     if (busy || !editorReady || hudEditor.revision === null) return;
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const response = await mutateHudConfig({
         kind: 'activate-preset',
@@ -685,6 +698,7 @@ export function HudConsolePage() {
       applyResponse(response);
       setCommandState('当前预设已启用。');
     } catch (error: unknown) {
+      setCommandError(true);
       setCommandState(
         error instanceof HudConfigMutationError && error.status === 409
           ? '已在另一页面更新，请先处理冲突。'
@@ -878,6 +892,37 @@ export function HudConsolePage() {
           </div>
         </header>
 
+        <section className="hud-console__versions" aria-label="编辑与正式播出版本">
+          <div>
+            <strong>正在编辑 · {presetDraft.name}</strong>
+            <span>
+              {hasDirtyDraft ? '未保存修改' : '已保存资源'} · 资源版本{' '}
+              {hudEditor.revision ?? '读取中'}
+            </span>
+          </div>
+          <div>
+            <strong>正式播出 · {onAir.current.preset.name}</strong>
+            <span>
+              启用版本 {onAir.activeRevision ?? '读取中'}
+              {activationStale ? ' · 有保存尚未应用' : ''}
+            </span>
+          </div>
+          <Button
+            disabled={
+              busy ||
+              !editorReady ||
+              hasDirtyDraft ||
+              selectedLayoutId !== presetDraft.layoutId ||
+              selectedThemeId !== presetDraft.themeId
+            }
+            onClick={() => {
+              if (window.confirm('将当前已保存 HUD 预设应用到正式播出？'))
+                void activateSelectedPreset();
+            }}
+          >
+            应用到播出
+          </Button>
+        </section>
         <div className="hud-console__layout">
           <div className="hud-console__preview-column" ref={reviewFrameRef}>
             <section className="hud-console__preview-toolbar" aria-label="预览设置">
@@ -1187,11 +1232,7 @@ export function HudConsolePage() {
           <div
             aria-live="polite"
             className="hud-console__status"
-            role={
-              commandState?.includes('冲突') || commandState?.includes('未完成')
-                ? 'alert'
-                : 'status'
-            }
+            role={commandError ? 'alert' : 'status'}
           >
             {commandState ?? '正在读取配置。'}
           </div>
