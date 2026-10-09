@@ -198,7 +198,7 @@ export function PreparationPage() {
                   autoOpen={query.has('createFromServer')}
                   onSaved={() => void refresh()}
                 />
-                <LocalMatchControls action={action} />
+                <LocalMatchControls action={action} onSelected={() => setSelecting(false)} />
                 <RivalHubPreparationPanel mode="matches" />
               </Panel>
             ) : null}

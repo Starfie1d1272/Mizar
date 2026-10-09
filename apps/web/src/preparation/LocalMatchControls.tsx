@@ -5,7 +5,9 @@ import { useLocalTournament } from './tournament';
 
 export function LocalMatchControls({
   action,
+  onSelected,
 }: {
+  readonly onSelected?: () => void;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
   const { view, refresh } = useLocalTournament();
@@ -28,6 +30,7 @@ export function LocalMatchControls({
             setA({ name: '', id: '' });
             setB({ name: '', id: '' });
             await refresh();
+            onSelected?.();
           });
         }}
       >
@@ -92,6 +95,7 @@ export function LocalMatchControls({
               void action(async () => {
                 await command('/operator/local-match/select', { matchId: event.target.value });
                 await refresh();
+                onSelected?.();
               });
           }}
         >
