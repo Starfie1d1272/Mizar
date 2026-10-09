@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$OutputDirectory)
+﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -44,7 +44,10 @@ try {
   } while (!$complete -and !$failed -and (Get-Date) -lt $deadline)
   Save-Window $process 'native-result.png'
   if (!$complete) { throw 'Real anonymous HTTPS download did not complete' }
-  [ordered]@{ result='PASS'; os=[Environment]::OSVersion.VersionString; native=$true; appVersion='POC'; installationExecuted=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'native-evidence.json') -Encoding UTF8
+  $screen = [Drawing.Graphics]::FromHwnd($process.MainWindowHandle)
+  $dpi = $screen.DpiX
+  $screen.Dispose()
+  [ordered]@{ dpi=$dpi; result='PASS'; os=[Environment]::OSVersion.VersionString; native=$true; appVersion='POC'; installationExecuted=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'native-evidence.json') -Encoding UTF8
 } finally {
   if (!$process.HasExited) { $process.CloseMainWindow() | Out-Null; if (!$process.WaitForExit(5000)) { $process.Kill() } }
 }

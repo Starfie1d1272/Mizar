@@ -28,3 +28,5 @@
 `capture-poc.ps1` 从实际原生 EXE 窗口截屏，保存 ready/result 和 Windows 信息，不生成 HTML 原型。测试处理器证明网络失败边界和缓存契约；实际 HTTPS 下载由独立窗口步骤证明。GitHub runner Windows Server 的结果不代替 Windows 10/11 与 125%/150% DPI 实机验收，也不证明真实 NSIS 安装、资源入库或断网 EPL 播放。体积以 `build.json` 为准；Web 的 ZIP 测量不代替完整 Setup 体积或 Quick/Full/Release wall-time。
 
 本次 Linux 工作区同源码 Web 实测（既有依赖缓存，先 Full 后 Core；不是冷／热对照）：Full 98,144,273 bytes，ZIP 44,534,530 bytes，构建 1.378s、压缩 2.162s；Core 12,527,012 bytes，ZIP 10,117,650 bytes，构建 1.081s、压缩 0.382s。ZIP 减少约 77.3%。没有重编译 Rust、生成 Setup 或发行，因此不能由此宣称 Full<=180s 或 Release<=600s。
+
+公开入口只读验证：GitHub 的固定许可样例实际下载并核对成功；Box 分享根目录返回 HTTP 200、Content-Type text/html，不能据此宣称已有可用的文件直链或将其作为第一下载源。

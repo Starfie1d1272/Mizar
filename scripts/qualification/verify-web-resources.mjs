@@ -31,10 +31,10 @@ async function verifyCoreFiles(source, target) {
 export async function verifyWebResources(root, requestedMode) {
   const mode = webResourceMode(requestedMode);
   let marker;
-  let hasMarker = false;
+  let hasMarker;
   try {
-    hasMarker = true;
     marker = JSON.parse(await readFile(resolve(root, 'web-resource-mode.json'), 'utf8'));
+    hasMarker = true;
   } catch (error) {
     if (error.code !== 'ENOENT' || mode === 'core-only') throw error;
     hasMarker = false;
@@ -52,15 +52,6 @@ export async function verifyWebResources(root, requestedMode) {
       ) {
         throw new Error(`Core contains unknown or optional resources: ${entry.name}`);
       }
-    }
-    for (const directory of ['fixtures', 'fixture-media']) {
-      try {
-        await access(resolve(root, directory));
-      } catch (error) {
-        if (error.code === 'ENOENT') continue;
-        throw error;
-      }
-      throw new Error(`Core contains optional resources: ${directory}`);
     }
     await verifyCoreFiles(
       fileURLToPath(new URL('../../apps/web/public/brand/', import.meta.url)),

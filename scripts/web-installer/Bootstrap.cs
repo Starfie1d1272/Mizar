@@ -137,7 +137,7 @@ namespace Mizar.WebInstaller {
     readonly Button action = new Button(), cancel = new Button();
     CancellationTokenSource cancellation;
     public Window(Plan value) {
-      plan = value; Text = "Mizar 在线安装 · 验证预览"; AutoScaleMode = AutoScaleMode.Dpi;
+      plan = value; Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); Text = "Mizar 在线安装 · 验证预览"; AutoScaleMode = AutoScaleMode.Dpi;
       ClientSize = new Size(590, 380); MinimumSize = Size; MaximizeBox = false;
       StartPosition = FormStartPosition.CenterScreen; Font = new Font("Microsoft YaHei UI", 9F);
       BackColor = Color.White;
@@ -146,8 +146,10 @@ namespace Mizar.WebInstaller {
       banner.Controls.Add(brand);
       using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("header.bmp")) {
         if (stream != null) {
-          var picture = new PictureBox { Image = new Bitmap(stream), SizeMode = PictureBoxSizeMode.Zoom, Location = new Point(400, 8), Size = new Size(160, 72) };
+          using (var original = new Bitmap(stream)) {
+          var picture = new PictureBox { Image = new Bitmap(original), SizeMode = PictureBoxSizeMode.Zoom, Location = new Point(400, 8), Size = new Size(160, 72) };
           banner.Controls.Add(picture);
+          }
         }
       }
       Controls.Add(banner);
