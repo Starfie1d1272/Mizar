@@ -30,3 +30,15 @@
 本次 Linux 工作区同源码 Web 实测（既有依赖缓存，先 Full 后 Core；不是冷／热对照）：Full 98,144,273 bytes，ZIP 44,534,530 bytes，构建 1.378s、压缩 2.162s；Core 12,527,012 bytes，ZIP 10,117,650 bytes，构建 1.081s、压缩 0.382s。ZIP 减少约 77.3%。没有重编译 Rust、生成 Setup 或发行，因此不能由此宣称 Full<=180s 或 Release<=600s。
 
 公开入口只读验证：GitHub 的固定许可样例实际下载并核对成功；Box 分享根目录返回 HTTP 200、Content-Type text/html，不能据此宣称已有可用的文件直链或将其作为第一下载源。
+
+## 真实 NSIS 与官方 Pack 接线进度
+
+`pin-stable-core.mjs` 复用已构建 Companion 的 `StableSource`，认证真实 Stable 后生成固定 NSIS 下载／执行输入；不接受镜像自报摘要或另一个信任根。`legacy-stable-plan.json` 与实际认证的 v1.1.0 输出完全一致，只用于原安装器资格验证，不是新 Core-only 发行。
+
+`Nsis.Install` 在同一个只读锁定 fd 上复核大小／摘要，再直接调用既有 NSIS；固定 `/S /MIZARUPDATE /D=` 参数，不经过 shell，也不接收网页命令。只允许全新当前用户程序目录或隔离资格目录；既有目录、登记、快捷方式或 Mizar 进程均拒绝。写入开始后的取消先等 NSIS 退出，再调用它生成的原卸载器清理；不强杀写入进程，不递归删除用户目录。超时仍在运行时明确返回需要恢复的目录并保留现场，禁止并发重试。完成只表示 Core 安装及身份核对，不表示默认资源就绪。默认 POC 窗口仍固定许可下载，不启用实际用户安装。
+
+`installOfficialPack` 是安装桥，运行位置为产品 `resources/app/dist/web-installer/install-official-pack.mjs`，从 Companion 的真实依赖解析 `@mizar/resource-pack-contract/runtime`。先认证并冻结全部原输入，再只把验证器返回的文件字节交给传入的唯一 Store；保存原声明、证明与 manifest，供其真实离线 receipt 适配器复验。无 activation provider、未 active、不可读取默认三份 EPL 清单或视频时均不能返回完成。已有相同 ready 版本时直接通过 Store 复验读取，不联网验证远端。`readOfficialWebResource(store,path,range)` 为既有 `/fixtures/...` 与 `/fixture-media/epl-s24/...` 提供映射，所有字节及 Range 仍由唯一 Store 负责，不新增监听器或第二缓存。
+
+父协调还需要完成两个跨域接口：Companion 声明 `@mizar/resource-pack-contract: workspace:*`（目前只在临时集成工作树添加以验证真实导入，没有复制进本 PR）；shared verifier 提供无完整归档、无联网的已授权 manifest receipt 复验，区分 install/cache/rollback 的有效期及 TUF 缓存策略。当前 Bytes API 需要完整 archive 且 createVerifier 默认刷新 TUF，不能直接满足 Store 的离线 cache 入口；安装桥没有对此伪造通过。
+
+定向 Windows run 37991657925 已实际下载原 83,607,477-byte NSIS、在带空格的全新目录安装、拒绝覆盖既有安装，并证明安装过程中取消等待退出后由原卸载器清理。临时合并 #248/#250 的真实代码、注册真实依赖后，真实 producer 生成了 34,367,014-byte/43-file EPL 归档；真实 Sigstore 入口拒绝已有正式发行但 subject 错误的证明，实际 Store 保持 missing，未伪报 resourcesReady。这仍不替代有效新资源签名、首次成功入库、断网 EPL 和最终 Core-only 产品启动证据。
