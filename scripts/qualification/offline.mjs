@@ -1,9 +1,10 @@
 import { access, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
+import { createBuildTimer } from './build-timings.mjs';
 import { isDevelopmentFile } from './portable-files.mjs';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -226,29 +227,41 @@ async function assertBundleSmoke(outputRoot) {
 }
 
 async function main() {
-  for (const command of [
-    ['format:check'],
-    ['lint'],
-    ['architecture:check'],
-    ['typecheck'],
-    ['test'],
-    ['build'],
-  ])
-    await runCommand('pnpm', command);
-
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length && args[0] !== '--quality-owned-static-checks'))
+    throw new Error('offline qualification accepts only --quality-owned-static-checks');
+  const qualityOwnedStaticChecks = args.length === 1;
   const temporaryParent = join(rootDir, '.agent-tmp');
-  await mkdir(temporaryParent, { recursive: true });
+  const evidence = join(temporaryParent, 'offline-evidence');
+  await mkdir(evidence, { recursive: true });
+  const timed = createBuildTimer(evidence, {
+    gitSha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' }).trim(),
+    platform: process.platform,
+    qualityOwnedStaticChecks,
+  });
+  // CI's required Quality lane owns identical-source static checks. Standalone
+  // callers keep them; every OS still executes its own types, tests and build.
+  const commands = [
+    ...(qualityOwnedStaticChecks ? [] : ['format:check', 'lint', 'architecture:check']),
+    'typecheck',
+    'test',
+    'build',
+  ];
+  for (const command of commands) await timed(command, () => runCommand('pnpm', [command]));
+
   const outputRoot = await mkdtemp(join(temporaryParent, 'qualification-offline-'));
   try {
-    await runCommand('node', [
-      'scripts/qualification/build.mjs',
-      '--skip-build',
-      '--skip-node-runtime',
-      '--allow-dirty',
-      '--output',
-      outputRoot,
-    ]);
-    await assertBundleSmoke(outputRoot);
+    await timed('portable-bundle', () =>
+      runCommand('node', [
+        'scripts/qualification/build.mjs',
+        '--skip-build',
+        '--skip-node-runtime',
+        '--allow-dirty',
+        '--output',
+        outputRoot,
+      ]),
+    );
+    await timed('portable-integrity', () => assertBundleSmoke(outputRoot));
     console.log('QUALIFICATION_OFFLINE_PASS');
   } finally {
     await rm(outputRoot, { recursive: true, force: true });

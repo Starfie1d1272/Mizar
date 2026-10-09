@@ -70,8 +70,6 @@ const WINDOWS_QUALIFICATION_PATHS = new Set([
   'scripts/qualification/installer-assets/sources.json',
   'scripts/qualification/installer-assets/wizard.bmp',
   'scripts/qualification/installer-assets/wizard.svg',
-  'scripts/qualification/offline.mjs',
-  'scripts/qualification/offline.test.mjs',
   'scripts/qualification/portable-files.mjs',
   'scripts/qualification/portable-files.test.mjs',
   'scripts/qualification/product-logs.mjs',
@@ -101,6 +99,7 @@ const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
   if (DISTRIBUTION_TOOL_PATHS.has(path)) return false;
+  if (isOfflineQualificationPath(path)) return false;
   return (
     PORTABLE_SMOKE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     path === 'packages/telemetry-gsi/src/production-config.json' ||
@@ -128,6 +127,7 @@ function isForcedFullPath(path) {
     (!isDocsOnlyPath(path) &&
       path.startsWith('scripts/qualification/') &&
       !DISTRIBUTION_TOOL_PATHS.has(path) &&
+      !isOfflineQualificationPath(path) &&
       !WINDOWS_QUALIFICATION_PATHS.has(path)) ||
     path.startsWith('.github/') ||
     path.startsWith('scripts/ci/') ||
@@ -209,18 +209,26 @@ function fullPlan(reason, includeOfflineQualification = false) {
   };
 }
 
+function isOfflineQualificationPath(path) {
+  return (
+    path === 'scripts/qualification/offline.mjs' ||
+    path === 'scripts/qualification/offline.test.mjs'
+  );
+}
+
 function selectivePlan(changedFiles, eventName) {
   const runDesign = changedFiles.some(({ path }) => isDesignPath(path));
   const runQuality = changedFiles.some(({ path }) => isKnownQualityPath(path));
   const runAcceptance = changedFiles.some(({ path }) => isAcceptancePath(path));
   const runPlatform = changedFiles.some(({ path }) => isPlatformPath(path));
   const runQualification = changedFiles.some(({ path }) => isQualificationPath(path));
+  const runOfflineQualification = changedFiles.some(({ path }) => isOfflineQualificationPath(path));
   const requiredJobs = CI_JOB_IDS.filter((job) => {
     if (job === 'quality') return runQuality;
     if (job === 'design') return runDesign;
     if (job === 'acceptance') return runAcceptance;
     if (job === 'platform') return runPlatform;
-    if (job === 'qualification_offline') return false;
+    if (job === 'qualification_offline') return runOfflineQualification;
     return runQualification;
   });
 
@@ -230,7 +238,7 @@ function selectivePlan(changedFiles, eventName) {
     runAcceptance,
     runPlatform,
     runQualification,
-    runOfflineQualification: false,
+    runOfflineQualification,
     requiredJobs,
     reason: `${eventName} changed surface classified (${changedFiles.length} file(s))`,
   };
@@ -283,13 +291,15 @@ export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
   if (!['pull_request', 'push'].includes(eventName))
     return fullPlan(`forced full for ${eventName}`, true);
-  const includeOfflineQualification = eventName === 'push';
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>
     typeof entry === 'string'
       ? { path: normalizePath(entry), status: 'M' }
       : { path: normalizePath(entry.path), status: entry.status ?? 'M' },
   );
+
+  const includeOfflineQualification =
+    eventName === 'push' || changedFiles.some(({ path }) => isOfflineQualificationPath(path));
 
   if (changedFiles.length === 0)
     return fullPlan(`forced full: missing ${eventName} changed paths`, includeOfflineQualification);

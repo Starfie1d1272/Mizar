@@ -98,7 +98,7 @@ describe('changed-surface CI planner', () => {
         runQuality: true,
         runAcceptance: false,
         runPlatform: false,
-        runQualification: true,
+        runQualification: false,
       },
     ],
     [
@@ -144,8 +144,7 @@ describe('changed-surface CI planner', () => {
   ])('%s selects the matching evidence', (_name, files, expected) => {
     const plan = createCiPlan({ eventName: 'pull_request', changedFiles: files });
     expect(plan).toMatchObject(expected);
-    expect(plan.requiredJobs).not.toContain('qualification_offline');
-    expect(plan.runOfflineQualification).toBe(false);
+    expect(plan.runOfflineQualification).toBe(files.includes('scripts/qualification/offline.mjs'));
   });
 
   it.each(['pull_request', 'push'])(
@@ -258,6 +257,66 @@ describe('changed-surface CI planner', () => {
       }).requiredJobs,
     ).toEqual(['quality']);
   });
+
+  it.each(['pull_request', 'push'])(
+    'validates offline self-changes on both platforms for %s',
+    (eventName) => {
+      const plan = createCiPlan({ eventName, changedFiles: ['scripts/qualification/offline.mjs'] });
+      expect(plan.requiredJobs).toEqual(['quality', 'qualification_offline']);
+      expect(
+        evaluateCiGate({
+          planResult: 'success',
+          requiredJobs: plan.requiredJobs,
+          jobResults: {
+            quality: 'skipped',
+            qualification_offline: 'success',
+            qualification_windows: 'success',
+          },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(['pull_request', 'push'])(
+    'unions offline tooling with its independent consumers for %s',
+    (eventName) => {
+      for (const path of [
+        'scripts/qualification/offline.mjs',
+        'scripts/qualification/offline.test.mjs',
+      ]) {
+        for (const status of ['M', 'D']) {
+          expect(
+            createCiPlan({ eventName, changedFiles: [{ path, status }] }).requiredJobs,
+          ).toEqual(['quality', 'qualification_offline']);
+        }
+        expect(
+          createCiPlan({
+            eventName,
+            changedFiles: [path, 'scripts/qualification/windows-setup.nsi'],
+          }).requiredJobs,
+        ).toEqual(['quality', 'qualification_offline', 'qualification_windows']);
+        expect(
+          createCiPlan({
+            eventName,
+            changedFiles: parseGitDiffNameStatus(
+              `R100\0${path}\0scripts/qualification/bundle/update-install.ps1\0`,
+            ),
+          }).requiredJobs,
+        ).toEqual(['quality', 'qualification_offline', 'qualification_windows']);
+        expect(
+          createCiPlan({ eventName, changedFiles: [path, '.github/workflows/ci.yml'] })
+            .requiredJobs,
+        ).toEqual([
+          'quality',
+          'design',
+          'acceptance',
+          'platform',
+          'qualification_offline',
+          'qualification_windows',
+        ]);
+      }
+    },
+  );
 
   it('unions browser, platform and Windows qualification risks with ordinary docs', () => {
     expect(

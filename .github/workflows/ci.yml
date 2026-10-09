@@ -512,6 +512,8 @@ jobs:
             runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
@@ -526,7 +528,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run offline qualification
-        run: pnpm qualification:offline
+        run: >-
+          node scripts/qualification/offline.mjs
+          ${{ needs.plan.outputs.run_quality == 'true' && '--quality-owned-static-checks' || '' }}
+
+      - name: Preserve offline phase measurements
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: offline-evidence-${{ matrix.name }}
+          include-hidden-files: true
+          path: .agent-tmp/offline-evidence/build-timings.json
+          if-no-files-found: error
 
   ci-gate:
     name: ci-gate
