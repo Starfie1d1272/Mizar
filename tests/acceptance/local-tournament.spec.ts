@@ -30,12 +30,13 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
         });
       },
     );
-    await page.goto('/matches');
+    await page.goto('/');
     const form = page.locator('.workspace-local-match form').first();
     await form.locator('input').nth(0).fill('甲队');
     await form.locator('input').nth(1).fill('乙队');
     await form.getByRole('button', { name: '创建本地比赛' }).click();
     await expect(page.getByRole('region', { name: '本场上下文' })).toContainText('甲队 vs 乙队');
+    await page.getByRole('link', { name: '本场资料', exact: true }).click();
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     await page.getByLabel('阶段名称').fill('决赛');
     await page.getByRole('button', { name: '保存比赛资料' }).click();
