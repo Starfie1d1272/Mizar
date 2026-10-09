@@ -74,7 +74,6 @@ export interface HudConsoleWorkspaceProps {
   readonly onSubmitMutation: (kind: HudWorkspace, saveAs: boolean) => void;
   readonly onDiscard: (kind: HudWorkspace) => void;
   readonly onReset: (kind: HudWorkspace) => void;
-  readonly onActivate: () => void;
   readonly onImportPresetFile: (file: File) => void;
   readonly onExportPresetFile: () => void;
 }
@@ -129,7 +128,6 @@ export function HudConsoleWorkspaces({
   onSubmitMutation,
   onDiscard,
   onReset,
-  onActivate,
   onImportPresetFile,
   onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
@@ -298,15 +296,7 @@ export function HudConsoleWorkspaces({
           />
         )}
         {renderResourceActions('preset', presetDirty, selectedPresetId)}
-        <Button
-          className="hud-console__primary-action"
-          disabled={busy || !editorReady || hasDirtyDraft || !previewMatchesPresetReferences}
-          onClick={onActivate}
-          type="button"
-        >
-          启用当前预设
-        </Button>
-        <p className="hud-console__hint">保存预设后，点击“启用当前预设”上屏。</p>
+        <p className="hud-console__hint">保存资源后，在常显版本区明确启用当前预设上屏。</p>
       </section>
     );
   }

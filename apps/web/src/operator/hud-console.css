@@ -814,3 +814,39 @@
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }
+
+/* Keep the canvas and version controls inside the desktop window. */
+@media (min-width: 1200px) and (min-height: 800px) {
+  .hud-console {
+    padding: var(--mizar-layout-padding);
+    min-height: 0;
+  }
+  .hud-console__versions {
+    margin-block: 0;
+  }
+  .hud-console__canvas-frame {
+    width: min(100%, calc((100dvh - 580px) * 16 / 9));
+    margin-inline: auto;
+  }
+  .hud-console__editor-fieldset {
+    max-height: calc(100dvh - 460px);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .hud-console__editor-fieldset .hud-console__actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--mizar-bg-surface);
+    padding-block: var(--mizar-layout-gap);
+    z-index: 1;
+  }
+}
+@media (min-width: 1200px) and (min-height: 800px) {
+  .hud-console__replay {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+  }
+  .hud-console__replay-provenance {
+    grid-column: 1 / -1;
+  }
+}

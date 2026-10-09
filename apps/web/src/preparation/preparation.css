@@ -578,24 +578,10 @@
   margin-inline: auto;
 }
 
-.program-preview-workspace[data-scene='bp'] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  align-items: start;
-  gap: var(--mizar-layout-gap);
-}
 .bp-workspace-controls {
   display: grid;
   gap: var(--mizar-layout-gap);
   min-width: 0;
-}
-.program-preview-workspace .bp-demo-options {
-  grid-template-columns: minmax(0, 1fr);
-}
-@media (max-width: 900px) {
-  .program-preview-workspace[data-scene='bp'] {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .program-preview-playback {

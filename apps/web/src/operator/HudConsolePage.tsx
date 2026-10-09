@@ -916,11 +916,10 @@ export function HudConsolePage() {
               selectedThemeId !== presetDraft.themeId
             }
             onClick={() => {
-              if (window.confirm('将当前已保存 HUD 预设应用到正式播出？'))
-                void activateSelectedPreset();
+              void activateSelectedPreset();
             }}
           >
-            应用到播出
+            启用当前预设
           </Button>
         </section>
         <div className="hud-console__layout">

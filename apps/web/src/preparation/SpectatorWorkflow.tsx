@@ -41,8 +41,8 @@ export function SpectatorWorkflow({
             <span>
               点击右上角「
               {production?.mode === 'preparation' && window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
+                ? '启动新制作并进入现场'
+                : '返回现有现场'}
               」。
             </span>
           </li>
@@ -55,7 +55,7 @@ export function SpectatorWorkflow({
             </span>
           </li>
           <li>
-            <a href="/picture?tab=overlay">隐藏 CS2 原生 HUD</a>
+            <a href="/?tab=hud">隐藏 CS2 原生 HUD</a>
             <span>复制命令，在 CS2 控制台粘贴并回车。</span>
           </li>
           <li>

@@ -49,7 +49,7 @@ export function registerProductionRoutes(
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
-        cleanup = null;
+        if (mode === 'preparation') cleanup = null;
         mode = 'live';
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';

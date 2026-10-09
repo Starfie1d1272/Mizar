@@ -16,7 +16,8 @@ export function Settings({ tab }: { tab: string }) {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [connectionEditing, setConnectionEditing] = useState(false);
+  const [connectionOverride, setConnectionEditing] = useState<boolean | null>(null);
+  const connectionEditing = connectionOverride ?? obs?.connection !== 'connected';
   const [messageTone, setMessageTone] = useState<'info' | 'danger'>('info');
   const [gsi, setGsi] = useState<{
     detected: boolean;
@@ -147,7 +148,7 @@ export function Settings({ tab }: { tab: string }) {
           <section className="obs-connection-summary" aria-label="OBS 连接摘要">
             <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
             <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
-            <Button onClick={() => setConnectionEditing((value) => !value)}>编辑连接</Button>
+            <Button onClick={() => setConnectionEditing(!connectionEditing)}>编辑连接</Button>
             <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
               重新检查
             </Button>
@@ -180,11 +181,15 @@ export function Settings({ tab }: { tab: string }) {
                 </details>
               ) : null}
             </Panel>
-            <details
-              open={connectionEditing}
-              onToggle={(event) => setConnectionEditing(event.currentTarget.open)}
-            >
-              <summary>WebSocket 连接设置</summary>
+            <details open={connectionEditing}>
+              <summary
+                onClick={(event) => {
+                  event.preventDefault();
+                  setConnectionEditing(!connectionEditing);
+                }}
+              >
+                WebSocket 连接设置
+              </summary>
               <Panel>
                 <h3>连接控制</h3>
                 <p>填写 OBS 提供的端口与密码。</p>

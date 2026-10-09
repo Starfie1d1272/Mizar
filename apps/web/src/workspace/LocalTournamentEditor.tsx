@@ -118,7 +118,7 @@ export function LocalTournamentEditor({
           },
     );
   return (
-    <div className="preparation-editor">
+    <div className="preparation-editor" data-section={section}>
       {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
       {scope === 'match' && section !== 'maps' ? (
         <form

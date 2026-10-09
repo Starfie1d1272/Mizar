@@ -156,7 +156,7 @@ export function WorkspaceLeft() {
         </header>
         <section className="workspace-radar" aria-label="比赛雷达">
           {recovering ? (
-            <RecoveryPanel onClose={() => setRecovering(false)} />
+            <RecoveryPanel operator={payload} onClose={() => setRecovering(false)} />
           ) : (
             <>
               <header className="workspace-section-heading">

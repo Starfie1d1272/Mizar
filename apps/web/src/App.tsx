@@ -3,7 +3,7 @@ import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
-import { BpWorkspaceControls, BpPage } from './bp/BpPage';
+import { BpWorkbench, BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -64,7 +64,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'bp',
-    path: '/preview?scene=bp',
+    path: '/operator/bp',
     title: 'BP 制作',
     description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
@@ -620,7 +620,7 @@ export function App() {
               环境。
             </p>
             <p>普通制作模式不会自动开启验收记录。</p>
-            <a href="/">返回准备中心</a>
+            <a href="/">返回本场制播</a>
           </section>
         </main>
       </OperatorShell>
@@ -663,7 +663,7 @@ export function App() {
         <main className="preparation">
           <h1>正式 BP 控制</h1>
           <p>影响正式播出；赛前可用，无需启动 CS2 或等待 GSI。</p>
-          <BpWorkspaceControls />
+          <BpWorkbench />
         </main>
       </ToolShell>
     );
@@ -674,10 +674,10 @@ export function App() {
         <main className="operator-shell">
           <header className="product-heading">
             <h1>页面不存在</h1>
-            <p>404 · 请检查地址，或返回准备中心继续操作。</p>
+            <p>404 · 请检查地址，或返回本场制播继续操作。</p>
           </header>
           <div className="dashboard-links">
-            <a href="/">返回准备中心</a>
+            <a href="/">返回本场制播</a>
           </div>
         </main>
       </OperatorShell>

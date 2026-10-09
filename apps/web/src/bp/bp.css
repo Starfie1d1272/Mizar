@@ -1018,3 +1018,51 @@
   background: var(--mizar-bg-surface);
   padding-block: var(--mizar-layout-gap);
 }
+
+/* Source, current match and formal playback controls belong to one compact task. */
+@media (min-width: 1100px) {
+  .bp-workspace-controls .bp-control-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 24px;
+  }
+  .bp-workspace-controls .bp-control-panel > h2,
+  .bp-workspace-controls .bp-workbench-status,
+  .bp-workspace-controls .bp-pending-rivalhub {
+    grid-column: 1 / -1;
+  }
+  .bp-workspace-controls .bp-current-match {
+    grid-column: 1;
+    grid-row: 3 / span 2;
+  }
+  .bp-workspace-controls .bp-control-actions {
+    grid-column: 2;
+  }
+  .bp-workspace-controls .bp-demo-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.bp-workspace-controls .bp-scene-testing {
+  margin-top: 0;
+}
+.bp-workspace-controls .bp-scene-testing:not([open]) {
+  display: block;
+  padding-block: 8px;
+}
+.bp-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--mizar-layout-padding);
+  align-items: start;
+}
+.bp-workbench-preview {
+  min-width: 0;
+}
+.bp-workbench-preview .preparation-program-preview {
+  width: 100%;
+  max-width: none;
+}
+@media (max-width: 1100px) {
+  .bp-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
