@@ -52,6 +52,25 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await expect(page.getByLabel('赛事名称')).toHaveValue('验收赛事');
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');
+    const original = await app.inject({ url: '/local/v1/tournament' });
+    const resourceId = original.json<{ activeLocalMatchId: string }>().activeLocalMatchId;
+    const next = await app.inject({
+      method: 'POST',
+      url: '/operator/local-match/create',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { teamA: '下一场甲', teamB: '下一场乙', format: 'bo5' },
+    });
+    expect(next.statusCode).toBe(200);
+    await page.goto('/resources');
+    await page.getByLabel('浏览比赛资源').selectOption(resourceId);
+    await page.getByRole('link', { name: '赛事与赛程', exact: true }).click();
+    expect(new URL(page.url()).searchParams.get('resource')).toBe(resourceId);
+    await page.getByRole('link', { name: '比赛与队伍', exact: true }).click();
+    await expect(page.getByLabel('浏览比赛资源')).toHaveValue(resourceId);
+    const current = await app.inject({ url: '/local/v1/tournament' });
+    expect(current.json<{ activeLocalMatchId: string }>().activeLocalMatchId).toBe(
+      next.json<{ matchId: string }>().matchId,
+    );
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });
