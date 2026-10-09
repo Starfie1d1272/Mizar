@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
+import { releaseAttestationArgs } from './release-identity.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -385,20 +386,16 @@ async function main() {
         await writeFile(join(directory, asset.name), data);
         assets.push({ kind, bytes: data, size: data.length, sha256: digest(data) });
       }
-      // gh verifies the signature, repository, workflow and transparency proof;
-      // neither a mirror credential nor a same-channel hash grants authenticity.
-      await promisify(execFile)('gh', [
-        'attestation',
-        'verify',
-        join(directory, 'update-manifest.json'),
-        '--bundle',
-        join(directory, 'update-provenance.json'),
-        '--repo',
-        'Starfie1d1272/Mizar',
-        '--signer-workflow',
-        'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml',
-      ]);
       const update = JSON.parse(assets.find((a) => a.kind === 'manifest').bytes);
+      // The same main signer and exact-source policy owns Promotion and mirrors.
+      await promisify(execFile)(
+        'gh',
+        releaseAttestationArgs(
+          join(directory, 'update-manifest.json'),
+          update.gitSha,
+          join(directory, 'update-provenance.json'),
+        ),
+      );
       requireValue(
         update.version === identity.version &&
           update.installer.name === identity.name &&
