@@ -87,7 +87,7 @@ export function ProgramPreview({
   }, [demo, demoIndex, settledKey, frame.key, preview, intro]);
   return (
     <Panel className="program-preview-panel">
-      {standalone ? null : <h2>画面检查 · 只读</h2>}
+      {standalone ? null : <h2>节目画面</h2>}
       {allowCurrent ? (
         <Select
           label="节目预览来源"
@@ -97,7 +97,7 @@ export function ProgramPreview({
             setSource(event.target.value as 'current' | 'sample');
           }}
         >
-          <option value="current">本场资料 / 当前观战数据（只读）</option>
+          <option value="current">本场资料 / 当前观战数据</option>
           <option value="sample">版式样例（不是本场事实）</option>
         </Select>
       ) : null}
@@ -123,7 +123,7 @@ export function ProgramPreview({
             {demo
               ? `演示 ${demoIndex + 1} / ${demo.length} · ${PROGRAM_SCENES.find((scene) => scene.id === preview)!.title}`
               : source === 'current'
-                ? '本场服务数据 · 无数据时显示待确认，不替换为样例'
+                ? '本场服务数据 · 无数据时待确认'
                 : preview === 'bp'
                   ? workspace?.demo.active || workspace?.source === 'fixture'
                     ? 'BP 样例只读预览 · 不切换播出'

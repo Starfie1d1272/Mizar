@@ -14,6 +14,7 @@ import { useLocalTournament } from './tournament';
 import {
   openTool,
   productionAction,
+  productionEntryLabel,
   useLocalRead,
   useLocalReadWithTime,
   type Production,
@@ -134,7 +135,6 @@ export function PreparationPage() {
     return () => window.removeEventListener('mizar-enter', enter);
   });
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
-  const existing = production?.mode === 'hidden' || production?.mode === 'live';
   const canEdit = read.status === 'ready' && envelope?.freshness === 'fresh';
   return (
     <OperatorShell active={isSettings ? '/settings' : isResources ? '/resources' : '/'}>
@@ -174,11 +174,7 @@ export function PreparationPage() {
                   void action(() => productionAction('enter', production, setProgress))
                 }
               >
-                {existing
-                  ? '返回现有现场'
-                  : window.__TAURI_INTERNALS__
-                    ? '启动新制作并进入现场'
-                    : '进入制播工作区'}
+                {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
               </Button>
               <details className="production-actions-menu">
                 <summary>更多操作</summary>

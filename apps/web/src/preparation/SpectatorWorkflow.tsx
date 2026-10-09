@@ -1,6 +1,6 @@
 import { Panel } from '../ui';
 import { useCs2Status } from './cs2-status';
-import type { Production } from './client';
+import { productionEntryLabel, type Production } from './client';
 
 export function SpectatorWorkflow({
   capabilities,
@@ -40,9 +40,7 @@ export function SpectatorWorkflow({
             <strong>{status?.running ? 'CS2 已启动' : '从 Mizar 启动游戏'}</strong>
             <span>
               点击右上角「
-              {production?.mode === 'preparation' && window.__TAURI_INTERNALS__
-                ? '启动新制作并进入现场'
-                : '返回现有现场'}
+              {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
               」。
             </span>
           </li>

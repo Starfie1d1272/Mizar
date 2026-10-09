@@ -91,6 +91,14 @@ export async function openRivalHubAuthorization(url: string, popup?: Window | nu
   else if (popup && !popup.closed) popup.location.replace(url);
   else window.open(url, 'mizar-rivalhub');
 }
+export function productionEntryLabel(production: Production | null, desktop: boolean): string {
+  return production?.mode === 'live' || production?.mode === 'hidden'
+    ? '返回现有现场'
+    : desktop
+      ? '启动新制作并进入现场'
+      : '进入制播工作区';
+}
+
 export interface Production {
   cleanup?: {
     at: string;

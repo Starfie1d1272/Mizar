@@ -77,18 +77,18 @@ export function PictureWorkspace({
             </Button>
             <p>
               {onAir.status !== 'ready'
-                ? '启用状态待重查。所选配置的样例 / 回放预览请在真实编辑器完成。'
+                ? '启用状态待重查。'
                 : selected.id === onAir.current.preset.id
-                  ? '节目窗口使用当前正式启用配置。'
-                  : '此预设尚未启用。所选配置的样例 / 回放预览请在真实编辑器完成；右侧节目仍使用正式启用配置。'}
+                  ? '所选预设已正式启用。'
+                  : '所选预设尚未启用；在编辑器检查其样例 / 回放。'}
             </p>
           </>
         ) : (
           <p>连接未就绪，不使用样例配置冒充已保存选择。</p>
         )}
-        <p>选择、编辑保存与启用分别执行；浏览预设不会改变播出。</p>
+        <p>检查与保存不改变播出，只有启用操作应用所选预设；右侧使用正式配置。</p>
         <details>
-          <summary>本机观战工具 · 不影响正式视觉</summary>
+          <summary>本机观战工具</summary>
           <LocalOverlayControls />
           <SpectatorHudCommands />
         </details>

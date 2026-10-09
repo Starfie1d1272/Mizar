@@ -17,6 +17,7 @@ test('task workspaces use real local data and keep candidate browsing separate f
   let unavailableMatch = false;
   let unavailableTournament = false;
   const productionWrites: string[] = [];
+  const matchSelectionWrites: string[] = [];
   const evidence = process.env.MIZAR_REVIEW_SCREENSHOTS;
   try {
     await app.ready();
@@ -32,6 +33,8 @@ test('task workspaces use real local data and keep candidate browsing separate f
           await route.fulfill({ status: 503, json: { error: 'temporary_read_failure' } });
           return;
         }
+        if (request.method() === 'POST' && pathname === '/operator/local-match/select')
+          matchSelectionWrites.push(pathname);
         if (request.method() === 'POST' && pathname === '/operator/production')
           productionWrites.push(pathname);
         const response = await app.inject({
@@ -165,6 +168,10 @@ test('task workspaces use real local data and keep candidate browsing separate f
           await expect(page.locator('.preparation-editor fieldset').first()).toContainText(
             '首发选手 1—5',
           );
+        if (name === 'check')
+          await expect(page.locator('.spectator-workflow li').nth(2)).toContainText(
+            '进入制播工作区',
+          );
         if (name === 'picture') {
           await expect(page.getByTitle('节目预览', { exact: true })).toHaveAttribute(
             'src',
@@ -183,6 +190,11 @@ test('task workspaces use real local data and keep candidate browsing separate f
           await page.screenshot({ path: join(evidence, `${name}-${scale}.png`), fullPage: true });
       }
     }
+    await page.goto('/resources');
+    await expect(page.getByRole('button', { name: '确认载入为本场', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '前往本场准备', exact: true }).click();
+    await expect(page).toHaveURL(/\/\?tab=match$/);
+    expect(matchSelectionWrites).toEqual([]);
     const firstState = (await app.inject('/local/v1/tournament')).json<{
       events: { eventId: string; matchIds: string[] }[];
     }>();

@@ -208,9 +208,11 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
   align-items: start;
 }
-.production-page .obs-setup__cards > .mizar-panel:last-child {
-  grid-column: 2;
-  grid-row: 1 / span 2;
+.obs-setup__connection-stack {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+  align-content: start;
+  min-width: 0;
 }
 .production-page .obs-setup__cards .workspace-confidence {
   width: 100%;
@@ -229,10 +231,6 @@
   .production-preflight,
   .production-page .obs-setup__cards {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .production-page .obs-setup__cards > .mizar-panel:last-child {
-    grid-column: auto;
-    grid-row: auto;
   }
 }
 @media (max-width: 700px) {

@@ -154,102 +154,104 @@ export function Settings({ tab }: { tab: string }) {
             </Button>
           </section>
           <div className="obs-setup__cards">
-            <Panel>
-              <h3>打开 OBS</h3>
-              <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() => void action(() => obsCommand('open'))}
-              >
-                打开 OBS
-              </Button>
-              {window.__TAURI_INTERNALS__ ? (
-                <details>
-                  <summary>OBS 路径</summary>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const path = await desktopInvoke<string | null>('select_obs_executable');
-                        if (path) await obsCommand('configure', { executablePath: path });
-                      })
-                    }
-                  >
-                    更改 OBS 路径
-                  </Button>
-                </details>
-              ) : null}
-            </Panel>
-            <details open={connectionEditing}>
-              <summary
-                onClick={(event) => {
-                  event.preventDefault();
-                  setConnectionEditing(!connectionEditing);
-                }}
-              >
-                WebSocket 连接设置
-              </summary>
+            <div className="obs-setup__connection-stack">
               <Panel>
-                <h3>连接控制</h3>
-                <p>填写 OBS 提供的端口与密码。</p>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void action(async () => {
-                      await obsCommand('configure', {
-                        port,
-                        ...(password.length > 0 ? { password } : {}),
-                      });
-                      setPassword('');
-                      await obsCommand('check');
-                      setMessage(
-                        password.length > 0
-                          ? '已保存新密码并测试连接。'
-                          : '已保存端口并测试连接，原密码保持不变。',
-                      );
-                    });
-                  }}
+                <h3>打开 OBS</h3>
+                <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => void action(() => obsCommand('open'))}
                 >
-                  <Field
-                    label="WebSocket 端口"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={port}
-                    onChange={(e) => setPortOverride(Number(e.target.value))}
-                  />
-                  <Field
-                    label="WebSocket 密码"
-                    type="password"
-                    autoComplete="off"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
-                  />
-                  <Button type="submit" variant="primary" loading={busy}>
-                    保存并测试
-                  </Button>
-                </form>
-                {obs?.passwordConfigured ? (
+                  打开 OBS
+                </Button>
+                {window.__TAURI_INTERNALS__ ? (
                   <details>
-                    <summary>已保存密码</summary>
+                    <summary>OBS 路径</summary>
                     <Button
                       disabled={busy}
                       onClick={() =>
                         void action(async () => {
-                          await obsCommand('configure', { port, password: '' });
-                          await obsCommand('check');
-                          setMessage('已清除 Mizar 保存的 OBS 密码。');
+                          const path = await desktopInvoke<string | null>('select_obs_executable');
+                          if (path) await obsCommand('configure', { executablePath: path });
                         })
                       }
                     >
-                      清除已保存密码
+                      更改 OBS 路径
                     </Button>
                   </details>
                 ) : null}
               </Panel>
-            </details>
+              <details open={connectionEditing}>
+                <summary
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setConnectionEditing(!connectionEditing);
+                  }}
+                >
+                  WebSocket 连接设置
+                </summary>
+                <Panel>
+                  <h3>连接控制</h3>
+                  <p>填写 OBS 提供的端口与密码。</p>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void action(async () => {
+                        await obsCommand('configure', {
+                          port,
+                          ...(password.length > 0 ? { password } : {}),
+                        });
+                        setPassword('');
+                        await obsCommand('check');
+                        setMessage(
+                          password.length > 0
+                            ? '已保存新密码并测试连接。'
+                            : '已保存端口并测试连接，原密码保持不变。',
+                        );
+                      });
+                    }}
+                  >
+                    <Field
+                      label="WebSocket 端口"
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={port}
+                      onChange={(e) => setPortOverride(Number(e.target.value))}
+                    />
+                    <Field
+                      label="WebSocket 密码"
+                      type="password"
+                      autoComplete="off"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
+                    />
+                    <Button type="submit" variant="primary" loading={busy}>
+                      保存并测试
+                    </Button>
+                  </form>
+                  {obs?.passwordConfigured ? (
+                    <details>
+                      <summary>已保存密码</summary>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void action(async () => {
+                            await obsCommand('configure', { port, password: '' });
+                            await obsCommand('check');
+                            setMessage('已清除 Mizar 保存的 OBS 密码。');
+                          })
+                        }
+                      >
+                        清除已保存密码
+                      </Button>
+                    </details>
+                  ) : null}
+                </Panel>
+              </details>
+            </div>
             <Panel>
               <h3>实际画面与输出检查</h3>
               <ObsConfidence />

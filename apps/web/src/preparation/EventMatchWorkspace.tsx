@@ -125,28 +125,34 @@ export function EventMatchWorkspace({
           <>
             <MatchDocumentView document={match} section="details" />
             <div className="preparation-actions">
-              <Button
-                variant="primary"
-                disabled={!canWrite}
-                onClick={() => {
-                  if (
-                    !canChange() ||
-                    !window.confirm(
-                      `将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？资源浏览本身不改变播出。`,
+              {match.matchId === view?.activeLocalMatchId ? (
+                <Button variant="primary" onClick={() => window.location.assign('/?tab=match')}>
+                  前往本场准备
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={!canWrite}
+                  onClick={() => {
+                    if (
+                      !canChange() ||
+                      !window.confirm(
+                        `将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？资源浏览本身不改变播出。`,
+                      )
                     )
-                  )
-                    return;
-                  void action(async () => {
-                    await command('/operator/local-match/select', { matchId: match.matchId });
-                    window.location.assign('/?tab=match');
-                  });
-                }}
-              >
-                确认载入为本场
-              </Button>
+                      return;
+                    void action(async () => {
+                      await command('/operator/local-match/select', { matchId: match.matchId });
+                      window.location.assign('/?tab=match');
+                    });
+                  }}
+                >
+                  确认载入为本场
+                </Button>
+              )}
               <small>
                 {match.matchId === view?.activeLocalMatchId
-                  ? '正在制播的本地比赛'
+                  ? '当前本场 · 本地资料'
                   : '浏览资源 · 当前本场保持不变'}
               </small>
             </div>
