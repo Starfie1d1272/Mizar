@@ -21,6 +21,17 @@ const older = (a, b) => {
   return false;
 };
 
+export function promotionTag(run, jobs) {
+  const candidates = jobs
+    .filter(
+      (job) => job.run_id === run.id && job.status === 'completed' && job.conclusion === 'success',
+    )
+    .map((job) => /^发布 Mizar (v\d+\.\d+\.\d+(?:-rc\.\d+)?)$/.exec(job.name))
+    .filter(Boolean);
+  requireValue(candidates.length === 1, '无法确定唯一晋级标签；请手动指定标签重试');
+  return candidates[0][1];
+}
+
 export function validateRelease(release, manifest, distribution, tag, tagSha) {
   requireValue(/^v\d+\.\d+\.\d+$/.test(tag), '仅同步正式版本');
   requireValue(
@@ -301,9 +312,8 @@ async function main() {
         run.repository.full_name === process.env.GITHUB_REPOSITORY,
       '触发来源不是成功的发布晋级',
     );
-    const match = /^发布 Mizar (v\d+\.\d+\.\d+(?:-rc\.\d+)?)$/.exec(run.display_title);
-    requireValue(match, '无法确定晋级标签；请手动指定标签重试');
-    tag = match[1];
+    const { jobs } = await github(`actions/runs/${run.id}/jobs?per_page=100`);
+    tag = promotionTag(run, jobs);
   }
   if (mode === 'sync' && /^v\d+\.\d+\.\d+-rc\.\d+$/.test(tag ?? ''))
     return '候选版本：Stable 与 Archive 保持原样。';
