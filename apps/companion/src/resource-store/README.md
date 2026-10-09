@@ -6,10 +6,11 @@
 
 ## 接入边界
 
-- `verifyTrustedPack({packId, directory, receipt, signal})` 由官方 manifest / provenance 模块提供，返回 `TrustedPack`。Store 不解析另一套 manifest，不推断签发身份。适配器必须认证签发者、来源、版本及兼容性，并让可信发行声明绑定完整文件清单。镜像自带摘要不构成授权。
+- `verifyTrustedPack({packId, directory, receipt, signal, purpose})` 由官方 manifest / provenance 模块提供，返回 `TrustedPack`。`purpose` 为 `install | cache | legacy | rollback`，外部模块据此区分新安装、缓存和授权历史来源。Store 不解析另一套 manifest，不推断签发身份。适配器必须认证签发者、来源、版本及兼容性，并让可信发行声明绑定完整文件清单。镜像自带摘要不构成授权。
 - `prepare({directory, signal, onProgress})` 下载并有界解包到空目录，返回可序列化 receipt；须遵守取消信号及自己的归档/网络限制。Store 不接受浏览器指定 URL 或任意本机路径。
 - receipt 上限 2 MiB，和授权文件的私有副本一起持久化。**缓存命中时验证器必须离线复验 receipt 并恢复被授权清单**，不调用下载器。清单可放在 receipt 中，但必须被签名声明绑定；只签整个归档摘要而不保留可离线复验的清单证明不足以使用此适配器。版本内容目录只复制授权数据文件，未列出的归档成员不会生效。
 - `activateWhenSafe(commit)` 必须在整个 commit 期间持有既有制作状态的互斥保护，返回值表示是否调用且完成 commit。直播时返回 false。缺少此接口只准备素材。不能通过先查询直播状态再异步 commit 代替制作状态锁。
+- `createManifestVerifier(consumer, coreVersion)` 将外部真实 `verifyReceipt` 与 `resource-pack-contract` 的 `parsePackManifest`、`assertResourcePath`、`assertCompatibility` 对接到 Store。这里只做类型映射，外部模块仍唯一维护清单与身份规则。
 
 ## 调用接口
 
@@ -31,4 +32,4 @@
 
 ## 验证边界
 
-`store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。最终接入必须额外用真实 pack producer / manifest / provenance 验证器跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
+`apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。最终接入必须额外用真实 pack producer / manifest / provenance 验证器跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。

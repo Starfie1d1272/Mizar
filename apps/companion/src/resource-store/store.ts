@@ -6,6 +6,7 @@ import {
   ResourceStoreError,
   type PreparePack,
   type ResourceStatus,
+  type ResourceInstallOptions,
   type StoreOptions,
   type TrustedPack,
 } from './contract.js';
@@ -143,19 +144,25 @@ export class ResourceStore {
     directory: string,
     receipt: unknown,
     signal: AbortSignal,
+    purpose: 'install' | 'cache' | 'legacy' | 'rollback' = 'install',
   ): Promise<TrustedPack> {
     const descriptor = checkDescriptor(
-      await this.options.verifyTrustedPack({ packId, directory, receipt, signal }),
+      await this.options.verifyTrustedPack({ packId, directory, receipt, signal, purpose }),
       packId,
     );
     if (!descriptor.compatible) throw new ResourceStoreError('resource_incompatible');
     return descriptor;
   }
 
-  private async cached(packId: string, id: string, signal: AbortSignal): Promise<CachedPack> {
+  private async cached(
+    packId: string,
+    id: string,
+    signal: AbortSignal,
+    purpose: 'cache' | 'rollback' = 'cache',
+  ): Promise<CachedPack> {
     const directory = this.content(packId, id);
     const record = await readJson(dirname(directory), 'receipt.json');
-    const descriptor = await this.verify(packId, directory, record, signal);
+    const descriptor = await this.verify(packId, directory, record, signal, purpose);
     await checkTree(directory);
     for (const file of descriptor.files) await verifiedRead(directory, file, signal, () => {});
     return { id, descriptor };
@@ -309,9 +316,23 @@ export class ResourceStore {
   async installVerified(
     packId: string,
     prepare: PreparePack,
-    options: { signal?: AbortSignal; packVersion?: string; force?: boolean } = {},
+    options: ResourceInstallOptions = {},
+  ): Promise<ResourceStatus> {
+    return this.install(packId, prepare, options, 'install');
+  }
+
+  private async install(
+    packId: string,
+    prepare: PreparePack,
+    options: ResourceInstallOptions,
+    purpose: 'install' | 'legacy',
   ): Promise<ResourceStatus> {
     const entry = this.entry(packId);
+    if (
+      options.packVersion !== undefined &&
+      (!options.packVersion.length || options.packVersion.length > 128)
+    )
+      throw new ResourceStoreError('resource_version_mismatch');
     return this.exclusive(async () => {
       const controller = new AbortController();
       const signal = options.signal
@@ -368,7 +389,7 @@ export class ResourceStore {
         signal.throwIfAborted();
         entry.status.phase = 'verifying';
         await checkTree(staging);
-        const descriptor = await this.verify(packId, staging, receipt, signal);
+        const descriptor = await this.verify(packId, staging, receipt, signal, purpose);
         if (options.packVersion && options.packVersion !== descriptor.packVersion)
           throw new ResourceStoreError('resource_version_mismatch');
         sealed = join(this.directory(packId), 'staging', randomUUID());
@@ -381,6 +402,7 @@ export class ResourceStore {
           join(sealed, 'content'),
           await readJson(sealed, 'receipt.json'),
           signal,
+          purpose,
         );
         if (JSON.stringify(copied) !== JSON.stringify(descriptor))
           throw new ResourceStoreError('resource_descriptor_changed');
@@ -435,14 +457,21 @@ export class ResourceStore {
     legacy: { directory: string; receipt: unknown },
     options: { signal?: AbortSignal; packVersion?: string } = {},
   ): Promise<ResourceStatus> {
-    return this.installVerified(
+    return this.install(
       packId,
       async ({ directory, signal }) => {
-        const descriptor = await this.verify(packId, legacy.directory, legacy.receipt, signal);
+        const descriptor = await this.verify(
+          packId,
+          legacy.directory,
+          legacy.receipt,
+          signal,
+          'legacy',
+        );
         await this.copy(legacy.directory, directory, descriptor, signal);
         return legacy.receipt;
       },
       options,
+      'legacy',
     );
   }
 
@@ -457,7 +486,12 @@ export class ResourceStore {
     let committed = false;
     const accepted = await this.options.activateWhenSafe(async () => {
       if (committed) throw new ResourceStoreError('resource_activation_invalid');
-      const candidate = await this.cached(packId, requested.id, signal);
+      const candidate = await this.cached(
+        packId,
+        requested.id,
+        signal,
+        rollback ? 'rollback' : 'cache',
+      );
       signal.throwIfAborted();
       await this.persist(packId, {
         active: candidate.id,

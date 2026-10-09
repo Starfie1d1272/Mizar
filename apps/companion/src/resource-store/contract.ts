@@ -28,6 +28,12 @@ export interface PreparePack {
   }): Promise<unknown>;
 }
 
+export interface ResourceInstallOptions {
+  signal?: AbortSignal;
+  packVersion?: string;
+  force?: boolean;
+}
+
 export interface StoreOptions {
   root: string;
   packs?: readonly { packId: string; optional?: boolean }[];
@@ -37,6 +43,7 @@ export interface StoreOptions {
     packId: string;
     receipt: unknown;
     signal: AbortSignal;
+    purpose: 'install' | 'cache' | 'legacy' | 'rollback';
   }) => Promise<TrustedPack>;
   /** Integration holds its production/preparation lease throughout commit. Without it, prepare only. */
   activateWhenSafe?: (commit: () => Promise<void>) => Promise<boolean>;

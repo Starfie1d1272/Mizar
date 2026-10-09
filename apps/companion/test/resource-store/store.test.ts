@@ -14,10 +14,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PreparePack, StoreOptions, TrustedPack } from './contract.js';
-import { checkDescriptor, verifiedRead } from './files.js';
-import { registerResourceRoutes } from './routes.js';
-import { ResourceStore } from './store.js';
+import type { PreparePack, StoreOptions, TrustedPack } from '../../src/resource-store/contract.js';
+import { checkDescriptor, verifiedRead } from '../../src/resource-store/files.js';
+import { registerResourceRoutes } from '../../src/resource-store/routes.js';
+import { ResourceStore } from '../../src/resource-store/store.js';
 
 const packId = 'official:epl-default';
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
@@ -215,7 +215,15 @@ describe('Resource Store', () => {
   });
 
   it('migrates old bundled materials into a private copy without altering their bytes', async () => {
-    const { root, store } = await setup();
+    const { root, store } = await setup({
+      verifyTrustedPack: ({ purpose }) => {
+        if (purpose === 'install')
+          return Promise.reject(
+            new Error('legacy authorization must not become new-install authorization'),
+          );
+        return Promise.resolve(fixture('1'));
+      },
+    });
     const legacy = join(root, 'legacy');
     await mkdir(legacy);
     await prepare()({
@@ -291,7 +299,7 @@ describe('Resource Store', () => {
     await store.close();
     const restored = await ResourceStore.open(options);
     stores.push(restored);
-    expect(restored.getStatus(packId).phase).toBe('missing');
+    expect(restored.getStatus(packId)).toMatchObject({ phase: 'missing', downloadedBytes: 0 });
   });
 
   it('enforces paths, types, sizes and link rejection at the store boundary', async () => {
@@ -369,6 +377,14 @@ describe('Resource Store', () => {
     registerResourceRoutes(app, store);
     try {
       const base = '/local/v1/resources/official%3Aepl-default';
+      const head = await app.inject({
+        method: 'HEAD',
+        url: `${base}/files/replay/video.mp4`,
+        headers: { range: 'bytes=2-5' },
+      });
+      expect(head.statusCode).toBe(200);
+      expect(head.body).toBe('');
+      expect(head.headers['content-length']).toBe('10');
       expect((await app.inject(`${base}`)).json()).toMatchObject({
         phase: 'ready',
         activeVersion: '1',
@@ -388,11 +404,14 @@ describe('Resource Store', () => {
         expect(response.headers['content-type']).toBe('video/mp4');
         expect(response.headers['x-content-type-options']).toBe('nosniff');
       }
-      for (const range of ['bytes=10-', 'bytes=3-2', 'bytes=0-1,4-5', 'bytes=-0'])
-        expect(
-          (await app.inject({ url: `${base}/files/replay/video.mp4`, headers: { range } }))
-            .statusCode,
-        ).toBe(416);
+      for (const range of ['bytes=10-', 'bytes=3-2', 'bytes=0-1,4-5', 'bytes=-0']) {
+        const response = await app.inject({
+          url: `${base}/files/replay/video.mp4`,
+          headers: { range },
+        });
+        expect(response.statusCode).toBe(416);
+        expect(response.headers['content-range']).toBe('bytes */10');
+      }
       expect((await app.inject(`${base}/files/%2e%2e/secret.json`)).statusCode).toBe(404);
       expect(
         (await app.inject('/local/v1/resources/unknown/files/replay/video.mp4')).statusCode,
