@@ -49,8 +49,53 @@ const DISTRIBUTION_TOOL_PATHS = new Set([
 // Existing Windows consumers own these runtime, portability and installer
 // surfaces. Unknown qualification tooling and release-source protocols fail
 // closed instead of inheriting the mirror exception.
-const WINDOWS_QUALIFICATION_PATH =
-  /^scripts\/qualification\/(?:bundle\/|installer-assets\/|evidence\/|(?:offline|portable-files|product-(?:logs|runtime)|desktop-smoke|supervisor|gsi-discovery|evidence|verify-web-resources)(?:\.test)?\.mjs$|(?:product-smoke|product-soak|verify-c4-resources|c4-worker-benchmark)\.mjs$|(?:create-windows-archive|create-windows-setup|capture-setup-ui|desktop-probe|extract-windows-shell)\.ps1$|windows-setup\.nsi$)/;
+const WINDOWS_QUALIFICATION_PATHS = new Set([
+  'scripts/qualification/bundle/check.ps1',
+  'scripts/qualification/bundle/common.ps1',
+  'scripts/qualification/bundle/ensure-gsi.ps1',
+  'scripts/qualification/bundle/gsi-discovery.ps1',
+  'scripts/qualification/bundle/gsi-status.ps1',
+  'scripts/qualification/bundle/install-gsi.ps1',
+  'scripts/qualification/bundle/mark.ps1',
+  'scripts/qualification/bundle/restore-gsi.ps1',
+  'scripts/qualification/bundle/rotate.ps1',
+  'scripts/qualification/bundle/select-cs2-installation.ps1',
+  'scripts/qualification/bundle/start-product.ps1',
+  'scripts/qualification/bundle/start.ps1',
+  'scripts/qualification/bundle/stop-product.ps1',
+  'scripts/qualification/bundle/stop.ps1',
+  'scripts/qualification/bundle/update-install.ps1',
+  'scripts/qualification/installer-assets/header.bmp',
+  'scripts/qualification/installer-assets/header.svg',
+  'scripts/qualification/installer-assets/sources.json',
+  'scripts/qualification/installer-assets/wizard.bmp',
+  'scripts/qualification/installer-assets/wizard.svg',
+  'scripts/qualification/offline.mjs',
+  'scripts/qualification/offline.test.mjs',
+  'scripts/qualification/portable-files.mjs',
+  'scripts/qualification/portable-files.test.mjs',
+  'scripts/qualification/product-logs.mjs',
+  'scripts/qualification/product-logs.test.mjs',
+  'scripts/qualification/product-runtime.mjs',
+  'scripts/qualification/product-runtime.test.mjs',
+  'scripts/qualification/desktop-smoke.mjs',
+  'scripts/qualification/desktop-smoke.test.mjs',
+  'scripts/qualification/supervisor.mjs',
+  'scripts/qualification/supervisor.test.mjs',
+  'scripts/qualification/gsi-discovery.test.mjs',
+  'scripts/qualification/verify-web-resources.mjs',
+  'scripts/qualification/verify-web-resources.test.mjs',
+  'scripts/qualification/product-smoke.mjs',
+  'scripts/qualification/product-soak.mjs',
+  'scripts/qualification/verify-c4-resources.mjs',
+  'scripts/qualification/c4-worker-benchmark.mjs',
+  'scripts/qualification/create-windows-archive.ps1',
+  'scripts/qualification/create-windows-setup.ps1',
+  'scripts/qualification/capture-setup-ui.ps1',
+  'scripts/qualification/desktop-probe.ps1',
+  'scripts/qualification/extract-windows-shell.ps1',
+  'scripts/qualification/windows-setup.nsi',
+]);
 
 const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
@@ -83,7 +128,7 @@ function isForcedFullPath(path) {
     (!isDocsOnlyPath(path) &&
       path.startsWith('scripts/qualification/') &&
       !DISTRIBUTION_TOOL_PATHS.has(path) &&
-      !WINDOWS_QUALIFICATION_PATH.test(path)) ||
+      !WINDOWS_QUALIFICATION_PATHS.has(path)) ||
     path.startsWith('.github/') ||
     path.startsWith('scripts/ci/') ||
     name === 'package.json' ||
