@@ -48,13 +48,13 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 验证层次
 
-| 层次             | 证明什么                                          | 常用入口                                                                      |
-| ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 领域与契约       | 状态、身份、时钟、恢复、投递、结构和依赖边界      | `pnpm test`、`pnpm architecture:check`                                        |
-| 类型、样式与构建 | 类型一致性和可构建性                              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build`              |
-| 浏览器           | 关键操作、布局结构、预览、配置与数据来源隔离      | `pnpm acceptance:test`                                                        |
-| 设计系统         | 变量、组件交互、无障碍与组件目录                  | `pnpm design:check`                                                           |
-| 打包与启动       | 便携资源、脚本、服务与桌面启动                    | `pnpm qualification:offline`、`pnpm local-web:production-smoke`               |
+| 层次             | 证明什么                                          | 常用入口                                                             |
+| ---------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| 领域与契约       | 状态、身份、时钟、恢复、投递、结构和依赖边界      | `pnpm test`、`pnpm architecture:check`                               |
+| 类型、样式与构建 | 类型一致性和可构建性                              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build`     |
+| 浏览器           | 关键操作、布局结构、预览、配置与数据来源隔离      | `pnpm acceptance:test`                                               |
+| 设计系统         | 变量、组件交互、无障碍与组件目录                  | `pnpm design:check`                                                  |
+| 打包与启动       | 便携资源、脚本、服务与桌面启动                    | `pnpm qualification:offline`、`pnpm local-web:production-smoke`      |
 | 真实制播         | 指定包在 Windows + CS2 + OBS 的完整流程与长时运行 | [制播实机验收 #35](https://github.com/Starfie1d1272/Mizar/issues/35) |
 
 实时链路变更按影响覆盖：重放、慢消费者、重连、重复/乱序、代际与地图切换、错场与过期资料、正式节目与辅助隔离、队列/内存增长。界面还检查键盘、焦点、减少动效、缺失媒体与长文本。
@@ -80,6 +80,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 - Core、Radar、Radar View、HUD Config、Protocol、Telemetry GSI 的 `src/`，以及 Companion 的运行时、投影、场景、协议发布、配置、BP、比赛资料、系列进展、重放、公开输出与应用组装入口，保守增加完整的既有浏览器验收。精确前缀由计划器维护；这些规则保障消费者回归范围；本地服务与浏览器的完整链路另由集成检查验证。
 - 浏览器验收映射适用于上述实现路径；普通文档、CSS 和包外部测试按各自规则分类。基础质量、平台与 Windows 资格构建分别判定，多文件变更取风险并集。
 - 未知路径、无法确定的差异、工作流、锁文件、工具链或计划器改动默认完整验证。
+- Box 镜像工具及其测试由基础质量任务负责：校验已发布资产身份、远端字节、授权和失败时不发布更新清单；这两个明确路径不进入产品载荷，无需重编译 Desktop 或重复安装。与安装器、更新恢复、候选来源、Desktop 或其它路径混合时仍取所有风险并集；Windows 打包、安装和恢复消费者按明确的已知文件清单保持真实 Windows 验证，不对 bundle、installer-assets 或 evidence 目录作整目录豁免；资格证据完整性及新增未知文件回退完整验证；候选、晋级、Stable 信任协议与未知 qualification 工具完整验证，工作流仍保守回退。
 - 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
 - 基础质量检查（`quality`）分为静态检查、单元测试、样例、类型与构建四路并行任务；全部选中任务通过后汇总成功。
 - 浏览器验收按文件分成四个独立任务，每个任务使用一个工作进程串行执行；全部分片通过后，ci-gate 核对四份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。`pnpm acceptance:ci --shard=N/4` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。

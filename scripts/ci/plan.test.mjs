@@ -201,6 +201,64 @@ describe('changed-surface CI planner', () => {
     expect(createCiPlan({ changedFiles: [path] }).requiredJobs).toEqual(requiredJobs);
   });
 
+  it.each(['pull_request', 'push'])(
+    '%s assigns mirror contracts to quality without rebuilding the product',
+    (eventName) => {
+      for (const path of [
+        'scripts/qualification/box-sync.mjs',
+        'scripts/qualification/box-sync.test.mjs',
+      ]) {
+        expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs).toEqual(['quality']);
+      }
+    },
+  );
+
+  it.each([
+    ['scripts/qualification/windows-setup.nsi', ['quality', 'qualification_windows']],
+    ['scripts/qualification/bundle/update-install.ps1', ['quality', 'qualification_windows']],
+    [
+      'scripts/qualification/verify-source-ci.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/verify-candidate.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/verify-promotion.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/box-sync-helper.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    ['apps/desktop/src-tauri/src/main.rs', ['quality', 'qualification_windows']],
+    ['packages/protocol/src/version.ts', ['quality', 'acceptance']],
+  ])('mirror changes retain the independent risk owner for %s', (path, requiredJobs) => {
+    expect(
+      createCiPlan({
+        changedFiles: ['scripts/qualification/box-sync.mjs', path],
+      }).requiredJobs,
+    ).toEqual(requiredJobs);
+  });
+
+  it('retains both rename sides and deletion responsibilities for mirror tooling', () => {
+    for (const diff of [
+      'R100\0scripts/qualification/box-sync.mjs\0scripts/qualification/bundle/update-install.ps1\0',
+      'R100\0scripts/qualification/bundle/update-install.ps1\0scripts/qualification/box-sync.mjs\0',
+    ]) {
+      expect(createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) }).requiredJobs).toEqual([
+        'quality',
+        'qualification_windows',
+      ]);
+    }
+    expect(
+      createCiPlan({
+        changedFiles: [{ path: 'scripts/qualification/box-sync.mjs', status: 'D' }],
+      }).requiredJobs,
+    ).toEqual(['quality']);
+  });
+
   it('unions browser, platform and Windows qualification risks with ordinary docs', () => {
     expect(
       createCiPlan({
@@ -237,6 +295,16 @@ describe('changed-surface CI planner', () => {
     ['workflow', ['.github/workflows/ci.yml']],
     ['planner self-change', ['scripts/ci/plan.mjs']],
     ['unknown path', ['fixtures/custom-input.json']],
+    ['unknown qualification tool', ['scripts/qualification/new-tool.mjs']],
+    ['unknown bundled script', ['scripts/qualification/bundle/new-tool.ps1']],
+    ['unknown installer asset', ['scripts/qualification/installer-assets/new-asset.bmp']],
+    ['unknown evidence script', ['scripts/qualification/evidence/new-verifier.mjs']],
+    ['evidence integrity', ['scripts/qualification/evidence/integrity.mjs']],
+    ['evidence contract', ['scripts/qualification/evidence/contract.mjs']],
+    ['evidence entry', ['scripts/qualification/evidence.mjs']],
+    ['Stable trust source', ['apps/companion/src/updates/source.ts']],
+    ['update metadata protocol', ['scripts/qualification/update-manifest.mjs']],
+    ['runtime trust pin', ['scripts/qualification/runtime-config.mjs']],
     ['type change', [{ path: 'packages/core/src/old.ts', status: 'T' }]],
   ])('%s fails closed to full CI', (_name, changedFiles) => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);
