@@ -203,6 +203,9 @@ export async function verifyCatalogResourcePublicationBytes({ authorization, ...
   });
   requireValue(
     statementBytes.equals(jsonBytes(verified.statement)) &&
+      ['sequence', 'issuedAt', 'expiresAt'].every(
+        (key) => verified.statement[key] === identity.publication[key],
+      ) &&
       verified.manifestSha256 === identity.manifestSha256 &&
       verified.archive.sha256 === identity.archive.sha256 &&
       verified.archive.bytes === identity.archive.bytes,
