@@ -14,7 +14,7 @@ test('qualification help uses the preparation shell and development host diagnos
     'href',
     '/resources',
   );
-  await expect(page.getByRole('link', { name: '返回准备中心' })).toHaveAttribute('href', '/');
+  await expect(page.getByRole('link', { name: '返回本场制播' })).toHaveAttribute('href', '/');
 
   const response = await page.request.get('/debug/hosts');
   expect(response.ok()).toBe(true);
