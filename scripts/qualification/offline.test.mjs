@@ -23,7 +23,7 @@ async function changeScript(root, name, change) {
   await writeFile(path, change(await readFile(path, 'utf8')));
 }
 
-describe('offline qualification bundle discovery', () => {
+describe('offline qualification canonical bundle discovery', () => {
   it.each(['1.0.0-rc.13', '1.0.0'])(
     'accepts the canonical bundle and ZIP for %s',
     async (version) => {
