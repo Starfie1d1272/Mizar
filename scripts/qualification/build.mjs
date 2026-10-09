@@ -370,6 +370,25 @@ async function main() {
     await pruneDevelopmentFiles(appDir);
     await rm(deployedAppDir, { recursive: true, force: true });
     await restorePortableWorkspaceDependencySpecifiers(appDir);
+    // The bridge resolves the registered package's public exports from Companion's
+    // deployed node_modules. It remains absent until the real dependency is present.
+    const hasResourceContract = await access(
+      join(appDir, 'node_modules', '@mizar', 'resource-pack-contract', 'package.json'),
+    ).then(
+      () => true,
+      (error) => {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      },
+    );
+    if (hasResourceContract) {
+      const bridgeDirectory = join(appDir, 'dist', 'web-installer');
+      await mkdir(bridgeDirectory, { recursive: true });
+      await cp(
+        join(rootDir, 'scripts', 'web-installer', 'install-official-pack.mjs'),
+        join(bridgeDirectory, 'install-official-pack.mjs'),
+      );
+    }
     await runCommand(process.execPath, [join(scriptDir, 'verify-c4-resources.mjs'), appDir]);
     await cp(join(rootDir, 'apps', 'web', 'dist'), join(resourcesDir, 'web', 'dist'), {
       recursive: true,

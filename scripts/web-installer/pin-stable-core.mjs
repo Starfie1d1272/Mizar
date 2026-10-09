@@ -5,7 +5,7 @@ import { StableSource, installerUrl } from '../../apps/companion/dist/updates/so
 // This publisher authentication is the existing updater, not a second trust root.
 // Build Companion first. Never create executable pins from mirror-provided hashes.
 const output = resolve(process.argv[2] ?? '.agent-tmp/web-installer/pinned-core.json');
-const signal = AbortSignal.timeout(60_000);
+const signal = globalThis.AbortSignal.timeout(60_000);
 const source = new StableSource(resolve('.agent-tmp/web-installer/tuf'));
 const release = await source.latest(signal);
 if (!release) throw new Error('No authenticated Stable release');

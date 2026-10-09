@@ -8,6 +8,14 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace Mizar.WebInstaller {
+  sealed class CancelNsisProgress : IProgress<string> {
+    public readonly CancellationTokenSource Source = new CancellationTokenSource();
+    public bool Waiting;
+    public void Report(string phase) {
+      if (phase == "installing-core") Source.CancelAfter(100);
+      if (phase == "waiting-for-installer") Waiting = true;
+    }
+  }
   static class NsisTests {
     static void Assert(bool value) { if (!value) throw new Exception("NSIS assertion failed"); }
     static async Task Run() {
@@ -31,14 +39,13 @@ namespace Mizar.WebInstaller {
         Assert(refused);
         await result.RollbackAsync();
         Assert(!Directory.Exists(target));
-        var cancellation=new CancellationTokenSource(); bool waiting=false;
-        cancellation.CancelAfter(500);
+        var progress=new CancelNsisProgress();
         bool cancelled=false;
         string cancelledTarget=Path.Combine(root,"cancelled NSIS path");
-        try { await Nsis.Install(plan,installer,cancelledTarget,cancellation.Token,()=>waiting=true); }
+        try { await Nsis.Install(plan,installer,cancelledTarget,progress.Source.Token,progress); }
         catch(OperationCanceledException) { cancelled=true; }
-        Assert(cancelled && !Directory.Exists(cancelledTarget));
-        Console.WriteLine("PASS: cancellation waits for NSIS exit and existing uninstaller cleans fresh installation; waiting="+waiting);
+        Assert(cancelled && progress.Waiting && !Directory.Exists(cancelledTarget));
+        Console.WriteLine("PASS: cancellation waits for NSIS exit and existing uninstaller cleans fresh installation; waiting="+progress.Waiting);
         string bad=Path.Combine(cache,"bad.exe"); File.WriteAllText(bad,"not an installer");
         bool rejected=false; try { await Nsis.Install(plan,bad,Path.Combine(root,"bad path"),CancellationToken.None); } catch(IOException) { rejected=true; }
         Assert(rejected);

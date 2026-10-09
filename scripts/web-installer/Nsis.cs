@@ -37,11 +37,11 @@ namespace Mizar.WebInstaller {
         throw new IOException("检测到已有 Mizar 快捷方式，请先使用原安装器修复。");
       if (Process.GetProcessesByName("Mizar").Length != 0) throw new IOException("请正常退出 Mizar 后再安装。");
     }
-    static async Task<int> Wait(Process child, TimeSpan deadline, Action cancelling, CancellationToken token) {
+    static async Task<int> Wait(Process child, TimeSpan deadline, IProgress<string> progress, CancellationToken token) {
       var clock = Stopwatch.StartNew(); bool notified = false;
       while (!child.HasExited) {
         if (token.IsCancellationRequested && !notified) {
-          notified = true; if (cancelling != null) cancelling();
+          notified = true; if (progress != null) progress.Report("waiting-for-installer");
           // Never terminate a writer in the middle of NSIS extraction. Cancellation
           // becomes rollback after the existing installer has safely stopped.
         }
@@ -88,7 +88,7 @@ namespace Mizar.WebInstaller {
         throw new InstallerRecoveryRequired(target, "仍有文件残留，保留现场供修复。");
     }
     public static async Task<FreshInstallResult> Install(Plan plan, string installer, string destination,
-      CancellationToken token, Action cancelling = null, TimeSpan? deadline = null) {
+      CancellationToken token, IProgress<string> progress = null, TimeSpan? deadline = null) {
       plan.Validate();
       if (!plan.allowExecute || plan.kind != "nsis-setup") throw new IOException("缺少固定安装授权。");
       installer = Path.GetFullPath(installer); destination = Path.GetFullPath(destination);
@@ -107,13 +107,15 @@ namespace Mizar.WebInstaller {
               FileName = installer, Arguments = "/S /MIZARUPDATE /D=" + destination,
               UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(installer),
             })) {
-              try { code = await Wait(child, deadline ?? TimeSpan.FromMinutes(10), cancelling, token); }
+              if (progress != null) progress.Report("installing-core");
+              try { code = await Wait(child, deadline ?? TimeSpan.FromMinutes(10), progress, token); }
               catch (TimeoutException error) { throw new InstallerRecoveryRequired(destination, error.Message); }
             }
             if (code != 0 || token.IsCancellationRequested) {
               await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
               token.ThrowIfCancellationRequested(); throw new IOException("核心安装未完成，原卸载器已清理本次安装。");
             }
+            Exception validationFailure = null;
             try {
               AssertOwnedRegistration(destination);
               if (!File.Exists(Path.Combine(destination, "installed.flag"))) throw new IOException("核心安装未完成。");
@@ -122,8 +124,10 @@ namespace Mizar.WebInstaller {
               if (Convert.ToString(artifact["repository"]) != "Starfie1d1272/Mizar" || Convert.ToString(artifact["appVersion"]) != plan.version ||
                   Convert.ToString(artifact["gitSha"]) != plan.gitSha || Convert.ToString(artifact["artifactSha256"]) != plan.contentDigest)
                 throw new IOException("安装后的核心身份不匹配。");
-            } catch {
-              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10)); throw;
+            } catch (Exception error) { validationFailure = error; }
+            if (validationFailure != null) {
+              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
+              throw validationFailure;
             }
             return new FreshInstallResult(destination);
           }
