@@ -86,8 +86,7 @@ try {
   Capture 'shortcuts'
   # Native MUI component tree: Space toggles the optional desktop section.
   [SetupUI]::SendMessage($tree, 0x110B, [IntPtr](9), [SetupUI]::SendMessage($tree, 0x110A, [IntPtr](0), [IntPtr]::Zero)) | Out-Null
-  [SetupUI]::PostMessage($tree, 0x100, [IntPtr](32), [IntPtr]::Zero) | Out-Null
-  [SetupUI]::PostMessage($tree, 0x101, [IntPtr](32), [IntPtr]::Zero) | Out-Null
+  [SetupUI]::SendMessage($tree, 0x102, [IntPtr](32), [IntPtr]::Zero) | Out-Null
   Start-Sleep -Milliseconds 200
   Click-Next
   Wait-UI { [SetupUI]::Child($window, $null, 'msctls_progress32') } 'progress' | Out-Null
