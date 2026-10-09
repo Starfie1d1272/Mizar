@@ -87,7 +87,7 @@ for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld'] as co
         const points = paths.get(this) ?? [];
         if (this.getLineDash().length > 0 && points.length >= 2)
           this.canvas.dataset.testFlight = JSON.stringify({
-            first: points[0],
+            last: points.at(-1),
             count: points.length,
             alpha: this.globalAlpha,
           });
@@ -106,47 +106,62 @@ for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld'] as co
     await expect(armor.first()).toHaveText('7');
     const firstId = program.payload.players[0]!.sourcePlayerId;
     const card = page.locator(`[data-player-card="${firstId}"]`);
-    // Establish the flight only after asynchronous preset/font loading settles.
+    // This mocked-frame test controls receive intervals. Real wall-clock stalls must
+    // not accidentally exercise the sampling-gap reset owned by presentation tests.
+    const clockStart = new Date('2026-10-09T00:00:00Z');
+    await page.clock.install({ time: clockStart });
+    await page.clock.pauseAt(new Date(clockStart.getTime() + 100));
+    const paintedSequence = () =>
+      expect
+        .poll(async () => {
+          await page.clock.runFor(16);
+          return canvas.getAttribute('data-radar-sample-sequence');
+        })
+        .toBe(String(radar.cursor.programReceiveSequence));
+    // Establish the flight after asynchronous preset/font loading settles.
     radar.channelSeq++;
     radar.cursor.programSourceGeneration++;
     radar.cursor.programReceiveSequence = (radar.cursor.programReceiveSequence ?? 0) + 1;
     radarSocket!.send(JSON.stringify(radar));
-    await expect(canvas).toHaveAttribute(
-      'data-radar-sample-sequence',
-      String(radar.cursor.programReceiveSequence),
-    );
+    await paintedSequence();
     await expect(canvas).toHaveAttribute('data-radar-trails', '1');
+    let previousPaint: number[] | undefined;
     for (let index = 1; index <= 2; index++) {
+      await canvas.evaluate((element) => element.removeAttribute('data-test-flight'));
       radar.channelSeq++;
       radar.cursor.runtimeSeq++;
       radar.cursor.programReceiveSequence = (radar.cursor.programReceiveSequence ?? 0) + 1;
       radar.payload.grenades[0]!.position!.x += 2;
       radarSocket!.send(JSON.stringify(radar));
-      if (index === 1 || index === 2) {
-        await expect(canvas).toHaveAttribute('data-radar-trails', String(index + 1));
-        await expect(canvas).toHaveAttribute('data-test-flight', /"count":/);
-        const path = JSON.parse((await canvas.getAttribute('data-test-flight'))!) as {
-          first: number[];
-          count: number;
-          alpha: number;
-        };
-        expect(path.count).toBeGreaterThanOrEqual(2);
-        expect(path.alpha).toBeGreaterThan(0);
-        expect(path.alpha).toBeLessThanOrEqual(1);
-      }
+      await paintedSequence();
+      await expect(canvas).toHaveAttribute('data-radar-trails', String(index + 1));
+      await expect(canvas).toHaveAttribute('data-test-flight', /"count":/);
+      const path = JSON.parse((await canvas.getAttribute('data-test-flight'))!) as {
+        last: number[];
+        count: number;
+        alpha: number;
+      };
+      expect(path.count).toBeGreaterThanOrEqual(2);
+      expect(path.alpha).toBeGreaterThan(0);
+      expect(path.alpha).toBeLessThanOrEqual(1);
+      if (previousPaint) expect(path.last).not.toEqual(previousPaint);
+      previousPaint = path.last;
     }
+
     // Compare the armor transition itself, after preset layout and flight rendering settle.
     const initialBox = await card.boundingBox();
     program.channelSeq++;
     program.cursor.programReceiveSequence = (program.cursor.programReceiveSequence ?? 0) + 1;
     program.payload.players[0]!.state!.armor = 100;
     programSocket!.send(JSON.stringify(program));
+    await page.clock.runFor(250);
     await expect(card.locator('.player-rail__low-armor')).toHaveCount(0);
     expect(await card.boundingBox()).toEqual(initialBox);
     radar.channelSeq++;
     radar.cursor.programReceiveSequence++;
     radar.payload.grenades = [];
     radarSocket!.send(JSON.stringify(radar));
+    await paintedSequence();
     await expect(canvas).toHaveAttribute('data-radar-trails', '0');
   });
 }
