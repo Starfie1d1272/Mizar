@@ -35,6 +35,10 @@ _比赛画面、大雷达与制作控制尽在眼前。[查看更多画面](docs
 
 需要临场调整时，随时手动接管；由你决定何时恢复自动。
 
+![地图禁选依次展开](docs/screenshots/program-veto.gif)
+
+_禁用、选择与决胜地图依次呈现，让观众跟上双方的地图安排。[查看静态画面](docs/screenshots/program-veto.png)。_
+
 ## 看清比赛，也掌握播出
 
 在 Windows 制播工作台里，同时查看真实 CS2 画面、大雷达和比赛资料。解说更容易掌握全局，导播也能通过 OBS 定期画面预览、推流状态和 B 站开播状态确认现场情况。
@@ -44,6 +48,10 @@ _比赛画面、大雷达与制作控制尽在眼前。[查看更多画面](docs
 默认的 **Mizar Pulse** 包装贯穿赛前、局内和赛后，另有四套参考 EWC、IEM、Perfect World、ESL 赛事视觉的 HUD 风格。
 
 调整组件、布局与外观，预览满意后再用于播出；也可以分享预设，让下一场赛事沿用熟悉的风格。
+
+![从 BP 经对阵开场衔接到局内 HUD](docs/screenshots/program-opening.gif)
+
+_从 BP 到对阵开场，再进入局内 HUD，同一套包装贯穿比赛。[查看静态画面](docs/screenshots/program-opening.png)。_
 
 ## 本地就能办赛，连接网站还能做更多
 
