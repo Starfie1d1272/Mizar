@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { windowsBundleName } from './app-version.mjs';
-import { assertGsiScriptContract, assertPortableApp, findBundleDirectory } from './offline.mjs';
+import {
+  assertGsiScriptContract,
+  assertPortableApp,
+  findBundleDirectory,
+  offlineChecks,
+} from './offline.mjs';
 
 const roots = [];
 afterEach(async () => {
@@ -22,6 +27,40 @@ async function changeScript(root, name, change) {
   const path = join(root, name);
   await writeFile(path, change(await readFile(path, 'utf8')));
 }
+
+describe('offline qualification check ownership', () => {
+  it('keeps the full standalone validation and existing CI static delegation', () => {
+    expect(offlineChecks([]).commands).toEqual([
+      'format:check',
+      'lint',
+      'architecture:check',
+      'typecheck',
+      'test',
+      'build',
+    ]);
+    expect(offlineChecks(['--quality-owned-static-checks']).commands).toEqual([
+      'typecheck',
+      'test',
+      'build',
+    ]);
+  });
+
+  it('requires Quality ownership before replacing full tests with platform consumers', () => {
+    expect(() => offlineChecks(['--platform-only'])).toThrow('requires');
+    expect(offlineChecks(['--platform-only', '--quality-owned-static-checks'])).toEqual({
+      qualityOwnedStaticChecks: true,
+      platformOnly: true,
+      commands: ['typecheck', 'build'],
+    });
+  });
+
+  it.each([['--unknown'], ['--platform-only', '--platform-only']])(
+    'rejects unsupported or repeated flags: %s',
+    (...args) => {
+      expect(() => offlineChecks(args)).toThrow('accepts only');
+    },
+  );
+});
 
 describe('offline qualification bundle discovery', () => {
   it.each(['1.0.0-rc.13', '1.0.0'])(

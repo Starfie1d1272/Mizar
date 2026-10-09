@@ -147,42 +147,39 @@ describe('changed-surface CI planner', () => {
     expect(plan.runOfflineQualification).toBe(files.includes('scripts/qualification/offline.mjs'));
   });
 
-  it.each(['pull_request', 'push'])(
-    '%s routes shared producers without extra packaging',
-    (eventName) => {
-      const packageSources = [
-        'packages/core/src/projection/program.ts',
-        'packages/radar/src/map-geometry.ts',
-        'packages/radar-view/src/render-cache.ts',
-        'packages/hud-config/src/index.ts',
-        'packages/protocol/src/program.ts',
-        'packages/protocol/src/version.ts',
-        'packages/protocol/src/index.ts',
-        'scripts/local-web-production-browser-smoke.mjs',
-      ];
-      const companionSources = [
-        'runtime/program-runtime.ts',
-        'projections/projection-coordinator.ts',
-        'program-scenes/director.ts',
-        'local-protocol/channel-publisher.ts',
-        'hud-config/controller.ts',
-        'bp/controller.ts',
-        'match-context/controller.ts',
-        'series-progress/checkpoint-store.ts',
-        'replay/production-replay-composition.ts',
-        'output/projector.ts',
-        'app.ts',
-        'server.ts',
-      ].map((path) => `apps/companion/src/${path}`);
-      for (const path of [...packageSources, ...companionSources]) {
-        expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs, path).toEqual(
-          path.startsWith('apps/companion/')
-            ? ['quality', 'acceptance', 'platform']
-            : ['quality', 'acceptance'],
-        );
-      }
-    },
-  );
+  it.each(['pull_request'])('%s routes shared producers without extra packaging', (eventName) => {
+    const packageSources = [
+      'packages/core/src/projection/program.ts',
+      'packages/radar/src/map-geometry.ts',
+      'packages/radar-view/src/render-cache.ts',
+      'packages/hud-config/src/index.ts',
+      'packages/protocol/src/program.ts',
+      'packages/protocol/src/version.ts',
+      'packages/protocol/src/index.ts',
+      'scripts/local-web-production-browser-smoke.mjs',
+    ];
+    const companionSources = [
+      'runtime/program-runtime.ts',
+      'projections/projection-coordinator.ts',
+      'program-scenes/director.ts',
+      'local-protocol/channel-publisher.ts',
+      'hud-config/controller.ts',
+      'bp/controller.ts',
+      'match-context/controller.ts',
+      'series-progress/checkpoint-store.ts',
+      'replay/production-replay-composition.ts',
+      'output/projector.ts',
+      'app.ts',
+      'server.ts',
+    ].map((path) => `apps/companion/src/${path}`);
+    for (const path of [...packageSources, ...companionSources]) {
+      expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs, path).toEqual(
+        path.startsWith('apps/companion/')
+          ? ['quality', 'acceptance', 'platform']
+          : ['quality', 'acceptance'],
+      );
+    }
+  });
 
   it.each([
     ['packages/core/test/projection.test.ts', ['quality']],
@@ -200,7 +197,7 @@ describe('changed-surface CI planner', () => {
     expect(createCiPlan({ changedFiles: [path] }).requiredJobs).toEqual(requiredJobs);
   });
 
-  it.each(['pull_request', 'push'])(
+  it.each(['pull_request'])(
     '%s assigns mirror contracts to quality without rebuilding the product',
     (eventName) => {
       for (const path of [
@@ -217,19 +214,47 @@ describe('changed-surface CI planner', () => {
     ['scripts/qualification/bundle/update-install.ps1', ['quality', 'qualification_windows']],
     [
       'scripts/qualification/verify-source-ci.mjs',
-      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+      [
+        'quality',
+        'design',
+        'acceptance',
+        'platform',
+        'qualification_offline',
+        'qualification_windows',
+      ],
     ],
     [
       'scripts/qualification/verify-candidate.mjs',
-      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+      [
+        'quality',
+        'design',
+        'acceptance',
+        'platform',
+        'qualification_offline',
+        'qualification_windows',
+      ],
     ],
     [
       'scripts/qualification/verify-promotion.mjs',
-      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+      [
+        'quality',
+        'design',
+        'acceptance',
+        'platform',
+        'qualification_offline',
+        'qualification_windows',
+      ],
     ],
     [
       'scripts/qualification/box-sync-helper.mjs',
-      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+      [
+        'quality',
+        'design',
+        'acceptance',
+        'platform',
+        'qualification_offline',
+        'qualification_windows',
+      ],
     ],
     ['apps/desktop/src-tauri/src/main.rs', ['quality', 'qualification_windows']],
     ['packages/protocol/src/version.ts', ['quality', 'acceptance']],
@@ -258,7 +283,7 @@ describe('changed-surface CI planner', () => {
     ).toEqual(['quality']);
   });
 
-  it.each(['pull_request', 'push'])(
+  it.each(['pull_request'])(
     'validates offline self-changes on both platforms for %s',
     (eventName) => {
       const plan = createCiPlan({ eventName, changedFiles: ['scripts/qualification/offline.mjs'] });
@@ -277,7 +302,7 @@ describe('changed-surface CI planner', () => {
     },
   );
 
-  it.each(['pull_request', 'push'])(
+  it.each(['pull_request'])(
     'unions offline tooling with its independent consumers for %s',
     (eventName) => {
       for (const path of [
@@ -369,10 +394,10 @@ describe('changed-surface CI planner', () => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);
   });
 
-  it('keeps docs-only main pushes selective', () => {
+  it('requires Full for unverified docs-only main pushes', () => {
     const plan = createCiPlan({ eventName: 'push', changedFiles: ['README.md'] });
-    expect(plan.requiredJobs).toEqual([]);
-    expect(plan.runOfflineQualification).toBe(false);
+    expect(plan).toMatchObject(full);
+    expect(plan.runOfflineQualification).toBe(true);
   });
 
   it.each([
@@ -445,12 +470,12 @@ describe('changed-surface CI planner', () => {
   });
 
   it.each(['apps/web/src/hud.tsx', 'packages/hud-config/src/layout.ts'])(
-    'keeps ordinary main %s out of exact Windows packaging',
+    'requires native checks for an unverified main push touching %s',
     (path) => {
       const plan = createCiPlan({ eventName: 'push', changedFiles: [path] });
       expect(plan.runQuality).toBe(true);
-      expect(plan.runQualification).toBe(false);
-      expect(plan.runOfflineQualification).toBe(false);
+      expect(plan.runQualification).toBe(true);
+      expect(plan.runOfflineQualification).toBe(true);
     },
   );
 
@@ -461,13 +486,13 @@ describe('changed-surface CI planner', () => {
     expect(plan.runOfflineQualification).toBe(true);
   });
 
-  it('keeps offline qualification out of ordinary PR full CI', () => {
+  it('includes offline platform checks in PR Full evidence', () => {
     const plan = createCiPlan({
       eventName: 'pull_request',
       changedFiles: ['.github/workflows/ci.yml'],
     });
-    expect(plan.requiredJobs).not.toContain('qualification_offline');
-    expect(plan.runOfflineQualification).toBe(false);
+    expect(plan.requiredJobs).toContain('qualification_offline');
+    expect(plan.runOfflineQualification).toBe(true);
   });
 });
 

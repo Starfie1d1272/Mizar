@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
 import { createBuildTimer } from './build-timings.mjs';
 import { isDevelopmentFile } from './portable-files.mjs';
+import { runPlatformContracts } from '../ci/platform-contracts.mjs';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -226,11 +227,32 @@ async function assertBundleSmoke(outputRoot) {
     throw new Error('qualification 启动脚本不满足可移植性检查');
 }
 
+export function offlineChecks(args) {
+  const allowed = ['--quality-owned-static-checks', '--platform-only'];
+  if (new Set(args).size !== args.length || args.some((arg) => !allowed.includes(arg)))
+    throw new Error(
+      'offline qualification accepts only --quality-owned-static-checks and --platform-only',
+    );
+  const qualityOwnedStaticChecks = args.includes('--quality-owned-static-checks');
+  const platformOnly = args.includes('--platform-only');
+  if (platformOnly && !qualityOwnedStaticChecks)
+    throw new Error(
+      '--platform-only requires --quality-owned-static-checks and a required Quality lane',
+    );
+  return {
+    qualityOwnedStaticChecks,
+    platformOnly,
+    commands: [
+      ...(qualityOwnedStaticChecks ? [] : ['format:check', 'lint', 'architecture:check']),
+      'typecheck',
+      ...(platformOnly ? [] : ['test']),
+      'build',
+    ],
+  };
+}
+
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.length > 1 || (args.length && args[0] !== '--quality-owned-static-checks'))
-    throw new Error('offline qualification accepts only --quality-owned-static-checks');
-  const qualityOwnedStaticChecks = args.length === 1;
+  const { qualityOwnedStaticChecks, platformOnly, commands } = offlineChecks(process.argv.slice(2));
   const temporaryParent = join(rootDir, '.agent-tmp');
   const evidence = join(temporaryParent, 'offline-evidence');
   await mkdir(evidence, { recursive: true });
@@ -238,16 +260,16 @@ async function main() {
     gitSha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' }).trim(),
     platform: process.platform,
     qualityOwnedStaticChecks,
+    platformOnly,
   });
   // CI's required Quality lane owns identical-source static checks. Standalone
-  // callers keep them; every OS still executes its own types, tests and build.
-  const commands = [
-    ...(qualityOwnedStaticChecks ? [] : ['format:check', 'lint', 'architecture:check']),
-    'typecheck',
-    'test',
-    'build',
-  ];
+  // callers keep them. Reduced mode requires that owner and retains host types,
+  // builds and real OS-sensitive consumers before packaging the local outputs.
   for (const command of commands) await timed(command, () => runCommand('pnpm', [command]));
+  if (platformOnly)
+    await timed('platform-contracts', () =>
+      runPlatformContracts(join(evidence, 'platform-contracts')),
+    );
 
   const outputRoot = await mkdtemp(join(temporaryParent, 'qualification-offline-'));
   try {
