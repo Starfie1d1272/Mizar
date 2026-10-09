@@ -1,6 +1,6 @@
 # 快速开始与操作手册
 
-适用于 Windows x64 安装版与便携版。[南大云盘](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)提供国内下载，[GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)提供已发布版本、便携包与校验文件。功能适用范围见[数据源说明](data-source-capabilities.md)。
+适用于 Windows x64 安装版与便携版。[南大云盘](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)提供国内下载，[GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)提供已发布版本、便携包与校验文件。功能适用范围见[数据源说明](data-source-capabilities.md)。
 
 ## 安装与升级
 

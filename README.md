@@ -7,19 +7,19 @@
 <p align="center">
   <a href="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml"><img src="https://github.com/Starfie1d1272/Mizar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI 检查状态" /></a>
   <a href="docs/guide/quick-start.md"><img src="https://img.shields.io/badge/Windows-0078D4" alt="桌面平台：Windows" /></a>
-  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/github/v/release/Starfie1d1272/Mizar?include_prereleases" alt="最新发布版本" /></a>
+  <a href="https://github.com/Starfie1d1272/Mizar/releases"><img src="https://img.shields.io/github/v/release/Starfie1d1272/Mizar" alt="最新发布版本" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0--only-2563EB" alt="许可证：AGPL-3.0-only" /></a>
 </p>
 
 <p align="center">
-  <a href="https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/">下载 Windows 完整包</a> ·
+  <a href="https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/">下载 Windows 安装包</a> ·
   <a href="docs/guide/quick-start.md">开始使用</a> ·
   <a href="docs/screenshots/README.md">画面预览</a> ·
   <a href="docs/README.md">使用文档</a> ·
   <a href="CONTRIBUTING.md">参与开发</a>
 </p>
 
-**[下载 Windows 完整包（南大云盘）](https://box.nju.edu.cn/d/7e069258cb8045a1a5c7/)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
+**[下载 Windows 安装包（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
 
 下载 Windows x64 中文安装包，按向导完成安装。便携 ZIP、历史版本和校验文件见 GitHub Releases；安装与升级步骤见[快速开始](docs/guide/quick-start.md)。
 

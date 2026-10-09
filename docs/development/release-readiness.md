@@ -46,7 +46,7 @@ GitHub Releases 提供完整版本历史、Setup、ZIP、校验和与构建来�
 
 - `Stable/`：仅保留最新正式版本的一个 Setup。
 - `Archive/`：私有回滚目录，保留经过使用验证的版本；人工保留项由维护者管理。
-- 根目录历史候选：待正式下载入口迁移后由维护者核对处理。
+- 候选版本与历史版本通过 GitHub Releases 下载。
 
 **Box Sync** 在 Release Promotion 成功后独立执行，并支持指定标签重试与小文件接口探测。流程重新核对正式 Release、标签、清单、安装包大小和 SHA-256，再上传原始字节；候选版本直接跳过。GitHub Actions 使用现有 `MIZAR_BOX_REPO_TOKEN`，资料库令牌仅进入镜像任务。
 
@@ -54,4 +54,4 @@ GitHub Releases 提供完整版本历史、Setup、ZIP、校验和与构建来�
 
 同步失败可在 Actions 重跑 Box Sync，GitHub Release 继续提供下载。Token 缺失、权限错误、空间不足或上传中断时查看步骤摘要，修正后使用同一标签重试。
 
-公开入口在首个正式 Setup 完成匿名下载、摘要和只读权限核对后迁移到 [Stable](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)。届时同步修改 README 和操作手册，原云盘入口保留过渡期。当前用户入口继续提供已发布候选，迁移验收由 [#202](https://github.com/Starfie1d1272/Mizar/issues/202) 跟踪。
+公开下载统一使用 [Stable](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)，README 与操作手册维护同一入口。每次发布完成匿名下载、摘要与只读权限核对。资料库根目录和 Archive 保持私有，上传由资料库令牌完成。
