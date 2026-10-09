@@ -372,7 +372,7 @@ export function LocalTournamentEditor({
                     const finalBanOrder = change.currentTarget.value as Bo3BpRules['finalBanOrder'];
                     setEventBo3Rules((current) => ({ ...current, finalBanOrder }));
                   }}
-                  message="先禁方是 Veto A，后禁方是 Veto B；选图由对手选边。"
+                  message="先禁图方先选择第一张地图；选图由对手选边。"
                 >
                   <option value="veto_b_first">后禁方先禁，再由先禁方禁图</option>
                   <option value="veto_a_first">先禁方先禁，再由后禁方禁图</option>
