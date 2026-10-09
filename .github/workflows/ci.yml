@@ -435,7 +435,7 @@ jobs:
         with:
           name: mizar-desktop-smoke-${{ github.event.pull_request.head.sha || github.sha }}-win-x64
           path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/installer-ui/**
+            ${{ github.workspace }}/.agent-tmp/installer-ui/**
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/setup-desktop-smoke.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/desktop-smoke.json

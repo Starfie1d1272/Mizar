@@ -56,7 +56,7 @@ $extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
 })
 if ($extra.Count) { throw 'Unexpected Setup payload files' }
 if ($CaptureUi) {
-  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path $output 'installer-ui')
+  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path (Split-Path $output -Parent) 'installer-ui')
 }
 $sentinel = Join-Path $env:LOCALAPPDATA 'Mizar\data\setup-smoke-sentinel.txt'
 if (Test-Path -LiteralPath $sentinel) { throw 'Refusing to overwrite existing smoke sentinel' }
