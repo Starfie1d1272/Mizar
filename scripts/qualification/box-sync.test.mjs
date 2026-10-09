@@ -1,6 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import { Buffer } from 'node:buffer';
-import { digest, syncStable, validateRelease, BoxClient, probe } from './box-sync.mjs';
+import {
+  digest,
+  syncStable,
+  validateRelease,
+  BoxClient,
+  probe,
+  promotionTag,
+} from './box-sync.mjs';
+
+describe('成功发布任务的版本标签', () => {
+  const run = { id: 42, display_title: 'Release Promotion' };
+  const job = { run_id: 42, status: 'completed', conclusion: 'success', name: '发布 Mizar v1.0.0' };
+  it('固定流程标题仍能从成功任务读取正式版本', () => {
+    expect(promotionTag(run, [job])).toBe('v1.0.0');
+  });
+  it('候选标签可识别，交给已有候选跳过规则处理', () => {
+    expect(promotionTag(run, [{ ...job, name: '发布 Mizar v1.0.1-rc.2' }])).toBe('v1.0.1-rc.2');
+  });
+  it.each([
+    [],
+    [{ ...job, run_id: 43 }],
+    [{ ...job, conclusion: 'failure' }],
+    [{ ...job, status: 'in_progress' }],
+    [{ ...job, name: '发布 Mizar v1.0.0 extra' }],
+    [job, { ...job, name: '发布 Mizar v1.0.1' }],
+  ])('缺失、未成功、来源不符或多个标签时停止同步', (...jobs) => {
+    expect(() => promotionTag(run, jobs)).toThrow('唯一晋级标签');
+  });
+});
 
 const make = (version, bytes = Buffer.from(version)) => ({
   version,

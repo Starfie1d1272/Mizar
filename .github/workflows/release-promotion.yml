@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote:
+    name: 发布 Mizar ${{ inputs.tag }}
     runs-on: windows-2025
     timeout-minutes: 15
     env:
