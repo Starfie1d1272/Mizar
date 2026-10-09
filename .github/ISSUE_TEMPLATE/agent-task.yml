@@ -1,6 +1,6 @@
-name: Agent 执行任务
-description: 已完成主要设计、可直接交给 Luna 或其它编码 Agent 的实现任务。
-title: "[M?] "
+name: 实现任务
+description: 目标与主要方案明确，可直接开展的实现任务。
+title: "[任务] "
 body:
   - type: markdown
     attributes:
@@ -11,7 +11,7 @@ body:
     id: objective
     attributes:
       label: 目标
-      description: 完成后真实存在什么能力或修复？请描述可观察结果，而不是只列要改的文件。
+      description: 描述完成后可观察的产品能力或修复结果。
     validations:
       required: true
 
@@ -19,7 +19,7 @@ body:
     id: context
     attributes:
       label: 背景与约束
-      description: 说明任务原因，以及相关产品、架构、ADR、协议或外部约束。
+      description: 说明任务原因，以及相关产品、架构、协议、讨论或外部约束。
     validations:
       required: true
 
@@ -27,10 +27,10 @@ body:
     id: decisions
     attributes:
       label: 已冻结决策
-      description: 列出实现 Agent 不应重新设计的决定；如需改变，应退回设计阶段。
+      description: 列出已确定的设计与约束，调整时在对应讨论中说明理由。
       placeholder: |
-        - ADR-0003 ...
-        - Core 不得依赖 ...
+        - 当前架构文档中的职责划分
+        - 核心模块的依赖方向
     validations:
       required: true
 
@@ -45,8 +45,8 @@ body:
   - type: textarea
     id: non_goals
     attributes:
-      label: 非目标
-      description: 明确排除容易顺手扩张的相邻工作。
+      label: 范围边界
+      description: 说明与相邻任务的分工。
     validations:
       required: true
 
@@ -54,7 +54,7 @@ body:
     id: architecture
     attributes:
       label: 架构与所有权
-      description: 涉及哪些 package / app、依赖方向、数据所有者和边界。
+      description: 涉及哪些包、应用、依赖方向与数据职责。
     validations:
       required: true
 
@@ -62,7 +62,7 @@ body:
     id: implementation
     attributes:
       label: 实施方案
-      description: 基于真实仓库结构给出可直接执行的步骤；允许调整局部细节，但不得自行改变架构。
+      description: 基于当前仓库给出实施步骤，局部选择遵循既定架构。
     validations:
       required: true
 
@@ -148,7 +148,7 @@ body:
     id: docs
     attributes:
       label: 文档影响
-      description: 需要同步哪些长期文档、ADR 或 README；若没有也请明确说明。
+      description: 需要同步哪些当前文档、讨论记录或 README；若没有也请明确说明。
     validations:
       required: true
 
@@ -157,6 +157,6 @@ body:
     attributes:
       label: 交接要求
       description: 除 CONTRIBUTING.md 外，最终 PR 还必须报告哪些任务特有信息。
-      placeholder: "例如：偏离项、实际验证证据、待补真实环境验收、剩余风险和后续工作。"
+      placeholder: "例如：偏离项、实际验证证据、后续实机验收、剩余风险和后续工作。"
     validations:
       required: true

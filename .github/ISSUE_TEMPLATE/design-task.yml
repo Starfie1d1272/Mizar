@@ -1,6 +1,6 @@
 name: 设计 / 架构任务
 description: 在进入实现前调研并冻结重要产品或技术决策。
-title: "[Design] "
+title: "[设计] "
 body:
   - type: textarea
     id: problem
@@ -37,8 +37,8 @@ body:
   - type: textarea
     id: invariants
     attributes:
-      label: 不可破坏的不变量
-      description: 引用相关 ADR、文档和权威边界。
+      label: 既定约束
+      description: 引用相关当前规范、讨论记录与职责边界。
     validations:
       required: true
 
@@ -54,14 +54,14 @@ body:
     id: deliverable
     attributes:
       label: 交付物
-      description: 设计完成后应更新什么，例如 ADR、长期文档或可直接执行的实现任务。
+      description: 设计完成后应更新什么，例如当前规范、方案讨论或可直接执行的实现任务。
     validations:
       required: true
 
   - type: textarea
     id: exit
     attributes:
-      label: 退出条件
-      description: 在后续实现可标记为 agent-ready 前，哪些问题必须已经得到确定答案？
+      label: 完成标准
+      description: 说明后续实现开始前需要明确的结论与验收条件。
     validations:
       required: true
