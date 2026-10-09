@@ -116,8 +116,11 @@ jobs:
           gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw 'Existing tag without verified release; refusing mutation' }
           $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
-          if ($env:RELEASE_TAG -eq 'v1.0.0') {
-            $notes = Get-Content docs/releases/1.0.md -Raw
+          $policy = Get-Content scripts/qualification/update-release.json -Raw | ConvertFrom-Json
+          $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
+          $notesFile = if ($policy.version -eq $identity.appVersion -and $policy.notesFile -match '^docs/releases/[A-Za-z0-9.-]+\.md$') { $policy.notesFile } elseif ($env:RELEASE_TAG -eq 'v1.0.0') { 'docs/releases/1.0.md' } else { $null }
+          if ($notesFile) {
+            $notes = Get-Content -LiteralPath $notesFile -Raw
             # Release pages resolve relative links differently from repository Markdown.
             $notes = $notes -replace '\]\(\.\./\.\./', "](https://github.com/$env:GH_REPO/blob/$env:SOURCE_SHA/"
             $notes = $notes -replace '\]\(\.\./', "](https://github.com/$env:GH_REPO/blob/$env:SOURCE_SHA/docs/"
