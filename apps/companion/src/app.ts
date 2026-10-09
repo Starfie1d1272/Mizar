@@ -8,6 +8,14 @@ import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.j
 import { registerProductionRoutes } from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
+import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
+import { ResourceStore } from './resource-store/store.js';
+import {
+  createRuntimeVerifier,
+  isOfficialWebResource,
+  PACK_ID,
+} from './resource-store/runtime-adapter.js';
+import { registerResourceRoutes } from './resource-store/routes.js';
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
@@ -90,6 +98,11 @@ import {
 } from './local-web/websocket-transport.js';
 
 export interface CompanionAppOptions {
+  readonly resources?: {
+    readonly root: string;
+    readonly policy?: ResourceTrustPolicy;
+    readonly cacheHistory?: readonly ResourceTrustPolicy[];
+  };
   readonly updates?: UpdateManager;
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
@@ -169,6 +182,7 @@ function projectionDiagnosticDegradesRuntime(code: string): boolean {
 }
 
 export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
+  let resources: ResourceStore | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -326,6 +340,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerStaticHost(app, {
     ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
     qualificationMode: options.qualificationMode ?? false,
+    readResource: async (path, range) => {
+      if (!resources || !isOfficialWebResource(path) || !resources.getStatus(PACK_ID).activeVersion)
+        return undefined;
+      return resources.read(PACK_ID, path, range);
+    },
   });
   const hudConfigStore =
     options.hudConfigStore ??
@@ -602,6 +621,27 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  if (options.resources) {
+    app.decorate('getResourceStore', () => resources);
+    registerResourceRoutes(app, () => resources);
+    app.addHook('onReady', async () => {
+      try {
+        resources = await ResourceStore.open({
+          root: options.resources!.root,
+          verifyTrustedPack: createRuntimeVerifier(
+            options.resources!.policy,
+            options.resources!.cacheHistory,
+          ),
+          activateWhenSafe: (commit) => production.withResourceActivation(commit),
+        });
+      } catch {
+        app.log.warn('官方素材缓存不可用；保留原 Full 资源路径。');
+      }
+    });
+    app.addHook('onClose', async () => {
+      await resources?.shutdown();
+    });
+  }
   if (options.updates && options.productRuntime)
     registerUpdateRoutes(app, {
       manager: options.updates,

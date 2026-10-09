@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import { ResourceStoreError } from '../resource-store/contract.js';
+import type { ResourceStore } from '../resource-store/store.js';
 
 const SURFACE_ROUTES = [
   ...new Set([
@@ -38,6 +40,10 @@ const RESERVED_PREFIXES = [
 export interface StaticHostOptions {
   readonly webRoot?: string;
   readonly qualificationMode?: boolean;
+  readonly readResource?: (
+    path: string,
+    range?: string,
+  ) => Promise<Awaited<ReturnType<ResourceStore['read']>> | undefined>;
 }
 
 function defaultWebRoot(): string {
@@ -82,7 +88,7 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
 
   app.register(fastifyStatic, {
     root,
-    wildcard: false,
+    serve: false,
     index: false,
     cacheControl: false,
     setHeaders: (reply, pathname) => {
@@ -116,6 +122,40 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
     if (shouldLeaveForApi(pathname)) return reply.callNotFound();
     const filename = pathFromRequest(request);
     if (filename.length === 0) return reply.callNotFound();
+    if (options.readResource) {
+      try {
+        const resource = await options.readResource(
+          decodeURIComponent(filename),
+          request.method === 'GET' ? request.headers.range : undefined,
+        );
+        if (resource) {
+          reply
+            .header('content-type', resource.contentType)
+            .header('content-length', resource.bytes.length)
+            .header('cache-control', 'no-store')
+            .header('accept-ranges', 'bytes')
+            .header('x-content-type-options', 'nosniff')
+            .header('content-security-policy', "default-src 'none'; sandbox");
+          if (resource.partial)
+            reply
+              .code(206)
+              .header(
+                'content-range',
+                `bytes ${resource.start}-${resource.end}/${resource.totalBytes}`,
+              );
+          return reply.send(resource.bytes);
+        }
+      } catch (error) {
+        const code = error instanceof ResourceStoreError ? error.code : 'resource_read_failed';
+        if (error instanceof ResourceStoreError && error.totalBytes !== undefined)
+          reply.header('content-range', `bytes */${error.totalBytes}`);
+        return reply
+          .code(
+            code === 'resource_range_invalid' ? 416 : code === 'resource_file_unknown' ? 404 : 409,
+          )
+          .send({ error: code });
+      }
+    }
     if (extname(filename) === '' && request.headers.accept?.includes('text/html')) {
       reply.code(404);
       return sendStaticFile(reply, 'index.html', 'no-store');

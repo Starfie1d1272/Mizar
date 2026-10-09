@@ -155,7 +155,7 @@ try {
       rejection,
       wallMs: performance.now() - started,
       limitation:
-        'No authenticated publication positive/offline-cache claim; receipt API still required.',
+        'Online unsigned-install negative only; authenticated publication positive requires formal signing. Offline receipt cryptography is covered by app-integration.test.ts.',
     }),
   );
 } finally {

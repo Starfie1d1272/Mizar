@@ -53,7 +53,9 @@ export class ResourceStore {
   private readonly root: string;
   private readonly controllers = new Map<string, AbortController>();
   private busy = false;
+  private operation: Promise<void> | undefined;
   private closed = false;
+  private closing = false;
   private lease: string | null = null;
   private readingBytes = 0;
   private readers = 0;
@@ -277,12 +279,18 @@ export class ResourceStore {
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) throw new ResourceStoreError('resource_operation_conflict');
-    if (this.closed) throw new ResourceStoreError('resource_store_closed');
+    if (this.closed || this.closing) throw new ResourceStoreError('resource_store_closed');
     this.busy = true;
+    let settle!: () => void;
+    this.operation = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
     try {
       return await operation();
     } finally {
       this.busy = false;
+      settle();
+      this.operation = undefined;
     }
   }
 
@@ -653,5 +661,12 @@ export class ResourceStore {
     if (this.busy || this.readers) throw new ResourceStoreError('resource_operation_conflict');
     this.closed = true;
     await this.releaseLease();
+  }
+
+  async shutdown(): Promise<void> {
+    this.closing = true;
+    for (const controller of this.controllers.values()) controller.abort();
+    await this.operation;
+    await this.close();
   }
 }

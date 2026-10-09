@@ -3,14 +3,30 @@ import { ResourceStoreError } from './contract.js';
 import type { ResourceStore } from './store.js';
 
 /** Register on the existing local service. No listener and no renderer-controlled download/path API. */
-export function registerResourceRoutes(app: FastifyInstance, store: ResourceStore): void {
-  app.get('/local/v1/resources', async (_request, reply) =>
-    reply.header('cache-control', 'no-store').send({ resources: store.list() }),
-  );
+export function registerResourceRoutes(
+  app: FastifyInstance,
+  source: ResourceStore | (() => ResourceStore | undefined),
+): void {
+  const current = () => {
+    const store = typeof source === 'function' ? source() : source;
+    if (!store) throw new ResourceStoreError('resource_store_unavailable');
+    return store;
+  };
+  app.get('/local/v1/resources', async (_request, reply) => {
+    try {
+      return reply.header('cache-control', 'no-store').send({ resources: current().list() });
+    } catch {
+      return reply.code(503).send({ error: 'resource_store_unavailable' });
+    }
+  });
   app.get<{ Params: { packId: string } }>('/local/v1/resources/:packId', async (request, reply) => {
     try {
-      return reply.header('cache-control', 'no-store').send(store.getStatus(request.params.packId));
-    } catch {
+      return reply
+        .header('cache-control', 'no-store')
+        .send(current().getStatus(request.params.packId));
+    } catch (error) {
+      if (error instanceof ResourceStoreError && error.code === 'resource_store_unavailable')
+        return reply.code(503).send({ error: error.code });
       return reply.code(404).send({ error: 'resource_pack_unknown' });
     }
   });
@@ -18,7 +34,7 @@ export function registerResourceRoutes(app: FastifyInstance, store: ResourceStor
     '/local/v1/resources/:packId/files/*',
     async (request, reply) => {
       try {
-        const result = await store.read(
+        const result = await current().read(
           request.params.packId,
           request.params['*'],
           request.method === 'GET' ? request.headers.range : undefined,
@@ -42,7 +58,8 @@ export function registerResourceRoutes(app: FastifyInstance, store: ResourceStor
             reply.header('content-range', `bytes */${error.totalBytes}`);
           return reply.code(416).send({ error: code });
         }
-        if (code === 'resource_operation_conflict') return reply.code(503).send({ error: code });
+        if (code === 'resource_operation_conflict' || code === 'resource_store_unavailable')
+          return reply.code(503).send({ error: code });
         if (
           code === 'resource_file_unknown' ||
           code === 'resource_pack_unknown' ||

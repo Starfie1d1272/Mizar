@@ -2,7 +2,11 @@
 
 `ResourceStore.open(options)` 持有独立持久目录的单个写入租约。Windows 默认目录为 `%LOCALAPPDATA%/Mizar/assets`，调用方不得把它放入 NSIS 管理的程序目录。`close()` 在没有安装或读取任务时释放租约。
 
-本模块尚未接入 App，旧版随包素材路径继续工作。主装配和安装器须注入同一 Store，不能各维护下载状态。只读路由由 `registerResourceRoutes(app, store)` 注册到现有 Fastify 服务，不创建监听器。
+Companion 的 App 在启动钩子打开唯一 Store，安装器桥通过 `app.getDecorator<() => ResourceStore | undefined>('getResourceStore')()` 获取同一实例。关闭 App 取消并等待安装后释放写入租约。状态与只读路由注册到现有 Fastify 服务，不创建监听器。
+
+Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bundle 内可选 `resource-policy.json` 读取固定策略；`coreVersion` 必须匹配当前 Core，不能用镜像 receipt 推导策略。缺少固定策略时拒绝缓存授权，保留旧 Full 随包 URL。该文件可携带经同一 Core/bootstrap 授权的 `cacheHistory`，供离线旧版恢复；未批准的历史版本不能仅凭 receipt 自报身份进入允许列表。独立素材更新的策略必须由认证的 bootstrap/catalog 提供，不能写入未签镜像字段。
+
+原 `fixtures/epl-*` 和 `fixture-media/epl-s24` URL 在有活动缓存时通过 Store 验证读取；活动缓存的错误或缺失成员明确失败，不混入 Full 的另一个版本。没有活动缓存时继续使用原 Full 随包素材。制作中的下载只准备；激活与 production 的 enter/hide/finish/shutdown、Host 更新共用互斥区，并在提交期间阻断场景切换。
 
 ## 接入边界
 
@@ -32,6 +36,6 @@
 
 ## 验证边界
 
-`apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。最终接入必须额外用真实 pack producer / manifest / provenance 验证器跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
+`apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。`app-integration.test.ts` 用真实 SDK 和公开 TUF snapshot 验证离线密码学拒绝且不调用网络，并验证真实 App 单例/Full 回退、异步制作互斥和原 URL 的 Range/损坏拒绝。原 URL 的活动版本正例是明确的 HTTP 授权 fixture，不是正式签名通过证据。正式签名正例仍须用真实发布包跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
 
 跨分支接线可执行 `pnpm --filter @mizar/companion exec tsx test/resource-store/verify-real-pack.mts <Pack/Trust-checkout>`。该脚本使用实际 producer、shared parser 和运行时 SDK，把真实 EPL 的未签反例送入 Store；必须到达 bundle/签名拒绝才通过，TUF 网络初始化失败明确不能冒充密码学拒绝。它不声明新资源包的正式签发成功，也不代替签名 receipt 的离线缓存验证。
