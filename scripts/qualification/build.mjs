@@ -384,10 +384,9 @@ async function main() {
     if (hasResourceContract) {
       const bridgeDirectory = join(appDir, 'dist', 'web-installer');
       await mkdir(bridgeDirectory, { recursive: true });
-      await cp(
-        join(rootDir, 'scripts', 'web-installer', 'install-official-pack.mjs'),
-        join(bridgeDirectory, 'install-official-pack.mjs'),
-      );
+      for (const name of ['install-official-pack.mjs', 'complete-bootstrap.mjs']) {
+        await cp(join(rootDir, 'scripts', 'web-installer', name), join(bridgeDirectory, name));
+      }
     }
     await runCommand(process.execPath, [join(scriptDir, 'verify-c4-resources.mjs'), appDir]);
     await cp(join(rootDir, 'apps', 'web', 'dist'), join(resourcesDir, 'web', 'dist'), {
