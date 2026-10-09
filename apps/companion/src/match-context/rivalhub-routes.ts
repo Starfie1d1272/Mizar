@@ -142,7 +142,8 @@ export function registerRivalHubConnectionRoutes(
     automaticTask = options.connection
       .claim(snapshot, binding.manifest.revision, false)
       .then(async () => {
-        if (linkedBinding()?.context.matchId !== snapshot.matchId)
+        const current = linkedBinding();
+        if (current?.context.matchId !== snapshot.matchId || current.origin !== 'online')
           await options.connection.release();
         automaticMatchId = null;
       })

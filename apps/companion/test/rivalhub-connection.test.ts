@@ -1131,13 +1131,29 @@ it('new production waits for its observed lineup, stops pending claims on releas
       kind: 'online',
       load: () => Promise.resolve(manifest),
     });
+    // A local BP override for the same match also invalidates the pending online claim.
+    slowClaim = true;
+    source.beginProduction();
+    await controller.selectMatch(manifest.match.matchId, {
+      kind: 'local',
+      load: () => Promise.resolve(manifest),
+    });
+    finishClaim!();
+    await source.stopAutomaticClaim();
+    expect(connection.view().activeSourceMatchId).toBeNull();
+    expect(calls.slice(-2)).toEqual(['claim', 'release']);
+    slowClaim = false;
+    await controller.selectMatch(manifest.match.matchId, {
+      kind: 'online',
+      load: () => Promise.resolve(manifest),
+    });
     anotherDevice = true;
     source.beginProduction();
     await source.stopAutomaticClaim();
     expect(connection.view().activeDeviceName).toBe('Other');
     source.beginProduction();
     await source.stopAutomaticClaim();
-    expect(claims).toHaveLength(9);
+    expect(claims).toHaveLength(10);
   } finally {
     await app.close();
     vi.useRealTimers();
