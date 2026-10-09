@@ -176,7 +176,7 @@ public class UpdateFixture {
       assert.equal(
         result.code,
         0,
-        `${result.errors}\n${await readFile(join(state, 'updates/result.json'), 'utf8')}`,
+        `${result.errors}\n${await readFile(join(state, 'updates/result.json'), 'utf8').catch(() => 'No recovery result was written')}`,
       );
     } else if (scenario === 'remaining-process') {
       const owned = spawn(join(installed, 'Mizar.exe'), ['--hold'], {
@@ -244,14 +244,15 @@ public class UpdateFixture {
     process.stdout.write(`Native update ${scenario}: PASS\n`);
   }
 } finally {
-  await run([
-    '-Command',
-    "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue",
-  ]);
-  if (ownsRegistration)
+  if (ownsRegistration) {
+    await run([
+      '-Command',
+      "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue",
+    ]);
     await run([
       '-Command',
       "Remove-Item 'HKCU:\\Software\\Mizar', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Recurse -Force -ErrorAction SilentlyContinue",
     ]);
+  }
   await rm(root, { force: true, recursive: true });
 }
