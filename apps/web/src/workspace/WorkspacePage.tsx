@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { getRadarArtwork } from '@mizar-hud/radar-view';
-import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
@@ -20,13 +19,10 @@ import {
 } from '../preparation/client';
 import { Button, StatusPill, Dialog } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
-import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
-import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
+import { RecoveryPanel } from './RecoveryPanel';
 import './workspace.css';
-
-const previewSettled = () => {};
 
 async function openPreparation(path: string) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_main', { path });
@@ -83,7 +79,7 @@ function ContextPanel({
   );
 }
 
-function ObsConfidence() {
+export function ObsConfidence() {
   const { value: result, updatedAt } = useLocalReadWithTime<{
     preview: { scene: string; image: string } | null;
   }>('/local/v1/obs/confidence', 2000);
@@ -93,7 +89,7 @@ function ObsConfidence() {
         <>
           <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
           <small className="workspace-confidence__time">
-            画面确认 ·{' '}
+            缩略图 · 无声音 ·{' '}
             {updatedAt
               ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })
               : '更新中'}
@@ -101,7 +97,7 @@ function ObsConfidence() {
         </>
       ) : (
         <div className="workspace-confidence__empty">
-          <span>OBS 预览暂不可用</span>
+          <span>OBS 画面暂不可用 · 缩略图无声音</span>
           <Button onClick={() => void openPreparation('/settings?tab=obs')}>检查连接</Button>
         </div>
       )}
@@ -110,6 +106,21 @@ function ObsConfidence() {
 }
 
 export function WorkspaceLeft() {
+  const [recovering, setRecovering] = useState(false);
+  useEffect(() => {
+    const channel = new BroadcastChannel('mizar-workspace-ui');
+    channel.onmessage = (event) => {
+      if (event.data === 'recovery') setRecovering(true);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setRecovering(false);
+    };
+    window.addEventListener('keydown', escape);
+    return () => {
+      channel.close();
+      window.removeEventListener('keydown', escape);
+    };
+  }, []);
   const radar = useLocalChannelClient('radar');
   const operator = useLocalChannelClient('operator');
   const program = useLocalChannelClient('program');
@@ -144,37 +155,47 @@ export function WorkspaceLeft() {
           </StatusPill>
         </header>
         <section className="workspace-radar" aria-label="比赛雷达">
-          <header className="workspace-section-heading">
-            <small>比赛雷达</small>
-            <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
-          </header>
-          <div className="workspace-radar__picture">
-            {liveRadar ? (
-              <Radar client={radar} zoomMode="full-map" />
-            ) : (
-              <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
-                {artwork ? (
-                  <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
+          {recovering ? (
+            <RecoveryPanel onClose={() => setRecovering(false)} />
+          ) : (
+            <>
+              <header className="workspace-section-heading">
+                <small>比赛雷达</small>
+                <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
+              </header>
+              <div className="workspace-radar__picture">
+                {liveRadar ? (
+                  <Radar client={radar} zoomMode="full-map" />
                 ) : (
-                  <div className="workspace-radar-grid" aria-hidden="true">
-                    <i />
-                    <i />
+                  <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
+                    {artwork ? (
+                      <img src={artwork} alt={`${map} 地图底图，无实时选手标记`} />
+                    ) : (
+                      <div className="workspace-radar-grid" aria-hidden="true">
+                        <i />
+                        <i />
+                      </div>
+                    )}
+                    <div className="workspace-empty">
+                      <strong>
+                        {payload?.identity.state === 'mismatch'
+                          ? '等待核对比赛名单'
+                          : '等待 GSI 数据'}
+                      </strong>
+                      <p>
+                        {artwork
+                          ? '地图底图 · 实时位置尚不可用'
+                          : '进入 CS2 观战后显示地图与选手位置'}
+                      </p>
+                      <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
+                        检查游戏连接
+                      </Button>
+                    </div>
                   </div>
                 )}
-                <div className="workspace-empty">
-                  <strong>
-                    {payload?.identity.state === 'mismatch' ? '等待核对比赛名单' : '等待 GSI 数据'}
-                  </strong>
-                  <p>
-                    {artwork ? '地图底图 · 实时位置尚不可用' : '进入 CS2 观战后显示地图与选手位置'}
-                  </p>
-                  <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
-                    检查游戏连接
-                  </Button>
-                </div>
               </div>
-            )}
-          </div>
+            </>
+          )}
         </section>
         <ContextPanel
           operator={payload}
@@ -188,19 +209,14 @@ export function WorkspaceLeft() {
 }
 
 export function WorkspaceDock() {
-  const sceneState = useProgramScenes();
-  const { snapshot: bp } = useBpSession();
+  const scenes = useProgramScenes();
   const obs = useObsStatus();
-  const [message, setMessage] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (!message) return;
-    const timer = setTimeout(() => setMessage(''), 6000);
-    return () => clearTimeout(timer);
-  }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [finishOpen, setFinishOpen] = useState(false);
+  const [tools, setTools] = useState<'tools' | 'spectator'>('tools');
   useEffect(() => {
     const hide = () => {
       void fetch('/local/v1/production', { cache: 'no-store' })
@@ -208,41 +224,39 @@ export function WorkspaceDock() {
         .then((current) =>
           command('/operator/production', { action: 'hide', expectedRevision: current.revision }),
         )
-        .catch(() => setErrorMessage('工作区已隐藏，制作状态暂未同步。'));
+        .catch(() => setError('工作区已隐藏，制作状态暂未同步。'));
     };
     window.addEventListener('mizar-hide', hide);
     return () => window.removeEventListener('mizar-hide', hide);
   }, []);
-  async function action(run: () => Promise<unknown>, restoreFocus = false) {
+  async function action(run: () => Promise<unknown>, focus = false) {
     if (busy) return;
     setBusy(true);
     setMessage('');
-    setErrorMessage('');
+    setError('');
     try {
       await run();
-      if (restoreFocus && window.__TAURI_INTERNALS__) {
-        const focused = await desktopInvoke<boolean>('restore_cs2_focus');
-        if (!focused) setMessage('操作已完成，未能将焦点交还 CS2。');
-      }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '操作未完成。');
+      if (focus && window.__TAURI_INTERNALS__) await desktopInvoke('restore_cs2_focus');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '操作未完成。');
     } finally {
       setBusy(false);
     }
   }
-  const mode = sceneState?.director?.mode;
-  const connected = obs?.connection === 'connected';
-  const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
-  const nextFrame = useMemo(
-    () => (next ? { key: next.id, scene: next.id, src: next.path, immediate: true } : null),
-    [next],
-  );
+  function recover() {
+    const channel = new BroadcastChannel('mizar-workspace-ui');
+    channel.postMessage('recovery');
+    channel.close();
+  }
+  const mode = scenes?.director?.mode;
+  const next = PROGRAM_SCENES.find((scene) => scene.id === scenes?.director?.next);
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
-      <section className="workspace-direction" aria-label="节目控制">
-        <div className="workspace-section-heading">
+      <section className="workspace-direction" aria-label="正式节目控制">
+        <header className="workspace-section-heading">
           <strong>
-            {PROGRAM_SCENES.find((scene) => scene.id === sceneState?.active)?.title ?? '等待同步'}
+            已确认 ·{' '}
+            {PROGRAM_SCENES.find((scene) => scene.id === scenes?.active)?.title ?? '等待同步'}
           </strong>
           <StatusPill tone={mode === 'blocked' ? 'warning' : 'info'}>
             {mode === 'auto'
@@ -254,31 +268,31 @@ export function WorkspaceDock() {
                   : '准备中'}
           </StatusPill>
           <Button
-            disabled={busy || !sceneState || (mode !== 'manual' && mode !== 'blocked')}
+            disabled={busy || !scenes || (mode !== 'manual' && mode !== 'blocked')}
             onClick={() =>
-              sceneState &&
+              scenes &&
               void action(() =>
                 command('/operator/program-director', {
                   action: 'resume',
-                  expectedRevision: sceneState.revision,
+                  expectedRevision: scenes.revision,
                 }),
               )
             }
           >
             恢复自动
           </Button>
-        </div>
+        </header>
         <div className="workspace-scene-buttons" aria-label="手动切换场景">
           {PROGRAM_SCENES.map((scene) => (
             <Button
               key={scene.id}
-              disabled={busy || !sceneState || !sceneState.available.includes(scene.id)}
-              aria-pressed={sceneState?.active === scene.id}
-              title={sceneState?.blocked?.[scene.id] ?? `手动切换到${scene.title}`}
+              disabled={busy || !scenes?.available.includes(scene.id)}
+              aria-pressed={scenes?.active === scene.id}
+              title={scenes?.blocked[scene.id] ?? `正式切换到${scene.title}`}
               onClick={() =>
-                sceneState &&
+                scenes &&
                 void action(
-                  () => selectProgramScene(scene.id, sceneState.revision),
+                  () => selectProgramScene(scene.id, scenes.revision),
                   scene.id === 'gameplay' || scene.id === 'bp',
                 )
               }
@@ -287,113 +301,86 @@ export function WorkspaceDock() {
             </Button>
           ))}
         </div>
-        <div className="workspace-next-preview" aria-label="下一个场景预览">
-          {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
-          <div>
-            <small>下一场景</small>
-            <strong>
-              {next?.title ??
-                (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')}
-            </strong>
-          </div>
-        </div>
-      </section>
-      <section className="workspace-spectator" aria-label="观战控制">
-        <div className="workspace-section-heading">
-          <small>观战 · 本机</small>
-          <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
-            BP 工作台
-          </Button>
-          {bp && bp.state !== 'hidden' && bp.projection ? (
-            <span>
-              BP · {bp.revealedCount} / {bp.projection.steps.length}
-            </span>
-          ) : null}
-        </div>
-        <SpectatorHudCommands compact onMessage={setMessage} />
-        <p className="workspace-command-help">复制后在 CS2 控制台执行</p>
-        <LocalOverlayControls onMessage={setMessage} />
-      </section>
-      <section className="workspace-production" aria-label="制作工具">
-        <div className="workspace-section-heading">
-          <small>制作工具</small>
-          <span data-tone={connected ? 'success' : 'warning'}>
-            {connected
-              ? `OBS · ${obs.streaming ? '推流中' : '已连接'}`
-              : obs?.connection === 'invalid_password'
-                ? 'OBS · 密码无效'
-                : obs?.connection === 'password_required'
-                  ? 'OBS · 需要密码'
-                  : 'OBS · 未连接'}
-          </span>
-        </div>
-        <Button
-          disabled={busy}
-          onClick={() => void action(() => openPreparation('/settings?tab=obs'))}
-        >
-          OBS 配置
-        </Button>
-        <p className="workspace-obs-live">
-          推流 · {connected ? (obs.streaming ? '进行中' : '未启动') : '无法确认'} · 录制 ·{' '}
-          {connected ? (obs.recording ? '进行中' : '未启动') : '无法确认'}
+        <p className="workspace-next-summary">
+          预计下一节目 ·{' '}
+          {next?.title ?? (scenes?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')} ·
+          预告尚未执行
         </p>
-        <div className="workspace-tools">
-          <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
-            HUD 编辑器
-          </Button>
-          <Button disabled={busy} onClick={() => void action(() => openTool('diagnostics'))}>
-            运行诊断
-          </Button>
-          <Button
-            disabled={busy || !window.__TAURI_INTERNALS__}
-            onClick={() => void action(() => desktopInvoke('restore_layout'), true)}
-          >
-            恢复布局
-          </Button>
-          <Button
-            disabled={!production || busy}
-            onClick={() => production && void action(() => productionAction('hide', production))}
-          >
-            隐藏工作区
-          </Button>
-        </div>
       </section>
-      <footer className="workspace-message" role="status">
-        <span title={sceneState?.director?.reason ?? undefined}>
-          {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
-        </span>
-        {errorMessage ? (
-          <button
-            className="workspace-error"
-            onClick={() => setDetailsOpen(true)}
-            title={errorMessage}
-            aria-label="查看错误详情"
-          >
-            <span role="alert">{errorMessage}</span>
-          </button>
-        ) : null}
-        {message ? (
-          <span className="workspace-feedback" role="status">
-            {message}
-          </span>
-        ) : null}
-        <div className="workspace-footer-actions">
-          <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-          <small className="workspace-exit-help">关闭游戏并恢复配置</small>
-          <Button
-            className="workspace-exit"
-            disabled={!production || busy}
-            aria-busy={busy}
-            onClick={() => production && void action(() => productionAction('finish', production))}
-          >
-            退出工作台
+      <section className="workspace-production" aria-label="现场工具与观战">
+        <div className="workspace-section-heading">
+          <Button aria-pressed={tools === 'tools'} onClick={() => setTools('tools')}>
+            工具
           </Button>
+          <Button aria-pressed={tools === 'spectator'} onClick={() => setTools('spectator')}>
+            观战 / 本机 HUD
+          </Button>
+          <span>
+            OBS ·{' '}
+            {obs?.connection === 'connected' ? (obs.streaming ? '推流中' : '已连接') : '无法确认'}
+          </span>
         </div>
+        {tools === 'spectator' ? (
+          <>
+            <SpectatorHudCommands compact onMessage={setMessage} />
+            <p className="workspace-command-help">复制后在 CS2 控制台执行</p>
+            <LocalOverlayControls onMessage={setMessage} />
+          </>
+        ) : (
+          <div className="workspace-tools">
+            <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
+              正式 BP
+            </Button>
+            <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
+              HUD 编辑器
+            </Button>
+            <Button disabled={busy} onClick={() => void action(() => openPreparation('/'))}>
+              本场资料
+            </Button>
+            <Button
+              disabled={busy || !production}
+              onClick={() => production && void action(() => productionAction('hide', production))}
+            >
+              隐藏工作区
+            </Button>
+          </div>
+        )}
+      </section>
+      <footer className="workspace-message">
+        <span
+          title={error || message || scenes?.director?.reason || ''}
+          role={error ? 'alert' : 'status'}
+        >
+          {error || message || scenes?.director?.reason || '正式切场后保持手动；网站数据源独立控制'}
+        </span>
+        <Button onClick={recover}>现场恢复</Button>
+        <Button
+          className="workspace-exit"
+          disabled={busy || !production}
+          onClick={() => setFinishOpen(true)}
+        >
+          结束制播
+        </Button>
       </footer>
-      <Dialog open={detailsOpen} title="操作未完成" onClose={() => setDetailsOpen(false)}>
-        <p>{errorMessage}</p>
-        <p>{sceneState?.director?.reason}</p>
-        <Button onClick={() => setDetailsOpen(false)}>关闭详情</Button>
+      <Dialog open={finishOpen} title="结束本场制播" onClose={() => setFinishOpen(false)}>
+        <p>
+          收起节目、释放本机网站数据源、关闭受管理 CS2 并恢复配置。OBS 推流 /
+          录制不会自动停止；不会提交网站官方结果。
+        </p>
+        <Button
+          disabled={busy || !production}
+          onClick={() =>
+            production &&
+            void action(async () => {
+              await productionAction('finish', production, setMessage);
+              setFinishOpen(false);
+            })
+          }
+        >
+          确认结束并恢复配置
+        </Button>
+        <Button onClick={() => setFinishOpen(false)}>继续制作</Button>
+        {error ? <p role="alert">{error}</p> : null}
       </Dialog>
     </main>
   );

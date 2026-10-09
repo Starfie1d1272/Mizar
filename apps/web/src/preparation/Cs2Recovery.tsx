@@ -92,7 +92,12 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           {status?.pending ? (
             <Button
               disabled={busy || Boolean(phase) || !production || (uncertain && !cancelled)}
-              onClick={() =>
+              onClick={() => {
+                if (
+                  status.running &&
+                  !window.confirm('关闭受管理 CS2 并恢复配置？OBS 输出不会自动停止。')
+                )
+                  return;
                 void run(() =>
                   status.running && production
                     ? production.mode === 'preparation'
@@ -101,8 +106,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                     : production?.mode === 'preparation'
                       ? desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: cancelled })
                       : productionAction('finish', production!),
-                )
-              }
+                );
+              }}
             >
               {status.running ? '退出 CS2 并恢复设置' : '恢复配置备份'}
             </Button>
