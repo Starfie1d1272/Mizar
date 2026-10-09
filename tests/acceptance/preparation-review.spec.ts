@@ -440,7 +440,6 @@ for (const source of ['online', 'cache'] as const) {
       ).toBeVisible();
       await expect(page.getByText('计划开始', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '保存比赛资料' })).toHaveCount(0);
-      await page.getByRole('link', { name: '双方与首发', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: match.entrants.a.name, exact: true }),
       ).toBeVisible();
@@ -456,7 +455,7 @@ for (const source of ['online', 'cache'] as const) {
       await page.getByText('Steam 身份', { exact: true }).first().click();
       await expect(page.getByText('76561198000000001', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '从当前服务器识别首发' })).toHaveCount(0);
-      await page.getByRole('link', { name: '地图与正式 BP', exact: true }).click();
+      await page.getByText(/^地图计划与已保存禁选/).click();
       await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('DUST2');
       await expect(page.getByRole('list', { name: 'BP 步骤' })).toContainText('禁用');
       await expect(page.getByRole('article', { name: /ANCIENT/ })).toContainText('16 : 12');

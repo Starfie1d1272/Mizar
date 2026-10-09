@@ -4,18 +4,14 @@ import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { useHudConfigClient } from '../realtime/hud-config-client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import { BpWorkbench } from '../bp/BpPage';
-import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui';
+import { Button, Panel, StatusBanner } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
-import { LocalOverlayControls } from './LocalOverlayControls';
-import { SpectatorHudCommands } from './SpectatorHudCommands';
-import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
+import { MatchDocumentView } from './MatchDocumentView';
 import { useLocalTournament } from './tournament';
 import {
-  command,
   openTool,
   productionAction,
   useLocalRead,
@@ -25,23 +21,30 @@ import {
 import { RosterCapture } from './RosterCapture';
 import { Settings } from './Settings';
 import { AutomaticPreparation } from './AutomaticPreparation';
-import { ProgramPreview } from './ProgramPreview';
 import { useCs2Status } from './cs2-status';
 import { Cs2Recovery } from './Cs2Recovery';
 import { SpectatorWorkflow } from './SpectatorWorkflow';
+import { EventMatchWorkspace } from './EventMatchWorkspace';
+import { PictureWorkspace } from './PictureWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import './preparation.css';
 import './production.css';
 
 const tasks = [
-  ['prepare', '开播检查'],
-  ['details', '本场资料'],
-  ['roster', '双方与首发'],
-  ['maps', '地图与正式 BP'],
-  ['hud', 'HUD 与本机显示'],
-  ['program', '画面检查'],
-  ['finish', '恢复与收尾'],
+  ['match', '本场准备'],
+  ['picture', '画面检查'],
+  ['check', '开播检查'],
 ] as const;
+const taskFor = (tab: string | null, path: string) =>
+  tab === 'finish'
+    ? 'finish'
+    : tab === 'maps' || tab === 'bp'
+      ? 'bp'
+      : path === '/picture' || tab === 'hud' || tab === 'program' || tab === 'picture'
+        ? 'picture'
+        : tab === 'prepare' || tab === 'check'
+          ? 'check'
+          : 'match';
 const settings = [
   ['gsi', 'CS2 / GSI'],
   ['obs', 'OBS'],
@@ -55,13 +58,29 @@ export function PreparationPage() {
   const isSettings = path === '/settings';
   const isResources = path === '/resources';
   const requested = query.get('tab');
-  const tab = isSettings
-    ? (settings.find(([id]) => id === requested)?.[0] ?? 'gsi')
-    : path === '/matches'
-      ? (requested ?? 'details')
-      : path === '/picture'
-        ? (requested ?? 'program')
-        : (tasks.find(([id]) => id === requested)?.[0] ?? 'prepare');
+  const [task, setTask] = useState(() => taskFor(requested, path));
+  const [visited, setVisited] = useState(() => new Set([taskFor(requested, path)]));
+  const tab = isSettings ? (settings.find(([id]) => id === requested)?.[0] ?? 'gsi') : task;
+  function navigateTask(next: string) {
+    setTask(next);
+    setVisited((current) => new Set([...current, next]));
+    const url = new URL(window.location.href);
+    url.pathname = '/';
+    url.searchParams.set('tab', next);
+    window.history.pushState(null, '', url);
+  }
+  useEffect(() => {
+    const restore = () => {
+      const next = taskFor(
+        new URLSearchParams(window.location.search).get('tab'),
+        window.location.pathname,
+      );
+      setTask(next);
+      setVisited((current) => new Set([...current, next]));
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
   const read = useLocalReadWithTime<ContextEnvelope<MatchDocumentV1>>(
     '/local/v1/match-document',
     2000,
@@ -77,14 +96,15 @@ export function PreparationPage() {
     useLocalRead<
       { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
     >('/local/v1/readiness');
-  const hud = useHudConfigClient();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [selecting, setSelecting] = useState(
     query.has('select') || query.has('createLocal') || query.has('createFromServer'),
   );
-  const [resourceId, setResourceId] = useState(() => query.get('resource') ?? '');
-  const [resourceSection, setResourceSection] = useState<MatchSection>('details');
+  const [selectionIntent, setSelectionIntent] = useState<'existing' | 'create' | 'online'>(() =>
+    query.has('createLocal') || query.has('createFromServer') ? 'create' : 'existing',
+  );
+  const [matchDirty, setMatchDirty] = useState(false);
   const [progress, setProgress] = useState('');
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
@@ -110,7 +130,6 @@ export function PreparationPage() {
     return () => window.removeEventListener('mizar-enter', enter);
   });
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
-  const resource = view?.matches.find((item) => item.matchId === resourceId) ?? view?.matches[0];
   const existing = production?.mode === 'hidden' || production?.mode === 'live';
   const canEdit = read.status === 'ready' && envelope?.freshness === 'fresh';
   return (
@@ -119,33 +138,54 @@ export function PreparationPage() {
         className="preparation production-page"
         data-task={isResources ? `resource-${requested ?? 'matches'}` : tab}
       >
-        <header className="preparation-heading">
-          <div>
-            <h1>{isSettings ? '本机设置' : isResources ? '资源' : '本场制播'}</h1>
-            <p>
+        <header className="preparation-heading production-identity">
+          <div role="region" aria-label="本场上下文">
+            <h1>
               {isSettings
-                ? '长期配置与诊断，准备完成后可持续复用。'
+                ? '本机设置'
                 : isResources
-                  ? '浏览跨场资源不会替换正在制作的比赛。'
-                  : '准备、正式播出与安全收尾，围绕同一场比赛推进。'}
+                  ? '资源'
+                  : match
+                    ? `${match.entrants.a.name} vs ${match.entrants.b.name}`
+                    : '本场准备'}
+            </h1>
+            <p>
+              {!isSettings && !isResources
+                ? match
+                  ? `${match.competition?.name ?? '独立比赛'} · ${match.format.toUpperCase()} · ${envelope?.source === 'local' ? '本地资料' : envelope?.source === 'fixture' ? '排练资料' : 'RivalHub'}${read.status === 'stale' || envelope?.freshness === 'stale' ? ' · 资料过期，只读' : ''}`
+                  : '先建立本场，可离线准备名单、BP 与视觉。'
+                : isResources
+                  ? '浏览资源与当前制播分开；确认载入才切换本场。'
+                  : '可复用的本机配置与诊断'}
             </p>
           </div>
           {!isSettings && !isResources ? (
-            <Button
-              variant="primary"
-              disabled={busy || !production?.canEnter}
-              onClick={() =>
-                production && void action(() => productionAction('enter', production, setProgress))
-              }
-            >
-              {existing
-                ? '返回现有现场'
-                : window.__TAURI_INTERNALS__
-                  ? '启动新制作并进入现场'
-                  : '进入制播工作区'}
-            </Button>
+            <div className="preparation-actions">
+              <Button onClick={() => setSelecting((value) => !value)}>选择 / 切换本场</Button>
+              <Button
+                variant="primary"
+                disabled={busy || matchDirty || !production?.canEnter}
+                onClick={() =>
+                  production &&
+                  void action(() => productionAction('enter', production, setProgress))
+                }
+              >
+                {existing
+                  ? '返回现有现场'
+                  : window.__TAURI_INTERNALS__
+                    ? '启动新制作并进入现场'
+                    : '进入制播工作区'}
+              </Button>
+              <details className="production-actions-menu">
+                <summary>更多操作</summary>
+                <Button onClick={() => navigateTask('finish')}>恢复与收尾</Button>
+              </details>
+            </div>
           ) : null}
         </header>
+        {matchDirty ? (
+          <p role="status">本场有未保存修改；任务切换保留草稿，进入现场前请先保存。</p>
+        ) : null}
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
         {progress ? <p role="status">{progress}</p> : null}
         {production?.cleanup && tab !== 'finish' ? (
@@ -155,72 +195,80 @@ export function PreparationPage() {
         ) : null}
         {!isSettings && !isResources ? (
           <>
-            <section className="production-context" aria-label="本场上下文">
-              <div>
-                <strong>
-                  {match
-                    ? `${match.entrants.a.name} vs ${match.entrants.b.name}`
-                    : read.status === 'loading'
-                      ? '正在读取本场'
-                      : '尚未选择比赛'}
-                </strong>
-                <p>
-                  {match
-                    ? `${match.competition?.name ?? '独立比赛'} · ${match.format.toUpperCase()} · ${match.matchLabel ?? match.matchId}`
-                    : '先创建本地比赛，或确认 RivalHub 比赛候选。'}
-                </p>
-              </div>
-              <StatusPill tone={read.status === 'stale' ? 'warning' : 'info'}>
-                {envelope?.source === 'local'
-                  ? '本地资料'
-                  : envelope?.source === 'fixture'
-                    ? '排练资料'
-                    : envelope
-                      ? 'RivalHub'
-                      : '来源待确认'}
-                {read.status === 'stale' || envelope?.freshness === 'stale'
-                  ? ' · 资料过期，只读'
-                  : ''}
-              </StatusPill>
-              <Button onClick={() => setSelecting((value) => !value)}>选择 / 切换本场</Button>
-            </section>
             {read.status === 'stale' ? (
               <StatusBanner tone="warning">
-                资料刷新失败，保留最近读取的资料（
-                {read.updatedAt ? new Date(read.updatedAt).toLocaleTimeString('zh-CN') : '时间未知'}
-                ）。正式编辑待连接恢复后再操作。
+                资料刷新失败，保留最近资料供核对，正式编辑待连接恢复。
               </StatusBanner>
             ) : null}
-            {selecting || (!match && tab === 'prepare') ? (
+            {selecting || !match ? (
               <Panel className="production-selection">
                 <h2>选择本场</h2>
-                <RosterCapture
-                  create
-                  autoOpen={query.has('createFromServer')}
-                  onSaved={() => void refresh()}
-                />
-                <LocalMatchControls action={action} onSelected={() => setSelecting(false)} />
-                <RivalHubPreparationPanel mode="matches" />
+                <div className="preparation-actions" aria-label="本场选择方式">
+                  {(
+                    [
+                      ['existing', '已有本地比赛'],
+                      ['create', '新建本地比赛'],
+                      ['online', 'RivalHub'],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <Button
+                      key={id}
+                      aria-pressed={selectionIntent === id}
+                      onClick={() => setSelectionIntent(id)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <div hidden={selectionIntent !== 'existing'}>
+                  <LocalMatchControls
+                    beforeApply={() =>
+                      !matchDirty || window.confirm('本场资料有未保存修改，放弃草稿并切换？')
+                    }
+                    mode="select"
+                    action={action}
+                    onSelected={() => setSelecting(false)}
+                  />
+                </div>
+                <div hidden={selectionIntent !== 'create'}>
+                  <LocalMatchControls
+                    beforeApply={() =>
+                      !matchDirty || window.confirm('本场资料有未保存修改，放弃草稿并创建下一场？')
+                    }
+                    mode="create"
+                    action={action}
+                    onSelected={() => setSelecting(false)}
+                  />
+                  <details open={query.has('createFromServer')}>
+                    <summary>从当前服务器识别双方 · 需有效 5v5 数据</summary>
+                    <RosterCapture
+                      create
+                      autoOpen={query.has('createFromServer')}
+                      onSaved={() => {
+                        void refresh();
+                        setSelecting(false);
+                      }}
+                    />
+                  </details>
+                </div>
+                {selectionIntent === 'online' ? <RivalHubPreparationPanel mode="matches" /> : null}
               </Panel>
             ) : null}
             <nav className="preparation-tabs" aria-label="本场任务">
               {tasks.map(([id, label]) => (
-                <a key={id} href={`/?tab=${id}`} aria-current={tab === id ? 'page' : undefined}>
+                <Button
+                  key={id}
+                  aria-current={
+                    task === id || (task === 'bp' && id === 'match') ? 'page' : undefined
+                  }
+                  onClick={() => navigateTask(id)}
+                >
                   {label}
-                </a>
+                </Button>
               ))}
             </nav>
             <Cs2Recovery production={production} />
           </>
-        ) : null}
-        {!isSettings &&
-        !isResources &&
-        tab === 'prepare' &&
-        production?.mode === 'preparation' &&
-        !cs2.status?.pending &&
-        !cs2.phase &&
-        (!window.__TAURI_INTERNALS__ || cs2.status !== null) ? (
-          <AutomaticPreparation />
         ) : null}
         {isSettings ? (
           <>
@@ -236,277 +284,220 @@ export function PreparationPage() {
               ))}
             </nav>
             {tab !== 'gsi' ? <Cs2Recovery production={production} /> : null}
+            {query.get('returnTask') === 'check' || query.get('prepare') === '1' ? (
+              <a href="/?tab=check">返回开播检查</a>
+            ) : null}
             <Settings tab={tab} />
           </>
         ) : isResources ? (
           <>
             <nav className="preparation-tabs" aria-label="资源分区">
-              {(
-                [
-                  ['matches', '比赛与队伍'],
-                  ['event', '赛事与赛程'],
-                  ['hud', 'HUD 文件'],
-                ] as const
-              ).map(([id, label]) => (
-                <a
-                  key={id}
-                  href={`/resources?tab=${id}${resourceId ? `&resource=${encodeURIComponent(resourceId)}` : ''}`}
-                  aria-current={(requested ?? 'matches') === id ? 'page' : undefined}
-                >
-                  {label}
-                </a>
-              ))}
+              <a href="/resources" aria-current={requested !== 'hud' ? 'page' : undefined}>
+                赛事与比赛
+              </a>
+              <a href="/resources?tab=hud" aria-current={requested === 'hud' ? 'page' : undefined}>
+                HUD 文件
+              </a>
             </nav>
-            {(requested ?? 'matches') === 'matches' ? (
-              <Panel>
-                <h2>本地比赛与队伍</h2>
-                <p>在资源中核对赛事与赛程；载入比赛需明确确认。</p>
-                <Select
-                  label="浏览比赛资源"
-                  value={resource?.matchId ?? ''}
-                  onChange={(e) => setResourceId(e.target.value)}
-                >
-                  {view?.matches.map((item) => (
-                    <option key={item.matchId} value={item.matchId}>
-                      {item.entrants.a.name} vs {item.entrants.b.name}
-                    </option>
-                  ))}
-                </Select>
-                {resource ? (
-                  <>
-                    <MatchDocumentView document={resource} section="details" />
-                    <Button
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `将本场切换为 ${resource.entrants.a.name} vs ${resource.entrants.b.name}？`,
-                          )
-                        )
-                          void action(async () => {
-                            await command('/operator/local-match/select', {
-                              matchId: resource.matchId,
-                            });
-                            window.location.assign('/?tab=details');
-                          });
-                      }}
-                    >
-                      确认载入为本场
-                    </Button>
-                  </>
-                ) : (
-                  <p>暂无本地比赛，在制播中创建后即可复用。</p>
-                )}
-                <ul className="resource-team-list" aria-label="已保存队伍">
-                  {view?.teams.map((team) => (
-                    <li key={team.teamId}>{team.name}</li>
-                  ))}
-                </ul>
-              </Panel>
-            ) : requested === 'event' && resource ? (
-              <Panel>
-                <h2>赛事资产与默认规则</h2>
-                <Select
-                  label="资源编辑区域"
-                  value={resourceSection}
-                  onChange={(e) => setResourceSection(e.target.value as MatchSection)}
-                >
-                  <option value="details">赛事资料 / 赛程顺序</option>
-                  <option value="maps">默认地图池 / BO3 规则</option>
-                </Select>
-                <LocalTournamentEditor
-                  key={`${resource.matchId}:${resourceSection}`}
-                  document={resource}
-                  view={view}
-                  refresh={refresh}
-                  action={action}
-                  section={resourceSection}
-                  scope="resources"
-                />
-              </Panel>
-            ) : requested === 'hud' ? (
+            {requested === 'hud' ? (
               <Panel>
                 <h2>HUD 预设与文件</h2>
-                <p>
-                  五套预设、布局引用、导入和导出均在真实编辑器管理。选择与保存资源不会自动应用到播出。
-                </p>
                 <HudPresetDirectory action={action} />
                 <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
               </Panel>
+            ) : view ? (
+              <EventMatchWorkspace view={view} refresh={refresh} action={action} />
             ) : (
-              <p>暂无赛事资源，请先创建本地比赛。</p>
+              <p>正在读取本地赛事与比赛；读取失败时不替换为样例。</p>
             )}
           </>
-        ) : selecting || (!match && tab === 'prepare') ? null : tab === 'prepare' ? (
+        ) : (
           <>
-            <div className="production-preflight">
-              <div>
-                <Panel>
-                  <h2>开播检查</h2>
-                  <p>
-                    本场资料预览与赛前 BP 可先准备，无需启动
-                    CS2。进入真实现场前需确认比赛资料、无冲突的 GSI 配置与 OBS 连接 /
-                    场景；比赛画面、雷达与首发身份依赖进入观战后的实时数据。待确认不等于全部阻止预览。
-                  </p>
-                  {capabilities ? (
-                    capabilities.map((item) => (
-                      <a className="preparation-readiness" key={item.label} href={item.href}>
-                        <div>
-                          <strong>
-                            {item.label} · {item.ready ? '已确认' : '待处理 / 待确认'}
-                          </strong>
-                          <p>{item.reason}</p>
-                        </div>
-                        <span>{item.action ?? '查看'}</span>
-                      </a>
-                    ))
-                  ) : (
-                    <p>正在读取本地检查状态。</p>
-                  )}
-                </Panel>
-                {match ? <ProductionStatus matchId={match.matchId} /> : null}
-              </div>
-              <SpectatorWorkflow capabilities={capabilities} production={production} />
-            </div>
-          </>
-        ) : ['details', 'roster', 'maps'].includes(tab) ? (
-          <>
-            <RivalHubSyncControls />
-            {match ? (
-              local && canEdit ? (
+            <section hidden={task !== 'match'} aria-label="本场准备工作区">
+              {match ? (
                 <>
-                  {tab === 'roster' ? (
+                  <div className="match-workspace-heading">
+                    <div>
+                      <h2>本场准备</h2>
+                      <p>
+                        {match.competition?.name ?? '独立比赛'} · {match.stageLabel || '阶段待填写'}{' '}
+                        · 地图计划与双方首发在本场持续准备。
+                      </p>
+                    </div>
+                    <Button variant="primary" onClick={() => navigateTask('bp')}>
+                      准备正式 BP
+                    </Button>
+                  </div>
+                  <RivalHubSyncControls />
+                  {local && canEdit ? (
+                    <LocalTournamentEditor
+                      key={match.matchId}
+                      document={match}
+                      section="overview"
+                      view={view}
+                      refresh={refresh}
+                      action={action}
+                      scope="match"
+                      onDirtyChange={setMatchDirty}
+                    />
+                  ) : (
+                    <>
+                      <MatchDocumentView document={match} section="details" />
+                      <MatchDocumentView document={match} section="roster" />
+                    </>
+                  )}
+                  <details className="match-plan-summary">
+                    <summary>
+                      地图计划与已保存禁选 ·{' '}
+                      {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
+                    </summary>
+                    <MatchDocumentView document={match} section="maps" />
+                  </details>
+                  {local && canEdit ? (
                     <RosterCapture
                       names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
                       onSaved={() => void refresh()}
                     />
                   ) : null}
-                  {tab !== 'maps' ? (
-                    <LocalTournamentEditor
-                      key={`${match.matchId}:${tab}`}
-                      document={match}
-                      section={tab as MatchSection}
-                      view={view}
-                      refresh={refresh}
-                      action={action}
-                      scope="match"
-                    />
-                  ) : null}
                 </>
               ) : (
-                <MatchDocumentView document={match} section={tab as MatchSection} />
-              )
-            ) : (
-              <p>请先选择本场。</p>
-            )}
-            {tab === 'maps' ? (
-              <Panel>
-                <h2>正式 BP 控制 · 影响播出</h2>
-                <p>赛前即可编辑与播放 BP，无需启动 CS2 或等待 GSI。画面检查仅用于只读预览。</p>
-                <BpWorkbench />
-              </Panel>
-            ) : null}
-          </>
-        ) : tab === 'hud' || tab === 'overlay' ? (
-          <>
-            <Panel>
-              <h2>
-                正式播出 ·{' '}
-                {hud.status === 'ready'
-                  ? hud.current.preset.name
-                  : hud.status === 'loading'
-                    ? '正在读取'
-                    : '无法确认'}
-              </h2>
-              {hud.status === 'ready' ? (
-                <p>
-                  布局：{hud.current.layout.name} · 外观：{hud.current.theme.name}
-                </p>
-              ) : (
-                <StatusBanner tone={hud.status === 'error' ? 'warning' : 'info'}>
-                  {hud.activeRevision
-                    ? `最近确认：${hud.current.preset.name} · 版本 ${hud.activeRevision}；当前状态待重查。`
-                    : '尚无已确认的播出配置。'}
-                </StatusBanner>
+                <Panel>
+                  <h2>先建立双方，其他资料可以逐步补齐</h2>
+                  <p>已有本地比赛、快速建立 BO 或 RivalHub 候选均可开始；无需先连接游戏设备。</p>
+                </Panel>
               )}
-              <p>编辑、保存与应用到播出是独立操作。五套 HUD 的真实画布与预设文件在编辑器中操作。</p>
-              <Button onClick={() => void action(() => openTool('hud'))}>
-                编辑 / 选择 HUD 与导入导出
-              </Button>
-            </Panel>
-            <Panel>
-              <h2>本机显示</h2>
-              <p>仅影响本机覆盖层，OBS 继续使用正式启用预设。</p>
-              <LocalOverlayControls />
-              <SpectatorHudCommands />
-            </Panel>
-            <a href="/?tab=program">下一步：检查节目画面 →</a>
+            </section>
+            <section hidden={task !== 'bp'} aria-label="正式 BP 子任务">
+              <div className="match-workspace-heading">
+                <h2>正式 BP · 影响播出</h2>
+                <Button onClick={() => navigateTask('match')}>返回本场准备</Button>
+              </div>
+              <p>同一本场上下文；赛前可编辑与播放，无需 CS2 / GSI。返回本场保留资料草稿。</p>
+              {visited.has('bp') ? <BpWorkbench /> : null}
+            </section>
+            <section hidden={task !== 'picture'} aria-label="画面检查工作区">
+              {visited.has('picture') ? <PictureWorkspace action={action} /> : null}
+            </section>
+            <section hidden={task !== 'check'} aria-label="开播检查工作区">
+              <div className="production-preflight">
+                <Panel>
+                  <h2>完成开播所需事项</h2>
+                  <p>资料、BP 与样例预览可离线准备；真实比赛画面与雷达依赖进入观战后的有效数据。</p>
+                  {!capabilities ? (
+                    <p>正在读取检查状态，不推断已就绪。</p>
+                  ) : (
+                    <>
+                      {capabilities
+                        .filter((item) => !item.ready)
+                        .map((item) => (
+                          <a
+                            className="preparation-readiness"
+                            key={item.label}
+                            href={`${item.href}${item.href.includes('?') ? '&' : '?'}returnTask=check`}
+                          >
+                            <div>
+                              <strong>{item.label} · 待确认</strong>
+                              <p>{item.reason}</p>
+                            </div>
+                            <span>{item.action ?? '检查 / 重查'}</span>
+                          </a>
+                        ))}
+                      <details>
+                        <summary>
+                          已确认 {capabilities.filter((item) => item.ready).length} 项 ·
+                          默认配置可复用
+                        </summary>
+                        {capabilities
+                          .filter((item) => item.ready)
+                          .map((item) => (
+                            <p key={item.label}>
+                              {item.label} · {item.reason}
+                            </p>
+                          ))}
+                      </details>
+                    </>
+                  )}
+                  <Button onClick={() => navigateTask('match')}>返回本场继续准备</Button>
+                </Panel>
+                <div>
+                  <SpectatorWorkflow capabilities={capabilities} production={production} />
+                  {match ? <ProductionStatus matchId={match.matchId} /> : null}
+                </div>
+              </div>
+              {task === 'check' &&
+              production?.mode === 'preparation' &&
+              !cs2.status?.pending &&
+              !cs2.phase &&
+              (!window.__TAURI_INTERNALS__ || cs2.status !== null) ? (
+                <AutomaticPreparation />
+              ) : null}
+            </section>
+            <section hidden={task !== 'finish'} aria-label="恢复与收尾工作区">
+              <Panel>
+                <h2>恢复与收尾</h2>
+                {production?.cleanup ? (
+                  <ul aria-label="Companion 清理回执">
+                    <li>
+                      收起节目 ·{' '}
+                      {production.cleanup.scene === 'confirmed'
+                        ? '已确认'
+                        : production.cleanup.scene === 'failed'
+                          ? '失败，可重试'
+                          : '待确认'}
+                    </li>
+                    <li>
+                      释放网站数据源 ·{' '}
+                      {production.cleanup.source === 'confirmed'
+                        ? '已确认'
+                        : production.cleanup.source === 'failed'
+                          ? '失败，可重试'
+                          : '待确认'}
+                    </li>
+                    <li>回执时间 · {new Date(production.cleanup.at).toLocaleString('zh-CN')}</li>
+                  </ul>
+                ) : (
+                  <p>尚无本次服务的收尾回执。</p>
+                )}
+                <p>
+                  结束制播会收起节目、释放本机网站源、关闭受管理 CS2 并恢复配置。OBS
+                  推流和录制继续由你在 OBS
+                  中操作；网站官方结果需另行提交。重试会重新执行整个收尾流程，请分别核对节目、网站数据源与
+                  Host 回执。
+                </p>
+                <p>
+                  Host 游戏与配置 ·{' '}
+                  {window.__TAURI_INTERNALS__
+                    ? cs2.error
+                      ? '读取失败，请重查'
+                      : cs2.phase
+                        ? '正在操作'
+                        : cs2.status
+                          ? cs2.status.pending
+                            ? '备份尚待恢复'
+                            : cs2.status.running
+                              ? '游戏仍在运行'
+                              : '未检测到受管理游戏或待恢复备份'
+                          : '正在读取'
+                    : '浏览器无法验收 Windows 游戏与配置'}
+                </p>
+                <ProductionStatus matchId={match?.matchId ?? null} />
+                <Button
+                  disabled={busy || !production}
+                  onClick={() => {
+                    if (
+                      production &&
+                      window.confirm(
+                        '结束本场制作、关闭受管理游戏并恢复配置？OBS 推流 / 录制不会自动停止。',
+                      )
+                    )
+                      void action(() => productionAction('finish', production, setProgress));
+                  }}
+                >
+                  结束制播 / 重试收尾
+                </Button>
+              </Panel>
+            </section>
           </>
-        ) : tab === 'finish' ? (
-          <Panel>
-            <h2>恢复与收尾</h2>
-            {production?.cleanup ? (
-              <ul aria-label="Companion 清理回执">
-                <li>
-                  收起节目 ·{' '}
-                  {production.cleanup.scene === 'confirmed'
-                    ? '已确认'
-                    : production.cleanup.scene === 'failed'
-                      ? '失败，可重试'
-                      : '待确认'}
-                </li>
-                <li>
-                  释放网站数据源 ·{' '}
-                  {production.cleanup.source === 'confirmed'
-                    ? '已确认'
-                    : production.cleanup.source === 'failed'
-                      ? '失败，可重试'
-                      : '待确认'}
-                </li>
-                <li>回执时间 · {new Date(production.cleanup.at).toLocaleString('zh-CN')}</li>
-              </ul>
-            ) : (
-              <p>尚无本次服务的收尾回执。</p>
-            )}
-            <p>
-              结束制播会收起节目、释放本机网站源、关闭受管理 CS2 并恢复配置。OBS
-              推流和录制继续由你在 OBS
-              中操作；网站官方结果需另行提交。重试会重新执行整个收尾流程，请分别核对节目、网站数据源与
-              Host 回执。
-            </p>
-            <p>
-              Host 游戏与配置 ·{' '}
-              {window.__TAURI_INTERNALS__
-                ? cs2.error
-                  ? '读取失败，请重查'
-                  : cs2.phase
-                    ? '正在操作'
-                    : cs2.status
-                      ? cs2.status.pending
-                        ? '备份尚待恢复'
-                        : cs2.status.running
-                          ? '游戏仍在运行'
-                          : '未检测到受管理游戏或待恢复备份'
-                      : '正在读取'
-                : '浏览器无法验收 Windows 游戏与配置'}
-            </p>
-            <ProductionStatus matchId={match?.matchId ?? null} />
-            <Button
-              disabled={busy || !production}
-              onClick={() => {
-                if (
-                  production &&
-                  window.confirm(
-                    '结束本场制作、关闭受管理游戏并恢复配置？OBS 推流 / 录制不会自动停止。',
-                  )
-                )
-                  void action(() => productionAction('finish', production, setProgress));
-              }}
-            >
-              结束制播 / 重试收尾
-            </Button>
-          </Panel>
-        ) : (
-          <ProgramPreview />
         )}
       </main>
     </OperatorShell>

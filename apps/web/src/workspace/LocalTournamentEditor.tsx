@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, StatusBanner, Select } from '../ui';
 import { LOCAL_BP_MAP_CATALOG, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
 import type { Bo3BpRules } from '@mizar/core/projection';
@@ -44,7 +44,12 @@ async function command(path: string, payload: unknown): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error('本地比赛保存失败，请检查填写内容。');
+  if (!response.ok)
+    throw new Error(
+      response.status === 409
+        ? '本场已变化，请核对后重新保存；当前草稿保留。'
+        : '本地比赛保存失败，请检查填写内容。',
+    );
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -74,6 +79,18 @@ function localInputTime(value: string | null): string {
   return local.toISOString().slice(0, 16);
 }
 
+function editableMatch(document: MatchDocumentV1 | null | undefined) {
+  return document
+    ? {
+        format: document.format,
+        stageLabel: document.stageLabel,
+        roundLabel: document.roundLabel,
+        scheduledAt: document.scheduledAt,
+        entrants: document.entrants,
+      }
+    : null;
+}
+
 export function LocalTournamentEditor({
   document,
   view,
@@ -81,30 +98,76 @@ export function LocalTournamentEditor({
   action,
   section = 'details',
   scope = 'match',
+  eventId,
+  onDirtyChange,
 }: {
   readonly scope?: 'match' | 'resources';
-  readonly document: MatchDocumentV1;
-  readonly section?: 'details' | 'roster' | 'maps';
+  readonly document?: MatchDocumentV1 | null;
+  readonly eventId?: string;
+  readonly onDirtyChange?: (dirty: boolean) => void;
+  readonly section?: 'details' | 'roster' | 'maps' | 'overview';
   readonly view: LocalTournamentView | null;
   readonly refresh: () => Promise<void>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
   const selected = document;
-  const event = view?.events.find((item) => item.eventId === selected?.competition?.competitionId);
+  const event = view?.events.find(
+    (item) => item.eventId === (eventId ?? selected?.competition?.competitionId),
+  );
   const [draft, setDraft] = useState<MatchDocumentV1 | null>(selected ?? null);
   const [eventName, setEventName] = useState(event?.name ?? '');
   const [eventLogo, setEventLogo] = useState<string | null>(event?.logoUrl ?? null);
+  const [eventTheme, setEventTheme] = useState<string | null>(event?.themeColor ?? null);
   const [eventPool, setEventPool] = useState<readonly string[]>(event?.mapPool ?? []);
   const [eventBo3Rules, setEventBo3Rules] = useState(event?.bo3Rules ?? DEFAULT_BO3_BP_RULES);
   const [savedMessage, setSavedMessage] = useState('');
+  const previousDocument = useRef(selected);
+  useEffect(() => {
+    const previous = previousDocument.current;
+    previousDocument.current = selected;
+    if (scope !== 'match' || !selected) return;
+    setDraft((current) =>
+      JSON.stringify(editableMatch(current)) === JSON.stringify(editableMatch(previous))
+        ? selected
+        : current,
+    );
+  }, [selected, scope]);
+  const dirty =
+    scope === 'match'
+      ? draft !== null &&
+        JSON.stringify(editableMatch(draft)) !== JSON.stringify(editableMatch(selected))
+      : event !== undefined &&
+        (eventName !== event.name ||
+          eventLogo !== event.logoUrl ||
+          eventTheme !== event.themeColor ||
+          JSON.stringify(eventPool) !== JSON.stringify(event.mapPool) ||
+          JSON.stringify(eventBo3Rules) !== JSON.stringify(event.bo3Rules ?? DEFAULT_BO3_BP_RULES));
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    const protect = (event: BeforeUnloadEvent) => {
+      if (dirty) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', protect);
+    return () => {
+      window.removeEventListener('beforeunload', protect);
+      onDirtyChange?.(false);
+    };
+  }, [dirty, onDirtyChange]);
   if (
     view === null ||
-    draft === null ||
-    event === undefined ||
-    (scope === 'match' && view?.activeLocalMatchId !== draft.matchId)
+    (scope === 'match' && draft === null) ||
+    (scope === 'resources' && event === undefined) ||
+    (scope === 'match' && view?.activeLocalMatchId !== draft?.matchId)
   )
     return null;
 
+  const contextReady =
+    scope !== 'match' ||
+    JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
+      JSON.stringify(selected);
   const updateEntrant = (side: 'a' | 'b', patch: Partial<MatchDocumentV1['entrants']['a']>) =>
     setDraft((current) =>
       current === null
@@ -120,10 +183,11 @@ export function LocalTournamentEditor({
   return (
     <div className="preparation-editor" data-section={section}>
       {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
-      {scope === 'match' && section !== 'maps' ? (
+      {scope === 'match' && draft !== null && section !== 'maps' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            if (!contextReady) return;
             if (
               !window.confirm(
                 '保存将更新本场资料，并同步队伍库中的队名、队标与名单，影响今后复用。当前节目可能刷新，确认保存？',
@@ -134,94 +198,102 @@ export function LocalTournamentEditor({
             void action(async () => {
               await command('/operator/local-match/save', {
                 expectedContextRevision: view.contextRevision,
-                document: draft,
+                document: { ...selected, ...editableMatch(draft) },
               });
               await refresh();
               setSavedMessage('比赛资料已保存。');
             });
           }}
         >
-          {section === 'details' ? (
-            <>
-              <label>
-                赛制{' '}
-                <select
-                  value={draft.format}
-                  onChange={(change) =>
-                    setDraft({ ...draft, format: change.target.value as typeof draft.format })
-                  }
-                >
-                  {['bo1', 'bo3', 'bo5'].map((bo) => (
-                    <option value={bo} key={bo}>
-                      {bo.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                阶段名称{' '}
-                <input
-                  value={draft.stageLabel}
-                  onChange={(change) => setDraft({ ...draft, stageLabel: change.target.value })}
-                />
-              </label>
-              <label>
-                轮次（选填）{' '}
-                <input
-                  value={draft.roundLabel ?? ''}
-                  onChange={(change) =>
-                    setDraft({ ...draft, roundLabel: change.target.value || null })
-                  }
-                />
-              </label>
-              <label>
-                计划开始{' '}
-                <input
-                  type="datetime-local"
-                  value={localInputTime(draft.scheduledAt)}
-                  onChange={(change) =>
-                    setDraft({
-                      ...draft,
-                      scheduledAt: change.target.value
-                        ? new Date(change.target.value).toISOString()
-                        : null,
-                    })
-                  }
-                />
-              </label>
-            </>
+          {section === 'details' || section === 'overview' ? (
+            <details open={section === 'details'} className="match-meta-edit">
+              <summary>
+                场次信息 · {draft.format.toUpperCase()} · {draft.stageLabel || '阶段待填写'}
+              </summary>
+              <div className="match-meta-fields">
+                <label>
+                  赛制{' '}
+                  <select
+                    value={draft.format}
+                    onChange={(change) =>
+                      setDraft({ ...draft, format: change.target.value as typeof draft.format })
+                    }
+                  >
+                    {['bo1', 'bo3', 'bo5'].map((bo) => (
+                      <option value={bo} key={bo}>
+                        {bo.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  阶段名称{' '}
+                  <input
+                    value={draft.stageLabel}
+                    onChange={(change) => setDraft({ ...draft, stageLabel: change.target.value })}
+                  />
+                </label>
+                <label>
+                  轮次（选填）{' '}
+                  <input
+                    value={draft.roundLabel ?? ''}
+                    onChange={(change) =>
+                      setDraft({ ...draft, roundLabel: change.target.value || null })
+                    }
+                  />
+                </label>
+                <label>
+                  计划开始{' '}
+                  <input
+                    type="datetime-local"
+                    value={localInputTime(draft.scheduledAt)}
+                    onChange={(change) =>
+                      setDraft({
+                        ...draft,
+                        scheduledAt: change.target.value
+                          ? new Date(change.target.value).toISOString()
+                          : null,
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            </details>
           ) : null}
-          {section === 'roster'
+          {section === 'roster' || section === 'overview'
             ? (['a', 'b'] as const).map((side) => (
                 <fieldset key={side}>
-                  <legend>队伍 {side.toUpperCase()}</legend>
-                  <label>
-                    队名{' '}
-                    <input
-                      value={draft.entrants[side].name}
-                      onChange={(change) => updateEntrant(side, { name: change.target.value })}
-                    />
-                  </label>
-                  <label>
-                    队标图片{' '}
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={(change) => {
-                        const file = change.target.files?.[0];
-                        if (!file) return;
-                        void action(async () =>
-                          updateEntrant(side, { logoUrl: await uploadImage(file) }),
-                        );
-                      }}
-                    />
-                  </label>
-                  {draft.entrants[side].logoUrl ? (
-                    <img
-                      src={draft.entrants[side].logoUrl}
-                      alt={`${draft.entrants[side].name} 队标`}
-                    />
-                  ) : null}
+                  <legend>{draft.entrants[side].name || `队伍 ${side.toUpperCase()}`}</legend>
+                  <details open={section === 'roster'}>
+                    <summary>编辑队伍资料</summary>
+                    <label>
+                      队名{' '}
+                      <input
+                        value={draft.entrants[side].name}
+                        onChange={(change) => updateEntrant(side, { name: change.target.value })}
+                      />
+                    </label>
+                    <label>
+                      队标图片{' '}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(change) => {
+                          const file = change.target.files?.[0];
+                          if (!file) return;
+                          void action(async () =>
+                            updateEntrant(side, { logoUrl: await uploadImage(file) }),
+                          );
+                        }}
+                      />
+                    </label>
+                    {draft.entrants[side].logoUrl ? (
+                      <img
+                        src={draft.entrants[side].logoUrl}
+                        alt={`${draft.entrants[side].name} 队标`}
+                      />
+                    ) : null}
+                  </details>
                   <ul>
                     {draft.entrants[side].players.map((player) => (
                       <li key={player.playerId}>
@@ -315,10 +387,15 @@ export function LocalTournamentEditor({
           <p>
             保存本场同时同步队伍库的队名、队标与名单；已有其他比赛快照不改写，今后复用使用更新后的队伍。
           </p>
-          <Button type="submit">保存比赛资料</Button>
+          {!contextReady ? (
+            <p role="status">本场刚有更新，正在同步保存版本；资料草稿保留。</p>
+          ) : null}
+          <Button type="submit" disabled={!contextReady}>
+            保存比赛资料
+          </Button>
         </form>
       ) : null}
-      {scope === 'resources' && section !== 'roster' ? (
+      {scope === 'resources' && event !== undefined && section !== 'roster' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
@@ -336,7 +413,7 @@ export function LocalTournamentEditor({
                 eventId: event.eventId,
                 name: eventName,
                 logoUrl: eventLogo,
-                themeColor: event.themeColor,
+                themeColor: eventTheme,
                 mapPool: eventPool,
                 bo3Rules: eventBo3Rules,
               });
@@ -349,7 +426,7 @@ export function LocalTournamentEditor({
             保存会传播赛事名称、Logo 与品牌色至同赛事所有比赛；仅仍沿用旧默认的比赛同步地图池。BO3
             默认规则供 BP 准备使用；已保存禁选步骤不改写。包含当前本场时可能立即刷新节目。
           </p>
-          {section === 'details' ? (
+          {section === 'details' || section === 'overview' ? (
             <>
               <label>
                 赛事名称{' '}
@@ -368,9 +445,18 @@ export function LocalTournamentEditor({
                 />
               </label>
               {eventLogo ? <img src={eventLogo} alt={`${eventName} Logo`} /> : null}
+              <label>
+                赛事品牌色（选填）{' '}
+                <input
+                  value={eventTheme ?? ''}
+                  placeholder="#RRGGBB"
+                  pattern="#[0-9a-fA-F]{6}"
+                  onChange={(change) => setEventTheme(change.target.value || null)}
+                />
+              </label>
             </>
           ) : null}
-          {section === 'maps' ? (
+          {section === 'maps' || section === 'overview' ? (
             <>
               <fieldset className="preparation-map-pool">
                 <legend>赛事地图池</legend>
@@ -426,7 +512,10 @@ export function LocalTournamentEditor({
           <Button type="submit">保存赛事资料</Button>
         </form>
       ) : null}
-      {scope === 'resources' && section === 'details' && event.matchIds.length > 1 ? (
+      {scope === 'resources' &&
+      event !== undefined &&
+      (section === 'details' || section === 'overview') &&
+      event.matchIds.length > 1 ? (
         <div className="workspace-local-schedule">
           <strong>比赛顺序</strong>
           {event.matchIds.map((id, index) => {

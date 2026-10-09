@@ -32,14 +32,19 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     );
     page.on('dialog', (dialog) => dialog.accept());
     await page.goto('/');
+    await page.getByRole('button', { name: '新建本地比赛', exact: true }).click();
     const form = page.locator('.workspace-local-match form').first();
     await form.locator('input').nth(0).fill('甲队');
     await form.locator('input').nth(1).fill('乙队');
     await form.getByRole('button', { name: '创建本地比赛' }).click();
     await expect(page.getByRole('region', { name: '本场上下文' })).toContainText('甲队 vs 乙队');
-    await page.getByRole('link', { name: '本场资料', exact: true }).click();
+    await page.getByText(/^场次信息 ·/).click();
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     await page.getByLabel('阶段名称').fill('决赛');
+    await page.getByRole('button', { name: '画面检查', exact: true }).click();
+    await expect(page.getByRole('region', { name: '画面检查工作区' })).toBeVisible();
+    await page.getByRole('button', { name: '本场准备', exact: true }).click();
+    await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     await page.getByRole('button', { name: '保存比赛资料' }).click();
     await expect(page.getByText('比赛资料已保存。', { exact: true })).toBeVisible();
     await page.goto('/resources?tab=event');
@@ -48,10 +53,12 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
     await page.goto('/?tab=details');
+    await page.getByText(/^场次信息 ·/).click();
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     await page.goto('/resources?tab=event');
     await expect(page.getByLabel('赛事名称')).toHaveValue('验收赛事');
     await page.goto('/?select=1');
+    await page.getByRole('button', { name: '新建本地比赛', exact: true }).click();
     await page.getByRole('button', { name: '沿用当前本地赛事 · 验收赛事' }).click();
     await form.getByLabel('队伍 A', { exact: true }).fill('丙队');
     await form.getByLabel('队伍 B', { exact: true }).fill('丁队');
@@ -93,7 +100,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');
     const original = await app.inject({ url: '/local/v1/tournament' });
-    const resourceId = original.json<{ matches: { matchId: string }[] }>().matches[0]!.matchId;
+    expect(original.json<{ matches: unknown[] }>().matches).toHaveLength(2);
     const next = await app.inject({
       method: 'POST',
       url: '/operator/local-match/create',
@@ -102,11 +109,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     });
     expect(next.statusCode).toBe(200);
     await page.goto('/resources');
-    await page.getByLabel('浏览比赛资源').selectOption(resourceId);
-    await page.getByRole('link', { name: '赛事与赛程', exact: true }).click();
-    expect(new URL(page.url()).searchParams.get('resource')).toBe(resourceId);
-    await page.getByRole('link', { name: '比赛与队伍', exact: true }).click();
-    await expect(page.getByLabel('浏览比赛资源')).toHaveValue(resourceId);
+    await page.getByRole('button', { name: /甲队 vs 乙队/ }).click();
     const current = await app.inject({ url: '/local/v1/tournament' });
     expect(current.json<{ activeLocalMatchId: string }>().activeLocalMatchId).toBe(
       next.json<{ matchId: string }>().matchId,
@@ -119,7 +122,10 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await page.getByRole('button', { name: '确认载入为本场' }).click();
     await expect(page.getByText('载入未完成，保留当前选择。', { exact: true })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe('/resources');
-    await expect(page.getByLabel('浏览比赛资源')).toHaveValue(resourceId);
+    await expect(page.getByRole('button', { name: /甲队 vs 乙队/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     // Selection succeeds through the existing service before navigation.
     await context.route('**/operator/local-match/select', async (route) => {
       const response = await app.inject({
@@ -135,9 +141,11 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
       });
     });
     await page.getByRole('button', { name: '确认载入为本场' }).click();
-    await expect(page).toHaveURL(/\/\?tab=details$/);
+    await expect(page).toHaveURL(/\/\?tab=match$/);
+    await page.getByText(/^场次信息 ·/).click();
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     await page.goto('/?tab=roster');
+    await page.getByText('编辑队伍资料', { exact: true }).first().click();
     await page.getByLabel('队名', { exact: true }).first().fill('甲队更新');
     await expect(
       page.getByText(

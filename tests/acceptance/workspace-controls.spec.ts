@@ -15,7 +15,7 @@ test('three product entries lead to production, reusable resources and machine s
   for (const [label, path, title] of [
     ['资源', '/resources', '资源'],
     ['设置', '/settings', '本机设置'],
-    ['制播', '/', '本场制播'],
+    ['制播', '/', '本场准备'],
   ] as const) {
     await page
       .getByRole('navigation', { name: '制作导航' })
@@ -158,14 +158,12 @@ test('map-pool saving reaches the real tournament service', async ({ page, conte
       });
     });
     await page.goto('/resources?tab=event');
-    await page.getByRole('combobox', { name: '资源编辑区域' }).selectOption('maps');
     const train = page.getByRole('checkbox', { name: 'Train', exact: true });
     await train.check();
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: '保存赛事资料', exact: true }).click();
     await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
-    await page.getByRole('combobox', { name: '资源编辑区域' }).selectOption('maps');
     await expect(train).toBeChecked();
   } finally {
     await app.close();
