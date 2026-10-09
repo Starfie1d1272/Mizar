@@ -15,10 +15,16 @@ export function githubApi(endpoint) {
     .map((page) => JSON.parse(page));
 }
 export function githubJobLogs(repository, jobId) {
-  return execFileSync('gh', ['api', `repos/${repository}/actions/jobs/${jobId}/logs`], {
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  try {
+    return execFileSync('gh', ['api', `repos/${repository}/actions/jobs/${jobId}/logs`], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    // Storage redirects can contain temporary signed URLs. Never log them.
+    throw new Error('GitHub plan job logs unavailable; Full CI required');
+  }
 }
 const shaPattern = /^[a-f0-9]{40}$/;
 const one = (pages) => {

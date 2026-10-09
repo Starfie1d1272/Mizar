@@ -50,7 +50,8 @@ export function verifyPlatformReport(report, files, platform, rootDir = root) {
         platform === 'win32' &&
         file === 'apps/companion/test/support-export.test.ts' &&
         test.title === 'rejects symlink log targets' &&
-        test.status === 'pending'
+        test.fullName === 'support export rejects symlink log targets' &&
+        test.status === 'skipped'
       )
         skips.push({ file, title: test.title, reason: 'existing Unix symlink test' });
       else throw new Error(`platform contracts non-passing test: ${file}: ${test.fullName}`);

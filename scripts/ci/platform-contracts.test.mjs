@@ -51,7 +51,8 @@ describe('platform contract evidence', () => {
     const windows = report();
     windows.testResults[1].assertionResults.push({
       title: 'rejects symlink log targets',
-      status: 'pending',
+      fullName: 'support export rejects symlink log targets',
+      status: 'skipped',
     });
     expect(verifyPlatformReport(windows, files, 'win32').skips).toHaveLength(1);
     expect(() => verifyPlatformReport(windows, files, 'darwin')).toThrow('non-passing test');
