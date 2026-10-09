@@ -226,7 +226,7 @@
   background: var(--mizar-bg-surface);
   display: grid;
   grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) var(--mizar-layout-target);
+  grid-template-rows: minmax(0, 1fr) calc(var(--mizar-layout-target) + var(--mizar-line-border) * 2);
   position: relative;
   min-height: 0;
   min-width: 0;
