@@ -10,7 +10,7 @@ import {
   promotionTag,
 } from './box-sync.mjs';
 
-describe('成功发布任务的版本标签', () => {
+describe('已成功晋级任务的镜像版本标签', () => {
   const run = { id: 42, display_title: 'Release Promotion' };
   const job = { run_id: 42, status: 'completed', conclusion: 'success', name: '发布 Mizar v1.0.0' };
   it('固定流程标题仍能从成功任务读取正式版本', () => {
