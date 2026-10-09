@@ -130,6 +130,24 @@ pub fn validate_plan(plan: &Value, root: &Path, state: &Path) -> Result<(), Stri
     }
     Ok(())
 }
+fn provider_plan(mut plan: Value, root: &Path, state: &Path) -> Result<Value, String> {
+    // The runtime inherits Rust's canonical state path. Normalize the paths
+    // inside the JSON too: removing the prefix only from -PlanPath leaves
+    // PowerShell 5.1 unable to read the actual installer or state directory.
+    let installer = PathBuf::from(plan["installer"].as_str().ok_or("安装包路径无效。")?);
+    for (name, path) in [
+        ("bundleRoot", root),
+        ("stateRoot", state),
+        ("installer", &installer),
+    ] {
+        plan[name] = Value::String(
+            powershell::provider_path(path)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    Ok(plan)
+}
 pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
     let pending = app.state::<PendingUpdate>();
     if pending.preparing.swap(true, Ordering::AcqRel) {
@@ -165,6 +183,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         };
         let prepared: Result<(), String> = (|| {
             validate_plan(&plan, &root, &log.state_root)?;
+            let plan = provider_plan(plan, &root, &log.state_root)?;
             let path = log
                 .state_root
                 .join("updates")
@@ -266,4 +285,33 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
         .map_err(|_| "安装工具未能启动，旧版保持可用。请重新打开 Mizar 后重试。")?;
     log.event("update_install", "helper_started", None);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn serialized_installation_plan_has_paths_windows_powershell_can_read() {
+        let plan = provider_plan(
+            json!({
+                "schemaVersion": 1,
+                "version": "1.1.0",
+                "installerSha256": "signed installer identity",
+                "installer": r"\\?\C:\Users\User\AppData\Local\Mizar\updates\download-test\Mizar-v1.1.0-Windows-x64-Setup.exe"
+            }),
+            Path::new(r"\\?\C:\Program Files\Mizar"),
+            Path::new(r"\\?\C:\Users\User\AppData\Local\Mizar"),
+        )
+        .unwrap();
+        assert_eq!(plan["bundleRoot"], r"C:\Program Files\Mizar");
+        assert_eq!(plan["stateRoot"], r"C:\Users\User\AppData\Local\Mizar");
+        assert_eq!(
+            plan["installer"],
+            r"C:\Users\User\AppData\Local\Mizar\updates\download-test\Mizar-v1.1.0-Windows-x64-Setup.exe"
+        );
+        assert_eq!(plan["version"], "1.1.0");
+        assert_eq!(plan["installerSha256"], "signed installer identity");
+    }
 }
