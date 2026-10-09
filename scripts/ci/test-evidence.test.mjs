@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { browserIdentities, verifyBrowserEvidence } from './test-evidence.mjs';
+import { browserIdentities, verifyBrowserEvidence, verifyBrowserShards } from './test-evidence.mjs';
 
 function report(names, result = undefined) {
   return {
@@ -72,4 +72,18 @@ describe('browser discovery and actual execution proof', () => {
     nested.push({ projectName: 'other', results: [] });
     expect(new Set(browserIdentities(sample).map((test) => test.id)).size).toBe(3);
   });
+});
+
+it('requires shard union to cover the same FULL exactly once', () => {
+  const full = report(['first', 'second']);
+  const shard = (names) => ({ full, selected: report(names), actual: report(names, passed) });
+  expect(verifyBrowserShards([shard(['first']), shard(['second'])])).toEqual({
+    full: 2,
+    passed: 2,
+  });
+  expect(() => verifyBrowserShards([shard(['first'])])).toThrow('shard union');
+  expect(() => verifyBrowserShards([shard(['first']), shard(['first'])])).toThrow('shard union');
+  expect(() =>
+    verifyBrowserShards([shard(['first']), { ...shard(['second']), full: report(['second']) }]),
+  ).toThrow('different FULL');
 });

@@ -53,3 +53,24 @@ export function verifyBrowserEvidence(full, selected, actual) {
     identities: selectedIds.sort(),
   };
 }
+
+// Validate the partition as well as each lane: a passing subset is not FULL evidence.
+export function verifyBrowserShards(shards) {
+  assert(shards.length > 0, 'missing browser shards');
+  const fullIds = browserIdentities(shards[0].full)
+    .map((test) => test.id)
+    .sort();
+  const actualIds = [];
+  for (const { full, selected, actual } of shards) {
+    assert.deepEqual(
+      browserIdentities(full)
+        .map((test) => test.id)
+        .sort(),
+      fullIds,
+      'shards discovered different FULL identities',
+    );
+    actualIds.push(...verifyBrowserEvidence(full, selected, actual).identities);
+  }
+  assert.deepEqual(actualIds.sort(), fullIds, 'shard union must cover FULL exactly once');
+  return { full: fullIds.length, passed: actualIds.length };
+}
