@@ -44,9 +44,6 @@ function Install-Setup {
   $process = Start-Process -FilePath $archive -ArgumentList @('/S', ('/D=' + $target)) -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw 'Setup installation failed' }
 }
-if ($CaptureUi) {
-  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path $output 'installer-ui')
-}
 Install-Setup
 # Verify exact qualified payload before running anything from the installation.
 foreach ($file in $files) {
@@ -58,6 +55,9 @@ $extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
   $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
 })
 if ($extra.Count) { throw 'Unexpected Setup payload files' }
+if ($CaptureUi) {
+  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path $output 'installer-ui')
+}
 $sentinel = Join-Path $env:LOCALAPPDATA 'Mizar\data\setup-smoke-sentinel.txt'
 if (Test-Path -LiteralPath $sentinel) { throw 'Refusing to overwrite existing smoke sentinel' }
 New-Item -ItemType Directory -Force -Path (Split-Path $sentinel) | Out-Null

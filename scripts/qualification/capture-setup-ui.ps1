@@ -8,8 +8,6 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 public static class SetupUI {
   public delegate bool EnumProc(IntPtr hwnd, IntPtr param);
@@ -41,19 +39,9 @@ public static class SetupUI {
       if(IsWindowVisible(h) && (text == null || Text(h).Contains(text)) && (className == null || c.ToString() == className)) { found=h; return false; } return true; }, IntPtr.Zero);
     return found;
   }
-  public static void Capture(IntPtr hwnd, string path) {
-    Rect r; if(!GetWindowRect(hwnd,out r)) throw new Exception("Cannot measure installer");
-    using(var bitmap=new Bitmap(r.Right-r.Left,r.Bottom-r.Top)) {
-      using(var graphics=Graphics.FromImage(bitmap)) {
-        var dc=graphics.GetHdc(); bool ok;
-        try { ok=PrintWindow(hwnd,dc,2); } finally { graphics.ReleaseHdc(dc); }
-        if(!ok) throw new Exception("Cannot capture native installer");
-      }
-      bitmap.Save(path,ImageFormat.Png);
-    }
-  }
+
 }
-'@ -ReferencedAssemblies System.Drawing.Common, System.Drawing.Primitives
+'@
 [SetupUI]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $process = Start-Process -FilePath $Installer -ArgumentList ('/D=' + $InstallDirectory) -PassThru
@@ -74,7 +62,16 @@ function Click-Next {
 }
 function Capture([string]$Stage) {
   Start-Sleep -Milliseconds 200
-  [SetupUI]::Capture($window, (Join-Path $OutputDirectory "$Stage.png"))
+  $rect = New-Object SetupUI+Rect
+  if (![SetupUI]::GetWindowRect($window, [ref]$rect)) { throw 'Cannot measure installer' }
+  $bitmap = New-Object System.Drawing.Bitmap ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  try {
+    $dc = $graphics.GetHdc()
+    try { $captured = [SetupUI]::PrintWindow($window, $dc, 2) } finally { $graphics.ReleaseHdc($dc) }
+    if (!$captured) { throw 'Cannot capture native installer' }
+    $bitmap.Save((Join-Path $OutputDirectory "$Stage.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  } finally { $graphics.Dispose(); $bitmap.Dispose() }
 }
 try {
   $window = Wait-UI { [SetupUI]::Window($process.Id) } 'welcome'

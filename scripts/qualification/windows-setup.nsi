@@ -40,7 +40,6 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-
 Function .onInit
   SetShellVarContext current
   Call CheckRunning
