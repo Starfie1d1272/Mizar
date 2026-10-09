@@ -187,7 +187,7 @@ public class UpdateFixture {
       assert.equal(report.code, success ? 'update_completed' : 'update_committed_payload_invalid');
       const recovery = await run([
         '-Command',
-        `(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'`,
+        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'`,
       ]);
       assert.equal(recovery.output.includes(stage), !success);
       assert.deepEqual(await readFile(join(stage, 'previous/Mizar.exe')), binary);
