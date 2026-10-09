@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
 import { releaseAttestationArgs } from './release-identity.mjs';
+import { assertPublication } from './update-publication.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -359,19 +360,24 @@ async function main() {
   );
   const release = await github(`releases/tags/${tag}`);
   const metadata = release.assets.filter((a) =>
-    ['update-manifest.json', 'update-provenance.json'].includes(a.name),
+    [
+      'update-manifest.json',
+      'update-provenance.json',
+      'update-publication.json',
+      'update-publication-provenance.json',
+    ].includes(a.name),
   );
   let updateIndex;
   if (metadata.length) {
-    requireValue(metadata.length === 2, '正式更新资料缺少清单或来源证明');
+    requireValue(metadata.length === 4, '正式更新资料缺少清单、来源证明或发布确认');
     const assets = [];
     const directory = await mkdtemp(join(tmpdir(), 'mizar-update-proof-'));
     try {
-      for (const kind of ['manifest', 'provenance']) {
+      for (const kind of ['manifest', 'provenance', 'publication', 'publication-provenance']) {
         const asset = metadata.find((a) => a.name === `update-${kind}.json`);
         requireValue(
           asset &&
-            asset.size <= (kind === 'manifest' ? 65536 : 2097152) &&
+            asset.size <= (kind.includes('provenance') ? 2097152 : 65536) &&
             asset.browser_download_url ===
               `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/update-${kind}.json`,
           '更新资料地址或大小无效',
@@ -403,11 +409,30 @@ async function main() {
           update.installer.bytes === identity.size,
         '更新清单与正式安装包不一致',
       );
+      const publication = JSON.parse(assets.find((a) => a.kind === 'publication').bytes);
+      assertPublication(publication, assets.find((a) => a.kind === 'manifest').bytes, update);
+      requireValue(
+        publication.releaseId === release.id && publication.publishedAt === release.published_at,
+        '发布确认与正式 Release 不一致',
+      );
+      await promisify(execFile)(
+        'gh',
+        releaseAttestationArgs(
+          join(directory, 'update-publication.json'),
+          publication.promotionSha,
+          join(directory, 'update-publication-provenance.json'),
+          'promotion',
+        ),
+      );
       updateIndex = Buffer.from(
         JSON.stringify({
-          schemaVersion: 'mizar.update-index.v1',
+          schemaVersion: 'mizar.update-index.v2',
           manifestBase64: assets.find((a) => a.kind === 'manifest').bytes.toString('base64'),
           provenance: JSON.parse(assets.find((a) => a.kind === 'provenance').bytes),
+          publicationBase64: assets.find((a) => a.kind === 'publication').bytes.toString('base64'),
+          publicationProvenance: JSON.parse(
+            assets.find((a) => a.kind === 'publication-provenance').bytes,
+          ),
         }) + '\n',
       );
     } finally {

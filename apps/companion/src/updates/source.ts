@@ -7,6 +7,8 @@ import {
   compareVersions,
   UPDATE_REPOSITORY,
   UPDATE_WORKFLOW,
+  PUBLICATION_WORKFLOW,
+  updatePublicationSchema,
   updateManifestSchema,
   type UpdateManifest,
 } from './contract.js';
@@ -41,7 +43,10 @@ const attestationSchema = z.object({
       externalParameters: z.object({
         workflow: z.object({
           repository: z.literal(`https://github.com/${UPDATE_REPOSITORY}`),
-          path: z.literal('.github/workflows/release-qualification.yml'),
+          path: z.enum([
+            '.github/workflows/release-qualification.yml',
+            '.github/workflows/release-promotion.yml',
+          ]),
           ref: z.literal('refs/heads/main'),
         }),
       }),
@@ -54,6 +59,7 @@ export function verifyAttestation(
   name: string,
   bundle: Bundle,
   verifier: BundleVerifier,
+  workflow: 'qualification' | 'promotion' = 'qualification',
 ): string {
   // Verify the envelope before interpreting any of its claims. The configured
   // certificate policy is mandatory and is never taken from the envelope.
@@ -68,6 +74,11 @@ export function verifyAttestation(
   const statement = attestationSchema.parse(
     JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8')),
   );
+  if (
+    statement.predicate.buildDefinition.externalParameters.workflow.path !==
+    `.github/workflows/release-${workflow}.yml`
+  )
+    throw new Error('update_provenance_invalid');
   const sha = createHash('sha256').update(bytes).digest('hex');
   if (!statement.subject.some((s) => s.name === name && s.digest.sha256 === sha))
     throw new Error('update_subject_mismatch');
@@ -113,6 +124,40 @@ export class StableSource {
     if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
     return manifest;
   }
+  private async verifyPublication(
+    bytes: Buffer,
+    bundle: Bundle,
+    manifestBytes: Buffer,
+    manifest: UpdateManifest,
+    signal: AbortSignal,
+  ) {
+    const verifier = await createVerifier({
+      certificateIssuer: 'https://token.actions.githubusercontent.com',
+      certificateIdentityURI: PUBLICATION_WORKFLOW,
+      ctLogThreshold: 1,
+      tlogThreshold: 1,
+      tufCachePath: this.cachePath,
+      retry: 0,
+      timeout: 5000,
+    });
+    signal.throwIfAborted();
+    const promotionSha = verifyAttestation(
+      bytes,
+      'update-publication.json',
+      bundle,
+      verifier,
+      'promotion',
+    );
+    const publication = updatePublicationSchema.parse(JSON.parse(bytes.toString('utf8')));
+    if (
+      publication.promotionSha !== promotionSha ||
+      publication.version !== manifest.version ||
+      publication.gitSha !== manifest.gitSha ||
+      publication.manifestSha256 !== createHash('sha256').update(manifestBytes).digest('hex')
+    )
+      throw new Error('update_publication_mismatch');
+    return publication;
+  }
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
     this.mirrorCandidate = undefined;
     try {
@@ -120,25 +165,43 @@ export class StableSource {
       const box = new BoxSource(this.fetcher);
       const index = z
         .strictObject({
-          schemaVersion: z.literal('mizar.update-index.v1'),
+          schemaVersion: z.literal('mizar.update-index.v2'),
           manifestBase64: z
             .string()
             .max(90_000)
             .regex(/^[A-Za-z0-9+/]+={0,2}$/),
           provenance: z.unknown(),
+          publicationBase64: z
+            .string()
+            .max(90_000)
+            .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+          publicationProvenance: z.unknown(),
         })
         .parse(JSON.parse((await box.metadata(attempt)).toString('utf8')));
       const bytes = Buffer.from(index.manifestBase64, 'base64');
       if (bytes.length > 64 * 1024 || bytes.toString('base64') !== index.manifestBase64)
         throw new Error('update_metadata_corrupt');
       const manifest = await this.verify(bytes, [index.provenance as Bundle], attempt);
+      const publicationBytes = Buffer.from(index.publicationBase64, 'base64');
+      if (
+        publicationBytes.length > 64 * 1024 ||
+        publicationBytes.toString('base64') !== index.publicationBase64
+      )
+        throw new Error('update_metadata_corrupt');
+      const publication = await this.verifyPublication(
+        publicationBytes,
+        index.publicationProvenance as Bundle,
+        bytes,
+        manifest,
+        attempt,
+      );
       if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
         throw new Error('update_mirror_unavailable');
       const release = {
         tag_name: `v${manifest.version}`,
         draft: false,
         prerelease: false,
-        published_at: 'signed',
+        published_at: publication.publishedAt,
         assets: [],
       };
       this.mirrorCandidate = { release, manifest };

@@ -10,6 +10,7 @@ import {
   compareVersions,
   isCompatible,
   UPDATE_WORKFLOW,
+  PUBLICATION_WORKFLOW,
   updateManifestSchema,
 } from '../src/updates/contract.js';
 import { allowedUpdateUrl, boundedBytes, updateRequest } from '../src/updates/network.js';
@@ -57,6 +58,16 @@ describe('actual qualified Release provenance', () => {
     expect(() =>
       verifyAttestation(bytes, 'distribution-manifest.json', bundle, other.verifier),
     ).toThrow();
+    const publicationOnly = await signedFixture(PUBLICATION_WORKFLOW);
+    expect(() =>
+      verifyAttestation(
+        bytes,
+        'distribution-manifest.json',
+        bundle,
+        publicationOnly.verifier,
+        'promotion',
+      ),
+    ).toThrow();
     expect(() =>
       verifyAttestation(Buffer.from('forged'), 'distribution-manifest.json', bundle, verifier),
     ).toThrow('update_subject_mismatch');
@@ -66,6 +77,136 @@ describe('actual qualified Release provenance', () => {
       verifyAttestation(bytes, 'distribution-manifest.json', changed, verifier),
     ).toThrow();
   });
+});
+
+it('accepts Box only with a separately signed publication bound to the qualified manifest', async () => {
+  // Signature cryptography is covered by the real fixture; here we exercise
+  // mirror orchestration, both pinned signer policies and independent claims.
+  vi.mocked(createVerifier).mockResolvedValue({ verify: vi.fn() });
+  const manifest = {
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.1.0',
+    gitSha: 'a'.repeat(40),
+    notes: '版本说明',
+    compatibility: { minimumVersion: '1.0.0', maximumVersionExclusive: '2.0.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.1.0-Windows-x64-Setup.exe',
+      bytes: 50,
+      sha256: 'b'.repeat(64),
+      contentDigest: 'c'.repeat(64),
+    },
+  };
+  const bytes = Buffer.from(JSON.stringify(manifest));
+  const publication = {
+    schemaVersion: 'mizar.update-publication.v1',
+    repository: 'Starfie1d1272/Mizar',
+    version: '1.1.0',
+    gitSha: manifest.gitSha,
+    manifestSha256: createHash('sha256').update(bytes).digest('hex'),
+    releaseId: 42,
+    publishedAt: '2026-10-10T00:00:00Z',
+    promotionSha: 'd'.repeat(40),
+  };
+  const envelope = (subject: string, data: Buffer, workflow: string, commit: string) => ({
+    dsseEnvelope: {
+      payloadType: 'application/vnd.in-toto+json',
+      payload: Buffer.from(
+        JSON.stringify({
+          _type: 'https://in-toto.io/Statement/v1',
+          subject: [
+            { name: subject, digest: { sha256: createHash('sha256').update(data).digest('hex') } },
+          ],
+          predicateType: 'https://slsa.dev/provenance/v1',
+          predicate: {
+            buildDefinition: {
+              resolvedDependencies: [
+                {
+                  uri: 'git+https://github.com/Starfie1d1272/Mizar@refs/heads/main',
+                  digest: { gitCommit: commit },
+                },
+              ],
+              externalParameters: {
+                workflow: {
+                  repository: 'https://github.com/Starfie1d1272/Mizar',
+                  path: `.github/workflows/release-${workflow}.yml`,
+                  ref: 'refs/heads/main',
+                },
+              },
+            },
+          },
+        }),
+      ).toString('base64'),
+    },
+  });
+  const index = (record = publication, workflow = 'promotion') => {
+    const receipt = Buffer.from(JSON.stringify(record));
+    return {
+      schemaVersion: 'mizar.update-index.v2',
+      manifestBase64: bytes.toString('base64'),
+      provenance: envelope('update-manifest.json', bytes, 'qualification', manifest.gitSha),
+      publicationBase64: receipt.toString('base64'),
+      publicationProvenance: envelope(
+        'update-publication.json',
+        receipt,
+        workflow,
+        publication.promotionSha,
+      ),
+    };
+  };
+  let metadata: Record<string, unknown> = index();
+  const githubRequests: string[] = [];
+  const fetcher: typeof fetch = (input) => {
+    const url = fetchUrl(input);
+    if (url.includes('api.github.com')) {
+      githubRequests.push(url);
+      return Promise.resolve(Response.json([]));
+    }
+    if (url.includes('/dir/'))
+      return Promise.resolve(Response.json({ user_perm: 'r', repo_name: 'Mizar' }));
+    if (url.includes('/download-link/'))
+      return Promise.resolve(
+        Response.json('https://box.nju.edu.cn/seafhttp/files/index/latest.json'),
+      );
+    return Promise.resolve(Response.json(metadata));
+  };
+  const source = new StableSource('/unused', fetcher),
+    signal = new AbortController().signal;
+  const release = await source.latest(signal);
+  expect(release?.tag_name).toBe('v1.1.0');
+  expect(await source.authenticate(release!, signal)).toEqual(manifest);
+  expect(githubRequests).toEqual([]);
+  expect(createVerifier).toHaveBeenCalledWith(
+    expect.objectContaining({ certificateIdentityURI: UPDATE_WORKFLOW }),
+  );
+  expect(createVerifier).toHaveBeenCalledWith(
+    expect.objectContaining({
+      certificateIdentityURI: PUBLICATION_WORKFLOW,
+      ctLogThreshold: 1,
+      tlogThreshold: 1,
+    }),
+  );
+  for (const invalid of [
+    {
+      ...index(),
+      schemaVersion: 'mizar.update-index.v1',
+      publicationBase64: undefined,
+      publicationProvenance: undefined,
+    },
+    { ...index(), publicationBase64: undefined },
+    index(publication, 'qualification'),
+    index({ ...publication, version: '1.2.0' }),
+    index({ ...publication, gitSha: 'e'.repeat(40) }),
+    index({ ...publication, manifestSha256: 'f'.repeat(64) }),
+    index({ ...publication, promotionSha: 'e'.repeat(40) }),
+  ]) {
+    metadata = invalid;
+    expect(await source.latest(signal)).toBeNull();
+  }
+  expect(githubRequests.length).toBe(7);
 });
 describe('Stable discovery and bounded requests', () => {
   it('uses the read-only Box API and keeps the credential off temporary downloads and GitHub', async () => {

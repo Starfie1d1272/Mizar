@@ -5,6 +5,89 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { verifyPromotion } from './verify-promotion.mjs';
+import { assertPublishedAssets, assertPublication } from './update-publication.mjs';
+
+it('requires every original published asset before treating a promotion retry as complete', () => {
+  const identity = { tag: 'v1.1.0', gitSha: 'a'.repeat(40) };
+  const expected = [
+    'product.zip',
+    'Setup.exe',
+    'update-manifest.json',
+    'update-provenance.json',
+    'evidence.zip',
+    'promotion-identity.json',
+    'promotion-ci.json',
+  ].map((name, i) => ({
+    name,
+    size: i + 1,
+    sha256: String(i).repeat(64),
+  }));
+  const release = {
+    id: 42,
+    tag_name: identity.tag,
+    draft: false,
+    prerelease: false,
+    published_at: '2026-10-10T00:00:00Z',
+    assets: expected.map((a) => ({
+      ...a,
+      digest: `sha256:${a.sha256}`,
+      browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/${a.name}`,
+    })),
+  };
+  const ref = { object: { type: 'commit', sha: identity.gitSha } };
+  expect(() => assertPublishedAssets(release, ref, identity, expected)).not.toThrow();
+  for (let i = 0; i < expected.length; i++) {
+    expect(() =>
+      assertPublishedAssets(
+        { ...release, assets: release.assets.filter((_, n) => n !== i) },
+        ref,
+        identity,
+        expected,
+      ),
+    ).toThrow();
+    expect(() =>
+      assertPublishedAssets(
+        {
+          ...release,
+          assets: release.assets.map((a, n) => (n === i ? { ...a, digest: 'sha256:wrong' } : a)),
+        },
+        ref,
+        identity,
+        expected,
+      ),
+    ).toThrow();
+  }
+  expect(() =>
+    assertPublishedAssets({ ...release, draft: true }, ref, identity, expected),
+  ).toThrow();
+  expect(() =>
+    assertPublishedAssets({ ...release, prerelease: true }, ref, identity, expected),
+  ).toThrow();
+});
+
+it('binds the publication authorization to the exact manifest and actual release identity', () => {
+  const bytes = Buffer.from('original update manifest'),
+    manifest = { version: '1.1.0', gitSha: 'a'.repeat(40) };
+  const receipt = {
+    schemaVersion: 'mizar.update-publication.v1',
+    repository: 'Starfie1d1272/Mizar',
+    ...manifest,
+    manifestSha256: createHash('sha256').update(bytes).digest('hex'),
+    releaseId: 42,
+    publishedAt: '2026-10-10T00:00:00Z',
+    promotionSha: 'b'.repeat(40),
+  };
+  expect(() => assertPublication(receipt, bytes, manifest)).not.toThrow();
+  for (const patch of [
+    { version: '1.2.0' },
+    { gitSha: 'c'.repeat(40) },
+    { manifestSha256: 'd'.repeat(64) },
+    { promotionSha: 'main' },
+    { releaseId: 0 },
+    { publishedAt: 'not-published' },
+  ])
+    expect(() => assertPublication({ ...receipt, ...patch }, bytes, manifest)).toThrow();
+});
 
 it.each([
   ['Mizar-v1.0.0-rc.7-Windows-x64', '1.0.0-rc.7', '-Setup.exe'],

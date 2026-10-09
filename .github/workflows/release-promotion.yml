@@ -14,6 +14,8 @@ on:
 permissions:
   contents: write
   actions: read
+  id-token: write
+  attestations: write
 concurrency:
   group: release-promotion-${{ inputs.tag }}
   cancel-in-progress: false
@@ -106,11 +108,13 @@ jobs:
         run: |
           $existing = gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2>$null | ConvertFrom-Json
           if ($LASTEXITCODE -eq 0) {
-            $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
-            $asset = @($existing.assets | Where-Object name -EQ $identity.archive)
             $ref = gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" | ConvertFrom-Json
-            if (@($asset).Count -ne 1 -or $asset[0].digest -ne "sha256:$($identity.archiveSha256)" -or $ref.object.sha -ne $env:SOURCE_SHA -or $existing.draft) { throw 'Existing release identity differs; refusing overwrite' }
-            Write-Output 'Identical release already published; no mutation.'
+            if ($LASTEXITCODE -ne 0) { throw 'Existing release tag could not be verified' }
+            $existing | ConvertTo-Json -Depth 50 | Set-Content existing-release.json -Encoding utf8
+            $ref | ConvertTo-Json -Depth 50 | Set-Content existing-ref.json -Encoding utf8
+            node scripts/qualification/update-publication.mjs verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product evidence
+            if ($LASTEXITCODE -ne 0) { throw 'Existing release is incomplete or differs; refusing overwrite' }
+            'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
             exit 0
           }
           gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null | Out-Null
@@ -125,3 +129,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed; inspect before retry' }
           gh release edit $env:RELEASE_TAG --draft=false
           if ($LASTEXITCODE -ne 0) { throw 'Publication failed; no rebuild or overwrite attempted' }
+      - name: Confirm the published Stable and prepare its authorization
+        if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        shell: pwsh
+        run: |
+          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed' }
+          gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
+          if ($LASTEXITCODE -ne 0) { throw 'Published tag lookup failed' }
+          node scripts/qualification/update-publication.mjs create published-release.json published-ref.json $env:RELEASE_TAG product evidence update-publication.json
+          if ($LASTEXITCODE -ne 0) { throw 'Published Stable authorization preparation failed' }
+      - name: Attest the actual Stable publication
+        if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        id: publication-provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: update-publication.json
+      - name: Upload and verify publication authorization
+        if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        shell: pwsh
+        env:
+          PUBLICATION_BUNDLE: ${{ steps.publication-provenance.outputs.bundle-path }}
+        run: |
+          Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination update-publication-provenance.json
+          gh attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
+          if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }
+          gh release upload $env:RELEASE_TAG update-publication.json update-publication-provenance.json
+          if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
+          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
+          node scripts/qualification/update-publication.mjs verify-existing published-release.json published-ref.json $env:RELEASE_TAG product evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }

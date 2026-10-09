@@ -237,7 +237,19 @@ try {
   if ($journal.phase -eq 'installing') {
     try { Restore-Previous }
     catch { Recovery-Registration $true; Record-Result 'recovery-required' $code }
-  } elseif ($journal.phase -eq 'committed') { Record-Result 'installed' 'update_completed'; Recovery-Registration $false }
+  } elseif ($journal.phase -eq 'committed') {
+    # A committed journal is not evidence that the current files are intact.
+    # Cleanup/launch errors may still be successful installs, but corruption
+    # must retain recovery registration and never be presented as completion.
+    try {
+      Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+      Record-Result 'installed' 'update_completed'
+      Recovery-Registration $false
+    } catch {
+      Recovery-Registration $true
+      Record-Result 'recovery-required' 'update_committed_payload_invalid'
+    }
+  }
   else { Record-Result 'cancelled' $code; Recovery-Registration $false }
   exit 1
 }
