@@ -1101,7 +1101,7 @@
     grid-column: 1;
   }
   .bp-editor-dialog .bp-sequence-step {
-    padding: var(--mizar-layout-compact);
+    padding: calc(var(--mizar-layout-compact) / 2) var(--mizar-layout-compact);
     grid-template-columns: 28px minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 1fr);
   }
   .bp-editor-dialog .bp-sequence-step .bp-editor-field > span {
