@@ -109,6 +109,8 @@ export function registerLocalTournamentRoutes(
           const teamBId = teamId(body.teamBId);
           const existingPlayers = (id: string | undefined) =>
             store.getSnapshot().teams.find((team) => team.teamId === id)?.players ?? [];
+          const existingName = (id: string | undefined) =>
+            store.getSnapshot().teams.find((team) => team.teamId === id)?.name;
           const document = await store.createMatch(
             {
               teamA: current.ctName ?? (typeof body.teamA === 'string' ? body.teamA : ''),
@@ -117,8 +119,14 @@ export function registerLocalTournamentRoutes(
               ...(teamBId === undefined ? {} : { teamBId }),
               format: body.format as 'bo1' | 'bo3' | 'bo5',
               mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
-              playersA: mergeObservedStarters(existingPlayers(teamAId), current.ct),
-              playersB: mergeObservedStarters(existingPlayers(teamBId), current.t),
+              playersA: mergeObservedStarters(existingPlayers(teamAId), current.ct, [
+                current.ctName,
+                existingName(teamAId),
+              ]),
+              playersB: mergeObservedStarters(existingPlayers(teamBId), current.t, [
+                current.tName,
+                existingName(teamBId),
+              ]),
             },
             canCommit,
           );
@@ -142,6 +150,7 @@ export function registerLocalTournamentRoutes(
                   players: mergeObservedStarters(
                     document.entrants.a.players,
                     ct === 'a' ? current.ct : current.t,
+                    [document.entrants.a.name, ct === 'a' ? current.ctName : current.tName],
                   ),
                 },
                 b: {
@@ -149,6 +158,7 @@ export function registerLocalTournamentRoutes(
                   players: mergeObservedStarters(
                     document.entrants.b.players,
                     ct === 'b' ? current.ct : current.t,
+                    [document.entrants.b.name, ct === 'b' ? current.ctName : current.tName],
                   ),
                 },
               },

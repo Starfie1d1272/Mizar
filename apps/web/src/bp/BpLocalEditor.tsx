@@ -241,19 +241,18 @@ export function BpLocalEditor({
             <option value="bo5">BO5</option>
           </select>
         </label>
-        <label className="bp-editor-field">
-          <span>Veto A</span>
-          <select
-            value={draft.vetoA}
-            onChange={(event) => {
-              const vetoA = event.currentTarget.value as 'a' | 'b';
-              setDraft((value) => ({ ...value, vetoA }));
-            }}
-          >
-            <option value="a">队伍 A · {draft.entrants.a.name || '待填写'}</option>
-            <option value="b">队伍 B · {draft.entrants.b.name || '待填写'}</option>
-          </select>
-        </label>
+        <Select
+          label="先禁图方"
+          value={draft.vetoA}
+          message="此选择决定整套 BP 顺序，不只是第一张禁图。"
+          onChange={(event) => {
+            const vetoA = event.currentTarget.value as 'a' | 'b';
+            setDraft((value) => ({ ...value, vetoA }));
+          }}
+        >
+          <option value="a">{draft.entrants.a.name || '队伍 A（待填写）'}</option>
+          <option value="b">{draft.entrants.b.name || '队伍 B（待填写）'}</option>
+        </Select>
       </div>
 
       {draft.format === 'bo3' ? (
@@ -268,7 +267,7 @@ export function BpLocalEditor({
                 finalBanOrder: event.currentTarget.value as Bo3BpRules['finalBanOrder'],
               })
             }
-            message="先禁方是 Veto A，后禁方是 Veto B；选图由对手选边。"
+            message="先禁图方先选择第一张地图；选图由对手选边。"
           >
             <option value="veto_b_first">后禁方先禁，再由先禁方禁图</option>
             <option value="veto_a_first">先禁方先禁，再由后禁方禁图</option>
@@ -372,10 +371,10 @@ export function BpLocalEditor({
       <section className="bp-editor-sequence" aria-labelledby="bp-sequence-title">
         <div className="bp-sequence-heading">
           <div>
-            <span className="bp-workspace-eyebrow">CANONICAL VETO ORDER</span>
+            <span className="bp-workspace-eyebrow">地图禁选</span>
             <h3 id="bp-sequence-title">BP 顺序</h3>
           </div>
-          <p>操作方与步骤由赛制和所选规则确定</p>
+          <p>选定先禁图方后，后续步骤由赛制和所选规则确定</p>
         </div>
         <ol className="bp-sequence-list">
           {actions.map((action, index) => {

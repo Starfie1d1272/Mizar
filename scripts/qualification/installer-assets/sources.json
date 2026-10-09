@@ -1,0 +1,27 @@
+{
+  "license": "AGPL-3.0-only",
+  "source": "apps/web/public/brand/mizar-mark.svg",
+  "sourceSha256": "adbffd8f5860052330fe9cde54b9e7f061f6db279ab1c35adeeb7a16c3e9c88a",
+  "files": [
+    {
+      "path": "wizard.bmp",
+      "sha256": "14d9d972f8379fc91f9d03e128b128d78c1e857d3e7546ac726c23ebc40ac4bc",
+      "bytes": 1390446
+    },
+    {
+      "path": "header.bmp",
+      "sha256": "da708c8132a92e15b247bd3b728864b42795cdf5f62c01aced64df8dc41d196c",
+      "bytes": 231246
+    },
+    {
+      "path": "wizard.svg",
+      "sha256": "8c662a3a4f0a4d5ec7a5dc932692672e03579562a5b54a51d55accd3ac36eab7",
+      "bytes": 3042
+    },
+    {
+      "path": "header.svg",
+      "sha256": "1a956279ddbca132c1db3e1cbe5efe3f1faae72430c227066971bc92229015a3",
+      "bytes": 2826
+    }
+  ]
+}

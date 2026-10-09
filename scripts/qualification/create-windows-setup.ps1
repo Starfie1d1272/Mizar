@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$BundleRoot,
   [Parameter(Mandatory = $true)][string]$OutputRoot,
-  [Parameter(Mandatory = $true)][string]$ExtractRoot
+  [Parameter(Mandatory = $true)][string]$ExtractRoot,
+  [switch]$CaptureUi
 )
 $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path -LiteralPath $BundleRoot).Path
@@ -24,8 +25,20 @@ $lines = @($files | ForEach-Object { 'Delete "$INSTDIR\' + (Escape-Nsis ([IO.Pat
 $lines += @(Get-ChildItem -LiteralPath $source -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object { 'RMDir "$INSTDIR\' + (Escape-Nsis ([IO.Path]::GetRelativePath($source, $_.FullName))) + '"' })
 $lines | Set-Content -LiteralPath $remove -Encoding utf8
 $script = Join-Path $PSScriptRoot 'windows-setup.nsi'
+$assets = Join-Path $PSScriptRoot 'installer-assets'
+$assetManifestPath = Join-Path $assets 'sources.json'
+$assetManifest = Get-Content -Raw -LiteralPath $assetManifestPath | ConvertFrom-Json
+$installerAssets = @($assetManifest.files | ForEach-Object {
+  if ($_.path -notmatch '^[a-z]+\.(bmp|svg)$') { throw 'Invalid installer asset path' }
+  $asset = Join-Path $assets $_.path
+  $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
+  if ($hash -ne $_.sha256 -or (Get-Item -LiteralPath $asset).Length -ne $_.bytes) { throw "Installer asset differs: $($_.path)" }
+  [ordered]@{ path = $_.path; sha256 = $hash; bytes = $_.bytes }
+})
+$brandSource = Join-Path $PSScriptRoot ('../../' + $assetManifest.source)
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $brandSource).Hash.ToLowerInvariant() -ne $assetManifest.sourceSha256) { throw 'Installer brand source differs' }
 $icon = Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico'
-& $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DREMOVE_FILES=$remove" $script
+& $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" "/DREMOVE_FILES=$remove" $script
 if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
 function Install-Setup {
   $process = Start-Process -FilePath $archive -ArgumentList @('/S', ('/D=' + $target)) -PassThru -Wait
@@ -42,6 +55,9 @@ $extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
   $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
 })
 if ($extra.Count) { throw 'Unexpected Setup payload files' }
+if ($CaptureUi) {
+  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path (Split-Path $output -Parent) 'installer-ui')
+}
 $sentinel = Join-Path $env:LOCALAPPDATA 'Mizar\data\setup-smoke-sentinel.txt'
 if (Test-Path -LiteralPath $sentinel) { throw 'Refusing to overwrite existing smoke sentinel' }
 New-Item -ItemType Directory -Force -Path (Split-Path $sentinel) | Out-Null
@@ -70,9 +86,12 @@ $distribution = [ordered]@{
   format = 'nsis-setup'; installerVersion = $version
   installerCompilerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $compiler).Hash.ToLowerInvariant()
   installerScriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $script).Hash.ToLowerInvariant()
+  installerAssets = $installerAssets
+  installerAssetsManifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetManifestPath).Hash.ToLowerInvariant()
+  installerIconSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $icon).Hash.ToLowerInvariant()
   installerLicense = $licenseName
   installerLicenseSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $licensePath).Hash.ToLowerInvariant()
   verifiedFiles = $files.Count
 }
-$distribution | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'distribution-manifest.json') -Encoding utf8NoBOM
-$distribution | ConvertTo-Json
+$distribution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'distribution-manifest.json') -Encoding utf8NoBOM
+$distribution | ConvertTo-Json -Depth 5

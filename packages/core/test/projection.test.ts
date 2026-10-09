@@ -18,6 +18,7 @@ import {
   projectObserverAssist,
   projectProgram,
   selectProgramSafeRuntimeView,
+  observedPlayerDisplayName,
 } from '../src/projection/index.js';
 import { createSeriesProgress } from '../src/series-progress/index.js';
 import type { MatchContext } from '../src/match-context/index.js';
@@ -191,6 +192,154 @@ function resolvedLineup(
 }
 
 describe('Program-safe projections', () => {
+  it.each([
+    ['The Beast TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['THE BEAST | TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['NJU美少女队｜小 明', ['NJU美少女队'], '小 明'],
+    ['Team With Spaces - Player With Spaces', ['Team With Spaces'], 'Player With Spaces'],
+    ['The Beast:TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['The Beast：TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['The Beast·TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['The Beast–TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['The Beast—TomatoDebu', ['The Beast'], 'TomatoDebu'],
+    ['TB | TomatoDebu', ['The Beast', 'TB'], 'TomatoDebu'],
+    ['The Beast TomatoDebu', ['The', 'The Beast'], 'TomatoDebu'],
+    ['The Beast TomatoDebu', [], 'The Beast TomatoDebu'],
+    ['Tomato The Beast Debu', ['The Beast'], 'Tomato The Beast Debu'],
+    ['The Beasts TomatoDebu', ['The Beast'], 'The Beasts TomatoDebu'],
+    ['The BeastTomatoDebu', ['The Beast'], 'The BeastTomatoDebu'],
+    ['TB | TomatoDebu', ['The Beast'], 'TB | TomatoDebu'],
+    ['Player With Spaces', ['The Beast'], 'Player With Spaces'],
+    ['The Beast', ['The Beast'], 'The Beast'],
+    ['The Beast | ', ['The Beast'], 'The Beast | '],
+    ['The Beast | ', ['The', 'The Beast'], 'The Beast | '],
+    ['The Beast', ['The', 'The Beast'], 'The Beast'],
+    ['The Beast TomatoDebu', [null, '', ' '], 'The Beast TomatoDebu'],
+    [null, ['The Beast'], null],
+  ] as const)(
+    'presents observed nickname %s only at proven team boundaries',
+    (name, teams, expected) => {
+      expect(observedPlayerDisplayName(name, teams)).toBe(expected);
+    },
+  );
+
+  it('uses current side names for neutral telemetry without altering observations or Steam64', () => {
+    const original = observation();
+    const frame: TelemetryObservation = {
+      ...original,
+      telemetry: {
+        ...original.telemetry,
+        map: {
+          ...original.telemetry.map,
+          sides: { ct: { name: 'The Beast' }, t: { name: 'NJU美少女队' } },
+        },
+        allPlayers: original.telemetry.allPlayers!.map((item, index) => ({
+          ...item,
+          displayName: index === 0 ? 'The Beast TomatoDebu' : 'NJU美少女队｜小 明',
+        })),
+      },
+    };
+    const project = (input: TelemetryObservation) => {
+      const state = acceptedState(input);
+      const identity = unboundIdentityResolution();
+      return projectProgram({
+        runtime: selectProgramSafeRuntimeView(state),
+        identity,
+        activeLineup: resolvedLineup(state, input, identity),
+        nowMonotonicMs: 7,
+        continuityPolicy: POLICY,
+      });
+    };
+    const result = project(frame);
+    expect(result.players[0]).toMatchObject({
+      sourcePlayerId: steam64(1),
+      displayName: 'TomatoDebu',
+      displayNameSource: 'observed',
+    });
+    expect(result.players[5]?.displayName).toBe('小 明');
+    expect(result.players[1]?.displayName).toBe('NJU美少女队｜小 明');
+    expect(frame.telemetry.allPlayers![0]!.displayName).toBe('The Beast TomatoDebu');
+    const switched: TelemetryObservation = {
+      ...frame,
+      telemetry: {
+        ...frame.telemetry,
+        map: {
+          ...frame.telemetry.map,
+          sides: { ct: { name: 'Other Team' }, t: { name: 'The Beast' } },
+        },
+        allPlayers: frame.telemetry.allPlayers!.map((item) => ({
+          ...item,
+          side: item.side === 'CT' ? 'T' : 'CT',
+        })),
+      },
+    };
+    expect(project(switched).players[0]?.displayName).toBe('TomatoDebu');
+    expect(
+      project({
+        ...frame,
+        telemetry: { ...frame.telemetry, map: { ...frame.telemetry.map, sides: {} } },
+      }).players[0]?.displayName,
+    ).toBe('The Beast TomatoDebu');
+    expect(
+      project({ ...frame, coverage: { ...frame.coverage, map: 'degraded' } }).players[0]
+        ?.displayName,
+    ).toBe('The Beast TomatoDebu');
+  });
+
+  it('preserves canonical nicknames and uses mapped entrant names only for observed fallback', () => {
+    const base = contextFixture();
+    const context: MatchContext = {
+      ...base,
+      entrants: {
+        ...base.entrants,
+        a: {
+          ...base.entrants.a,
+          name: 'The Beast',
+          players: base.entrants.a.players.map((item, index) => ({
+            ...item,
+            displayName: index === 0 ? null : 'The Beast Official Name',
+          })),
+        },
+      },
+    };
+    const original = observation();
+    const frame: TelemetryObservation = {
+      ...original,
+      telemetry: {
+        ...original.telemetry,
+        map: { ...original.telemetry.map, sides: {} },
+        allPlayers: original.telemetry.allPlayers!.map((item) => ({
+          ...item,
+          displayName: 'The Beast TomatoDebu',
+        })),
+      },
+    };
+    const state = acceptedState(frame);
+    const identity = matchedIdentity(context, frame);
+    const input = {
+      runtime: selectProgramSafeRuntimeView(state),
+      context,
+      identity,
+      activeLineup: resolvedLineup(state, frame, identity, context),
+      nowMonotonicMs: 7,
+      continuityPolicy: POLICY,
+    };
+    expect(projectProgram(input).players[0]).toMatchObject({
+      displayName: 'TomatoDebu',
+      displayNameSource: 'observed',
+      canonicalPlayerId: 'a-player-1',
+    });
+    expect(projectProgram(input).players[1]).toMatchObject({
+      displayName: 'The Beast Official Name',
+      displayNameSource: 'canonical',
+    });
+    expect(
+      projectProgram({ ...input, identity: { ...identity, mapEpoch: identity.mapEpoch + 1 } })
+        .players[0]?.displayName,
+    ).toBe('The Beast TomatoDebu');
+    expect(identity.players[0]?.observedDisplayName).toBe('The Beast TomatoDebu');
+  });
+
   it('keeps selected match facts for control while projecting neutral unbound demo branding', () => {
     const context = contextFixture();
     const frame = observation(true);
