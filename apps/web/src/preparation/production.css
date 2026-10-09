@@ -65,6 +65,13 @@
   width: min(100%, calc((100dvh - 680px) * 16 / 9));
   max-width: none;
 }
+.resource-team-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: var(--mizar-layout-gap);
+  max-height: calc(var(--mizar-layout-target) * 5);
+  overflow: auto;
+}
 .production-page .production-preflight {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }

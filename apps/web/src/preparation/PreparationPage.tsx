@@ -82,7 +82,7 @@ export function PreparationPage() {
   const [selecting, setSelecting] = useState(
     query.has('select') || query.has('createLocal') || query.has('createFromServer'),
   );
-  const [resourceId, setResourceId] = useState('');
+  const [resourceId, setResourceId] = useState(() => query.get('resource') ?? '');
   const [resourceSection, setResourceSection] = useState<MatchSection>('details');
   const [progress, setProgress] = useState('');
   async function action(run: () => Promise<unknown>) {
@@ -249,7 +249,7 @@ export function PreparationPage() {
               ).map(([id, label]) => (
                 <a
                   key={id}
-                  href={`/resources?tab=${id}`}
+                  href={`/resources?tab=${id}${resourceId ? `&resource=${encodeURIComponent(resourceId)}` : ''}`}
                   aria-current={(requested ?? 'matches') === id ? 'page' : undefined}
                 >
                   {label}
@@ -295,7 +295,7 @@ export function PreparationPage() {
                 ) : (
                   <p>暂无本地比赛，在制播中创建后即可复用。</p>
                 )}
-                <ul>
+                <ul className="resource-team-list" aria-label="已保存队伍">
                   {view?.teams.map((team) => (
                     <li key={team.teamId}>{team.name}</li>
                   ))}
