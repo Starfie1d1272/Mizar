@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
-import type { Page } from '@playwright/test';
+import type { Page, WebSocketRoute } from '@playwright/test';
 import { getBuiltinResolvedPreset } from '../../packages/hud-config/src/index.js';
 import { programSnapshotSchema } from '../../packages/protocol/src/program.js';
+import { adaptGsiPayload } from '../../packages/telemetry-gsi/src/adapter.js';
+import { createProgramRuntime } from '../../apps/companion/src/runtime/program-runtime.js';
+import { createProjectionCoordinator } from '../../apps/companion/src/projections/projection-coordinator.js';
+import { createCstvSourceManagers } from '../../apps/companion/src/telemetry/cstv-source-manager.js';
 import { expect, test } from './companion-isolation.js';
 
 const artifact = JSON.parse(
@@ -25,6 +29,96 @@ async function feed(page: Page, id: string) {
   await expect(page.locator('[data-gameplay-hud]')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 }
+
+test('all five HUDs consume the same GSI nickname in player rails, focus and pause rosters', async ({
+  page,
+}) => {
+  const runtime = createProgramRuntime('nickname-regression');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    nowMonotonicMs: () => 0,
+    predictionPublishCoalescing: false,
+  });
+  // Issue #208's reported nickname reconstructed in synthetic GSI; not a recording replay.
+  const allplayers = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => {
+      const steamid = String(76561198000000000n + BigInt(index));
+      return [
+        steamid,
+        {
+          steamid,
+          name:
+            index === 0
+              ? 'The Beast TomatoDebu'
+              : index === 5
+                ? 'NJU美少女队｜小 明'
+                : `Player ${index}`,
+          team: index < 5 ? 'CT' : 'T',
+          observer_slot: index,
+          activity: 'playing',
+          state: { health: 100, armor: 100 },
+          weapons: { weapon_0: { name: 'weapon_knife', type: 'Knife', state: 'active' } },
+        },
+      ];
+    }),
+  );
+  const snapshots = [];
+  try {
+    for (const [index, phase] of ['live', 'timeout_ct'].entries()) {
+      const adapted = adaptGsiPayload(
+        {
+          map: {
+            name: 'de_mirage',
+            phase: 'live',
+            round: 3,
+            team_ct: { name: 'The Beast', score: 2 },
+            team_t: { name: 'NJU美少女队', score: 1 },
+          },
+          round: { phase: 'live' },
+          phase_countdowns: { phase, phase_ends_in: '30' },
+          allplayers,
+          player: Object.values(allplayers)[0],
+        },
+        { sequence: index + 1, receivedAt: '2026-10-09T00:00:00.000Z', receivedMonotonicMs: 0 },
+      );
+      if (!adapted.ok) throw new Error('nickname GSI reconstruction is invalid');
+      coordinator.afterRuntimeMutation(runtime.acceptObservation(adapted.observation));
+      snapshots.push(coordinator.getPublisher('program').getCurrent()!);
+    }
+    expect(coordinator.getRosterEvidence()?.ct[0]?.displayName).toBe('The Beast TomatoDebu');
+    expect(runtime.getCurrentState().programTelemetry?.telemetry.allPlayers?.[0]?.displayName).toBe(
+      'The Beast TomatoDebu',
+    );
+  } finally {
+    await coordinator.close();
+  }
+  let snapshot = snapshots[0]!;
+  let socket: WebSocketRoute | undefined;
+  await page.routeWebSocket('**/local/v1/program', (route) => {
+    socket = route;
+    route.send(JSON.stringify(snapshot));
+  });
+  let preset = getBuiltinResolvedPreset();
+  await page.route('**/local/v1/hud-config', (route) =>
+    route.fulfill({ json: { resolved: preset, etag: 'nickname', activeRevision: 'nickname' } }),
+  );
+  for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld']) {
+    preset = getBuiltinResolvedPreset(`builtin:${style}-preset`);
+    snapshot = snapshots[0]!;
+    await page.goto('/program?hud-config=companion');
+    await expect(page.getByRole('article', { name: 'TomatoDebu player card' })).toBeVisible();
+    await expect(page.locator('.focused-player__name')).toHaveText('TomatoDebu');
+    await expect(page.getByRole('article', { name: '小 明 player card' })).toBeVisible();
+    await expect(page.getByText('The Beast TomatoDebu', { exact: true })).toHaveCount(0);
+    socket!.send(JSON.stringify(snapshots[1]));
+    await expect(page.locator('[data-pause-player]')).toHaveCount(10);
+    await expect(
+      page.locator('[data-pause-player]').filter({ hasText: 'TomatoDebu' }),
+    ).toBeVisible();
+    await expect(page.locator('[data-pause-player]').filter({ hasText: '小 明' })).toBeVisible();
+  }
+});
 
 test('default radar compacts its empty series slot and the enlarged kill badge fits its slot', async ({
   page,

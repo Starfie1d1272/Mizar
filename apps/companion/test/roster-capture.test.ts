@@ -10,7 +10,7 @@ import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
 
 const ct = Array.from({ length: 5 }, (_, i) => ({
   steam64: `7656119800000000${i}`,
-  displayName: `Observed ${i}`,
+  displayName: i === 0 ? 'Alpha TomatoDebu' : `Observed ${i}`,
 }));
 const t = Array.from({ length: 5 }, (_, i) => ({
   steam64: `7656119800000001${i}`,
@@ -198,6 +198,20 @@ it.each([true, false])(
       } else {
         expect(envelope.document.entrants.a.entryId).not.toBe(seed.entrants.a.entryId);
         expect(envelope.document.entrants.a.logoUrl).toBeNull();
+        expect(envelope.document.entrants.a.players[0]).toMatchObject({
+          steam64: ct[0]!.steam64,
+          displayName: 'TomatoDebu',
+        });
+        // Capture does not rewrite the raw evidence, and normalization survives disk reload.
+        expect(currentEvidence.ct[0]!.displayName).toBe('Alpha TomatoDebu');
+        const restored = new LocalTournamentStore(path);
+        await restored.load();
+        expect(
+          restored
+            .getSnapshot()
+            .teams.find((team) => team.teamId === envelope.document.entrants.a.entryId)?.players[0]
+            ?.displayName,
+        ).toBe('TomatoDebu');
       }
       const view = (await app.inject('/local/v1/tournament')).json<{
         teams: unknown[];
@@ -205,6 +219,37 @@ it.each([true, false])(
       }>();
       expect(view.teams).toHaveLength(reuse ? 2 : 4);
       expect(view.matches.find((match) => match.matchId === seed.matchId)).toEqual(enriched);
+      // After a side swap, capture a new starter into B using B's team name.
+      currentEvidence = {
+        ...currentEvidence,
+        ctName: 'Beta',
+        tName: 'Alpha',
+        ct: t.map((player, i) =>
+          i === 0 ? { steam64: '76561198000000088', displayName: 'Beta | New Starter' } : player,
+        ),
+        t: ct,
+      };
+      const captureCandidate = await get();
+      expect(captureCandidate.ctEntrant).toBe('b');
+      const capture = await app.inject({
+        method: 'POST',
+        url: '/operator/local-match/capture',
+        headers,
+        payload: {
+          expectedContextRevision: captureCandidate.contextRevision,
+          expectedSourceGeneration: captureCandidate.sourceGeneration,
+          expectedMapEpoch: captureCandidate.mapEpoch,
+          candidateRevision: captureCandidate.revision,
+        },
+      });
+      expect(capture.statusCode, capture.body).toBe(200);
+      const captured = (await app.inject('/local/v1/match-document')).json<{
+        document: typeof seed;
+      }>().document;
+      expect(
+        captured.entrants.b.players.find((player) => player.steam64 === '76561198000000088'),
+      ).toMatchObject({ displayName: 'New Starter', isStarter: true });
+      expect(captured.entrants.a.players[0]).toEqual(envelope.document.entrants.a.players[0]);
     } finally {
       await app.close();
       spy.mockRestore();

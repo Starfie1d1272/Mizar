@@ -446,8 +446,14 @@ export class ProjectionCoordinator {
     return {
       sourceGeneration: lineup.sourceGeneration,
       mapEpoch: lineup.mapEpoch,
-      ctName: observation?.telemetry.map?.sides?.ct?.name?.trim() || null,
-      tName: observation?.telemetry.map?.sides?.t?.name?.trim() || null,
+      ctName:
+        observation.coverage.map === 'present'
+          ? observation.telemetry.map?.sides?.ct?.name?.trim() || null
+          : null,
+      tName:
+        observation.coverage.map === 'present'
+          ? observation.telemetry.map?.sides?.t?.name?.trim() || null
+          : null,
       ct: lineup.ct.map((player) => ({
         steam64: player.sourcePlayerId,
         displayName: player.observed?.displayName ?? null,

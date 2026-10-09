@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { MatchDocumentV1 } from '@mizar/core/match-context';
+import { observedPlayerDisplayName } from '@mizar/core/projection';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { LocalTeamV1 } from './local-tournament-store.js';
 
@@ -57,7 +58,11 @@ export function rosterCandidate(
   };
 }
 
-export function mergeObservedStarters(existing: Players, observed: Evidence['ct']): Players {
+export function mergeObservedStarters(
+  existing: Players,
+  observed: Evidence['ct'],
+  teamNames: readonly (string | null | undefined)[] = [],
+): Players {
   const ids = new Set(observed.map((player) => player.steam64));
   return [
     ...existing.map((player) => ({
@@ -69,7 +74,7 @@ export function mergeObservedStarters(existing: Players, observed: Evidence['ct'
       .map((player) => ({
         playerId: randomUUID(),
         steam64: player.steam64,
-        displayName: player.displayName,
+        displayName: observedPlayerDisplayName(player.displayName, teamNames),
         avatarUrl: null,
         isStarter: true,
       })),
