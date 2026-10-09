@@ -1,0 +1,118 @@
+{
+  "node": "v24.19.0",
+  "zlib": "1.3.2.1-motley-3246f1b",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "method": "Raw-zlib compression-operation wall time (performance.now), CPU-bound workload only, same backend as artifact archiver; excludes ZIP framing, disk/network and Actions runner. Published assets downloaded read-only, SHA256 checked against GitHub release digest. Decode hash independently verified; never uploads or publishes assets.",
+  "rows": [
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 1,
+      "level": 6,
+      "compressionMs": 3097.4835789999997,
+      "compressedBytes": 98680042
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 1,
+      "level": 0,
+      "compressionMs": 356.3123889999997,
+      "compressedBytes": 100086028
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 2,
+      "level": 0,
+      "compressionMs": 189.34079900000052,
+      "compressedBytes": 100086028
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 2,
+      "level": 6,
+      "compressionMs": 2710.841872,
+      "compressedBytes": 98680042
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 3,
+      "level": 6,
+      "compressionMs": 2632.033875000001,
+      "compressedBytes": 98680042
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64.zip",
+      "sha256": "1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253",
+      "inputBytes": 100070763,
+      "round": 3,
+      "level": 0,
+      "compressionMs": 102.75761500000044,
+      "compressedBytes": 100086028
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 1,
+      "level": 6,
+      "compressionMs": 2153.0646940000006,
+      "compressedBytes": 83616858
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 1,
+      "level": 0,
+      "compressionMs": 93.28214000000116,
+      "compressedBytes": 83620232
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 2,
+      "level": 0,
+      "compressionMs": 95.57576400000107,
+      "compressedBytes": 83620232
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 2,
+      "level": 6,
+      "compressionMs": 2097.657601000001,
+      "compressedBytes": 83616858
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 3,
+      "level": 6,
+      "compressionMs": 2185.400118999998,
+      "compressedBytes": 83616858
+    },
+    {
+      "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+      "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+      "inputBytes": 83607477,
+      "round": 3,
+      "level": 0,
+      "compressionMs": 86.14944800000012,
+      "compressedBytes": 83620232
+    }
+  ]
+}
