@@ -53,6 +53,7 @@ try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   page.on('pageerror', (error) => errors.push(error.message));
+  const radar = page.getByLabel('比赛雷达', { exact: true });
   const navigation = await page.goto(`${baseUrl}/program`);
   assert.equal(navigation.status(), 200);
   const frames = [];
@@ -73,6 +74,12 @@ try {
         signal: globalThis.AbortSignal.timeout(5000),
       });
       assert.equal(response.status, 204);
+      // This is a delivery/render closure, not an unpaced overload test. Keep
+      // the real consumer caught up without disabling production backpressure.
+      if ((index + 1) % 16 === 0 || sequence === target || index === frames.length - 1) {
+        await expect(radar).toHaveAttribute('data-radar-sample-sequence', String(sequence));
+        assert.deepEqual(errors, []);
+      }
     }
   };
   // Independent facts from the preserved round, not expectations computed from projections.
@@ -80,7 +87,6 @@ try {
   await expect(page.locator('[data-gameplay-hud]')).toBeVisible();
   await expect(page.locator('[data-player-card]')).toHaveCount(10);
   await expect(page.locator('.match-header__team-name')).toHaveText(['FURIA', 'G2.Esports']);
-  const radar = page.getByLabel('比赛雷达', { exact: true });
   await expect(radar).toHaveAttribute('data-radar-sample-sequence', '1000');
   await expect(radar).toHaveAttribute('data-radar-players', '10');
   await expect(radar).toHaveAttribute('data-radar-artwork', 'ready');
@@ -129,6 +135,7 @@ try {
         startedAt,
         finishedAt: new Date().toISOString(),
         message: error.message,
+        pageErrors: errors,
       },
       null,
       2,
