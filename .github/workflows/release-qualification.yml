@@ -12,6 +12,14 @@ on:
         required: true
         default: RC1
         type: string
+      resource_pack_version:
+        description: 'Immutable official resource version; advance when source/archive identity changes'
+        required: true
+        type: string
+      resource_sequence:
+        description: 'Positive monotonically increasing official resource sequence'
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -19,6 +27,9 @@ permissions:
 env:
   RELEASE_LABEL: ${{ inputs.label }}
   QUALIFICATION_SOURCE_INPUT: ${{ inputs.ref }}
+  RESOURCE_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/release-resources
+  RESOURCE_PACK_VERSION: ${{ inputs.resource_pack_version }}
+  RESOURCE_SEQUENCE: ${{ inputs.resource_sequence }}
   QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
 
 jobs:
@@ -28,6 +39,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
       archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
+      resource_artifact: ${{ steps.resources.outputs.artifact }}
     steps:
       # Reject an untrusted workflow branch before running checked-out policy code.
       - name: Require main qualification workflow
@@ -83,6 +95,22 @@ jobs:
         run: |
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           "archive_sha256=$($manifest.archiveSha256)" >> $env:GITHUB_OUTPUT
+
+      - name: Build independent resource candidate from the same source (no Core rebuild)
+        id: resources
+        shell: pwsh
+        run: |
+          node scripts/ci/resource-release.mjs prepare "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') "$env:RESOURCE_PACK_VERSION" "$env:RESOURCE_SEQUENCE"
+          if ($LASTEXITCODE -ne 0) { throw 'Resource producer/source/catalog validation failed' }
+          "artifact=release-resource-candidate-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
+      - name: Preserve original resource candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.resources.outputs.artifact }}
+          path: ${{ env.RESOURCE_BUILD_ROOT }}/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload unqualified candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -289,12 +317,18 @@ jobs:
       id-token: write
       attestations: write
     env:
+      GH_TOKEN: ${{ github.token }}
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build.outputs.source_sha }}
+      - name: Set up Node.js 24 for fixed resource verification
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-candidate
@@ -312,6 +346,16 @@ jobs:
         with:
           name: release-build-evidence
           path: ${{ runner.temp }}/release-evidence
+      - name: Download exact resource candidate built by this source job
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ${{ needs.build.outputs.resource_artifact }}
+          path: ${{ env.RESOURCE_BUILD_ROOT }}
+      - name: Verify resource content/catalog against the assembled Core candidate
+        shell: pwsh
+        run: |
+          node scripts/ci/resource-release.mjs check "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Resource transfer/compatibility/source mismatch' }
       - name: Verify all lane identities and assembled assets
         shell: pwsh
         run: |
@@ -345,6 +389,30 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
+
+      - name: Attest original resource archive and frozen catalog qualification
+        id: resource-qualified-provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ env.RESOURCE_BUILD_ROOT }}/*.zip
+            ${{ env.RESOURCE_BUILD_ROOT }}/resource-descriptor.json
+      - name: Preserve and verify original resource Qualification proofs
+        shell: pwsh
+        env:
+          RESOURCE_QUALIFICATION_BUNDLE: ${{ steps.resource-qualified-provenance.outputs.bundle-path }}
+        run: |
+          Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-pack-provenance.json')
+          Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-descriptor-qualification-provenance.json')
+          node scripts/ci/resource-release.mjs qualified "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proof validation failed' }
+      - name: Upload original qualified resources (not publication authorization)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-qualified-resources
+          path: ${{ env.RESOURCE_BUILD_ROOT }}/*
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Preserve original update verification bundle
         shell: pwsh
