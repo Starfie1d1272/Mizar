@@ -208,9 +208,7 @@ describe('changed-surface CI planner', () => {
         'scripts/qualification/box-sync.mjs',
         'scripts/qualification/box-sync.test.mjs',
       ]) {
-        expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs).toEqual([
-          'quality',
-        ]);
+        expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs).toEqual(['quality']);
       }
     },
   );
@@ -234,12 +232,13 @@ describe('changed-surface CI planner', () => {
 
   it('retains both rename sides and deletion responsibilities for mirror tooling', () => {
     for (const diff of [
-      'R100\\0scripts/qualification/box-sync.mjs\\0scripts/qualification/bundle/update-install.ps1\\0',
-      'R100\\0scripts/qualification/bundle/update-install.ps1\\0scripts/qualification/box-sync.mjs\\0',
+      'R100\0scripts/qualification/box-sync.mjs\0scripts/qualification/bundle/update-install.ps1\0',
+      'R100\0scripts/qualification/bundle/update-install.ps1\0scripts/qualification/box-sync.mjs\0',
     ]) {
-      expect(
-        createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) }).requiredJobs,
-      ).toEqual(['quality', 'qualification_windows']);
+      expect(createCiPlan({ changedFiles: parseGitDiffNameStatus(diff) }).requiredJobs).toEqual([
+        'quality',
+        'qualification_windows',
+      ]);
     }
     expect(
       createCiPlan({

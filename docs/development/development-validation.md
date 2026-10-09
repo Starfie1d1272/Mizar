@@ -48,13 +48,13 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 验证层次
 
-| 层次             | 证明什么                                          | 常用入口                                                                      |
-| ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 领域与契约       | 状态、身份、时钟、恢复、投递、结构和依赖边界      | `pnpm test`、`pnpm architecture:check`                                        |
-| 类型、样式与构建 | 类型一致性和可构建性                              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build`              |
-| 浏览器           | 关键操作、布局结构、预览、配置与数据来源隔离      | `pnpm acceptance:test`                                                        |
-| 设计系统         | 变量、组件交互、无障碍与组件目录                  | `pnpm design:check`                                                           |
-| 打包与启动       | 便携资源、脚本、服务与桌面启动                    | `pnpm qualification:offline`、`pnpm local-web:production-smoke`               |
+| 层次             | 证明什么                                          | 常用入口                                                             |
+| ---------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| 领域与契约       | 状态、身份、时钟、恢复、投递、结构和依赖边界      | `pnpm test`、`pnpm architecture:check`                               |
+| 类型、样式与构建 | 类型一致性和可构建性                              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`、`pnpm build`     |
+| 浏览器           | 关键操作、布局结构、预览、配置与数据来源隔离      | `pnpm acceptance:test`                                               |
+| 设计系统         | 变量、组件交互、无障碍与组件目录                  | `pnpm design:check`                                                  |
+| 打包与启动       | 便携资源、脚本、服务与桌面启动                    | `pnpm qualification:offline`、`pnpm local-web:production-smoke`      |
 | 真实制播         | 指定包在 Windows + CS2 + OBS 的完整流程与长时运行 | [制播实机验收 #35](https://github.com/Starfie1d1272/Mizar/issues/35) |
 
 实时链路变更按影响覆盖：重放、慢消费者、重连、重复/乱序、代际与地图切换、错场与过期资料、正式节目与辅助隔离、队列/内存增长。界面还检查键盘、焦点、减少动效、缺失媒体与长文本。
