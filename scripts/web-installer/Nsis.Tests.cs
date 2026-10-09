@@ -55,9 +55,14 @@ namespace Mizar.WebInstaller {
             if(String.IsNullOrEmpty(argument) || argument.IndexOfAny(new char[]{'"','\r','\n'})>=0)
               throw new IOException("Invalid qualification bridge arguments");
           using(var bridge=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-            FileName=node, Arguments="\""+bridgeScript+"\" \""+bridgeModule+"\" \""+target+"\" \""+planPath+"\"", UseShellExecute=false, CreateNoWindow=true
+            FileName=node, Arguments="\""+bridgeScript+"\" \""+bridgeModule+"\" \""+target+"\" \""+planPath+"\"", UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true
           })) {
-            if(!bridge.WaitForExit(120000) || bridge.ExitCode!=0) throw new IOException("Real installed Core bootstrap boundary failed");
+            var stdout=bridge.StandardOutput.ReadToEndAsync();
+            var stderr=bridge.StandardError.ReadToEndAsync();
+            if(!bridge.WaitForExit(120000)) throw new IOException("Real installed Core bootstrap boundary timed out");
+            Console.WriteLine(await stdout);
+            Console.Error.WriteLine(await stderr);
+            if(bridge.ExitCode!=0) throw new IOException("Real installed Core bootstrap boundary failed (exit "+bridge.ExitCode+")");
           }
           Console.WriteLine("PASS: real NSIS-installed Core and deployed App bridge deny incomplete official resource installation");
         }
