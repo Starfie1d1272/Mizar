@@ -43,70 +43,33 @@ function currentState(document: ReturnType<typeof fixtureDocument>) {
 }
 
 describe('HUD console authoritative draft merge', () => {
-  it('updates a clean draft from another page and remains clean', () => {
-    const previous = fixtureDocument();
-    const next = {
-      ...previous,
-      customThemes: [{ ...previous.customThemes[0]!, brandColor: '#aa66ff' }],
-    };
-    const state = currentState(previous);
-    const merged = mergeHudEditorDocument({
-      currentIds: state.ids,
-      currentDrafts: state.drafts,
-      currentConflicts: state.conflicts,
-      baseRevisions: state.baseRevisions,
-      previousDocument: previous,
-      nextDocument: next,
-      nextRevision: 'r2',
-      committed: null,
-    });
-
-    expect(merged.drafts.theme.brandColor).toBe('#aa66ff');
-    expect(merged.conflicts.theme).toBe(false);
-    expect(merged.baseRevisions.theme).toBe('r2');
-  });
-
-  it('retains a dirty draft when another page changes an unrelated resource', () => {
-    const previous = fixtureDocument();
-    const next = {
-      ...previous,
-      customThemes: [{ ...previous.customThemes[0]!, brandColor: '#aa66ff' }],
-    };
-    const state = currentState(previous);
-    state.drafts.theme = { ...state.drafts.theme, name: '本地草稿' };
-    const merged = mergeHudEditorDocument({
-      currentIds: state.ids,
-      currentDrafts: state.drafts,
-      currentConflicts: state.conflicts,
-      baseRevisions: state.baseRevisions,
-      previousDocument: previous,
-      nextDocument: next,
-      nextRevision: 'r2',
-      committed: null,
-    });
-
-    expect(merged.drafts.theme.name).toBe('本地草稿');
-    expect(merged.conflicts.theme).toBe(true);
-    expect(merged.baseRevisions.theme).toBe('r1');
-  });
-
-  it('advances the base revision when a dirty draft resource is unchanged remotely', () => {
-    const previous = fixtureDocument();
-    const state = currentState(previous);
-    state.drafts.theme = { ...state.drafts.theme, name: '本地草稿' };
-    const merged = mergeHudEditorDocument({
-      currentIds: state.ids,
-      currentDrafts: state.drafts,
-      currentConflicts: state.conflicts,
-      baseRevisions: state.baseRevisions,
-      previousDocument: previous,
-      nextDocument: { ...previous, customPresets: [{ ...getBuiltinPreset(), id: 'preset-b' }] },
-      nextRevision: 'r2',
-      committed: null,
-    });
-
-    expect(merged.drafts.theme.name).toBe('本地草稿');
-    expect(merged.conflicts.theme).toBe(false);
-    expect(merged.baseRevisions.theme).toBe('r2');
-  });
+  it.each([
+    { dirty: false, remoteTheme: true, conflict: false, revision: 'r2' },
+    { dirty: true, remoteTheme: true, conflict: true, revision: 'r1' },
+    { dirty: true, remoteTheme: false, conflict: false, revision: 'r2' },
+  ])(
+    'merges without losing edits: $dirty dirty, $remoteTheme remote theme change',
+    ({ dirty, remoteTheme, conflict, revision }) => {
+      const previous = fixtureDocument();
+      const state = currentState(previous);
+      if (dirty) state.drafts.theme = { ...state.drafts.theme, name: '本地草稿' };
+      const merged = mergeHudEditorDocument({
+        currentIds: state.ids,
+        currentDrafts: state.drafts,
+        currentConflicts: state.conflicts,
+        baseRevisions: state.baseRevisions,
+        previousDocument: previous,
+        nextDocument: remoteTheme
+          ? { ...previous, customThemes: [{ ...previous.customThemes[0]!, brandColor: '#aa66ff' }] }
+          : { ...previous, customPresets: [{ ...getBuiltinPreset(), id: 'preset-b' }] },
+        nextRevision: 'r2',
+        committed: null,
+      });
+      expect(merged.drafts.theme).toMatchObject(
+        dirty ? { name: '本地草稿' } : { brandColor: '#aa66ff' },
+      );
+      expect(merged.conflicts.theme).toBe(conflict);
+      expect(merged.baseRevisions.theme).toBe(revision);
+    },
+  );
 });

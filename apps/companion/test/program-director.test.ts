@@ -137,7 +137,9 @@ describe('automatic Program choreography', () => {
       await r.step();
       expect(r.scenes.get().active).toBe('map_result');
       expect(r.director.get()).toMatchObject({ next: 'match_result', readyToTake: null });
-      await r.pass(12_000);
+      await r.pass(11_900);
+      expect(r.scenes.get().active).toBe('map_result');
+      await r.step();
       expect(r.scenes.get().active).toBe('match_result');
       expect(r.director.get()).toMatchObject({ next: null, nextStatus: 'complete' });
     },
@@ -409,18 +411,6 @@ describe('automatic Program choreography', () => {
     await r.step();
     await r.pass(12_000);
     expect(r.scenes.get().active).toBe('intermap');
-  });
-  it('shows a confirmed map result for 12s then the appropriate summary', async () => {
-    const r = rig();
-    Object.assign(r.program, sample('real-gameover'));
-    await r.step();
-    expect(r.scenes.get().active).toBe('map_result');
-    await r.pass(11_900);
-    expect(r.scenes.get().active).toBe('map_result');
-    await r.step();
-    expect(r.scenes.get().active).toBe(
-      r.program.series!.status === 'completed' ? 'match_result' : 'intermap',
-    );
   });
 });
 

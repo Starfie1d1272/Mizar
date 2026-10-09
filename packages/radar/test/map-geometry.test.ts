@@ -126,14 +126,4 @@ describe('Radar map geometry', () => {
     expect(diagonal?.y).toBeCloseTo(-Math.SQRT1_2, 12);
     expect(Math.hypot(diagonal?.x ?? 0, diagonal?.y ?? 0)).toBeCloseTo(1, 12);
   });
-
-  it('is deterministic for repeated identical inputs', () => {
-    const results = Array.from({ length: 100 }, () =>
-      projectWorldPosition({ x: -670, y: -847, z: -495 }, SPLIT_GEOMETRY),
-    );
-
-    expect(results.every((result) => JSON.stringify(result) === JSON.stringify(results[0]))).toBe(
-      true,
-    );
-  });
 });

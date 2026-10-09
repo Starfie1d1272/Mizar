@@ -140,14 +140,6 @@ describe('Core RuntimeState through production adapter replay', () => {
     expect(replay.transitions.filter(({ kind }) => kind === 'map_execution_changed')).toEqual([]);
   });
 
-  it('replays the same semantic capture deterministically', async () => {
-    const capturePath = resolve(process.cwd(), 'fixtures/gsi/semantic/match/gameover');
-    const first = await replayRuntime(capturePath);
-    const second = await replayRuntime(capturePath);
-
-    expect(second).toEqual(first);
-  });
-
   it('replays the same inputs, replay clock, and explicit controls deterministically', async () => {
     const root = await temporaryDirectory();
     try {

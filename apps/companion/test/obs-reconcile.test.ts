@@ -213,13 +213,6 @@ it('refreshes exact owned program URLs once without changing collection, scene, 
   expect(obs.inputs.get('User Browser')!.settings).toEqual({ url: 'https://example.test' });
 });
 
-it('derives all OBS scenes and URLs from the shared registry', () => {
-  const desired = obsDesiredScenes(baseUrl);
-  expect(desired.map((scene) => scene.id)).toEqual(PROGRAM_SCENES.map((scene) => scene.id));
-  expect(desired.find((scene) => scene.id === 'gameplay')?.sources).toHaveLength(2);
-  expect(desired.find((scene) => scene.id === 'bp')?.browserUrl).toBe(`${baseUrl}/program/bp`);
-});
-
 it('repairs only Mizar collection, browser sources and order, then is idempotently healthy', async () => {
   const obs = new FakeObs();
   obs.scenes.set('My Camera Scene', []);

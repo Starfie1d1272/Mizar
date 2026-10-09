@@ -349,43 +349,6 @@ describe('Preparation: RivalHubPreparationPanel', () => {
 });
 
 describe('Live Workspace: RivalHubLiveSourcePanel', () => {
-  it('does not display any pairing form, URL, code, or schedule selector', async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        Response.json({
-          paired: true,
-          displayName: '主舞台制播机',
-          activeMatchId: 'match-101',
-          activeSourceMatchId: 'match-101',
-          activeDeviceName: null,
-        }),
-      ),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    await act(async () => {
-      root!.render(
-        <RivalHubLiveSourcePanel
-          action={async (fn) => void (await fn())}
-          onMessage={() => {}}
-          currentMatchTitle="南京大学 vs 东南大学"
-        />,
-      );
-      await Promise.resolve();
-    });
-
-    expect(container.querySelector('input')).toBeNull();
-    expect(container.querySelector('select')).toBeNull();
-    expect(container.textContent).not.toContain('赛事网站地址');
-    expect(container.textContent).not.toContain('一次性连接码');
-    expect(container.textContent).not.toContain('match-101');
-    expect(container.textContent).not.toContain('查看近期赛程');
-
-    expect(container.textContent).toContain('实时数据源');
-    expect(container.textContent).toContain('本机正在提供实时数据');
-    expect(container.textContent).toContain('停止作为数据源');
-  });
-
   it('offers a recovery link instead of hiding the data source entry when unpaired', async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(

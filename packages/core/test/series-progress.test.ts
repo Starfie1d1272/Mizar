@@ -112,6 +112,42 @@ function reduce(
   }).progress;
 }
 
+function mapEnded(mapEpoch: number, finalScore: { ct: number; t: number }): SeriesProgressEvent {
+  return { kind: 'map-ended', sourceGeneration: 0, mapEpoch, finalScore };
+}
+function roundEnded(
+  mapEpoch: number,
+  roundNumber: number,
+  winnerSide: 'CT' | 'T',
+  winCondition: 'elimination' | 'bomb' | 'defuse' | 'time' | 'unknown',
+): SeriesProgressEvent {
+  return {
+    kind: 'round-ended',
+    sourceGeneration: 0,
+    mapEpoch,
+    roundNumber,
+    winnerSide,
+    winCondition,
+  };
+}
+function mapChanged(
+  mapEpoch: number,
+  previousMapEpoch: number,
+  previousMapName: string,
+  mapName: string,
+  resetReason: 'operator-correction' | 'restore' | 'same-map-restart' | null,
+): SeriesProgressEvent {
+  return {
+    kind: 'map-execution-changed',
+    sourceGeneration: 0,
+    mapEpoch,
+    previousMapEpoch,
+    previousMapName,
+    mapName,
+    resetReason,
+  };
+}
+
 describe('SeriesProgress', () => {
   it('reconciles the final absolute round history before the same observation freezes the map', () => {
     // Real RC20 Nuke: gameover arrives with round=18, score=5:13,
@@ -128,7 +164,7 @@ describe('SeriesProgress', () => {
     );
     progress = reduce(
       progress,
-      [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 5, t: 13 } }],
+      [mapEnded(1, { ct: 5, t: 13 })],
       observation('Mirage', 1, { ct: 5, t: 13 }, wins),
     );
     expect(progress.maps[0]).toMatchObject({ status: 'completed', finalScore: { a: 5, b: 13 } });
@@ -165,22 +201,7 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'unknown',
-        },
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          finalScore: { ct: 13, t: 9 },
-        },
-      ],
+      [roundEnded(1, 1, 'CT', 'unknown'), mapEnded(1, { ct: 13, t: 9 })],
       observation('Mirage', 1, { ct: 13, t: 9 }),
     );
     expect(progress.score).toEqual({ a: 1, b: 0 });
@@ -195,39 +216,14 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          previousMapEpoch: 1,
-          previousMapName: 'Mirage',
-          mapName: 'Dust 2',
-          resetReason: null,
-        },
-      ],
+      [mapChanged(2, 1, 'Mirage', 'Dust 2', null)],
       observation('dust2', 2),
     );
     expect(progress).toMatchObject({ currentMapOrder: 2, bindingState: 'bound' });
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'unknown',
-        },
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          finalScore: { ct: 8, t: 13 },
-        },
-      ],
+      [roundEnded(2, 1, 'CT', 'unknown'), mapEnded(2, { ct: 8, t: 13 })],
       observation('dust2', 2, { ct: 8, t: 13 }),
       proof(2, 'T'),
     );
@@ -284,13 +280,6 @@ describe('SeriesProgress', () => {
     );
   });
 
-  it('uses the BO5 threshold without creating another score owner', () => {
-    const progress = createSeriesProgress(contextFixture('bo5'));
-    expect(progress.requiredWins).toBe(3);
-    expect(progress.score).toEqual({ a: 0, b: 0 });
-    expect(progress.maps).toHaveLength(5);
-  });
-
   it('keeps round_ended winner side primary and marks a conflicting snapshot partial', () => {
     const context = contextFixture('bo1');
     const wins = [
@@ -310,16 +299,7 @@ describe('SeriesProgress', () => {
 
     const primaryProgress = reduce(
       createSeriesProgress(context),
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 1,
-          winnerSide: 'T',
-          winCondition: 'unknown',
-        },
-      ],
+      [roundEnded(1, 1, 'T', 'unknown')],
       observation('mirage', 1, { ct: 2, t: 1 }, wins),
       proof(1, 'T'),
     );
@@ -360,30 +340,9 @@ describe('SeriesProgress', () => {
     const checkpointed = reduce(
       createSeriesProgress(context),
       [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'elimination',
-        },
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 2,
-          winnerSide: 'T',
-          winCondition: 'defuse',
-        },
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 3,
-          winnerSide: 'CT',
-          winCondition: 'bomb',
-        },
+        roundEnded(1, 1, 'CT', 'elimination'),
+        roundEnded(1, 2, 'T', 'defuse'),
+        roundEnded(1, 3, 'CT', 'bomb'),
       ],
       observation('mirage', 1, { ct: 2, t: 1 }),
     );
@@ -442,14 +401,7 @@ describe('SeriesProgress', () => {
     let progress = reduce(createSeriesProgress(contextFixture('bo1')));
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          finalScore: { ct: 13, t: 7 },
-        },
-      ],
+      [mapEnded(1, { ct: 13, t: 7 })],
       observation('de_mirage', 1, { ct: 13, t: 7 }),
       proof(1),
     );
@@ -468,14 +420,7 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          finalScore: { ct: 13, t: 9 },
-        },
-      ],
+      [mapEnded(1, { ct: 13, t: 9 })],
       observation('de_mirage', 1, { ct: 13, t: 9 }),
       proof(1),
     );
@@ -483,23 +428,7 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          previousMapEpoch: 1,
-          previousMapName: 'de_mirage',
-          mapName: 'de_dust2',
-          resetReason: null,
-        },
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          finalScore: { ct: 9, t: 13 },
-        },
-      ],
+      [mapChanged(2, 1, 'de_mirage', 'de_dust2', null), mapEnded(2, { ct: 9, t: 13 })],
       observation('de_dust2', 2, { ct: 9, t: 13 }),
       proof(2, 'T'),
     );
@@ -507,23 +436,7 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 3,
-          previousMapEpoch: 2,
-          previousMapName: 'de_dust2',
-          mapName: 'de_inferno',
-          resetReason: null,
-        },
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 3,
-          finalScore: { ct: 13, t: 11 },
-        },
-      ],
+      [mapChanged(3, 2, 'de_dust2', 'de_inferno', null), mapEnded(3, { ct: 13, t: 11 })],
       observation('de_inferno', 3, { ct: 13, t: 11 }),
       proof(3),
     );
@@ -545,30 +458,13 @@ describe('SeriesProgress', () => {
     let progress = reduce(createSeriesProgress(context));
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          finalScore: { ct: 13, t: 9 },
-        },
-      ],
+      [mapEnded(1, { ct: 13, t: 9 })],
       observation('de_mirage', 1, { ct: 13, t: 9 }),
       proof(1),
     );
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          previousMapEpoch: 1,
-          previousMapName: 'de_mirage',
-          mapName: 'de_dust2',
-          resetReason: null,
-        },
-      ],
+      [mapChanged(2, 1, 'de_mirage', 'de_dust2', null)],
       observation('de_dust2', 2),
       proof(2),
     );
@@ -600,46 +496,19 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'elimination',
-        },
-      ],
+      [roundEnded(1, 1, 'CT', 'elimination')],
       observation('de_mirage', 1, { ct: 1, t: 0 }),
       proof(1, 'CT'),
     );
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 2,
-          winnerSide: 'CT',
-          winCondition: 'time',
-        },
-      ],
+      [roundEnded(1, 2, 'CT', 'time')],
       observation('de_mirage', 1, { ct: 2, t: 0 }),
       proof(1, 'T'),
     );
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 3,
-          winnerSide: 'T',
-          winCondition: 'bomb',
-        },
-      ],
+      [roundEnded(1, 3, 'T', 'bomb')],
       observation('de_mirage', 1, { ct: 2, t: 1 }),
       null,
     );
@@ -663,16 +532,7 @@ describe('SeriesProgress', () => {
     let progress = reduce(createSeriesProgress(contextFixture('bo1')));
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'elimination',
-        },
-      ],
+      [roundEnded(1, 1, 'CT', 'elimination')],
       observation('de_mirage', 1, { ct: 1, t: 0 }),
       proof(1),
     );
@@ -696,38 +556,13 @@ describe('SeriesProgress', () => {
     let progress = reduce(createSeriesProgress(context));
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          finalScore: { ct: 13, t: 9 },
-        },
-      ],
+      [mapEnded(1, { ct: 13, t: 9 })],
       observation('de_mirage', 1, { ct: 13, t: 9 }),
       proof(1),
     );
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          previousMapEpoch: 1,
-          previousMapName: 'de_mirage',
-          mapName: 'de_dust2',
-          resetReason: null,
-        },
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          roundNumber: 1,
-          winnerSide: 'CT',
-          winCondition: 'elimination',
-        },
-      ],
+      [mapChanged(2, 1, 'de_mirage', 'de_dust2', null), roundEnded(2, 1, 'CT', 'elimination')],
       observation('de_dust2', 2, { ct: 1, t: 0 }),
       proof(2),
     );
@@ -735,17 +570,7 @@ describe('SeriesProgress', () => {
 
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 3,
-          previousMapEpoch: 2,
-          previousMapName: 'de_dust2',
-          mapName: 'de_dust2',
-          resetReason: 'same-map-restart',
-        },
-      ],
+      [mapChanged(3, 2, 'de_dust2', 'de_dust2', 'same-map-restart')],
       observation('de_dust2', 3),
       proof(3),
     );
@@ -785,16 +610,7 @@ describe('SeriesProgress', () => {
     // Live round_ended arrives for round 4 with known winCondition:
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'round-ended',
-          sourceGeneration: 0,
-          mapEpoch: 1,
-          roundNumber: 4,
-          winnerSide: 'CT',
-          winCondition: 'defuse',
-        },
-      ],
+      [roundEnded(1, 4, 'CT', 'defuse')],
       observation('de_mirage', 1, { ct: 3, t: 1 }, midMapWins),
       proof(1, 'CT'),
     );
@@ -808,103 +624,15 @@ describe('SeriesProgress', () => {
     });
   });
 
-  it('C.2 flags partial when restore + round_wins + score have conflict combinations and unprovable OT indices without guessing round offsets', () => {
-    const context = contextFixture('bo1');
-
-    // Score is 7:5 (12 rounds total), but roundWins only has 8 rounds:
-    const incompleteWins = Array.from({ length: 8 }, (_, i) => ({
-      roundNumber: i + 1,
-      winnerSide: 'CT' as const,
-      winCondition: 'elimination' as const,
-    }));
-    const partialProgress = reduce(
-      createSeriesProgress(context),
-      [],
-      observation('de_mirage', 1, { ct: 7, t: 5 }, incompleteWins),
-      proof(1, 'CT'),
-    );
-    expect(partialProgress.maps[0]?.roundHistory.completeness).toBe('partial');
-    expect(partialProgress.issues).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'round_history_partial' })]),
-    );
-
-    // OT scenario: score is 16:15, but roundWins has fewer rounds than total score:
-    const otWins = [
-      { roundNumber: 1, winnerSide: 'CT' as const, winCondition: 'elimination' as const },
-      { roundNumber: 2, winnerSide: 'T' as const, winCondition: 'bomb' as const },
-    ];
-    const otProgress = reduce(
-      createSeriesProgress(context),
-      [],
-      observation('de_mirage', 1, { ct: 16, t: 15 }, otWins),
-      proof(1, 'CT'),
-    );
-    // Must fail closed to partial, no guessing OT offset:
-    expect(otProgress.maps[0]?.roundHistory.completeness).toBe('partial');
-    expect(otProgress.issues).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'round_history_partial' })]),
-    );
-  });
-
-  it('D.1 verifies pick, decider, independent teamAStartSide across BO1, BO3, and BO5 formats', () => {
-    const bo1 = createSeriesProgress(contextFixture('bo1'));
-    expect(bo1.format).toBe('bo1');
-    expect(bo1.requiredWins).toBe(1);
-    expect(bo1.maps).toHaveLength(1);
-
-    const bo3 = createSeriesProgress(contextFixture('bo3'));
-    expect(bo3.format).toBe('bo3');
-    expect(bo3.requiredWins).toBe(2);
-    expect(bo3.maps).toHaveLength(3);
-    expect(bo3.maps[0]?.selection).toEqual({ kind: 'pick', entryId: 'a' });
-    expect(bo3.maps[0]?.teamAStartSide).toBe('CT');
-    expect(bo3.maps[1]?.selection).toEqual({ kind: 'pick', entryId: 'b' });
-    expect(bo3.maps[1]?.teamAStartSide).toBe('T');
-    // Map 3 is decider, with start side independent from pick
-    expect(bo3.maps[2]?.selection).toEqual({ kind: 'decider' });
-
-    const bo5 = createSeriesProgress(contextFixture('bo5'));
-    expect(bo5.format).toBe('bo5');
-    expect(bo5.requiredWins).toBe(3);
-    expect(bo5.maps).toHaveLength(5);
-  });
-
   it('D.2 normalizes map aliases (Dust 2 / Dust II / dust2, Mirage / mirage) and fails closed on duplicate canonical map slot ambiguity', () => {
     // 1. Dust 2 / Dust II / dust2 aliases:
+    const base = contextFixture('bo3');
     const contextWithDust2: MatchContext = {
-      ...contextFixture('bo3'),
-      maps: [
-        {
-          mapId: 'map-1',
-          mapOrder: 1,
-          mapName: 'Dust II',
-          pickedByEntryId: 'a',
-          teamAStartSide: 'CT',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-        {
-          mapId: 'map-2',
-          mapOrder: 2,
-          mapName: 'Mirage',
-          pickedByEntryId: 'b',
-          teamAStartSide: 'T',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-        {
-          mapId: 'map-3',
-          mapOrder: 3,
-          mapName: 'de_inferno',
-          pickedByEntryId: null,
-          teamAStartSide: 'CT',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-      ],
+      ...base,
+      maps: base.maps.map((map, index) => ({
+        ...map,
+        mapName: ['Dust II', 'Mirage', 'de_inferno'][index]!,
+      })),
     };
     const progress = reduce(createSeriesProgress(contextWithDust2), [], observation('dust2', 1));
     expect(progress.bindingState).toBe('bound');
@@ -913,39 +641,11 @@ describe('SeriesProgress', () => {
 
     // 2. Duplicate canonical map slots ambiguity fails closed:
     const ambiguousContext: MatchContext = {
-      ...contextFixture('bo3'),
-      maps: [
-        {
-          mapId: 'map-1',
-          mapOrder: 1,
-          mapName: 'de_mirage',
-          pickedByEntryId: 'a',
-          teamAStartSide: 'CT',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-        {
-          mapId: 'map-2',
-          mapOrder: 2,
-          mapName: 'Mirage', // Both map 1 and map 2 canonicalize to de_mirage!
-          pickedByEntryId: 'b',
-          teamAStartSide: 'T',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-        {
-          mapId: 'map-3',
-          mapOrder: 3,
-          mapName: 'de_inferno',
-          pickedByEntryId: null,
-          teamAStartSide: 'CT',
-          scoreA: null,
-          scoreB: null,
-          completedAt: null,
-        },
-      ],
+      ...base,
+      maps: base.maps.map((map, index) => ({
+        ...map,
+        mapName: ['de_mirage', 'Mirage', 'de_inferno'][index]!,
+      })),
     };
     const ambiguousProgress = reduce(
       createSeriesProgress(ambiguousContext),
@@ -1002,7 +702,7 @@ describe('unplanned map observations', () => {
       });
       progress = reduce(
         progress,
-        [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: epoch, finalScore: { ct: 13, t: 7 } }],
+        [mapEnded(epoch, { ct: 13, t: 7 })],
         observation(mapName, epoch, { ct: 13, t: 7 }),
         proof(epoch),
       );
@@ -1030,7 +730,7 @@ describe('unplanned map observations', () => {
     expect(reduce(interrupted).bindingState).toBe('bound');
     progress = reduce(
       progress,
-      [{ kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } }],
+      [mapEnded(1, { ct: 13, t: 7 })],
       observation('de_mirage', 1, { ct: 13, t: 7 }),
       null,
     );
@@ -1044,17 +744,7 @@ describe('unplanned map observations', () => {
     progress = reduce(progress);
     progress = reduce(
       progress,
-      [
-        {
-          kind: 'map-execution-changed',
-          sourceGeneration: 0,
-          mapEpoch: 2,
-          previousMapEpoch: 1,
-          previousMapName: 'de_mirage',
-          mapName: 'de_mirage',
-          resetReason: 'same-map-restart',
-        },
-      ],
+      [mapChanged(2, 1, 'de_mirage', 'de_mirage', 'same-map-restart')],
       observation('de_mirage', 2),
     );
     expect(progress.maps).toHaveLength(1);
@@ -1072,9 +762,7 @@ it('keeps an event with no BP plan awaiting a plan, including checkpoint round-t
   const context = { ...contextFixture(), maps: [], veto: [], mapPool: ['de_mirage'] };
   const initial = createSeriesProgress(context);
   expect(initial.sourcePlan.mode).toBe('awaiting_plan');
-  const progress = reduce(initial, [
-    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
-  ]);
+  const progress = reduce(initial, [mapEnded(1, { ct: 13, t: 7 })]);
   expect(progress.maps).toEqual([]);
   expect(progress.score).toEqual({ a: 0, b: 0 });
   const checkpoint = makeSeriesProgressCheckpoint(progress);
@@ -1094,26 +782,14 @@ it('does not reuse a completed map for a different unplanned map order', () => {
     mapPool: ['de_mirage', 'de_dust2', 'de_inferno'],
   };
   let progress = reduce(createSeriesProgress(context));
-  progress = reduce(progress, [
-    { kind: 'map-ended', sourceGeneration: 0, mapEpoch: 1, finalScore: { ct: 13, t: 7 } },
-  ]);
+  progress = reduce(progress, [mapEnded(1, { ct: 13, t: 7 })]);
   const frozen = progress.maps[0];
   const repeated = reduce(progress, [], observation('Mirage', 2));
   expect(repeated.maps).toEqual([frozen]);
   expect(repeated.bindingState).toBe('needs_operator');
   const restart = reduce(
     progress,
-    [
-      {
-        kind: 'map-execution-changed',
-        sourceGeneration: 0,
-        mapEpoch: 2,
-        previousMapEpoch: 1,
-        previousMapName: 'de_mirage',
-        mapName: 'de_mirage',
-        resetReason: 'same-map-restart',
-      },
-    ],
+    [mapChanged(2, 1, 'de_mirage', 'de_mirage', 'same-map-restart')],
     observation('de_mirage', 2),
   );
   expect(restart.maps).toEqual([frozen]);

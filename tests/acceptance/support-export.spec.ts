@@ -12,7 +12,7 @@ const bundle = {
 
 test('normal UI downloads the real Companion allowlist export through the local proxy', async ({
   page,
-}, testInfo) => {
+}) => {
   const app = buildApp({
     productRuntime: {
       gitSha: 'a'.repeat(40),
@@ -50,7 +50,6 @@ test('normal UI downloads the real Companion allowlist export through the local 
     expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
     expect(bytes.toString('utf8')).not.toContain('private-');
     expect(errors).toEqual([]);
-    await page.screenshot({ path: testInfo.outputPath('support-export.png'), fullPage: true });
   } finally {
     await app.close();
   }

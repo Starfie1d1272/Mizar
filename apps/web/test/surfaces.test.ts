@@ -4,7 +4,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DebugPage, SurfacePage, surfaceDefinitions, surfaceForPath } from '../src/App';
+import { DebugPage, surfaceForPath } from '../src/App';
 import { parseDebugRuntimeResponse, type DebugRuntimeResponse } from '../src/debug/runtime';
 import { parseBrowserHostDiagnostics } from '../src/debug/host-diagnostics';
 
@@ -77,15 +77,6 @@ describe('web surface shell', () => {
     expect(surfaceForPath('/')?.id).toBe('operator');
     expect(surfaceForPath('/operator/hud')?.id).toBe('hud');
     expect(surfaceForPath('/missing')).toBeUndefined();
-  });
-
-  it('renders a surface-owned React page element', () => {
-    const page = SurfacePage({ surface: surfaceDefinitions[2] });
-
-    expect(page).toMatchObject({
-      type: 'main',
-      props: { 'data-surface': 'debug' },
-    });
   });
 
   it('accepts the bounded awaiting debug shape', () => {

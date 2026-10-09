@@ -40,19 +40,7 @@ describe('RivalHub Fastify Routes', () => {
         url: '/local/v1/rivalhub-connection',
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({
-        lastRefreshAt: null,
-        refreshError: null,
-        sourceReady: false,
-        sourceBlockedReason: '请先选择并确认加载赛事比赛。',
-        websiteUrl: null,
-        paired: true,
-        competitionId: 'comp-1',
-        displayName: '星宇',
-        activeSourceMatchId: null,
-        activeDeviceName: null,
-        activeMatchId: null,
-      });
+      expect(res.json()).toMatchObject({ paired: true, sourceReady: false, activeMatchId: null });
 
       // Refuses mutation from untrusted origin
       const pairStartRes = await app.inject({

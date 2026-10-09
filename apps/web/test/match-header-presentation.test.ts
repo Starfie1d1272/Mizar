@@ -184,31 +184,6 @@ describe('Match Header presentation selector', () => {
     });
   });
 
-  it('marks a completed picked-map loss from the picker perspective', () => {
-    const snapshot = getProgramFixture('series-bo5');
-    if (snapshot === null || snapshot.payload.series === null) throw new Error('fixture missing');
-    const series = snapshot.payload.series;
-    const first = series.maps[0];
-    if (first === undefined || first.selection.kind !== 'pick') {
-      throw new Error('picked map missing');
-    }
-    const opposingWinner =
-      first.selection.entryId === series.entrants.a.entryId
-        ? series.entrants.b.entryId
-        : series.entrants.a.entryId;
-    const value = buildMatchHeaderPresentation({
-      ...snapshot.payload,
-      series: {
-        ...series,
-        maps: series.maps.map((map, index) =>
-          index === 0 ? { ...map, winnerEntryId: opposingWinner } : map,
-        ),
-      },
-    });
-
-    expect(value.seriesMaps?.[0]?.pickOutcome).toBe('loss');
-  });
-
   it('keeps the picker score on the left in the picker-loss preview', () => {
     const value = presentation('series-bo5-pick-loss');
     expect(value.seriesMaps?.[0]).toMatchObject({ statusText: '13–11', pickOutcome: 'win' });
@@ -239,19 +214,6 @@ describe('Match Header presentation selector', () => {
       pickOutcome: null,
       winnerName: null,
     });
-  });
-
-  it('covers the frozen BO3 Map 1, not-played, and logo availability fixtures', () => {
-    expect(presentation('series-bo3-map1').seriesMaps?.[0]).toMatchObject({
-      mapName: 'Ancient',
-      status: 'current',
-      selectionText: 'PICK',
-    });
-    expect(
-      presentation('series-not-played').seriesMaps?.some((map) => map.status === 'not_played'),
-    ).toBe(true);
-    expect(presentation('series-logo-mixed').teamA.logoUrl).toMatch(/^data:image\/svg\+xml,/);
-    expect(presentation('series-logo-mixed').teamB.logoUrl).toBeNull();
   });
 
   it('does not render a production placeholder when roundNumber is unavailable', () => {

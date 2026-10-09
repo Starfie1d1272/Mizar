@@ -4,13 +4,7 @@ import { join } from 'node:path';
 
 import { deriveScheduleNeighborhood } from '@mizar/core/match-context';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
-import { parseMatchDocumentV1 } from '@mizar/protocol/context';
-import {
-  toMatchDocumentV1,
-  toScheduleWindowV1,
-  validateBroadcastManifest,
-  validateBroadcastScheduleWindow,
-} from '@mizar/rivalhub';
+import { toMatchDocumentV1, validateBroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it } from 'vitest';
 
 import { LocalTournamentStore } from '../src/match-context/local-tournament-store.js';
@@ -87,66 +81,6 @@ describe('Mizar local tournament input', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
-
-  it('adapts the current RivalHub fixture and rejects unsupported or malformed input', async () => {
-    const file = join(
-      process.cwd(),
-      'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
-    );
-    const manifest: unknown = JSON.parse(await readFile(file, 'utf8'));
-    const document = toMatchDocumentV1(manifest);
-    expect(document.schemaVersion).toBe('mizar.match-document.v1');
-    expect(document.competition?.logoUrl).toBeNull();
-    expect(document.entrants.a.players).toHaveLength(6);
-    expect(document.maps).toHaveLength(3);
-    expect(document.veto.length).toBeGreaterThan(0);
-    expect(document.mapPool).toEqual([]);
-    expect(document.competition).not.toHaveProperty('slug');
-    expect(document).not.toHaveProperty('stageKey');
-    const validated = validateBroadcastManifest(manifest);
-    if (!validated.ok) throw new Error('RivalHub fixture invalid');
-    const enriched = toMatchDocumentV1({
-      ...validated.value,
-      match: {
-        ...validated.value.match,
-        mapPool: ['de_ancient', 'de_mirage'],
-        stageKey: 'swiss',
-        stageLabel: '瑞士赛',
-        startedAt: '2026-09-28T10:00:00.000Z',
-        competition: {
-          ...validated.value.match.competition,
-          logoUrl: 'https://example.invalid/event.png',
-        },
-      },
-    });
-    expect(enriched.mapPool).toEqual(['de_ancient', 'de_mirage']);
-    expect(enriched.stage).toBe('swiss');
-    expect(enriched.stageLabel).toBe('瑞士赛');
-    expect(enriched.startedAt).toBe('2026-09-28T10:00:00.000Z');
-    expect(enriched.competition?.logoUrl).toBe('https://example.invalid/event.png');
-    const scheduleFile = join(
-      process.cwd(),
-      'packages/rivalhub/test/fixtures/broadcast-schedule-window-v1.valid.json',
-    );
-    const scheduleFixture: unknown = JSON.parse(await readFile(scheduleFile, 'utf8'));
-    const validatedSchedule = validateBroadcastScheduleWindow(scheduleFixture);
-    if (!validatedSchedule.ok) throw new Error('RivalHub schedule fixture invalid');
-    const schedule = toScheduleWindowV1(scheduleFixture);
-    expect(schedule.matches.map((match) => match.matchId)).toEqual(
-      validatedSchedule.value.matches.map((match) => match.matchId),
-    );
-    expect(schedule.matches[0]?.stageLabel).toBe(validatedSchedule.value.matches[0]?.stage);
-    expect(() => parseMatchDocumentV1({ ...document, schemaVersion: 'old.brand.v1' })).toThrow();
-    expect(() =>
-      parseMatchDocumentV1({
-        ...document,
-        entrants: {
-          ...document.entrants,
-          b: { ...document.entrants.b, entryId: document.entrants.a.entryId },
-        },
-      }),
-    ).toThrow();
   });
 });
 

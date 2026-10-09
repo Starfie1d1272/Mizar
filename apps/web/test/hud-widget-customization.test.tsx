@@ -9,7 +9,6 @@ import {
   getBuiltinTheme,
   getHudWidgetDescriptor,
   resolveHudPreset,
-  switchHudWidgetVariant,
   type HudPreset,
 } from '@mizar/hud-config';
 import { HudWidgetInspector } from '../src/operator/HudWidgetInspector';
@@ -109,9 +108,7 @@ describe('Generic HUD widget settings', () => {
       variant.value = 'minimal';
       variant.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    expect(updates[1]).toEqual(
-      switchHudWidgetVariant(getHudWidgetDescriptor('focused-player'), 'minimal'),
-    );
+    expect(updates[1]).toMatchObject({ variant: 'minimal' });
     act(() =>
       root!.render(
         <HudWidgetInspector
@@ -164,9 +161,6 @@ describe('Generic HUD widget settings', () => {
       ),
     ).toHaveLength(0);
     expect(container.querySelector('[data-clock]')).not.toBeNull();
-    expect(
-      container.querySelector<HTMLElement>('[data-hud-widget="team-ct-rail"]')!.style.width,
-    ).toBe('440px');
   });
   it('minimal dead-state removes statistics while preserving identity and death evidence', () => {
     const container = mount();

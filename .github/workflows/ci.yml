@@ -158,9 +158,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify tokens and architecture contracts
+      - name: Verify design tokens
         run: |
           pnpm design:tokens:verify
+
+      - name: Architecture and contracts when quality is not selected
+        if: ${{ needs.plan.outputs.run_quality != 'true' }}
+        run: |
           pnpm architecture:check
           pnpm design:contracts:test
 
@@ -202,7 +206,25 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run HUD Replay browser acceptance
-        run: pnpm acceptance:test --shard=${{ matrix.shard }}/4
+        run: pnpm acceptance:ci --shard=${{ matrix.shard }}/4
+
+      - name: Build and run production Companion to Chromium closure
+        if: ${{ matrix.shard == 1 }}
+        timeout-minutes: 2
+        run: |
+          pnpm --filter @mizar/companion... --filter @mizar/web... --fail-if-no-match run build
+          pnpm local-web:production-browser-smoke
+
+      - name: Preserve browser test identities and production evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-evidence-${{ matrix.shard }}
+          include-hidden-files: true
+          path: |
+            .agent-tmp/test-evidence/**
+            .agent-tmp/production-browser-smoke/**
+          if-no-files-found: error
 
       - name: Upload browser acceptance diagnostics
         if: ${{ failure() }}
@@ -509,6 +531,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download browser identity evidence
+        if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: browser-evidence-*
+          path: .agent-tmp/browser-shards
+
+      - name: Verify all browser shards cover FULL exactly once
+        if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
+        run: node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 4
 
       - name: Validate planner-selected jobs
         run: node scripts/ci/plan.mjs --gate

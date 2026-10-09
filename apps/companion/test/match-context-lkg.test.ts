@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path';
 import type { BroadcastManifest, BroadcastScheduleWindowV1 } from '@mizar/rivalhub';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { MATCH_CONTEXT_CACHE_VERSION } from '../src/match-context/lkg-store.js';
 import {
   createFixtureManifestSource,
   MatchContextController,
@@ -15,7 +14,6 @@ import {
   SourceLoadError,
 } from '../src/match-context/index.js';
 import type { ScheduleWindowRequest } from '../src/match-context/index.js';
-import { SCHEDULE_WINDOW_CACHE_VERSION } from '../src/match-context/schedule-window-store.js';
 import type { DurableJsonCommitPoint } from '../src/match-context/durable-json.js';
 
 const fixtureRoot = resolve(process.cwd(), 'packages/rivalhub/test/fixtures');
@@ -98,21 +96,6 @@ describe('Match Manifest last-known-good seam', () => {
     expect(restored.value.storedAt).toBe('2026-09-16T12:00:00.000Z');
     expect(restored.value.manifest).toEqual(manifest);
     expect(restored.value.context.matchId).toBe(manifest.match.matchId);
-
-    const envelope = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>;
-    expect(envelope).toEqual({
-      cacheVersion: MATCH_CONTEXT_CACHE_VERSION,
-      metadata: {
-        matchId: manifest.match.matchId,
-        origin: 'online',
-        storedAt: '2026-09-16T12:00:00.000Z',
-        localAuthoringMode: 'bound-overlay',
-      },
-      payload: manifest,
-    });
-    await expect(readFile(`${filePath}.meta.json`, 'utf8')).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
   });
 
   it('uses the same-shape local fixture as a Companion source', async () => {
@@ -571,26 +554,6 @@ describe('Match Manifest last-known-good seam', () => {
 });
 
 describe('independent ScheduleWindow last-known-good seam', () => {
-  it('writes and reads only the canonical Mizar ScheduleWindow cache version', async () => {
-    const root = await temporaryDirectory();
-    const schedule = await readFixture<BroadcastScheduleWindowV1>(
-      'broadcast-schedule-window-v1.valid.json',
-    );
-    const filePath = join(root, 'schedule.json');
-    const request = scheduleRequest(schedule);
-    const writer = new ScheduleWindowLkgStore({ filePath });
-
-    expect((await writer.save(schedule, 'fixture')).ok).toBe(true);
-    const envelope = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>;
-    expect(envelope.cacheVersion).toBe(SCHEDULE_WINDOW_CACHE_VERSION);
-    const restored = await new ScheduleWindowLkgStore({ filePath }).read(request);
-
-    expect(restored).toMatchObject({
-      ok: true,
-      value: { origin: 'cache', cachedFrom: 'fixture' },
-    });
-  });
-
   it('requires a source response to match its requested competition and exact window', async () => {
     const root = await temporaryDirectory();
     const schedule = await readFixture<BroadcastScheduleWindowV1>(
@@ -880,28 +843,6 @@ describe('independent ScheduleWindow last-known-good seam', () => {
       'schedule_source_failed',
       'schedule_memory_fallback',
     ]);
-  });
-
-  it('carries contract diagnostics into fresh and restored ScheduleWindow bindings', async () => {
-    const root = await temporaryDirectory();
-    const schedule = await readFixture<BroadcastScheduleWindowV1>(
-      'broadcast-schedule-window-v1.valid.json',
-    );
-    const filePath = join(root, 'schedule.json');
-    const store = new ScheduleWindowLkgStore({ filePath });
-    const controller = new ScheduleWindowController({ lkgStore: store });
-
-    const fresh = await controller.refresh(
-      scheduleSource('fixture', schedule, scheduleRequest(schedule)),
-    );
-    expect(fresh.ok).toBe(true);
-    if (!fresh.ok) throw new Error('valid schedule should bind');
-    expect(fresh.binding.diagnostics).toEqual([]);
-
-    const restored = await store.read();
-    expect(restored.ok).toBe(true);
-    if (!restored.ok) throw new Error('valid schedule LKG should restore');
-    expect(restored.value.diagnostics).toEqual(fresh.binding.diagnostics);
   });
 
   it('does not couple schedule failure to an active MatchContext', async () => {

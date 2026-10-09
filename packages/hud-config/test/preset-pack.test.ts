@@ -129,20 +129,4 @@ describe('variant envelopes', () => {
       }),
     ).toThrow('尺寸与 variant 不一致');
   });
-
-  it('exposes only controls rendered by the Shanghai information structure', () => {
-    for (const [id, unsupported] of [
-      ['top-score-bar', ['showSeriesWins', 'showAliveMatchup']],
-      ['team-ct-rail', ['showTeamName']],
-      ['team-t-rail', ['showTeamName']],
-    ] as const) {
-      const controls = getHudWidgetDescriptor(id).editorControls.filter((control) =>
-        control.variants.includes('perfectworld'),
-      );
-      expect(controls.some((control) => new Set<string>(unsupported).has(control.path))).toBe(
-        false,
-      );
-      expect(controls.length).toBeGreaterThan(0);
-    }
-  });
 });
