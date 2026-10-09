@@ -23,3 +23,11 @@ export function mizarCertificatePolicy(
   certificateIdentityURI: string;
   certificateOIDs: Record<string, string>;
 };
+
+export function verifyMizarAttestationDigest(
+  digest: string,
+  name: string,
+  bundle: Bundle,
+  verifier: BundleVerifier,
+  workflow?: MizarSignerRole,
+): string;

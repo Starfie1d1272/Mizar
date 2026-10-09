@@ -12,3 +12,5 @@
 - `@mizar/resource-pack-contract/attestation`：固定 Mizar signer 策略与已配置验签器的公共证据判定，供现有 StableSource 后续提取复用。
 
 运行时与既有 Companion 使用同一精确版本的 Sigstore 与相同公开 TUF 根。当前没有修改 Companion；其原有验签入口的提取/接线由父会话协调，不能让 Store 复制另一份资源 schema。构建脚本只将原生 ESM 与手写公开声明转换为仓库规定的 dist 扩展名，不编译 Core，也不产生资源副本。
+
+`runtime` 还导出 `verifyResourceReceipt`，供无 ZIP 的缓存启动/回退。原安装结果 `.receipt` 保存签名声明、原始 manifest、双证明和从固定 Sigstore seed 认证的离线证据；没有自报可信字段。缓存用途绝不联网，首次安装/升级用途保持当前授权有效期和防重放门禁。具体接线与材料持久化见[发行授权](../../scripts/qualification/resource-provenance/README.md#store-的离线-receipt-接线)。

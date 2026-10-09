@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createVerifier } from 'sigstore';
-import { isSourceSha, requireValue } from './index.mjs';
+import { isSourceSha, isSha256, requireValue } from './index.mjs';
 import { sha256 } from './content.mjs';
 import { REPOSITORY } from './publication.mjs';
 export const signerIdentity = (workflow) => {
@@ -41,6 +41,16 @@ export async function createMizarVerifier(workflow, sourceSha, tufCachePath) {
 }
 /** 供现有更新验证器共用的已配置 verifier 边界；资源生产入口不接收外部 verifier。 */
 export function verifyMizarAttestation(bytes, name, bundle, verifier, workflow = 'qualification') {
+  return verifyMizarAttestationDigest(sha256(bytes), name, bundle, verifier, workflow);
+}
+export function verifyMizarAttestationDigest(
+  digest,
+  name,
+  bundle,
+  verifier,
+  workflow = 'qualification',
+) {
+  requireValue(isSha256(digest), '签名 subject 摘要无效');
   signerIdentity(workflow);
   verifier.verify(bundle);
   const envelope = bundle?.dsseEnvelope;
@@ -63,7 +73,7 @@ export function verifyMizarAttestation(bytes, name, bundle, verifier, workflow =
   requireValue(
     Array.isArray(statement.subject) &&
       statement.subject.some(
-        (subject) => subject.name === name && subject.digest?.sha256 === sha256(bytes),
+        (subject) => subject.name === name && subject.digest?.sha256 === digest,
       ),
     '资源签名 subject 不等于实际字节',
   );

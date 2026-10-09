@@ -15,7 +15,9 @@ const instant = (value) =>
   new Date(value).toISOString() === value.replace('Z', '.000Z');
 
 /** policy 来自安装器/本地受信任控制面，绝不能从待验证镜像反推。 */
-export function parsePublication(value, policy) {
+export function parsePublication(value, policy, { purpose = 'install' } = {}) {
+  requireValue(['install', 'legacy', 'cache', 'rollback'].includes(purpose), '资源验证用途无效');
+  const cached = purpose === 'cache' || purpose === 'rollback';
   requireValue(
     policy &&
       isVersion(policy.packVersion) &&
@@ -54,14 +56,14 @@ export function parsePublication(value, policy) {
       value.sequence > 0 &&
       Number.isSafeInteger(policy.minimumSequence) &&
       policy.minimumSequence >= 0 &&
-      value.sequence >= policy.minimumSequence,
+      (cached || value.sequence >= policy.minimumSequence),
     '发行声明重放或序号无效',
   );
   requireValue(
     instant(value.issuedAt) &&
       instant(value.expiresAt) &&
       Date.parse(value.issuedAt) <= policy.now &&
-      policy.now < Date.parse(value.expiresAt) &&
+      (cached || policy.now < Date.parse(value.expiresAt)) &&
       Date.parse(value.expiresAt) > Date.parse(value.issuedAt) &&
       Date.parse(value.expiresAt) - Date.parse(value.issuedAt) <= 366 * 86400000,
     '发行声明过期、时间或有效期无效',

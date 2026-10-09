@@ -15,6 +15,7 @@ for (const file of [
   'attestation.d.mts',
   'runtime.mjs',
   'runtime.d.mts',
+  'trust-snapshot.mjs',
 ]) {
   const destination = file.replace(/\.mjs$/, '.js').replace(/\.d\.mts$/, '.d.ts');
   const text = (await readFile(join(root, file), 'utf8')).replace(

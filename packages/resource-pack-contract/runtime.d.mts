@@ -31,6 +31,28 @@ export function verifyResourcePublicationBytes(options: {
   archiveBytes: Buffer;
   archiveBundleBytes: Buffer;
   policy: ResourceTrustPolicy;
+  tufCachePath: string;
+  signal?: AbortSignal;
+}): Promise<VerifiedPackContent & { statement: ResourcePublication; receipt: ResourceReceipt }>;
+
+export interface ResourceReceipt {
+  schemaVersion: 'mizar.resource-receipt.v1';
+  manifestBase64: string;
+  publicationBase64: string;
+  publicationBundleBase64: string;
+  archiveBundleBase64: string;
+  trust: {
+    schemaVersion: 'mizar.sigstore-cache.v1';
+    rootChain: string[];
+    targetsBase64: string;
+    trustedRootBase64: string;
+  };
+}
+export function verifyResourceReceipt(options: {
+  receipt: unknown;
+  manifestBytes?: Buffer;
+  policy: ResourceTrustPolicy;
+  purpose: 'install' | 'cache' | 'legacy' | 'rollback';
   tufCachePath?: string;
   signal?: AbortSignal;
-}): Promise<VerifiedPackContent & { statement: ResourcePublication }>;
+}): Promise<import('./index.mjs').ResourcePackManifest>;
