@@ -13,10 +13,15 @@ const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'bundle/update-install.ps1');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 async function run(args) {
+  // The Host also removes an inherited PowerShell 7 module path before
+  // launching Windows PowerShell 5.1, so its built-in modules load normally.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
+  );
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', ...args],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let output = '',
     errors = '';
