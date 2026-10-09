@@ -21,6 +21,14 @@ function report() {
 
 describe('platform contract evidence', () => {
   it('requires real passing execution from every selected consumer', () => {
+    for (const platform of ['win32', 'darwin', 'linux']) {
+      expect(platformTestFiles(platform)).toEqual(
+        expect.arrayContaining([
+          'apps/companion/test/resource-store/store.test.ts',
+          'apps/companion/test/resource-store/app-integration.test.ts',
+        ]),
+      );
+    }
     expect(verifyPlatformReport(report(), files, 'linux').passed).toBe(2);
     const missing = report();
     missing.testResults.pop();
