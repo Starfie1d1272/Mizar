@@ -33,3 +33,5 @@
 ## 验证边界
 
 `apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。最终接入必须额外用真实 pack producer / manifest / provenance 验证器跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
+
+跨分支接线可执行 `pnpm --filter @mizar/companion exec tsx test/resource-store/verify-real-pack.mts <Pack/Trust-checkout>`。该脚本使用实际 producer、shared parser 和运行时 SDK，把真实 EPL 的未签反例送入 Store；必须到达 bundle/签名拒绝才通过，TUF 网络初始化失败明确不能冒充密码学拒绝。它不声明新资源包的正式签发成功，也不代替签名 receipt 的离线缓存验证。

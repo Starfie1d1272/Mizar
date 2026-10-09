@@ -53,7 +53,8 @@ export class ResourceStoreError extends Error {
   constructor(
     public readonly code: string,
     public readonly totalBytes?: number,
+    options?: ErrorOptions,
   ) {
-    super(code);
+    super(code, options);
   }
 }

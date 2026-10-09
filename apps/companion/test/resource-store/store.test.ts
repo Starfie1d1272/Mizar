@@ -94,7 +94,7 @@ describe('Resource Store', () => {
     for (const [candidate, version, reason] of [
       [prepare('v2', 'XXXXXXXXXX'), '2', 'resource_integrity_failed'],
       [prepare('v2', 'a'), '2', 'resource_file_changed'],
-      [prepare('attacker'), '2', 'untrusted receipt'],
+      [prepare('attacker'), '2', 'resource_trust_failed'],
       [prepare('v2', 'abcdefghij'), '3', 'resource_version_mismatch'],
     ] as const) {
       await expect(store.repair(packId, candidate, { packVersion: version })).rejects.toThrow(

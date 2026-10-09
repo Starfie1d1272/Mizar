@@ -146,10 +146,21 @@ export class ResourceStore {
     signal: AbortSignal,
     purpose: 'install' | 'cache' | 'legacy' | 'rollback' = 'install',
   ): Promise<TrustedPack> {
-    const descriptor = checkDescriptor(
-      await this.options.verifyTrustedPack({ packId, directory, receipt, signal, purpose }),
-      packId,
-    );
+    let trusted: TrustedPack;
+    try {
+      trusted = await this.options.verifyTrustedPack({
+        packId,
+        directory,
+        receipt,
+        signal,
+        purpose,
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof ResourceStoreError) throw error;
+      throw new ResourceStoreError('resource_trust_failed', undefined, { cause: error });
+    }
+    const descriptor = checkDescriptor(trusted, packId);
     if (!descriptor.compatible) throw new ResourceStoreError('resource_incompatible');
     return descriptor;
   }
