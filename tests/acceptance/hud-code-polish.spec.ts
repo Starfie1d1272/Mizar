@@ -109,8 +109,12 @@ for (const style of ['mizar-default', 'ewc', 'iem', 'esl', 'perfectworld'] as co
     // This mocked-frame test controls receive intervals. Real wall-clock stalls must
     // not accidentally exercise the sampling-gap reset owned by presentation tests.
     const clockStart = new Date('2026-10-09T00:00:00Z');
-    await page.clock.install({ time: clockStart });
-    await page.clock.pauseAt(new Date(clockStart.getTime() + 100));
+    // Freeze Date before pausing so runner stalls cannot put the pause target
+    // in the past. Restore advancing Date once timers are paused; runFor below
+    // continues to exercise the real receive-gap and animation semantics.
+    await page.clock.setFixedTime(clockStart);
+    await page.clock.pauseAt(clockStart);
+    await page.clock.setSystemTime(clockStart);
     const paintedSequence = () =>
       expect
         .poll(async () => {
