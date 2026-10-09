@@ -9,6 +9,7 @@ for (const name of [
   'complete-bootstrap.mjs',
   'published-bootstrap.mjs',
   'installed-entry.mjs',
+  'cancel-control.mjs',
 ])
   await cp(new URL(name, import.meta.url), join(bridge, name));
 await mkdir(join(output, 'resources/scripts'), { recursive: true });

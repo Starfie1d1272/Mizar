@@ -37,7 +37,7 @@ jobs:
       - name: Verify real Windows Store FS and offline catalog SDK rejection
         shell: powershell
         run: |
-          pnpm exec vitest run packages/resource-pack-contract/catalog.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
+          pnpm exec vitest run scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
           if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
           node scripts/web-installer/test-pack-cache-boundary.mjs .agent-tmp/web-installer/bridge/resources/app/dist/web-installer/install-official-pack.mjs
           if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }

@@ -136,7 +136,7 @@ namespace Mizar.WebInstaller {
       if(digest!=plan.contentDigest) throw new IOException("核心清单不属于固定安装计划。");
       const string entryName="resources/app/dist/web-installer/installed-entry.mjs";
       if(!entries.ContainsKey(entryName)) throw new IOException("此 Core 缺少在线安装入口，请使用完整离线安装或新版 Core。");
-      foreach(string name in new[]{"resources/runtime/node.exe",entryName,"resources/scripts/product-runtime.mjs","resources/scripts/product-logs.mjs","Mizar.exe"}) {
+      foreach(string name in new[]{"resources/runtime/node.exe",entryName,"resources/app/dist/web-installer/cancel-control.mjs","resources/scripts/product-runtime.mjs","resources/scripts/product-logs.mjs","Mizar.exe"}) {
         string expected;
         if(!entries.TryGetValue(name,out expected)) throw new IOException("核心缺少安装运行文件。");
         string path=Path.Combine(target,name.Replace('/',Path.DirectorySeparatorChar)); Downloader.NoReparse(path);
@@ -163,10 +163,12 @@ namespace Mizar.WebInstaller {
       if(progress!=null) progress.Report("installing-resources");
       using(var nodeLock=new FileStream(node,FileMode.Open,FileAccess.Read,FileShare.Read))
       using(var entryLock=new FileStream(entry,FileMode.Open,FileAccess.Read,FileShare.Read))
+      using(var controlLock=new FileStream(Path.Combine(target,"resources","app","dist","web-installer","cancel-control.mjs"),FileMode.Open,FileAccess.Read,FileShare.Read))
       using(var runtimeLock=new FileStream(Path.Combine(target,"resources","scripts","product-runtime.mjs"),FileMode.Open,FileAccess.Read,FileShare.Read))
       using(var logsLock=new FileStream(Path.Combine(target,"resources","scripts","product-logs.mjs"),FileMode.Open,FileAccess.Read,FileShare.Read)) {
         AssertLocked(nodeLock,expected["resources/runtime/node.exe"]);
         AssertLocked(entryLock,expected["resources/app/dist/web-installer/installed-entry.mjs"]);
+        AssertLocked(controlLock,expected["resources/app/dist/web-installer/cancel-control.mjs"]);
         AssertLocked(runtimeLock,expected["resources/scripts/product-runtime.mjs"]);
         AssertLocked(logsLock,expected["resources/scripts/product-logs.mjs"]);
         var start=new ProcessStartInfo {

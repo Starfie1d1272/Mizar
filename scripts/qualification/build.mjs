@@ -389,6 +389,7 @@ async function main() {
         'complete-bootstrap.mjs',
         'published-bootstrap.mjs',
         'installed-entry.mjs',
+        'cancel-control.mjs',
       ]) {
         await cp(join(rootDir, 'scripts', 'web-installer', name), join(bridgeDirectory, name));
       }

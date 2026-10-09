@@ -56,6 +56,11 @@ namespace Mizar.WebInstaller {
           handler.Reply=r=>r.RequestUri.AbsolutePath.EndsWith("fallback.bin") ? Response(body) : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
           result=await downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None);
           Assert(Downloader.Matches(result,plan));
+          File.Delete(result);
+          int retryCalls=0;
+          handler.Reply=r=>++retryCalls==1 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Response(body);
+          result=await downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(retryCalls==2 && Downloader.Matches(result,plan));
           var cancelled=new CancellationTokenSource(); cancelled.Cancel();
           await Reject(()=>downloader.Download(plan,root,new IgnoreProgress(),cancelled.Token));
           File.Delete(result);

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { access } from 'node:fs/promises';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { createCancelControl } from './cancel-control.mjs';
 import { verifyPayload, writableRoot } from '../../../scripts/product-runtime.mjs';
 
 // This executable entry is shipped inside Core and invoked by its embedded Node.
@@ -14,11 +15,10 @@ const signal = globalThis.AbortSignal.any([
   globalThis.AbortSignal.timeout(480000),
 ]);
 process.stdin.setEncoding('utf8');
-let control = '';
-process.stdin.on('data', (chunk) => {
-  control += chunk;
-  if (control.length > 64 || control.includes('cancel\n')) cancellation.abort();
-});
+process.stdin.on(
+  'data',
+  createCancelControl(() => cancellation.abort()),
+);
 let app;
 try {
   if (!version || !/^[a-f0-9]{40}$/.test(gitSha) || !/^[a-f0-9]{64}$/.test(contentDigest))
