@@ -133,12 +133,13 @@ function Record-Result([string]$status, [string]$code) {
 }
 function Restore-Previous {
   Assert-Stopped
-  # Recover may run after the helper died immediately after Start-Process.
-  # Inspect the staged executable directly; a journal PID is not reliable evidence.
-  foreach ($running in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
-    if ($running.ExecutablePath -eq (Join-Path $StageRoot 'Installer.exe') -or
-      ($running.Name -eq 'Installer.exe' -and !$running.ExecutablePath)) { throw 'update_installer_remaining' }
-  }
+  # Windows refuses write access to an executable image while it is mapped.
+  # Check the actual file, avoiding PID gaps and short/Unicode path aliases.
+  # No bytes are written; an unreadable or still-used installer fails closed.
+  try {
+    $image = [IO.File]::Open((Join-Path $StageRoot 'Installer.exe'), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $image.Dispose()
+  } catch { throw 'update_installer_remaining' }
   $backup = Join-Path $StageRoot 'previous'
   Assert-Payload $backup $plan.previousContentDigest
   $restore = $plan.bundleRoot + '.mizar-restore-' + (Split-Path $StageRoot -Leaf)
