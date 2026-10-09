@@ -1,3 +1,4 @@
+import type { BpSnapshot } from '../../packages/protocol/src/bp.js';
 import type { BrowserContext, FrameLocator, Page } from '@playwright/test';
 import { expect, test } from './companion-isolation.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -140,13 +141,30 @@ async function playAndRevealBp(
   }
 
   const initial = JSON.parse((await app.inject('/local/v1/bp')).body) as {
-    projection: { steps: readonly unknown[] } | null;
+    projection: { steps: readonly unknown[]; format: string } | null;
     revealedCount: number;
     state: string;
   };
   expect(initial).toMatchObject({ revealedCount: 1, state: 'revealing' });
   if (initial.projection === null) throw new Error('BP reveal lost its presentation projection');
-  clock.advanceBy(Math.max(0, initial.projection.steps.length - 1) * 1600);
+  let revealedSteps = 1;
+  if (initial.projection.format !== 'bo1') {
+    clock.advanceBy(3200);
+    for (const surface of surfaces) {
+      const firstPick = surface.locator('.bp-card[data-kind="pick"]').first();
+      await expect(firstPick).toHaveAttribute('data-visible', 'true');
+      await expect(firstPick.locator('.bp-side-choice')).toHaveCSS('opacity', '0');
+      await expect(firstPick.locator('.bp-side-choice')).toHaveAttribute('aria-hidden', 'true');
+    }
+    clock.advanceBy(1600);
+    for (const surface of surfaces) {
+      const firstPick = surface.locator('.bp-card[data-kind="pick"]').first();
+      await expect(firstPick.locator('.bp-side-choice')).toHaveAttribute('aria-hidden', 'false');
+      await expect(firstPick.locator('.bp-side-choice')).toHaveCSS('opacity', '1');
+    }
+    revealedSteps = 4;
+  }
+  clock.advanceBy(Math.max(0, initial.projection.steps.length - revealedSteps) * 1600);
   for (const surface of surfaces) {
     await expect(surface.locator('.bp-scene')).toHaveAttribute('data-state', 'shown', {
       timeout: 5000,
@@ -230,9 +248,8 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         page.frameLocator('iframe[title="节目预览"]'),
       ]);
       await expect(program.locator('.bp-card')).toHaveCount(7);
-      for (const logo of await program.locator('.bp-team img').all()) {
-        await expect(logo).toHaveCSS('visibility', 'hidden');
-      }
+      await expect(program.locator('.bp-team img')).toHaveCount(0);
+      await expect(program.getByRole('img', { name: /队标不可用/ }).first()).toBeVisible();
       for (const image of await program
         .locator(
           '.bp-card[data-kind="pick"] .bp-map-art, .bp-card[data-kind="decider"] .bp-map-art',
@@ -272,6 +289,10 @@ for (const format of ['bo1', 'bo3', 'bo5'] as const) {
         page.frameLocator('iframe[title="节目预览"]').locator('.bp-card[data-visible=true]'),
       ).toHaveCount(7);
 
+      await test.info().attach(`bp-${format}-full-screen`, {
+        body: await program.screenshot(),
+        contentType: 'image/png',
+      });
       const decider = program.locator('.bp-card[data-kind="decider"]');
       if (format === 'bo1') {
         await expect(decider).toContainText('INFERNO');
@@ -593,7 +614,7 @@ test('event BO3 controls save EPL opponent side choices without a decider select
     await editor.getByRole('textbox', { name: '赛事名称 可选' }).fill('ESL Pro League Season 24');
     await editor.locator('.bp-editor-team[data-entrant="a"] input').first().fill('Falcons');
     await editor.locator('.bp-editor-team[data-entrant="b"] input').first().fill('Natus Vincere');
-    await editor.getByRole('combobox', { name: 'Veto A', exact: true }).selectOption('b');
+    await editor.getByRole('combobox', { name: '先禁图方', exact: true }).selectOption('b');
     const order = editor.getByRole('combobox', { name: 'BO3 最后两次禁图', exact: true });
     const decider = editor.getByRole('combobox', { name: 'BO3 决胜图起始阵营', exact: true });
     await order.selectOption('veto_a_first');
@@ -936,4 +957,112 @@ test('legacy BP preview address redirects to the single Program workspace', asyn
     'true',
   );
   await expect(page.locator('iframe[title="节目预览"]')).toHaveAttribute('src', '/program/bp');
+});
+
+test('BP team media falls back and recovers without moving long-name cards', async ({ page }) => {
+  const app = buildApp({ matchContextBinding: bindingFor('semifinalA') });
+  try {
+    const baseline = JSON.parse((await app.inject('/local/v1/bp')).body) as BpSnapshot;
+    if (!baseline.projection) throw new Error('Missing BP media test projection');
+    const projection = {
+      ...baseline.projection,
+      entrants: {
+        a: { name: '中文长队名用于合成布局边界检查'.repeat(4), logoUrl: '/bp-media/empty.svg' },
+        b: {
+          name: 'Synthetic Long English Team Name For Broadcast Layout '.repeat(2).slice(0, 80),
+          logoUrl: '/bp-media/missing.webp',
+        },
+      },
+    };
+    let snapshot: BpSnapshot = {
+      ...baseline,
+      projection,
+      state: 'shown',
+      revealedCount: projection.steps.length,
+      revision: 'media-1',
+    };
+    await page.route('**/local/v1/bp', (route) => route.fulfill({ json: snapshot }));
+    await page.route('**/bp-media/empty.svg', (route) =>
+      route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"/>',
+      }),
+    );
+    await page.route('**/bp-media/missing.webp', (route) => route.abort());
+    await page.route('**/bp-media/valid.webp', async (route) =>
+      route.fulfill({
+        contentType: 'image/webp',
+        body: await readFile('apps/web/public/fixture-media/epl-s24/epl-falcons.webp'),
+      }),
+    );
+    await page.goto('/program/bp');
+    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(11);
+    await expect(page.locator('.bp-team-logo img')).toHaveCount(0);
+    const before = await page.locator('.bp-card').evaluateAll((cards) =>
+      cards.map((card) => {
+        const { x, y, width, height } = card.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    );
+    for (const width of [1920, 960, 2560]) {
+      await page.setViewportSize({ width, height: (width * 9) / 16 });
+      // OBS scales the complete 1920×1080 browser source as one surface.
+      await page.addStyleTag({
+        content: `.bp-canvas { transform: scale(${width / 1920}); transform-origin: top left; }`,
+      });
+      const canvas = await page.locator('[data-program-canvas]').boundingBox();
+      expect(canvas).not.toBeNull();
+      expect(canvas!.width).toBeCloseTo(width, 0);
+      for (const card of await page.locator('.bp-card').all()) {
+        const bounds = await card.boundingBox();
+        expect(bounds).not.toBeNull();
+        for (const content of await card
+          .locator('h2, .bp-badge, .bp-owner, .bp-side-choice')
+          .all()) {
+          const box = await content.boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.x).toBeGreaterThanOrEqual(bounds!.x);
+          expect(box!.y).toBeGreaterThanOrEqual(bounds!.y);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
+          expect(box!.y + box!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1);
+        }
+      }
+      await test.info().attach(`bp-long-names-${width}`, {
+        body: await page.screenshot(),
+        contentType: 'image/png',
+      });
+    }
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.addStyleTag({ content: '.bp-canvas { transform: none; }' });
+    snapshot = {
+      ...snapshot,
+      revision: 'media-2',
+      projection: {
+        ...projection,
+        entrants: {
+          a: { ...projection.entrants.a, logoUrl: '/bp-media/valid.webp' },
+          b: { ...projection.entrants.b, logoUrl: null },
+        },
+      },
+    };
+    const logo = page.locator('.bp-team[data-entrant="a"] img');
+    await expect(logo).toBeVisible();
+    await expect
+      .poll(() => logo.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0);
+    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(6);
+    expect(
+      await page.locator('.bp-card').evaluateAll((cards) =>
+        cards.map((card) => {
+          const { x, y, width, height } = card.getBoundingClientRect();
+          return { x, y, width, height };
+        }),
+      ),
+    ).toEqual(before);
+    await test
+      .info()
+      .attach('bp-logo-recovered', { body: await page.screenshot(), contentType: 'image/png' });
+  } finally {
+    await app.close();
+  }
 });

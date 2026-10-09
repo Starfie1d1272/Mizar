@@ -6,15 +6,49 @@ import './bp.css';
 import '../program/broadcast-material.css';
 import { BroadcastArc } from '../program/BroadcastArc';
 
-function TeamLogo({ src, name }: { readonly src: string; readonly name: string }) {
+function TeamLogo({
+  src,
+  name,
+  entrant,
+}: {
+  readonly src: string | null;
+  readonly name: string;
+  readonly entrant: 'a' | 'b';
+}) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const available = Boolean(src) && failedSrc !== src;
   return (
-    <img
-      src={src}
-      alt={`${name} 队标`}
-      style={{ visibility: failedSrc === src ? 'hidden' : undefined }}
-      onError={() => setFailedSrc(src)}
-    />
+    <span
+      className="bp-team-logo"
+      role="img"
+      aria-label={`${name} 队标${available ? '' : '不可用'}`}
+    >
+      <span className="bp-logo-fallback" aria-hidden="true">
+        {entrant.toUpperCase()}
+      </span>
+      {available && src ? (
+        <img
+          src={src}
+          alt=""
+          onError={() => setFailedSrc(src)}
+          onLoad={(event) => {
+            // Inspect readable assets for an empty transparent image. Remote assets
+            // without CORS remain usable, with the entrant badge as a visual fallback.
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 32;
+            const context = canvas.getContext('2d');
+            if (!context) return;
+            try {
+              context.drawImage(event.currentTarget, 0, 0, 32, 32);
+              const pixels = context.getImageData(0, 0, 32, 32).data;
+              if (!pixels.some((value, index) => index % 4 === 3 && value > 0)) setFailedSrc(src);
+            } catch {
+              // Cross-origin pixels cannot be inspected in the browser.
+            }
+          }}
+        />
+      ) : null}
+    </span>
   );
 }
 
@@ -55,7 +89,7 @@ export function BpPresentation({
               const team = projection.entrants[key];
               return (
                 <div className="bp-team" data-entrant={key} key={key}>
-                  {team.logoUrl ? <TeamLogo src={team.logoUrl} name={team.name} /> : null}
+                  <TeamLogo src={team.logoUrl} name={team.name} entrant={key} />
                   <strong>{team.name}</strong>
                 </div>
               );
@@ -83,23 +117,47 @@ export function BpPresentation({
                   {image ? <img className="bp-map-art" src={image.outputPath} alt="" /> : null}
                   <div className="bp-shade" />
                   <span className="bp-number">{String(index + 1).padStart(2, '0')}</span>
-                  <span className="bp-badge">{card.kind.toUpperCase()}</span>
+                  <span className="bp-badge">
+                    {card.kind === 'ban' ? <span aria-hidden="true">× </span> : null}
+                    {card.kind.toUpperCase()}
+                  </span>
                   <div className="bp-copy">
                     <h2>{card.mapName.replace(/^de_/, '').toUpperCase()}</h2>
                     <div className="bp-owner">
-                      {card.kind === 'decider'
-                        ? '决胜地图'
-                        : `${team?.name ?? ''} · ${card.kind === 'ban' ? '禁用' : '选择'}`}
+                      {team && card.entrant && card.kind !== 'decider' ? (
+                        <>
+                          <TeamLogo src={team.logoUrl} name={team.name} entrant={card.entrant} />
+                          <div className="bp-owner-copy">
+                            <span title={team.name}>{team.name}</span>
+                            <small>{card.kind === 'ban' ? '禁用地图' : '选择地图'}</small>
+                          </div>
+                        </>
+                      ) : (
+                        '决胜地图'
+                      )}
                     </div>
                     {card.sideChoice ? (
                       <div
                         className="bp-side-choice"
                         data-visible={sideShown}
                         data-entrant={card.sideChoice.entrant}
+                        data-side={card.sideChoice.side}
                         aria-hidden={!sideShown}
                       >
-                        <span>{projection.entrants[card.sideChoice.entrant].name}</span>
-                        <strong>{card.sideChoice.side} 开局</strong>
+                        <div className="bp-side-team">
+                          <TeamLogo
+                            src={projection.entrants[card.sideChoice.entrant].logoUrl}
+                            name={projection.entrants[card.sideChoice.entrant].name}
+                            entrant={card.sideChoice.entrant}
+                          />
+                          <span title={projection.entrants[card.sideChoice.entrant].name}>
+                            {projection.entrants[card.sideChoice.entrant].name}
+                          </span>
+                        </div>
+                        <div className="bp-side-label">
+                          <span>选边 · 开局</span>
+                          <strong>{card.sideChoice.side} 开局</strong>
+                        </div>
                       </div>
                     ) : null}
                   </div>
