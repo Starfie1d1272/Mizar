@@ -5,6 +5,73 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifyCandidate } from './verify-candidate.mjs';
 import { createBuildTimer } from './build-timings.mjs';
+import {
+  assertQualificationIdentity,
+  assertQualificationRun,
+  releaseAttestationArgs,
+} from './release-identity.mjs';
+
+const signingSha = 'a'.repeat(40);
+const signingContext = {
+  repository: 'Starfie1d1272/Mizar',
+  ref: 'refs/heads/main',
+  sha: signingSha,
+  event: 'workflow_dispatch',
+  workflowRef: 'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main',
+};
+
+it('binds the candidate, checkout and main signing context before build and attestation', () => {
+  expect(assertQualificationIdentity(signingContext, signingSha, signingSha, signingSha)).toBe(
+    signingSha,
+  );
+  for (const patch of [
+    { ref: 'refs/heads/feature' },
+    { event: 'pull_request' },
+    { repository: 'other/Mizar' },
+    { workflowRef: signingContext.workflowRef.replace('main', 'feature') },
+    { sha: 'main' },
+  ]) {
+    expect(() =>
+      assertQualificationIdentity({ ...signingContext, ...patch }, signingSha, signingSha),
+    ).toThrow();
+  }
+  for (const [checkout, requested, manifest] of [
+    ['b'.repeat(40), signingSha, signingSha],
+    [signingSha, 'b'.repeat(40), signingSha],
+    [signingSha, signingSha, 'b'.repeat(40)],
+    [signingSha, 'main', signingSha],
+  ]) {
+    expect(() =>
+      assertQualificationIdentity(signingContext, checkout, requested, manifest),
+    ).toThrow();
+  }
+});
+
+it('rejects old or differently signed qualification evidence at promotion', () => {
+  const run = {
+    status: 'completed',
+    conclusion: 'success',
+    event: 'workflow_dispatch',
+    path: '.github/workflows/release-qualification.yml',
+    head_branch: 'main',
+    head_repository: { full_name: 'Starfie1d1272/Mizar' },
+    head_sha: signingSha,
+  };
+  expect(() => assertQualificationRun(run, signingSha)).not.toThrow();
+  for (const patch of [
+    { status: 'in_progress' },
+    { conclusion: 'failure' },
+    { event: 'push' },
+    { path: '.github/workflows/other.yml' },
+    { head_branch: 'feature' },
+    { head_repository: { full_name: 'other/Mizar' } },
+    { head_sha: 'b'.repeat(40) },
+  ]) {
+    expect(() => assertQualificationRun({ ...run, ...patch }, signingSha)).toThrow();
+  }
+  expect(() => assertQualificationRun(run, 'b'.repeat(40))).toThrow();
+  expect(() => releaseAttestationArgs('asset.exe', 'main')).toThrow();
+});
 
 it('rejects changed transfers, mixed lane evidence and substituted Setup assets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-candidate-'));

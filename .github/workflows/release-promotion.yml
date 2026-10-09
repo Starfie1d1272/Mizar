@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tag:
-        description: Exact application version tag (v1.0.0-rc.N or v1.0.0)
+        description: Exact application version tag (v1.1.0-rc.N or v1.1.0)
         required: true
         type: string
 permissions:
@@ -28,21 +28,27 @@ jobs:
       RUN_ID: ${{ inputs.qualification_run }}
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: Require main promotion workflow
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Promotion must run from main' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve successful qualification source
         shell: pwsh
         run: |
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
           $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
-          if ($run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch') { throw 'Not a successful qualification run' }
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main') { throw 'Not a successful main qualification run' }
+          $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
           gh run download $env:RUN_ID --name release-portable-product --dir product
           if ($LASTEXITCODE -ne 0) { throw 'Product download failed' }
           gh run download $env:RUN_ID --name release-qualification-evidence --dir evidence
           if ($LASTEXITCODE -ne 0) { throw 'Evidence download failed' }
           $manifest = Get-Content product/release-manifest.json -Raw | ConvertFrom-Json
           if ($manifest.gitSha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid source SHA' }
-          # workflow_dispatch head_sha can be the workflow ref, not the checked-out product ref.
-          # Both product and evidence must name the same checked-out source and digest.
+          node scripts/qualification/release-identity.mjs promotion qualification-run.json product/release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified product and main signing source differ' }
+          # The product, workflow run and all evidence name the same exact source.
           New-Item -ItemType Directory -Path evidence-extracted | Out-Null
           $ev = Get-ChildItem evidence -Filter '*.zip'
           if (@($ev).Count -ne 1) { throw 'Ambiguous evidence' }
@@ -70,9 +76,9 @@ jobs:
           Expand-Archive -LiteralPath "product/$env:PRODUCT_ARCHIVE" -DestinationPath extracted
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-          gh attestation verify "product/$env:PRODUCT_ARCHIVE" --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+          node scripts/qualification/release-identity.mjs attestation "product/$env:PRODUCT_ARCHIVE" $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP provenance verification failed' }
-          gh attestation verify product/release-manifest.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+          node scripts/qualification/release-identity.mjs attestation product/release-manifest.json $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Qualified source/version manifest provenance verification failed' }
       - name: Verify qualified installer provenance
         shell: pwsh
@@ -80,17 +86,17 @@ jobs:
           $distributionPath = 'product/distribution-manifest.json'
           if (Test-Path -LiteralPath $distributionPath) {
             $distribution = Get-Content $distributionPath -Raw | ConvertFrom-Json
-            gh attestation verify "product/$($distribution.archive)" --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            node scripts/qualification/release-identity.mjs attestation "product/$($distribution.archive)" $env:SOURCE_SHA
             if ($LASTEXITCODE -ne 0) { throw 'Setup provenance verification failed' }
-            gh attestation verify $distributionPath --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            node scripts/qualification/release-identity.mjs attestation $distributionPath $env:SOURCE_SHA
             if ($LASTEXITCODE -ne 0) { throw 'Setup manifest provenance verification failed' }
           }
           $updatePath = 'product/update-manifest.json'
           if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+$') {
             if (!(Test-Path -LiteralPath $updatePath)) { throw 'Stable update manifest is required' }
-            gh attestation verify $updatePath --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA
             if ($LASTEXITCODE -ne 0) { throw 'Stable update provenance verification failed' }
-            gh attestation verify $updatePath --bundle product/update-provenance.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-qualification.yml"
+            node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA --bundle product/update-provenance.json
             if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }

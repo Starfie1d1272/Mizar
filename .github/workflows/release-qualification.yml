@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref/SHA to build and soak'
+        description: 'Exact SHA of this main workflow run; checkout and signer source must match'
         required: true
         type: string
       label:
@@ -18,6 +18,7 @@ permissions:
 
 env:
   RELEASE_LABEL: ${{ inputs.label }}
+  QUALIFICATION_SOURCE_INPUT: ${{ inputs.ref }}
   QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
 
 jobs:
@@ -28,16 +29,17 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
       archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Pin checked-out source
-        id: source
+      # Reject an untrusted workflow branch before running checked-out policy code.
+      - name: Require main qualification workflow
         shell: pwsh
         run: |
-          $sha = git rev-parse HEAD
-          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid source SHA' }
-          "sha=$sha" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Qualification must run from main' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Pin checked-out source
+        id: source
+        run: node scripts/qualification/release-identity.mjs qualification
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -314,6 +316,8 @@ jobs:
             $archive = Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-$env:RELEASE_LABEL-$lane-evidence.zip"
             Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $evidenceRoot $lane)
           }
+          node scripts/qualification/release-identity.mjs qualification (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate and attestation source mismatch' }
           node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $env:SOURCE_SHA $env:ARCHIVE_SHA256 $evidenceRoot
           if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
