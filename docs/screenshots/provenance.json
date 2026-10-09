@@ -9,10 +9,7 @@
       "capturedAt": "2026-10-09T03:19:58.638Z",
       "source": "EPL S24 Falcons 对 Natus Vincere，Inferno 本地回放",
       "capture": "通过 OBS 临时显示器来源截取的完整 Windows 工作台，原始像素",
-      "resolution": [
-        2560,
-        1440
-      ],
+      "resolution": [2560, 1440],
       "hud": "builtin:mizar-default-preset",
       "visualReview": "比赛数据正常；默认 Pulse HUD、雷达与制作控制完整显示"
     },
@@ -60,6 +57,48 @@
       "source": "EPL S24 Falcons 对 Natus Vincere，Inferno demo",
       "capture": "Windows / CS2 / OBS 原始截图",
       "originalPath": "docs/screenshots/windows-rc27/b-inferno-r4-esl.png"
+    },
+    {
+      "file": "program-veto.gif",
+      "sha256": "ab83d434115d9caeeae729aff94afd1434dc21b8dfcbe8517e938a5c269cbe8b",
+      "videoSource": "nju-major-2026-10-08",
+      "sourceSeconds": [232.7, 247.0],
+      "resolution": [1200, 675],
+      "framesPerSecond": 12,
+      "loop": true
+    },
+    {
+      "file": "program-opening.gif",
+      "sha256": "750544f56feb9333b0c7c0aa24fd58e8ca6b431ddcbee0b382787f88cf9de741",
+      "videoSource": "nju-major-2026-10-08",
+      "sourceSeconds": [352.8, 362.8],
+      "resolution": [960, 540],
+      "framesPerSecond": 10,
+      "loop": true
+    },
+    {
+      "file": "program-veto.png",
+      "sha256": "d7a62d5c2725cc352efaab041f656a91667bf53f69cb4385236675872919d9ed",
+      "videoSource": "nju-major-2026-10-08",
+      "sourceSeconds": [354.0],
+      "resolution": [1920, 1080]
+    },
+    {
+      "file": "program-opening.png",
+      "sha256": "7505102111e3348f9809c8bec321da1506b32ac74c15d1fafca3afdaf07277de",
+      "videoSource": "nju-major-2026-10-08",
+      "sourceSeconds": [357.0],
+      "resolution": [1920, 1080]
+    }
+  ],
+  "videoSources": [
+    {
+      "id": "nju-major-2026-10-08",
+      "file": "2026-10-08 22-09-43.mp4",
+      "sha256": "6d3dee80232c6db1bdc8e4cb2ada15343803ce8f436ab5bd3438c14ddd557a1e",
+      "source": "维护者提供的 Windows / CS2 实机录屏，2026 NJU Major 炸鸡杯测试赛，The Beast 对 NJU美少女组合",
+      "resolution": [1920, 1080],
+      "capture": "原始录屏中的真实播出画面；动图仅截取时间范围、缩放及调色板压缩"
     }
   ]
 }
