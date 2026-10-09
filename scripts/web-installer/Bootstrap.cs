@@ -117,6 +117,7 @@ namespace Mizar.WebInstaller {
           using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token)) {
             deadline.CancelAfter(TimeSpan.FromMinutes(5));
             for(int attempt=0;attempt<2;attempt++) {
+            bool retry=false;
             try {
               using (var response = await Request(url, deadline.Token)) {
                 if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != plan.bytes)
@@ -147,11 +148,10 @@ namespace Mizar.WebInstaller {
               if (File.Exists(staging)) File.Delete(staging);
               token.ThrowIfCancellationRequested();
               last = error;
-              if(attempt==0 && error is HttpRequestException && !deadline.IsCancellationRequested) {
-                await Task.Delay(500,token); continue;
-              }
-              break;
+              retry=attempt==0 && error is HttpRequestException && !deadline.IsCancellationRequested;
             }
+            if(!retry) break;
+            await Task.Delay(500,token);
             }
           }
         }
