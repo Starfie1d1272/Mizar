@@ -1,4 +1,5 @@
-// Windows-only native recovery evidence; never a simulated Linux PASS.
+// Windows filesystem/process recovery with a stub installer; not a real NSIS upgrade or login recovery acceptance.
+import { setTimeout } from 'node:timers';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -99,7 +100,10 @@ public class UpdateFixture {
     var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
     if (Path.GetFileName(exe).Equals("Mizar.exe", StringComparison.OrdinalIgnoreCase)) { if (args.Length > 0 && args[0] == "--hold") Thread.Sleep(30000); return; }
     var stage = Path.GetDirectoryName(exe);
+    if (args.Length > 0 && args[0] == "--hold") { File.WriteAllText(Path.Combine(stage, "running.txt"), "ready"); Thread.Sleep(30000); return; }
     var mode = File.ReadAllText(Path.Combine(stage, "mode.txt"));
+    var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Mizar.lnk");
+    if (File.Exists(shortcut)) File.Delete(shortcut);
     var command = String.Join(" ", args);
     var target = command.Substring(command.IndexOf("/D=") + 3);
     using (var app = Registry.CurrentUser.CreateSubKey(@"Software\Mizar")) app.SetValue("InstallDir", target);
@@ -116,7 +120,15 @@ public class UpdateFixture {
   assert.equal(compiled.code, 0, compiled.errors);
   const binary = await readFile(binaryPath);
   const exited = await run(['-Command', 'exit 0']);
-  for (const scenario of ['success', 'cancel', 'failure', 'interrupted', 'remaining-process']) {
+  for (const scenario of [
+    'success',
+    'success-no-shortcut',
+    'cancel',
+    'failure',
+    'interrupted',
+    'remaining-process',
+  ]) {
+    const success = scenario.startsWith('success');
     const area = join(root, scenario),
       installed = join(area, 'installed path'),
       state = join(area, 'user state');
@@ -128,6 +140,11 @@ public class UpdateFixture {
       `New-Item 'HKCU:\\Software\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Mizar' -Name InstallDir -Value '${installed.replace(/'/g, "''")}' -PropertyType String -Force | Out-Null; New-Item 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Name DisplayVersion -Value '1.0.0' -PropertyType String -Force | Out-Null`,
     ]);
     assert.equal(registered.code, 0, registered.errors);
+    const desktop = await run(['-Command', "[Environment]::GetFolderPath('Desktop')"]);
+    assert.equal(desktop.code, 0, desktop.errors);
+    const shortcut = join(desktop.output, 'Mizar.lnk');
+    await rm(shortcut, { force: true });
+    if (scenario !== 'success-no-shortcut') await writeFile(shortcut, 'existing user shortcut');
     const nextPath = join(area, 'next payload'),
       next = await payload(nextPath, '1.1.0', binary);
     const installer = join(state, 'updates/download-test/Mizar-v1.1.0-Windows-x64-Setup.exe');
@@ -150,7 +167,7 @@ public class UpdateFixture {
     assert.equal(prepared.code, 0, prepared.errors);
     const stage = JSON.parse(prepared.output).stageRoot;
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
-    await writeFile(join(stage, 'mode.txt'), scenario);
+    await writeFile(join(stage, 'mode.txt'), success ? 'success' : scenario);
     let result;
     if (scenario === 'interrupted') {
       await cp(installed, join(stage, 'previous'), { recursive: true });
@@ -172,6 +189,30 @@ public class UpdateFixture {
       );
       await writeFile(join(stage, 'journal.json'), JSON.stringify({ phase: 'installing' }));
       await rm(installed, { recursive: true });
+      // Installation started but no PID was persisted: recovery must leave
+      // the installation untouched while that exact staged executable is alive.
+      const installer = spawn(join(stage, 'Installer.exe'), ['--hold'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      try {
+        const deadline = Date.now() + 10000;
+        while (!(await readFile(join(stage, 'running.txt'), 'utf8').catch(() => ''))) {
+          assert(Date.now() < deadline, 'installer did not start');
+          await new Promise((done) => setTimeout(done, 50));
+        }
+        const blocked = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
+        assert.equal(
+          blocked.code,
+          1,
+          'running installer must block recovery without a journal PID',
+        );
+        await assert.rejects(readFile(join(installed, 'Mizar.exe')), { code: 'ENOENT' });
+      } finally {
+        const exited = new Promise((done) => installer.once('exit', done));
+        installer.kill();
+        await exited;
+      }
       result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
       assert.equal(
         result.code,
@@ -210,23 +251,19 @@ public class UpdateFixture {
         '-HostProcessId',
         String(exited.pid),
       ]);
-      assert.equal(result.code, scenario === 'success' ? 0 : 1, result.errors);
+      assert.equal(result.code, success ? 0 : 1, result.errors);
     }
     const report = JSON.parse(
       (await readFile(join(state, 'updates/result.json'), 'utf8')).replace(/^\uFEFF/, ''),
     );
     assert.equal(
       report.status,
-      scenario === 'success'
-        ? 'installed'
-        : scenario === 'remaining-process'
-          ? 'cancelled'
-          : 'restored',
+      success ? 'installed' : scenario === 'remaining-process' ? 'cancelled' : 'restored',
     );
     const identity = JSON.parse(
       await readFile(join(installed, 'resources/metadata/artifact.json'), 'utf8'),
     );
-    assert.equal(identity.appVersion, scenario === 'success' ? '1.1.0' : '1.0.0');
+    assert.equal(identity.appVersion, success ? '1.1.0' : '1.0.0');
     assert.equal(
       await readFile(join(state, 'user-data.json'), 'utf8'),
       'untouched match and settings',
@@ -239,12 +276,21 @@ public class UpdateFixture {
     assert.equal(registration.code, 0, registration.errors);
     assert.deepEqual(JSON.parse(registration.output), {
       directory: installed,
-      version: scenario === 'success' ? '1.1.0' : '1.0.0',
+      version: success ? '1.1.0' : '1.0.0',
     });
-    process.stdout.write(`Native update ${scenario}: PASS\n`);
+    if (scenario === 'success-no-shortcut')
+      await assert.rejects(readFile(shortcut), { code: 'ENOENT' });
+    else if (scenario !== 'interrupted')
+      assert.equal(await readFile(shortcut, 'utf8'), 'existing user shortcut');
+    await rm(shortcut, { force: true });
+    process.stdout.write(`Stub-installer recovery ${scenario}: PASS\n`);
   }
 } finally {
   if (ownsRegistration) {
+    await run([
+      '-Command',
+      "Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk') -Force -ErrorAction SilentlyContinue",
+    ]);
     await run([
       '-Command',
       "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue",

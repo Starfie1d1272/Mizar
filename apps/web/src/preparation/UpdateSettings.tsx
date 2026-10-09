@@ -14,6 +14,7 @@ interface UpdateStatus {
     | 'installing'
     | 'manual'
     | 'error';
+  productionRevision: string;
   automatic: boolean;
   currentVersion: string;
   distribution: 'installed' | 'portable';
@@ -52,6 +53,7 @@ export function UpdateSettings() {
   const [unavailable, setUnavailable] = useState(false);
   const installing = useRef(false);
   const resumed = useRef(false);
+  const requestedRevision = useRef<string | null>(null);
   const desktop = Boolean(window.__TAURI_INTERNALS__);
   const applyStatus = useCallback((next: UpdateStatus) => {
     setStatus(next);
@@ -98,6 +100,10 @@ export function UpdateSettings() {
   }, [applyStatus]);
   useEffect(() => {
     if (!requested || !status || installing.current) return;
+    if (status.productionRevision !== requestedRevision.current) {
+      setRequested(false);
+      return;
+    }
     if (status.phase === 'error' || status.error === 'update_cancelled') return;
     if (status.phase !== 'ready') return;
     if (status.installBlockedReason && (!status.canResumeAutomatic || resumed.current)) {
@@ -140,6 +146,7 @@ export function UpdateSettings() {
     if (busy || !desktop || !status) return;
     setError('');
     resumed.current = false;
+    requestedRevision.current = status.productionRevision;
     if (status.phase === 'available') {
       setBusy(true);
       try {

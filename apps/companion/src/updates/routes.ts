@@ -40,6 +40,7 @@ export function registerUpdateRoutes(
     const scene = scenes.get();
     return {
       ...status,
+      productionRevision: production.get().revision,
       installBlockedReason,
       canResumeAutomatic:
         production.get().mode === 'preparation' &&

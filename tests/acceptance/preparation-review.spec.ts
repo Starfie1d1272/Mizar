@@ -9,13 +9,11 @@ import {
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
-test('Stable updates foreground release notes and use one explicit click, preserving cancellation and production protection', async ({
-  page,
-}, testInfo) => {
-  // Browser/API/IPC fixtures prove user interaction, not a real Windows upgrade.
-  let downloads = 0;
+async function updateFixture(page: import('@playwright/test').Page) {
+  // API/IPC fixtures prove interaction only; native installation has separate evidence.
   const status = {
     phase: 'available',
+    productionRevision: 'preparation-1',
     automatic: false,
     currentVersion: '1.0.0',
     distribution: 'installed',
@@ -23,43 +21,41 @@ test('Stable updates foreground release notes and use one explicit click, preser
     downloadedBytes: 0,
     candidate: {
       version: '1.1.0',
-      notes: '新增应用内更新，一键升级到最新版本。\n改善国内下载体验。\n修复多项问题，提升稳定性。',
+      notes: '新增应用内更新，一键升级到最新版本。',
       installer: { bytes: 100 },
     },
     installBlockedReason: null as string | null,
     canResumeAutomatic: false,
   };
-  await page.route('**/local/v1/updates', (route) => route.fulfill({ json: status }));
+  const actions: string[] = [];
+  let completeDownload = false;
   await page.route('**/operator/obs/launch-target', (route) =>
     route.fulfill({ json: { executablePath: 'C:\\OBS\\obs64.exe' } }),
   );
+  await page.route('**/local/v1/updates', (route) => route.fulfill({ json: status }));
   await page.route('**/operator/updates', async (route) => {
     const body = route.request().postDataJSON() as { action: string; enabled?: boolean };
+    actions.push(body.action);
     if (body.action === 'automatic') status.automatic = body.enabled ?? false;
     if (body.action === 'download') {
-      downloads++;
-      status.phase = downloads < 3 ? 'downloading' : 'ready';
-      status.downloadedBytes = downloads < 3 ? 40 : 100;
+      status.phase = completeDownload ? 'ready' : 'downloading';
+      status.downloadedBytes = completeDownload ? 100 : 40;
     }
     if (body.action === 'cancel') status.phase = 'available';
     if (body.action === 'resume') {
       status.installBlockedReason = null;
       status.canResumeAutomatic = false;
     }
-    if (body.action === 'check') {
-      status.phase = 'error';
-      status.error = 'update_provenance_failed';
-    }
     await route.fulfill({ json: status });
   });
   await page.addInitScript(() => {
-    const commands: { command: string; args?: Record<string, unknown> }[] = [];
+    const commands: string[] = [];
     Object.assign(window, {
       updateCommands: commands,
       __TAURI_INTERNALS__: {
-        invoke: <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-          if (command.startsWith('install_update') || command.startsWith('open_update'))
-            commands.push({ command, ...(args ? { args } : {}) });
+        invoke: <T>(command: string): Promise<T> => {
+          if (command === 'install_update' || command.startsWith('open_update'))
+            commands.push(command);
           return command === 'install_update'
             ? Promise.reject(new Error('更新未完成，请重试。'))
             : Promise.resolve({} as T);
@@ -67,23 +63,31 @@ test('Stable updates foreground release notes and use one explicit click, preser
       },
     });
   });
+  return {
+    status,
+    actions,
+    completeDownload: () => {
+      completeDownload = true;
+    },
+    commands: () => page.evaluate(() => Reflect.get(window, 'updateCommands') as string[]),
+  };
+}
+
+test('update cancellation and postponement preserve the download choice without installing later', async ({
+  page,
+}) => {
+  const { status, commands } = await updateFixture(page);
   await page.goto('/settings?tab=advanced');
-  await expect(page.getByRole('heading', { name: '应用更新' })).toBeVisible();
   await expect(
-    page.getByText('新增应用内更新，一键升级到最新版本。', { exact: false }),
+    page.getByText('新增应用内更新，一键升级到最新版本。', { exact: true }),
   ).toBeVisible();
-  const update = page.getByRole('button', { name: '一键更新', exact: true });
-  await expect(update).toBeEnabled();
-  await page.screenshot({
-    path: testInfo.outputPath('stable-update-release-notes.png'),
-    fullPage: true,
-  });
+  await expect(page.getByRole('checkbox', { name: '自动检查更新' })).toBeHidden();
   await page.getByText('更新设置', { exact: true }).click();
   const automatic = page.getByRole('checkbox', { name: '自动检查更新' });
   await expect(automatic).not.toBeChecked();
   await automatic.click();
   await expect(automatic).toBeChecked();
-  await page.getByText('更新设置', { exact: true }).click();
+  const update = page.getByRole('button', { name: '一键更新', exact: true });
   await update.click();
   await expect(page.getByRole('progressbar', { name: '更新下载进度' })).toHaveAttribute(
     'value',
@@ -94,38 +98,63 @@ test('Stable updates foreground release notes and use one explicit click, preser
   await update.click();
   await page.getByRole('button', { name: '稍后', exact: true }).click();
   status.phase = 'ready';
-  status.downloadedBytes = 100;
+  await expect(update).toBeEnabled();
+  expect(await commands()).toEqual([]);
+});
+
+test('entering and leaving production during download revokes the previous installation request', async ({
+  page,
+}) => {
+  const { status, commands } = await updateFixture(page);
+  await page.goto('/settings?tab=advanced');
+  const update = page.getByRole('button', { name: '一键更新', exact: true });
+  await update.click();
+  await expect(page.getByRole('button', { name: '正在更新…', exact: true })).toBeVisible();
+  // Both lifecycle transitions can occur between polls; revision still records the change.
+  status.productionRevision = 'preparation-after-live';
+  await expect(page.getByRole('button', { name: '稍后', exact: true })).toHaveCount(0);
+  status.phase = 'ready';
   status.installBlockedReason = '结束制作后可更新。';
   await expect(update).toBeDisabled();
-  expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([]);
+  status.installBlockedReason = null;
+  await expect(update).toBeEnabled();
+  expect(await commands()).toEqual([]);
+});
+
+test('one update click downloads and installs without a dialog, with manual direction recovery and errors', async ({
+  page,
+}) => {
+  const { status, commands, actions, completeDownload } = await updateFixture(page);
+  completeDownload();
   status.installBlockedReason = '结束节目制作后可更新。';
   status.canResumeAutomatic = true;
-  await expect(update).toBeEnabled();
+  await page.goto('/settings?tab=advanced');
+  const update = page.getByRole('button', { name: '一键更新', exact: true });
   await update.focus();
   await page.keyboard.press('Enter');
   await expect(page.getByText('更新未完成，请重试。', { exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([
-    { command: 'install_update' },
-  ]);
-  await page.getByRole('button', { name: '检查更新', exact: true }).click();
-  await expect(page.getByText('更新验证失败，请稍后重试。')).toBeVisible();
-  status.phase = 'available';
-  status.error = null;
-  status.canResumeAutomatic = false;
+  expect(actions).toEqual(['download', 'resume']);
+  expect(await commands()).toEqual(['install_update']);
+});
+
+test('unverified updates and portable builds offer manual download and render notes as text', async ({
+  page,
+}) => {
+  const { status } = await updateFixture(page);
+  status.phase = 'error';
+  status.error = 'update_provenance_failed';
   status.candidate.notes = '<script>untrusted()</script>';
-  await page.reload();
+  await page.goto('/settings?tab=advanced');
+  await expect(page.getByText('更新验证失败，请稍后重试。')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'GitHub 下载' })).toBeVisible();
   await expect(page.getByText('<script>untrusted()</script>', { exact: true })).toBeVisible();
-  await update.click();
-  await expect(page.getByText('更新未完成，请重试。', { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([
-    { command: 'install_update' },
-  ]);
   status.phase = 'manual';
+  status.error = null;
   status.distribution = 'portable';
   await page.reload();
   await expect(page.getByRole('button', { name: '下载新版', exact: true })).toBeVisible();
-  await expect(update).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '一键更新', exact: true })).toHaveCount(0);
 });
 
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({

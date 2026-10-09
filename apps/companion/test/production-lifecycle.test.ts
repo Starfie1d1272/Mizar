@@ -330,6 +330,10 @@ it('requires the private Host and idle production, then prevents entry until upg
       ).statusCode,
     ).toBe(403);
     expect(prepare).not.toHaveBeenCalled();
+    const initialRevision = (await app.inject('/local/v1/updates')).json<{
+      productionRevision: string;
+    }>().productionRevision;
+    expect(initialRevision).toBe(production.get().revision);
     await enter();
     expect((await host('prepare')).statusCode).toBe(409);
     await app.inject({
@@ -345,6 +349,10 @@ it('requires the private Host and idle production, then prevents entry until upg
       headers: { origin: 'http://127.0.0.1:3000' },
       payload: { action: 'finish', expectedRevision: production.get().revision },
     });
+    expect(
+      (await app.inject('/local/v1/updates')).json<{ productionRevision: string }>()
+        .productionRevision,
+    ).not.toBe(initialRevision);
     for (const state of [
       { connection: 'unavailable', streaming: false, recording: false },
       { connection: 'connected', streaming: true, recording: false },

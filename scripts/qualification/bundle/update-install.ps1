@@ -133,10 +133,10 @@ function Record-Result([string]$status, [string]$code) {
 }
 function Restore-Previous {
   Assert-Stopped
-  $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
-  if ($journal.installerPid) {
-    $running = Get-Process -Id $journal.installerPid -ErrorAction SilentlyContinue
-    if ($running -and $running.Path -eq (Join-Path $StageRoot 'Installer.exe')) { throw 'update_installer_remaining' }
+  # Recover may run after the helper died immediately after Start-Process.
+  # Inspect the staged executable directly; a journal PID is not reliable evidence.
+  foreach ($running in @(Get-Process -Name Installer -ErrorAction SilentlyContinue)) {
+    if (!$running.Path -or $running.Path -eq (Join-Path $StageRoot 'Installer.exe')) { throw 'update_installer_remaining' }
   }
   $backup = Join-Path $StageRoot 'previous'
   Assert-Payload $backup $plan.previousContentDigest
@@ -212,10 +212,15 @@ try {
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
   $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
-  Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing'; installerPid = $installer.Id }
   $installer.WaitForExit()
   if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
   Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+  # Silent Setup removes the old shortcut and leaves its optional section off.
+  # Preserve the user's existing shortcut without creating one for other users.
+  $desktopShortcut = Join-Path $StageRoot 'shortcut-0'
+  if (Test-Path -LiteralPath $desktopShortcut) {
+    Copy-Item -LiteralPath $desktopShortcut -Destination (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk') -Force
+  }
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'committed' }
   Record-Result 'installed' 'update_completed'
   Recovery-Registration $false
