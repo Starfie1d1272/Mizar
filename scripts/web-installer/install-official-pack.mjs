@@ -19,11 +19,8 @@ export async function installOfficialPack({
   onProgress = () => {},
 }) {
   signal.throwIfAborted();
-  const current = store.getStatus(PACK_ID);
-  if (current.phase === 'ready' && current.activeVersion === policy.packVersion) {
-    await assertDefaultEplReadable(store, signal);
-    return { packId: PACK_ID, packVersion: current.activeVersion, resourcesReady: true };
-  }
+  // A version is not a trusted content identity. Until Store exposes active receipt
+  // revalidation against the caller's policy, never reuse its version-only fast path.
   const frozenInputs = Object.fromEntries(
     [
       ['statementBytes', 64 * 1024],
@@ -45,16 +42,8 @@ export async function installOfficialPack({
     signal,
   });
   signal.throwIfAborted();
-  // Preserve the original signed bytes and original manifest for Store's offline
-  // verifier. No unsigned mirror field becomes policy or an authorization flag.
-  const receipt = {
-    schemaVersion: 'mizar.resource-receipt.v1',
-    statementBase64: frozenInputs.statementBytes.toString('base64'),
-    publicationBundleBase64: frozenInputs.publicationBundleBytes.toString('base64'),
-    archiveBundleBase64: frozenInputs.archiveBundleBytes.toString('base64'),
-    manifestBase64: verified.entries.get('pack-manifest.json').toString('base64'),
-    acceptedAt: new Date().toISOString(),
-  };
+  // The shared verifier owns the receipt schema and offline trust snapshot.
+  // Forward its authenticated receipt unchanged; do not reconstruct evidence here.
   await store.installVerified(
     PACK_ID,
     async ({ directory, signal: preparationSignal, onProgress: storeProgress }) => {
@@ -71,12 +60,16 @@ export async function installOfficialPack({
         onProgress(bytes);
       }
       preparationSignal.throwIfAborted();
-      return receipt;
+      return verified.receipt;
     },
-    { packVersion: verified.manifest.packVersion, signal },
+    { packVersion: verified.manifest.packVersion, signal, force: true },
   );
   const status = store.getStatus(PACK_ID);
-  if (status.phase !== 'ready' || status.activeVersion !== verified.manifest.packVersion) {
+  if (
+    status.phase !== 'ready' ||
+    status.activeVersion !== verified.manifest.packVersion ||
+    status.preparedVersion !== null
+  ) {
     throw new Error('Default official resources are not active; installation is incomplete');
   }
   await assertDefaultEplReadable(store, signal);
