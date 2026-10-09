@@ -38,9 +38,18 @@ const PLATFORM_PREFIXES = [
   'packages/telemetry-gsi/',
   'packages/telemetry-cstv/',
 ];
+// Mirror tooling consumes already-qualified release assets; it is not shipped in
+// the Desktop payload. Quality owns its identity, authorization and failure
+// contracts. Keep this exact allowlist small; other qualification paths retain
+// real Windows verification.
+const DISTRIBUTION_TOOL_PATHS = new Set([
+  'scripts/qualification/box-sync.mjs',
+  'scripts/qualification/box-sync.test.mjs',
+]);
 const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
+  if (DISTRIBUTION_TOOL_PATHS.has(path)) return false;
   return (
     PORTABLE_SMOKE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     path === 'packages/telemetry-gsi/src/production-config.json' ||
