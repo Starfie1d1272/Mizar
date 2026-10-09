@@ -1,7 +1,8 @@
 name: Box Sync
 on:
   workflow_run:
-    workflows: [Release Promotion]
+    # GitHub 的完成事件可能以 run-name 中的发布标题匹配流程。
+    workflows: [Release Promotion, '发布 Mizar v*']
     types: [completed]
   workflow_dispatch:
     inputs:
