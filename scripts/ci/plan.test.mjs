@@ -144,8 +144,7 @@ describe('changed-surface CI planner', () => {
   ])('%s selects the matching evidence', (_name, files, expected) => {
     const plan = createCiPlan({ eventName: 'pull_request', changedFiles: files });
     expect(plan).toMatchObject(expected);
-    expect(plan.requiredJobs).not.toContain('qualification_offline');
-    expect(plan.runOfflineQualification).toBe(false);
+    expect(plan.runOfflineQualification).toBe(files.includes('scripts/qualification/offline.mjs'));
   });
 
   it.each(['pull_request', 'push'])(
@@ -258,6 +257,29 @@ describe('changed-surface CI planner', () => {
       }).requiredJobs,
     ).toEqual(['quality']);
   });
+
+  it.each(['pull_request', 'push'])(
+    'validates offline self-changes on both platforms for %s',
+    (eventName) => {
+      const plan = createCiPlan({ eventName, changedFiles: ['scripts/qualification/offline.mjs'] });
+      expect(plan.requiredJobs).toEqual([
+        'quality',
+        'qualification_offline',
+        'qualification_windows',
+      ]);
+      expect(
+        evaluateCiGate({
+          planResult: 'success',
+          requiredJobs: plan.requiredJobs,
+          jobResults: {
+            quality: 'skipped',
+            qualification_offline: 'success',
+            qualification_windows: 'success',
+          },
+        }).ok,
+      ).toBe(false);
+    },
+  );
 
   it('unions browser, platform and Windows qualification risks with ordinary docs', () => {
     expect(

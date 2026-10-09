@@ -127,6 +127,8 @@ BP 内置 BO3 演示使用同场 EPL 公开禁选和已确认的 UTC 开赛时�
 
 ## 便携包自动化
 
+离线验收单独运行时保留完整静态检查。CI 已选择同一源码的质量任务时，通过 `--quality-owned-static-checks` 将格式、lint 和架构检查交给质量任务；聚合门禁仍要求质量与离线任务都成功。Linux/macOS 继续分别运行类型、完整单测、构建和本平台包可移植性检查，不跨 OS 复用产物。离线脚本自身变化同时选择 Linux/macOS 验收；阶段耗时和失败保留于 `.agent-tmp/offline-evidence/build-timings.json`。
+
 离线验收与构建器共用应用版本和发布包命名函数，检查同一版本的目录及 ZIP；不接受其他版本的归档替代本次产物。检查整个应用目录中残留的开发文件和符号链接，不仅凭依赖目录名为 `test` 就删除可能被运行入口引用的资源。发布名称规范见[发布流程](release-readiness.md)。
 
 Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 使用 EPL Inferno 开局与决胜回合回放，包含本地头像；历史 Ancient 与 Nuke 回放只用于开发回归，不进入生产包。每次产品构建校验资源边界。
