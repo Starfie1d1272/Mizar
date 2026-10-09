@@ -100,7 +100,9 @@ export function LocalTournamentEditor({
   scope = 'match',
   eventId,
   onDirtyChange,
+  canSave = true,
 }: {
+  readonly canSave?: boolean;
   readonly scope?: 'match' | 'resources';
   readonly document?: MatchDocumentV1 | null;
   readonly eventId?: string;
@@ -165,9 +167,10 @@ export function LocalTournamentEditor({
     return null;
 
   const contextReady =
-    scope !== 'match' ||
-    JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
-      JSON.stringify(selected);
+    canSave &&
+    (scope !== 'match' ||
+      JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
+        JSON.stringify(selected));
   const updateEntrant = (side: 'a' | 'b', patch: Partial<MatchDocumentV1['entrants']['a']>) =>
     setDraft((current) =>
       current === null
@@ -277,6 +280,7 @@ export function LocalTournamentEditor({
                       队标图片{' '}
                       <input
                         type="file"
+                        disabled={!canSave}
                         accept="image/png,image/jpeg,image/webp"
                         onChange={(change) => {
                           const file = change.target.files?.[0];
@@ -387,9 +391,7 @@ export function LocalTournamentEditor({
           <p>
             保存本场同时同步队伍库的队名、队标与名单；已有其他比赛快照不改写，今后复用使用更新后的队伍。
           </p>
-          {!contextReady ? (
-            <p role="status">本场刚有更新，正在同步保存版本；资料草稿保留。</p>
-          ) : null}
+          {!contextReady ? <p role="status">正在核对本场连接与保存版本；资料草稿保留。</p> : null}
           <Button type="submit" disabled={!contextReady}>
             保存比赛资料
           </Button>
@@ -399,6 +401,7 @@ export function LocalTournamentEditor({
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
+            if (!canSave) return;
             const affectsCurrent = event.matchIds.includes(view.activeLocalMatchId ?? '');
             if (
               affectsCurrent &&
@@ -436,6 +439,7 @@ export function LocalTournamentEditor({
                 赛事 Logo{' '}
                 <input
                   type="file"
+                  disabled={!canSave}
                   accept="image/png,image/jpeg,image/webp"
                   onChange={(change) => {
                     const file = change.target.files?.[0];
@@ -509,7 +513,9 @@ export function LocalTournamentEditor({
               </fieldset>
             </>
           ) : null}
-          <Button type="submit">保存赛事资料</Button>
+          <Button type="submit" disabled={!canSave}>
+            保存赛事资料
+          </Button>
         </form>
       ) : null}
       {scope === 'resources' &&
@@ -527,7 +533,7 @@ export function LocalTournamentEditor({
                 </span>
                 <Button
                   type="button"
-                  disabled={index === 0}
+                  disabled={!canSave || index === 0}
                   onClick={() =>
                     void action(async () => {
                       const ids = [...event.matchIds];
@@ -544,7 +550,7 @@ export function LocalTournamentEditor({
                 </Button>
                 <Button
                   type="button"
-                  disabled={index === event.matchIds.length - 1}
+                  disabled={!canSave || index === event.matchIds.length - 1}
                   onClick={() =>
                     void action(async () => {
                       const ids = [...event.matchIds];

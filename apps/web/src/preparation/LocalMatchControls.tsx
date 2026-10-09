@@ -16,7 +16,7 @@ export function LocalMatchControls({
   readonly beforeApply?: () => boolean;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
-  const { view, refresh } = useLocalTournament();
+  const { view, refresh, status } = useLocalTournament();
   const [a, setA] = useState({ name: '', id: '' });
   const [b, setB] = useState({ name: '', id: '' });
   const [format, setFormat] = useState('bo3');
@@ -31,6 +31,7 @@ export function LocalMatchControls({
         <form
           onSubmit={(event) => {
             event.preventDefault();
+            if (status !== 'ready') return;
             if (beforeApply && !beforeApply()) return;
             if (!window.confirm(`创建 ${a.name} vs ${b.name} 并应用为本场？现有比赛资料会保留。`))
               return;
@@ -115,7 +116,9 @@ export function LocalMatchControls({
           <Button
             type="submit"
             variant="primary"
-            disabled={!a.name.trim() || !b.name.trim() || (!!a.id && a.id === b.id)}
+            disabled={
+              status !== 'ready' || !a.name.trim() || !b.name.trim() || (!!a.id && a.id === b.id)
+            }
           >
             创建本地比赛
           </Button>
@@ -137,6 +140,7 @@ export function LocalMatchControls({
       ) : null}
       {mode !== 'create' && candidateId ? (
         <Button
+          disabled={status !== 'ready'}
           onClick={() => {
             const match = view?.matches.find((item) => item.matchId === candidateId);
             if (

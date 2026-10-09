@@ -89,7 +89,7 @@ export function PreparationPage() {
   );
   const envelope = read.value;
   const match = envelope?.document;
-  const { view, refresh } = useLocalTournament();
+  const { view, refresh, status: tournamentStatus } = useLocalTournament();
   const cs2 = useCs2Status();
   const production = useLocalRead<Production>('/local/v1/production');
   const capabilities =
@@ -120,6 +120,10 @@ export function PreparationPage() {
   }
   useEffect(() => {
     const enter = () => {
+      if (matchDirty) {
+        setMessage('本场有未保存修改，请先保存资料再进入现场；当前草稿保留。');
+        return;
+      }
       void action(async () => {
         const response = await fetch('/local/v1/production', { cache: 'no-store' });
         if (!response.ok) throw new Error('无法读取制作状态。');
@@ -186,6 +190,11 @@ export function PreparationPage() {
         {matchDirty ? (
           <p role="status">本场有未保存修改；任务切换保留草稿，进入现场前请先保存。</p>
         ) : null}
+        {tournamentStatus === 'stale' ? (
+          <StatusBanner tone="warning">
+            赛事读取失败，保留最近资料与草稿；连接恢复并核对前禁止保存或载入。
+          </StatusBanner>
+        ) : null}
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
         {progress ? <p role="status">{progress}</p> : null}
         {production?.cleanup && tab !== 'finish' ? (
@@ -197,7 +206,7 @@ export function PreparationPage() {
           <>
             {read.status === 'stale' ? (
               <StatusBanner tone="warning">
-                资料刷新失败，保留最近资料供核对，正式编辑待连接恢复。
+                资料刷新失败，保留最近资料与草稿供核对；恢复连接前禁止保存。
               </StatusBanner>
             ) : null}
             {selecting || !match ? (
@@ -306,7 +315,12 @@ export function PreparationPage() {
                 <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
               </Panel>
             ) : view ? (
-              <EventMatchWorkspace view={view} refresh={refresh} action={action} />
+              <EventMatchWorkspace
+                view={view}
+                refresh={refresh}
+                action={action}
+                canWrite={tournamentStatus === 'ready'}
+              />
             ) : (
               <p>正在读取本地赛事与比赛；读取失败时不替换为样例。</p>
             )}
@@ -329,7 +343,7 @@ export function PreparationPage() {
                     </Button>
                   </div>
                   <RivalHubSyncControls />
-                  {local && canEdit ? (
+                  {local ? (
                     <LocalTournamentEditor
                       key={match.matchId}
                       document={match}
@@ -338,6 +352,7 @@ export function PreparationPage() {
                       refresh={refresh}
                       action={action}
                       scope="match"
+                      canSave={canEdit && tournamentStatus === 'ready'}
                       onDirtyChange={setMatchDirty}
                     />
                   ) : (

@@ -13,7 +13,9 @@ export function EventMatchWorkspace({
   view,
   refresh,
   action,
+  canWrite,
 }: {
+  canWrite: boolean;
   view: LocalTournamentView | null;
   refresh: () => Promise<void>;
   action: (run: () => Promise<unknown>) => Promise<void>;
@@ -36,11 +38,14 @@ export function EventMatchWorkspace({
   const markDirty = useCallback((value: boolean) => {
     dirty.current = value;
   }, []);
-  const matches =
-    view?.matches.filter((match) =>
-      eventId === 'independent' ? !match.competition : match.competition?.competitionId === eventId,
-    ) ?? [];
   const event = view?.events.find((item) => item.eventId === eventId);
+  const matches =
+    eventId === 'independent'
+      ? (view?.matches.filter((match) => !match.competition) ?? [])
+      : (event?.matchIds.flatMap((id) => {
+          const match = view?.matches.find((item) => item.matchId === id);
+          return match ? [match] : [];
+        }) ?? []);
   const match = matches.find((item) => item.matchId === matchId) ?? matches[0];
   return (
     <div className="event-match-workspace">
@@ -111,6 +116,7 @@ export function EventMatchWorkspace({
               key={eventId}
               mode="create"
               initialEventId={event?.eventId ?? ''}
+              beforeApply={() => canWrite && canChange()}
               action={action}
               onSelected={() => window.location.assign('/?tab=match')}
             />
@@ -121,6 +127,7 @@ export function EventMatchWorkspace({
             <div className="preparation-actions">
               <Button
                 variant="primary"
+                disabled={!canWrite}
                 onClick={() => {
                   if (
                     !canChange() ||
@@ -164,6 +171,7 @@ export function EventMatchWorkspace({
               refresh={refresh}
               action={action}
               scope="resources"
+              canSave={canWrite}
               section="overview"
               onDirtyChange={markDirty}
             />

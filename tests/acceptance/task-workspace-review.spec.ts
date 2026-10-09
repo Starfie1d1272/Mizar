@@ -14,13 +14,26 @@ test('task workspaces use real local data and keep candidate browsing separate f
     matchManifestPath: join(directory, 'match.json'),
     localTournamentPath: join(directory, 'tournament.json'),
   });
+  let unavailableMatch = false;
+  let unavailableTournament = false;
+  const productionWrites: string[] = [];
   const evidence = process.env.MIZAR_REVIEW_SCREENSHOTS;
   try {
     await app.ready();
     await context.route(
-      /\/(?:local\/v1\/|operator\/local-|operator\/bp-local-save|operator\/hud-config)/,
+      /\/(?:local\/v1\/|operator\/local-|operator\/bp-local-save|operator\/hud-config|operator\/production)/,
       async (route) => {
         const request = route.request();
+        const pathname = new URL(request.url()).pathname;
+        if (
+          (unavailableMatch && pathname === '/local/v1/match-document') ||
+          (unavailableTournament && pathname === '/local/v1/tournament')
+        ) {
+          await route.fulfill({ status: 503, json: { error: 'temporary_read_failure' } });
+          return;
+        }
+        if (request.method() === 'POST' && pathname === '/operator/production')
+          productionWrites.push(pathname);
         const response = await app.inject({
           method: request.method() as 'GET' | 'POST',
           url: new URL(request.url()).pathname,
@@ -36,6 +49,10 @@ test('task workspaces use real local data and keep candidate browsing separate f
     );
     page.on('dialog', (dialog) => dialog.accept());
     await page.goto('/?createLocal=1');
+    if (evidence) {
+      await mkdir(evidence, { recursive: true });
+      await page.screenshot({ path: join(evidence, 'empty-match.png') });
+    }
     await page.getByLabel('队伍 A', { exact: true }).fill('星火国际电子竞技俱乐部 Alpha');
     await page.getByLabel('队伍 B', { exact: true }).fill('北极星青年竞技俱乐部 Bravo');
     await page.getByRole('button', { name: '创建本地比赛', exact: true }).click();
@@ -51,6 +68,25 @@ test('task workspaces use real local data and keep candidate browsing separate f
           .fill(`首发选手 ${side + 1}—${player + 1}`);
       }
     }
+
+    await page.evaluate(() => window.dispatchEvent(new Event('mizar-enter')));
+    await expect(page.getByRole('alert')).toContainText('请先保存资料再进入现场');
+    expect(productionWrites).toEqual([]);
+    unavailableMatch = true;
+    unavailableTournament = true;
+    await expect(
+      page.getByText('赛事读取失败，保留最近资料与草稿；连接恢复并核对前禁止保存或载入。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '保存比赛资料', exact: true })).toBeDisabled();
+    await expect(page.getByLabel('选手名称', { exact: true })).toHaveCount(10);
+    await expect(page.getByLabel('选手名称', { exact: true }).first()).toHaveValue('首发选手 1—1');
+    if (evidence)
+      await page.screenshot({ path: join(evidence, 'match-stale-draft.png'), fullPage: true });
+    unavailableMatch = false;
+    unavailableTournament = false;
+    await expect(page.getByRole('button', { name: '保存比赛资料', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '保存比赛资料', exact: true }).click();
     await expect(page.getByText('比赛资料已保存。', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '准备正式 BP', exact: true }).click();
@@ -90,6 +126,24 @@ test('task workspaces use real local data and keep candidate browsing separate f
     }>().matches[0]!;
     expect(afterMatchSave.veto).toEqual(beforeMatchSave.veto);
     expect(afterMatchSave.maps).toEqual(beforeMatchSave.maps);
+
+    await page.goto('/resources?tab=event');
+    await page.getByLabel('赛事名称', { exact: true }).fill('断线保留赛事草稿');
+    unavailableTournament = true;
+    await expect(
+      page.getByText('赛事读取失败，保留最近资料与草稿；连接恢复并核对前禁止保存或载入。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByLabel('赛事名称', { exact: true })).toHaveValue('断线保留赛事草稿');
+    await expect(page.getByRole('button', { name: '保存赛事资料', exact: true })).toBeDisabled();
+    if (evidence)
+      await page.screenshot({ path: join(evidence, 'event-stale-draft.png'), fullPage: true });
+    unavailableTournament = false;
+    await expect(page.getByRole('button', { name: '保存赛事资料', exact: true })).toBeEnabled();
+    await expect(page.getByLabel('赛事名称', { exact: true })).toHaveValue('断线保留赛事草稿');
+    await page.getByRole('button', { name: '保存赛事资料', exact: true }).click();
+    await expect(page.getByText('赛事资料已保存。', { exact: true })).toBeVisible();
     await page.reload();
     if (evidence) await mkdir(evidence, { recursive: true });
     for (const scale of [100, 125, 150]) {
@@ -129,7 +183,30 @@ test('task workspaces use real local data and keep candidate browsing separate f
           await page.screenshot({ path: join(evidence, `${name}-${scale}.png`), fullPage: true });
       }
     }
-    await page.goto('/resources');
+    const firstState = (await app.inject('/local/v1/tournament')).json<{
+      events: { eventId: string; matchIds: string[] }[];
+    }>();
+    const event = firstState.events[0]!;
+    const second = await app.inject({
+      method: 'POST',
+      url: '/operator/local-match/create',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        teamA: '下一场 Alpha',
+        teamB: '下一场 Charlie',
+        eventId: event.eventId,
+        format: 'bo3',
+      },
+    });
+    expect(second.statusCode).toBe(200);
+    await page.goto('/resources?tab=event');
+    const schedule = page.getByLabel('本赛事赛程').getByRole('button');
+    await expect(schedule.first()).toContainText('星火国际电子竞技俱乐部 Alpha');
+    await page.getByRole('button', { name: '上移', exact: true }).nth(1).click();
+    await expect(schedule.first()).toContainText('下一场 Alpha');
+    await expect(schedule.nth(1)).toContainText('星火国际电子竞技俱乐部 Alpha');
+    await page.reload();
+    await expect(schedule.first()).toContainText('下一场 Alpha');
     const activeBefore = (await app.inject('/local/v1/tournament')).json<{
       activeLocalMatchId: string;
     }>().activeLocalMatchId;
