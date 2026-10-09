@@ -196,9 +196,16 @@ test('preset files export, edit, import and activate without replacing resources
       0,
     );
     const before = store.getState();
+    await page.getByLabel('选择预设文件', { exact: true }).setInputFiles({
+      name: 'invalid.mizar-hud.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from('{}'),
+    });
+    await expect(page.getByRole('alert').filter({ hasText: /配置|文件|预设/ })).toBeVisible();
     const downloadEvent = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出预设文件', exact: true }).click();
     const download = await downloadEvent;
+    await expect(page.getByRole('status').filter({ hasText: '已导出预设文件' })).toBeVisible();
     expect(download.suggestedFilename()).toMatch(/\.mizar-hud\.json$/);
     const exportedPath = join(directory, 'export.mizar-hud.json');
     await download.saveAs(exportedPath);
@@ -261,5 +268,68 @@ test('preset files export, edit, import and activate without replacing resources
     await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('HUD summaries distinguish loading, unavailable and last confirmed configurations', async ({
+  page,
+  context,
+}) => {
+  const app = buildApp({ hudConfigStore: new HudConfigStore({}) });
+  await app.ready();
+  let offline = false;
+  let held = true;
+  let resume: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  await context.route(/\/local\/v1\/hud-config$/, async (route) => {
+    if (held) await pending;
+    if (offline) return route.fulfill({ status: 503, json: { error: 'fixture-offline' } });
+    const result = await app.inject({ url: '/local/v1/hud-config' });
+    return route.fulfill({
+      status: result.statusCode,
+      contentType: 'application/json',
+      body: result.body,
+    });
+  });
+  await context.route('**/operator/hud-config', async (route) => {
+    const result = await app.inject({ url: '/operator/hud-config' });
+    return route.fulfill({
+      status: result.statusCode,
+      contentType: 'application/json',
+      body: result.body,
+    });
+  });
+  try {
+    await page.goto('/?tab=hud');
+    await expect(
+      page.getByRole('heading', { name: '正式播出 · 正在读取', exact: true }),
+    ).toBeVisible();
+    held = false;
+    offline = true;
+    resume!();
+    await expect(
+      page.getByRole('heading', { name: '正式播出 · 无法确认', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText('尚无已确认的播出配置。', { exact: true })).toBeVisible();
+    offline = false;
+    await expect(page.getByRole('heading', { name: /正式播出 · Mizar/ })).toBeVisible();
+    offline = true;
+    await expect(
+      page.getByRole('heading', { name: '正式播出 · 无法确认', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/最近确认：Mizar/)).toBeVisible();
+    await page.goto('/operator/hud?hud-config=companion&mode=fixture');
+    await expect(page.getByText('正式播出 · 无法确认', { exact: true })).toBeVisible();
+    await expect(page.getByText('尚无已确认的播出配置', { exact: true })).toBeVisible();
+    offline = false;
+    await expect(page.getByText(/正式播出 · Mizar/)).toBeVisible();
+    offline = true;
+    await expect(page.getByText('正式播出 · 无法确认', { exact: true })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: /最近确认：Mizar/ })).toBeVisible();
+  } finally {
+    resume!();
+    await app.close();
   }
 });

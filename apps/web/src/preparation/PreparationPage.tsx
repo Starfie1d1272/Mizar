@@ -402,10 +402,25 @@ export function PreparationPage() {
         ) : tab === 'hud' || tab === 'overlay' ? (
           <>
             <Panel>
-              <h2>正式播出 · {hud.current.preset.name}</h2>
-              <p>
-                布局：{hud.current.layout.name} · 外观：{hud.current.theme.name}
-              </p>
+              <h2>
+                正式播出 ·{' '}
+                {hud.status === 'ready'
+                  ? hud.current.preset.name
+                  : hud.status === 'loading'
+                    ? '正在读取'
+                    : '无法确认'}
+              </h2>
+              {hud.status === 'ready' ? (
+                <p>
+                  布局：{hud.current.layout.name} · 外观：{hud.current.theme.name}
+                </p>
+              ) : (
+                <StatusBanner tone={hud.status === 'error' ? 'warning' : 'info'}>
+                  {hud.activeRevision
+                    ? `最近确认：${hud.current.preset.name} · 版本 ${hud.activeRevision}；当前状态待重查。`
+                    : '尚无已确认的播出配置。'}
+                </StatusBanner>
+              )}
               <p>编辑、保存与应用到播出是独立操作。五套 HUD 的真实画布与预设文件在编辑器中操作。</p>
               <Button onClick={() => void action(() => openTool('hud'))}>
                 编辑 / 选择 HUD 与导入导出

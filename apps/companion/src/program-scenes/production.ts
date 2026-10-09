@@ -11,6 +11,7 @@ export function registerProductionRoutes(
     hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
+    beginSource?: () => void;
   },
 ) {
   let cleanup: {
@@ -49,8 +50,10 @@ export function registerProductionRoutes(
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
-        if (mode === 'preparation') cleanup = null;
+        const starting = mode === 'preparation';
+        if (starting) cleanup = null;
         mode = 'live';
+        if (starting) options.beginSource?.();
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {

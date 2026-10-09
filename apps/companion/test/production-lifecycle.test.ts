@@ -150,11 +150,13 @@ it.each(['live', 'hidden'] as const)(
       return Promise.resolve();
     });
     const app = Fastify();
+    const beginSource = vi.fn();
     const lifecycle = registerProductionRoutes(app, {
       originPolicy: createLocalWebOriginPolicy(),
       hasContext: () => true,
       scenes,
       release,
+      beginSource,
     });
     const send = (action: string) =>
       app.inject({
@@ -165,6 +167,10 @@ it.each(['live', 'hidden'] as const)(
       });
     try {
       await send('enter');
+      await send('enter');
+      await send('hide');
+      await send('enter');
+      expect(beginSource).toHaveBeenCalledTimes(1);
       if (mode === 'hidden') await send('hide');
       const before = lifecycle.get();
       calls.length = 0;

@@ -677,6 +677,7 @@ export function HudConsolePage() {
       return;
     try {
       downloadHudPresetFile(presetDraft, layoutDraft, themeDraft);
+      setCommandError(false);
       setCommandState('已导出预设文件，包含组件方案、布局与外观。');
     } catch {
       setCommandError(true);
@@ -901,10 +902,21 @@ export function HudConsolePage() {
             </span>
           </div>
           <div>
-            <strong>正式播出 · {onAir.current.preset.name}</strong>
-            <span>
-              启用版本 {onAir.activeRevision ?? '读取中'}
-              {activationStale ? ' · 有保存尚未应用' : ''}
+            <strong>
+              正式播出 ·{' '}
+              {onAir.status === 'ready'
+                ? onAir.current.preset.name
+                : onAir.status === 'loading'
+                  ? '正在读取'
+                  : '无法确认'}
+            </strong>
+            <span role={onAir.status === 'error' ? 'alert' : 'status'}>
+              {onAir.status === 'ready'
+                ? `启用版本 ${onAir.activeRevision}`
+                : onAir.activeRevision
+                  ? `最近确认：${onAir.current.preset.name} · 版本 ${onAir.activeRevision}；当前状态待重查`
+                  : '尚无已确认的播出配置'}
+              {onAir.status === 'ready' && activationStale ? ' · 有保存尚未应用' : ''}
             </span>
           </div>
           <Button
