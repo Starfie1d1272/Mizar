@@ -89,7 +89,7 @@ public class UpdateFixture {
   }
   public static void Main(string[] args) {
     var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
-    if (Path.GetFileName(exe).Equals("Mizar.exe", StringComparison.OrdinalIgnoreCase)) { Thread.Sleep(30000); return; }
+    if (Path.GetFileName(exe).Equals("Mizar.exe", StringComparison.OrdinalIgnoreCase)) { if (args.Length > 0 && args[0] == "--hold") Thread.Sleep(30000); return; }
     var stage = Path.GetDirectoryName(exe);
     var mode = File.ReadAllText(Path.Combine(stage, "mode.txt"));
     var command = String.Join(" ", args);
@@ -145,7 +145,10 @@ public class UpdateFixture {
       result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
       assert.equal(result.code, 0, result.errors);
     } else if (scenario === 'remaining-process') {
-      const owned = spawn(join(installed, 'Mizar.exe'), [], { windowsHide: true, stdio: 'ignore' });
+      const owned = spawn(join(installed, 'Mizar.exe'), ['--hold'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
       try {
         result = await run([
           '-File',

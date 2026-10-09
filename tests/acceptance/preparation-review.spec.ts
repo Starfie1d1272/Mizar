@@ -9,7 +9,7 @@ import {
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
-test('Stable updates allow cancellation and delay, protect production and require an explicit native confirmation', async ({
+test('Stable updates foreground release notes and use one explicit click, preserving cancellation and production protection', async ({
   page,
 }, testInfo) => {
   // Browser/API/IPC fixtures prove user interaction, not a real Windows upgrade.
@@ -21,27 +21,25 @@ test('Stable updates allow cancellation and delay, protect production and requir
     distribution: 'installed',
     error: null as string | null,
     downloadedBytes: 0,
-    lastCheckedAt: null,
     candidate: {
       version: '1.1.0',
-      notes: '<script>untrusted()</script>\n中文更新说明',
+      notes: '新增应用内更新，一键升级到最新版本。\n改善国内下载体验。\n修复多项问题，提升稳定性。',
       installer: { bytes: 100 },
     },
     installBlockedReason: null as string | null,
     canResumeAutomatic: false,
   };
   await page.route('**/local/v1/updates', (route) => route.fulfill({ json: status }));
+  await page.route('**/operator/obs/launch-target', (route) =>
+    route.fulfill({ json: { executablePath: 'C:\\OBS\\obs64.exe' } }),
+  );
   await page.route('**/operator/updates', async (route) => {
     const body = route.request().postDataJSON() as { action: string; enabled?: boolean };
     if (body.action === 'automatic') status.automatic = body.enabled ?? false;
     if (body.action === 'download') {
       downloads++;
-      status.phase = downloads === 1 ? 'downloading' : 'ready';
-      status.downloadedBytes = downloads === 1 ? 40 : 100;
-      if (downloads > 1) {
-        status.installBlockedReason = '请先结束节目制作并恢复自动编排，再安装更新。';
-        status.canResumeAutomatic = true;
-      }
+      status.phase = downloads < 3 ? 'downloading' : 'ready';
+      status.downloadedBytes = downloads < 3 ? 40 : 100;
     }
     if (body.action === 'cancel') status.phase = 'available';
     if (body.action === 'resume') {
@@ -63,7 +61,7 @@ test('Stable updates allow cancellation and delay, protect production and requir
           if (command.startsWith('install_update') || command.startsWith('open_update'))
             commands.push({ command, ...(args ? { args } : {}) });
           return command === 'install_update'
-            ? Promise.reject(new Error('升级准备未完成，旧版保持可用。'))
+            ? Promise.reject(new Error('更新未完成，请重试。'))
             : Promise.resolve({} as T);
         },
       },
@@ -71,60 +69,63 @@ test('Stable updates allow cancellation and delay, protect production and requir
   });
   await page.goto('/settings?tab=advanced');
   await expect(page.getByRole('heading', { name: '应用更新' })).toBeVisible();
-  const automatic = page.getByRole('checkbox', { name: '后台检查 Stable 更新' });
+  await expect(
+    page.getByText('新增应用内更新，一键升级到最新版本。', { exact: false }),
+  ).toBeVisible();
+  const update = page.getByRole('button', { name: '一键更新', exact: true });
+  await expect(update).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath('stable-update-release-notes.png'),
+    fullPage: true,
+  });
+  await page.getByText('更新设置', { exact: true }).click();
+  const automatic = page.getByRole('checkbox', { name: '自动检查更新' });
   await expect(automatic).not.toBeChecked();
   await automatic.click();
   await expect(automatic).toBeChecked();
-  await page.getByText('更新说明', { exact: true }).click();
-  await expect(page.getByText('<script>untrusted()</script>', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: '下载并验证更新' }).click();
+  await page.getByText('更新设置', { exact: true }).click();
+  await update.click();
   await expect(page.getByRole('progressbar', { name: '更新下载进度' })).toHaveAttribute(
     'value',
     '40',
   );
-  await page.getByRole('button', { name: '取消下载', exact: true }).click();
-  await expect(page.getByRole('button', { name: '下载并验证更新' })).toBeVisible();
-  await page.getByRole('button', { name: '下载并验证更新' }).click();
-  const install = page.getByRole('button', { name: '退出并升级', exact: true });
-  await expect(install).toBeDisabled();
-  await page.getByRole('button', { name: '稍后安装', exact: true }).click();
-  await expect(page.getByText('安装包已保留，可在结束制作后回来安装。')).toBeVisible();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(update).toBeEnabled();
+  await update.click();
+  await page.getByRole('button', { name: '稍后', exact: true }).click();
+  status.phase = 'ready';
+  status.downloadedBytes = 100;
+  status.installBlockedReason = '结束制作后可更新。';
+  await expect(update).toBeDisabled();
   expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([]);
-  await page.getByRole('button', { name: '恢复自动编排' }).click();
-  await expect(install).toBeEnabled();
-  await install.focus();
+  status.installBlockedReason = '结束节目制作后可更新。';
+  status.canResumeAutomatic = true;
+  await expect(update).toBeEnabled();
+  await update.focus();
   await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog', { name: '退出 Mizar 并升级' });
-  await expect(dialog).toBeVisible();
-  const confirm = dialog.getByRole('button', { name: '确认退出并升级' });
-  await expect(confirm).toBeDisabled();
-  await page.keyboard.press('Escape');
-  await expect(dialog).not.toBeVisible();
-  await expect(install).toBeFocused();
-  await install.click();
-  await dialog.getByRole('checkbox', { name: '我已保存资料并关闭编辑工具' }).check();
-  await expect(confirm).toBeEnabled();
-  await page.screenshot({
-    path: testInfo.outputPath('stable-update-confirmation.png'),
-    fullPage: true,
-  });
-  await confirm.click();
-  await expect(page.getByText('升级准备未完成，旧版保持可用。')).toBeVisible();
+  await expect(page.getByText('更新未完成，请重试。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([
     { command: 'install_update' },
   ]);
-  await page.getByRole('button', { name: '检查新版本', exact: true }).click();
-  await expect(
-    page.getByText('更新来源验证失败，安装已被阻止。请稍后重试或查看正式发布页。'),
-  ).toBeVisible();
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(page.getByText('更新验证失败，请稍后重试。')).toBeVisible();
+  status.phase = 'available';
+  status.error = null;
+  status.canResumeAutomatic = false;
+  status.candidate.notes = '<script>untrusted()</script>';
+  await page.reload();
+  await expect(page.getByText('<script>untrusted()</script>', { exact: true })).toBeVisible();
+  await update.click();
+  await expect(page.getByText('更新未完成，请重试。', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(window, 'updateCommands') as unknown)).toEqual([
+    { command: 'install_update' },
+  ]);
   status.phase = 'manual';
   status.distribution = 'portable';
-  status.error = null;
   await page.reload();
-  await expect(
-    page.getByText('便携版请下载新版 ZIP，备份原目录并核对 state/ 资料后更新。'),
-  ).toBeVisible();
-  await expect(page.getByRole('button', { name: '退出并升级', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '下载新版', exact: true })).toBeVisible();
+  await expect(update).toHaveCount(0);
 });
 
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({

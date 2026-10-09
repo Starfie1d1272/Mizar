@@ -31,8 +31,13 @@ function Assert-Plan($plan) {
   $bundle = [IO.Path]::GetFullPath($plan.bundleRoot).TrimEnd('\')
   $state = [IO.Path]::GetFullPath($plan.stateRoot).TrimEnd('\')
   if ($state -eq $bundle -or $state.StartsWith($bundle + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
-  $expected = Join-Path (Join-Path $state 'updates') ('download-*\Mizar-v' + $plan.version + '-Windows-x64-Setup.exe')
-  if ($plan.installer -notlike $expected) { throw 'update_installer_path_invalid' }
+  $installerPath = [IO.Path]::GetFullPath($plan.installer)
+  $downloadDirectory = Split-Path -Parent $installerPath
+  $downloadName = Split-Path -Leaf $downloadDirectory
+  $updatesDirectory = [IO.Path]::GetFullPath((Join-Path $state 'updates')).TrimEnd('\')
+  if ((Split-Path -Parent $downloadDirectory).TrimEnd('\') -ne $updatesDirectory -or
+    $downloadName -notmatch '^download-[A-Za-z0-9_-]+$' -or
+    (Split-Path -Leaf $installerPath) -ne ('Mizar-v' + $plan.version + '-Windows-x64-Setup.exe')) { throw 'update_installer_path_invalid' }
 }
 function Assert-Installer($plan, [string]$path) {
   Assert-PlainPath $path
@@ -164,8 +169,9 @@ if ($Mode -eq 'Prepare') {
 Assert-PlainPath $StageRoot
 $plan = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'plan.json') -Raw | ConvertFrom-Json
 Assert-Plan $plan
-$allowedStage = Join-Path $plan.stateRoot 'updates\install-*'
-if ($StageRoot.TrimEnd('\') -notlike $allowedStage) { throw 'update_stage_invalid' }
+$StageRoot = [IO.Path]::GetFullPath($StageRoot).TrimEnd('\')
+if ((Split-Path -Parent $StageRoot) -ne [IO.Path]::GetFullPath((Join-Path $plan.stateRoot 'updates')).TrimEnd('\') -or
+  (Split-Path -Leaf $StageRoot) -notmatch '^install-[a-f0-9]{32}$') { throw 'update_stage_invalid' }
 try {
   if ($Mode -eq 'Recover') {
     Recovery-Registration $true
@@ -196,7 +202,7 @@ try {
   Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
-  $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
+  $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing'; installerPid = $installer.Id }
   $installer.WaitForExit()
   if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
@@ -206,6 +212,8 @@ try {
   Recovery-Registration $false
   Remove-Item -LiteralPath (Join-Path $StageRoot 'previous') -Recurse -Force
   Remove-Item -LiteralPath (Join-Path $StageRoot 'Installer.exe') -Force
+  $env:MIZAR_STATE_ROOT = $plan.stateRoot
+  Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot
 } catch {
   $code = [string]$_.Exception.Message
   if ($code -notmatch '^update_[a-z_]+$') { $code = 'update_installation_failed' }

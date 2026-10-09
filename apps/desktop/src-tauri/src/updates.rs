@@ -141,7 +141,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         if host.webview_windows().iter().any(|(label, window)| {
             label.starts_with("tool-") && window.is_visible().unwrap_or(true)
         }) {
-            return Err("请先保存修改并关闭 HUD、BP、预览和诊断工具，再升级。".into());
+            return Err("请先保存并关闭编辑和预览窗口。".into());
         }
         if host
             .state::<PendingUpdate>()

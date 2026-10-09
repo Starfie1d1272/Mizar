@@ -11,11 +11,11 @@ export function installBlockReason(
   scenes: ReturnType<ProgramSceneController['get']>,
   obs: ObsStatus | undefined,
 ): string | null {
-  if (production.mode !== 'preparation') return '请先结束现场制作，再安装更新。';
+  if (production.mode !== 'preparation') return '结束制作后可更新。';
   if (scenes.preparing || scenes.active !== 'waiting' || scenes.director?.mode === 'manual')
-    return '请先结束节目制作并恢复自动编排，再安装更新。';
-  if (!obs || obs.connection !== 'connected') return '无法确认 OBS 播出状态，请先连接并检查 OBS。';
-  if (obs.streaming || obs.recording) return 'OBS 正在推流或录制，请停止后再安装更新。';
+    return '结束节目制作后可更新。';
+  if (!obs || obs.connection !== 'connected') return '请先连接 OBS。';
+  if (obs.streaming || obs.recording) return '停止 OBS 推流或录制后可更新。';
   return null;
 }
 export function registerUpdateRoutes(
