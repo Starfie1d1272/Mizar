@@ -14,6 +14,10 @@ namespace Mizar.WebInstaller {
     }
   }
   sealed class IgnoreProgress : IProgress<long> { public void Report(long value) {} }
+  sealed class CancelProgress : IProgress<long> {
+    public CancellationTokenSource Source;
+    public void Report(long value) { Source.Cancel(); }
+  }
   static class Tests {
     static readonly byte[] body = new byte[] { 1, 2, 3, 4 };
     static Plan Good() {
@@ -54,6 +58,11 @@ namespace Mizar.WebInstaller {
           Assert(Downloader.Matches(result,plan));
           var cancelled=new CancellationTokenSource(); cancelled.Cancel();
           await Reject(()=>downloader.Download(plan,root,new IgnoreProgress(),cancelled.Token));
+          File.Delete(result);
+          handler.Reply=r=>Response(body);
+          var during=new CancellationTokenSource();
+          await Reject(()=>downloader.Download(plan,root,new CancelProgress { Source=during },during.Token));
+          Assert(!File.Exists(result) && !File.Exists(result+".part"));
           plan.name="../fixture.bin";
           await Reject(()=>downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None));
           plan=Good(); plan.allowExecute=true;

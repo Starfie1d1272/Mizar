@@ -46,12 +46,24 @@ namespace Mizar.WebInstaller {
       }
     }
     public static bool Matches(string path, Plan plan) {
-      NoReparse(path);
+      return MatchesAsync(path, plan, CancellationToken.None).GetAwaiter().GetResult();
+    }
+    static async Task<bool> MatchesAsync(string path, Plan plan, CancellationToken token) {
+      NoReparse(path); token.ThrowIfCancellationRequested();
       if (!File.Exists(path)) return false;
-      using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+      using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true)) {
         if (input.Length != plan.bytes) return false;
-        using (var sha = SHA256.Create())
-          return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant() == plan.sha256;
+        using (var sha = SHA256.Create()) {
+          var buffer = new byte[65536];
+          for (;;) {
+            int count = await input.ReadAsync(buffer, 0, buffer.Length, token);
+            if (count == 0) break;
+            sha.TransformBlock(buffer, 0, count, buffer, 0);
+          }
+          token.ThrowIfCancellationRequested();
+          sha.TransformFinalBlock(new byte[0], 0, 0);
+          return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant() == plan.sha256;
+        }
       }
     }
     async Task<HttpResponseMessage> Request(string url, CancellationToken token) {
@@ -85,7 +97,7 @@ namespace Mizar.WebInstaller {
       // A lock bounds concurrent writes and disk consumption per authenticated identity.
       NoReparse(target + ".lock");
       using (var gate = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
-        if (Matches(target, plan)) { token.ThrowIfCancellationRequested(); progress.Report(plan.bytes); return target; }
+        if (await MatchesAsync(target, plan, token)) { token.ThrowIfCancellationRequested(); progress.Report(plan.bytes); return target; }
         string staging = target + ".part";
         NoReparse(staging);
         Exception last = null;
@@ -113,7 +125,7 @@ namespace Mizar.WebInstaller {
                 }
               }
               deadline.Token.ThrowIfCancellationRequested();
-              if (!Matches(staging, plan)) throw new InvalidDataException("文件校验失败。");
+              if (!await MatchesAsync(staging, plan, deadline.Token)) throw new InvalidDataException("文件校验失败。");
               token.ThrowIfCancellationRequested();
               NoReparse(target);
               if (File.Exists(target)) File.Delete(target);
