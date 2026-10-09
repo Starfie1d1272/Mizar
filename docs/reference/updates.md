@@ -4,7 +4,7 @@
 
 ## 可信元数据
 
-Stable 使用 `update-manifest.json`，结构标识为 `mizar.update.v1`，包含仓库、正式版本、源码 SHA、中文更新说明、兼容的旧版范围及 Windows x64 NSIS 安装包的名称、字节数、SHA-256 和内容摘要。资格构建在便携包与安装包通过验证后从原始分发清单生成，签发同一 GitHub 构建来源证明，并保存原始 `update-provenance.json` 验证包；晋级上传原清单、证明和原安装包，不重新打包。发布配置中的版本必须与应用版本一致。
+Stable 使用 `update-manifest.json`，结构标识为 `mizar.update.v1`，包含仓库、正式版本、源码 SHA、中文更新说明、兼容的旧版范围及 Windows x64 NSIS 安装包的名称、字节数、SHA-256 和内容摘要。中文更新说明从 CHANGELOG 的精确版本正文在构建时转换为纯文本，提取与格式规则由[发布流程](../development/release-readiness.md#更新日志与发布正文)维护；客户端只显示文本。资格构建在便携包与安装包通过验证后从原始分发清单生成，签发同一 GitHub 构建来源证明，并保存原始 `update-provenance.json` 验证包；晋级上传原清单、证明和原安装包，不重新打包。发布配置中的版本必须与应用版本一致。
 
 检查优先读取南大 Box 的 `Updates/latest.json`。该 `mizar.update-index.v1` 信封只包含原清单的 Base64 字节及验证它所需的原始 Sigstore 证明，不另同步整套发布证据。客户端必须验证证书、透明日志及清单摘要，签发者必须是本仓库 main 上的 Release Qualification，清单源码必须等于签署的构建源码。Box 未同步、不可用或验证失败时回退到内置仓库的 GitHub HTTPS 接口，排除草稿和预发布版本，按 SemVer 判断新旧，再核对证明、正式标签和资产身份。客户端保留的最高版本还用于排除落后的镜像。
 

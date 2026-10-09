@@ -116,19 +116,9 @@ jobs:
           gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw 'Existing tag without verified release; refusing mutation' }
           $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
-          $policy = Get-Content scripts/qualification/update-release.json -Raw | ConvertFrom-Json
           $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
-          $notesFile = if ($policy.version -eq $identity.appVersion -and $policy.notesFile -match '^docs/releases/[A-Za-z0-9.-]+\.md$') { $policy.notesFile } elseif ($env:RELEASE_TAG -eq 'v1.0.0') { 'docs/releases/1.0.md' } else { $null }
-          if ($notesFile) {
-            $notes = Get-Content -LiteralPath $notesFile -Raw
-            # Release pages resolve relative links differently from repository Markdown.
-            $notes = $notes -replace '\]\(\.\./\.\./', "](https://github.com/$env:GH_REPO/blob/$env:SOURCE_SHA/"
-            $notes = $notes -replace '\]\(\.\./', "](https://github.com/$env:GH_REPO/blob/$env:SOURCE_SHA/docs/"
-          } else {
-            $notes = "Mizar $env:RELEASE_TAG`n`n安装请下载名称以 -Setup.exe 结尾的文件；便携版、校验文件和验证报告见下方资产。"
-          }
-          $notes += "`n`n## 构建与校验`n`n源码：$env:SOURCE_SHA`n`n[资格构建](https://github.com/$env:GH_REPO/actions/runs/$env:RUN_ID)。发布资产沿用该构建的已验证文件。"
-          Set-Content release-notes.md $notes -Encoding utf8
+          node scripts/qualification/release-notes.mjs $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
           $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets
           if ($env:RELEASE_TAG -match '-rc\.') { $args += '--prerelease' }
           gh @args
