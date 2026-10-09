@@ -9,6 +9,7 @@ import {
   readdir,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -33,6 +34,7 @@ function usage() {
     '用法：node scripts/qualification/build.mjs [options]',
     '  --output <directory>       输出目录（默认：.agent-tmp/qualification-build）',
     '  --label <RC0|version>      可选报告名称，产品文件名由应用版本生成',
+    '  --resource-mode <full|core-only>  Web 资源组装（默认：full；core-only 不可发布）',
     '  --skip-build               复用已有 dist 输出',
     '  --skip-node-runtime        仅做结构 smoke 的 bundle，不是现场验收 artifact',
     '  --desktop-profile <ci|release>  桌面 Host 构建 profile（默认：release）',
@@ -44,6 +46,7 @@ function parseArgs(argv) {
   const options = {
     output: join(rootDir, '.agent-tmp', 'qualification-build'),
     nodeVersion: QUALIFICATION_NODE_VERSION,
+    resourceMode: 'full',
     skipBuild: false,
     skipNodeRuntime: false,
     desktopProfile: 'release',
@@ -52,7 +55,11 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--skip-build') options.skipBuild = true;
+    if (argument === '--resource-mode') {
+      const value = argv[++index];
+      if (!['full', 'core-only'].includes(value)) throw new Error('Invalid resource mode');
+      options.resourceMode = value;
+    } else if (argument === '--skip-build') options.skipBuild = true;
     else if (argument === '--skip-node-runtime') options.skipNodeRuntime = true;
     else if (argument === '--allow-dirty') options.allowDirty = true;
     else if (argument === '--desktop-profile') {
@@ -315,10 +322,14 @@ async function main() {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
-  if (!options.skipBuild) await timed('workspace-build', () => runCommand('pnpm', ['build']));
+  if (!options.skipBuild)
+    await timed('workspace-build', () =>
+      runCommand('pnpm', ['build'], { env: { MIZAR_WEB_RESOURCE_MODE: options.resourceMode } }),
+    );
   await runCommand(process.execPath, [
     join(scriptDir, 'verify-web-resources.mjs'),
     join(rootDir, 'apps/web/dist'),
+    options.resourceMode,
   ]);
   await access(join(rootDir, 'apps', 'companion', 'dist', 'server.js'));
 
@@ -433,7 +444,10 @@ async function main() {
       join(resourcesDir, 'scripts', 'product-logs.mjs'),
     );
     const developmentOnly =
-      options.allowDirty || options.skipNodeRuntime || process.platform !== 'win32';
+      options.resourceMode === 'core-only' ||
+      options.allowDirty ||
+      options.skipNodeRuntime ||
+      process.platform !== 'win32';
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
       const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
       await timed('desktop-cargo-build', () =>
@@ -463,6 +477,14 @@ async function main() {
     const digest = await timed('content-digest', () => contentDigest(stagingDir));
     const artifact = {
       appVersion,
+      resourceMode: options.resourceMode,
+      webBytes: (
+        await Promise.all(
+          (await listFiles(join(resourcesDir, 'web', 'dist'))).map((path) =>
+            stat(path).then((info) => info.size),
+          ),
+        )
+      ).reduce((sum, size) => sum + size, 0),
       schemaVersion: 1,
       productSchemaVersion: 1,
       desktopHost: 'tauri2',
@@ -500,6 +522,8 @@ async function main() {
         {
           schemaVersion: 1,
           appVersion: artifact.appVersion,
+          resourceMode: options.resourceMode,
+          webBytes: artifact.webBytes,
           label: options.label,
           archive: `${bundleName}.zip`,
           archiveSha256: archive.archiveSha256,

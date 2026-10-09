@@ -36,3 +36,31 @@ it('rejects missing production replays and leaked development assets', async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('keeps required Core assets intact and refuses optional resources or mismatched build modes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-core-resources-'));
+  try {
+    await cp(new URL('../../apps/web/public/brand', import.meta.url), join(root, 'brand'), {
+      recursive: true,
+    });
+    await cp(new URL('../../packages/cs2-assets/generated/public', import.meta.url), root, {
+      recursive: true,
+    });
+    await writeFile(
+      join(root, 'web-resource-mode.json'),
+      JSON.stringify({ schemaVersion: 1, resourceMode: 'core-only' }),
+    );
+    await writeFile(join(root, 'index.html'), '<html></html>');
+    await writeFile(join(root, 'product-shell.css'), '');
+    await expect(verifyWebResources(root, 'core-only')).resolves.toBeUndefined();
+    await expect(verifyWebResources(root, 'full')).rejects.toThrow('mode');
+    await expect(verifyWebResources(root, 'unknown')).rejects.toThrow('Unknown');
+    await mkdir(join(root, 'fixtures'));
+    await expect(verifyWebResources(root, 'core-only')).rejects.toThrow('optional');
+    await rm(join(root, 'fixtures'), { recursive: true });
+    await writeFile(join(root, 'brand/mizar-mark.svg'), 'corrupt');
+    await expect(verifyWebResources(root, 'core-only')).rejects.toThrow('Required Core');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

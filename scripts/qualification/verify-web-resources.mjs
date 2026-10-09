@@ -1,9 +1,78 @@
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir, lstat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { pathToFileURL, URL } from 'node:url';
+import { fileURLToPath, pathToFileURL, URL } from 'node:url';
 
-export async function verifyWebResources(root) {
+export function webResourceMode(value = process.env.MIZAR_WEB_RESOURCE_MODE ?? 'full') {
+  if (!['full', 'core-only'].includes(value))
+    throw new Error(`Unknown Web resource mode: ${value}`);
+  return value;
+}
+
+async function verifyCoreFiles(source, target) {
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) throw new Error('Core source contains a symlink');
+    if ((await lstat(resolve(target, entry.name))).isSymbolicLink()) {
+      throw new Error('Core output contains a symlink');
+    }
+    if (entry.isDirectory())
+      await verifyCoreFiles(resolve(source, entry.name), resolve(target, entry.name));
+    else {
+      const [original, packaged] = await Promise.all([
+        readFile(resolve(source, entry.name)),
+        readFile(resolve(target, entry.name)),
+      ]);
+      if (!original.equals(packaged))
+        throw new Error(`Required Core resource differs: ${entry.name}`);
+    }
+  }
+}
+
+export async function verifyWebResources(root, requestedMode) {
+  const mode = webResourceMode(requestedMode);
+  let marker;
+  let hasMarker = false;
+  try {
+    hasMarker = true;
+    marker = JSON.parse(await readFile(resolve(root, 'web-resource-mode.json'), 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT' || mode === 'core-only') throw error;
+    hasMarker = false;
+  }
+  if (hasMarker && (!marker || marker.schemaVersion !== 1 || marker.resourceMode !== mode)) {
+    throw new Error('Web resource mode does not match the requested bundle');
+  }
+  if (mode === 'core-only') {
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (
+        !['assets', 'brand', 'index.html', 'product-shell.css', 'web-resource-mode.json'].includes(
+          entry.name,
+        ) ||
+        entry.isSymbolicLink()
+      ) {
+        throw new Error(`Core contains unknown or optional resources: ${entry.name}`);
+      }
+    }
+    for (const directory of ['fixtures', 'fixture-media']) {
+      try {
+        await access(resolve(root, directory));
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      throw new Error(`Core contains optional resources: ${directory}`);
+    }
+    await verifyCoreFiles(
+      fileURLToPath(new URL('../../apps/web/public/brand/', import.meta.url)),
+      resolve(root, 'brand'),
+    );
+    await verifyCoreFiles(
+      fileURLToPath(new URL('../../packages/cs2-assets/generated/public/', import.meta.url)),
+      root,
+    );
+    for (const path of ['index.html', 'product-shell.css']) await access(resolve(root, path));
+    return;
+  }
   const media = JSON.parse(
     await readFile(new URL('../../fixtures/epl-s24/media.json', import.meta.url), 'utf8'),
   );
@@ -53,8 +122,6 @@ export async function verifyWebResources(root) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await verifyWebResources(resolve(process.argv[2] ?? 'apps/web/dist'));
-  console.log(
-    'Production Web: EPL editor replays retained; historical development replays excluded.',
-  );
+  await verifyWebResources(resolve(process.argv[2] ?? 'apps/web/dist'), process.argv[3]);
+  console.log(`Production Web verified (${webResourceMode(process.argv[3])}).`);
 }

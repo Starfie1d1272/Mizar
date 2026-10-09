@@ -1,0 +1,27 @@
+name: Web Installer POC
+on:
+  pull_request:
+    paths:
+      - 'scripts/web-installer/**'
+      - 'scripts/qualification/installer-assets/**'
+      - '.github/workflows/web-installer-poc.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compile and test the native bootstrapper
+        shell: powershell
+        run: ./scripts/web-installer/test-poc.ps1 -OutputDirectory .agent-tmp/web-installer
+      - name: Verify public HTTPS download and capture actual native UI
+        shell: powershell
+        run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: web-installer-poc-native
+          path: .agent-tmp/web-installer
