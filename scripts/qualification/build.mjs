@@ -379,6 +379,7 @@ async function main() {
       'install-gsi.ps1',
       'ensure-gsi.ps1',
       'restore-gsi.ps1',
+      'update-install.ps1',
       'start.ps1',
       'rotate.ps1',
       'mark.ps1',

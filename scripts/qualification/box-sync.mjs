@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, appendFile } from 'node:fs/promises';
+import { readFile, appendFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
@@ -155,12 +159,12 @@ export class BoxClient {
     }
     return { sha256: hash.digest('hex'), size };
   }
-  async upload(path, name, bytes) {
+  async upload(path, name, bytes, replace = false) {
     const url = this.temporaryUrl(await this.api('upload-link', path));
     url.searchParams.set('ret-json', '1');
     const form = new FormData();
     form.set('parent_dir', path);
-    form.set('replace', '0');
+    form.set('replace', replace ? '1' : '0');
     form.set('file', new Blob([bytes]), name);
     const result = await (
       await checkedFetch(url, { method: 'POST', body: form, redirect: 'error' }, 600000)
@@ -238,6 +242,30 @@ export async function syncStable({ box, identity, bytes, resolveIdentity }) {
     '新版已保留；Stable 尚需整理，可重试同一版本',
   );
   return '同步成功：Stable 已保留一个经过校验的正式安装包；Archive 保留回滚版本。';
+}
+
+export async function syncStableRelease({ box, identity, bytes, resolveIdentity, updateIndex }) {
+  const result = await syncStable({ box, identity, bytes, resolveIdentity });
+  if (!updateIndex) return result; // Historical releases have no update metadata.
+  // A pointer is published only after upload/hash verification and complete
+  // archival. Failed cleanup never advertises a new update to clients.
+  await verifyRemote(box, `/Stable/${identity.name}`, identity);
+  const root = await box.list('/');
+  const updates = root.find((e) => e.name === 'Updates');
+  requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
+  if (!updates) await box.api('dir', '/Updates', 'POST', { operation: 'mkdir' });
+  const indexIdentity = { size: updateIndex.length, sha256: digest(updateIndex) };
+  const entries = await box.list('/Updates');
+  if (entries.some((e) => e.name === 'latest.json')) {
+    const previous = await box.hash('/Updates/latest.json');
+    if (previous.sha256 === indexIdentity.sha256 && previous.size === indexIdentity.size)
+      return result;
+  }
+  // Seafile replace=1 publishes one complete file after its upload completes;
+  // the signature and original manifest travel in this one atomic envelope.
+  await box.upload('/Updates', 'latest.json', updateIndex, true);
+  await verifyRemote(box, '/Updates/latest.json', indexIdentity);
+  return `${result} Updates 最新清单已发布并核对。`;
 }
 
 export async function probe(box) {
@@ -328,7 +356,68 @@ async function main() {
   const bytes = Buffer.from(
     await (await checkedFetch(identity.asset.browser_download_url, {}, 600000)).arrayBuffer(),
   );
-  return syncStable({ box, identity, bytes, resolveIdentity: releaseIdentity });
+  const release = await github(`releases/tags/${tag}`);
+  const metadata = release.assets.filter((a) =>
+    ['update-manifest.json', 'update-provenance.json'].includes(a.name),
+  );
+  let updateIndex;
+  if (metadata.length) {
+    requireValue(metadata.length === 2, '正式更新资料缺少清单或来源证明');
+    const assets = [];
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-update-proof-'));
+    try {
+      for (const kind of ['manifest', 'provenance']) {
+        const asset = metadata.find((a) => a.name === `update-${kind}.json`);
+        requireValue(
+          asset &&
+            asset.size <= (kind === 'manifest' ? 65536 : 2097152) &&
+            asset.browser_download_url ===
+              `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/update-${kind}.json`,
+          '更新资料地址或大小无效',
+        );
+        const data = Buffer.from(
+          await (await checkedFetch(asset.browser_download_url)).arrayBuffer(),
+        );
+        requireValue(
+          data.length === asset.size && asset.digest === `sha256:${digest(data)}`,
+          '更新资料下载身份不一致',
+        );
+        await writeFile(join(directory, asset.name), data);
+        assets.push({ kind, bytes: data, size: data.length, sha256: digest(data) });
+      }
+      // gh verifies the signature, repository, workflow and transparency proof;
+      // neither a mirror credential nor a same-channel hash grants authenticity.
+      await promisify(execFile)('gh', [
+        'attestation',
+        'verify',
+        join(directory, 'update-manifest.json'),
+        '--bundle',
+        join(directory, 'update-provenance.json'),
+        '--repo',
+        'Starfie1d1272/Mizar',
+        '--signer-workflow',
+        'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml',
+      ]);
+      const update = JSON.parse(assets.find((a) => a.kind === 'manifest').bytes);
+      requireValue(
+        update.version === identity.version &&
+          update.installer.name === identity.name &&
+          update.installer.sha256 === identity.sha256 &&
+          update.installer.bytes === identity.size,
+        '更新清单与正式安装包不一致',
+      );
+      updateIndex = Buffer.from(
+        JSON.stringify({
+          schemaVersion: 'mizar.update-index.v1',
+          manifestBase64: assets.find((a) => a.kind === 'manifest').bytes.toString('base64'),
+          provenance: JSON.parse(assets.find((a) => a.kind === 'provenance').bytes),
+        }) + '\n',
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+  return syncStableRelease({ box, identity, bytes, resolveIdentity: releaseIdentity, updateIndex });
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {

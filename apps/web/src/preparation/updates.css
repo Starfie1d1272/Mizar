@@ -1,0 +1,7 @@
+.settings-update-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: calc(var(--mizar-layout-padding) * 24);
+  overflow: auto;
+  color: var(--mizar-fg-secondary);
+}

@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "notesFile": "docs/releases/1.0.md",
+  "minimumVersion": "1.0.0",
+  "maximumVersionExclusive": "2.0.0"
+}

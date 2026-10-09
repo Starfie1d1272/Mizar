@@ -6,6 +6,8 @@ import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
 import { registerProductionRoutes } from './program-scenes/production.js';
+import { registerUpdateRoutes } from './updates/routes.js';
+import type { UpdateManager } from './updates/manager.js';
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
@@ -88,6 +90,7 @@ import {
 } from './local-web/websocket-transport.js';
 
 export interface CompanionAppOptions {
+  readonly updates?: UpdateManager;
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
   readonly productRuntime?: {
@@ -599,6 +602,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  if (options.updates && options.productRuntime)
+    registerUpdateRoutes(app, {
+      manager: options.updates,
+      controlToken: options.productRuntime.controlToken,
+      originPolicy: localWebTransport.getOriginPolicy(),
+      production,
+      scenes: sceneController,
+      obs: async () => obsAdapter?.status(),
+    });
   const guidance = new ProductionGuidanceStore();
   const bilibili = new BilibiliStatus();
   app.get('/local/v1/production-guidance', async (_request, reply) => {

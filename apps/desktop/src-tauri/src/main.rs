@@ -14,6 +14,7 @@ mod production_exit;
 mod startup_log;
 mod startup_wait;
 mod support_export;
+mod updates;
 mod window_frame;
 mod window_presentation;
 mod windows_host;
@@ -424,7 +425,10 @@ fn obs_executable_allowed(path: &Path) -> bool {
 }
 
 #[tauri::command]
-async fn launch_obs(executable_path: String, log: tauri::State<'_, DesktopLog>) -> Result<bool, String> {
+async fn launch_obs(
+    executable_path: String,
+    log: tauri::State<'_, DesktopLog>,
+) -> Result<bool, String> {
     let log = log.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = OBS_LAUNCH_LOCK.lock().map_err(|_| "OBS 启动状态不可用。")?;
@@ -816,6 +820,84 @@ fn open_issue_report() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn install_update(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在制作中心的高级设置中确认升级。".into());
+    }
+    updates::prepare(app).await
+}
+
+#[tauri::command]
+fn open_update_page(source: String, version: Option<String>) -> Result<(), String> {
+    let url = if source == "mirror" {
+        "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/".to_string()
+    } else if source == "github" {
+        let base = "https://github.com/Starfie1d1272/Mizar/releases";
+        if let Some(version) = version {
+            let parts: Vec<_> = version.split('.').collect();
+            if parts.len() != 3
+                || parts.iter().any(|p| {
+                    p.is_empty()
+                        || !p.bytes().all(|c| c.is_ascii_digit())
+                        || (p.len() > 1 && p.starts_with('0'))
+                })
+            {
+                return Err("更新版本无效。".into());
+            }
+            format!("{base}/tag/v{version}")
+        } else {
+            base.to_string()
+        }
+    } else {
+        return Err("更新下载来源无效。".into());
+    };
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = format!("{url}\0").encode_utf16().collect();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        Err("正式下载页面未能打开，请重试。".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn open_update_recovery(app: tauri::AppHandle) -> Result<(), String> {
+    let log = app.state::<DesktopLog>();
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = format!(
+        "{}\0",
+        powershell::provider_path(&log.state_root.join("updates")).display()
+    )
+    .encode_utf16()
+    .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        Err("更新恢复目录未能打开，请查看日志。".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
 fn open_rivalhub_authorization(url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|_| "授权页面地址无效。")?;
     if parsed.scheme() != "https"
@@ -1091,6 +1173,7 @@ fn run_desktop(
     log: DesktopLog,
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
+    update_stage: Arc<Mutex<Option<PathBuf>>>,
 ) -> Result<(), String> {
     let exit_request = Arc::new(
         ExitRequest::new(&shutdown_scope(&bundle_root()?)?).map_err(|error| error.to_string())?,
@@ -1123,6 +1206,7 @@ fn run_desktop(
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
         .manage(production_exit::VerifiedStop::default())
+        .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
@@ -1142,6 +1226,9 @@ fn run_desktop(
             open_rivalhub_authorization,
             open_steam_api_key,
             open_issue_report,
+            install_update,
+            open_update_page,
+            open_update_recovery,
             open_rivalhub_workbench,
             save_support_bundle,
             gsi_status,
@@ -1465,6 +1552,7 @@ fn run_desktop(
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
                 if let Err(error) = result {
+                    updates::cancel(&host);
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
                     host.state::<production_exit::ExitGate>().cancel();
@@ -1513,6 +1601,7 @@ fn run_desktop(
 }
 
 fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
+    let update_stage = Arc::new(Mutex::new(None));
     let scope = log.step("shutdown_scope", || shutdown_scope(root))?;
     let exit_signal = log.step("shutdown_signal", || ExitSignal::new(&scope))?;
     let job = Arc::new(log.step("runtime_job", RuntimeJob::new)?);
@@ -1534,7 +1623,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_desktop(log.clone(), exit_signal, job.clone())
+            run_desktop(log.clone(), exit_signal, job.clone(), update_stage.clone())
         })) {
             Ok(result) => result,
             Err(_) => Err("桌面界面启动或运行时发生异常；原始 panic 信息已记录。".into()),
@@ -1549,7 +1638,14 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     // Failure cannot stop a same-artifact runtime borrowed from another session.
     // A successful desktop session's explicit exit may stop its verified local runtime.
     if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root)) {
-        let _ = log.step("runtime_stop", || stop_runtime(root, Some(log)));
+        let stopped = log.step("runtime_stop", || stop_runtime(root, Some(log)));
+        if stopped.is_err() {
+            if let Ok(mut pending) = update_stage.lock() {
+                if let Some(stage) = pending.take() {
+                    let _ = fs::remove_dir_all(stage);
+                }
+            }
+        }
     } else {
         log.event(
             "runtime_stop",
@@ -1570,6 +1666,15 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         return outcome.and(Err(error));
     }
     log.event(cleanup_stage, "success", None);
+    if outcome.is_ok() {
+        if let Some(stage) = update_stage
+            .lock()
+            .map_err(|_| "更新安装状态不可用。")?
+            .take()
+        {
+            updates::launch(&stage, log)?;
+        }
+    }
     outcome
 }
 

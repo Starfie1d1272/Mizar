@@ -6,6 +6,7 @@ import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
+import { UpdateSettings } from './UpdateSettings';
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
@@ -118,6 +119,7 @@ export function Settings({ tab }: { tab: string }) {
               </Button>
             </div>
           </Panel>
+          <UpdateSettings />
         </div>
       ) : tab === 'obs' ? (
         <div className="obs-setup">

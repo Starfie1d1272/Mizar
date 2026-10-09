@@ -6,6 +6,7 @@ import { version as osVersion } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
+import { UpdateManager } from './updates/manager.js';
 import { configuredHttpOutputs } from './output/http-sink.js';
 import { RivalHubConnection } from './match-context/rivalhub-connection.js';
 import { createProgramRuntime } from './runtime/program-runtime.js';
@@ -183,7 +184,26 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   if (productInstance !== undefined && (qualificationMode || !productArtifact || !productToken)) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
+  let updates: UpdateManager | undefined;
+  if (
+    productInstance &&
+    process.env.MIZAR_BUNDLE_ROOT &&
+    process.env.MIZAR_STATE_ROOT &&
+    process.env.MIZAR_APP_VERSION
+  ) {
+    updates = new UpdateManager({
+      stateRoot: process.env.MIZAR_STATE_ROOT,
+      bundleRoot: process.env.MIZAR_BUNDLE_ROOT,
+      version: process.env.MIZAR_APP_VERSION,
+      currentContentDigest: productArtifact!,
+      installed: process.env.MIZAR_DISTRIBUTION === 'installed',
+      log: (stage, code, version) =>
+        console.info(JSON.stringify({ event: 'update', stage, code, version })),
+    });
+    await updates.load();
+  }
   const app = buildApp({
+    ...(updates ? { updates } : {}),
     steamAvatars,
     ...(productInstance === undefined
       ? {}

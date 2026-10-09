@@ -1,5 +1,8 @@
 Unicode true
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "WinMessages.nsh"
+Var ControlledUpdate
 Name "Mizar"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Mizar"
@@ -11,10 +14,13 @@ SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Mizar.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 Mizar"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalled
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_PRE UpdateDirectoryPre
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShown
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -22,7 +28,29 @@ SetCompressor /SOLID lzma
 
 Function .onInit
   SetShellVarContext current
+  StrCpy $ControlledUpdate "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/MIZARUPDATE" $1
+  IfErrors +2 0
+  StrCpy $ControlledUpdate "1"
   Call CheckRunning
+FunctionEnd
+Function UpdateDirectoryPre
+  StrCmp $ControlledUpdate "1" 0 done
+  Abort
+  done:
+FunctionEnd
+Function FinishShown
+  StrCmp $ControlledUpdate "1" 0 done
+  SendMessage $mui.FinishPage.Run ${BM_SETCHECK} ${BST_UNCHECKED} 0
+  EnableWindow $mui.FinishPage.Run 0
+  done:
+FunctionEnd
+Function LaunchInstalled
+  StrCmp $ControlledUpdate "1" done
+  Exec '"$INSTDIR\Mizar.exe"'
+  done:
 FunctionEnd
 Function CheckRunning
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name Mizar -ErrorAction SilentlyContinue) { exit 1 }"'

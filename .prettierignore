@@ -1,3 +1,6 @@
 dist
 node_modules
 pnpm-lock.yaml
+# Preserve the real signed subject and original provenance bytes.
+apps/companion/test/fixtures/updates/distribution-manifest.json
+apps/companion/test/fixtures/updates/distribution.attestation.json

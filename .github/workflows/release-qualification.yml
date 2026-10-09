@@ -192,6 +192,12 @@ jobs:
         shell: pwsh
         run: choco install nsis --version=3.11 -y --no-progress
 
+      - name: Verify native update cancellation and recovery
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
+        timeout-minutes: 5
+        run: node scripts/qualification/verify-update-recovery.mjs
+
       - name: Build and verify same-content NSIS installer
         if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
@@ -315,10 +321,13 @@ jobs:
           Expand-Archive -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -DestinationPath $extractRoot
           node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $evidenceRoot 'qualified-identity.json')
           if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
+          node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
 
       - name: Attest qualified portable ZIP provenance
+        id: qualified-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
@@ -327,6 +336,16 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
+
+      - name: Preserve original update verification bundle
+        shell: pwsh
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.qualified-provenance.outputs.bundle-path }}
+        run: |
+          if (Test-Path -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-manifest.json')) {
+            Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-provenance.json')
+          }
 
       - name: Upload qualified portable product
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -340,6 +359,8 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/update-provenance.json
           if-no-files-found: error
 
       - name: Upload release qualification evidence
