@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parsePublication } from './statement.mjs';
 import { makePublication } from './create.mjs';
+import { verifyResourcePublicationBytes } from '../../../packages/resource-pack-contract/runtime.mjs';
 import { verifyResourcePublication } from './verify.mjs';
 import { buildOfficialPack, jsonBytes } from '../../asset-packs/pack.mjs';
 import { releaseAttestationArgs } from '../release-identity.mjs';
@@ -117,6 +118,17 @@ describe('发行授权策略', () => {
           publicationBundlePath: bundlePath,
           archiveBundlePath: bundlePath,
           policy: { ...policy, sourceSha: sha },
+        }),
+      ).rejects.toThrow();
+      // 同一真实归档进入进程内入口；Sigstore 真实库拒绝无签名证明，未注入 verifier。
+      await expect(
+        verifyResourcePublicationBytes({
+          statementBytes: jsonBytes(statement),
+          archiveBytes: pack.archiveBytes,
+          publicationBundleBytes: jsonBytes({}),
+          archiveBundleBytes: jsonBytes({}),
+          policy: { ...policy, sourceSha: sha },
+          tufCachePath: join(directory, 'sigstore-cache'),
         }),
       ).rejects.toThrow();
     } finally {

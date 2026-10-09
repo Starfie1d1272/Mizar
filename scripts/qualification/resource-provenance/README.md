@@ -2,7 +2,7 @@
 
 包内清单负责逐文件完整性，包外 `mizar.resource-publication.v1` 声明绑定归档摘要、大小、版本、兼容范围、素材源码、晋级源码、发行序号与有效期。声明没有自带可替换信任根，镜像不决定 signer 或源码身份。
 
-[verifyResourcePublication](verify.mjs) 是安装前的真实授权入口，输入：
+[verifyResourcePublication](verify.mjs) 是发行侧 CLI 的真实授权入口，输入：
 
 ```js
 await verifyResourcePublication({
@@ -39,3 +39,11 @@ node scripts/qualification/resource-provenance/create.mjs \
 ```
 
 本模块不改 CI/Release 工作流，不签发生产资产，不改 Stable/Box。现有工作流尚未调用资源 producer 或签发声明，因此本地生成包不能宣称真实发行已完成。Store/Installer 接线、受信任描述符的发布与下载域/重定向限制由对应模块和父会话统一落实。完整性测试使用真实 EPL；安全测试中的自制声明与无签名证明必须在真实 gh 校验中拒绝，测试不伪造有效生产签名。
+
+## 无外部 CLI 的运行时入口
+
+Store 使用 `@mizar/resource-pack-contract/runtime` 的 `verifyResourcePublicationBytes`，传入同一策略和四份下载字节：`statementBytes`、`publicationBundleBytes`、`archiveBytes`、`archiveBundleBytes`，另可传 `tufCachePath` 与 `signal`。返回值与 CLI 相同。输入在 await 前冻结，双证据始终经过 Sigstore 真实签名、证书 issuer、固定 main signer、CT 与 tlog 门槛，再核对 SLSA subject、main ref 和精确源码。生产入口不接受外部 verifier，不运行子进程或依赖用户安装 `gh`。
+
+正式 v1.0.0 的现有签名与公开根样例独立验证真实密码学成功和反例；它们不冒充新资源包的已签发行声明。新资源的完整签发与首次安装仍须父会话集成。`attestation` 子入口提供与现有 `StableSource` 相同的证据判定，便于父会话将既有更新入口提取共用；当前本分支不越界修改 Companion。
+
+证书的来源仓库、SHA 和 main ref 通过 Sigstore `certificateOIDs` 绑定，同时核对签名的 SLSA 源码依赖。通用 OID 的短 DER UTF8String 编码依据 [Fulcio 规范](https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md)。Sigstore 5 的 signer identity 选项按正则处理，因此资源入口将固定 URI 转义并加首尾锚点，避免相似 URI 或 main 后缀被接受。既有更新入口后续共用该策略时可同步获得此精确匹配约束。

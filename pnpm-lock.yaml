@@ -506,6 +506,25 @@ importers:
         specifier: 'catalog:'
         version: typescript@7.0.2
 
+  packages/resource-pack-contract:
+    dependencies:
+      sigstore:
+        specifier: 5.0.0
+        version: 5.0.0(supports-color@8.1.1)
+    devDependencies:
+      '@sigstore/bundle':
+        specifier: 5.0.0
+        version: 5.0.0
+      '@sigstore/protobuf-specs':
+        specifier: 0.5.2
+        version: 0.5.2
+      '@sigstore/verify':
+        specifier: 4.1.2
+        version: 4.1.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
   packages/rivalhub:
     dependencies:
       '@mizar/core':

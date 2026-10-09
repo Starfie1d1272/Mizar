@@ -9,7 +9,7 @@ node scripts/asset-packs/cli.mjs verify /tmp/epl-pack/Mizar-official-epl-default
 
 构建要求素材来源已提交，来源 SHA 等于 checkout。相同输入、版本及 Node/zlib 工具链产生相同归档字节。升级工具链后必须重新记录实际摘要，不能假设不同压缩库输出相同。输出目录包含归档、内置清单的副本与大小/真实耗时报告；均不是签发证据。禁止在归档内部放置归档自身摘要。
 
-`verifyPackBytes(Buffer, { coreVersion, expectedArchive })` 返回 `{ manifest, manifestSha256, archive: { format, bytes, sha256 }, entries: Map<path, Buffer> }`，证明内容完整性与原子同步绑定。需要来源授权的消费方调用 [verifyResourcePublication](../qualification/resource-provenance/verify.mjs)，不能把本函数返回结果直接标记为可信。
+`@mizar/resource-pack-contract/content` 的 `verifyPackBytes(Buffer, { coreVersion, expectedArchive })` 返回 `{ manifest, manifestSha256, archive: { format, bytes, sha256 }, entries: Map<path, Buffer> }`，证明内容完整性与原子同步绑定。运行时消费方调用 `@mizar/resource-pack-contract/runtime` 的 `verifyResourcePublicationBytes`，发行侧可调用 [verifyResourcePublication](../qualification/resource-provenance/verify.mjs)，不能把本函数返回结果直接标记为可信。
 
 路径与旧 Web URL 一致：`fixtures/epl-inferno-{video,opening,final-round}/…`、`fixture-media/epl-s24/…`；来源说明在 `provenance/`。Store 可将核验后的 `entries` 写入隔离 staging，再原子激活；HTTP 层仅允许 manifest 中的只读路径。归档解析不直接写入本机路径。版本目录、安全生效时机、取消与回滚由 Store 拥有，本模块不创建第二套缓存状态。
 
