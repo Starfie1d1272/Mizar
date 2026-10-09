@@ -13,7 +13,7 @@ using System.Web.Script.Serialization;
 namespace Mizar.WebInstaller {
   public sealed class Plan {
     public int schemaVersion;
-    public string version, name, sha256;
+    public string version, name, sha256, kind, gitSha, contentDigest;
     public long bytes;
     public string[] urls;
     public bool allowExecute;
@@ -23,8 +23,14 @@ namespace Mizar.WebInstaller {
           !System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$") ||
           bytes < 1 || bytes > 512L * 1024 * 1024 ||
           sha256 == null || !System.Text.RegularExpressions.Regex.IsMatch(sha256, "^[a-f0-9]{64}$") ||
-          urls == null || urls.Length < 1 || urls.Length > 4 || allowExecute)
+          urls == null || urls.Length < 1 || urls.Length > 4)
         throw new InvalidDataException("引导计划无效，或缺少正式安装授权。");
+      if (allowExecute && (kind != "nsis-setup" ||
+          !System.Text.RegularExpressions.Regex.IsMatch(version, @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$") ||
+          name != "Mizar-v" + version + "-Windows-x64-Setup.exe" ||
+          gitSha == null || !System.Text.RegularExpressions.Regex.IsMatch(gitSha, "^[a-f0-9]{40}$") ||
+          contentDigest == null || !System.Text.RegularExpressions.Regex.IsMatch(contentDigest, "^[a-f0-9]{64}$")))
+        throw new InvalidDataException("固定 NSIS 安装授权不完整。");
       foreach (string url in urls) if (!Downloader.Allowed(new Uri(url)))
         throw new InvalidDataException("下载地址不受信任。");
     }
@@ -38,7 +44,7 @@ namespace Mizar.WebInstaller {
          u.Host == "release-assets.githubusercontent.com" ||
          (u.Host == "box.nju.edu.cn" && u.AbsolutePath.StartsWith("/seafhttp/files/", StringComparison.Ordinal)));
     }
-    static void NoReparse(string path) {
+    internal static void NoReparse(string path) {
       for (string p = Path.GetFullPath(path); p != null; p = Path.GetDirectoryName(p)) {
         if ((Directory.Exists(p) || File.Exists(p)) &&
             (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
@@ -51,19 +57,22 @@ namespace Mizar.WebInstaller {
     static async Task<bool> MatchesAsync(string path, Plan plan, CancellationToken token) {
       NoReparse(path); token.ThrowIfCancellationRequested();
       if (!File.Exists(path)) return false;
-      using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true)) {
-        if (input.Length != plan.bytes) return false;
-        using (var sha = SHA256.Create()) {
-          var buffer = new byte[65536];
-          for (;;) {
-            int count = await input.ReadAsync(buffer, 0, buffer.Length, token);
-            if (count == 0) break;
-            sha.TransformBlock(buffer, 0, count, buffer, 0);
-          }
-          token.ThrowIfCancellationRequested();
-          sha.TransformFinalBlock(new byte[0], 0, 0);
-          return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant() == plan.sha256;
+      using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true))
+        return await MatchesStream(input, plan, token).ConfigureAwait(false);
+    }
+    internal static async Task<bool> MatchesStream(FileStream input, Plan plan, CancellationToken token) {
+      if (input.Length != plan.bytes) return false;
+      input.Position = 0;
+      using (var sha = SHA256.Create()) {
+        var buffer = new byte[65536];
+        for (;;) {
+          int count = await input.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+          if (count == 0) break;
+          sha.TransformBlock(buffer, 0, count, buffer, 0);
         }
+        token.ThrowIfCancellationRequested();
+        sha.TransformFinalBlock(new byte[0], 0, 0);
+        return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant() == plan.sha256;
       }
     }
     async Task<HttpResponseMessage> Request(string url, CancellationToken token) {

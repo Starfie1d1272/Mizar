@@ -17,6 +17,9 @@ jobs:
       - name: Compile and test the native bootstrapper
         shell: powershell
         run: ./scripts/web-installer/test-poc.ps1 -OutputDirectory .agent-tmp/web-installer
+      - name: Verify existing authenticated NSIS with fresh installation and cancellation
+        shell: powershell
+        run: ./scripts/web-installer/test-nsis.ps1 -OutputDirectory .agent-tmp/web-installer
       - name: Verify public HTTPS download and capture actual native UI
         shell: powershell
         run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer
