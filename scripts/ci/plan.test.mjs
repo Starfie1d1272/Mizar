@@ -216,10 +216,22 @@ describe('changed-surface CI planner', () => {
   it.each([
     ['scripts/qualification/windows-setup.nsi', ['quality', 'qualification_windows']],
     ['scripts/qualification/bundle/update-install.ps1', ['quality', 'qualification_windows']],
-    ['scripts/qualification/verify-source-ci.mjs', ['quality', 'qualification_windows']],
-    ['scripts/qualification/verify-candidate.mjs', ['quality', 'qualification_windows']],
-    ['scripts/qualification/verify-promotion.mjs', ['quality', 'qualification_windows']],
-    ['scripts/qualification/box-sync-helper.mjs', ['quality', 'qualification_windows']],
+    [
+      'scripts/qualification/verify-source-ci.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/verify-candidate.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/verify-promotion.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/box-sync-helper.mjs',
+      ['quality', 'design', 'acceptance', 'platform', 'qualification_windows'],
+    ],
     ['apps/desktop/src-tauri/src/main.rs', ['quality', 'qualification_windows']],
     ['packages/protocol/src/version.ts', ['quality', 'acceptance']],
   ])('mirror changes retain the independent risk owner for %s', (path, requiredJobs) => {
@@ -283,6 +295,10 @@ describe('changed-surface CI planner', () => {
     ['workflow', ['.github/workflows/ci.yml']],
     ['planner self-change', ['scripts/ci/plan.mjs']],
     ['unknown path', ['fixtures/custom-input.json']],
+    ['unknown qualification tool', ['scripts/qualification/new-tool.mjs']],
+    ['Stable trust source', ['apps/companion/src/updates/source.ts']],
+    ['update metadata protocol', ['scripts/qualification/update-manifest.mjs']],
+    ['runtime trust pin', ['scripts/qualification/runtime-config.mjs']],
     ['type change', [{ path: 'packages/core/src/old.ts', status: 'T' }]],
   ])('%s fails closed to full CI', (_name, changedFiles) => {
     expect(createCiPlan({ eventName: 'pull_request', changedFiles })).toMatchObject(full);

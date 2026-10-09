@@ -46,6 +46,12 @@ const DISTRIBUTION_TOOL_PATHS = new Set([
   'scripts/qualification/box-sync.mjs',
   'scripts/qualification/box-sync.test.mjs',
 ]);
+// Existing Windows consumers own these runtime, portability and installer
+// surfaces. Unknown qualification tooling and release-source protocols fail
+// closed instead of inheriting the mirror exception.
+const WINDOWS_QUALIFICATION_PATH =
+  /^scripts\/qualification\/(?:bundle\/|installer-assets\/|evidence\/|(?:offline|portable-files|product-(?:logs|runtime)|desktop-smoke|supervisor|gsi-discovery|evidence|verify-web-resources)(?:\.test)?\.mjs$|(?:product-smoke|product-soak|verify-c4-resources|c4-worker-benchmark)\.mjs$|(?:create-windows-archive|create-windows-setup|capture-setup-ui|desktop-probe|extract-windows-shell)\.ps1$|windows-setup\.nsi$)/;
+
 const PORTABLE_SMOKE_PREFIXES = ['scripts/qualification/', 'apps/desktop/'];
 
 export function isPortableSmokePath(path) {
@@ -73,6 +79,11 @@ function basename(path) {
 function isForcedFullPath(path) {
   const name = basename(path);
   return (
+    (!isDocsOnlyPath(path) && path.startsWith('apps/companion/src/updates/')) ||
+    (!isDocsOnlyPath(path) &&
+      path.startsWith('scripts/qualification/') &&
+      !DISTRIBUTION_TOOL_PATHS.has(path) &&
+      !WINDOWS_QUALIFICATION_PATH.test(path)) ||
     path.startsWith('.github/') ||
     path.startsWith('scripts/ci/') ||
     name === 'package.json' ||
