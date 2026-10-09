@@ -87,32 +87,21 @@
   position: relative;
   display: grid;
   place-items: center;
-  flex: 0 0 50px;
-  width: 50px;
-  height: 50px;
-  border: 1px solid currentColor;
-  border-radius: var(--mizar-shape-control);
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   color: inherit;
-  background: var(--mizar-broadcast-pulse-shell);
   overflow: hidden;
 }
 .bp-logo-fallback {
-  position: absolute;
-  right: 2px;
-  bottom: 1px;
-  font-size: 14px;
+  font-size: 26px;
   font-weight: 800;
   line-height: 1;
 }
 .bp-team-logo img {
   width: 100%;
   height: 100%;
-  padding: 5px;
   object-fit: contain;
-}
-.bp-team-logo:not(:has(img)) .bp-logo-fallback {
-  position: static;
-  font-size: 26px;
 }
 .bp-team > .bp-team-logo {
   flex-basis: 70px;
@@ -213,21 +202,21 @@
 }
 .bp-badge {
   position: absolute;
-  top: 64px;
-  left: 16px;
+  top: 23px;
+  right: 16px;
   width: fit-content;
   color: var(--mizar-broadcast-pulse-white);
   background: color-mix(in srgb, var(--mizar-broadcast-pulse-shell) 92%, transparent);
   padding: 5px 8px;
   border-radius: var(--mizar-shape-control);
-  font-size: 22px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: 1px;
 }
-.bp-card[data-entrant='a'] :is(.bp-badge, .bp-owner) {
+.bp-card[data-entrant='a'] .bp-badge {
   color: var(--mizar-entrant-a);
 }
-.bp-card[data-entrant='b'] :is(.bp-badge, .bp-owner) {
+.bp-card[data-entrant='b'] .bp-badge {
   color: var(--mizar-entrant-b);
 }
 .bp-card[data-kind='decider'] .bp-badge {
@@ -238,11 +227,14 @@
   right: 18px;
   bottom: 22px;
   left: 18px;
+  display: grid;
+  grid-template-rows: 40px 60px 54px;
 }
 .bp-copy h2 {
+  align-self: end;
   margin: 0;
   font-family: var(--mizar-type-family-display);
-  font-size: 40px;
+  font-size: 36px;
   font-weight: 900;
   line-height: 1;
   letter-spacing: 0.4px;
@@ -250,32 +242,24 @@
 }
 .bp-card[data-kind='ban'] h2 {
   color: var(--mizar-broadcast-pulse-muted);
-  font-size: 25px;
 }
 .bp-owner {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 60px;
+  min-height: 0;
   margin-top: 12px;
   color: var(--mizar-broadcast-pulse-white);
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 500;
   line-height: 1.25;
 }
 .bp-owner-copy {
   min-width: 0;
   overflow: hidden;
 }
-.bp-owner small {
-  display: block;
-  margin-top: 4px;
-  color: var(--mizar-broadcast-pulse-muted);
-  font-size: 16px;
-  font-weight: 400;
-}
 .bp-owner-copy > span,
-.bp-side-team > span {
+.bp-side-choice > span {
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -283,11 +267,13 @@
   overflow: hidden;
 }
 .bp-side-choice {
-  display: grid;
-  min-height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 0;
   gap: 8px;
-  margin-top: 5px;
-  padding-top: 9px;
+  padding-top: 8px;
+  color: var(--mizar-broadcast-pulse-muted);
   border-top: 1px solid var(--mizar-broadcast-pulse-raised);
   opacity: 0;
   transform: translateY(8px);
@@ -301,46 +287,15 @@
   opacity: 1;
   transform: none;
 }
-.bp-side-choice[data-entrant='a'] .bp-side-team {
-  color: var(--mizar-entrant-a);
-}
-.bp-side-choice[data-entrant='b'] .bp-side-team {
-  color: var(--mizar-entrant-b);
-}
-.bp-side-team {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.bp-side-choice > span {
   min-width: 0;
   font-size: 16px;
   line-height: 1.25;
 }
-.bp-side-team .bp-team-logo {
-  flex-basis: 30px;
-  width: 30px;
-  height: 30px;
-}
-.bp-side-team .bp-logo-fallback {
-  font-size: 10px;
-}
-.bp-side-team .bp-team-logo:not(:has(img)) .bp-logo-fallback {
-  font-size: 18px;
-}
-.bp-side-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 14px;
-  color: var(--mizar-broadcast-pulse-muted);
-}
-.bp-side-label strong {
+.bp-side-choice strong {
   flex: 0 0 auto;
-  padding: 4px 7px;
   font-size: 17px;
   white-space: nowrap;
-  border: 1px solid currentColor;
-  border-radius: var(--mizar-shape-control);
 }
 .bp-side-choice[data-side='CT'] strong {
   color: var(--mizar-side-ct);

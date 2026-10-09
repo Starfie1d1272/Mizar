@@ -996,7 +996,7 @@ test('BP team media falls back and recovers without moving long-name cards', asy
       }),
     );
     await page.goto('/program/bp');
-    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(11);
+    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(8);
     await expect(page.locator('.bp-team-logo img')).toHaveCount(0);
     const before = await page.locator('.bp-card').evaluateAll((cards) =>
       cards.map((card) => {
@@ -1013,6 +1013,10 @@ test('BP team media falls back and recovers without moving long-name cards', asy
       const canvas = await page.locator('[data-program-canvas]').boundingBox();
       expect(canvas).not.toBeNull();
       expect(canvas!.width).toBeCloseTo(width, 0);
+      const titlePositions = await page
+        .locator('.bp-copy h2')
+        .evaluateAll((titles) => titles.map((title) => title.getBoundingClientRect().y));
+      expect(Math.max(...titlePositions) - Math.min(...titlePositions)).toBeLessThan(1);
       for (const card of await page.locator('.bp-card').all()) {
         const bounds = await card.boundingBox();
         expect(bounds).not.toBeNull();
@@ -1050,7 +1054,7 @@ test('BP team media falls back and recovers without moving long-name cards', asy
     await expect
       .poll(() => logo.evaluate((image) => (image as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
-    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(6);
+    await expect(page.getByRole('img', { name: /队标不可用/ })).toHaveCount(4);
     expect(
       await page.locator('.bp-card').evaluateAll((cards) =>
         cards.map((card) => {
