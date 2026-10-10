@@ -244,11 +244,15 @@ export class UpdateManager {
     this.startupPending = false;
     await this.check(false, reason).catch((error: unknown) => this.failure('check', error));
   }
-  claimNotification(version: string) {
+  notification(version: string) {
     if (!this.status().notificationPending || this.candidate?.version !== version) return null;
-    this.notifiedVersion = version;
-    this.event('check', 'update_notification_claimed');
     return { version, notes: this.candidate.notes };
+  }
+  dismissNotification(version: string) {
+    if (this.candidate?.version !== version || this.notifiedVersion === version) return false;
+    this.notifiedVersion = version;
+    this.event('check', 'update_notification_dismissed');
+    return true;
   }
   status() {
     return {

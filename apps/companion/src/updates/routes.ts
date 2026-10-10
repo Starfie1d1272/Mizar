@@ -69,9 +69,10 @@ export function registerUpdateRoutes(
       else if (body?.action === 'automatic' && typeof body.enabled === 'boolean')
         await manager.setAutomatic(body.enabled);
       else if (body?.action === 'notify' && typeof body.version === 'string') {
-        const notification =
-          (await assess()) === null ? manager.claimNotification(body.version) : null;
+        const notification = (await assess()) === null ? manager.notification(body.version) : null;
         return { ...(await publicView()), notification };
+      } else if (body?.action === 'dismiss-notification' && typeof body.version === 'string') {
+        manager.dismissNotification(body.version);
       } else if (body?.action === 'resume') {
         const scene = scenes.get();
         if (

@@ -403,17 +403,21 @@ describe('controlled update lifecycle', () => {
     manager.desktopStartup('one');
     expect(latest).not.toHaveBeenCalled();
     await manager.check();
-    expect(manager.claimNotification('1.1.0')).toBeNull();
+    expect(manager.notification('1.1.0')).toBeNull();
     await manager.setAutomatic(true);
-    expect(manager.claimNotification('wrong-version')).toBeNull();
-    expect(manager.claimNotification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+    expect(manager.notification('wrong-version')).toBeNull();
+    expect(manager.notification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+    expect(manager.notification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+    expect(manager.status().notificationPending).toBe(true);
+    expect(manager.dismissNotification('wrong-version')).toBe(false);
+    expect(manager.dismissNotification('1.1.0')).toBe(true);
     await manager.check();
-    expect(manager.claimNotification('1.1.0')).toBeNull();
+    expect(manager.notification('1.1.0')).toBeNull();
     manager.desktopStartup('one');
-    expect(manager.claimNotification('1.1.0')).toBeNull();
+    expect(manager.notification('1.1.0')).toBeNull();
     manager.desktopStartup('two');
     await manager.check();
-    expect(manager.claimNotification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+    expect(manager.notification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
   });
   it('defers startup checks while a download owns the task', async () => {
     const source = {
@@ -437,7 +441,7 @@ describe('controlled update lifecycle', () => {
     await manager.download();
     manager.desktopStartup('one');
     expect(source.latest).toHaveBeenCalledTimes(1);
-    expect(manager.claimNotification('1.1.0')).toBeNull();
+    expect(manager.notification('1.1.0')).toBeNull();
     await manager.cancel();
     vi.useFakeTimers();
     manager.start();

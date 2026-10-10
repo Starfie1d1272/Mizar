@@ -280,11 +280,13 @@ it('requires the private Host and idle production, then prevents entry until upg
   // Trust and download lifecycle have their own owner; this seam exercises the control boundary only.
   const prepare = vi.fn(() => Promise.resolve({ schemaVersion: 1 }));
   const desktopStartup = vi.fn();
-  const claimNotification = vi.fn(() => ({ version: '1.1.0', notes: '可信更新' }));
+  const notification = vi.fn(() => ({ version: '1.1.0', notes: '可信更新' }));
+  const dismissNotification = vi.fn();
   const manager = {
     status: () => ({ phase: 'ready', automatic: true, notificationPending: true }),
     desktopStartup,
-    claimNotification,
+    notification,
+    dismissNotification,
     failure: vi.fn(),
     prepare,
     release: vi.fn(),
@@ -370,7 +372,7 @@ it('requires the private Host and idle production, then prevents entry until upg
     expect(initialRevision).toBe(production.get().revision);
     await enter();
     expect((await notify()).json<{ notification: unknown }>().notification).toBeNull();
-    expect(claimNotification).not.toHaveBeenCalled();
+    expect(notification).not.toHaveBeenCalled();
     expect((await host('prepare')).statusCode).toBe(409);
     await app.inject({
       method: 'POST',
@@ -407,6 +409,17 @@ it('requires the private Host and idle production, then prevents entry until upg
       version: '1.1.0',
       notes: '可信更新',
     });
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/updates',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'dismiss-notification', version: '1.1.0' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(dismissNotification).toHaveBeenCalledWith('1.1.0');
     expect((await host('prepare')).statusCode).toBe(200);
     expect(production.get().canEnter).toBe(false);
     expect((await enter()).statusCode).toBe(409);
