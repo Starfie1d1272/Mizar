@@ -40,6 +40,7 @@ interface LocalTournamentState {
     readonly document: MatchDocumentV1;
     readonly deletedAt: string | null;
     readonly scheduleIndex: number | null;
+    readonly scheduleMatchIds: readonly string[];
   }[];
   readonly selectedMatchId: string | null;
   readonly selectedAt: string | null;
@@ -125,6 +126,27 @@ function readState(input: unknown): LocalTournamentState {
     selectedMatchId,
     selectedAt,
   };
+}
+
+function restoreSchedulePosition(
+  ids: string[],
+  matchId: string,
+  original: readonly string[],
+  fallback: number | null,
+): void {
+  const originalIndex = original.indexOf(matchId);
+  const nextId = original.slice(originalIndex + 1).find((id) => ids.includes(id));
+  const previousId = original
+    .slice(0, Math.max(originalIndex, 0))
+    .reverse()
+    .find((id) => ids.includes(id));
+  const index =
+    nextId !== undefined
+      ? ids.indexOf(nextId)
+      : previousId !== undefined
+        ? ids.indexOf(previousId) + 1
+        : Math.min(fallback ?? ids.length, ids.length);
+  ids.splice(index, 0, matchId);
 }
 
 export class LocalTournamentStore {
@@ -288,6 +310,16 @@ export class LocalTournamentStore {
         throw new Error('local_match_not_found');
       }
       const event = this.state.events.find((item) => item.matchIds.includes(matchId));
+      const scheduleMatchIds = [...(event?.matchIds ?? [])];
+      for (const previous of this.state.trashedMatches) {
+        if (event && previous.document.competition?.competitionId === event.eventId)
+          restoreSchedulePosition(
+            scheduleMatchIds,
+            previous.document.matchId,
+            previous.scheduleMatchIds,
+            previous.scheduleIndex,
+          );
+      }
       const selected = this.state.selectedMatchId === matchId;
       await this.commit(
         {
@@ -303,6 +335,7 @@ export class LocalTournamentStore {
               document,
               deletedAt: new Date().toISOString(),
               scheduleIndex: event?.matchIds.indexOf(matchId) ?? null,
+              scheduleMatchIds,
             },
           ],
           selectedMatchId: selected ? null : this.state.selectedMatchId,
@@ -341,7 +374,7 @@ export class LocalTournamentStore {
         events: this.state.events.map((entry) => {
           if (entry.eventId !== event?.eventId) return entry;
           const ids = [...entry.matchIds];
-          ids.splice(Math.min(item.scheduleIndex ?? ids.length, ids.length), 0, matchId);
+          restoreSchedulePosition(ids, matchId, item.scheduleMatchIds, item.scheduleIndex);
           return { ...entry, matchIds: ids };
         }),
       });

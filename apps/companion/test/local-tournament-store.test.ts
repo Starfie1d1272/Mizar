@@ -298,3 +298,45 @@ it('restores imported local BP, maps, rosters and result facts without changes',
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('preserves schedule order when multiple recycled matches are restored in either order', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-trash-order-'));
+  try {
+    for (const reverse of [false, true]) {
+      const store = new LocalTournamentStore(join(directory, `${reverse}.json`));
+      const first = await store.createMatch({
+        teamA: 'A',
+        teamB: 'B',
+        format: 'bo1',
+        mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+      });
+      const eventId = first.competition!.competitionId;
+      const second = await store.createMatch({
+        eventId,
+        teamA: 'C',
+        teamB: 'D',
+        format: 'bo1',
+        mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+      });
+      const third = await store.createMatch({
+        eventId,
+        teamA: 'E',
+        teamB: 'F',
+        format: 'bo1',
+        mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+      });
+      await store.trashMatch(first.matchId, () => true);
+      await store.trashMatch(second.matchId, () => true);
+      await store.trashMatch(third.matchId, () => true);
+      const order = reverse ? [second.matchId, first.matchId] : [first.matchId, second.matchId];
+      for (const id of [...order, third.matchId]) await store.restoreMatch(id);
+      expect(store.getSnapshot().events[0]!.matchIds).toEqual([
+        first.matchId,
+        second.matchId,
+        third.matchId,
+      ]);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
