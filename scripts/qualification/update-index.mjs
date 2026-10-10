@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { assertPublication } from './publication-contract.mjs';
+import { assertPublication } from './update-publication.mjs';
 export function makeUpdateIndex(
   manifestBytes,
   provenanceBytes,
