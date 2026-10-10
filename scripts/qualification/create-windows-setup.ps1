@@ -2,7 +2,9 @@ param(
   [Parameter(Mandatory = $true)][string]$BundleRoot,
   [Parameter(Mandatory = $true)][string]$OutputRoot,
   [Parameter(Mandatory = $true)][string]$ExtractRoot,
-  [switch]$CaptureUi
+  [switch]$CaptureUi,
+  [ValidateSet('release-manifest.json','core-release-manifest.json')][string]$ManifestName = 'release-manifest.json',
+  [ValidateSet('distribution-manifest.json','core-distribution-manifest.json')][string]$DistributionName = 'distribution-manifest.json'
 )
 $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path -LiteralPath $BundleRoot).Path
@@ -16,7 +18,7 @@ $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
 if (!(Test-Path -LiteralPath $compiler)) { throw 'NSIS 3.11 is required' }
 $version = (& $compiler /VERSION | Out-String).Trim()
 if ($version -ne 'v3.11') { throw "Unexpected NSIS version: $version" }
-$manifest = Get-Content -Raw -LiteralPath (Join-Path $output 'release-manifest.json') | ConvertFrom-Json
+$manifest = Get-Content -Raw -LiteralPath (Join-Path $output $ManifestName) | ConvertFrom-Json
 $files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
 # NSIS has its own escaping rules. Never interpolate a payload path as instructions.
 function Escape-Nsis([string]$text) { $text.Replace('$', '$$').Replace('"', '$\"') }
@@ -93,5 +95,5 @@ $distribution = [ordered]@{
   installerLicenseSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $licensePath).Hash.ToLowerInvariant()
   verifiedFiles = $files.Count
 }
-$distribution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'distribution-manifest.json') -Encoding utf8NoBOM
+$distribution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output $DistributionName) -Encoding utf8NoBOM
 $distribution | ConvertTo-Json -Depth 5

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
-import { createOfflineMizarVerifier, verifyTrustSnapshot } from './trust-snapshot.mjs';
+import {
+  createOfflineMizarVerifier,
+  verifyTrustSnapshot,
+  verifyFreshTrustSnapshot,
+} from './trust-snapshot.mjs';
 import { verifyMizarAttestation, verifyMizarAttestationDigest } from './attestation.mjs';
 import { verifyResourceReceipt } from './runtime.mjs';
 import { parsePublication } from './publication.mjs';
@@ -180,4 +184,56 @@ describe('固定 Sigstore 根的离线缓存证据', () => {
       parsePublication(statement, { ...policy, minimumSequence: 0 }, { purpose: 'install' }),
     ).toThrow(/过期/);
   });
+});
+
+it('requires fresh signed TUF roles for first installation while preserving historical cache verification', async () => {
+  const { trust, bytes, bundle } = await evidence();
+  const fixture = new URL('./test-fixtures/tuf/', import.meta.url);
+  const fresh = {
+    ...trust,
+    timestampBase64: encode(await readFile(new URL('first-install-timestamp.tuf', fixture))),
+    snapshotBase64: encode(await readFile(new URL('first-install-snapshot.tuf', fixture))),
+    targetsBase64: encode(await readFile(new URL('first-install-targets.tuf', fixture))),
+  };
+  const network = vi.fn(() => {
+    throw new Error('Offline network denied');
+  });
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-10T12:00:00Z'));
+  vi.stubGlobal('fetch', network);
+  try {
+    const verifier = createOfflineMizarVerifier(fresh, 'qualification', sourceSha, {
+      firstInstall: true,
+    });
+    expect(verifyMizarAttestation(bytes, 'distribution-manifest.json', bundle, verifier)).toBe(
+      sourceSha,
+    );
+    expect(() => verifyFreshTrustSnapshot(trust)).toThrow();
+    expect(() =>
+      verifyFreshTrustSnapshot({ ...fresh, snapshotBase64: trust.targetsBase64 }),
+    ).toThrow();
+    const expiredAt = Math.min(
+      ...[
+        JSON.parse(Buffer.from(fresh.timestampBase64, 'base64')),
+        JSON.parse(Buffer.from(fresh.snapshotBase64, 'base64')),
+        JSON.parse(Buffer.from(fresh.targetsBase64, 'base64')),
+      ].map((role) => Date.parse(role.signed.expires)),
+    );
+    vi.setSystemTime(new Date(expiredAt));
+    expect(() =>
+      createOfflineMizarVerifier(fresh, 'qualification', sourceSha, { firstInstall: true }),
+    ).toThrow('expired');
+    expect(
+      verifyMizarAttestation(
+        bytes,
+        'distribution-manifest.json',
+        bundle,
+        createOfflineMizarVerifier(trust, 'qualification', sourceSha),
+      ),
+    ).toBe(sourceSha);
+    expect(network).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
 });

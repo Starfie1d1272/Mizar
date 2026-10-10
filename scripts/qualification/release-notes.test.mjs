@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { URL } from 'node:url';
-import { releaseSection, githubReleaseNotes } from './release-notes.mjs';
+import { releaseSection, githubReleaseNotes, readReleaseNotes } from './release-notes.mjs';
 import { qualifiedUpdateManifest } from './update-manifest.mjs';
 
 const example = `# 更新日志
@@ -76,11 +76,15 @@ it('builds fixed GitHub framing from the same release with exact asset and evide
     sourceSha: 'a'.repeat(40),
     qualificationRunId: '12345',
   });
-  expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64-Setup.exe');
+  expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64-WebInstaller.exe');
   expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64.zip');
   expect(body).toContain(`/blob/${'a'.repeat(40)}/docs/guide/quick-start.md`);
   expect(body).toContain('**更新日志**');
   expect(body).toContain('## 发行文件');
+  expect(body.match(/https:\/\/box\.nju\.edu\.cn\/d\/91dec4c27e5d47f38fcf\//g)).toHaveLength(2);
+  expect(body).toContain('Box 同步可能稍晚，请以版本号为准');
+  expect(body).toContain('完整离线 ZIP');
+  expect(body).not.toMatch(/Box 已|已同步|云盘已/);
   expect(body).toContain('/actions/runs/12345');
   expect(body).not.toContain('尚未发布');
   expect(() =>
@@ -117,8 +121,7 @@ it('embeds the repository release as plain text in the qualified update manifest
       }),
     );
     const manifest = await qualifiedUpdateManifest(directory);
-    expect(manifest.notes).toMatch(/^应用内更新\n\n• 新增/);
-    expect(manifest.notes).toContain('自动检查默认关闭');
+    expect(manifest.notes).toBe((await readReleaseNotes(policy.version)).text);
     expect(manifest.notes).not.toMatch(/###|\]\(|\*\*/);
     expect(manifest.gitSha).toBe(identity.gitSha);
     expect(manifest.installer.sha256).toBe(identity.archiveSha256);
