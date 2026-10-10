@@ -388,6 +388,7 @@ async function main() {
         'install-official-pack.mjs',
         'complete-bootstrap.mjs',
         'published-bootstrap.mjs',
+        'resource-mirror.mjs',
         'installed-entry.mjs',
         'cancel-control.mjs',
       ]) {

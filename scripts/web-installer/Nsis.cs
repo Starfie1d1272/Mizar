@@ -175,7 +175,7 @@ namespace Mizar.WebInstaller {
         AssertLocked(runtimeLock,expected["resources/scripts/product-runtime.mjs"]);
         AssertLocked(logsLock,expected["resources/scripts/product-logs.mjs"]);
         var start=new ProcessStartInfo {
-        FileName=node, Arguments="\""+entry+"\" "+plan.version+" "+plan.gitSha+" "+plan.contentDigest,
+        FileName=node, Arguments="\""+entry+"\" "+plan.version+" "+plan.gitSha+" "+plan.contentDigest+" "+plan.coreSha256+" "+plan.sha256+" "+plan.bytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
         UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=target,
         RedirectStandardInput=true, RedirectStandardOutput=true, RedirectStandardError=true
         };

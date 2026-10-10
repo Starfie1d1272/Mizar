@@ -42,7 +42,11 @@ export async function completeBootstrap({
     signal,
   });
   const identity = getResourceAuthorization(authorization);
-  if (identity.core.appVersion !== artifact.appVersion || identity.core.gitSha !== artifact.gitSha)
+  if (
+    identity.core.appVersion !== artifact.appVersion ||
+    identity.core.gitSha !== artifact.gitSha ||
+    (corePlan.coreSha256 !== undefined && identity.core.archiveSha256 !== corePlan.coreSha256)
+  )
     throw new Error('Resource catalog belongs to another authenticated Core');
   const resources = await installOfficialPack({
     store,

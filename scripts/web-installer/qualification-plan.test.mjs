@@ -45,6 +45,8 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
     [
       'Mizar.exe',
       'resources/runtime/node.exe',
+      'resources/app/package.json',
+      'resources/app/dist/updates/contract.js',
       'resources/app/dist/server.js',
       'resources/web/dist/index.html',
       'resources/scripts/product-runtime.mjs',
@@ -53,10 +55,20 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
       'resources/app/dist/web-installer/complete-bootstrap.mjs',
       'resources/app/dist/web-installer/install-official-pack.mjs',
       'resources/app/dist/web-installer/published-bootstrap.mjs',
+      'resources/app/dist/web-installer/resource-mirror.mjs',
       'resources/app/dist/web-installer/cancel-control.mjs',
     ]
       .sort()
-      .map((name) => [name, Buffer.from('contract fixture: ' + name)]),
+      .map((name) => [
+        name,
+        Buffer.from(
+          name.endsWith('/contract.js')
+            ? "export const BOX_READ_TOKEN = 'public-read-token-fixture';"
+            : name.endsWith('/package.json')
+              ? '{"type":"module"}'
+              : 'contract fixture: ' + name,
+        ),
+      ]),
   );
   const contentDigest = sha([...files].map(([name, bytes]) => `${name}\0${sha(bytes)}\n`).join(''));
   const artifact = {
