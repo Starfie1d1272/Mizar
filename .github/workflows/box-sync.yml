@@ -38,3 +38,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
         run: node scripts/qualification/box-sync.mjs
+      - name: Record complete qualification trigger through Box verification timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/release-timings.mjs box release-timings.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-timings.json
+          retention-days: 7

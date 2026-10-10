@@ -88,6 +88,10 @@ jobs:
         run: git checkout -- pnpm-lock.yaml
 
       - name: Build exact-SHA Windows qualification bundle
+        env:
+          MIZAR_CARGO_REGISTRY_CACHE_HIT: ${{ steps.cargo-cache.outputs.registry-hit }}
+          MIZAR_CARGO_TARGET_CACHE_HIT: ${{ steps.cargo-cache.outputs.target-hit }}
+          MIZAR_RESOURCE_REUSED: ${{ inputs.resource_source_run != '' }}
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --label "$env:RELEASE_LABEL"
 
       - name: Partition the same-run verified Full candidate into a distinct Core
@@ -313,16 +317,27 @@ jobs:
           node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "$env:LANE-identity.json")
           if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
 
-      - name: Upload verified distribution
-        if: ${{ matrix.lane != 'portable' }}
+      - name: Upload verified Full distribution
+        if: ${{ matrix.lane == 'setup' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-setup-${{ matrix.lane }}
+          name: release-setup-setup
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload verified Core distribution
+        if: ${{ matrix.lane == 'core-setup' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-setup-core-setup
+          path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
           compression-level: 0
           retention-days: 7
