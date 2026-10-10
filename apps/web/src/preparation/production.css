@@ -140,18 +140,6 @@
 .production-page .preparation-editor .editor-fields > button {
   justify-self: start;
 }
-.production-page .preparation-editor fieldset > ul {
-  list-style: none;
-  margin: var(--mizar-layout-gap) 0;
-  padding: 0;
-  display: grid;
-  gap: var(--mizar-layout-compact);
-}
-.production-page .preparation-editor fieldset > ul li {
-  padding-block: calc(var(--mizar-layout-compact) / 2);
-  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
-  overflow-wrap: anywhere;
-}
 .production-page .workspace-roster-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
@@ -174,9 +162,6 @@
 }
 .production-page .workspace-roster-row input[type='checkbox'] {
   width: auto;
-}
-.production-page .preparation-editor fieldset:has(details[open] .workspace-roster-row) > ul {
-  display: none;
 }
 .production-page input,
 .production-page select {

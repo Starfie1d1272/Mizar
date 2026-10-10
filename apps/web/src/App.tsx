@@ -569,7 +569,6 @@ export function DebugPage() {
       <main className="debug-shell mizar-surface" data-surface="technical">
         <header className="debug-header">
           <div>
-            <h1>运行诊断</h1>
             <p className="debug-intro">查看运行状态与恢复建议。</p>
           </div>
         </header>
@@ -661,7 +660,6 @@ export function App() {
     return (
       <ToolShell title="正式 BP 控制">
         <main className="preparation">
-          <h1>正式 BP 控制</h1>
           <p>影响正式播出；赛前可用，无需启动 CS2 或等待 GSI。</p>
           <BpWorkbench />
         </main>
