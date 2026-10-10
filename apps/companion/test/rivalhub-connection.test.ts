@@ -1325,18 +1325,33 @@ const liveFailureCases = [
       ),
   },
   {
-    name: 'unknown names and codes',
+    name: 'future network names and codes',
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: { name: 'FutureTransportError', code: 'NEW_NETWORK_CODE' },
+    response: () =>
+      Promise.reject(
+        Object.assign(new Error('private-token message'), {
+          name: 'FutureTransportError',
+          code: 'NEW_NETWORK_CODE',
+        }),
+      ),
+  },
+  ...[
+    'Bearer private-token',
+    'rh_mizar_private_token',
+    'https://private.example/?token=private-token',
+    'token=private-token',
+  ].map((credential) => ({
+    name: `credential-shaped identifier ${credential.split(/[: =]/)[0]}`,
     stage: 'fetch',
     reason: 'network_failed',
     error: { name: 'UnknownError' },
     response: () =>
       Promise.reject(
-        Object.assign(new Error('private-token message'), {
-          name: 'private-token',
-          code: 'ERR_PRIVATE_TOKEN',
-        }),
+        Object.assign(new Error('private-token message'), { name: credential, code: credential }),
       ),
-  },
+  })),
 ] as const;
 
 it.each(liveFailureCases)(
@@ -1399,7 +1414,8 @@ it.each(liveFailureCases)(
         cause: diagnostic.cause,
       });
       expect(serialized).not.toContain('private-token');
-      expect(serialized).not.toContain('ERR_PRIVATE_TOKEN');
+      expect(serialized).not.toContain('rh_mizar_private_token');
+      expect(serialized).not.toContain('private.example');
       expect(serialized).not.toContain('stack');
       recovering = true;
       await connection.sendLive(snapshot);

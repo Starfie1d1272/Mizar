@@ -6,6 +6,7 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
 import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
+import { redactDiagnosticText } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
   type ReliableDeliveryResult,
@@ -41,56 +42,25 @@ type LiveFailure = {
   error: LiveErrorEvidence;
 };
 
+function liveErrorIdentifier(value: unknown): string | undefined {
+  if (
+    typeof value !== 'string' ||
+    value.length > 64 ||
+    !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(value)
+  )
+    return undefined;
+  return redactDiagnosticText(value) === value ? value : undefined;
+}
+
 // Do not retain messages/stacks: fetch and JSON errors can contain URLs, tokens or response bytes.
 function liveErrorEvidence(error: unknown, depth = 0): LiveErrorEvidence {
   if (!(error instanceof Error)) return { name: 'UnknownError' };
-  const names = [
-    'Error',
-    'TypeError',
-    'SyntaxError',
-    'RangeError',
-    'AggregateError',
-    'SocketError',
-    'ConnectTimeoutError',
-    'HeadersTimeoutError',
-    'BodyTimeoutError',
-    'AbortError',
-    'TimeoutError',
-    'LiveResponseLimitError',
-    'LiveResponseShapeError',
-  ];
-  const name = names.includes(error.name) ? error.name : 'UnknownError';
+  const name = liveErrorIdentifier(error.name) ?? 'UnknownError';
   const rawCode = 'code' in error ? error.code : undefined;
-  const codes = [
-    'ECONNREFUSED',
-    'ECONNRESET',
-    'ETIMEDOUT',
-    'ENOTFOUND',
-    'EAI_AGAIN',
-    'EHOSTUNREACH',
-    'ENETUNREACH',
-    'EPIPE',
-    'ECANCELED',
-    'ERR_INVALID_URL',
-    'ERR_STREAM_PREMATURE_CLOSE',
-    'ERR_INVALID_STATE',
-    'ABORT_ERR',
-    'UND_ERR_CONNECT_TIMEOUT',
-    'UND_ERR_HEADERS_TIMEOUT',
-    'UND_ERR_BODY_TIMEOUT',
-    'UND_ERR_SOCKET',
-    'UND_ERR_ABORTED',
-    'UND_ERR_DESTROYED',
-    'UND_ERR_CLOSED',
-    'LIVE_RESPONSE_TOO_LARGE',
-    'LIVE_RESPONSE_INVALID',
-  ];
   const code =
-    typeof rawCode === 'string' && codes.includes(rawCode)
+    typeof rawCode === 'number' && Number.isSafeInteger(rawCode) && Math.abs(rawCode) <= 2147483647
       ? rawCode
-      : typeof rawCode === 'number' && Number.isInteger(rawCode) && rawCode >= 0 && rawCode <= 25
-        ? rawCode
-        : undefined;
+      : liveErrorIdentifier(rawCode);
   return {
     name,
     ...(code === undefined ? {} : { code }),
