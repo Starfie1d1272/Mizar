@@ -31,9 +31,11 @@ namespace Mizar.WebInstaller {
       bool complete=false;
       try {
         string installer;
+        var downloadClock=System.Diagnostics.Stopwatch.StartNew();
         using (var handler=new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false })
         using (var client=new HttpClient(handler) { Timeout=Timeout.InfiniteTimeSpan })
           installer=await new Downloader(client).Download(plan,cache,new IgnoreProgress(),CancellationToken.None);
+        Console.WriteLine("TIMING: verified installer acquisition "+downloadClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
         string pending=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache","fresh-install.pending");
         int ownerPid=0;long ownerStarted=0;
         using(var exited=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
@@ -61,7 +63,9 @@ namespace Mizar.WebInstaller {
           var prepared=Nsis.NewPending(plan,target,installer);
           prepared.ownerPid=ownerPid;prepared.ownerStarted=ownerStarted;
           File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),prepared.token);Nsis.SavePending(prepared,true);
+          var installClock=System.Diagnostics.Stopwatch.StartNew();
           var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
+          Console.WriteLine("TIMING: prepared first installation "+installClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
           Assert(!File.Exists(pending));
           Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
           Passed("prepared-install");
