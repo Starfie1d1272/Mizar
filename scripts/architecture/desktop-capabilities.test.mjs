@@ -48,13 +48,17 @@ function webCommands(path, source) {
 
 describe('Desktop capability contract', () => {
   it('keeps build registration, handlers, frontend calls and scoped grants in sync', async () => {
-    const [build, main, config, capability, demoCapability] = await Promise.all([
-      readFile(join(desktopRoot, 'build.rs'), 'utf8'),
-      readFile(join(desktopRoot, 'src/main.rs'), 'utf8'),
-      readFile(join(desktopRoot, 'tauri.conf.json'), 'utf8').then(JSON.parse),
-      readFile(join(desktopRoot, 'capabilities/workspace.json'), 'utf8').then(JSON.parse),
-      readFile(join(desktopRoot, 'capabilities/demo-test.json'), 'utf8').then(JSON.parse),
-    ]);
+    const [build, main, config, capability, demoCapability, demoWorkspaceCapability] =
+      await Promise.all([
+        readFile(join(desktopRoot, 'build.rs'), 'utf8'),
+        readFile(join(desktopRoot, 'src/main.rs'), 'utf8'),
+        readFile(join(desktopRoot, 'tauri.conf.json'), 'utf8').then(JSON.parse),
+        readFile(join(desktopRoot, 'capabilities/workspace.json'), 'utf8').then(JSON.parse),
+        readFile(join(desktopRoot, 'capabilities/demo-test.json'), 'utf8').then(JSON.parse),
+        readFile(join(desktopRoot, 'capabilities/demo-test-workspace.json'), 'utf8').then(
+          JSON.parse,
+        ),
+      ]);
     const manifest = build.match(/AppManifest::new\(\)\s*\.commands\(\s*&\s*\[([^\]]*)\]/);
     expect(manifest, '必须读取 production AppManifest commands').not.toBeNull();
     const registered = Array.from(
@@ -86,13 +90,24 @@ describe('Desktop capability contract', () => {
       registered.filter((command) => !commandsWithoutWebConsumer.includes(command)).toSorted(),
     );
 
-    expect(config.app.security.capabilities).toEqual(['workspace', 'demo-test']);
+    expect(config.app.security.capabilities).toEqual([
+      'workspace',
+      'demo-test',
+      'demo-test-workspace',
+    ]);
     expect(demoCapability.identifier).toBe('demo-test');
     expect(demoCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
     expect(demoCapability.windows).toEqual(['main']);
     expect(demoCapability.permissions.toSorted()).toEqual(
       demoCommands.map((command) => `allow-${command.replaceAll('_', '-')}`).toSorted(),
     );
+    expect(demoWorkspaceCapability.identifier).toBe('demo-test-workspace');
+    expect(demoWorkspaceCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
+    expect(demoWorkspaceCapability.windows.toSorted()).toEqual([
+      'workspace-dock',
+      'workspace-left',
+    ]);
+    expect(demoWorkspaceCapability.permissions).toEqual(['allow-finish-demo-test']);
     expect(capability.identifier).toBe('workspace');
     expect(capability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
     expect(capability.windows.toSorted()).toEqual(
