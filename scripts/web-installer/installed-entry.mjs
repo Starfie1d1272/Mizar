@@ -8,7 +8,15 @@ import { verifyPayload, writableRoot } from '../../../scripts/product-runtime.mj
 // This executable entry is shipped inside Core and invoked by its embedded Node.
 // It imports the actual product App only after the whole Core passes verification.
 const coreRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const [version, gitSha, contentDigest] = process.argv.slice(2);
+const [version, gitSha, contentDigest, coreSha256, sha256, installerBytes] = process.argv.slice(2);
+const nativePlan = {
+  version,
+  gitSha,
+  contentDigest,
+  coreSha256,
+  sha256,
+  bytes: Number(installerBytes),
+};
 const cancellation = new globalThis.AbortController();
 const signal = globalThis.AbortSignal.any([
   cancellation.signal,
@@ -21,7 +29,15 @@ process.stdin.on(
 );
 let app;
 try {
-  if (!version || !/^[a-f0-9]{40}$/.test(gitSha) || !/^[a-f0-9]{64}$/.test(contentDigest))
+  if (
+    !version ||
+    !/^[a-f0-9]{40}$/.test(gitSha) ||
+    !/^[a-f0-9]{64}$/.test(contentDigest) ||
+    !/^[a-f0-9]{64}$/.test(coreSha256) ||
+    !/^[a-f0-9]{64}$/.test(sha256) ||
+    !Number.isSafeInteger(nativePlan.bytes) ||
+    nativePlan.bytes < 1
+  )
     throw new Error('Authenticated native Core plan is required');
   const artifact = await verifyPayload(coreRoot);
   await access(join(coreRoot, 'installed.flag'));
@@ -64,6 +80,7 @@ try {
     signal.throwIfAborted();
     ({ authorization, inputs } = await authenticatePublishedBootstrap({
       version: artifact.appVersion,
+      expectedCore: { ...nativePlan, coreMode: artifact.resourceMode === 'core' },
       tufCachePath,
       signal,
     }));
@@ -71,7 +88,7 @@ try {
   const result = await completeBootstrap({
     app,
     coreRoot,
-    corePlan: { version, gitSha, contentDigest },
+    corePlan: nativePlan,
     authorization,
     inputs,
     tufCachePath,

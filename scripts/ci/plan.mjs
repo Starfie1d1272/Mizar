@@ -10,6 +10,7 @@ export const CI_JOB_IDS = Object.freeze([
   'platform',
   'qualification_offline',
   'qualification_windows',
+  'installer_windows',
 ]);
 
 const DOCS_ONLY_PATTERN = /^(?:docs\/.*|.*\.(?:md|mdx))$/s;
@@ -196,6 +197,28 @@ function isUnsafeChangeStatus(status) {
   return !/^(?:[AMD]|R(?:100|0[0-9]{2}|[0-9]{1,2}))$/.test(status ?? '');
 }
 
+function isInstallerPath(path) {
+  return (
+    !isDocsOnlyPath(path) &&
+    ([
+      'scripts/web-installer/',
+      'packages/resource-pack-contract/',
+      'apps/companion/src/resource-store/',
+      'apps/companion/test/resource-store/',
+      'scripts/qualification/installer-assets/',
+    ].some((prefix) => path.startsWith(prefix)) ||
+      [
+        'apps/companion/src/app.ts',
+        'scripts/qualification/build.mjs',
+        'scripts/qualification/product-runtime.mjs',
+        'scripts/qualification/windows-setup.nsi',
+        'scripts/qualification/create-windows-setup.ps1',
+        'apps/desktop/src-tauri/icons/icon.ico',
+        'apps/desktop/src-tauri/icons/tray-icon.png',
+      ].includes(path))
+  );
+}
+
 function fullPlan(reason, includeOfflineQualification = false) {
   return {
     runQuality: true,
@@ -203,6 +226,7 @@ function fullPlan(reason, includeOfflineQualification = false) {
     runAcceptance: true,
     runPlatform: true,
     runQualification: true,
+    runInstaller: true,
     runOfflineQualification: includeOfflineQualification,
     requiredJobs: CI_JOB_IDS.filter(
       (job) => includeOfflineQualification || job !== 'qualification_offline',
@@ -224,12 +248,14 @@ function selectivePlan(changedFiles, eventName) {
   const runAcceptance = changedFiles.some(({ path }) => isAcceptancePath(path));
   const runPlatform = changedFiles.some(({ path }) => isPlatformPath(path));
   const runQualification = changedFiles.some(({ path }) => isQualificationPath(path));
+  const runInstaller = changedFiles.some(({ path }) => isInstallerPath(path));
   const runOfflineQualification = changedFiles.some(({ path }) => isOfflineQualificationPath(path));
   const requiredJobs = CI_JOB_IDS.filter((job) => {
     if (job === 'quality') return runQuality;
     if (job === 'design') return runDesign;
     if (job === 'acceptance') return runAcceptance;
     if (job === 'platform') return runPlatform;
+    if (job === 'installer_windows') return runInstaller;
     if (job === 'qualification_offline') return runOfflineQualification;
     return runQualification;
   });
@@ -240,6 +266,7 @@ function selectivePlan(changedFiles, eventName) {
     runAcceptance,
     runPlatform,
     runQualification,
+    runInstaller,
     runOfflineQualification,
     requiredJobs,
     reason: `${eventName} changed surface classified (${changedFiles.length} file(s))`,
@@ -323,6 +350,7 @@ export function createCiPlan(options = {}) {
       runAcceptance: false,
       runPlatform: false,
       runQualification: false,
+      runInstaller: false,
       runOfflineQualification: false,
       requiredJobs: [],
       reason: 'docs-only change',
@@ -370,6 +398,7 @@ function outputPlan(plan) {
     run_acceptance: String(plan.runAcceptance),
     run_platform: String(plan.runPlatform),
     run_qualification: String(plan.runQualification),
+    run_installer: String(plan.runInstaller),
     run_offline_qualification: String(plan.runOfflineQualification),
     required_jobs: JSON.stringify(plan.requiredJobs),
     reason: plan.reason,
@@ -417,6 +446,7 @@ function runPlanner() {
         runAcceptance: false,
         runPlatform: false,
         runQualification: false,
+        runInstaller: false,
         runOfflineQualification: false,
         requiredJobs: [],
         reason: `trusted PR merge tree: run ${evidence.runId} attempt ${evidence.runAttempt}`,
@@ -451,6 +481,7 @@ function runGate() {
       platform: process.env.PLATFORM_RESULT,
       qualification_offline: process.env.QUALIFICATION_OFFLINE_RESULT,
       qualification_windows: process.env.QUALIFICATION_WINDOWS_RESULT,
+      installer_windows: process.env.INSTALLER_WINDOWS_RESULT,
     },
   });
   if (!result.ok) {

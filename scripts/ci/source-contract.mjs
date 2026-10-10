@@ -6,6 +6,7 @@ export const fullSourceJobs = Object.freeze([
   ...[1, 2, 3, 4, 5, 6, 7, 8].map((shard) => `acceptance / ${shard} of 8`),
   'platform / Windows',
   'native / Windows',
+  'installer / Windows',
   'qualification / offline / Linux',
   'qualification / offline / macOS',
   'ci-gate',

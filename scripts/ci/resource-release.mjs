@@ -1,5 +1,10 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineMetadata,
+} from '../../packages/resource-pack-contract/transport.mjs';
 import { execFileSync } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -29,12 +34,16 @@ const coreIdentity = (manifest) => {
     /^[a-f0-9]{40}$/.test(manifest.gitSha) &&
       /^[a-f0-9]{64}$/.test(manifest.archiveSha256) &&
       manifest.desktopBuildProfile === 'release' &&
-      manifest.developmentOnly === false,
+      manifest.developmentOnly === false &&
+      manifest.resourceMode !== 'core-only',
     '资源目录必须绑定正式资格候选；不能将 Core-only 开发产物升级为正式候选',
   );
   validateReleaseTag(`v${manifest.appVersion}`, manifest.appVersion);
   requireValue(
-    manifest.archive === `Mizar-v${manifest.appVersion}-Windows-x64.zip`,
+    [
+      `Mizar-v${manifest.appVersion}-Windows-x64.zip`,
+      `Mizar-v${manifest.appVersion}-Windows-x64-Core.zip`,
+    ].includes(manifest.archive),
     'Core 归档身份无效',
   );
   return {
@@ -253,13 +262,15 @@ export async function freezePublishedResources(folder, manifest, destination) {
     return candidate;
   });
 }
-function publishedResourceMetadata(release, catalog, expected) {
+function publishedResourceMetadata(release, catalog, expected, partial = false) {
   requireValue(
-    release.tag_name === `v${catalog.core.appVersion}` && !release.draft && release.published_at,
+    release.tag_name === `v${catalog.core.appVersion}` &&
+      (partial ? typeof release.draft === 'boolean' : !release.draft && release.published_at),
     '资源必须来自已公开的同版本发行，拒绝覆盖未完成草稿',
   );
   for (const asset of expected) {
     const found = release.assets.filter((item) => item.name === asset.name);
+    if (partial && !found.length) continue;
     requireValue(
       found.length === 1 &&
         found[0].size === asset.size &&
@@ -269,11 +280,68 @@ function publishedResourceMetadata(release, catalog, expected) {
     );
   }
 }
+async function publishedCarrier(release) {
+  const assets = release.assets.filter((a) => a.name === MACHINE_METADATA_NAME);
+  requireValue(
+    assets.length === 1 &&
+      assets[0].size > 0 &&
+      assets[0].size <= MACHINE_METADATA_MAX_BYTES &&
+      assets[0].browser_download_url ===
+        `https://github.com/${repository}/releases/download/${release.tag_name}/${MACHINE_METADATA_NAME}`,
+    'Invalid published machine carrier',
+  );
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-machine-readback-'));
+  try {
+    execFileSync(
+      'gh',
+      [
+        'release',
+        'download',
+        release.tag_name,
+        '--repo',
+        repository,
+        '--pattern',
+        MACHINE_METADATA_NAME,
+        '--dir',
+        directory,
+      ],
+      { stdio: 'pipe', timeout: 60000 },
+    );
+    const bytes = await boundedRead(
+      join(directory, MACHINE_METADATA_NAME),
+      MACHINE_METADATA_MAX_BYTES,
+    );
+    requireValue(
+      bytes.length === assets[0].size && assets[0].digest === `sha256:${sha256(bytes)}`,
+      'Machine carrier readback differs',
+    );
+    return readMachineMetadata(bytes);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 export async function verifyPublishedResourceMetadata(folder, manifest, release) {
   const { catalog } = await verifyPublishedResources(folder, manifest);
   const expected = await resourceAssetInventory(folder, manifest, true);
-  publishedResourceMetadata(release, catalog, expected);
+  if (manifest.resourceMode === 'core') {
+    publishedResourceMetadata(
+      release,
+      catalog,
+      expected.filter((a) => a.name.endsWith('.zip')),
+    );
+    if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
+      const originals = await publishedCarrier(release);
+      for (const asset of expected.filter((a) => !a.name.endsWith('.zip'))) {
+        const bytes = originals.get(asset.name);
+        requireValue(
+          bytes && bytes.length === asset.size && sha256(bytes) === asset.sha256,
+          'Published carrier differs from original resource proof bytes',
+        );
+      }
+    }
+  } else publishedResourceMetadata(release, catalog, expected);
 }
+
 function lookupGithubObject(path) {
   try {
     return JSON.parse(
@@ -294,29 +362,107 @@ async function resolvePublishedResourceFiles(folder, manifest) {
   const tag = `v${manifest.appVersion}`;
   const release = lookupGithubObject(`releases/tags/${tag}`);
   if (release === null) return false;
-  // First bind the existing immutable qualified files before downloading proofs.
+  if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
+    const originals = await publishedCarrier(release);
+    for (const name of Object.values(names)) {
+      const bytes = originals.get(name);
+      requireValue(bytes, 'Carrier is missing original resource metadata');
+      if (
+        [names.descriptor, names.descriptorQualification, names.archiveQualification].includes(name)
+      )
+        requireValue(
+          bytes.equals(await readFile(join(folder, name))),
+          'Published carrier differs from original qualification bytes',
+        );
+      else await writeFile(join(folder, name), bytes, { flag: 'wx' });
+    }
+    await verifyPublishedResourceMetadata(folder, manifest, release);
+    return true;
+  }
   const qualified = await resourceAssetInventory(folder, manifest);
-  publishedResourceMetadata(release, candidate.descriptor, qualified);
-  for (const name of [
+  publishedResourceMetadata(
+    release,
+    candidate.descriptor,
+    manifest.resourceMode === 'core' ? qualified.filter((a) => a.name.endsWith('.zip')) : qualified,
+    true,
+  );
+  const authorizationNames = [
     names.catalog,
     names.publication,
     names.publicationPromotion,
     names.catalogPromotion,
-  ]) {
-    const matches = release.assets.filter((asset) => asset.name === name);
-    requireValue(
-      matches.length === 1 &&
-        matches[0].size > 0 &&
-        matches[0].size <= ([names.publication, names.catalog].includes(name) ? 65536 : 2097152),
-      `已有发行缺少唯一资源授权：${name}`,
-    );
-    execFileSync(
-      'gh',
-      ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', folder],
-      { stdio: 'pipe', timeout: 60000 },
-    );
+  ];
+  const present = authorizationNames.filter((name) =>
+    release.assets.some((asset) => asset.name === name),
+  );
+  if (!present.length) return false;
+  if (present.length === authorizationNames.length) {
+    for (const name of authorizationNames) {
+      const found = release.assets.filter((asset) => asset.name === name);
+      requireValue(
+        found.length === 1 &&
+          found[0].size > 0 &&
+          found[0].size <= ([names.catalog, names.publication].includes(name) ? 65536 : 2097152),
+        '已有资源授权不唯一或超限',
+      );
+      execFileSync(
+        'gh',
+        ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', folder],
+        { stdio: 'pipe', timeout: 60000 },
+      );
+    }
+  } else {
+    requireValue(/^\d+$/.test(process.env.RUN_ID ?? ''), '恢复必须绑定原资格任务');
+    const prefix = `promotion-resources-${tag}-${process.env.RUN_ID}-`;
+    let artifacts = [];
+    for (let page = 1; page <= 5; page++) {
+      const response = lookupGithubObject(`actions/artifacts?per_page=100&page=${page}`);
+      requireValue(response?.artifacts, '无法查询原签名 CI 快照');
+      artifacts.push(
+        ...response.artifacts.filter(
+          (item) =>
+            !item.expired &&
+            item.name.startsWith(prefix) &&
+            /^\d+$/.test(item.name.slice(prefix.length)),
+        ),
+      );
+      if (response.artifacts.length < 100) break;
+    }
+    artifacts.sort((x, y) => y.id - x.id);
+    const original = artifacts[0];
+    requireValue(original?.workflow_run?.id, '部分公开资源缺少原签名 CI 快照；拒绝覆盖或重新签发');
+    const recovery = await mkdtemp(join(tmpdir(), 'mizar-original-publication-'));
+    try {
+      execFileSync(
+        'gh',
+        [
+          'run',
+          'download',
+          String(original.workflow_run.id),
+          '--repo',
+          repository,
+          '--name',
+          original.name,
+          '--dir',
+          recovery,
+        ],
+        { stdio: 'pipe', timeout: 600000 },
+      );
+      await resourceAssetInventory(recovery, manifest, true);
+      for (const name of authorizationNames)
+        await writeFile(join(folder, name), await readFile(join(recovery, name)), { flag: 'wx' });
+    } finally {
+      await rm(recovery, { recursive: true, force: true });
+    }
   }
-  await verifyPublishedResourceMetadata(folder, manifest, release);
+  const { catalog } = await verifyPublishedResources(folder, manifest);
+  publishedResourceMetadata(
+    release,
+    catalog,
+    await resourceAssetInventory(folder, manifest, true),
+    true,
+  );
+
   return true;
 }
 

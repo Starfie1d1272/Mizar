@@ -31,7 +31,10 @@ export function createResourceDescriptor({
       /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(core.appVersion) &&
       isSourceSha(core.gitSha) &&
       isSha256(core.archiveSha256) &&
-      core.archive === `Mizar-v${core.appVersion}-Windows-x64.zip`,
+      [
+        `Mizar-v${core.appVersion}-Windows-x64.zip`,
+        `Mizar-v${core.appVersion}-Windows-x64-Core.zip`,
+      ].includes(core.archive),
     '资源目录 Core 身份无效',
   );
   requireValue(

@@ -9,11 +9,6 @@ on:
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
-    inputs:
-      benchmark_release:
-        description: 'Research release LTO and NSIS compression; never promote experiment assets'
-        type: boolean
-        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
@@ -35,6 +30,7 @@ jobs:
       run_acceptance: ${{ steps.plan.outputs.run_acceptance }}
       run_platform: ${{ steps.plan.outputs.run_platform }}
       run_qualification: ${{ steps.plan.outputs.run_qualification }}
+      run_installer: ${{ steps.plan.outputs.run_installer }}
       run_offline_qualification: ${{ steps.plan.outputs.run_offline_qualification }}
       required_jobs: ${{ steps.plan.outputs.required_jobs }}
       reason: ${{ steps.plan.outputs.reason }}
@@ -345,6 +341,34 @@ jobs:
           target-key: ${{ steps.cargo-cache.outputs.target-key }}
           target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
 
+  installer_windows:
+    name: installer / Windows
+    if: ${{ needs.plan.outputs.run_installer == 'true' }}
+    needs: [plan]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          require-lockfile: true
+          install: false
+      - name: Verify native UI, bounded download, real NSIS and actual SDK / Store / App
+        shell: powershell
+        run: ./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: web-installer-native-${{ github.run_attempt }}
+          path: |
+            .agent-tmp/web-installer/*.json
+            .agent-tmp/web-installer/*.png
+
   qualification_offline:
     name: qualification / offline / ${{ matrix.name }}
     if: ${{ needs.plan.outputs.run_offline_qualification == 'true' }}
@@ -397,7 +421,7 @@ jobs:
     name: ci-gate
     if: always()
     needs:
-      [plan, quality, design, acceptance, platform, qualification_offline, qualification_windows]
+      [plan, quality, design, acceptance, platform, qualification_offline, qualification_windows, installer_windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -426,49 +450,4 @@ jobs:
           PLATFORM_RESULT: ${{ needs.platform.result }}
           QUALIFICATION_OFFLINE_RESULT: ${{ needs.qualification_offline.result }}
           QUALIFICATION_WINDOWS_RESULT: ${{ needs.qualification_windows.result }}
-
-  benchmark_release:
-    name: benchmark / release and NSIS
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_release }}
-    runs-on: windows-2025
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          install: false
-      # Only downloaded dependencies are restored. Each experiment clears its
-      # release target; restoring compiled targets just to delete them is waste.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-release-research-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            cargo-v3-${{ runner.os }}-${{ runner.arch }}-registry-
-      - run: pnpm install --frozen-lockfile
-      - run: git checkout -- pnpm-lock.yaml
-      - run: pnpm build
-      - name: Install pinned NSIS
-        run: choco install nsis --version=3.11 -y --no-progress
-      - name: Benchmark same-source release profiles and same-payload installers
-        run: node scripts/ci/benchmark-release.mjs
-      - name: Preserve experimental measurements and native evidence only
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-benchmark-evidence-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: |
-            .agent-tmp/release-benchmark/benchmark.json
-            .agent-tmp/release-benchmark/**/build-timings.json
-            .agent-tmp/release-benchmark/**/desktop-smoke.json
-            .agent-tmp/release-benchmark/**/host-soak.json
-            .agent-tmp/release-benchmark/**/identity.json
-            .agent-tmp/release-benchmark/**/distribution-manifest.json
-          if-no-files-found: error
+          INSTALLER_WINDOWS_RESULT: ${{ needs.installer_windows.result }}

@@ -1,10 +1,17 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineFile,
+} from '../../packages/resource-pack-contract/transport.mjs';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, readdir, mkdtemp, rm } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { releaseAttestationArgs } from './release-identity.mjs';
+import { publicProductAssets, assetInventory } from './release-assets.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -58,26 +65,16 @@ export function assertPublication(publication, manifestBytes, manifest) {
   );
 }
 
-async function expectedAssets(product, evidence) {
-  const paths = [];
-  for (const folder of [product, evidence])
-    for (const entry of await readdir(folder, { withFileTypes: true }))
-      if (entry.isFile()) paths.push(join(folder, entry.name));
-  paths.push('promotion-identity.json', 'promotion-ci.json');
-  return Promise.all(
-    paths.map(async (path) => {
-      const bytes = await readFile(path);
-      return { name: basename(path), size: bytes.length, sha256: sha256(bytes) };
-    }),
-  );
+async function expectedAssets(product) {
+  return assetInventory(await publicProductAssets(product));
 }
 
-async function verifiedPublishedRelease(releasePath, refPath, tag, product, evidence) {
+async function verifiedPublishedRelease(releasePath, refPath, tag, product) {
   const identity = await json('promotion-identity.json');
   requireValue(identity.tag === tag, '晋级标签不一致');
   const release = await json(releasePath),
     ref = await json(refPath);
-  assertPublishedAssets(release, ref, identity, await expectedAssets(product, evidence));
+  assertPublishedAssets(release, ref, identity, await expectedAssets(product));
   return { identity, release };
 }
 
@@ -85,6 +82,91 @@ async function verifyExistingPublication(release, identity, product) {
   if (!/^v\d+\.\d+\.\d+$/.test(identity.tag)) return;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-publication-'));
   try {
+    const carriers = release.assets.filter((a) => a.name === MACHINE_METADATA_NAME);
+    const indexName = carriers.length ? MACHINE_METADATA_NAME : 'update-index.json';
+    const indexAssets = carriers.length
+      ? carriers
+      : release.assets.filter((a) => a.name === 'update-index.json');
+    if (indexAssets.length) {
+      requireValue(
+        indexAssets.length === 1 &&
+          indexAssets[0].size > 0 &&
+          indexAssets[0].size <= (carriers.length ? MACHINE_METADATA_MAX_BYTES : 2097152),
+        '更新信封不唯一或超限',
+      );
+      execFileSync(
+        'gh',
+        [
+          'release',
+          'download',
+          identity.tag,
+          '--repo',
+          repository,
+          '--pattern',
+          indexName,
+          '--dir',
+          directory,
+        ],
+        { stdio: 'pipe', timeout: 60000 },
+      );
+      const transport = await readFile(join(directory, indexName));
+      const bytes = carriers.length ? readMachineFile(transport, 'update-index.json') : transport;
+      assertPublishedAssets(
+        release,
+        { object: { type: 'commit', sha: identity.gitSha } },
+        identity,
+        [{ name: indexName, size: transport.length, sha256: sha256(transport) }],
+      );
+      const index = JSON.parse(bytes);
+      requireValue(index.schemaVersion === 'mizar.update-index.v2', '更新信封格式无效');
+      const manifestBytes = Buffer.from(index.manifestBase64, 'base64'),
+        publicationBytes = Buffer.from(index.publicationBase64, 'base64');
+      requireValue(
+        manifestBytes.equals(await readFile(join(product, 'update-manifest.json'))),
+        '原更新清单字节不一致',
+      );
+      const { makeUpdateIndex } = await import('./update-index.mjs');
+      const provenance = Buffer.from(JSON.stringify(index.provenance)),
+        publicationProof = Buffer.from(JSON.stringify(index.publicationProvenance));
+      requireValue(
+        bytes.equals(
+          makeUpdateIndex(manifestBytes, provenance, publicationBytes, publicationProof),
+        ),
+        '更新信封不是原始规范字节',
+      );
+      const publication = JSON.parse(publicationBytes);
+      requireValue(
+        publication.releaseId === release.id && publication.publishedAt === release.published_at,
+        '发布确认对应不同 Release',
+      );
+      for (const [name, data] of [
+        ['update-manifest.json', manifestBytes],
+        ['update-provenance.json', provenance],
+        ['update-publication.json', publicationBytes],
+        ['update-publication-provenance.json', publicationProof],
+      ])
+        await writeFile(join(directory, name), data);
+      execFileSync(
+        'gh',
+        releaseAttestationArgs(
+          join(directory, 'update-manifest.json'),
+          identity.gitSha,
+          join(directory, 'update-provenance.json'),
+        ),
+        { stdio: 'inherit', timeout: 60000 },
+      );
+      execFileSync(
+        'gh',
+        releaseAttestationArgs(
+          join(directory, 'update-publication.json'),
+          publication.promotionSha,
+          join(directory, 'update-publication-provenance.json'),
+          'promotion',
+        ),
+        { stdio: 'inherit', timeout: 60000 },
+      );
+      return;
+    }
     for (const name of ['update-publication.json', 'update-publication-provenance.json']) {
       const assets = release.assets.filter((a) => a.name === name);
       requireValue(
@@ -133,15 +215,9 @@ async function verifyExistingPublication(release, identity, product) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [, , mode, releasePath, refPath, tag, product, evidence, output] = process.argv;
+  const [, , mode, releasePath, refPath, tag, product, output] = process.argv;
   requireValue(['create', 'verify-existing'].includes(mode), '发布确认操作无效');
-  const { identity, release } = await verifiedPublishedRelease(
-    releasePath,
-    refPath,
-    tag,
-    product,
-    evidence,
-  );
+  const { identity, release } = await verifiedPublishedRelease(releasePath, refPath, tag, product);
   if (mode === 'verify-existing') {
     await verifyExistingPublication(release, identity, product);
     console.log('已发布版本的完整必需资产与正式发布确认一致；不修改公开文件。');
