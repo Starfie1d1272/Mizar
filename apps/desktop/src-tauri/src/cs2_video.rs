@@ -25,6 +25,7 @@ struct Token {
     start: usize,
     end: usize,
     key_start: usize,
+    quoted: bool,
 }
 
 fn tokens(text: &str) -> Result<Vec<Token>, String> {
@@ -62,6 +63,7 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
                 start,
                 end: i,
                 key_start: start,
+                quoted: true,
             });
         } else if bytes[i] == b'{' || bytes[i] == b'}' {
             i += 1;
@@ -70,6 +72,7 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
                 start,
                 end: i,
                 key_start: start,
+                quoted: false,
             });
         } else {
             return Err("视频配置格式不支持，未修改游戏设置。".into());
@@ -80,9 +83,20 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
 
 fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
     let mut ts = tokens(text)?;
+    if ts
+        .iter()
+        .skip(2)
+        .take(ts.len().saturating_sub(3))
+        .any(|t| !t.quoted && (t.value == "{" || t.value == "}"))
+    {
+        return Err("cs2_video.txt：包含嵌套字段，未修改配置；可保持原游戏设置继续。".into());
+    }
     if ts.len() < 3
+        || !ts[0].quoted
         || ts[0].value != "video.cfg"
+        || ts[1].quoted
         || ts[1].value != "{"
+        || ts.last().unwrap().quoted
         || ts.last().unwrap().value != "}"
         || (ts.len() - 3) % 2 != 0
     {
@@ -90,18 +104,38 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
     }
     let close = ts.pop().unwrap().start;
     let mut map = BTreeMap::new();
+    let mut duplicate = None;
     let mut pairs = ts.into_iter().skip(2);
     while let Some(key) = pairs.next() {
         let mut value = pairs.next().ok_or("视频配置不完整。")?;
         value.key_start = key.start;
-        if key.value == "{"
-            || key.value == "}"
-            || value.value == "{"
-            || value.value == "}"
-            || map.insert(key.value, value).is_some()
-        {
-            return Err("视频配置包含重复或嵌套字段。".into());
+        if !key.quoted || !value.quoted {
+            return Err("cs2_video.txt：包含嵌套字段，未修改配置；可保持原游戏设置继续。".into());
         }
+        if let Some(previous) = map.get(&key.value) {
+            let previous: &Token = previous;
+            // Only known field names are exposed. Never include user values.
+            let name = if quality_preset(Quality::VeryHigh).contains_key(&key.value) {
+                key.value.as_str()
+            } else {
+                "其他字段"
+            };
+            let kind = if previous.value == value.value {
+                "同值重复"
+            } else {
+                "冲突重复"
+            };
+            if duplicate.is_none() || kind == "冲突重复" {
+                duplicate = Some(format!(
+                    "cs2_video.txt / {name}：{kind}，未修改配置；请检查备份，或保持原游戏设置继续。"
+                ));
+            }
+            continue;
+        }
+        map.insert(key.value, value);
+    }
+    if let Some(error) = duplicate {
+        return Err(error);
     }
     Ok((map, close))
 }
@@ -348,6 +382,22 @@ mod tests {
             "\"video.cfg\" {}",
         ] {
             assert!(apply(text, &preset(false)).is_err());
+        }
+    }
+    #[test]
+    fn duplicate_and_nested_diagnostics_do_not_expose_user_values() {
+        for (extra, kind) in [
+            ("\"setting.defaultres\" \"1280\"", "同值重复"),
+            ("\"setting.defaultres\" \"private-value\"", "冲突重复"),
+            ("\"nested\" { \"key\" \"private-value\" }", "嵌套字段"),
+        ] {
+            let original = ORIGINAL.replace("}\r\n", &format!("{extra}}}\r\n"));
+            let error = apply(&original, &preset(false)).unwrap_err();
+            assert!(error.contains(kind), "{error}");
+            assert!(!error.contains("private-value"));
+            if kind != "嵌套字段" {
+                assert!(error.contains("setting.defaultres"));
+            }
         }
     }
     #[test]

@@ -90,7 +90,7 @@ impl SessionStore {
                 }
                 let value: Value = serde_json::from_slice(&bytes)
                     .map_err(|_| "CS2 恢复记录损坏，请检查原配置备份。")?;
-                if value["version"] != 1 && value["version"] != 2 {
+                if value["version"] != 1 && value["version"] != 2 && value["version"] != 3 {
                     return Err("CS2 恢复记录版本不支持。".into());
                 }
                 Ok(Some(value))
@@ -135,7 +135,61 @@ impl SessionStore {
     ) -> Result<Value, String> {
         self.prepare_files(video, executable, size, None)
     }
+    /// Save opaque source bytes before attempting any interpretation. These
+    /// incident snapshots are never automatically restored over later settings.
+    pub fn backup_originals(&self, video: &Path) -> Result<(), String> {
+        if self.load()?.is_some() {
+            return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
+        }
+        let convars = video
+            .parent()
+            .ok_or("配置目录缺失。")?
+            .join("cs2_machine_convars.vcfg");
+        let snapshot = self.root.join(format!(
+            "original-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| "备份时间不可用。")?
+                .as_nanos()
+        ));
+        fs::create_dir_all(&self.root).map_err(|_| "无法创建原始配置备份目录。")?;
+        fs::create_dir(&snapshot).map_err(|_| "无法创建独立的原始配置备份。")?;
+        for (path, limit) in [(video, 128 * 1024), (convars.as_path(), 256 * 1024)] {
+            if fs::metadata(path)
+                .map_err(|_| "无法读取原始配置大小。")?
+                .len()
+                > limit as u64
+            {
+                return Err("原始游戏配置超过备份上限，未修改设置。".into());
+            }
+            let bytes = fs::read(path).map_err(|_| "无法备份原始游戏配置，未修改设置。")?;
+            if bytes.len() > limit {
+                return Err("原始游戏配置超过备份上限，未修改设置。".into());
+            }
+            atomic_write(
+                &snapshot.join(path.file_name().ok_or("备份文件名缺失。")?),
+                &bytes,
+            )?;
+        }
+        Ok(())
+    }
+    pub fn prepare_preserved(&self, video: &Path, executable: &Path) -> Result<Value, String> {
+        self.backup_originals(video)?;
+        let value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
+            "launchAttempted":false,"pid":null,"created":null});
+        self.save(&value)?;
+        Ok(value)
+    }
     pub fn prepare_with_frame_rate(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        self.backup_originals(video)?;
+        self.prepare_backed_up(video, executable, size)
+    }
+    pub fn prepare_backed_up(
         &self,
         video: &Path,
         executable: &Path,
@@ -178,6 +232,10 @@ impl SessionStore {
                 return Err("启动配置在准备期间发生变化，请重试。".into());
             }
         }
+        if fs::read(video).map_err(|_| "无法读取视频配置，原始备份仍保留。")? != original.as_bytes()
+        {
+            return Err("视频配置在准备期间发生变化，未修改配置。".into());
+        }
         // The original is durable and read-back verified before touching the game.
         self.save(&value)?;
         if let Err(error) = atomic_write(video, applied.as_bytes()) {
@@ -199,6 +257,34 @@ impl SessionStore {
         };
         if unconfirmed_launch(&value) {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
+        }
+        if value["version"] == 3 {
+            if value["preserveSettings"] != true
+                || [
+                    "original",
+                    "applied",
+                    "owned",
+                    "frameRateFiles",
+                    "frameRateLimit",
+                ]
+                .iter()
+                .any(|key| value.get(*key).is_some())
+                || !value["video"].as_str().is_some_and(|v| {
+                    Path::new(v).is_absolute()
+                        && Path::new(v)
+                            .file_name()
+                            .is_some_and(|n| n == "cs2_video.txt")
+                })
+                || !value["executable"]
+                    .as_str()
+                    .is_some_and(|v| Path::new(v).is_absolute())
+            {
+                return Err("保留设置的启动记录无效。".into());
+            }
+            // Nothing was owned or changed. In particular, never replace game
+            // writes made during this session with an incident snapshot.
+            return fs::remove_file(self.journal_path())
+                .map_err(|_| "启动记录尚未清理，请重试。".into());
         }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
         if path.file_name().and_then(|n| n.to_str()) != Some("cs2_video.txt") || !path.is_absolute()
@@ -340,6 +426,11 @@ mod tests {
                 .set_preferences(Preferences::new("high", limit).unwrap())
                 .unwrap();
             let before_video = fs::read(&video).unwrap();
+            fs::write(
+                &convars,
+                "\u{feff}\"config\" {\"convars\" {\"fps_max\" \" 100.500 \" \"other\" \"keep\"}}",
+            )
+            .unwrap();
             let before_convars = fs::read_to_string(&convars).unwrap();
             let cfg = root.join("game/csgo/cfg/auto.cfg");
             let before_cfg = fs::read(&cfg).unwrap();
@@ -369,6 +460,51 @@ mod tests {
             );
             assert_eq!(fs::read(&cfg).unwrap(), before_cfg);
             assert!(store.load().unwrap().is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn incompatible_config_is_backed_up_and_preserved_sessions_never_restore_over_game_writes() {
+        for invalid in [
+            b"invalid utf8: \xff".as_slice(),
+            b"\"video.cfg\" {\"setting.defaultres\" \"1280\" \"setting.defaultres\" \"1920\"}",
+        ] {
+            let (root, video, convars, executable, store) = frame_setup();
+            fs::write(&video, invalid).unwrap();
+            fs::write(&convars, b"opaque fps_max").unwrap();
+            assert!(store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1920, 1080).unwrap()
+                )
+                .is_err());
+            assert_eq!(fs::read(&video).unwrap(), invalid);
+            assert!(store.load().unwrap().is_none());
+            let snapshot = fs::read_dir(&store.root)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| p.is_dir())
+                .unwrap();
+            assert_eq!(fs::read(snapshot.join("cs2_video.txt")).unwrap(), invalid);
+            assert_eq!(
+                fs::read(snapshot.join("cs2_machine_convars.vcfg")).unwrap(),
+                b"opaque fps_max"
+            );
+            let mut journal = store.prepare_preserved(&video, &executable).unwrap();
+            assert!(store.prepare_preserved(&video, &executable).is_err());
+            journal["launchAttempted"] = json!(true);
+            store.save(&journal).unwrap();
+            assert!(store.restore().is_err());
+            fs::write(&video, b"new game settings").unwrap();
+            fs::write(&convars, b"new fps settings").unwrap();
+            journal["launchCancelled"] = json!(true);
+            store.save(&journal).unwrap();
+            SessionStore::new(root.clone()).restore().unwrap();
+            assert_eq!(fs::read(&video).unwrap(), b"new game settings");
+            assert_eq!(fs::read(&convars).unwrap(), b"new fps settings");
+            assert!(store.load().unwrap().is_none());
+            assert_eq!(fs::read(snapshot.join("cs2_video.txt")).unwrap(), invalid);
             fs::remove_dir_all(root).unwrap();
         }
     }

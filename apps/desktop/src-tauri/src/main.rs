@@ -485,7 +485,10 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 }
 
 #[tauri::command]
-async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
+async fn start_managed_cs2(
+    app: tauri::AppHandle,
+    preserve_settings: Option<bool>,
+) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
@@ -493,7 +496,15 @@ async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
         let _activity = activity.begin(1);
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        cs2.start()
+        let result = if preserve_settings.unwrap_or(false) {
+            cs2.start_with_settings(true)
+        } else {
+            cs2.start()
+        };
+        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+            tracker.preserve_settings = cs2.preserve_settings();
+        }
+        result
     })
     .await
     .map_err(|_| "CS2 启动未完成。".to_string())?
@@ -1338,6 +1349,9 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            if let Ok(mut tracker) = worker_tracker.lock() {
+                                tracker.preserve_settings = cs2.preserve_settings();
+                            }
                         }
                         cs2_check = Instant::now();
                     }

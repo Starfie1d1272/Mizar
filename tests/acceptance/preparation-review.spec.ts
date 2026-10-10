@@ -763,3 +763,77 @@ test('configured Steam key uses a non-secret mask and updates only with new inpu
   );
   await expect(page.getByRole('button', { name: '更新密钥', exact: true })).toBeDisabled();
 });
+
+test('configuration failure offers an explicit preserved launch and keeps its limits visible', async ({
+  page,
+}) => {
+  // Synthetic IPC fixture proves the user choice and command flow, not native CS2.
+  await page.addInitScript(() => {
+    const state = {
+      canPreserve: false,
+      preserveSettings: false,
+      pending: false,
+      running: false,
+      qualityPreset: 'very-high',
+      frameRateLimit: 60,
+      message: null as string | null,
+    };
+    const choices: unknown[] = [];
+    Object.assign(window, {
+      preservedLaunchChoices: choices,
+      __TAURI_INTERNALS__: {
+        invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+          await Promise.resolve();
+          if (command === 'gsi_status') return { installed: true, conflict: false } as T;
+          if (command === 'start_managed_cs2') {
+            choices.push(args?.preserveSettings === true);
+            if (args?.preserveSettings !== true) {
+              state.canPreserve = true;
+              state.message = 'cs2_video.txt / setting.defaultres：冲突重复，未修改配置。';
+              throw new Error(state.message);
+            }
+            state.canPreserve = false;
+            state.preserveSettings = true;
+            state.pending = true;
+            state.running = true;
+            state.message =
+              '已保持原游戏设置；未应用自动画质、帧率和游戏窗口布局，本机 HUD 覆盖已停用。';
+          }
+          return (command === 'cs2_config_status' ? { ...state } : {}) as T;
+        },
+      },
+    });
+  });
+  await page.route('**/local/v1/production', (route) =>
+    route.fulfill({
+      json: { mode: 'preparation', revision: 'preserved-1', canEnter: true },
+    }),
+  );
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: { connection: 'connected', findings: [] },
+    }),
+  );
+  const actions: unknown[] = [];
+  await page.route('**/operator/production', (route) => {
+    actions.push(route.request().postDataJSON());
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/');
+  const preserve = page.getByRole('button', { name: '保持原游戏设置继续', exact: true });
+  await expect(preserve).toHaveCount(0);
+  await page.getByRole('button', { name: '启动游戏并打开工作台', exact: true }).click();
+  await expect(preserve).toBeVisible();
+  await expect(page.getByText('未应用游戏设置，原始配置已备份', { exact: true })).toBeVisible();
+  await expect(page.getByText(/保持原设置继续时，不应用自动画质/)).toBeVisible();
+  expect(actions).toEqual([]);
+  await preserve.click();
+  await expect(page.getByText('CS2 正在运行，已保持原游戏设置', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { preservedLaunchChoices: unknown[] }).preservedLaunchChoices,
+    ),
+  ).toEqual([false, true]);
+  expect(actions).toEqual([{ action: 'enter', expectedRevision: 'preserved-1' }]);
+  await expect(page.getByRole('button', { name: '退出本次 CS2', exact: true })).toBeVisible();
+});

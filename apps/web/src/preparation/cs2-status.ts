@@ -4,6 +4,8 @@ import { desktopInvoke } from '../workspace/client';
 export interface Cs2ConfigStatus {
   qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
   frameRateLimit: 0 | 30 | 60;
+  canPreserve?: boolean;
+  preserveSettings?: boolean;
   pending: boolean;
   running: boolean;
   message: string | null;
