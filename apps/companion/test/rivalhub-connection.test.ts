@@ -1028,10 +1028,13 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
     expect(connection.view().liveDelivery).toMatchObject({
       status: 'dropped',
       reason,
-      consecutiveFailures: 0,
     });
+    expect(connection.view().liveDelivery.consecutiveUnaccepted).toBeGreaterThan(1);
+    expect(connection.view().liveDelivery.durationMs).toBeGreaterThanOrEqual(0);
   }
   expect(diagnostics).not.toHaveBeenCalled();
+  response = () => Promise.resolve(Response.json({ accepted: true }));
+  await connection.sendLive(snapshot);
   const clock = vi.spyOn(performance, 'now');
   let now = 0;
   clock.mockImplementation(() => now);
@@ -1055,7 +1058,7 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
     expect(connection.view().liveDelivery).toMatchObject({
       status: 'accepted',
       reason: null,
-      consecutiveFailures: 0,
+      consecutiveUnaccepted: 0,
       durationMs: 0,
     });
     expect(diagnostics).toHaveBeenCalledTimes(2);
@@ -1074,13 +1077,64 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
     response = () => Promise.resolve(Response.json({ accepted: false, reason: 'frame_expired' }));
     await connection.sendLive(snapshot);
     expect(connection.view().liveDelivery).toMatchObject({
-      status: 'dropped',
+      status: 'failing',
       reason: 'frame_expired',
-      consecutiveFailures: 0,
+      consecutiveUnaccepted: 6,
+      durationMs: 12000,
     });
     expect(diagnostics).toHaveBeenCalledTimes(3);
-    expect(liveBodies).toHaveLength(19);
-    expect(liveBodies[12]).toMatchObject({ cursor: { runtimeSeq: 999 } });
+    for (const reason of ['contended', 'delivery_dropped']) {
+      response = () => Promise.resolve(Response.json({ accepted: false, reason }));
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      consecutiveUnaccepted: 8,
+      durationMs: 12000,
+    });
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(4);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      consecutiveUnaccepted: 0,
+      durationMs: 0,
+    });
+    response = () =>
+      Promise.resolve(Response.json({ accepted: false, reason: 'capacity' }, { status: 429 }));
+    await connection.sendLive(snapshot);
+    for (let index = 0; index < 3; index++) {
+      now += 3000;
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).toHaveBeenCalledTimes(4);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'dropped',
+      consecutiveUnaccepted: 4,
+      durationMs: 9000,
+    });
+    now += 1000;
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(5);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      reason: 'capacity',
+      consecutiveUnaccepted: 6,
+      durationMs: 10000,
+    });
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(6);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      reason: null,
+      consecutiveUnaccepted: 0,
+      durationMs: 0,
+    });
+    expect(liveBodies).toHaveLength(30);
+    expect(liveBodies[13]).toMatchObject({ cursor: { runtimeSeq: 999 } });
   } finally {
     clock.mockRestore();
   }

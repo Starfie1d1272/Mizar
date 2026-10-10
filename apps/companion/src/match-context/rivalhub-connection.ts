@@ -95,13 +95,13 @@ export class RivalHubConnection {
   private liveDelivery: {
     status: 'idle' | 'accepted' | 'dropped' | 'failing';
     reason: string | null;
-    consecutiveFailures: number;
+    consecutiveUnaccepted: number;
     since: number | null;
     notified: boolean;
   } = {
     status: 'idle',
     reason: null,
-    consecutiveFailures: 0,
+    consecutiveUnaccepted: 0,
     since: null,
     notified: false,
   };
@@ -149,11 +149,11 @@ export class RivalHubConnection {
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       liveDelivery:
         this.source === null
-          ? { status: 'idle', reason: null, consecutiveFailures: 0, durationMs: 0 }
+          ? { status: 'idle', reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
           : {
               status: this.liveDelivery.status,
               reason: this.liveDelivery.reason,
-              consecutiveFailures: this.liveDelivery.consecutiveFailures,
+              consecutiveUnaccepted: this.liveDelivery.consecutiveUnaccepted,
               durationMs:
                 this.liveDelivery.since === null
                   ? 0
@@ -414,7 +414,7 @@ export class RivalHubConnection {
       this.liveDelivery = {
         status: 'idle',
         reason: null,
-        consecutiveFailures: 0,
+        consecutiveUnaccepted: 0,
         since: null,
         notified: false,
       };
@@ -564,22 +564,22 @@ export class RivalHubConnection {
       this.activeDeviceName = '另一台制播设备';
     }
     const previous = this.liveDelivery;
-    if (accepted || dropped) {
-      if (accepted && previous.notified)
+    if (accepted) {
+      if (previous.notified)
         this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
       this.liveDelivery = {
-        status: accepted ? 'accepted' : 'dropped',
-        reason: accepted ? null : reason,
-        consecutiveFailures: 0,
+        status: 'accepted',
+        reason: null,
+        consecutiveUnaccepted: 0,
         since: null,
         notified: false,
       };
       return;
     }
     this.liveDelivery = {
-      status: 'failing',
+      status: dropped && !previous.notified ? 'dropped' : 'failing',
       reason,
-      consecutiveFailures: previous.consecutiveFailures + 1,
+      consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
       since: previous.since ?? performance.now(),
       notified: previous.notified,
     };
@@ -587,15 +587,16 @@ export class RivalHubConnection {
     let newlyNotified = false;
     if (
       !this.liveDelivery.notified &&
-      this.liveDelivery.consecutiveFailures >= 5 &&
+      this.liveDelivery.consecutiveUnaccepted >= 5 &&
       duration >= 10_000
     ) {
+      this.liveDelivery.status = 'failing';
       this.liveDelivery.notified = true;
       newlyNotified = true;
       this.onDiagnostic(
         'live',
         new Error(
-          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveFailures}；durationMs=${Math.round(duration)}`,
+          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveUnaccepted}；durationMs=${Math.round(duration)}`,
         ),
       );
     }
