@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
-import { ObsAdapter } from './adapter.js';
+import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { obsSceneName } from './desired-state.js';
 
@@ -81,8 +81,19 @@ export function registerObsRoutes(
           return { ok: true, executablePath: await options.adapter.launchTarget() };
         }
       } catch (error: unknown) {
-        request.log.error({ err: error, action }, 'OBS operation failed');
+        const password = (await options.configStore.read().catch(() => undefined))?.password;
+        request.log.error(
+          {
+            event: 'obs',
+            stage: 'obs_operator_action',
+            action,
+            diagnostic: { error: obsErrorEvidence(error, password) },
+          },
+          'OBS operation failed',
+        );
+        const kind = obsFailureKind(error);
         const message =
+          kind === 'unknown' &&
           error instanceof Error &&
           (action === 'audio-setup' ||
             error.message.startsWith('OBS 正在输出') ||
@@ -91,7 +102,15 @@ export function registerObsRoutes(
                 error.message,
               )))
             ? error.message
-            : 'OBS 操作未完成，请检查连接与配置。';
+            : kind === 'authentication'
+              ? 'OBS 密码验证失败，尚未连接。请重新复制 WebSocket 密码，粘贴后保存并测试连接。'
+              : kind === 'refused'
+                ? 'OBS 拒绝连接。请打开 OBS，启用 WebSocket 服务器并核对端口，再保存并测试连接。'
+                : kind === 'timeout'
+                  ? '等待 OBS 响应超时。请确认 OBS 正常响应并核对 WebSocket 设置，再测试连接。'
+                  : action === 'check'
+                    ? 'OBS 场景检查失败，具体原因未确认。请查看诊断后重新检查。'
+                    : 'OBS 操作失败，具体原因未确认。请查看诊断后处理。';
         return reply.code(409).send({ error: 'obs_action_failed', message });
       }
     });

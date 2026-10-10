@@ -62,11 +62,24 @@ await assert.rejects(
         );
       },
     }),
-  (error) =>
-    error instanceof AggregateError &&
-    error.errors[0].message === 'original mirror failure' &&
-    error.errors[1].message === 'original canonical failure' &&
-    error.cause.message === 'original canonical failure',
+  (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 2);
+    const [mirror, canonical] = error.errors;
+    for (const [wrapped, source, message] of [
+      [mirror, 'box.nju.edu.cn', 'original mirror failure'],
+      [canonical, 'github.com', 'original canonical failure'],
+    ]) {
+      assert.equal(wrapped.name, 'UpdateRequestError');
+      assert.equal(wrapped.message, 'update_network_failed');
+      assert.equal(wrapped.source, source);
+      assert.ok(wrapped.cause instanceof Error);
+      assert.equal(wrapped.cause.message, message);
+    }
+    assert.equal(error.cause, canonical);
+    assert.equal(error.cause.cause, canonical.cause);
+    return true;
+  },
 );
 console.log(
   'PASS: actual deployed resource transport uses read-only Box, keeps token off bytes/GitHub, falls back to canonical GitHub and rejects traversal; no signature/installation claim',

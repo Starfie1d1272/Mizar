@@ -453,6 +453,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : new ObsAdapter(
           obsConfigStore,
           `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+          (stage, error) =>
+            app.log.warn(
+              { event: 'obs', stage, result: 'failure', diagnostic: { error } },
+              'OBS request failed',
+            ),
         );
   const sceneController = new ProgramSceneController(
     projectionCoordinator,

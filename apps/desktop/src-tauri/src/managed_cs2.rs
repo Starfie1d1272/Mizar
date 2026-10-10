@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub const LAUNCH_ARGS: &[&str] = &[
@@ -37,8 +37,8 @@ fn powershell(script: &str, log: &crate::startup_log::DesktopLog) -> Result<Stri
     crate::powershell::run(command, log, "CS2 启动配置检测", Duration::from_secs(15))
 }
 
-fn any_cs2_running() -> Result<bool, String> {
-    Ok(!cs2_pids()?.is_empty())
+fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
+    Ok(!cs2_pids(log)?.is_empty())
 }
 
 fn discover(log: &crate::startup_log::DesktopLog) -> Result<(PathBuf, PathBuf, PathBuf), String> {
@@ -147,10 +147,14 @@ impl Drop for Process {
         }
     }
 }
-fn cs2_pids() -> Result<Vec<u32>, String> {
+fn cs2_pids(log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
     if snapshot == -1 {
-        return Err("无法检查 CS2 是否运行，未修改游戏设置。".into());
+        return Err(win32_failure(
+            log,
+            "CreateToolhelp32Snapshot",
+            "无法检查 CS2 是否运行，未修改游戏设置。",
+        ));
     }
     let snapshot = Process(snapshot);
     let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
@@ -165,63 +169,114 @@ fn cs2_pids() -> Result<Vec<u32>, String> {
         found = unsafe { Process32NextW(snapshot.0, &mut entry) };
     }
     if unsafe { GetLastError() } != 18 {
-        return Err("CS2 进程检查未完成。".into());
+        return Err(win32_failure(log, "Process32NextW", "CS2 进程检查未完成。"));
     }
     Ok(pids)
 }
-fn open(pid: u32) -> Result<Option<Process>, String> {
+fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process>, String> {
     let handle = unsafe { OpenProcess(0x1000 | 0x100000, 0, pid) };
     if handle != 0 {
         Ok(Some(Process(handle)))
     } else if unsafe { GetLastError() } == 87 {
         Ok(None)
     } else {
-        Err("无法确认 CS2 进程身份，未关闭游戏或恢复配置。".into())
+        Err(win32_failure(
+            log,
+            "OpenProcess",
+            "无法确认 CS2 进程身份，未关闭游戏或恢复配置。",
+        ))
     }
 }
-fn identity(process: &Process) -> Result<(u64, PathBuf), String> {
+fn identity(
+    process: &Process,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<(u64, PathBuf), String> {
     let mut created = FileTime::default();
     let mut exit = FileTime::default();
     let mut kernel = FileTime::default();
     let mut user = FileTime::default();
     if unsafe { GetProcessTimes(process.0, &mut created, &mut exit, &mut kernel, &mut user) } == 0 {
-        return Err("无法确认 CS2 启动身份。".into());
+        return Err(win32_failure(
+            log,
+            "GetProcessTimes",
+            "无法确认 CS2 启动身份。",
+        ));
     }
     let mut buffer = vec![0u16; 32768];
     let mut len = buffer.len() as u32;
     if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut len) } == 0 {
-        return Err("无法确认 CS2 程序路径。".into());
+        return Err(win32_failure(
+            log,
+            "QueryFullProcessImageNameW",
+            "无法确认 CS2 程序路径。",
+        ));
     }
     Ok((
         ((created.high as u64) << 32) | created.low as u64,
         PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
     ))
 }
-fn owned_process(value: &Value) -> Result<Option<Process>, String> {
+fn win32_failure(log: &crate::startup_log::DesktopLog, api: &str, message: &str) -> String {
+    let code = unsafe { GetLastError() };
+    log.event(
+        "cs2_launch",
+        "failure",
+        Some(&format!(
+            "source=Win32; api={api}; code={code}; cause={}",
+            std::io::Error::from_raw_os_error(code as i32)
+        )),
+    );
+    message.into()
+}
+
+fn same_executable(actual: &std::path::Path, expected: &str) -> bool {
+    let normalize = |path: &std::path::Path| {
+        crate::powershell::provider_path(path)
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    normalize(actual) == normalize(std::path::Path::new(expected))
+}
+
+fn owned_process(
+    value: &Value,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<Option<Process>, String> {
     let Some(pid) = value["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
     else {
         return Ok(None);
     };
-    let Some(process) = open(pid)? else {
+    let Some(process) = open(pid, log)? else {
         return Ok(None);
     };
-    if unsafe { WaitForSingleObject(process.0, 0) } == 0 {
-        return Ok(None);
+    match unsafe { WaitForSingleObject(process.0, 0) } {
+        0 => return Ok(None),
+        258 => (),
+        _ => {
+            return Err(win32_failure(
+                log,
+                "WaitForSingleObject",
+                "无法确认 CS2 是否退出，备份仍保留。",
+            ))
+        }
     }
-    let (created, executable) = identity(&process)?;
+    let (created, executable) = identity(&process, log)?;
     let expected = value["executable"]
         .as_str()
         .ok_or("CS2 进程路径记录缺失。")?;
-    if value["created"].as_u64() != Some(created)
-        || !executable.to_string_lossy().eq_ignore_ascii_case(expected)
-    {
+    if value["created"].as_u64() != Some(created) || !same_executable(&executable, expected) {
         return Ok(None);
     }
     Ok(Some(process))
 }
-fn launched_process(value: &Value) -> Result<Option<(u32, u64)>, String> {
+fn launched_process(
+    value: &Value,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<(Option<(u32, u64)>, Value), String> {
     let launch_time = value["launchTime"]
         .as_u64()
         .ok_or("CS2 启动时间记录缺失。")?;
@@ -229,17 +284,31 @@ fn launched_process(value: &Value) -> Result<Option<(u32, u64)>, String> {
         .as_str()
         .ok_or("CS2 程序路径记录缺失。")?;
     let mut candidates = Vec::new();
-    for pid in cs2_pids()? {
-        if let Some(process) = open(pid)? {
-            let (created, actual) = identity(&process)?;
-            if created >= launch_time && actual.to_string_lossy().eq_ignore_ascii_case(executable) {
+    let mut observations = Vec::new();
+    for pid in cs2_pids(log)? {
+        if let Some(process) = open(pid, log)? {
+            match unsafe { WaitForSingleObject(process.0, 0) } {
+                0 => continue,
+                258 => (),
+                _ => {
+                    return Err(win32_failure(
+                        log,
+                        "WaitForSingleObject",
+                        "无法确认 CS2 是否运行，备份仍保留。",
+                    ))
+                }
+            }
+            let (created, actual) = identity(&process, log)?;
+            let matches = same_executable(&actual, executable);
+            observations.push(json!({"pid":pid,"created":created,"afterLaunch":created >= launch_time,"pathMatches":matches,"actualExecutable":actual}));
+            if created >= launch_time && matches {
                 candidates.push((pid, created));
             }
         }
     }
     match candidates.as_slice() {
-        [] => Ok(None),
-        [found] => Ok(Some(*found)),
+        [] => Ok((None, json!(observations))),
+        [found] => Ok((Some(*found), json!(observations))),
         _ => Err("CS2 启动身份不唯一，请退出游戏并取消 Steam 启动请求后恢复备份。".into()),
     }
 }
@@ -257,6 +326,7 @@ pub struct ManagedCs2 {
     store: SessionStore,
     log: crate::startup_log::DesktopLog,
     message: Option<String>,
+    launch_observation: Option<Value>,
 }
 impl ManagedCs2 {
     pub fn new(log: crate::startup_log::DesktopLog) -> Self {
@@ -264,13 +334,14 @@ impl ManagedCs2 {
             store: SessionStore::new(log.state_root.clone()),
             log,
             message: None,
+            launch_observation: None,
         }
     }
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;
         let running = pending
             .as_ref()
-            .map(owned_process)
+            .map(|value| owned_process(value, &self.log))
             .transpose()?
             .flatten()
             .is_some();
@@ -292,27 +363,33 @@ impl ManagedCs2 {
         // A delayed Steam launch remains a transaction until its identity is
         // known, or the operator explicitly cancels Steam's pending request.
         if crate::cs2_session::unconfirmed_launch(&value) {
-            if let Some((pid, created)) = launched_process(&value)? {
+            let (found, observation) = launched_process(&value, &self.log)?;
+            if self.launch_observation.as_ref() != Some(&observation) {
+                self.log.event("cs2_launch", "success", Some(&json!({"stage":"observe", "launchTime":value["launchTime"], "expectedExecutable":value["executable"], "processes":observation}).to_string()));
+                self.launch_observation = Some(observation);
+            }
+            if let Some((pid, created)) = found {
                 value["pid"] = json!(pid);
                 value["created"] = json!(created);
                 self.store.save(&value)?;
                 self.message = None;
             } else if !confirm_steam_cancelled {
-                return Err("Steam 启动结果待确认。若游戏稍后打开会继续跟踪；请先取消 Steam 中的启动请求，再手动恢复备份。".into());
+                self.message = Some("正在等待 Steam 启动 CS2；配置较低或网络较慢时可能需要更久。Mizar 会继续跟踪；如需取消，请先取消 Steam 启动请求，再恢复备份。".into());
+                return Ok(());
             }
         }
-        if owned_process(&value)?.is_some() {
+        if owned_process(&value, &self.log)?.is_some() {
             if confirm_steam_cancelled {
                 return Err("CS2 正在运行，请先退出游戏再恢复备份。".into());
             }
             return Ok(());
         }
-        if any_cs2_running()? {
+        if any_cs2_running(&self.log)? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
         // Allow the game to finish saving after its process exits.
         thread::sleep(Duration::from_millis(1500));
-        if any_cs2_running()? {
+        if any_cs2_running(&self.log)? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
         if confirm_steam_cancelled && crate::cs2_session::unconfirmed_launch(&value) {
@@ -330,16 +407,19 @@ impl ManagedCs2 {
     }
     pub fn start(&mut self) -> Result<bool, String> {
         if let Some(value) = self.store.load()? {
-            if owned_process(&value)?.is_some() {
+            if owned_process(&value, &self.log)?.is_some() {
                 return Ok(false);
             }
             self.recover(false)?;
+            if self.store.load()?.is_some() {
+                return Ok(false);
+            }
         }
-        if any_cs2_running()? {
+        if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         let (executable, video, steam) = discover(&self.log)?;
-        if any_cs2_running()? {
+        if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         self.message = None;
@@ -377,37 +457,41 @@ impl ManagedCs2 {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|_| {
+                .map_err(|error| {
+                    self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
                     journal["launchAttempted"] = json!(false);
-                    let _ = self.store.save(&journal);
+                    if let Err(save_error) = self.store.save(&journal) {
+                        self.log.event("cs2_launch", "failure", Some(&format!("stage=journal_after_spawn_failure; cause={save_error}")));
+                    }
                     "CS2 未能启动。"
                 })?;
-            // Steam's launcher PID is not the game PID. Claim only one newly
-            // created process from the resolved installation, after a no-game
-            // precondition; keep ambiguous launches pending for manual recovery.
-            let until = Instant::now() + Duration::from_secs(45);
-            let (pid, created) = loop {
-                if let Some(found) = launched_process(&journal)? {
-                    break found;
-                }
-                if Instant::now() >= until {
-                    return Err(
-                        "等待 CS2 启动超时，请检查 Steam；若游戏已打开，请先退出再重试恢复。"
-                            .into(),
-                    );
-                }
-                thread::sleep(Duration::from_millis(200));
-            };
-            journal["pid"] = json!(pid);
-            journal["created"] = json!(created);
-            self.store.save(&journal)?;
+            // Steam's launcher PID is not the game PID. Commit the pending
+            // request and release the command lock; the existing background poll
+            // adopts only a unique new process from the selected installation.
+            self.launch_observation = None;
+            self.message = Some("Steam 启动请求已提交，正在等待 CS2。启动较慢时会继续跟踪；如需取消，请先取消 Steam 启动请求，再恢复备份。".into());
+            self.log.event(
+                "cs2_launch",
+                "success",
+                Some(&format!(
+                    "stage=steam_request_submitted; launchTime={launch_time}"
+                )),
+            );
             // Child is intentionally outside Companion's Runtime Job. Never kill
             // by name; the durable PID + creation time + executable owns cleanup.
             Ok(true)
         })();
         if let Err(error) = &launch {
             self.message = Some(error.clone());
-            let _ = self.recover(false);
+            if let Err(recovery_error) = self.recover(false) {
+                self.log.event(
+                    "cs2_launch",
+                    "failure",
+                    Some(&format!(
+                        "stage=failed_launch_recovery; original={error}; cause={recovery_error}"
+                    )),
+                );
+            }
         }
         launch
     }
@@ -425,7 +509,7 @@ impl ManagedCs2 {
         // Poll once to adopt a uniquely identified late launch before closing it.
         self.poll();
         if let Some(value) = self.store.load()? {
-            if let Some(process) = owned_process(&value)? {
+            if let Some(process) = owned_process(&value, &self.log)? {
                 let pid = value["pid"].as_u64().ok_or("CS2 进程记录缺失。")?;
                 unsafe {
                     EnumWindows(close_window, pid as isize);
@@ -437,6 +521,17 @@ impl ManagedCs2 {
                     return Err(self.message.clone().unwrap());
                 }
             }
+        }
+        if self
+            .store
+            .load()?
+            .as_ref()
+            .is_some_and(crate::cs2_session::unconfirmed_launch)
+        {
+            return Err(
+                "Steam 启动仍在等待。请先取消 Steam 启动请求，并确认 CS2 已关闭，再恢复备份。"
+                    .into(),
+            );
         }
         match self.recover(false) {
             Ok(()) => Ok(()),
@@ -454,14 +549,61 @@ mod tests {
     #[test]
     fn process_ownership_requires_pid_creation_time_and_executable() {
         let pid = std::process::id();
-        let process = open(pid).unwrap().unwrap();
-        let (created, path) = identity(&process).unwrap();
+        let root = std::env::temp_dir().join(format!("mizar-identity-{}", pid));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let process = open(pid, &log).unwrap().unwrap();
+        let (created, path) = identity(&process, &log).unwrap();
         let mut journal = json!({"pid":pid,"created":created,"executable":path});
-        assert!(owned_process(&journal).unwrap().is_some());
+        assert!(owned_process(&journal, &log).unwrap().is_some());
         journal["created"] = json!(created + 1);
-        assert!(owned_process(&journal).unwrap().is_none());
+        assert!(owned_process(&journal, &log).unwrap().is_none());
         journal["created"] = json!(created);
         journal["executable"] = json!("C:\\different\\cs2.exe");
-        assert!(owned_process(&journal).unwrap().is_none());
+        assert!(owned_process(&journal, &log).unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn slow_launch_stays_pending_and_requires_explicit_cancel_before_restoration() {
+        let root = std::env::temp_dir().join(format!("mizar-waiting-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let mut managed = ManagedCs2::new(log);
+        let video = root.join("cs2_video.txt");
+        let original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
+        std::fs::write(&video, original).unwrap();
+        let mut journal = managed
+            .store
+            .prepare(
+                &video,
+                &root.join("absent/cs2.exe"),
+                crate::cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
+        journal["launchAttempted"] = json!(true);
+        journal["launchTime"] = json!(1);
+        managed.store.save(&journal).unwrap();
+        for _ in 0..3 {
+            managed.poll();
+        }
+        assert_eq!(managed.status().unwrap()["phase"], "uncertain");
+        assert!(managed.store.load().unwrap().is_some());
+        assert!(managed.finish().is_err());
+        assert_ne!(std::fs::read(&video).unwrap(), original);
+        managed.restore_backup(true).unwrap();
+        assert_eq!(std::fs::read(&video).unwrap(), original);
+        assert!(managed.store.load().unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn equivalent_windows_paths_keep_identity_without_accepting_other_installations() {
+        assert!(same_executable(
+            std::path::Path::new(r"\\?\C:\Games\CS2\cs2.exe"),
+            "c:/games/cs2/cs2.exe"
+        ));
+        assert!(!same_executable(
+            std::path::Path::new(r"C:\Other\cs2.exe"),
+            r"C:\Games\cs2.exe"
+        ));
     }
 }

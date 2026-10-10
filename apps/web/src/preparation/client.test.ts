@@ -7,12 +7,16 @@ const preparation: Production = { mode: 'preparation', revision: 'one', canEnter
 afterEach(() => {
   delete window.__TAURI_INTERNALS__;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  window.history.replaceState(null, '', '/');
 });
 
 function setup(
   failure?: 'launch' | 'production' | 'restore' | 'presentation' | 'network',
   actualMode = 'preparation',
   newlyStarted = true,
+  running = true,
+  gameStates: { running?: boolean; pending?: boolean; busy?: boolean }[] = [],
 ) {
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
@@ -26,9 +30,15 @@ function setup(
     return Promise.resolve(
       command === 'gsi_status'
         ? { installed: true, conflict: false }
-        : command === 'start_managed_cs2'
-          ? newlyStarted
-          : undefined,
+        : command === 'cs2_config_status'
+          ? (gameStates.shift() ?? {
+              running,
+              pending: true,
+              phase: running ? 'running' : 'uncertain',
+            })
+          : command === 'start_managed_cs2'
+            ? newlyStarted
+            : undefined,
     );
   });
   window.__TAURI_INTERNALS__ = {
@@ -62,9 +72,48 @@ describe('managed CS2 production entry and cleanup', () => {
       'gsi_status',
       '/local/v1/obs',
       'start_managed_cs2',
+      'cs2_config_status',
       '/operator/production',
       'present_production',
     ]);
+  });
+  it('does not enter production after the pending launch is cancelled and restored', async () => {
+    const calls = setup(undefined, 'preparation', true, false, [
+      { running: false, pending: true },
+      { running: false, pending: false },
+    ]);
+    await expect(productionAction('enter', preparation)).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      'gsi_status',
+      '/local/v1/obs',
+      'start_managed_cs2',
+      'cs2_config_status',
+      'cs2_config_status',
+    ]);
+    expect(calls).not.toContain('finish_managed_cs2');
+  });
+  it('continues the original entry intent after the late game is confirmed without launching again', async () => {
+    const calls = setup(undefined, 'preparation', true, false, [
+      { busy: true },
+      { running: false, pending: true },
+      { running: true, pending: true },
+    ]);
+    await productionAction('enter', preparation);
+    expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
+    expect(calls.slice(-2)).toEqual(['/operator/production', 'present_production']);
+  });
+  it('cancels the entry intent when navigation changes during Steam startup', async () => {
+    vi.useFakeTimers();
+    const calls = setup(undefined, 'preparation', true, false);
+    const entry = productionAction('enter', preparation);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toContain('cs2_config_status');
+    window.history.pushState(null, '', '/diagnostics');
+    await vi.advanceTimersByTimeAsync(1000);
+    await entry;
+    expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
+    expect(calls).not.toContain('/operator/production');
+    expect(calls).not.toContain('finish_managed_cs2');
   });
   it('does not enter production when the game cannot start', async () => {
     const calls = setup('launch');

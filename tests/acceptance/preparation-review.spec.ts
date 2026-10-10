@@ -146,8 +146,39 @@ test('unverified updates and portable builds offer manual download and render no
   status.error = 'update_provenance_failed';
   status.candidate.notes = '<script>untrusted()</script>';
   await page.goto('/settings?tab=advanced');
-  await expect(page.getByText('更新验证失败，请稍后重试。')).toBeVisible();
+  await expect(
+    page.getByText('更新来源认证未通过。请保留现有版本，导出诊断并从正式发布页核对安装包。'),
+  ).toBeVisible();
   await expect(page.getByRole('button', { name: 'GitHub 下载' })).toBeVisible();
+  const diagnostic = {
+    schema: 'mizar-support-bundle/1',
+    logs: [
+      {
+        localDiagnostic: {
+          message: 'independent original transport failure',
+          cause: { code: 'ECONNRESET' },
+        },
+      },
+    ],
+  };
+  await page.route('**/debug/support-bundle', (route) => route.fulfill({ json: diagnostic }));
+  await page.evaluate(() =>
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (text: string) => {
+          Reflect.set(window, 'copiedDiagnostic', text);
+          await Promise.resolve();
+        },
+      },
+      configurable: true,
+    }),
+  );
+  await page.getByRole('button', { name: '复制诊断信息' }).click();
+  await expect(page.getByText('诊断信息已复制，包含脱敏原因与相关输出。')).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(window, 'copiedDiagnostic') as string)).toBe(
+    JSON.stringify(diagnostic),
+  );
+
   await expect(page.getByText('<script>untrusted()</script>', { exact: true })).toBeVisible();
   status.phase = 'manual';
   status.error = null;
@@ -675,10 +706,10 @@ test('uncertain Steam launch recovery stays visible after navigation and require
     route.fulfill({ json: { mode: 'preparation', revision: 'recovery-1', canEnter: false } }),
   );
   await page.goto('/');
-  await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
   await page.getByRole('link', { name: '游戏设置', exact: true }).click();
-  await expect(page.getByText('CS2 原配置尚未恢复', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
   await page.getByRole('checkbox', { name: '已取消 Steam 启动请求，并确认 CS2 已关闭' }).check();

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { errorEvidence } from '../src/updates/diagnostics.js';
 import { createHash } from 'node:crypto';
 import {
   makeMachineMetadata,
@@ -739,4 +741,83 @@ it('binds the modern Core to four subjects of one Qualification and the authenti
     throw new Error('invalid_signature');
   };
   expect(() => selectQualifiedCore(carrier(), full, verifier)).toThrow('invalid_signature');
+});
+
+it('keeps nested transport codes and arbitrary messages while redacting credentials and signed URLs', () => {
+  const underlying = Object.assign(
+    new Error(
+      'connect ECONNRESET https://release-assets.githubusercontent.com/asset?signature=private-signature',
+    ),
+    { code: 'ECONNRESET' },
+  );
+  const error = new AggregateError(
+    [
+      new Error('Authorization: Bearer private-token'),
+      underlying,
+      Object.assign(new Error('schema failure'), { name: 'ZodError' }),
+    ],
+    'update_provenance_failed',
+  );
+  const evidence = errorEvidence(new Error('fetch failed', { cause: error }));
+  expect(evidence).toMatchObject({
+    cause: { errors: [expect.anything(), { code: 'ECONNRESET' }, { name: 'ZodError' }] },
+  });
+  const text = JSON.stringify(evidence);
+  for (const sensitive of ['private-token', 'private-signature'])
+    expect(text).not.toContain(sensitive);
+  underlying.cause = underlying;
+  expect(JSON.stringify(errorEvidence(underlying))).toContain('truncated');
+});
+
+it('retains string exceptions, stack and bounded schema issue metadata without schema input', () => {
+  expect(errorEvidence('unusual original failure')).toMatchObject({
+    message: 'unusual original failure',
+  });
+  const parsed = z
+    .object({
+      version: z.string().superRefine((value, context) => {
+        context.addIssue({
+          code: 'custom',
+          message: `rejected ${value}\n    at private-type-value`,
+        });
+      }),
+      bytes: z.number(),
+    })
+    .safeParse({ version: 'private-input', bytes: 'private-type-value' });
+  expect(parsed.success).toBe(false);
+  const evidence = errorEvidence(parsed.error);
+  expect(evidence).toMatchObject({
+    issues: [
+      { code: 'custom', path: ['version'] },
+      { code: 'invalid_type', path: ['bytes'], expected: 'number' },
+    ],
+  });
+  const wrapped = errorEvidence(new Error('schema wrapper', { cause: parsed.error }));
+  expect((wrapped as { stack?: unknown }).stack).toContain('at ');
+  expect(JSON.stringify(evidence)).not.toContain('private-input');
+  expect(JSON.stringify(evidence)).not.toContain('private-type-value');
+  expect(JSON.stringify(errorEvidence(new Error('x'.repeat(10_000))))).toContain('truncated');
+});
+
+it('preserves HTTP quota evidence when cancelling the failed response also fails', async () => {
+  const response = new Response(
+    new ReadableStream({
+      cancel() {
+        throw new Error('independent response cleanup failure');
+      },
+    }),
+    { status: 403, headers: { 'x-ratelimit-remaining': '0' } },
+  );
+  const result = updateRequest(
+    'https://api.github.com/repos/Starfie1d1272/Mizar/releases',
+    new AbortController().signal,
+    () => Promise.resolve(response),
+  );
+  await expect(result).rejects.toMatchObject({
+    message: 'update_network_failed',
+    status: 403,
+    source: 'api.github.com',
+    rateLimited: true,
+    cause: { message: 'independent response cleanup failure' },
+  });
 });

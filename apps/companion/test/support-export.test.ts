@@ -94,6 +94,20 @@ describe('support export', () => {
           err: { stack: poison },
           unknown: secrets,
         }),
+        JSON.stringify({
+          event: 'update',
+          stage: 'github_download',
+          code: 'update_network_failed',
+          diagnostic: {
+            operationId: '12345678-abcd-1234-abcd-123456789012',
+            error: {
+              status: 503,
+              source: 'github.com',
+              message: poison,
+              cause: { code: 'ECONNRESET', stack: poison },
+            },
+          },
+        }),
       ].join('\n'),
     );
     await writeFile(join(dir, 'companion.stderr.log'), poison);
@@ -153,6 +167,13 @@ describe('support export', () => {
       expect(
         bundle.logs.find((log: { name: string }) => log.name === 'companion.log')?.events[1],
       ).toMatchObject({ session: failed?.session, level: 50, httpStatus: 500 });
+      expect(bundle.logs.find((log) => log.name === 'companion.log')?.events[2]).toMatchObject({
+        stage: 'github_download',
+        updateCode: 'update_network_failed',
+        operationId: '12345678-abcd-1234-abcd-123456789012',
+        hasLocalError: true,
+        causes: [{ httpStatus: 503, source: 'github.com' }, { code: 'ECONNRESET' }],
+      });
       expect(bundle.snapshot.runtime.gsiDiagnostics).toMatchObject({
         suppressedCount: 3,
         recent: [{ code: 'INVALID_FIELD', severity: 'warning' }],
@@ -261,6 +282,53 @@ describe('support export', () => {
         expect(log.events.length).toBeGreaterThan(0);
         expect(log.events.length).toBeLessThanOrEqual(32);
         expect(log.events.at(-1)?.result).toBe('failure');
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('bounds large cause chains per event while retaining the latest failure in every file', async () => {
+    const dir = await directory();
+    const leaf = {
+      name: 'Error',
+      message: 'latest original cause ' + '故障'.repeat(700),
+      stack: 'at C:\\Users\\private-user\\Mizar\\network.js:12:1 ' + 'x'.repeat(700),
+    };
+    const line =
+      JSON.stringify({
+        event: 'update',
+        stage: 'download',
+        result: 'failure',
+        code: 'update_operation_failed',
+        time: Date.now(),
+        diagnostic: {
+          error: {
+            name: 'AggregateError',
+            message: 'latest transfer failed',
+            errors: Array.from({ length: 4 }, () => ({ ...leaf, cause: leaf })),
+          },
+        },
+      }) + '\n';
+    for (const name of [
+      'desktop.ndjson',
+      'supervisor.ndjson',
+      'companion.log',
+      'companion.stderr.log',
+    ])
+      for (const suffix of ['', '.1', '.2', '.3'])
+        await writeFile(join(dir, name + suffix), line.repeat(5));
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(Buffer.byteLength(response.body)).toBeLessThanOrEqual(SUPPORT_BUNDLE_MAX_BYTES);
+      expect(response.body).not.toContain('private-user');
+      for (const log of response.json<SupportBundle>().logs) {
+        const diagnostic = JSON.stringify(log.events.at(-1));
+        expect(diagnostic).toContain('latest transfer failed');
+        expect(diagnostic).toContain('latest original cause');
+        expect(diagnostic).toContain('truncated');
       }
     } finally {
       await app.close();

@@ -1,3 +1,4 @@
+import type { Cs2ConfigStatus } from './cs2-status';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
@@ -99,11 +100,23 @@ export async function checkObsBeforeLaunch() {
 }
 
 export async function productionAction(action: 'enter' | 'hide' | 'finish', state: Production) {
+  const entryLocation = window.location.href;
   if (action === 'enter' && !(await checkObsBeforeLaunch())) return;
   let newlyStarted = false;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     newlyStarted = await desktopInvoke<boolean>('start_managed_cs2');
+    let gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+    // Preserve this one entry intent while the native command lock is free.
+    // Recovery/cancel remains available; navigation cancels only entry intent.
+    while (!gameStatus.running) {
+      if ((!gameStatus.busy && !gameStatus.pending) || window.location.href !== entryLocation)
+        return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      if (window.location.href !== entryLocation) return;
+      gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+    }
   }
+  if (action === 'enter' && window.location.href !== entryLocation) return;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision });
     if (window.__TAURI_INTERNALS__) {

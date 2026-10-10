@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import './updates.css';
+import { openTool } from './client';
 
 interface UpdateStatus {
   phase:
@@ -19,6 +20,13 @@ interface UpdateStatus {
   currentVersion: string;
   distribution: 'installed' | 'portable';
   error: string | null;
+  failureDetails?: {
+    stage: string;
+    stageLabel?: string;
+    summary: string;
+    nextStep: string;
+    operationId: string;
+  }[];
   downloadedBytes: number;
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
@@ -26,10 +34,16 @@ interface UpdateStatus {
   lastResult?: 'installed' | 'restored' | 'recovery-required' | 'cancelled' | null;
 }
 const failures: Record<string, string> = {
+  update_network_failed: '更新网络请求失败，具体原因请查看诊断；网络恢复后可重新检查。',
+  update_trust_metadata_failed:
+    'Sigstore 信任元数据未能刷新，尚未完成来源认证；请检查网络或从正式发布页下载完整离线包。',
+  update_operation_failed: '更新未完成，原因未知。请导出诊断定位原因。',
   update_metadata_missing: '暂时无法验证更新，请从发布页下载。',
-  update_provenance_failed: '更新验证失败，请稍后重试。',
-  update_rollback_rejected: '更新版本异常，请稍后重试。',
-  update_identity_changed: '更新内容异常，请稍后重试。',
+  update_provenance_failed:
+    '更新来源认证未通过。请保留现有版本，导出诊断并从正式发布页核对安装包。',
+  update_rollback_rejected: '更新版本发生回退，已拒绝安装。请从正式发布页核对版本。',
+  update_identity_changed:
+    '同版本更新内容发生变化，已拒绝安装。请导出诊断并从正式发布页核对安装包。',
   update_download_corrupt: '下载不完整，请重试。',
   update_settings_invalid: '更新设置无法保存，请检查资料目录。',
 };
@@ -41,7 +55,12 @@ async function sendAction(action: string, enabled?: boolean): Promise<UpdateStat
     signal: AbortSignal.timeout(75_000),
   });
   const value = (await response.json()) as UpdateStatus & { error?: string };
-  if (!response.ok) throw new Error(failures[value.error ?? ''] ?? '更新未完成，请重试。');
+  if (!response.ok)
+    throw new Error(
+      value.failureDetails?.map((detail) => `${detail.summary} ${detail.nextStep}`).join('\n') ||
+        failures[value.error ?? ''] ||
+        '更新未完成，原因未知。请导出诊断定位原因。',
+    );
   return value;
 }
 export function UpdateSettings() {
@@ -50,6 +69,7 @@ export function UpdateSettings() {
   const [requested, setRequested] = useState(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
+  const [diagnosticFeedback, setDiagnosticFeedback] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const installing = useRef(false);
   const resumed = useRef(false);
@@ -178,6 +198,27 @@ export function UpdateSettings() {
       setError('下载页面未能打开。');
     }
   };
+  const copyDiagnostics = async () => {
+    try {
+      const response = await fetch('/debug/support-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desktop: null }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error('export_failed');
+      const text = await response.text();
+      if (
+        new TextEncoder().encode(text).length > 256 * 1024 ||
+        (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
+      )
+        throw new Error('export_too_large');
+      await navigator.clipboard.writeText(text);
+      setDiagnosticFeedback('诊断信息已复制，包含脱敏原因与相关输出。');
+    } catch {
+      setDiagnosticFeedback('诊断复制未完成，请打开诊断页面导出。');
+    }
+  };
   const phase = status?.phase;
   const waiting = busy || phase === 'checking' || phase === 'installing';
   const downloading = phase === 'downloading';
@@ -186,7 +227,11 @@ export function UpdateSettings() {
     error ||
     connectionError ||
     (status?.error && status.error !== 'update_cancelled'
-      ? (failures[status.error] ?? '更新未完成，请重试。')
+      ? status.failureDetails
+          ?.map((detail) => `${detail.stageLabel ?? '更新'}：${detail.summary} ${detail.nextStep}`)
+          .join('\n') ||
+        failures[status.error] ||
+        '更新未完成，原因未知。请导出诊断定位原因。'
       : '');
   return (
     <Panel className="settings-card settings-card--wide settings-update">
@@ -233,7 +278,22 @@ export function UpdateSettings() {
       {blocked && phase === 'ready' ? (
         <StatusBanner tone="warning">{status.installBlockedReason}</StatusBanner>
       ) : null}
-      {failure ? <StatusBanner tone="danger">{failure}</StatusBanner> : null}
+      {failure ? (
+        <StatusBanner tone="danger">
+          <p>{failure}</p>
+          <Button onClick={() => void copyDiagnostics()}>复制诊断信息</Button>
+          <Button
+            onClick={() =>
+              void openTool('diagnostics').catch(() =>
+                setDiagnosticFeedback('诊断页面未能打开，请从高级设置进入。'),
+              )
+            }
+          >
+            导出诊断包
+          </Button>
+          {diagnosticFeedback ? <p>{diagnosticFeedback}</p> : null}
+        </StatusBanner>
+      ) : null}
       {status?.lastResult === 'restored' ? (
         <StatusBanner tone="warning">升级未完成，已恢复旧版。</StatusBanner>
       ) : null}

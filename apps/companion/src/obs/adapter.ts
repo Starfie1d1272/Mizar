@@ -1,3 +1,4 @@
+import { errorEvidence } from '../updates/diagnostics.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
@@ -15,8 +16,32 @@ import {
   type ObsSceneSwitchOptions,
 } from './reconcile.js';
 
+export function obsFailureKind(
+  error: unknown,
+): 'authentication' | 'refused' | 'timeout' | 'unknown' {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  const message = typeof value?.message === 'string' ? value.message.toLowerCase() : '';
+  if (value?.code === 4009 || /authentication|invalid password|password required/.test(message))
+    return 'authentication';
+  if (value?.code === 'ECONNREFUSED' || message.includes('econnrefused')) return 'refused';
+  if (/timeout|timed out|超时/.test(message)) return 'timeout';
+  return 'unknown';
+}
+export function obsErrorEvidence(error: unknown, password = ''): unknown {
+  const redact = (value: unknown): unknown => {
+    if (typeof value === 'string')
+      return password ? value.replaceAll(password, '[redacted]') : value;
+    if (Array.isArray(value)) return value.map(redact);
+    if (typeof value === 'object' && value !== null)
+      return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redact(field)]));
+    return value;
+  };
+  return redact(errorEvidence(error));
+}
+
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
+  readonly connectionFailure?: ReturnType<typeof obsFailureKind>;
   readonly currentScene: string | null;
   readonly port: number;
   readonly streaming: boolean;
@@ -41,6 +66,7 @@ export class ObsAdapter {
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
+    private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
   ) {}
 
   startBrowserRecovery(): void {
@@ -89,9 +115,11 @@ export class ObsAdapter {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stage = 'obs_connect';
     try {
       const task = (async () => {
         await client.connect(`ws://${config.host}:${config.port}`, config.password);
+        stage = 'obs_request';
         const rpc: ObsRpc = {
           onTransitionVideoEnded: (listener) => {
             const onEnded = (event: { transitionName: string }) => listener(event.transitionName);
@@ -114,6 +142,9 @@ export class ObsAdapter {
           timeout = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), timeoutMs);
         }),
       ]);
+    } catch (error) {
+      this.diagnostic(stage, obsErrorEvidence(error, config.password));
+      throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
       await client.disconnect().catch(() => undefined);
@@ -146,9 +177,15 @@ export class ObsAdapter {
           obs.call('GetStreamStatus'),
           obs.call('GetRecordStatus'),
           obs.call('GetVideoSettings'),
-          this.configurationFindings(obs).catch(() => [
-            { code: 'configuration_check_failed', message: 'OBS 配置检查未完成，请重新检查。' },
-          ]),
+          this.configurationFindings(obs).catch((error: unknown) => {
+            this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
+            return [
+              {
+                code: 'configuration_check_failed',
+                message: 'OBS 已连接，但场景或音频检查失败。请查看诊断后重新检查。',
+              },
+            ];
+          }),
         ]);
         return {
           connection: 'connected',
@@ -171,21 +208,22 @@ export class ObsAdapter {
       this.findings = [...status.findings];
       return status;
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message.toLowerCase() : '';
+      const kind = obsFailureKind(error);
       return {
         connection:
-          message.includes('authentication') || message.includes('password')
+          kind === 'authentication'
             ? config.password
               ? 'invalid_password'
               : 'password_required'
             : 'unavailable',
+        connectionFailure: kind,
         currentScene: null,
         port: config.port,
         streaming: false,
         recording: false,
         passwordConfigured: Boolean(config.password),
         video: null,
-        findings: this.findings,
+        findings: [],
       };
     }
   }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
+  readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
   readonly port: number;

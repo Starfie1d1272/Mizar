@@ -77,7 +77,10 @@ export function registerUpdateRoutes(
       } else return reply.code(400).send({ error: 'update_action_invalid' });
       return await publicView();
     } catch (e) {
-      return reply.code(409).send({ error: safeCode(e) });
+      manager.failure('operator_action', e);
+      return reply
+        .code(409)
+        .send({ error: safeCode(e), failureDetails: manager.status().failureDetails });
     }
   });
   // Only the Host holds the per-launch capability. Renderer-supplied paths,
@@ -109,6 +112,7 @@ export function registerUpdateRoutes(
       scenes.setUpdatePending(true);
       return plan;
     } catch (e) {
+      manager.failure('install_plan', e);
       manager.release();
       production.releaseUpdate();
       scenes.setUpdatePending(false);
