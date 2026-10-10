@@ -1,5 +1,5 @@
 //! Optional raw-number-key preset. Never own or rewrite personal key bindings.
-use crate::cs2_frame_rate::field;
+use crate::{cs2_frame_rate::field, cs2_session::io_error};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -45,7 +45,7 @@ pub fn install(executable: &Path) -> Result<(), String> {
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
                 || metadata.len() != CFG.len() as u64
-                || fs::read(&path).map_err(|_| "无法核实观战 CFG。")? != CFG
+                || fs::read(&path).map_err(|error| io_error("无法核实观战 CFG。", &error))? != CFG
             {
                 return Err(
                     "同名 mizar_observer.cfg 不属于当前固定配置，已保留原文件，未加载观战预设。"
@@ -58,15 +58,16 @@ pub fn install(executable: &Path) -> Result<(), String> {
                 .write(true)
                 .create_new(true)
                 .open(&path)
-                .map_err(|_| "观战 CFG 无法部署，未加载观战预设。")?;
+                .map_err(|error| io_error("观战 CFG 无法部署，未加载观战预设。", &error))?;
             file.write_all(CFG)
                 .and_then(|_| file.sync_all())
-                .map_err(|_| "观战 CFG 未能完整保存，未加载观战预设。")?;
-            if fs::read(&path).map_err(|_| "观战 CFG 无法读回核实。")? != CFG {
+                .map_err(|error| io_error("观战 CFG 未能完整保存，未加载观战预设。", &error))?;
+            if fs::read(&path).map_err(|error| io_error("观战 CFG 无法读回核实。", &error))? != CFG
+            {
                 return Err("观战 CFG 读回不一致，未加载观战预设。".into());
             }
         }
-        Err(_) => return Err("无法核实观战 CFG，未加载观战预设。".into()),
+        Err(error) => return Err(io_error("无法核实观战 CFG，未加载观战预设。", &error)),
     }
     Ok(())
 }
@@ -110,17 +111,25 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
         match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => (),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            _ => return Err("观战配置镜像无法安全核实，数字键预设未应用。".into()),
+            Err(error) => {
+                return Err(io_error(
+                    "观战配置镜像无法安全核实，数字键预设未应用。",
+                    &error,
+                ))
+            }
+            Ok(_) => return Err("观战配置镜像无法安全核实，数字键预设未应用。".into()),
         };
-        for entry in fs::read_dir(&directory).map_err(|_| "无法核实观战配置镜像。")? {
-            let entry = entry.map_err(|_| "无法核实观战配置镜像。")?;
+        for entry in
+            fs::read_dir(&directory).map_err(|error| io_error("无法核实观战配置镜像。", &error))?
+        {
+            let entry = entry.map_err(|error| io_error("无法核实观战配置镜像。", &error))?;
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             if !name.contains("convars") || !name.contains(".vcfg") {
                 continue;
             }
             count += 1;
-            let metadata =
-                fs::symlink_metadata(entry.path()).map_err(|_| "无法读取观战配置镜像。")?;
+            let metadata = fs::symlink_metadata(entry.path())
+                .map_err(|error| io_error("无法读取观战配置镜像。", &error))?;
             if count > 32
                 || !metadata.is_file()
                 || metadata.file_type().is_symlink()
@@ -128,7 +137,8 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
             {
                 return Err("观战配置镜像无法安全核实，数字键预设未应用。".into());
             }
-            let text = fs::read_to_string(entry.path()).map_err(|_| "无法读取观战配置镜像。")?;
+            let text = fs::read_to_string(entry.path())
+                .map_err(|error| io_error("无法读取观战配置镜像。", &error))?;
             total += text.len();
             if text.len() > 256 * 1024 || total > 1024 * 1024 {
                 return Err("观战配置镜像过大，数字键预设未应用。".into());

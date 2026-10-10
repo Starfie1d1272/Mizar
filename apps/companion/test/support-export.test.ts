@@ -39,6 +39,75 @@ const request = {
 };
 
 describe('support export', () => {
+  it('exports observer CFG and restore evidence through the user bundle without private configuration contents', async () => {
+    const dir = await directory();
+    const prepared = { stage: 'prepared', file: 'mizar_observer.cfg', runtime: 'unverified' };
+    await writeFile(
+      join(dir, 'desktop.ndjson'),
+      [
+        { stage: 'cs2_spectator_cfg', result: 'success', detail: JSON.stringify(prepared) },
+        {
+          stage: 'cs2_spectator_cfg',
+          result: 'failure',
+          error: JSON.stringify({
+            ...prepared,
+            reason: '观战 CFG 无法部署。 [ioKind=PermissionDenied; osCode=5]',
+            original: 'private-convar-body',
+            path: 'C:\\Users\\Private\\game.cfg',
+            password: 'private-password',
+          }),
+        },
+        {
+          stage: 'cs2_spectator_restore',
+          result: 'failure',
+          error:
+            '观战恢复记录损坏。 [jsonCategory=Eof; line=3; column=17]\npassword=private-secret',
+        },
+        {
+          stage: 'cs2_spectator_restore',
+          result: 'success',
+          detail: 'stage=retry; originalField=restored',
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join('\n'),
+    );
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      for (const secret of ['private-convar-body', 'Private', 'private-password', 'private-secret'])
+        expect(response.body).not.toContain(secret);
+      const events = response
+        .json<SupportBundle>()
+        .logs.find((log) => log.name === 'desktop.ndjson')!.events;
+      expect(events).toHaveLength(4);
+      expect(
+        events.find((event) => event.stage === 'cs2_spectator_cfg' && event.result === 'success'),
+      ).toMatchObject({
+        localDiagnostic: { phase: 'prepared', runtime: 'unverified', file: 'mizar_observer.cfg' },
+      });
+      expect(
+        events.find((event) => event.stage === 'cs2_spectator_cfg' && event.result === 'failure'),
+      ).toMatchObject({
+        osErrorCode: 5,
+        localDiagnostic: { errorKind: 'PermissionDenied', osCode: 5 },
+      });
+      expect(
+        events.find(
+          (event) => event.stage === 'cs2_spectator_restore' && event.result === 'failure',
+        ),
+      ).toMatchObject({ localDiagnostic: { category: 'Eof', line: 3, column: 17 } });
+      expect(
+        events.find(
+          (event) => event.stage === 'cs2_spectator_restore' && event.result === 'success',
+        ),
+      ).toMatchObject({ localDiagnostic: { phase: 'retry' } });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('exports native Demo stages and correlated Companion exceptions through the user bundle', async () => {
     const dir = await directory();
     const operationId = '12345678-abcd-1234-abcd-123456789012';

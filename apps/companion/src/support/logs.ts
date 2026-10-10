@@ -13,6 +13,8 @@ const stages = new Set([
   'process_start',
   'powershell',
   'cs2_launch',
+  'cs2_spectator_cfg',
+  'cs2_spectator_restore',
   'update_install',
   'production_finish',
   'webview2_recheck',
@@ -218,6 +220,36 @@ function nativeDemoEvidence(value: Record<string, unknown>) {
   };
 }
 
+/** Fixed native observer fields; never export arbitrary JSON/configuration keys. */
+function spectatorEvidence(text: string, stage: string) {
+  const detail = parse(text);
+  const message =
+    typeof detail.reason === 'string'
+      ? detail.reason
+      : text.trimStart().startsWith('{')
+        ? ''
+        : text;
+  const osCode = /\bosCode=(-?\d{1,10})\b/.exec(message);
+  const code = osCode ? Number(osCode[1]) : null;
+  return {
+    phase:
+      choice(detail.stage, ['prepared']) ??
+      (/\bstage=retry\b/.test(message)
+        ? 'retry'
+        : stage === 'cs2_spectator_restore'
+          ? 'restore'
+          : null),
+    runtime: choice(detail.runtime, ['unverified']),
+    file: choice(detail.file, ['mizar_observer.cfg']),
+    message: redactDiagnosticText(message),
+    errorKind: /\bioKind=([A-Za-z]{1,50})\b/.exec(message)?.[1] ?? null,
+    osCode: code !== null && Number.isInteger(code) && Math.abs(code) <= 2147483648 ? code : null,
+    category: /\bjsonCategory=(Io|Syntax|Data|Eof)\b/.exec(message)?.[1] ?? null,
+    line: count(Number(/\bline=(\d{1,10})\b/.exec(message)?.[1])),
+    column: count(Number(/\bcolumn=(\d{1,10})\b/.exec(message)?.[1])),
+  };
+}
+
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
@@ -241,6 +273,10 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const status = record(entry.res).statusCode;
   const error = typeof entry.error === 'string' ? entry.error : '';
   const nativeDemo = stage === 'demo_test' ? parse(error) : {};
+  const spectator =
+    stage === 'cs2_spectator_cfg' || stage === 'cs2_spectator_restore'
+      ? spectatorEvidence(error || (typeof entry.detail === 'string' ? entry.detail : ''), stage)
+      : null;
   const demoEvidence = demo ? diagnostic : nativeDemo;
   const osError = /\(os error (\d{1,6})\)/.exec(error);
   return {
@@ -273,27 +309,29 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ...((update || live) && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
-    ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
-      ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-      : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
-        ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
-        : !update &&
-            !live &&
-            !demo &&
-            [
-              'powershell',
-              'cs2_launch',
-              'update_install',
-              'production_finish',
-              'webview2_preflight',
-              'webview2_recheck',
-              'webview2_recovery_action',
-            ].includes(stage ?? '') &&
-            typeof entry.detail === 'string'
-          ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-          : !update && !live && !demo && typeof record(entry.err).message === 'string'
-            ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
-            : {}),
+    ...(spectator
+      ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
+      : stage === 'workspace_group_restore' && typeof entry.detail === 'string'
+        ? { localDiagnostic: windowRestoreDetail(entry.detail) }
+        : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
+          ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
+          : !update &&
+              !live &&
+              !demo &&
+              [
+                'powershell',
+                'cs2_launch',
+                'update_install',
+                'production_finish',
+                'webview2_preflight',
+                'webview2_recheck',
+                'webview2_recovery_action',
+              ].includes(stage ?? '') &&
+              typeof entry.detail === 'string'
+            ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
+            : !update && !live && !demo && typeof record(entry.err).message === 'string'
+              ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
+              : {}),
     durationMs: count(diagnostic.durationMs),
     occurrences: Math.max(1, count(entry.occurrences ?? nativeDemo.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),
@@ -311,8 +349,9 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       Math.abs(entry.code) <= 2147483648
         ? entry.code
         : null,
-    osErrorCode:
-      typeof nativeDemo.osCode === 'number'
+    osErrorCode: spectator
+      ? spectator.osCode
+      : typeof nativeDemo.osCode === 'number'
         ? nativeDemo.osCode
         : osError === null
           ? null

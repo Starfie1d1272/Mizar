@@ -430,6 +430,7 @@ impl ManagedCs2 {
             self.store.save(&value)?;
         }
         // Preserve Demo quarantine until all core cleanup has completed.
+        let had_spectator = self.store.spectator_pending();
         let spectator_error = self.store.restore()?;
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
@@ -453,6 +454,13 @@ impl ManagedCs2 {
                 spectator_error.unwrap_or_default()
             ));
         } else {
+            if had_spectator {
+                self.log.event(
+                    "cs2_spectator_restore",
+                    "success",
+                    Some("stage=restore; originalField=restored"),
+                );
+            }
             self.message = Some("原设置已恢复。".into());
         }
 
@@ -693,7 +701,16 @@ impl ManagedCs2 {
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
                 }
-                self.store.restore_spectator()?;
+                if let Err(error) = self.store.restore_spectator() {
+                    self.log
+                        .event("cs2_spectator_restore", "failure", Some(&error));
+                    return Err(error);
+                }
+                self.log.event(
+                    "cs2_spectator_restore",
+                    "success",
+                    Some("stage=retry; originalField=restored"),
+                );
                 self.message = Some("观战原值已恢复。".into());
             }
             Ok(())

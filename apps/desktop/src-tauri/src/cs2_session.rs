@@ -16,9 +16,30 @@ pub fn unconfirmed_launch(value: &Value) -> bool {
         && (value["pid"].as_u64().is_none() || value["created"].as_u64().is_none())
 }
 
+/// Preserve system classification without forwarding custom messages, paths,
+/// or configuration bytes to UI, desktop logs, or the user support bundle.
+pub(crate) fn io_error(summary: &str, error: &std::io::Error) -> String {
+    format!(
+        "{summary} [ioKind={:?}; osCode={}]",
+        error.kind(),
+        error
+            .raw_os_error()
+            .map_or_else(|| "none".into(), |code| code.to_string())
+    )
+}
+
+fn json_error(summary: &str, error: &serde_json::Error) -> String {
+    format!(
+        "{summary} [jsonCategory={:?}; line={}; column={}]",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("配置路径无效。")?;
-    fs::create_dir_all(parent).map_err(|_| "无法创建配置目录。")?;
+    fs::create_dir_all(parent).map_err(|error| io_error("无法创建配置目录。", &error))?;
     let temp = parent.join(format!(
         ".mizar-{}-{}.tmp",
         std::process::id(),
@@ -32,13 +53,14 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .write(true)
             .create_new(true)
             .open(&temp)
-            .map_err(|_| "无法准备配置写入。")?;
+            .map_err(|error| io_error("无法准备配置写入。", &error))?;
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
-            .map_err(|_| "配置未能完整保存。")?;
+            .map_err(|error| io_error("配置未能完整保存。", &error))?;
         drop(file);
         replace(&temp, path)?;
-        if fs::read(path).map_err(|_| "配置读回验证失败。")? != bytes {
+        if fs::read(path).map_err(|error| io_error("配置读回验证失败。", &error))? != bytes
+        {
             return Err("配置读回验证失败。".into());
         }
         Ok(())
@@ -49,7 +71,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn replace(from: &Path, to: &Path) -> Result<(), String> {
-    fs::rename(from, to).map_err(|_| "配置写入失败，备份仍保留。".into())
+    fs::rename(from, to).map_err(|error| io_error("配置写入失败，备份仍保留。", &error))
 }
 #[cfg(windows)]
 fn replace(from: &Path, to: &Path) -> Result<(), String> {
@@ -61,7 +83,10 @@ fn replace(from: &Path, to: &Path) -> Result<(), String> {
     let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 1 | 8) } == 0 {
-        Err("配置写入失败，备份仍保留。".into())
+        Err(io_error(
+            "配置写入失败，备份仍保留。",
+            &std::io::Error::last_os_error(),
+        ))
     } else {
         Ok(())
     }
@@ -117,19 +142,25 @@ impl SessionStore {
         let metadata = match fs::symlink_metadata(self.spectator_path()) {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err("观战恢复记录无法读取，请打开备份目录检查。".into()),
+            Err(error) => {
+                return Err(io_error(
+                    "观战恢复记录无法读取，请打开备份目录检查。",
+                    &error,
+                ))
+            }
         };
         if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024
         {
             return Err("观战恢复记录格式或大小异常，请打开备份目录检查。".into());
         }
-        let bytes = fs::read(self.spectator_path()).map_err(|_| "观战恢复记录无法读取。")?;
+        let bytes = fs::read(self.spectator_path())
+            .map_err(|error| io_error("观战恢复记录无法读取。", &error))?;
         if bytes.len() > 1024 * 1024 {
             return Err("观战恢复记录过大。".into());
         }
         serde_json::from_slice(&bytes)
             .map(Some)
-            .map_err(|_| "观战恢复记录损坏，请打开备份目录检查。".into())
+            .map_err(|error| json_error("观战恢复记录损坏，请打开备份目录检查。", &error))
     }
     pub fn spectator_warning(&self) -> Option<String> {
         match self.spectator_record() {
@@ -161,14 +192,16 @@ impl SessionStore {
                 .parent()
                 .ok_or("观战配置目录缺失。")?
                 .join("cs2_machine_convars.vcfg");
-            let metadata = fs::symlink_metadata(&machine).map_err(|_| "当前观战配置无法读取。")?;
+            let metadata = fs::symlink_metadata(&machine)
+                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
                 || metadata.len() > 256 * 1024
             {
                 return Err("当前观战配置无法安全核实。".into());
             }
-            let current = fs::read_to_string(&machine).map_err(|_| "当前观战配置无法读取。")?;
+            let current = fs::read_to_string(&machine)
+                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
             if current.len() > 256 * 1024 {
                 return Err("当前观战配置过大。".into());
             }
@@ -177,16 +210,17 @@ impl SessionStore {
                 atomic_write(&machine, restored.as_bytes())?;
             }
             fs::remove_file(self.spectator_path())
-                .map_err(|_| "观战原值已恢复，但记录未清理，请重试。".to_string())
+                .map_err(|error| io_error("观战原值已恢复，但记录未清理，请重试。", &error))
         })();
         if let Err(error) = result {
             let warning = format!("观战原值尚未恢复：{error} 帧率与画质恢复不受影响；退出游戏后可重试或打开备份目录检查。");
             record["warning"] = json!(warning);
             atomic_write(
                 &self.spectator_path(),
-                &serde_json::to_vec_pretty(&record).map_err(|_| "观战恢复诊断无法保存。")?,
+                &serde_json::to_vec_pretty(&record)
+                    .map_err(|error| json_error("观战恢复诊断无法保存。", &error))?,
             )
-            .map_err(|_| format!("{warning} 恢复诊断未能更新，原值记录仍保留。"))?;
+            .map_err(|error| format!("{warning} 恢复诊断未能更新，原值记录仍保留：{error}"))?;
             return Err(warning);
         }
         Ok(())
@@ -307,7 +341,8 @@ impl SessionStore {
             // optional restore later fails. Save it before allowing +exec.
             atomic_write(
                 &self.spectator_path(),
-                &serde_json::to_vec_pretty(&record).map_err(|_| "观战原值备份无法保存。")?,
+                &serde_json::to_vec_pretty(&record)
+                    .map_err(|error| json_error("观战原值备份无法保存。", &error))?,
             )?;
             Ok(())
         });
@@ -544,6 +579,25 @@ mod tests {
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
     }
+    #[test]
+    fn optional_error_evidence_retains_system_codes_and_json_positions_without_input_contents() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "private-path-and-config",
+        );
+        let rendered = io_error("无法读取。", &io);
+        assert!(rendered.contains("ioKind=PermissionDenied"));
+        assert!(!rendered.contains("private-path-and-config"));
+        assert!(io_error("无法读取。", &std::io::Error::from_raw_os_error(5)).contains("osCode=5"));
+        let error =
+            serde_json::from_str::<Value>("{\n\"original\":\"private-configuration\"").unwrap_err();
+        let rendered = json_error("记录损坏。", &error);
+        assert!(rendered.contains("jsonCategory=Eof"));
+        assert!(rendered.contains("line=2"));
+        assert!(rendered.contains("column="));
+        assert!(!rendered.contains("private-configuration"));
+    }
+
     #[test]
     fn observer_cfg_supports_zero_and_one_and_restores_exact_values_without_rebinding() {
         for token in ["0", "1", "false", "true"] {
