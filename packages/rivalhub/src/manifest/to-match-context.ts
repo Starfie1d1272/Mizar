@@ -1,4 +1,7 @@
 import type { MatchContext, MatchDocumentV1 } from '@mizar/core/match-context';
+import { z } from 'zod';
+import { structuralDiagnostics } from '../validation-helpers.js';
+import { makeContractDiagnostic } from '../diagnostics.js';
 import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 
 import { validateBroadcastManifest } from './validate.js';
@@ -7,7 +10,10 @@ import type { BroadcastEntrantV1, BroadcastManifest, BroadcastSide } from './typ
 export class BroadcastManifestConversionError extends Error {
   readonly diagnostics: ReturnType<typeof validateBroadcastManifest>['diagnostics'];
 
-  constructor(diagnostics: ReturnType<typeof validateBroadcastManifest>['diagnostics']) {
+  constructor(
+    diagnostics: ReturnType<typeof validateBroadcastManifest>['diagnostics'],
+    readonly stage: 'manifest' | 'match_document' = 'manifest',
+  ) {
     super('BroadcastManifest 不能转换为 MatchContext。');
     this.name = 'BroadcastManifestConversionError';
     this.diagnostics = diagnostics;
@@ -115,23 +121,39 @@ export function toMatchDocumentV1(input: unknown): MatchDocumentV1 {
   const context = toMatchContext(input);
   const mapNames = manifest.match.mapPool ?? [];
 
-  return parseMatchDocumentV1({
-    ...context,
-    schemaVersion: 'mizar.match-document.v1',
-    competition:
-      context.competition === null
-        ? null
-        : {
-            competitionId: context.competition.competitionId,
-            name: context.competition.name,
-            themeColor: context.competition.themeColor,
-            logoUrl: context.competition.logoUrl ?? null,
-          },
-    stage: manifest.match.stageKey ?? context.stage,
-    stageLabel: manifest.match.stageLabel ?? context.stage ?? '比赛',
-    roundLabel: manifest.match.roundLabel ?? null,
-    matchLabel: manifest.match.matchLabel ?? null,
-    stakesLabel: manifest.match.stakesLabel ?? null,
-    mapPool: [...new Set(mapNames)],
-  });
+  try {
+    return parseMatchDocumentV1({
+      ...context,
+      schemaVersion: 'mizar.match-document.v1',
+      competition:
+        context.competition === null
+          ? null
+          : {
+              competitionId: context.competition.competitionId,
+              name: context.competition.name,
+              themeColor: context.competition.themeColor,
+              logoUrl: context.competition.logoUrl ?? null,
+            },
+      stage: manifest.match.stageKey ?? context.stage,
+      stageLabel: manifest.match.stageLabel ?? context.stage ?? '比赛',
+      roundLabel: manifest.match.roundLabel ?? null,
+      matchLabel: manifest.match.matchLabel ?? null,
+      stakesLabel: manifest.match.stakesLabel ?? null,
+      mapPool: [...new Set(mapNames)],
+    });
+  } catch (error) {
+    const diagnostics =
+      error instanceof z.ZodError
+        ? structuralDiagnostics(error, 'MatchDocumentV1')
+        : [
+            makeContractDiagnostic(
+              'structural',
+              'error',
+              'invalid_shape',
+              '$',
+              '比赛资料超过大小限制或不能转换。',
+            ),
+          ];
+    throw new BroadcastManifestConversionError(diagnostics, 'match_document');
+  }
 }

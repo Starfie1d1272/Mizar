@@ -16,9 +16,20 @@ namespace Mizar.WebInstaller {
       if (phase == "waiting-for-installer") Waiting = true;
     }
   }
+  // Observe existing production phases without changing scheduling or assertions.
+  sealed class NativeUpdateTiming : IProgress<string> {
+    readonly System.Diagnostics.Stopwatch clock=System.Diagnostics.Stopwatch.StartNew();
+    string previous;
+    public void Report(string phase) {
+      if(phase==previous) return;
+      previous=phase;
+      Console.WriteLine("TIMING: native update phase "+phase+" at "+clock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+    }
+  }
   static class NsisTests {
     static void Assert(bool value) { if (!value) throw new Exception("NSIS assertion failed"); }
     static string Hash(string path) {using(var file=File.OpenRead(path)) using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();}
+    static string timingOutput;
     static readonly System.Collections.Generic.List<string> cases = new System.Collections.Generic.List<string>();
     static void Passed(string name) { cases.Add(name); }
     static async Task Run(string group, string downloadCache) {
@@ -30,9 +41,11 @@ namespace Mizar.WebInstaller {
       bool complete=false;
       try {
         string installer;
+        var downloadClock=System.Diagnostics.Stopwatch.StartNew();
         using (var handler=new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false })
         using (var client=new HttpClient(handler) { Timeout=Timeout.InfiniteTimeSpan })
           installer=await new Downloader(client).Download(plan,cache,new IgnoreProgress(),CancellationToken.None);
+        Console.WriteLine("TIMING: verified installer acquisition "+downloadClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
         string pending=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache","fresh-install.pending");
         int ownerPid=0;long ownerStarted=0;
         using(var exited=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
@@ -60,7 +73,9 @@ namespace Mizar.WebInstaller {
           var prepared=Nsis.NewPending(plan,target,installer);
           prepared.ownerPid=ownerPid;prepared.ownerStarted=ownerStarted;
           File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),prepared.token);Nsis.SavePending(prepared,true);
+          var installClock=System.Diagnostics.Stopwatch.StartNew();
           var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
+          Console.WriteLine("TIMING: prepared first installation "+installClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
           Assert(!File.Exists(pending));
           Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
           Passed("prepared-install");
@@ -74,13 +89,19 @@ namespace Mizar.WebInstaller {
           string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","upgrade-sentinel.txt");
           if(File.Exists(data)) throw new IOException("Refusing to replace existing user sentinel");
           Directory.CreateDirectory(Path.GetDirectoryName(data));File.WriteAllText(data,"preserve user data");
+          string priorTiming=Environment.GetEnvironmentVariable("MIZAR_MEASURE_UPDATE");
+          Environment.SetEnvironmentVariable("MIZAR_MEASURE_UPDATE","1");
           try {
             var phaseClock=System.Diagnostics.Stopwatch.StartNew();
-            var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
+            var updated=await Nsis.Install(plan,installer,target,CancellationToken.None,new NativeUpdateTiming());
             Console.WriteLine("TIMING: same-version native update "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
             phaseClock.Restart();
             Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");Passed("same-version-update");
             var committed=(PendingInstall)typeof(FreshInstallResult).GetField("record",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(updated);
+            string timingFile=Path.Combine(committed.updateStage,"install-timings.json");
+            string timingText=File.ReadAllText(timingFile);
+            Console.WriteLine("NATIVE_UPDATE_TIMING "+timingText);
+            File.WriteAllText(Path.Combine(timingOutput,"native-update-install-timings.json"),timingText);
             string script=Path.Combine(committed.updateStage,"update-install.ps1"),nativePlan=Path.Combine(committed.updateStage,"plan.json");
             string stage;
             using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" -Mode Prepare -PlanPath \""+nativePlan+"\"",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true})) {
@@ -107,7 +128,7 @@ namespace Mizar.WebInstaller {
             Assert(File.Exists(Path.Combine(target,"Mizar.exe")) && File.ReadAllText(data)=="preserve user data");
             Console.WriteLine("PASS: real lightweight same-version repair/upgrade and rollback preserve the existing path and user data");
           Passed("update-rollback");
-          } finally {File.Delete(data);}
+          } finally {Environment.SetEnvironmentVariable("MIZAR_MEASURE_UPDATE",priorTiming);File.Delete(data);}
           await result.RollbackAsync();
           Assert(!Directory.Exists(target));
         }
@@ -206,6 +227,7 @@ namespace Mizar.WebInstaller {
           return 0;
         }
         if((args.Length!=2 && args.Length!=3) || (args[0]!="all" && args[0]!="update" && args[0]!="faults")) throw new IOException("Unknown NSIS qualification group");
+        timingOutput=Path.GetDirectoryName(Path.GetFullPath(args[1]));
         Run(args[0],args.Length==3 ? args[2] : null).GetAwaiter().GetResult();
         var evidence=new { group=args[0], cases=cases.ToArray(), sourceSha=Environment.GetEnvironmentVariable("GITHUB_SHA"), runId=Environment.GetEnvironmentVariable("GITHUB_RUN_ID"), attempt=Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT") };
         using(var output=new FileStream(args[1],FileMode.CreateNew,FileAccess.Write,FileShare.None))

@@ -225,8 +225,14 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     typeof entry.stage === 'string' &&
     updateStages.has(entry.stage);
   const demo = entry.event === 'demo-test' && identifier(entry.stage) !== null;
+  const live =
+    entry.event === 'rivalhub_live' &&
+    typeof entry.stage === 'string' &&
+    ['fetch', 'read', 'parse', 'validate', 'cancel', 'acceptance', 'accepted'].includes(
+      entry.stage,
+    );
   const stage =
-    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || demo)
+    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live || demo)
       ? entry.stage
       : null;
   const diagnostic = record(entry.diagnostic);
@@ -264,14 +270,15 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
           causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
         }
       : {}),
-    ...(update && diagnostic.error !== undefined
+    ...((update || live) && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
     ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
       ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-      : !update && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
+      : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
         ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
         : !update &&
+            !live &&
             !demo &&
             [
               'powershell',
@@ -284,7 +291,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
             ].includes(stage ?? '') &&
             typeof entry.detail === 'string'
           ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-          : !update && typeof record(entry.err).message === 'string'
+          : !update && !live && !demo && typeof record(entry.err).message === 'string'
             ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
             : {}),
     durationMs: count(diagnostic.durationMs),
