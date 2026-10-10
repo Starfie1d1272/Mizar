@@ -1,4 +1,5 @@
 import { AutomaticPreparation } from './AutomaticPreparation';
+import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
@@ -233,6 +234,7 @@ export function PreparationPage() {
 
         {path === '/' ? (
           <div className="preparation-dashboard" data-selected={Boolean(match)}>
+            <DemoTestPanel />
             {!match ? (
               <Panel className="preparation-task-panel">
                 <div className="preparation-task-content">

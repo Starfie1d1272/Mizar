@@ -152,6 +152,12 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 ## 本地访问与安全
 
+`GET /local/v1/demo-test` 提供有限试播状态：`active`、`phase`（`idle / starting / playing / stopping / recovery`）、`requestId`、双方名称及 `dataReady`。`dataReady` 表示当前新鲜观战数据覆盖，不证明选定文件已经加载，不返回文件路径或私有令牌。
+
+`POST /operator/runtime/demo-test` 仅供持有本次服务私有 `x-runtime-token` 的 Host 使用，拒绝任何网页 Origin。命令为带 UUID `requestId` 的 `begin / playing / finish / complete / cancel`；`begin` 可附双方名称，其余不得附路径、控制台文本或比赛文档。`begin` 需要准备状态、已连接且未推流的 OBS；`playing` 由 Host 再次核对受管进程后提交；`finish` 隔离输入并切等待，`complete` 仅在 Host 确认游戏退出与配置恢复后提交，`cancel` 仅用于未发出游戏启动的准备撤销。重试使用原操作 ID，冲突保持隔离。恢复记录损坏时返回新的恢复 ID，Host 按自己的进程日志安全收尾后再确认，不能把损坏字段当控制权。
+
+桌面 `select_demo_file` 只返回本次短期 token 与文件名；`start_demo_test` 使用 token 和双方名称，`enter_demo_test / finish_demo_test` 使用操作 ID。原路径及文件格式校验留在 Host，游戏播放请求使用固定命令与参数；浏览器和局域网不能选择或启动任意本机文件。
+
 `GET /local/v1/updates` 返回有限更新状态、中文说明和制作阻断原因，不返回暂存路径或凭据；`POST /operator/updates` 仅允许本机操作者发起检查、下载、取消、后台检查偏好及结束制作后的恢复自动编排。安装计划只能由持有每次启动私有控制令牌的 Host 调用，拒绝网页 Origin，不接受网页提供的路径或安装参数；原生命令 `install_update` 只允许制作中心主窗口发起。元数据与安装恢复契约见[应用内更新](updates.md)。
 
 桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。

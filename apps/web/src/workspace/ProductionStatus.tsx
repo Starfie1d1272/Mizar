@@ -1,5 +1,6 @@
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { useLocalRead, type Production } from '../preparation/client';
+import type { DemoTestView } from '../preparation/demo-test';
 import { desktopInvoke } from './client';
 import { useObsStatus } from './obs-client';
 import { useState } from 'react';
@@ -14,6 +15,7 @@ export function ProductionStatus({
 }) {
   const response = useLocalRead<ProductionGuidance>('/local/v1/production-guidance', 5000);
   const production = useLocalRead<Production>('/local/v1/production');
+  const trial = useLocalRead<DemoTestView>('/local/v1/demo-test');
   const obs = useObsStatus();
   const [error, setError] = useState('');
   const guidance = matchId !== undefined && response?.matchId !== matchId ? null : response;
@@ -49,13 +51,19 @@ export function ProductionStatus({
         </span>
       </div>
       <strong role={compact && (reminder || guidance?.interMapReminder) ? 'status' : undefined}>
-        {compact && reminder
-          ? '比赛进行中，OBS 未推流，请检查 OBS。'
-          : compact && guidance?.interMapReminder
-            ? '图间已超过 10 分钟，请确认下一图准备情况。'
-            : (guidance?.task ?? '正在读取制作状态')}
+        {trial?.active
+          ? trial.phase === 'playing'
+            ? trial.dataReady
+              ? 'Demo 试播 · 游戏数据已就绪'
+              : 'Demo 试播 · 等待有效观战数据'
+            : 'Demo 试播 · 等待游戏启动或配置恢复'
+          : compact && reminder
+            ? '比赛进行中，OBS 未推流，请检查 OBS。'
+            : compact && guidance?.interMapReminder
+              ? '图间已超过 10 分钟，请确认下一图准备情况。'
+              : (guidance?.task ?? '正在读取制作状态')}
       </strong>
-      {guidance && !compact ? (
+      {guidance && !compact && !trial?.active ? (
         <>
           {guidance.result && ['map_end', 'match_end'].includes(guidance.phase) ? (
             <p>{guidance.result}</p>
