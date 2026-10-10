@@ -61,7 +61,7 @@ export function DemoTestPanel() {
   }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run]);
 
   return (
-    <Panel className="preparation-task-panel">
+    <Panel>
       <h2>Demo 试播</h2>
       <p>开播前，用本地 Demo 检查 HUD、游戏画面和 OBS 音画。</p>
       {!shown ? (
