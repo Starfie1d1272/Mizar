@@ -277,6 +277,9 @@ for (const gsi of [
   test(`Desktop entry requires installed conflict-free GSI: ${JSON.stringify(gsi)}`, async ({
     page,
   }) => {
+    await page.route('**/local/v1/demo-test', (route) =>
+      route.fulfill({ json: { active: false, phase: 'idle' } }),
+    );
     await page.addInitScript((status) => {
       Object.assign(window, {
         __TAURI_INTERNALS__: {
