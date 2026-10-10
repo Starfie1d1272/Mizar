@@ -93,8 +93,9 @@ async function authenticateBootstrapSource({
   const identity = getResourceAuthorization(authorization);
   if (expectedCore && identity.core.archiveSha256 !== expectedCore.coreSha256)
     throw new Error('Published Core archive differs from the fixed native qualification identity');
-  // Signed descriptor/catalog bind the qualified original ZIP; the existing
-  // signed update/publication envelope binds the executed NSIS. A second
+  // Signed descriptor/catalog bind the qualified Core ZIP. For a distinct Core,
+  // the native qualification pin binds its executed NSIS; the signed update
+  // envelope continues to bind the Full NSIS for existing clients. A second
   // GitHub API asset listing is not a publisher authority and is unnecessary.
   const inputs = {};
   for (const [field, name, maximum, digest] of [

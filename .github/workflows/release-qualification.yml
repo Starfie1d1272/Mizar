@@ -298,7 +298,7 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }

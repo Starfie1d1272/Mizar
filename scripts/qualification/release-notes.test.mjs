@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { URL } from 'node:url';
-import { releaseSection, githubReleaseNotes } from './release-notes.mjs';
+import { releaseSection, githubReleaseNotes, readReleaseNotes } from './release-notes.mjs';
 import { qualifiedUpdateManifest } from './update-manifest.mjs';
 
 const example = `# 更新日志
@@ -121,8 +121,7 @@ it('embeds the repository release as plain text in the qualified update manifest
       }),
     );
     const manifest = await qualifiedUpdateManifest(directory);
-    expect(manifest.notes).toMatch(/^应用内更新\n\n• 新增/);
-    expect(manifest.notes).toContain('自动检查默认关闭');
+    expect(manifest.notes).toBe((await readReleaseNotes(policy.version)).text);
     expect(manifest.notes).not.toMatch(/###|\]\(|\*\*/);
     expect(manifest.gitSha).toBe(identity.gitSha);
     expect(manifest.installer.sha256).toBe(identity.archiveSha256);
