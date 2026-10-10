@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, access } from 'node:fs/promises';
 import { join, basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -8,16 +8,27 @@ const repo = 'Starfie1d1272/Mizar';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export async function publicProductAssets(product) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json')));
-  const paths = [
-    manifest.archive,
-    'release-manifest.json',
-    'distribution-manifest.json',
-    'NSIS-LICENSE.txt',
-  ];
+  const paths = [manifest.archive];
   const distribution = JSON.parse(await readFile(join(product, 'distribution-manifest.json')));
   if (distribution.gitSha !== manifest.gitSha || distribution.appVersion !== manifest.appVersion)
     throw new Error('发行身份不一致');
   paths.push(distribution.archive);
+  const core = JSON.parse(await readFile(join(product, 'core-release-manifest.json')));
+  const coreDistribution = JSON.parse(
+    await readFile(join(product, 'core-distribution-manifest.json')),
+  );
+  if (
+    core.resourceMode !== 'core' ||
+    core.gitSha !== manifest.gitSha ||
+    core.appVersion !== manifest.appVersion ||
+    core.derivedFrom?.archiveSha256 !== manifest.archiveSha256 ||
+    coreDistribution.originalArchiveSha256 !== core.archiveSha256 ||
+    coreDistribution.contentDigest !== core.contentDigest ||
+    coreDistribution.gitSha !== core.gitSha ||
+    coreDistribution.appVersion !== core.appVersion
+  )
+    throw new Error('Distinct qualified Core identity is required');
+  paths.push(coreDistribution.archive);
   if (/^\d+\.\d+\.\d+$/.test(manifest.appVersion)) {
     paths.push('update-manifest.json');
     const build = JSON.parse(await readFile(join(product, 'web-installer-build.json')));
@@ -29,8 +40,8 @@ export async function publicProductAssets(product) {
       build.version !== manifest.appVersion ||
       build.sha256 !== hash(bytes) ||
       build.bytes !== bytes.length ||
-      build.installer !== distribution.archive ||
-      build.core !== manifest.archive
+      build.installer !== coreDistribution.archive ||
+      build.core !== core.archive
     )
       throw new Error('轻量安装器不是同一资格候选的原字节');
     paths.push(name);
@@ -39,6 +50,14 @@ export async function publicProductAssets(product) {
     paths.some((name) => typeof name !== 'string' || name !== basename(name) || name.includes('..'))
   )
     throw new Error('发行路径无效');
+  if (!/^\d+\.\d+\.\d+$/.test(manifest.appVersion)) {
+    try {
+      await access(join(product, 'machine-metadata.json'));
+      paths.push('machine-metadata.json');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
   return paths.map((name) => join(product, name));
 }
 export async function assetInventory(paths) {
@@ -95,7 +114,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const [releasePath, refPath, identityPath, resources] = args;
     if (resources && resources !== '-') {
       const { readdir } = await import('node:fs/promises');
-      for (const name of await readdir(resources)) paths.push(join(resources, name));
+      for (const name of await readdir(resources))
+        if (name.endsWith('.zip')) paths.push(join(resources, name));
     }
     const release = JSON.parse(await readFile(releasePath)),
       ref = JSON.parse(await readFile(refPath)),

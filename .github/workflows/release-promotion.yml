@@ -92,15 +92,15 @@ jobs:
           'RESOURCE_ENABLED=true' >> $env:GITHUB_ENV
           gh run download $env:RUN_ID --name release-qualified-resources --dir "$env:RESOURCE_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Resource-aware qualification is missing its original resource artifact' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" qualified "$env:RESOURCE_ROOT" product/release-manifest.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" qualified "$env:RESOURCE_ROOT" product/core-release-manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proofs failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" resolve "$env:RESOURCE_ROOT" product/release-manifest.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" resolve "$env:RESOURCE_ROOT" product/core-release-manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Existing resource publication resolution failed; refusing overwrite' }
       - name: Prepare exact resource publication on the current main tools
         if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' }}
         shell: pwsh
         run: |
-          $manifest = Join-Path $env:GITHUB_WORKSPACE 'product/release-manifest.json'
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'product/core-release-manifest.json'
           $parameters = Join-Path $env:RUNNER_TEMP 'resource-publication-parameters.json'
           Set-Location -LiteralPath $env:RESOURCE_PUBLISHER_ROOT
           node scripts/ci/resource-release.mjs parameters "$env:RESOURCE_ROOT" "$manifest" "$parameters"
@@ -127,7 +127,7 @@ jobs:
             Copy-Item -LiteralPath $env:RESOURCE_PUBLICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_ROOT 'resource-publication-provenance.json')
             Copy-Item -LiteralPath $env:RESOURCE_PUBLICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_ROOT 'resource-catalog-promotion-provenance.json')
           }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" freeze "$env:RESOURCE_ROOT" product/release-manifest.json "$env:RESOURCE_FROZEN_ROOT"
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" freeze "$env:RESOURCE_ROOT" product/core-release-manifest.json "$env:RESOURCE_FROZEN_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Resource archive/publication/catalog verification failed' }
       - name: Preserve original signed resource publication for safe partial-upload retries
         if: ${{ env.RESOURCE_ENABLED == 'true' }}
@@ -153,6 +153,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP provenance verification failed' }
           node scripts/qualification/release-identity.mjs attestation product/release-manifest.json $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Qualified source/version manifest provenance verification failed' }
+      - name: Verify distinct qualified Core original bytes and provenance
+        shell: pwsh
+        run: |
+          $core = Get-Content product/core-release-manifest.json -Raw | ConvertFrom-Json
+          $extract = Join-Path $env:RUNNER_TEMP 'promotion original Core'
+          Expand-Archive -LiteralPath (Join-Path product $core.archive) -DestinationPath $extract
+          $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
+          if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
+          node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
+          foreach ($name in @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe'))) {
+            node scripts/qualification/release-identity.mjs attestation (Join-Path product $name) $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Original Core qualification provenance failed' }
+          }
+
       - name: Verify qualified installer provenance
         shell: pwsh
         run: |
@@ -186,12 +201,19 @@ jobs:
         run: |
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Release/tag existence is unknown or conflicts; refusing mutation' }
+      - name: Prepare prerelease original machine carrier
+        if: ${{ contains(inputs.tag, '-') && env.RESOURCE_ENABLED == 'true' }}
+        shell: pwsh
+        run: |
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" - product/machine-metadata.json
+          if ($LASTEXITCODE -ne 0) { throw 'Prerelease original carrier failed' }
+
       - name: Publish exact qualified assets
         shell: pwsh
         run: |
           $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
-          if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -File).FullName) }
+          if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -Filter '*.zip' -File).FullName) }
           if ($env:RELEASE_FOUND -eq 'true') {
             gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
             if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
@@ -203,7 +225,7 @@ jobs:
             gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > existing-release.json
             if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
             $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
-            if (@($existing.assets | Where-Object name -eq 'update-index.json').Count) {
+            if (@($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
               node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product
               if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
               'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
@@ -225,7 +247,7 @@ jobs:
         run: |
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > resource-published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Published resource readback failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/release-manifest.json resource-published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json resource-published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Public resources differ from the signed immutable candidate' }
       - name: Confirm the published Stable and prepare its authorization
         if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
@@ -254,12 +276,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-index.mjs" product/update-manifest.json product/update-provenance.json update-publication.json update-publication-provenance.json update-index.json
           if ($LASTEXITCODE -ne 0) { throw 'Original dual-signature envelope preparation failed' }
-          gh release upload $env:RELEASE_TAG update-index.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" update-index.json machine-metadata.json
+          if ($LASTEXITCODE -ne 0) { throw 'Original machine metadata aggregation failed' }
+          gh release upload $env:RELEASE_TAG machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
+
+      - name: Verify final original machine resource bytes after authorization upload
+        if: ${{ env.RESOURCE_ENABLED == 'true' && !contains(inputs.tag, '-') }}
+        shell: pwsh
+        run: |
+          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > machine-published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Final carrier release lookup failed' }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json machine-published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Final original resource carrier readback failed' }
 
       - name: Preserve maintainer promotion records in CI only
         if: ${{ always() }}

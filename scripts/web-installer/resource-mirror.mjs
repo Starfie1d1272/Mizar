@@ -1,3 +1,8 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineFile,
+} from '@mizar/resource-pack-contract/transport';
 import { RESOURCE_ASSET_NAMES } from '@mizar/resource-pack-contract/runtime';
 import { updateJson, updateRequest, boundedBytes } from '../updates/network.js';
 
@@ -23,7 +28,16 @@ export async function downloadResourceOriginal({
   fetcher,
   sourceMode = 'auto',
 }) {
-  const path = mirrorResourcePath(version, name);
+  const originalPath = mirrorResourcePath(version, name);
+  const metadata = fixedNames.has(name);
+  const transportName = metadata ? MACHINE_METADATA_NAME : name;
+  const path = metadata ? `/Runtime/v${version}/${transportName}` : originalPath;
+  const bound = metadata ? MACHINE_METADATA_MAX_BYTES : maximum;
+  const extract = (bytes) => {
+    const original = metadata ? readMachineFile(bytes, name) : bytes;
+    if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
+    return original;
+  };
   const deadline = globalThis.AbortSignal.any([
     signal,
     globalThis.AbortSignal.timeout(maximum > 2097152 ? 300000 : 60000),
@@ -32,7 +46,7 @@ export async function downloadResourceOriginal({
     if (sourceMode === 'github') throw new Error('resource_github_transport');
     const attempt = globalThis.AbortSignal.any([deadline, globalThis.AbortSignal.timeout(15000)]);
     const directory = await updateJson(
-      `https://box.nju.edu.cn/api/v2.1/via-repo-token/dir/?path=${encodeURIComponent('/Resources/v' + version)}`,
+      `https://box.nju.edu.cn/api/v2.1/via-repo-token/dir/?path=${encodeURIComponent((metadata ? '/Runtime/v' : '/Resources/v') + version)}`,
       attempt,
       fetcher,
     );
@@ -56,18 +70,20 @@ export async function downloadResourceOriginal({
     )
       throw new Error('resource_mirror_link_invalid');
     // Never fall back after bytes have arrived and failed publisher verification.
-    return await boundedBytes(await updateRequest(url.href, deadline, fetcher), maximum);
+    return extract(await boundedBytes(await updateRequest(url.href, deadline, fetcher), bound));
   } catch {
     deadline.throwIfAborted();
     // All fallback bytes undergo the same sole SDK verification. No metadata,
     // pin or authority is taken from the failed mirror response.
-    return boundedBytes(
-      await updateRequest(
-        `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${name}`,
-        deadline,
-        fetcher,
+    return extract(
+      await boundedBytes(
+        await updateRequest(
+          `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${transportName}`,
+          deadline,
+          fetcher,
+        ),
+        bound,
       ),
-      maximum,
     );
   }
 }

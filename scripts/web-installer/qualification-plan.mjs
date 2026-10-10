@@ -16,14 +16,33 @@ async function identity(path) {
 // Only the existing main Qualification producer can authorize embedded executable pins.
 // No mirror hashes, caller-supplied plan, development Core or second trust verifier.
 export async function qualificationPlan(product, coreRoot, context, checkedOutSha, requestedSha) {
-  const release = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
+  assertQualificationIdentity(context, checkedOutSha, requestedSha);
+  const release = JSON.parse(await readFile(join(product, 'core-release-manifest.json'), 'utf8'));
+  const full = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
+  const distribution = JSON.parse(
+    await readFile(join(product, 'core-distribution-manifest.json'), 'utf8'),
+  );
+  if (
+    release.resourceMode !== 'core' ||
+    release.developmentOnly ||
+    release.desktopBuildProfile !== 'release' ||
+    full.gitSha !== release.gitSha ||
+    full.appVersion !== release.appVersion ||
+    release.derivedFrom?.archiveSha256 !== full.archiveSha256 ||
+    distribution.originalArchiveSha256 !== release.archiveSha256 ||
+    distribution.contentDigest !== release.contentDigest ||
+    distribution.gitSha !== release.gitSha ||
+    distribution.appVersion !== release.appVersion
+  )
+    throw new Error('A distinct qualified Core and original Full identity are required');
   assertQualificationIdentity(context, checkedOutSha, requestedSha, release.gitSha);
   const manifest = await qualifiedUpdateManifest(product);
   if (!manifest) throw new Error('A stable qualified update manifest is required');
-  const coreName = `Mizar-v${manifest.version}-Windows-x64.zip`;
+  const coreName = `Mizar-v${manifest.version}-Windows-x64-Core.zip`;
   if (release.archive !== coreName) throw new Error('Noncanonical Core archive');
   const artifact = await verifyPayload(coreRoot);
   if (
+    artifact.resourceMode !== 'core' ||
     artifact.appVersion !== manifest.version ||
     artifact.desktopBuildProfile !== 'release' ||
     artifact.gitSha !== manifest.gitSha ||
@@ -57,24 +76,24 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
   if (typeof BOX_READ_TOKEN !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(BOX_READ_TOKEN))
     throw new Error('Existing public Box read contract is invalid');
   const core = await identity(join(product, coreName));
-  const installer = await identity(join(product, manifest.installer.name));
+  const installer = await identity(join(product, distribution.archive));
   if (
     core.sha256 !== release.archiveSha256 ||
-    installer.sha256 !== manifest.installer.sha256 ||
-    installer.bytes !== manifest.installer.bytes
+    installer.sha256 !== distribution.archiveSha256 ||
+    installer.bytes !== distribution.archiveBytes
   )
     throw new Error('Qualified archive or NSIS bytes changed');
   return {
     schemaVersion: 1,
     kind: 'nsis-setup',
     version: manifest.version,
-    name: manifest.installer.name,
+    name: distribution.archive,
     bytes: installer.bytes,
     sha256: installer.sha256,
     gitSha: manifest.gitSha,
-    contentDigest: manifest.installer.contentDigest,
+    contentDigest: release.contentDigest,
     urls: [
-      `https://github.com/Starfie1d1272/Mizar/releases/download/v${manifest.version}/${manifest.installer.name}`,
+      `https://github.com/Starfie1d1272/Mizar/releases/download/v${manifest.version}/${distribution.archive}`,
     ],
     coreName,
     coreBytes: core.bytes,
@@ -82,6 +101,9 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
     allowExecute: true,
     publicationRequired: true,
     boxReadToken: BOX_READ_TOKEN,
+    updateManifestSha256: createHash('sha256')
+      .update(await readFile(join(product, 'update-manifest.json')))
+      .digest('hex'),
   };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

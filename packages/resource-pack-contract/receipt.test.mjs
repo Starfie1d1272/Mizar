@@ -191,9 +191,9 @@ it('requires fresh signed TUF roles for first installation while preserving hist
   const fixture = new URL('./test-fixtures/tuf/', import.meta.url);
   const fresh = {
     ...trust,
-    timestampBase64: encode(await readFile(new URL('first-install-timestamp.json', fixture))),
-    snapshotBase64: encode(await readFile(new URL('first-install-snapshot.json', fixture))),
-    targetsBase64: encode(await readFile(new URL('first-install-targets.json', fixture))),
+    timestampBase64: encode(await readFile(new URL('first-install-timestamp.tuf', fixture))),
+    snapshotBase64: encode(await readFile(new URL('first-install-snapshot.tuf', fixture))),
+    targetsBase64: encode(await readFile(new URL('first-install-targets.tuf', fixture))),
   };
   const network = vi.fn(() => {
     throw new Error('Offline network denied');

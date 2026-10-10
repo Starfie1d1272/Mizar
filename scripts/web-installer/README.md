@@ -1,6 +1,6 @@
 # Windows 轻量安装器
 
-正式分发提供一个推荐轻量 EXE 和一个完整离线 ZIP。轻量 EXE 是下载引导器；原 NSIS Setup 负责安装、卸载和更新，Companion 的同一 Resource Store 负责官方素材。正式产品仍使用 Full；Core-only 保持 developmentOnly，不能晋级。
+推荐 EXE 安装真正不含可选 EPL 媒体的 Core，然后通过同一 Resource Store 完成首次资源缓存。Qualification 从同次已完整核验的 Full 候选分离 Core，生成独立 Core ZIP/NSIS、清单和摘要，并在签名前验证实际安装与桌面启动。原 Full ZIP 保留既有离线行为；旧客户端仍使用原 Full NSIS 更新。开发 core-only 保持不可发布，readiness 仍须真实首次安装证据。
 
 ## 构建与晋级
 
@@ -16,7 +16,7 @@
 
 Native 先读取 Box 的只读 Mizar 资料库、原 v2 更新信封及精确 Setup 文件，核对 Qualification 内嵌的版本、源码、大小和摘要；Box 不可用或不匹配时回退 GitHub 固定版本。此步骤核对公开状态，不能替代来源签名。下载的原 NSIS 全部字节必须符合固定资格身份，执行前再验证。只读 Token 只发往指定 Box API，不随临时文件链接或 GitHub 请求发送。
 
-安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 验证原更新清单与正式发布确认的双签名；资源从 Box `/Resources/v<应用版本>/` 优先读取原字节，失败回退原 GitHub 地址。目录、资格和晋级证明、资源归档仍由同一 SDK 验证，不新增信任根。Native 的 NSIS、Core ZIP 与 SDK 的发布身份必须一致。只有 Core 和同一 Store 的官方资源都通过验证才显示完成；持久缓存启动时从原 receipt 离线复验。
+安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 验证原更新清单与正式发布确认的双签名；机器元数据从 Box Runtime/v<应用版本>/machine-metadata.json 或 GitHub 同名附件解出原字节；资源 ZIP 从 Resources/v<应用版本>/ 读取，失败回退 GitHub。运输载体有名称白名单、大小、重复条目和规范编码边界；原目录/出版/归档签名仍交同一 SDK 验证，不建立第二根。Core 身份与保留的 Full 更新身份分别绑定。仅 Core 与同一 Store 的官方资源通过验证才显示完成，缓存复用仍核验原 receipt。
 
 Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 ZIP 和八份资源文件，回读全部原字节并完成历史归档，最后更新 `Updates/latest.json`。资源版本目录只补缺，不覆盖异内容。公开分享使用既有根地址，实际同步状态以版本号和回读结果为准。
 

@@ -1,3 +1,4 @@
+import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
@@ -18,13 +19,15 @@ const fetcher = async (input, options) => {
     if (unavailable) return new globalThis.Response('unavailable', { status: 503 });
     if (url.pathname.endsWith('/dir/'))
       return globalThis.Response.json({ repo_name: 'Mizar', user_perm: 'r' });
-    assert.equal(url.searchParams.get('path'), '/Resources/v2.0.0/resource-descriptor.json');
+    assert.equal(url.searchParams.get('path'), '/Runtime/v2.0.0/machine-metadata.json');
     return globalThis.Response.json(
       'https://box.nju.edu.cn/seafhttp/files/test/resource-descriptor.json',
     );
   }
   assert.equal(headers.has('Authorization'), false);
-  return new globalThis.Response(original);
+  return new globalThis.Response(
+    makeMachineMetadata(new Map([['resource-descriptor.json', original]])),
+  );
 };
 const read = () =>
   downloadResourceOriginal({

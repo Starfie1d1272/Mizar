@@ -1,3 +1,4 @@
+import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 import { describe, it, expect } from 'vitest';
 import { Buffer } from 'node:buffer';
 import {
@@ -6,6 +7,7 @@ import {
   syncStableRelease,
   syncOffline,
   syncResourceFiles,
+  syncRuntimeFiles,
   syncBootstrap,
   validateOfflineRelease,
   validateRelease,
@@ -467,4 +469,23 @@ it('keeps the NSIS machine backend alongside the recommended lightweight EXE', a
   });
   expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
   expect(box.stored.get('/Stable/' + bootstrap.name)).toEqual(bootstrap.bytes);
+});
+
+it('keeps Runtime original carrier/backend immutable across retries and refuses changed readback before uploading', async () => {
+  const version = '2.0.0';
+  const carrier = makeMachineMetadata(new Map([['release-manifest.json', Buffer.from('{}')]]));
+  const backend = Buffer.from('transport-only backend fixture; never executed');
+  const files = [
+    { name: 'machine-metadata.json', bytes: carrier },
+    { name: 'Mizar-v2.0.0-Windows-x64-Core-Setup.exe', bytes: backend },
+  ].map((f) => ({ ...f, size: f.bytes.length, sha256: digest(f.bytes) }));
+  const box = fakeBox();
+  await syncRuntimeFiles({ box, version, files });
+  expect(box.operations).toEqual(['upload', 'upload']);
+  box.operations.length = 0;
+  await syncRuntimeFiles({ box, version, files });
+  expect(box.operations).toEqual([]);
+  box.stored.set('/Runtime/v2.0.0/machine-metadata.json', Buffer.from('changed'));
+  await expect(syncRuntimeFiles({ box, version, files })).rejects.toThrow();
+  expect(box.operations).toEqual([]);
 });

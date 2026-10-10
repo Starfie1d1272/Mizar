@@ -62,9 +62,10 @@ async function authenticateBootstrapSource({
     expectedCore &&
     (manifest.version !== expectedCore.version ||
       manifest.gitSha !== expectedCore.gitSha ||
-      manifest.installer.contentDigest !== expectedCore.contentDigest ||
-      manifest.installer.sha256 !== expectedCore.sha256 ||
-      manifest.installer.bytes !== expectedCore.bytes)
+      (!expectedCore.coreMode &&
+        (manifest.installer.contentDigest !== expectedCore.contentDigest ||
+          manifest.installer.sha256 !== expectedCore.sha256 ||
+          manifest.installer.bytes !== expectedCore.bytes)))
   )
     throw new Error('Published NSIS differs from the fixed native qualification identity');
   const prefix = `https://github.com/${repository}/releases/download/v${manifest.version}/`;

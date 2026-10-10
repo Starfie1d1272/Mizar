@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
 
 export function webResourceMode(value = process.env.MIZAR_WEB_RESOURCE_MODE ?? 'full') {
-  if (!['full', 'core-only'].includes(value))
+  if (!['full', 'core-only', 'core'].includes(value))
     throw new Error(`Unknown Web resource mode: ${value}`);
   return value;
 }
@@ -36,13 +36,13 @@ export async function verifyWebResources(root, requestedMode) {
     marker = JSON.parse(await readFile(resolve(root, 'web-resource-mode.json'), 'utf8'));
     hasMarker = true;
   } catch (error) {
-    if (error.code !== 'ENOENT' || mode === 'core-only') throw error;
+    if (error.code !== 'ENOENT' || mode !== 'full') throw error;
     hasMarker = false;
   }
   if (hasMarker && (!marker || marker.schemaVersion !== 1 || marker.resourceMode !== mode)) {
     throw new Error('Web resource mode does not match the requested bundle');
   }
-  if (mode === 'core-only') {
+  if (mode !== 'full') {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (
         !['assets', 'brand', 'index.html', 'product-shell.css', 'web-resource-mode.json'].includes(

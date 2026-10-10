@@ -77,6 +77,9 @@ jobs:
       - name: Build exact-SHA Windows qualification bundle
         run: node scripts/qualification/build.mjs --output "$env:QUALIFICATION_BUILD_ROOT" --label "$env:RELEASE_LABEL"
 
+      - name: Partition the same-run verified Full candidate into a distinct Core
+        run: node scripts/qualification/core-candidate.mjs "$env:QUALIFICATION_BUILD_ROOT"
+
       - name: Test Windows desktop startup deadlines and diagnostics
         run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 
@@ -100,7 +103,7 @@ jobs:
         id: resources
         shell: pwsh
         run: |
-          node scripts/ci/resource-release.mjs prepare "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') "$env:RESOURCE_PACK_VERSION" "$env:RESOURCE_SEQUENCE"
+          node scripts/ci/resource-release.mjs prepare "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$env:RESOURCE_PACK_VERSION" "$env:RESOURCE_SEQUENCE"
           if ($LASTEXITCODE -ne 0) { throw 'Resource producer/source/catalog validation failed' }
           "artifact=release-resource-candidate-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
       - name: Preserve original resource candidate
@@ -120,6 +123,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
@@ -169,7 +173,8 @@ jobs:
         shell: pwsh
         timeout-minutes: 5
         run: |
-          $archive = Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -Filter '*.zip' -File | Select-Object -First 1
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $archive = Get-Item -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive)
           if ($null -eq $archive) { throw '未生成 qualification ZIP' }
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
           if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
@@ -242,6 +247,26 @@ jobs:
           node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
           if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
 
+      - name: Qualify distinct Core payload and real NSIS installation
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
+        run: |
+          $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
+          $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
+          ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
+          $payload = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
+          if ($payload.Count -ne 1) { throw 'Core extraction is ambiguous' }
+          $installed = Join-Path $env:RUNNER_TEMP 'core installed qualification'
+          ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $payload[0].FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -ManifestName core-release-manifest.json -DistributionName core-distribution-manifest.json
+          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
+          if ($root.Count -ne 1) { throw 'Core installation is ambiguous' }
+          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Core identity or resource boundary failed' }
+          node scripts/qualification/product-smoke.mjs $root[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Real installed Core startup failed' }
+          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Real Core desktop startup failed' }
+
       - name: Record successful lane identity
         shell: pwsh
         env:
@@ -262,6 +287,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
@@ -354,7 +380,7 @@ jobs:
       - name: Verify resource content/catalog against the assembled Core candidate
         shell: pwsh
         run: |
-          node scripts/ci/resource-release.mjs check "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
+          node scripts/ci/resource-release.mjs check "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json')
           if ($LASTEXITCODE -ne 0) { throw 'Resource transfer/compatibility/source mismatch' }
       - name: Verify all lane identities and assembled assets
         shell: pwsh
@@ -376,8 +402,13 @@ jobs:
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
           if ($manifest.appVersion -match '^\d+\.\d+\.\d+$') {
-            $cores = @(Get-ChildItem -LiteralPath $extractRoot -Directory)
+            $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
+            $coreExtract = Join-Path $env:RUNNER_TEMP 'final Core candidate'
+            Expand-Archive -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -DestinationPath $coreExtract
+            $cores = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
             if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
+            node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $cores[0].FullName $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
             ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
             if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
           }
@@ -394,7 +425,9 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/web-installer-build.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
 
       - name: Attest original resource archive and frozen catalog qualification
@@ -411,7 +444,7 @@ jobs:
         run: |
           Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-pack-provenance.json')
           Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-descriptor-qualification-provenance.json')
-          node scripts/ci/resource-release.mjs qualified "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
+          node scripts/ci/resource-release.mjs qualified "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json')
           if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proof validation failed' }
       - name: Upload original qualified resources (not publication authorization)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -444,7 +477,9 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/web-installer-build.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-provenance.json
           if-no-files-found: error

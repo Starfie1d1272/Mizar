@@ -17,7 +17,7 @@ namespace Mizar.WebInstaller {
     public long bytes;
     public string[] urls;
     public bool allowExecute, publicationRequired;
-    public string coreName, coreSha256, boxReadToken;
+    public string coreName, coreSha256, boxReadToken, updateManifestSha256;
     public long coreBytes;
     public void Validate() {
       if (schemaVersion != 1 || String.IsNullOrEmpty(version) ||
@@ -29,7 +29,7 @@ namespace Mizar.WebInstaller {
         throw new InvalidDataException("引导计划无效，或缺少正式安装授权。");
       if (allowExecute && (kind != "nsis-setup" ||
           !System.Text.RegularExpressions.Regex.IsMatch(version, @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$") ||
-          name != "Mizar-v" + version + "-Windows-x64-Setup.exe" ||
+          (name != "Mizar-v" + version + "-Windows-x64-Setup.exe" && name != "Mizar-v" + version + "-Windows-x64-Core-Setup.exe") ||
           gitSha == null || !System.Text.RegularExpressions.Regex.IsMatch(gitSha, "^[a-f0-9]{40}$") ||
           contentDigest == null || !System.Text.RegularExpressions.Regex.IsMatch(contentDigest, "^[a-f0-9]{64}$")))
         throw new InvalidDataException("固定 NSIS 安装授权不完整。");
@@ -42,8 +42,9 @@ namespace Mizar.WebInstaller {
   static class Publication {
     internal static void ValidatePlan(Plan plan) {
       plan.Validate();
+      if(plan.updateManifestSha256!=null && (!System.Text.RegularExpressions.Regex.IsMatch(plan.updateManifestSha256,"^[a-f0-9]{64}$") || plan.name!="Mizar-v"+plan.version+"-Windows-x64-Core-Setup.exe" || plan.coreName!="Mizar-v"+plan.version+"-Windows-x64-Core.zip")) throw new InvalidDataException("Core qualification pins are invalid");
       if (!plan.allowExecute || !plan.publicationRequired ||
-          plan.coreName != "Mizar-v" + plan.version + "-Windows-x64.zip" ||
+          (plan.coreName != "Mizar-v" + plan.version + "-Windows-x64.zip" && plan.coreName != "Mizar-v" + plan.version + "-Windows-x64-Core.zip") ||
           plan.coreBytes < 1 || plan.coreSha256 == null ||
           !System.Text.RegularExpressions.Regex.IsMatch(plan.coreSha256,"^[a-f0-9]{64}$") ||
           plan.urls.Length != 1 || plan.urls[0] != "https://github.com/Starfie1d1272/Mizar/releases/download/v" + plan.version + "/" + plan.name)
@@ -63,7 +64,7 @@ namespace Mizar.WebInstaller {
         throw new InvalidDataException("对应版本尚未正式公开发布。");
       var assets=(System.Collections.ArrayList)release["assets"];
       CheckAsset(assets,plan.name,plan.bytes,plan.sha256,plan.version);
-      CheckAsset(assets,plan.coreName,plan.coreBytes,plan.coreSha256,plan.version);
+      if(plan.updateManifestSha256==null) CheckAsset(assets,plan.coreName,plan.coreBytes,plan.coreSha256,plan.version);
     }
     static void CheckAsset(System.Collections.ArrayList assets,string name,long bytes,string sha,string version) {
       int matches=0;
@@ -154,22 +155,24 @@ namespace Mizar.WebInstaller {
       var manifest=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(System.Text.Encoding.UTF8.GetString(original));
       var publication=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(System.Text.Encoding.UTF8.GetString(published));
       var installer=(System.Collections.Generic.Dictionary<string,object>)manifest["installer"];
+      bool corePlan=plan.updateManifestSha256!=null;
       string digest;using(var sha=SHA256.Create()) digest=BitConverter.ToString(sha.ComputeHash(original)).Replace("-","").ToLowerInvariant();
       DateTimeOffset time;
-      if(!Object.Equals(manifest["repository"],"Starfie1d1272/Mizar") || !Object.Equals(manifest["schemaVersion"],"mizar.update.v1") || !Object.Equals(manifest["channel"],"stable") || !Object.Equals(manifest["version"],plan.version) || !Object.Equals(manifest["gitSha"],plan.gitSha) || !Object.Equals(installer["name"],plan.name) || Convert.ToInt64(installer["bytes"])!=plan.bytes || !Object.Equals(installer["sha256"],plan.sha256) || !Object.Equals(installer["contentDigest"],plan.contentDigest) || !Object.Equals(publication["schemaVersion"],"mizar.update-publication.v1") || !Object.Equals(publication["repository"],"Starfie1d1272/Mizar") || !Object.Equals(publication["version"],plan.version) || !Object.Equals(publication["gitSha"],plan.gitSha) || !Object.Equals(publication["manifestSha256"],digest) || Convert.ToInt64(publication["releaseId"])<1 || !DateTimeOffset.TryParse((string)publication["publishedAt"],out time) || time>DateTimeOffset.UtcNow) throw new InvalidDataException("镜像与固定资格版本不一致。");
+      if(!Object.Equals(manifest["repository"],"Starfie1d1272/Mizar") || !Object.Equals(manifest["schemaVersion"],"mizar.update.v1") || !Object.Equals(manifest["channel"],"stable") || !Object.Equals(manifest["version"],plan.version) || !Object.Equals(manifest["gitSha"],plan.gitSha) || (corePlan ? !Object.Equals(plan.updateManifestSha256,digest) : !Object.Equals(installer["name"],plan.name) || Convert.ToInt64(installer["bytes"])!=plan.bytes || !Object.Equals(installer["sha256"],plan.sha256) || !Object.Equals(installer["contentDigest"],plan.contentDigest)) || !Object.Equals(publication["schemaVersion"],"mizar.update-publication.v1") || !Object.Equals(publication["repository"],"Starfie1d1272/Mizar") || !Object.Equals(publication["version"],plan.version) || !Object.Equals(publication["gitSha"],plan.gitSha) || !Object.Equals(publication["manifestSha256"],digest) || Convert.ToInt64(publication["releaseId"])<1 || !DateTimeOffset.TryParse((string)publication["publishedAt"],out time) || time>DateTimeOffset.UtcNow) throw new InvalidDataException("镜像与固定资格版本不一致。");
     }
     internal static async Task<string> Resolve(Plan plan,HttpClient client,CancellationToken token) {
       if(String.IsNullOrEmpty(plan.boxReadToken)) throw new IOException("镜像只读合同缺失。");
       await Directory(client,plan,"/Updates",token);
       string index=await Link(client,plan,"/Updates/latest.json",token);
       CheckIndex(await Read(client,index,null,token),plan);
-      var entries=await Directory(client,plan,"/Stable",token);int count=0;
+      string folder=plan.updateManifestSha256!=null ? "/Runtime/v"+plan.version : "/Stable";
+      var entries=await Directory(client,plan,folder,token);int count=0;
       foreach(var item in (System.Collections.ArrayList)entries["dirent_list"]) {
         var entry=(System.Collections.Generic.Dictionary<string,object>)item;
         if(Object.Equals(entry["name"],plan.name)) {count++;if(!Object.Equals(entry["type"],"file") || Convert.ToInt64(entry["size"])!=plan.bytes) throw new InvalidDataException("镜像安装包不匹配。");}
       }
       if(count!=1) throw new IOException("镜像尚未同步该版本。");
-      return await Link(client,plan,"/Stable/"+plan.name,token);
+      return await Link(client,plan,folder+"/"+plan.name,token);
     }
   }
   public sealed class Downloader {

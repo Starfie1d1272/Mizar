@@ -1,3 +1,8 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineFile,
+} from '@mizar/resource-pack-contract/transport';
 import { createHash } from 'node:crypto';
 import { BoxSource } from './box.js';
 import { createVerifier, type Bundle, type BundleVerifier } from 'sigstore';
@@ -252,26 +257,27 @@ export class StableSource {
       return this.mirrorCandidate.manifest;
     }
     let manifest: UpdateManifest;
-    const indices = release.assets.filter((asset) => asset.name === 'update-index.json');
+    const carriers = release.assets.filter((asset) => asset.name === MACHINE_METADATA_NAME);
+    const indices = carriers.length
+      ? carriers
+      : release.assets.filter((asset) => asset.name === 'update-index.json');
+    const indexName = carriers.length ? MACHINE_METADATA_NAME : 'update-index.json';
+    const maximum = carriers.length ? MACHINE_METADATA_MAX_BYTES : 2 * 1024 * 1024;
     if (indices.length) {
       const asset = indices[0]!;
-      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/update-index.json`;
-      if (
-        indices.length !== 1 ||
-        asset.size > 2 * 1024 * 1024 ||
-        asset.browser_download_url !== url
-      )
+      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/${indexName}`;
+      if (indices.length !== 1 || asset.size > maximum || asset.browser_download_url !== url)
         throw new Error('update_asset_invalid');
-      const bytes = await boundedBytes(
-        await updateRequest(url, signal, this.fetcher),
-        2 * 1024 * 1024,
-      );
+      const bytes = await boundedBytes(await updateRequest(url, signal, this.fetcher), maximum);
       if (
         bytes.length !== asset.size ||
         asset.digest !== `sha256:${createHash('sha256').update(bytes).digest('hex')}`
       )
         throw new Error('update_metadata_corrupt');
-      const authenticated = await this.authenticateIndex(bytes, signal);
+      const authenticated = await this.authenticateIndex(
+        carriers.length ? readMachineFile(bytes, 'update-index.json') : bytes,
+        signal,
+      );
       if (
         authenticated.publication.releaseId !== release.id ||
         authenticated.publication.publishedAt !== release.published_at

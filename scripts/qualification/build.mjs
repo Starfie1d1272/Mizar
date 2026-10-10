@@ -16,7 +16,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import qualificationContract from '../../apps/companion/src/qualification/contract.json' with { type: 'json' };
 import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
@@ -208,13 +208,13 @@ async function listFiles(root, ignored = new Set()) {
   });
 }
 
-async function sha256File(path) {
+export async function sha256File(path) {
   const hash = createHash('sha256');
   for await (const chunk of (await import('node:fs')).createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 }
 
-async function contentDigest(bundleDir) {
+export async function contentDigest(bundleDir) {
   const files = await listFiles(
     bundleDir,
     new Set(['resources/metadata/artifact.json', 'resources/metadata/SHA256SUMS', 'state']),
@@ -272,7 +272,7 @@ async function restorePortableWorkspaceDependencySpecifiers(appDir) {
   await writeFile(deployedManifestPath, `${JSON.stringify(deployedManifest, null, 2)}\n`, 'utf8');
 }
 
-async function writeShaSums(bundleDir) {
+export async function writeShaSums(bundleDir) {
   const sumsPath = join(bundleDir, 'resources', 'metadata', 'SHA256SUMS');
   const files = await listFiles(bundleDir, new Set(['resources/metadata/SHA256SUMS', 'state']));
   const lines = [];
@@ -281,7 +281,7 @@ async function writeShaSums(bundleDir) {
   await writeFile(sumsPath, `${lines.join('\n')}\n`, 'utf8');
 }
 
-async function createArchive(bundleDir, outputRoot, bundleName) {
+export async function createArchive(bundleDir, outputRoot, bundleName) {
   const archivePath = join(outputRoot, `${bundleName}.zip`);
   if (process.platform === 'win32') {
     await runCommand('powershell.exe', [
@@ -581,9 +581,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `QUALIFICATION_BUILD_ERROR: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().catch((error) => {
+    console.error(
+      `QUALIFICATION_BUILD_ERROR: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = 1;
+  });

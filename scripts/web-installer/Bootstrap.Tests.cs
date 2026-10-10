@@ -38,6 +38,12 @@ namespace Mizar.WebInstaller {
       }
       string firstAsset=json.Substring(json.IndexOf("[{",StringComparison.Ordinal)+1,json.IndexOf("},{",StringComparison.Ordinal)-json.IndexOf("[{",StringComparison.Ordinal));
       bool duplicateDenied=false; try {Publication.Check(json.Replace("[{","["+firstAsset+",{"),plan);} catch {duplicateDenied=true;} Assert(duplicateDenied);
+      var corePlan=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Plan>(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(plan));
+      corePlan.name="Mizar-v9.0.0-Windows-x64-Core-Setup.exe";corePlan.coreName="Mizar-v9.0.0-Windows-x64-Core.zip";
+      corePlan.urls=new[]{"https://github.com/Starfie1d1272/Mizar/releases/download/v9.0.0/"+corePlan.name};corePlan.updateManifestSha256=new string('f',64);
+      Publication.Check(json.Replace(plan.name,corePlan.name),corePlan); // Core ZIP is not a consumer download.
+      corePlan.updateManifestSha256="invalid";
+      bool coreDenied=false;try{Publication.ValidatePlan(corePlan);}catch{coreDenied=true;}Assert(coreDenied);
       plan.publicationRequired=false;
       bool denied=false; try {Publication.ValidatePlan(plan);} catch {denied=true;} Assert(denied);
     }

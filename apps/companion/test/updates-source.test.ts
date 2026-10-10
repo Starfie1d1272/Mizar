@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  makeMachineMetadata,
+  MACHINE_METADATA_NAME,
+} from '@mizar/resource-pack-contract/transport';
 import { createVerifier } from 'sigstore';
 import { readFile } from 'node:fs/promises';
 import { bundleFromJSON } from '@sigstore/bundle';
@@ -498,7 +502,8 @@ it('authenticates the real v1.1 dual signatures transported in the GitHub envelo
   };
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = fetchUrl(input);
-    if (url.endsWith('/update-index.json')) return Promise.resolve(new Response(carrier));
+    if (url.endsWith('/update-index.json') || url.endsWith('/' + MACHINE_METADATA_NAME))
+      return Promise.resolve(new Response(carrier));
     if (url.endsWith(`/git/ref/tags/v${manifest.version}`))
       return Promise.resolve(Response.json({ object: { type: 'commit', sha: manifest.gitSha } }));
     throw new Error(`unexpected request: ${url}`);
@@ -530,6 +535,21 @@ it('authenticates the real v1.1 dual signatures transported in the GitHub envelo
       ([input]) => new URL(fetchUrl(input)).hostname === 'box.nju.edu.cn',
     ),
   ).toBe(true);
+  // The transport preserves the same real SDK proofs; it adds no trust root.
+  const originalAsset = { ...release.assets[0]! };
+  carrier = makeMachineMetadata(new Map([['update-index.json', indexBytes]]));
+  release.assets[0] = {
+    name: MACHINE_METADATA_NAME,
+    size: carrier.length,
+    digest: 'sha256:' + createHash('sha256').update(carrier).digest('hex'),
+    browser_download_url: originalAsset.browser_download_url.replace(
+      'update-index.json',
+      MACHINE_METADATA_NAME,
+    ),
+  };
+  expect(await source.authenticate(release, signal)).toEqual(manifest);
+  carrier = Buffer.from(indexBytes);
+  release.assets[0] = originalAsset;
   for (const mutate of [
     (value: typeof index) => {
       value.manifestBase64 = Buffer.from('{}').toString('base64');

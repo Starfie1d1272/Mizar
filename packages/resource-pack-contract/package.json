@@ -18,6 +18,10 @@
     "./attestation": {
       "types": "./dist/attestation.d.ts",
       "import": "./dist/attestation.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "import": "./dist/transport.js"
     }
   },
   "scripts": {

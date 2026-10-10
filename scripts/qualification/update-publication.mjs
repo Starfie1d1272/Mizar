@@ -1,3 +1,8 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineFile,
+} from '../../packages/resource-pack-contract/transport.mjs';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
@@ -77,10 +82,16 @@ async function verifyExistingPublication(release, identity, product) {
   if (!/^v\d+\.\d+\.\d+$/.test(identity.tag)) return;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-publication-'));
   try {
-    const indexAssets = release.assets.filter((a) => a.name === 'update-index.json');
+    const carriers = release.assets.filter((a) => a.name === MACHINE_METADATA_NAME);
+    const indexName = carriers.length ? MACHINE_METADATA_NAME : 'update-index.json';
+    const indexAssets = carriers.length
+      ? carriers
+      : release.assets.filter((a) => a.name === 'update-index.json');
     if (indexAssets.length) {
       requireValue(
-        indexAssets.length === 1 && indexAssets[0].size > 0 && indexAssets[0].size <= 2097152,
+        indexAssets.length === 1 &&
+          indexAssets[0].size > 0 &&
+          indexAssets[0].size <= (carriers.length ? MACHINE_METADATA_MAX_BYTES : 2097152),
         '更新信封不唯一或超限',
       );
       execFileSync(
@@ -92,18 +103,19 @@ async function verifyExistingPublication(release, identity, product) {
           '--repo',
           repository,
           '--pattern',
-          'update-index.json',
+          indexName,
           '--dir',
           directory,
         ],
         { stdio: 'pipe', timeout: 60000 },
       );
-      const bytes = await readFile(join(directory, 'update-index.json'));
+      const transport = await readFile(join(directory, indexName));
+      const bytes = carriers.length ? readMachineFile(transport, 'update-index.json') : transport;
       assertPublishedAssets(
         release,
         { object: { type: 'commit', sha: identity.gitSha } },
         identity,
-        [{ name: 'update-index.json', size: bytes.length, sha256: sha256(bytes) }],
+        [{ name: indexName, size: transport.length, sha256: sha256(transport) }],
       );
       const index = JSON.parse(bytes);
       requireValue(index.schemaVersion === 'mizar.update-index.v2', '更新信封格式无效');

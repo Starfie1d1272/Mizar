@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer';
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { qualifiedUpdateManifest } from '../qualification/update-manifest.mjs';
 import { qualificationPlan } from './qualification-plan.mjs';
 
 let root;
@@ -38,7 +39,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
   root = await mkdtemp(join(tmpdir(), 'mizar installer candidate '));
   const product = join(root, 'assembled');
   const extracted = join(root, 'final candidate');
-  const bundleName = 'Mizar-v1.1.0-Windows-x64';
+  const bundleName = 'Mizar-v1.1.0-Windows-x64-Core';
   const core = join(extracted, bundleName);
   await mkdir(product, { recursive: true });
   const files = new Map(
@@ -76,6 +77,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
     productSchemaVersion: 1,
     desktopHost: 'tauri2',
     platform: 'win32-x64',
+    resourceMode: 'core',
     developmentOnly: false,
     desktopBuildProfile: 'release',
     appVersion: '1.1.0',
@@ -105,7 +107,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
     ]);
   else execFileSync('zip', ['-q', '-r', archive, bundleName], { cwd: extracted });
   const archiveSha256 = sha(await readFile(archive));
-  const name = 'Mizar-v1.1.0-Windows-x64-Setup.exe';
+  const name = 'Mizar-v1.1.0-Windows-x64-Core-Setup.exe';
   const nsis = Buffer.from('NSIS identity contract fixture; never executed');
   await writeFile(join(product, name), nsis);
   await writeFile(
@@ -113,7 +115,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
     JSON.stringify({
       appVersion: '1.1.0',
       gitSha: context.sha,
-      archive: bundleName + '.zip',
+      archive: 'Mizar-v1.1.0-Windows-x64.zip',
       archiveSha256,
       contentDigest,
       desktopBuildProfile: 'release',
@@ -128,10 +130,34 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
       originalArchiveSha256: archiveSha256,
       contentDigest,
       format: 'nsis-setup',
-      archive: name,
+      archive: 'Mizar-v1.1.0-Windows-x64-Setup.exe',
       archiveSha256: sha(nsis),
       archiveBytes: nsis.length,
     }),
+  );
+  await expect(
+    qualificationPlan(product, core, context, context.sha, context.sha),
+  ).rejects.toThrow();
+  const full = JSON.parse(await readFile(join(product, 'release-manifest.json')));
+  await writeFile(
+    join(product, 'core-release-manifest.json'),
+    JSON.stringify({
+      ...full,
+      resourceMode: 'core',
+      archive: bundleName + '.zip',
+      derivedFrom: { archiveSha256: full.archiveSha256 },
+    }),
+  );
+  const originalDistribution = JSON.parse(
+    await readFile(join(product, 'distribution-manifest.json')),
+  );
+  await writeFile(
+    join(product, 'core-distribution-manifest.json'),
+    JSON.stringify({ ...originalDistribution, archive: name }),
+  );
+  await writeFile(
+    join(product, 'update-manifest.json'),
+    JSON.stringify(await qualifiedUpdateManifest(product), null, 2) + '\n',
   );
   const plan = await qualificationPlan(product, core, context, context.sha, context.sha);
   expect(plan).toMatchObject({

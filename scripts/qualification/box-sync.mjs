@@ -1,3 +1,8 @@
+import {
+  MACHINE_METADATA_NAME,
+  MACHINE_METADATA_MAX_BYTES,
+  readMachineMetadata,
+} from '../../packages/resource-pack-contract/transport.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, appendFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -328,14 +333,14 @@ export async function syncStable(options) {
 export async function syncBootstrap(options) {
   return syncPackage(options, '/Stable', bootstrapPattern);
 }
-export async function syncResourceFiles({ box, version, files }) {
+export async function syncResourceFiles({ box, version, files, metadataInRuntime = false }) {
   requireValue(/^\d+\.\d+\.\d+$/.test(version), '资源镜像版本无效');
   const zip = files.filter((f) => /^Mizar-official-epl-default-\d+\.\d+\.\d+\.zip$/.test(f.name));
-  const expected = [...Object.values(resourceNames), zip[0]?.name];
+  const expected = [...(metadataInRuntime ? [] : Object.values(resourceNames)), zip[0]?.name];
   requireValue(
     zip.length === 1 &&
-      files.length === 8 &&
-      new Set(files.map((f) => f.name)).size === 8 &&
+      files.length === expected.length &&
+      new Set(files.map((f) => f.name)).size === expected.length &&
       files.every(
         (f) =>
           expected.includes(f.name) && f.bytes.length === f.size && digest(f.bytes) === f.sha256,
@@ -370,6 +375,46 @@ export async function syncResourceFiles({ box, version, files }) {
   }
   for (const file of files) await verifyRemote(box, `${folder}/${file.name}`, file);
 }
+export async function syncRuntimeFiles({ box, version, files }) {
+  requireValue(
+    /^\d+\.\d+\.\d+$/.test(version) &&
+      files.length === 2 &&
+      new Set(files.map((f) => f.name)).size === 2 &&
+      files.some((f) => f.name === MACHINE_METADATA_NAME) &&
+      files.some((f) => f.name === `Mizar-v${version}-Windows-x64-Core-Setup.exe`) &&
+      files.every((f) => f.bytes.length === f.size && digest(f.bytes) === f.sha256),
+    'Invalid immutable Runtime files',
+  );
+  readMachineMetadata(files.find((f) => f.name === MACHINE_METADATA_NAME).bytes);
+  const root = await box.list('/');
+  const runtime = root.filter((e) => e.name === 'Runtime');
+  requireValue(
+    runtime.length <= 1 && (!runtime.length || runtime[0].type === 'dir'),
+    'Invalid Runtime directory',
+  );
+  if (!runtime.length) await box.api('dir', '/Runtime', 'POST', { operation: 'mkdir' });
+  const versionName = 'v' + version;
+  const versions = (await box.list('/Runtime')).filter((e) => e.name === versionName);
+  requireValue(
+    versions.length <= 1 && (!versions.length || versions[0].type === 'dir'),
+    'Invalid Runtime version',
+  );
+  const folder = '/Runtime/' + versionName;
+  if (!versions.length) await box.api('dir', folder, 'POST', { operation: 'mkdir' });
+  const existing = await box.list(folder);
+  requireValue(
+    new Set(existing.map((e) => e.name)).size === existing.length &&
+      existing.every((e) => e.type === 'file' && files.some((f) => f.name === e.name)),
+    'Unexpected Runtime content',
+  );
+  for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
+    await verifyRemote(box, folder + '/' + file.name, file);
+  for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
+    await box.upload(folder, file.name, file.bytes);
+    await verifyRemote(box, folder + '/' + file.name, file);
+  }
+  for (const file of files) await verifyRemote(box, folder + '/' + file.name, file);
+}
 export async function syncOffline(options) {
   return syncPackage(options, '/Offline', offlinePattern);
 }
@@ -383,6 +428,7 @@ export async function syncStableRelease({
   bootstrap,
   resources,
   updateIndex,
+  runtime,
 }) {
   requireValue(
     offline?.identity && offline.bytes && offline.resolveIdentity,
@@ -402,7 +448,14 @@ export async function syncStableRelease({
       '轻量安装器必须是同源同版正式原资产',
     );
   await box.initialize();
-  if (resources) await syncResourceFiles({ box, version: identity.version, files: resources });
+  if (runtime) await syncRuntimeFiles({ box, version: identity.version, files: runtime });
+  if (resources)
+    await syncResourceFiles({
+      box,
+      version: identity.version,
+      files: resources,
+      metadataInRuntime: Boolean(runtime),
+    });
   await syncOffline({ box, ...offline });
   const result = await syncStable({ box, identity, bytes, resolveIdentity });
   if (bootstrap) await syncBootstrap({ box, ...bootstrap });
@@ -415,6 +468,9 @@ export async function syncStableRelease({
   if (resources)
     for (const file of resources)
       await verifyRemote(box, `/Resources/v${identity.version}/${file.name}`, file);
+  if (runtime)
+    for (const file of runtime)
+      await verifyRemote(box, `/Runtime/v${identity.version}/${file.name}`, file);
   const root = await box.list('/');
   const updates = root.find((e) => e.name === 'Updates');
   requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
@@ -502,8 +558,28 @@ async function releaseIdentity(tag) {
   const release = await github(`releases/tags/${tag}`);
   const ref = await github(`git/ref/tags/${tag}`);
   requireValue(ref.object.type === 'commit', '发布标签必须直接指向已验源码');
-  const manifestBytes = await downloadReleaseAsset(release, tag, 'release-manifest.json');
-  const distributionBytes = await downloadReleaseAsset(release, tag, 'distribution-manifest.json');
+  const carrier = release.assets.some((a) => a.name === MACHINE_METADATA_NAME)
+    ? await downloadReleaseAsset(release, tag, MACHINE_METADATA_NAME, MACHINE_METADATA_MAX_BYTES)
+    : undefined;
+  const originals = carrier ? readMachineMetadata(carrier) : undefined;
+  requireValue(
+    !originals ||
+      [
+        'release-manifest.json',
+        'distribution-manifest.json',
+        'core-release-manifest.json',
+        'core-distribution-manifest.json',
+        'update-index.json',
+        ...Object.values(resourceNames),
+      ].every((name) => originals.has(name)),
+    'Carrier is missing required original machine bytes',
+  );
+  const manifestBytes =
+    originals?.get('release-manifest.json') ??
+    (await downloadReleaseAsset(release, tag, 'release-manifest.json'));
+  const distributionBytes =
+    originals?.get('distribution-manifest.json') ??
+    (await downloadReleaseAsset(release, tag, 'distribution-manifest.json'));
   const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-source-'));
   try {
     for (const [name, bytes] of [
@@ -525,6 +601,72 @@ async function releaseIdentity(tag) {
   identity.offline = validateOfflineRelease(release, manifest, tag, ref.object.sha);
   identity.release = release;
   identity.manifest = manifest;
+  if (originals) {
+    const coreBytes = originals.get('core-release-manifest.json'),
+      coreDistributionBytes = originals.get('core-distribution-manifest.json');
+    requireValue(coreBytes && coreDistributionBytes, 'Missing Core machine metadata');
+    const core = JSON.parse(coreBytes),
+      distribution = JSON.parse(coreDistributionBytes);
+    requireValue(
+      core.resourceMode === 'core' &&
+        !core.developmentOnly &&
+        core.desktopBuildProfile === 'release' &&
+        core.gitSha === manifest.gitSha &&
+        core.appVersion === manifest.appVersion &&
+        core.derivedFrom?.archiveSha256 === manifest.archiveSha256 &&
+        core.archive === `Mizar-v${identity.version}-Windows-x64-Core.zip` &&
+        distribution.archive === `Mizar-v${identity.version}-Windows-x64-Core-Setup.exe` &&
+        distribution.originalArchiveSha256 === core.archiveSha256 &&
+        distribution.contentDigest === core.contentDigest &&
+        distribution.gitSha === core.gitSha &&
+        distribution.appVersion === core.appVersion,
+      'Core and Full identities differ',
+    );
+    const temp = await mkdtemp(join(tmpdir(), 'mizar-core-publication-proof-'));
+    try {
+      for (const [name, data] of [
+        ['core-release-manifest.json', coreBytes],
+        ['core-distribution-manifest.json', coreDistributionBytes],
+      ]) {
+        await writeFile(join(temp, name), data);
+        await promisify(execFile)('gh', releaseAttestationArgs(join(temp, name), core.gitSha));
+      }
+      const backend = await downloadReleaseAsset(
+        release,
+        tag,
+        distribution.archive,
+        distribution.archiveBytes,
+      );
+      requireValue(
+        digest(backend) === distribution.archiveSha256 &&
+          backend.length === distribution.archiveBytes,
+        'Core backend original bytes differ',
+      );
+      await writeFile(join(temp, distribution.archive), backend);
+      await promisify(execFile)(
+        'gh',
+        releaseAttestationArgs(join(temp, distribution.archive), core.gitSha),
+      );
+      identity.runtime = [
+        {
+          name: MACHINE_METADATA_NAME,
+          size: carrier.length,
+          sha256: digest(carrier),
+          bytes: carrier,
+        },
+        {
+          name: distribution.archive,
+          size: backend.length,
+          sha256: digest(backend),
+          bytes: backend,
+        },
+      ];
+      identity.core = core;
+      identity.originals = originals;
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  }
   const bootstrapName = `Mizar-v${identity.version}-Windows-x64-WebInstaller.exe`;
   if (release.assets.some((a) => a.name === bootstrapName)) {
     const data = await downloadReleaseAsset(release, tag, bootstrapName, 16777216);
@@ -596,9 +738,10 @@ async function main() {
   );
   let updateIndex;
   const indexAsset = release.assets.filter((a) => a.name === 'update-index.json');
-  if (indexAsset.length) {
-    requireValue(indexAsset.length === 1, '更新信封不唯一');
-    updateIndex = await downloadReleaseAsset(release, tag, 'update-index.json', 2097152);
+  if (identity.originals) updateIndex = identity.originals.get('update-index.json');
+  if (indexAsset.length || updateIndex) {
+    requireValue(updateIndex || indexAsset.length === 1, '更新信封不唯一');
+    updateIndex ??= await downloadReleaseAsset(release, tag, 'update-index.json', 2097152);
     const index = JSON.parse(updateIndex);
     requireValue(index.schemaVersion === 'mizar.update-index.v2', '更新信封格式无效');
     const extracted = [
@@ -692,18 +835,19 @@ async function main() {
     }
   }
   let resources;
-  if (release.assets.some((a) => a.name === resourceNames.descriptor)) {
+  if (identity.originals || release.assets.some((a) => a.name === resourceNames.descriptor)) {
     const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-resources-'));
     try {
       for (const name of Object.values(resourceNames))
         await writeFile(
           join(directory, name),
-          await downloadReleaseAsset(
-            release,
-            tag,
-            name,
-            name.includes('provenance') ? 2097152 : 65536,
-          ),
+          identity.originals?.get(name) ??
+            (await downloadReleaseAsset(
+              release,
+              tag,
+              name,
+              name.includes('provenance') ? 2097152 : 65536,
+            )),
         );
       const descriptor = JSON.parse(await readFile(join(directory, resourceNames.descriptor)));
       const name = descriptor.resources?.[0]?.archive?.name;
@@ -715,12 +859,14 @@ async function main() {
         join(directory, name),
         await downloadReleaseAsset(release, tag, name, LIMITS.archiveBytes),
       );
-      await verifyPublishedResources(directory, identity.manifest);
+      await verifyPublishedResources(directory, identity.core ?? identity.manifest);
       resources = await Promise.all(
-        (await resourceAssetInventory(directory, identity.manifest, true)).map(async (file) => ({
-          ...file,
-          bytes: await readFile(join(directory, file.name)),
-        })),
+        (await resourceAssetInventory(directory, identity.core ?? identity.manifest, true)).map(
+          async (file) => ({
+            ...file,
+            bytes: await readFile(join(directory, file.name)),
+          }),
+        ),
       );
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -730,6 +876,7 @@ async function main() {
     box,
     identity,
     bytes,
+    runtime: identity.runtime,
     resolveIdentity: releaseIdentity,
     offline: {
       identity: identity.offline,
@@ -743,7 +890,7 @@ async function main() {
           resolveIdentity: async (tag) => (await releaseIdentity(tag)).bootstrap,
         }
       : undefined,
-    resources,
+    resources: identity.runtime ? resources.filter((f) => f.name.endsWith('.zip')) : resources,
     updateIndex,
   });
 }

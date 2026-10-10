@@ -80,7 +80,7 @@ try {
     signal.throwIfAborted();
     ({ authorization, inputs } = await authenticatePublishedBootstrap({
       version: artifact.appVersion,
-      expectedCore: nativePlan,
+      expectedCore: { ...nativePlan, coreMode: artifact.resourceMode === 'core' },
       tufCachePath,
       signal,
     }));
