@@ -55,6 +55,38 @@ async function render() {
 }
 
 describe('CS2 configuration progress', () => {
+  it('saves the explicit number-key choice and shows a skipped-preset reason without reporting success', async () => {
+    await render();
+    const select =
+      container.querySelector<HTMLSelectElement>('select[aria-label="数字键观战"]') ??
+      [...container.querySelectorAll('select')].find((element) =>
+        element.querySelector('option[value="enabled"]'),
+      )!;
+    expect(select.value).toBe('preserve');
+    await act(async () => {
+      select.value = 'enabled';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      container
+        .querySelector('form')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
+      qualityPreset: 'preserve',
+      frameRateLimit: 60,
+      spectatorNumberKeys: true,
+    });
+    await poll({
+      ...idle,
+      spectatorNumberKeys: true,
+      spectatorWarning: '原值缺失，数字键预设未应用。',
+    });
+    expect(container.textContent).toContain('原值缺失，数字键预设未应用。');
+  });
+
   it('preserves an unsaved draft after a failed save and allows retry', async () => {
     await render();
     const select = container.querySelector('select')!;
@@ -127,6 +159,7 @@ describe('CS2 configuration progress', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
       qualityPreset: 'preserve',
       frameRateLimit: 0,
+      spectatorNumberKeys: false,
     });
     expect(container.textContent).toContain('已保存，下次启动生效。');
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'start_managed_cs2')).toBe(

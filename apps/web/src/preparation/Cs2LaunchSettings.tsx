@@ -16,7 +16,7 @@ export function Cs2LaunchSettings() {
   const qualityLabels = { 'very-high': '最高', high: '高', medium: '中', preserve: '保留原画质' };
   const [draft, setDraft] = useState<Pick<
     Cs2ConfigStatus,
-    'qualityPreset' | 'frameRateLimit'
+    'qualityPreset' | 'frameRateLimit' | 'spectatorNumberKeys'
   > | null>(null);
   const [saved, setSaved] = useState(false);
   const preferences = draft ?? status;
@@ -24,7 +24,8 @@ export function Cs2LaunchSettings() {
     draft &&
     status &&
     (draft.qualityPreset !== status.qualityPreset ||
-      draft.frameRateLimit !== status.frameRateLimit),
+      draft.frameRateLimit !== status.frameRateLimit ||
+      Boolean(draft.spectatorNumberKeys) !== Boolean(status.spectatorNumberKeys)),
   );
   function edit(next: NonNullable<typeof draft>) {
     setDraft(next);
@@ -40,6 +41,7 @@ export function Cs2LaunchSettings() {
       await desktopInvoke('set_cs2_preferences', {
         qualityPreset: preferences.qualityPreset,
         frameRateLimit: preferences.frameRateLimit,
+        spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
       });
       setSaved(true);
       refresh();
@@ -68,6 +70,7 @@ export function Cs2LaunchSettings() {
               onChange={(event) => {
                 if (preferences)
                   edit({
+                    spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
                     qualityPreset: event.target.value as Cs2ConfigStatus['qualityPreset'],
                     frameRateLimit: preferences.frameRateLimit,
                   });
@@ -87,6 +90,7 @@ export function Cs2LaunchSettings() {
                 if (preferences)
                   edit({
                     qualityPreset: preferences.qualityPreset,
+                    spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
                     frameRateLimit: Number(event.target.value) as Cs2ConfigStatus['frameRateLimit'],
                   });
               }}
@@ -95,7 +99,25 @@ export function Cs2LaunchSettings() {
               <option value={30}>30 帧／秒（省资源）</option>
               <option value={0}>不限帧（可能导致雷达卡顿）</option>
             </Select>
+            <Select
+              label="数字键观战"
+              value={preferences?.spectatorNumberKeys ? 'enabled' : 'preserve'}
+              disabled={disabled}
+              onChange={(event) => {
+                if (preferences)
+                  edit({ ...preferences, spectatorNumberKeys: event.target.value === 'enabled' });
+              }}
+            >
+              <option value="preserve">保留原设置</option>
+              <option value="enabled">下次启动使用原始数字键</option>
+            </Select>
           </div>
+          <p>
+            数字键预设只调整观战设置，保留个人绑定。停止本次游戏后恢复已备份原值；原值缺失或发现配置镜像时不会应用。保留原设置进入工作台时不应用此预设。
+          </p>
+          {status?.spectatorWarning ? (
+            <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
+          ) : null}
           <p>默认 60 帧／秒，为雷达与 OBS 留出图形资源。30 帧／秒适合资源紧张或 30 帧播出。</p>
           {preferences?.frameRateLimit === 0 ? (
             <StatusBanner tone="danger">

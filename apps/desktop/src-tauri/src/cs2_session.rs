@@ -189,8 +189,11 @@ impl SessionStore {
     }
     pub fn prepare_preserved(&self, video: &Path, executable: &Path) -> Result<Value, String> {
         self.backup_originals(video)?;
-        let value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
+        let mut value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
             "launchAttempted":false,"pid":null,"created":null});
+        if self.preferences()?.spectator_number_keys {
+            value["spectatorWarning"] = json!("本次保留原游戏设置，未应用数字键观战预设。");
+        }
         self.save(&value)?;
         Ok(value)
     }
@@ -209,9 +212,19 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        let frames =
-            cs2_frame_rate::prepare(video, executable, self.preferences()?.frame_rate_limit)?;
-        self.prepare_files(video, executable, size, Some(frames))
+        let preferences = self.preferences()?;
+        let mut frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
+        let warning = if preferences.spectator_number_keys {
+            crate::cs2_spectator::prepare(&mut frames, video).err()
+        } else {
+            None
+        };
+        let mut journal = self.prepare_files(video, executable, size, Some(frames))?;
+        if let Some(warning) = warning {
+            journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"));
+            self.save(&journal)?;
+        }
+        Ok(journal)
     }
     fn prepare_files(
         &self,
@@ -432,6 +445,139 @@ mod tests {
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
     }
+    #[test]
+    fn number_key_preset_restores_original_without_touching_custom_or_absent_bindings() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original = "\"config\" {\"convars\" {\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"0\" \"other\" \"old\"}}";
+        fs::write(&machine, original).unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\"}}";
+        fs::write(&keys, bindings).unwrap();
+        let mut preferences = store.preferences().unwrap();
+        preferences.spectator_number_keys = true;
+        store.set_preferences(preferences).unwrap();
+        let journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(journal["frameRateFiles"][0]["spectatorNumberKeys"], true);
+        let applied = fs::read_to_string(&machine).unwrap();
+        assert!(applied.contains("\"spec_usenumberkeys_nobinds\" \"true\""));
+        fs::write(
+            &machine,
+            applied
+                .replace("\"true\"", "\"1\"")
+                .replace("\"old\"", "\"new\""),
+        )
+        .unwrap();
+        store.restore().unwrap();
+        assert_eq!(
+            fs::read_to_string(&machine).unwrap(),
+            original.replace("\"old\"", "\"new\"")
+        );
+        assert_eq!(fs::read_to_string(keys).unwrap(), bindings);
+        assert!(!video
+            .parent()
+            .unwrap()
+            .join("cs2_user_keys_0_slot1.vcfg")
+            .exists());
+        assert!(store.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_number_key_value_skips_preset_and_cloud_mirror_blocks_restoration() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let mut preferences = store.preferences().unwrap();
+        preferences.spectator_number_keys = true;
+        store.set_preferences(preferences).unwrap();
+        let size = cs2_video::VideoSize::new(1440, 810).unwrap();
+        let skipped = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert!(skipped["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("未应用"));
+        assert!(!fs::read_to_string(&machine)
+            .unwrap()
+            .contains("spec_usenumberkeys_nobinds"));
+        store.restore().unwrap();
+        fs::write(
+            &machine,
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}",
+        )
+        .unwrap();
+        store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        let before = fs::read(&machine).unwrap();
+        let remote = video
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("remote");
+        fs::create_dir_all(&remote).unwrap();
+        let mirror = remote.join("cs2_user_convars.vcfg");
+        let cloud = "\"config\" {\"convars\" {\"spec_usenumberkeys_nobinds\" \"true\"}}";
+        fs::write(&mirror, cloud).unwrap();
+        assert!(store.restore().unwrap_err().contains("镜像"));
+        assert!(store.load().unwrap().is_some());
+        assert_eq!(fs::read(&machine).unwrap(), before);
+        assert_eq!(fs::read_to_string(&mirror).unwrap(), cloud);
+        fs::remove_file(mirror).unwrap();
+        store.restore().unwrap();
+        assert!(fs::read_to_string(&machine)
+            .unwrap()
+            .contains("\"spec_usenumberkeys_nobinds\" \"false\""));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn personal_startup_override_skips_preset_and_preserved_launch_never_applies_it() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original =
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}";
+        fs::write(&machine, original).unwrap();
+        let mut preferences = store.preferences().unwrap();
+        preferences.spectator_number_keys = true;
+        store.set_preferences(preferences).unwrap();
+        fs::write(
+            root.join("game/csgo/cfg/auto.cfg"),
+            "fps_max 0; spec_usenumberkeys_nobinds false\n",
+        )
+        .unwrap();
+        let journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert!(journal["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("CFG"));
+        assert!(fs::read_to_string(&machine)
+            .unwrap()
+            .contains("\"spec_usenumberkeys_nobinds\" \"false\""));
+        store.restore().unwrap();
+        let preserved = store.prepare_preserved(&video, &executable).unwrap();
+        assert!(preserved["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("未应用"));
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        store.restore().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn frame_rate_startup_override_and_crash_recovery_restore_exact_user_config() {
         for limit in [60, 30, 0] {

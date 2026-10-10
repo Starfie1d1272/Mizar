@@ -5,6 +5,7 @@ mod cs2_diagnostics;
 mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
+mod cs2_spectator;
 mod cs2_video;
 mod desktop_worker;
 mod geometry;
@@ -547,8 +548,10 @@ async fn set_cs2_preferences(
     app: tauri::AppHandle,
     quality_preset: String,
     frame_rate_limit: u16,
+    spectator_number_keys: Option<bool>,
 ) -> Result<(), String> {
-    let preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
+    let mut preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
+    preferences.spectator_number_keys = spectator_number_keys.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;

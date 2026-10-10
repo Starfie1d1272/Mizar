@@ -165,3 +165,8 @@ Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](https://github.c
 安装版的数据目录与自动准备所有权边界见 [ADR-0048](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0048-installed-state-and-safe-preparation.md)：安装版使用当前用户数据目录，便携模式保持原路径；自动 GSI 不取得未知文件所有权，OBS 重连不覆盖手动配置。
 
 本机支持包按有限尾部读取桌面、监督器和服务日志，并读取宿主实际轮转的 `desktop.<序号>.ndjson`；兼容旧尾缀命名。窗口加载成功在宿主按累计次数的二次幂采样，在导出时按启动会话聚合；失败和告警优先占用有限事件窗口，保留已知阶段的脱敏原始原因。日志尾部之外的历史仍受读取上限约束，聚合不保证无限保留。素材缓存打开与复验证失败写入既有服务日志，不改变 Full 回退或资源激活规则。
+
+
+### 最小数字键观战预设
+
+显式可选的原始数字键预设沿用 `cs2_session` 的同一 pending journal，在既有 machine convars 的 original/applied 记录上标记单一观战字段所有权；不增加恢复 owner、不重写个人绑定、不生成长期 autoexec，也不开放任意控制台。受管理冷启动使用固定白名单参数，保留原设置启动不应用预设。缺失原值、个人启动配置覆盖或发现用户/remote/lastclouded 镜像时不接管；恢复重新核对镜像和原值，只恢复受管字段，错误保留 pending。配置与镜像探测为有界只读，不日志输出私人字段。协议表示的是保存的预设选择，不能据此宣称实际游戏已经成功切换 POV；Windows/CS2/Steam Cloud 验收仍独立记录。

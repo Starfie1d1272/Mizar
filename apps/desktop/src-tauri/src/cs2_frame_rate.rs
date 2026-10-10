@@ -11,10 +11,10 @@ const FILE_LIMIT: usize = 256 * 1024;
 const TOTAL_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
-struct Token {
-    value: String,
-    start: usize,
-    end: usize,
+pub(crate) struct Token {
+    pub(crate) value: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
     quoted: bool,
 }
 
@@ -90,7 +90,7 @@ fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
     Ok(result)
 }
 
-fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String> {
+pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String> {
     fn walk(
         tokens: &[Token],
         i: &mut usize,
@@ -323,6 +323,7 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
     let mut includes = vec![("autoexec.cfg".to_string(), true)];
     let mut aliases = BTreeSet::new();
     let mut commands = BTreeSet::new();
+    let mut spectator_startup_conflict = false;
     if localconfig.exists() {
         // Read only. Never put this file, its other fields, or tokens in a journal.
         let local = read_bounded(&localconfig, 16 * 1024 * 1024)?;
@@ -338,6 +339,10 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
                 "LaunchOptions",
             ],
         )? {
+            spectator_startup_conflict |= options
+                .value
+                .to_ascii_lowercase()
+                .contains("spec_usenumberkeys_nobinds");
             let tokens = lex(&options.value, true)?;
             for (index, token) in tokens.iter().enumerate() {
                 if let Some(command) = token.value.strip_prefix('+') {
@@ -396,6 +401,9 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
             return Err("CS2 启动配置引用过多，未修改游戏设置。".into());
         }
         let original = read_bounded(&path, FILE_LIMIT)?;
+        spectator_startup_conflict |= original
+            .to_ascii_lowercase()
+            .contains("spec_usenumberkeys_nobinds");
         total += original.len();
         if total > TOTAL_LIMIT {
             return Err("CS2 启动配置总量超过上限。".into());
@@ -412,6 +420,9 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
     }
     if !aliases.is_disjoint(&commands) {
         return Err("启动配置调用了自定义别名，无法保证帧率上限，请改为直接命令后重试。".into());
+    }
+    if spectator_startup_conflict {
+        files[0]["spectatorStartupConflict"] = json!(true);
     }
     Ok(files)
 }
@@ -438,7 +449,13 @@ pub fn validated<'a>(
             {
                 return Err("帧率恢复路径无效。".into());
             }
-            patch_convars(original, limit)?
+            let patched = patch_convars(original, limit)?;
+            if spectator_owned(record)? {
+                crate::cs2_spectator::check_archive(video)?;
+                crate::cs2_spectator::apply(&patched)?
+            } else {
+                patched
+            }
         }
         Some("cfg") => {
             let root = cfg_root(executable)?;
@@ -461,6 +478,15 @@ pub fn validated<'a>(
     Ok((path, original, applied))
 }
 
+fn spectator_owned(record: &Value) -> Result<bool, String> {
+    match record.get("spectatorNumberKeys") {
+        None => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "观战配置恢复记录无效。".into()),
+    }
+}
+
 pub fn restored(record: &Value, current: &str) -> Result<String, String> {
     let original = record["original"].as_str().ok_or("原帧率备份缺失。")?;
     let applied = record["applied"].as_str().ok_or("帧率应用记录缺失。")?;
@@ -472,7 +498,11 @@ pub fn restored(record: &Value, current: &str) -> Result<String, String> {
         let now = fps_field(current)?;
         let mut result = current.to_string();
         result.replace_range(now.start..now.end, &original[before.start..before.end]);
-        Ok(result)
+        if spectator_owned(record)? {
+            crate::cs2_spectator::restore(original, &result)
+        } else {
+            Ok(result)
+        }
     } else {
         Err("本次启动配置已被外部修改，请检查帧率备份后重试恢复。".into())
     }

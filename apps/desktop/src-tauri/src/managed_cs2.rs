@@ -375,7 +375,7 @@ impl ManagedCs2 {
             .is_some();
         let preferences = self.store.preferences()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "spectatorNumberKeys":preferences.spectator_number_keys, "spectatorWarning":pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -522,6 +522,11 @@ impl ManagedCs2 {
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
                 ]);
+                if journal["frameRateFiles"].as_array().is_some_and(|files| {
+                    files.iter().any(|file| file["spectatorNumberKeys"] == true)
+                }) {
+                    command.args(["+spec_usenumberkeys_nobinds", "1"]);
+                }
             } else {
                 command.args(["-applaunch", "730"]);
             }

@@ -31,12 +31,14 @@ impl Quality {
 pub struct Preferences {
     pub quality: Quality,
     pub frame_rate_limit: u16,
+    pub spectator_number_keys: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             quality: Quality::VeryHigh,
             frame_rate_limit: 60,
+            spectator_number_keys: false,
         }
     }
 }
@@ -48,6 +50,7 @@ impl Preferences {
         Ok(Self {
             quality: Quality::parse(quality)?,
             frame_rate_limit,
+            spectator_number_keys: false,
         })
     }
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -56,7 +59,12 @@ impl Preferences {
                 .as_u64()
                 .and_then(|v| u16::try_from(v).ok())
                 .ok_or("CS2 帧率设置无法读取。")?;
-            Self::new(quality, limit)
+            let mut preferences = Self::new(quality, limit)?;
+            preferences.spectator_number_keys = match value.get("spectatorNumberKeys") {
+                None => false,
+                Some(value) => value.as_bool().ok_or("观战数字键设置无法读取。")?,
+            };
+            Ok(preferences)
         } else if let Some(preserve) = value["preserveQuality"].as_bool() {
             Ok(Self {
                 quality: if preserve {
@@ -71,7 +79,7 @@ impl Preferences {
         }
     }
     pub fn json(self) -> Value {
-        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit})
+        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "spectatorNumberKeys": self.spectator_number_keys})
     }
 }
 
@@ -83,6 +91,7 @@ mod tests {
         for preserve in [false, true] {
             let preferences = Preferences::from_json(&json!({"preserveQuality":preserve})).unwrap();
             assert_eq!(preferences.frame_rate_limit, 60);
+            assert!(!preferences.spectator_number_keys);
             assert_eq!(preferences.quality == Quality::Preserve, preserve);
             assert_eq!(
                 Preferences::from_json(&preferences.json()).unwrap(),
@@ -91,6 +100,7 @@ mod tests {
         }
         for invalid in [
             json!({}),
+            json!({"qualityPreset":"high", "frameRateLimit":60, "spectatorNumberKeys":"true"}),
             json!({"qualityPreset":"high", "frameRateLimit":120}),
             json!({"qualityPreset":"invalid", "frameRateLimit":60}),
         ] {
