@@ -14,10 +14,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    pub fn clear(&mut self) {
-        self.selected = None;
-    }
-
     pub fn select(&mut self, path: &Path) -> Result<Value, String> {
         let path = validate_file(path)?;
         let name = path
@@ -82,6 +78,43 @@ pub fn validate_file(path: &Path) -> Result<PathBuf, String> {
         return Err("所选文件不是 CS2 Demo。".into());
     }
     Ok(path)
+}
+
+// canonicalize() yields extended paths on Windows. CS2 receives an ordinary
+// drive/UNC path, with its own quotes retained through Steam's argument relay.
+pub fn playdemo_argument(path: &Path) -> Result<String, String> {
+    let path = validate_file(path)?;
+    let text = path
+        .to_str()
+        .ok_or("Demo 路径必须是有效的 Unicode 文本。")?;
+    Ok(format!("\"{}\"", engine_path(text)?))
+}
+
+fn engine_path(text: &str) -> Result<String, String> {
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        if unc
+            .split('\\')
+            .take(2)
+            .filter(|part| !part.is_empty())
+            .count()
+            != 2
+        {
+            return Err("Demo 网络路径无效。".into());
+        }
+        return Ok(format!(r"\\{unc}"));
+    }
+    if let Some(drive) = text.strip_prefix(r"\\?\") {
+        let bytes = drive.as_bytes();
+        if bytes.len() < 3
+            || !bytes[0].is_ascii_alphabetic()
+            || bytes[1] != b':'
+            || bytes[2] != b'\\'
+        {
+            return Err("Demo 路径不是受支持的游戏文件路径。".into());
+        }
+        return Ok(drive.into());
+    }
+    Ok(text.into())
 }
 
 pub fn request_id() -> Result<String, String> {
@@ -262,7 +295,14 @@ mod tests {
         assert!(validate_file(&root).is_err());
         fs::write(root.join("short.dem"), b"PBDEMS2").unwrap();
         assert!(validate_file(&root.join("short.dem")).is_err());
-        selection.clear();
+        fs::write(&path, b"PBDEMS2\0payload").unwrap();
+        assert!(selection.select(&root.join("short.dem")).is_err());
+        // A cancelled picker makes no select call; previous capability remains valid.
+        assert!(selection
+            .resolve(selected["token"].as_str().unwrap())
+            .is_ok());
+        assert!(playdemo_argument(&path).unwrap().contains("校园 对阵.dem"));
+        fs::rename(&path, root.join("moved.dem")).unwrap();
         assert!(selection
             .resolve(selected["token"].as_str().unwrap())
             .is_err());
@@ -289,5 +329,19 @@ mod tests {
         assert_eq!(first.len(), 36);
         assert_eq!(&first[14..15], "4");
         assert_ne!(first, request_id().unwrap());
+    }
+
+    #[test]
+    fn extended_windows_paths_become_game_paths_without_losing_unicode() {
+        assert_eq!(
+            engine_path(r"\\?\C:\资料\校园 对阵.dem").unwrap(),
+            r"C:\资料\校园 对阵.dem"
+        );
+        assert_eq!(
+            engine_path(r"\\?\UNC\server\共享\校园 对阵.dem").unwrap(),
+            r"\\server\共享\校园 对阵.dem"
+        );
+        assert!(engine_path(r"\\?\Volume{123}\demo.dem").is_err());
+        assert!(engine_path(r"\\?\UNC\server\").is_err());
     }
 }
