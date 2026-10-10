@@ -395,7 +395,7 @@ function publishedResourceMetadata(release, catalog, expected, partial = false) 
     );
   }
 }
-async function publishedCarrier(release) {
+async function publishedCarrier(release, providedBytes) {
   const assets = release.assets.filter((a) => a.name === MACHINE_METADATA_NAME);
   requireValue(
     assets.length === 1 &&
@@ -405,6 +405,14 @@ async function publishedCarrier(release) {
         `https://github.com/${repository}/releases/download/${release.tag_name}/${MACHINE_METADATA_NAME}`,
     'Invalid published machine carrier',
   );
+  const decode = (bytes) => {
+    requireValue(
+      bytes.length === assets[0].size && assets[0].digest === `sha256:${sha256(bytes)}`,
+      'Machine carrier readback differs',
+    );
+    return readMachineMetadata(bytes);
+  };
+  if (providedBytes) return decode(providedBytes);
   const directory = await mkdtemp(join(tmpdir(), 'mizar-machine-readback-'));
   try {
     execFileSync(
@@ -426,35 +434,37 @@ async function publishedCarrier(release) {
       join(directory, MACHINE_METADATA_NAME),
       MACHINE_METADATA_MAX_BYTES,
     );
-    requireValue(
-      bytes.length === assets[0].size && assets[0].digest === `sha256:${sha256(bytes)}`,
-      'Machine carrier readback differs',
-    );
-    return readMachineMetadata(bytes);
+    return decode(bytes);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
-export async function verifyPublishedResourceMetadata(folder, manifest, release) {
-  const { catalog } = await verifyPublishedResources(folder, manifest);
-  const expected = await resourceAssetInventory(folder, manifest, true);
-  if (manifest.resourceMode === 'core') {
-    publishedResourceMetadata(
-      release,
-      catalog,
-      expected.filter((a) => a.name.endsWith('.zip')),
-    );
-    if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
-      const originals = await publishedCarrier(release);
-      for (const asset of expected.filter((a) => !a.name.endsWith('.zip'))) {
-        const bytes = originals.get(asset.name);
-        requireValue(
-          bytes && bytes.length === asset.size && sha256(bytes) === asset.sha256,
-          'Published carrier differs from original resource proof bytes',
-        );
+export async function verifyPublishedResourceMetadata(folder, manifest, release, carrierBytes) {
+  return withVerifiedSnapshot(folder, manifest, true, async ({ catalog, ...candidate }, frozen) => {
+    await assertFileSet(folder, expectedResourceNames(candidate, true));
+    const expected = [...frozen].map(([name, bytes]) => ({
+      name,
+      size: bytes.length,
+      sha256: sha256(bytes),
+    }));
+    if (manifest.resourceMode === 'core') {
+      publishedResourceMetadata(
+        release,
+        catalog,
+        expected.filter((a) => a.name.endsWith('.zip')),
+      );
+      if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
+        const originals = await publishedCarrier(release, carrierBytes);
+        for (const asset of expected.filter((a) => !a.name.endsWith('.zip'))) {
+          const bytes = originals.get(asset.name);
+          requireValue(
+            bytes && bytes.length === asset.size && sha256(bytes) === asset.sha256,
+            'Published carrier differs from original resource proof bytes',
+          );
+        }
       }
-    }
-  } else publishedResourceMetadata(release, catalog, expected);
+    } else publishedResourceMetadata(release, catalog, expected);
+  });
 }
 
 function lookupGithubObject(path) {

@@ -311,6 +311,11 @@ async function main() {
   const timed = createBuildTimer(options.output, {
     gitSha,
     desktopBuildProfile: options.desktopProfile,
+    cargoCache: {
+      registry: process.env.MIZAR_CARGO_REGISTRY_CACHE_HIT ?? 'unknown',
+      target: process.env.MIZAR_CARGO_TARGET_CACHE_HIT ?? 'unknown',
+      resourceReused: process.env.MIZAR_RESOURCE_REUSED ?? 'unknown',
+    },
   });
   const bundleDir = join(options.output, bundleName);
   const archivePath = join(options.output, `${bundleName}.zip`);

@@ -88,6 +88,14 @@ it('rejects changed transfers, mixed lane evidence and substituted Setup assets'
     developmentOnly: false,
   };
   const distribution = { archiveSha256: 'c'.repeat(64) };
+  const core = {
+    ...manifest,
+    resourceMode: 'core',
+    archive: 'Mizar-v1.0.0-rc.1-Windows-x64-Core.zip',
+    archiveSha256: 'e'.repeat(64),
+    derivedFrom: { archiveSha256: digest, contentDigest: manifest.contentDigest },
+  };
+  const coreDistribution = { archiveSha256: 'f'.repeat(64) };
   const writeManifest = (value) =>
     writeFile(join(root, 'release-manifest.json'), JSON.stringify(value));
   const writeIdentity = (lane, value) =>
@@ -110,7 +118,29 @@ it('rejects changed transfers, mixed lane evidence and substituted Setup assets'
       await writeIdentity(lane, { ...manifest, ...(lane === 'setup' ? { distribution } : {}) });
     }
     await writeFile(join(root, 'distribution-manifest.json'), JSON.stringify(distribution));
+    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow();
+    await mkdir(join(root, 'core-setup'));
+    await writeFile(join(root, 'core-release-manifest.json'), JSON.stringify(core));
+    await writeFile(
+      join(root, 'core-distribution-manifest.json'),
+      JSON.stringify(coreDistribution),
+    );
+    await writeIdentity('core-setup', { ...core, distribution: coreDistribution });
+    for (const lane of ['setup', 'core-setup'])
+      await writeFile(join(root, lane, 'update-recovery.log'), 'Native recovery passed');
     expect(await verifyCandidate(root, sha, digest, root)).toEqual(manifest);
+    await writeIdentity('core-setup', {
+      ...core,
+      gitSha: 'd'.repeat(40),
+      distribution: coreDistribution,
+    });
+    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('core-setup 验收身份');
+    await writeIdentity('core-setup', { ...core, distribution: { archiveSha256: 'd'.repeat(64) } });
+    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('Core Setup 验收身份');
+    await writeIdentity('core-setup', { ...core, distribution: coreDistribution });
+    await writeFile(join(root, 'core-setup/update-recovery.log'), '');
+    await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('缺少恢复');
+    await writeFile(join(root, 'core-setup/update-recovery.log'), 'Native recovery passed');
     await writeIdentity('portable', { ...manifest, gitSha: 'd'.repeat(40) });
     await expect(verifyCandidate(root, sha, digest, root)).rejects.toThrow('portable 验收身份');
     await writeIdentity('portable', manifest);
