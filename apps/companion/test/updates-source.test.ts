@@ -537,7 +537,7 @@ it('authenticates the real v1.1 dual signatures transported in the GitHub envelo
   ).toBe(true);
   // The transport preserves the same real SDK proofs; it adds no trust root.
   const originalAsset = { ...release.assets[0]! };
-  carrier = makeMachineMetadata(new Map([['update-index.json', indexBytes]]));
+  carrier = Buffer.from(makeMachineMetadata(new Map([['update-index.json', indexBytes]])));
   release.assets[0] = {
     name: MACHINE_METADATA_NAME,
     size: carrier.length,
