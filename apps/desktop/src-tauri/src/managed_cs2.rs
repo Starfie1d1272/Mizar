@@ -329,6 +329,19 @@ pub struct ManagedCs2 {
     launch_observation: Option<Value>,
     can_preserve: bool,
 }
+
+/// A verified session process held open during window operations. Keeping the
+/// handle prevents PID reuse from turning a stale window into another game.
+pub struct WorkspaceProcess {
+    process: Process,
+    pub pid: u32,
+    pub created: u64,
+}
+impl WorkspaceProcess {
+    pub fn is_running(&self) -> bool {
+        unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
+    }
+}
 impl ManagedCs2 {
     pub fn new(log: crate::startup_log::DesktopLog) -> Self {
         Self {
@@ -338,6 +351,19 @@ impl ManagedCs2 {
             launch_observation: None,
             can_preserve: false,
         }
+    }
+    pub fn workspace_process(&self) -> Result<Option<WorkspaceProcess>, String> {
+        let Some(value) = self.store.load()? else {
+            return Ok(None);
+        };
+        let Some(process) = owned_process(&value, &self.log)? else {
+            return Ok(None);
+        };
+        Ok(Some(WorkspaceProcess {
+            process,
+            pid: value["pid"].as_u64().ok_or("CS2 进程记录缺失。")? as u32,
+            created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
+        }))
     }
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;

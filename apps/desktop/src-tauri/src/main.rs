@@ -20,6 +20,7 @@ mod window_frame;
 mod window_presentation;
 mod windows_host;
 mod windows_startup;
+mod workspace_group;
 mod workspace_shell;
 
 use desktop_worker::DesktopWorker;
@@ -73,6 +74,7 @@ struct HostState {
     live_window_lock: Mutex<()>,
     tray_available: AtomicBool,
     fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
+    window_group: Mutex<workspace_group::Group>,
 }
 
 fn bundle_root() -> Result<PathBuf, String> {
@@ -354,11 +356,28 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
 }
 
 #[tauri::command]
-fn restore_cs2_focus(state: tauri::State<'_, HostState>) -> bool {
+fn restore_cs2_focus(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> bool {
+    if !state.visible.load(Ordering::Acquire)
+        || app.state::<production_exit::ExitGate>().check().is_err()
+        || app.state::<cs2_activity::Activity>().phase() != "idle"
+    {
+        return false;
+    }
+    let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+    let Ok(cs2) = cs2_state.try_lock() else {
+        return false;
+    };
+    let Ok(Some(process)) = cs2.workspace_process() else {
+        return false;
+    };
     state
         .tracker
         .lock()
-        .is_ok_and(|tracker| tracker.restore_focus())
+        .is_ok_and(|tracker| {
+            process.is_running()
+                && tracker.window.is_some_and(|window| window.pid == process.pid)
+                && tracker.restore_focus()
+        })
 }
 
 #[tauri::command]
@@ -739,8 +758,12 @@ fn show_workspace(app: &tauri::AppHandle) {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
             let _ = window_presentation::set_visible(&window, true);
-            let _ = window.set_focus();
         }
+    }
+    // Select one input target. The group restores its peers without activating
+    // them when the existing worker observes this explicit activation.
+    if let Some(dock) = app.get_webview_window("workspace-dock") {
+        let _ = dock.set_focus();
     }
     update_overlay(app, &state);
 }
@@ -748,6 +771,9 @@ fn show_workspace(app: &tauri::AppHandle) {
 fn hide_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
     state.visible.store(false, Ordering::Relaxed);
+    if let Ok(mut group) = state.window_group.lock() {
+        *group = workspace_group::Group::default();
+    }
     sync_workspace_shell(app);
     for label in ["workspace-left", "workspace-dock", "program-overlay"] {
         if let Some(window) = app.get_webview_window(label) {
@@ -1359,6 +1385,7 @@ fn run_desktop(
         live_window_lock: Mutex::new(()),
         tray_available: AtomicBool::new(false),
         fullscreen_scope: Mutex::new(workspace_shell::FullscreenScope::default()),
+        window_group: Mutex::new(workspace_group::Group::default()),
     };
     log.event("tauri_begin", "begin", None);
     let setup_log = log.clone();
@@ -1508,6 +1535,45 @@ fn run_desktop(
                             }
                         }
                         cs2_check = Instant::now();
+                    }
+                    // Window linkage owns no lifecycle or geometry. A verified
+                    // process handle is held through this bounded operation;
+                    // lock contention, hide and exit all fail closed.
+                    let allowed = || {
+                        worker_running.load(Ordering::Acquire)
+                            && worker_visible.load(Ordering::Acquire)
+                            && !exit_signal.requested()
+                            && host.state::<production_exit::ExitGate>().check().is_ok()
+                            && host.state::<cs2_activity::Activity>().phase() == "idle"
+                    };
+                    let process = if allowed() {
+                        host.state::<Mutex<managed_cs2::ManagedCs2>>()
+                            .try_lock()
+                            .ok()
+                            .and_then(|cs2| cs2.workspace_process().ok().flatten())
+                    } else {
+                        None
+                    };
+                    let panels = host
+                        .get_webview_window("workspace-left")
+                        .zip(host.get_webview_window("workspace-dock"))
+                        .and_then(|(left, dock)| left.hwnd().ok().zip(dock.hwnd().ok()))
+                        .map(|(left, dock)| [left.0 as isize, dock.0 as isize]);
+                    if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
+                        if let Some(failure) = workspace_group::synchronize(
+                            &mut group, process.as_ref(), panels, &allowed,
+                        ) {
+                            if let Some(process) = &process {
+                                host.state::<DesktopLog>().event(
+                                    "workspace_group_restore", "failure",
+                                    Some(&serde_json::json!({
+                                        "stage": failure.stage, "api": failure.api,
+                                        "lastError": failure.last_error,
+                                        "gamePid": process.pid, "created": process.created
+                                    }).to_string()),
+                                );
+                            }
+                        }
                     }
                     // Cross-process CS2 calls stay off the Tauri main loop.
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
