@@ -135,7 +135,12 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| io_failure(log, "tcp_write_timeout", &error, "无法提交更新请求。"))?;
-    let body = json!({"action": action}).to_string();
+    let body = if action == "startup" {
+        json!({"action": action, "sessionId": log.session_id})
+    } else {
+        json!({"action": action})
+    }
+    .to_string();
     stream.write_all(format!("POST /operator/updates/install-plan HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nx-runtime-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).map_err(|error| io_failure(log, "tcp_write", &error, "更新请求未完成。"))?;
     let mut bytes = Vec::new();
     loop {
@@ -219,6 +224,13 @@ fn same_path(value: &Value, expected: &Path) -> bool {
         .and_then(|v| Path::new(v).canonicalize().ok())
         .is_some_and(|p| p == expected)
 }
+pub fn check_on_startup(log: DesktopLog) {
+    // Best effort background metadata check; failure never blocks or closes the Host.
+    std::thread::spawn(move || {
+        let _ = request(&log, "startup");
+    });
+}
+
 pub fn validate_plan(plan: &Value, root: &Path, state: &Path) -> Result<(), String> {
     if plan["schemaVersion"] != 1
         || !root.join("installed.flag").is_file()

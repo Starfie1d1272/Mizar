@@ -130,6 +130,14 @@ namespace Mizar.WebInstaller {
           Assert(File.Exists(result) && handler.Calls==1);
           await downloader.Download(plan, root, new IgnoreProgress(), CancellationToken.None);
           Assert(handler.Calls==1); // persistent verified cache requires no network
+          // Cross-run transport caches must reject same-length byte tampering,
+          // acquire correct bytes, then keep the normal zero-network reuse path.
+          File.WriteAllBytes(result,new byte[]{9,9,9,9});
+          int beforeRepair=handler.Calls;
+          result=await downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(handler.Calls==beforeRepair+1 && Downloader.Matches(result,plan));
+          await downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(handler.Calls==beforeRepair+1);
           File.WriteAllText(result,"bad");
           handler.Reply=r=>Response(new byte[]{9,9,9,9});
           await Reject(()=>downloader.Download(plan,root,new IgnoreProgress(),CancellationToken.None));

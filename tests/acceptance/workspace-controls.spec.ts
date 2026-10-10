@@ -300,6 +300,9 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
 test('desktop tool buttons dispatch the intended windows and lifecycle actions', async ({
   page,
 }) => {
+  await page.route('**/local/v1/demo-test', (route) =>
+    route.fulfill({ json: { active: false, phase: 'idle' } }),
+  );
   await page.addInitScript(() => {
     const calls: unknown[] = [];
     Object.assign(window, {

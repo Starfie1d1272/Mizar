@@ -26,7 +26,7 @@ Mizar 契约使用严格结构和大小限制，未知字段或不支持版本�
 
 RivalHub 输入同时接受 `rivalhub.broadcast-manifest.v1` 与 `.v2`。v1 的必需赛事约束保持不变；v2 可表达没有赛事和阶段的比赛，BP 的参赛方引用、地图与比分校验仍然执行。Mizar 本地文档使用既有 v1 容器的可空上下文，旧版本解析器可能拒绝此类新文档，因此不能把无赛事文档交给旧客户端。赛事文档的线格式保持兼容。
 
-无赛事文档可导入并经本地比赛库原子保存、重载和投影，不生成赛事记录或相邻赛程。现有本地创建表单仍创建赛事比赛。公开 LIVE 与可靠事件的 outbound v1 仍要求赛事授权；无赛事绑定不产生该输出，后续独立在线授权需单独演进协议。未知时间和字段保留空值，不从 BP 反推完整地图池，不从阶段显示名称推断阶段键。
+无赛事文档可导入并经本地比赛库原子保存、重载和投影，不生成赛事记录或相邻赛程。现有本地创建表单仍创建赛事比赛。公开 LIVE 与可靠事件的 outbound v1 仍要求赛事授权；无赛事绑定不产生该输出，后续独立在线授权需单独演进协议。解说直播外链独立允许无内嵌凭据的绝对 HTTP/HTTPS 地址；拒绝危险 scheme、相对地址、控制字符与反斜杠。它不是素材下载或嵌入入口，不放宽头像、队标等资源的 HTTPS/相对路径规则。清单到比赛文档转换失败进入既有领域诊断，提供阶段、字段路径及修正方向，不输出原始字段值。未知时间和字段保留空值，不从 BP 反推完整地图池，不从阶段显示名称推断阶段键。
 
 赛事测试赛在提供方文档、内部比赛文档和赛程摘要中携带 `isTest`。测试赛使用原赛事授权、参赛方、BP 和 LIVE/reliable 输出，不走演示模式或制造占位赛事。正式比赛的相邻赛程排除测试赛；选中测试赛时只保留本场，不自动衔接正式比赛或其它测试。上游的「测试赛」阶段/场次名称用于原有制作界面展示。此标记控制节目关联，不放宽身份、遥测或输出权限。
 
@@ -75,6 +75,8 @@ C4 异步预测的普通实战更新可最多合并十六毫秒；等待期间�
 配置 `MIZAR_LIVE_OUTPUT_URL`、`MIZAR_RELIABLE_OUTPUT_URL` 和 `MIZAR_OUTPUT_TOKEN` 启用 HTTPS POST 输出。两个目标独立可选，启用任一个必须提供令牌；禁止内嵌凭据和重定向，令牌只由本地服务使用。
 
 快照默认包含有效公共雷达。可靠事件带 `Idempotency-Key`。`2xx` 表示接受，`408/429/5xx`、网络错误和超时可重试，其他状态拒绝；快照失败丢弃旧值，发送前重新检查当前有效性。
+
+RivalHub LIVE 回执必须明确 `accepted:true` 才表示应用接受。`accepted:false` 的 `frame_expired / contended / delivery_dropped` 及 HTTP 429 的 `capacity` 为正常丢帧；`broadcast_unavailable`、未分类的旧服拒收、无效回执、非 2xx 和超时累计为投递失败。适配器在既有连接状态暴露安全结果、连续未接收计数及持续时间；短暂正常丢帧不提示，持续无成功接收达到阈值后只记录一次诊断并降级。正常丢帧不清除既有失败窗口或告警，只有明确 `accepted:true` 清除提示并确认恢复；没有原因的旧服回执只记未知拒收。失败保留 fetch/read/parse/validate/cancel 阶段及最多三层经过类型、长度、安全字符与既有脱敏校验的异常 name/code/cause，超时独立分类；禁止记录异常 message/stack、网址、凭据与响应正文，未知但合法的异常名称/机器码保留，凭据样式与不合法标识不原样输出。不逐帧记录远端正文，不排队或重试旧 LIVE。可靠事件仍按其独立 ACK 与取消合约处理。
 
 RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领后还需建立地图开始证据：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0050-live-after-map-start-acknowledgement.md)。恢复队列保留事件原始生产实例；适配器只使用匹配该实例与会话的认领上传，旧事件在本机终止投递，不借用新认领或当前首发证据，见 [ADR-0051](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0051-recovered-events-and-source-authority.md)。可靠队列超时向底层传递取消信号，取消或已被新地图开始投递取代的回执不修改本地授权与地图确认。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
 
@@ -152,6 +154,12 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 ## 本地访问与安全
 
+`GET /local/v1/demo-test` 提供有限试播状态：`active`、`phase`（`idle / starting / playing / stopping / recovery`）、`requestId`、双方名称及 `dataReady`。`dataReady` 表示当前新鲜观战数据覆盖，不证明选定文件已经加载，不返回文件路径或私有令牌。
+
+`POST /operator/runtime/demo-test` 仅供持有本次服务私有 `x-runtime-token` 的 Host 使用，拒绝任何网页 Origin。命令为带 UUID `requestId` 的 `begin / playing / finish / complete / cancel`；`begin` 可附双方名称，其余不得附路径、控制台文本或比赛文档。`begin` 需要准备状态、已连接且未推流的 OBS；`playing` 由 Host 再次核对受管进程后提交；`finish` 隔离输入并切等待，`complete` 仅在 Host 确认游戏退出与配置恢复后提交，`cancel` 仅用于未发出游戏启动的准备撤销。重试使用原试播 `requestId`，冲突保持隔离。参数与生命周期错误返回稳定机器码 `error`、实际 `stage`、单次操作 UUID `operationId`、可用时的试播 `requestId` 及中文 `message`；底层异常与响应共享关联号，用户导出的诊断包保留阶段和脱敏原因链，不记录任意私有响应正文。恢复记录损坏时返回新的恢复 ID，Host 按自己的进程日志安全收尾后再确认，不能把损坏字段当控制权。
+
+桌面 `select_demo_file` 只返回本次短期 token 与文件名；`start_demo_test` 使用 token 和双方名称，`enter_demo_test / finish_demo_test` 使用操作 ID。原路径及文件格式校验留在 Host，游戏播放请求使用固定命令与参数；浏览器和局域网不能选择或启动任意本机文件。
+
 `GET /local/v1/updates` 返回有限更新状态、中文说明和制作阻断原因，不返回暂存路径或凭据；`POST /operator/updates` 仅允许本机操作者发起检查、下载、取消、后台检查偏好及结束制作后的恢复自动编排。安装计划只能由持有每次启动私有控制令牌的 Host 调用，拒绝网页 Origin，不接受网页提供的路径或安装参数；原生命令 `install_update` 只允许制作中心主窗口发起。元数据与安装恢复契约见[应用内更新](updates.md)。
 
 桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
@@ -169,3 +177,6 @@ WebSocket 校验 Origin、子协议和消息大小，通道仅服务端向客户
 ### Gameplay 手动门槛与结束提示
 
 `program-scenes` 的 available.gameplay 由新鲜正式输入决定，手动选择不建立赛事绑定；自动编排和非 Gameplay 场景仍受既有可信证据门槛约束。Director 的可选 gg 为 `{ mapEpoch, remainingMs }` 或 null，表示当前自动 Gameplay 的可信单图结束过渡。消费者只在当前场景/执行匹配时显示 GG，不自行推导获胜事实或启动 3 秒倒计时。
+
+
+Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、无 Origin 和有效 `x-runtime-token`。`prepare` 为处于准备状态、等待画面的本地独立比赛生成 `{ticket, matchId, contextRevision}`，非适用绑定返回空资格；Host 完成游戏收尾并确认全机没有 CS2 后，以 `confirm` 原样回传资格。`invalidate` 在新的托管游戏启动前撤销资格。Companion 同时核对内部制作修订和游戏接收游标，拒绝旧资格、重复确认或变化后的绑定；票据与令牌不进入普通本机视图。资格不持久化，恢复的当前选择需通过 Host 重新确认。普通删除确认仍要求本机 Origin，并在最终持久化提交前重新验证活动引用和退出资格。

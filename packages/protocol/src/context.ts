@@ -29,6 +29,32 @@ const asset = z
     }
   })
   .nullable();
+/** External viewing links are distinct from downloadable/rendered assets. */
+export const liveStreamUrlSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    if (
+      value
+        .split('')
+        .some(
+          (character) =>
+            character === '\\' || character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127,
+        )
+    )
+      return false;
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        url.username === '' &&
+        url.password === ''
+      );
+    } catch {
+      return false;
+    }
+  })
+  .nullable();
 const format = z.enum(['bo1', 'bo3', 'bo5']);
 const status = z.enum(['scheduled', 'in_progress', 'finished', 'cancelled']);
 const side = z.enum(['CT', 'T']).nullable();
@@ -104,7 +130,7 @@ export const matchDocumentV1Schema = z
           userId: id,
           displayName: label,
           avatarUrl: asset,
-          liveStreamUrl: asset,
+          liveStreamUrl: liveStreamUrlSchema,
         }),
       )
       .max(16),
@@ -205,6 +231,17 @@ export const localTournamentStateV1Schema = z.strictObject({
     )
     .max(128),
   matches: z.array(matchDocumentV1Schema).max(256),
+  trashedMatches: z
+    .array(
+      z.strictObject({
+        document: matchDocumentV1Schema,
+        deletedAt: instant,
+        scheduleIndex: z.number().int().min(0).nullable(),
+        scheduleMatchIds: z.array(id).max(256).default([]),
+      }),
+    )
+    .max(256)
+    .default([]),
   selectedMatchId: id.nullable(),
   selectedAt: instant,
 });

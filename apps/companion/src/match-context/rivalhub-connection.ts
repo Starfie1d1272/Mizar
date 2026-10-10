@@ -6,6 +6,7 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
 import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
+import { redactDiagnosticText } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
   type ReliableDeliveryResult,
@@ -34,6 +35,52 @@ type Source = {
   acknowledgedExecution?: string;
   mapStartAttempt?: symbol;
 };
+
+type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
+type LiveFailure = {
+  stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
+  error: LiveErrorEvidence;
+};
+
+function liveErrorIdentifier(value: unknown): string | undefined {
+  if (
+    typeof value !== 'string' ||
+    value.length > 64 ||
+    !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(value)
+  )
+    return undefined;
+  return redactDiagnosticText(value) === value ? value : undefined;
+}
+
+// Do not retain messages/stacks: fetch and JSON errors can contain URLs, tokens or response bytes.
+function liveErrorEvidence(error: unknown, depth = 0): LiveErrorEvidence {
+  if (!(error instanceof Error)) return { name: 'UnknownError' };
+  const name = liveErrorIdentifier(error.name) ?? 'UnknownError';
+  const rawCode = 'code' in error ? error.code : undefined;
+  const code =
+    typeof rawCode === 'number' && Number.isSafeInteger(rawCode) && Math.abs(rawCode) <= 2147483647
+      ? rawCode
+      : liveErrorIdentifier(rawCode);
+  return {
+    name,
+    ...(code === undefined ? {} : { code }),
+    ...(depth < 2 && error.cause !== undefined
+      ? { cause: liveErrorEvidence(error.cause, depth + 1) }
+      : {}),
+  };
+}
+function liveTimeout(error: LiveErrorEvidence): boolean {
+  return (
+    error.name === 'TimeoutError' ||
+    [
+      'ETIMEDOUT',
+      'UND_ERR_CONNECT_TIMEOUT',
+      'UND_ERR_HEADERS_TIMEOUT',
+      'UND_ERR_BODY_TIMEOUT',
+    ].includes(String(error.code ?? '')) ||
+    (error.cause !== undefined && liveTimeout(error.cause))
+  );
+}
 
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   return JSON.stringify([
@@ -92,6 +139,20 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
   private claimRevision = 0;
+  private liveDelivery: {
+    status: 'idle' | 'accepted' | 'dropped' | 'failing';
+    reason: string | null;
+    consecutiveUnaccepted: number;
+    since: number | null;
+    notified: boolean;
+    failure?: LiveFailure;
+  } = {
+    status: 'idle',
+    reason: null,
+    consecutiveUnaccepted: 0,
+    since: null,
+    notified: false,
+  };
 
   /** Local delivery identity only; never includes installation credentials. */
   reliableAuthorityScope(): string | null {
@@ -134,6 +195,19 @@ export class RivalHubConnection {
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
+      liveDelivery:
+        this.source === null
+          ? { status: 'idle', reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
+          : {
+              status: this.liveDelivery.status,
+              reason: this.liveDelivery.reason,
+              failure: this.liveDelivery.failure ?? null,
+              consecutiveUnaccepted: this.liveDelivery.consecutiveUnaccepted,
+              durationMs:
+                this.liveDelivery.since === null
+                  ? 0
+                  : Math.max(0, performance.now() - this.liveDelivery.since),
+            },
     };
   }
 
@@ -386,6 +460,13 @@ export class RivalHubConnection {
       activeDeviceName?: string;
     };
     if (result.claimed) {
+      this.liveDelivery = {
+        status: 'idle',
+        reason: null,
+        consecutiveUnaccepted: 0,
+        since: null,
+        notified: false,
+      };
       this.claimRevision += 1;
       this.source = {
         matchId: snapshot.matchId,
@@ -424,7 +505,7 @@ export class RivalHubConnection {
   }
 
   private async upload(
-    operation: 'live' | 'reliable',
+    operation: 'reliable',
     body: unknown,
     matchId: string,
     signal?: AbortSignal,
@@ -468,8 +549,159 @@ export class RivalHubConnection {
     // after re-claim, generation advance and map change. No old snapshot is queued.
     if (this.source?.acknowledgedExecution !== executionKey(snapshot.cursor))
       throw new Error('rivalhub_map_start_pending');
-    if ((await this.upload('live', snapshot, snapshot.matchId)) !== 'accepted')
+    const source = this.source;
+    if (!source || source.matchId !== snapshot.matchId)
       throw new Error('rivalhub_live_unavailable');
+    let reason: string;
+    let accepted = false;
+    let dropped = false;
+    let lostAuthority = false;
+    let stage: LiveFailure['stage'] = 'fetch';
+    let failure: LiveFailure | undefined;
+    const signal = AbortSignal.timeout(4000);
+    try {
+      // LIVE is disposable: one bounded request, no retries and no response payload logging.
+      const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
+        method: 'POST',
+        redirect: 'manual',
+        signal,
+        headers: {
+          authorization: `Bearer ${this.installation!.credential}`,
+          'content-type': 'application/json',
+          'x-rivalhub-authority': String(source.authorityRevision),
+        },
+        body: JSON.stringify(snapshot),
+      });
+      if (response.ok || response.status === 429) {
+        // Bounded response consumption; remote details/URLs are never diagnostics.
+        stage = 'read';
+        const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
+        let text = '';
+        let bytes = 0;
+        let readFailed = false;
+        let readError: unknown;
+        try {
+          if (reader)
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              bytes += chunk.value.byteLength;
+              if (bytes > 4096)
+                throw Object.assign(new Error(''), {
+                  name: 'LiveResponseLimitError',
+                  code: 'LIVE_RESPONSE_TOO_LARGE',
+                });
+              text += new TextDecoder().decode(chunk.value);
+            }
+        } catch (error) {
+          readFailed = true;
+          readError = error;
+        }
+        try {
+          await reader?.cancel();
+        } catch (error) {
+          if (!readFailed) {
+            stage = 'cancel';
+            readFailed = true;
+            readError = error;
+          }
+        }
+        reader?.releaseLock();
+        if (readFailed) throw readError;
+        stage = 'parse';
+        const parsed: unknown = JSON.parse(text);
+        stage = 'validate';
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed) ||
+          (response.ok && !('accepted' in parsed && typeof parsed.accepted === 'boolean'))
+        )
+          throw Object.assign(new Error(''), {
+            name: 'LiveResponseShapeError',
+            code: 'LIVE_RESPONSE_INVALID',
+          });
+        const result = parsed as { accepted?: unknown; reason?: unknown };
+        accepted = response.ok && result.accepted === true;
+        const normal = ['frame_expired', 'contended', 'delivery_dropped'];
+        dropped =
+          (response.ok && result.accepted === false && normal.includes(String(result.reason))) ||
+          (response.status === 429 && result.reason === 'capacity');
+        reason = dropped
+          ? String(result.reason)
+          : result.reason === 'broadcast_unavailable'
+            ? 'broadcast_unavailable'
+            : response.ok
+              ? 'unknown_rejection'
+              : 'http_429';
+      } else {
+        reason = `http_${response.status}`;
+        lostAuthority = response.status === 403;
+        stage = 'cancel';
+        await response.body?.cancel();
+      }
+    } catch (error) {
+      const evidence = liveErrorEvidence(error);
+      failure = { stage, error: evidence };
+      reason =
+        liveTimeout(evidence) || (signal.aborted && evidence.name === 'AbortError')
+          ? 'timeout'
+          : evidence.code === 'LIVE_RESPONSE_TOO_LARGE'
+            ? 'response_too_large'
+            : stage === 'parse' || stage === 'validate'
+              ? 'invalid_response'
+              : stage === 'fetch'
+                ? 'network_failed'
+                : stage === 'cancel'
+                  ? 'response_cancel_failed'
+                  : 'response_read_failed';
+      // Keep only bounded evidence. A newer frame may recover; never resend this frame.
+    }
+    if (this.source !== source) throw new Error('rivalhub_live_unavailable');
+    if (lostAuthority) {
+      this.source = null;
+      this.activeDeviceName = '另一台制播设备';
+    }
+    const previous = this.liveDelivery;
+    if (accepted) {
+      if (previous.notified)
+        this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
+      this.liveDelivery = {
+        status: 'accepted',
+        reason: null,
+        consecutiveUnaccepted: 0,
+        since: null,
+        notified: false,
+      };
+      return;
+    }
+    this.liveDelivery = {
+      status: dropped && previous.status !== 'failing' ? 'dropped' : 'failing',
+      reason,
+      consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
+      since: previous.since ?? performance.now(),
+      notified: previous.notified,
+      ...(failure ? { failure } : previous.failure ? { failure: previous.failure } : {}),
+    };
+    const duration = performance.now() - this.liveDelivery.since!;
+    let newlyNotified = false;
+    if (
+      !this.liveDelivery.notified &&
+      this.liveDelivery.consecutiveUnaccepted >= 5 &&
+      duration >= 10_000
+    ) {
+      this.liveDelivery.status = 'failing';
+      this.liveDelivery.notified = true;
+      newlyNotified = true;
+      this.onDiagnostic(
+        'live',
+        new Error(
+          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveUnaccepted}；durationMs=${Math.round(duration)}；stage=${this.liveDelivery.failure?.stage ?? 'acceptance'}`,
+          { cause: this.liveDelivery.failure },
+        ),
+      );
+    }
+    if (lostAuthority || newlyNotified) throw new Error('rivalhub_live_unavailable');
   }
 
   async sendReliable(

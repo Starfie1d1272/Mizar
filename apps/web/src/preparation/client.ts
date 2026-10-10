@@ -1,4 +1,5 @@
 import type { Cs2ConfigStatus } from './cs2-status';
+import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
@@ -69,7 +70,7 @@ export interface Production {
   revision: string;
   canEnter: boolean;
 }
-export async function checkObsBeforeLaunch() {
+export async function checkObsBeforeLaunch(requireStoppedOutput = false) {
   // Installation is checkable before launch; fresh telemetry is not.
   if (window.__TAURI_INTERNALS__) {
     const gsi = await desktopInvoke<{ installed: boolean; conflict: boolean }>('gsi_status');
@@ -88,6 +89,7 @@ export async function checkObsBeforeLaunch() {
         ? ((await response.json()) as {
             connection: string;
             findings: readonly unknown[];
+            streaming?: boolean;
           })
         : null,
     )
@@ -96,6 +98,8 @@ export async function checkObsBeforeLaunch() {
     window.location.assign('/settings?tab=obs&prepare=1');
     return false;
   }
+  if (requireStoppedOutput && obs.streaming !== false)
+    throw new Error('请先在 OBS 停止推流并确认状态，再开始 Demo 试播。');
   return true;
 }
 
@@ -104,6 +108,20 @@ export async function productionAction(
   state: Production,
   preserveSettings = false,
 ) {
+  if (window.__TAURI_INTERNALS__ && action !== 'hide') {
+    const response = await fetch('/local/v1/demo-test', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('试播状态未确认，请检查本地服务后重试。');
+    const trial = (await response.json()) as DemoTestView;
+    if (trial.active) {
+      if (action === 'finish')
+        await desktopInvoke('finish_demo_test', { requestId: trial.requestId });
+      else await desktopInvoke('enter_demo_test', { requestId: trial.requestId });
+      return;
+    }
+  }
   const entryLocation = window.location.href;
   if (action === 'enter' && !(await checkObsBeforeLaunch())) return;
   let newlyStarted = false;

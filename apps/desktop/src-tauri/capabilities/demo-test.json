@@ -1,0 +1,12 @@
+{
+  "identifier": "demo-test",
+  "description": "Only the preparation window may select and control native Demo trials.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
+  "permissions": [
+    "allow-select-demo-file",
+    "allow-start-demo-test",
+    "allow-enter-demo-test",
+    "allow-finish-demo-test"
+  ]
+}

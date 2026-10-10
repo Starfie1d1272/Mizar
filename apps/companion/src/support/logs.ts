@@ -9,6 +9,7 @@ export const SUPPORT_LOG_EVENTS = 32;
 const HEADER_BYTES = 4096;
 const names = ['desktop.ndjson', 'supervisor.ndjson', 'companion.log', 'companion.stderr.log'];
 const stages = new Set([
+  'demo_test',
   'process_start',
   'powershell',
   'cs2_launch',
@@ -184,21 +185,77 @@ function windowRestoreDetail(value: string) {
   };
 }
 
+function identifier(value: unknown): string | null {
+  return typeof value === 'string' &&
+    !/^[a-f0-9]{32,64}$/i.test(value) &&
+    /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(value)
+    ? value
+    : null;
+}
+
+function uuid(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
+    ? value
+    : null;
+}
+
+function nativeDemoEvidence(value: Record<string, unknown>) {
+  return {
+    phase: identifier(value.phase),
+    stage: identifier(value.stage),
+    code: identifier(value.code),
+    errorKind: identifier(value.errorKind),
+    cause: typeof value.cause === 'string' ? redactDiagnosticText(value.cause) : null,
+    category: identifier(value.category),
+    osCode:
+      typeof value.osCode === 'number' && Number.isSafeInteger(value.osCode) ? value.osCode : null,
+    status:
+      typeof value.status === 'number' && Number.isSafeInteger(value.status) ? value.status : null,
+    line: count(value.line),
+    column: count(value.column),
+    validUpTo: count(value.validUpTo),
+    errorLength: count(value.errorLength),
+  };
+}
+
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
     ['update', 'production', 'obs', 'resource'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
     updateStages.has(entry.stage);
+  const demo = entry.event === 'demo-test' && identifier(entry.stage) !== null;
+  const live =
+    entry.event === 'rivalhub_live' &&
+    typeof entry.stage === 'string' &&
+    ['fetch', 'read', 'parse', 'validate', 'cancel', 'acceptance', 'accepted'].includes(
+      entry.stage,
+    );
   const stage =
-    typeof entry.stage === 'string' && (stages.has(entry.stage) || update) ? entry.stage : null;
+    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live || demo)
+      ? entry.stage
+      : null;
   const diagnostic = record(entry.diagnostic);
   const level = [10, 20, 30, 40, 50, 60].includes(Number(entry.level)) ? Number(entry.level) : null;
   if (stage === null && level === null) return null;
   const status = record(entry.res).statusCode;
   const error = typeof entry.error === 'string' ? entry.error : '';
+  const nativeDemo = stage === 'demo_test' ? parse(error) : {};
+  const demoEvidence = demo ? diagnostic : nativeDemo;
   const osError = /\(os error (\d{1,6})\)/.exec(error);
   return {
+    ...(demo || stage === 'demo_test'
+      ? {
+          demoCode: identifier(demoEvidence.code),
+          operationId: uuid(demoEvidence.operationId),
+          requestId: uuid(demoEvidence.requestId),
+          demoPhase: identifier(demo ? stage : demoEvidence.phase),
+          localDiagnostic: boundDiagnostic(
+            demo ? errorEvidence(diagnostic.error) : nativeDemoEvidence(nativeDemo),
+            8 * 1024,
+          ),
+        }
+      : {}),
     ...(update
       ? {
           updateCode:
@@ -213,14 +270,16 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
           causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
         }
       : {}),
-    ...(update && diagnostic.error !== undefined
+    ...((update || live) && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
     ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
       ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-      : !update && typeof entry.error === 'string'
+      : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
         ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
         : !update &&
+            !live &&
+            !demo &&
             [
               'powershell',
               'cs2_launch',
@@ -232,11 +291,11 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
             ].includes(stage ?? '') &&
             typeof entry.detail === 'string'
           ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-          : !update && typeof record(entry.err).message === 'string'
+          : !update && !live && !demo && typeof record(entry.err).message === 'string'
             ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
             : {}),
     durationMs: count(diagnostic.durationMs),
-    occurrences: Math.max(1, count(entry.occurrences)),
+    occurrences: Math.max(1, count(entry.occurrences ?? nativeDemo.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),
     session,
     stage: stage ?? 'companion_structured_log',
@@ -252,7 +311,12 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       Math.abs(entry.code) <= 2147483648
         ? entry.code
         : null,
-    osErrorCode: osError === null ? null : Number(osError[1]),
+    osErrorCode:
+      typeof nativeDemo.osCode === 'number'
+        ? nativeDemo.osCode
+        : osError === null
+          ? null
+          : Number(osError[1]),
     hasLocalError:
       entry.error !== undefined || entry.err !== undefined || diagnostic.error !== undefined,
     gitSha: digest(entry.gitSha, 40),

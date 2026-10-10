@@ -416,6 +416,7 @@ impl ManagedCs2 {
             }
             return Ok(());
         }
+        let trial = crate::demo_test::quarantine_if_needed(&self.log, Some(&value))?;
         if any_cs2_running(&self.log)? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
@@ -428,7 +429,12 @@ impl ManagedCs2 {
             value["launchCancelled"] = json!(true);
             self.store.save(&value)?;
         }
+        // Preserve Demo quarantine until all core cleanup has completed.
         let spectator_error = self.store.restore()?;
+        if trial.is_some() && any_cs2_running(&self.log)? {
+            return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
+        }
+        crate::demo_test::complete(&self.log, trial.as_deref())?;
         if self.store.spectator_pending() {
             self.log.event(
                 "cs2_spectator_restore",
@@ -449,6 +455,7 @@ impl ManagedCs2 {
         } else {
             self.message = Some("原设置已恢复。".into());
         }
+
         Ok(())
     }
     pub fn poll(&mut self) {
@@ -466,6 +473,57 @@ impl ManagedCs2 {
         self.start_with_settings(false)
     }
     pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
+        let journal = self.store.load()?;
+        if crate::demo_test::requires_recovery(&self.log, journal.as_ref())
+            && crate::demo_test::status(&self.log)?["active"] == true
+        {
+            return Err("请先结束 Demo 试播并恢复游戏配置。".into());
+        }
+        self.start_internal(preserve, None)
+    }
+    pub fn ensure_demo_available(&self) -> Result<(), String> {
+        if self.store.load()?.is_some() || any_cs2_running(&self.log)? {
+            return Err("请先退出 CS2 并恢复原配置，再开始 Demo 试播。".into());
+        }
+        Ok(())
+    }
+    pub fn start_demo(
+        &mut self,
+        path: &std::path::Path,
+        request_id: &str,
+        preserve: bool,
+    ) -> Result<bool, String> {
+        self.ensure_demo_available()?;
+        let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
+        self.start_internal(preserve, Some((&argument, request_id)))
+    }
+    pub fn demo_launch_attempted(&self) -> Result<bool, String> {
+        Ok(self
+            .store
+            .load()?
+            .is_some_and(|v| v["launchAttempted"] == true))
+    }
+    pub fn has_demo_journal(&self) -> Result<bool, String> {
+        Ok(self
+            .store
+            .load()?
+            .is_some_and(|v| v.get("demoTestRequestId").is_some()))
+    }
+    pub fn validate_demo_running(&mut self, request_id: &str) -> Result<(), String> {
+        self.recover(false)?;
+        let journal = self.store.load()?.ok_or("Demo 游戏启动记录已失效。")?;
+        if journal["demoTestRequestId"].as_str() != Some(request_id)
+            || owned_process(&journal, &self.log)?.is_none()
+        {
+            return Err("正在等待本次 Demo 的 CS2 启动，请稍后重试。".into());
+        }
+        Ok(())
+    }
+    fn start_internal(
+        &mut self,
+        preserve: bool,
+        demo: Option<(&str, &str)>,
+    ) -> Result<bool, String> {
         if preserve && !self.can_preserve {
             return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
         }
@@ -537,6 +595,9 @@ impl ManagedCs2 {
                 ),
             );
         }
+        if let Some((_, request_id)) = demo {
+            journal["demoTestRequestId"] = json!(request_id);
+        }
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
         journal["launchAttempted"] = json!(true);
@@ -567,6 +628,9 @@ impl ManagedCs2 {
                 }
             } else {
                 command.args(["-applaunch", "730"]);
+            }
+            if let Some((argument, _)) = demo {
+                command.args(["+playdemo", argument]);
             }
             command
                 .creation_flags(0x08000000)
@@ -600,7 +664,11 @@ impl ManagedCs2 {
         })();
         if let Err(error) = &launch {
             self.message = Some(error.clone());
-            if let Err(recovery_error) = self.recover(false) {
+            if let Err(recovery_error) = if demo.is_none() {
+                self.recover(false)
+            } else {
+                Ok(())
+            } {
                 self.log.event(
                     "cs2_launch",
                     "failure",
@@ -635,7 +703,17 @@ impl ManagedCs2 {
         }
         result
     }
+    /// A restored or absent journal alone does not prove external CS2 has stopped.
+    pub fn confirm_game_stopped(&self) -> Result<(), String> {
+        if any_cs2_running(&self.log)? {
+            return Err("CS2 仍在运行，本场回收资格未确认。请退出游戏后重试结束游戏。".into());
+        }
+        Ok(())
+    }
+
     pub fn finish(&mut self) -> Result<(), String> {
+        let journal = self.store.load()?;
+        let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref())?;
         // Poll once to adopt a uniquely identified late launch before closing it.
         self.poll();
         if let Some(value) = self.store.load()? {
@@ -664,7 +742,12 @@ impl ManagedCs2 {
             );
         }
         match self.recover(false) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                if trial.is_some() && any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2，再完成 Demo 试播恢复。".into());
+                }
+                crate::demo_test::complete(&self.log, trial.as_deref())
+            }
             Err(error) => {
                 self.message = Some(error.clone());
                 Err(error)
@@ -676,6 +759,52 @@ impl ManagedCs2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These tests create or inspect machine-wide CS2 processes. Hold the same
+    // gate so the external-game fixture cannot contaminate recovery evidence.
+    static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn absent_journal_cleanup_does_not_prove_an_external_game_stopped() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("mizar-external-game-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        // Use a harmless waiting Windows command process with the game's executable
+        // name to exercise real process enumeration without CS2 or Steam.
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let executable = root.join("cs2.exe");
+        std::fs::copy(system.join("System32/cmd.exe"), &executable).unwrap();
+        struct ExternalGame {
+            child: std::process::Child,
+            root: PathBuf,
+        }
+        impl Drop for ExternalGame {
+            fn drop(&mut self) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                let _ = std::fs::remove_dir_all(&self.root);
+            }
+        }
+        let mut external = ExternalGame {
+            child: Command::new(executable)
+                .args(["/D", "/Q", "/K"])
+                .creation_flags(0x08000000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            root,
+        };
+        let mut managed = ManagedCs2::new(log);
+        assert!(external.child.try_wait().unwrap().is_none());
+        managed.finish().unwrap();
+        assert!(managed.confirm_game_stopped().is_err());
+        // An unrelated process must never be closed by the cleanup operation.
+        assert!(external.child.try_wait().unwrap().is_none());
+        external.child.kill().unwrap();
+        external.child.wait().unwrap();
+        managed.confirm_game_stopped().unwrap();
+    }
+
     #[test]
     fn process_ownership_requires_pid_creation_time_and_executable() {
         let pid = std::process::id();
@@ -690,11 +819,24 @@ mod tests {
         journal["created"] = json!(created);
         journal["executable"] = json!("C:\\different\\cs2.exe");
         assert!(owned_process(&journal, &log).unwrap().is_none());
+        let mut managed = ManagedCs2::new(log);
+        let id = crate::demo_test::request_id().unwrap();
+        journal["version"] = json!(1);
+        journal["executable"] = json!(path);
+        journal["demoTestRequestId"] = json!(id);
+        managed.store.save(&journal).unwrap();
+        // A running, owned process is necessary but insufficient: it must also
+        // belong to this exact native Demo launch request.
+        assert!(managed.validate_demo_running(&id).is_ok());
+        assert!(managed
+            .validate_demo_running(&crate::demo_test::request_id().unwrap())
+            .is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn slow_launch_stays_pending_and_requires_explicit_cancel_before_restoration() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
         let root = std::env::temp_dir().join(format!("mizar-waiting-{}", std::process::id()));
         let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
         let mut managed = ManagedCs2::new(log);

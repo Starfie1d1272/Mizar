@@ -1,3 +1,4 @@
+import { errorEvidence } from '../updates/diagnostics.js';
 import { rosterCandidate, mergeObservedStarters } from './roster-capture.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { FastifyInstance } from 'fastify';
@@ -25,6 +26,9 @@ export function registerLocalTournamentRoutes(
     readonly store: LocalTournamentStore;
     readonly projections?: ProjectionCoordinator;
     readonly controller: MatchContextController;
+    readonly canReleaseLocalSelection: () => boolean;
+    readonly canConfirmLocalExit: () => boolean;
+    readonly withLocalSelectionRelease: (commit: () => Promise<void>) => Promise<boolean>;
     readonly originPolicy: LocalWebOriginPolicy;
   },
 ): void {
@@ -40,6 +44,15 @@ export function registerLocalTournamentRoutes(
       events: state.events,
       teams: state.teams,
       matches: state.matches,
+      trashedMatches: state.trashedMatches,
+      inUseMatchId:
+        active?.origin === 'local' &&
+        active.localAuthoringMode === 'standalone' &&
+        options.canReleaseLocalSelection()
+          ? null
+          : (active?.context.matchId ?? null),
+      canReleaseLocalSelection: options.canReleaseLocalSelection(),
+      canConfirmLocalExit: options.canConfirmLocalExit(),
       selectedMatchId: state.selectedMatchId,
       activeLocalMatchId:
         active?.origin === 'local' && active.localAuthoringMode === 'standalone'
@@ -221,6 +234,78 @@ export function registerLocalTournamentRoutes(
       return reply.code(404).send({ error: 'local_match_not_found' });
     }
   });
+
+  for (const operation of ['trash', 'restore'] as const) {
+    app.post(`/operator/local-match/${operation}`, { bodyLimit: 2048 }, async (request, reply) => {
+      if (!canMutate(originPolicy, request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const body = object(request.body);
+      if (typeof body?.matchId !== 'string' || body.confirmed !== true)
+        return reply.code(400).send({ message: '请确认要处理的本地比赛。' });
+      const matchId = body.matchId;
+      const canCommit = () => controller.getActiveBinding()?.context.matchId !== matchId;
+      try {
+        if (operation === 'restore') await store.restoreMatch(matchId);
+        else if (canCommit()) await store.trashMatch(matchId, canCommit);
+        else {
+          const binding = controller.getActiveBinding();
+          if (
+            body.releaseCurrent !== true ||
+            binding?.origin !== 'local' ||
+            binding.localAuthoringMode !== 'standalone' ||
+            !options.canReleaseLocalSelection()
+          )
+            throw new Error('local_match_in_use');
+          const revision = controller.getActiveRevision();
+          const safe = () =>
+            controller.getActiveRevision() === revision && options.canReleaseLocalSelection();
+          const released = await options.withLocalSelectionRelease(async () => {
+            await store.trashMatch(matchId, safe);
+            if (controller.getActiveRevision() === revision) controller.clearActive();
+          });
+          if (!released) throw new Error('local_match_in_use');
+        }
+        return { ok: true };
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        const known: Record<string, { status: number; message: string }> = {
+          local_match_in_use: {
+            status: 409,
+            message:
+              '比赛正在使用，或游戏退出尚未确认。请结束制作，在桌面关闭游戏并确认后重试；也可切换到其他比赛。',
+          },
+          local_evidence_changed: {
+            status: 409,
+            message: '当前比赛引用已变化，资料未删除。请刷新后重试。',
+          },
+          local_match_not_found: { status: 404, message: '本地比赛不存在，请刷新比赛列表。' },
+          local_trash_full: {
+            status: 409,
+            message: '回收站已满（256 场），比赛未删除。请先恢复回收站中的比赛，再清理其他比赛。',
+          },
+          local_matches_full: {
+            status: 409,
+            message: '本地比赛列表已满（256 场），比赛未恢复。请先将不使用的比赛移入回收站。',
+          },
+          local_store_too_large: {
+            status: 409,
+            message: '本地比赛资料已达到存储大小上限，操作未完成。请备份资料并查看诊断后处理。',
+          },
+        };
+        const failure = known[code];
+        if (failure)
+          return reply.code(failure.status).send({ error: code, message: failure.message });
+        app.log.error(
+          { event: 'local_match', operation, matchId, diagnostic: errorEvidence(error) },
+          'Local match persistence failed',
+        );
+        return reply.code(500).send({
+          error: 'local_match_storage_failed',
+          message: '本地比赛写入失败，原资料仍保留。请检查磁盘空间和资料目录权限，查看诊断后重试。',
+        });
+      }
+    });
+  }
 
   app.post('/operator/local-match/save', { bodyLimit: 131_072 }, async (request, reply) => {
     if (!canMutate(originPolicy, request.headers.origin))

@@ -49,6 +49,7 @@ export interface MatchContextControllerIssue {
   readonly code: MatchContextControllerIssueCode;
   readonly message: string;
   readonly diagnostics?: readonly ContractDiagnostic[];
+  readonly stage?: 'manifest' | 'match_document';
   readonly storeIssue?: MatchContextStoreIssue;
 }
 
@@ -156,6 +157,73 @@ export class MatchContextController {
     this.bindingRevision = options.initialBinding === undefined ? 0 : 1;
   }
 
+  private temporary = false;
+  private suspendedBinding: MatchContextBinding | undefined;
+
+  isTemporary(): boolean {
+    return this.temporary;
+  }
+
+  /** Quarantine invalidates in-flight selections and drains the existing commit owner. */
+  async beginTemporary(input?: unknown): Promise<void> {
+    this.temporary = true;
+    this.activeSelectionGeneration++;
+    this.onlineCandidateGeneration++;
+    await this.commitQueue.run(() => {
+      this.suspendedBinding = this.activeBinding;
+      this.clearActiveBinding();
+      this.pendingOnlineCandidate = undefined;
+      this.onlineCandidateAcquisition = undefined;
+      if (input === undefined) return;
+      const document = parseMatchDocumentV1(input);
+      this.setActive({
+        manifest: localDocumentBindingManifest(document),
+        context: document,
+        origin: 'local',
+        freshness: 'fresh',
+        localAuthoringMode: 'standalone',
+        diagnostics: [],
+      });
+    });
+  }
+
+  /** Restore under the quarantine lock: background selectors stay excluded until marker removal. */
+  async restoreTemporaryBinding(): Promise<MatchContextBinding | undefined> {
+    if (!this.temporary) throw new Error('demo_test_not_active');
+    return this.commitQueue.run(async () => {
+      let previous = this.suspendedBinding;
+      if (previous === undefined) {
+        const cached = await this.lkgStore.readLatest();
+        if (cached.ok) previous = cached.value;
+      }
+      this.clearActiveBinding();
+      if (previous !== undefined) this.setActive(previous);
+      return previous;
+    });
+  }
+
+  restoreTemporaryLocalDocument(input: unknown): void {
+    if (!this.temporary) throw new Error('demo_test_not_active');
+    const document = parseMatchDocumentV1(input);
+    this.setActive({
+      manifest: localDocumentBindingManifest(document),
+      context: document,
+      origin: 'local',
+      freshness: 'fresh',
+      localAuthoringMode: 'standalone',
+      diagnostics: [],
+    });
+  }
+
+  endTemporary(): void {
+    this.suspendedBinding = undefined;
+    this.temporary = false;
+  }
+
+  private requireFormal(): void {
+    if (this.temporary) throw new Error('demo_test_active');
+  }
+
   getActiveBinding(): MatchContextBinding | undefined {
     return this.activeBinding;
   }
@@ -183,6 +251,7 @@ export class MatchContextController {
 
   /** A Mizar-owned local document is persisted by LocalTournamentStore first. */
   activateLocalDocument(input: unknown): MatchContextBinding {
+    this.requireFormal();
     const document: MatchDocumentV1 = parseMatchDocumentV1(input);
     const manifest = localDocumentBindingManifest(document);
     this.activeSelectionGeneration += 1;
@@ -200,6 +269,7 @@ export class MatchContextController {
 
   /** Development rehearsal uses the production conversion path without persisting a fake authority. */
   activateFixture(input: unknown): MatchContextBinding {
+    this.requireFormal();
     const validated = validateBroadcastManifest(input);
     if (!validated.ok) throw new Error('Rivals 示例比赛资料无效。');
     const context = toMatchDocumentV1(validated.value);
@@ -227,6 +297,7 @@ export class MatchContextController {
   }
 
   clearActive(): void {
+    this.requireFormal();
     this.activeSelectionGeneration += 1;
     this.onlineCandidateGeneration += 1;
     this.onlineCandidateAcquisition = undefined;
@@ -262,6 +333,7 @@ export class MatchContextController {
     requestedMatchId: string,
     source: MatchContextSource,
   ): Promise<MatchContextSelectionResult> {
+    if (this.temporary) return this.staleSelectionResult('');
     if (source.kind === 'online' && this.hasLocalOverride()) {
       const candidateGeneration = ++this.onlineCandidateGeneration;
       this.onlineCandidateAcquisition = candidateGeneration;
@@ -313,7 +385,7 @@ export class MatchContextController {
           controllerIssue(
             'source_conversion_failed',
             'Manifest candidate 无法转换为 MatchContext。',
-            { diagnostics: error.diagnostics },
+            { diagnostics: error.diagnostics, stage: error.stage },
           ),
         ],
       };
@@ -357,6 +429,7 @@ export class MatchContextController {
     candidate: unknown,
     expectedBindingRevision: string,
   ): Promise<MatchContextSelectionResult> {
+    if (this.temporary) return this.staleSelectionResult('');
     const generation = ++this.activeSelectionGeneration;
     const isCurrent = () => generation === this.activeSelectionGeneration;
     const validated = validateBroadcastManifest(candidate);
@@ -382,6 +455,7 @@ export class MatchContextController {
         diagnostics: [
           controllerIssue('source_conversion_failed', '本地 BP 无法转换为比赛上下文。', {
             diagnostics: error.diagnostics,
+            stage: error.stage,
           }),
         ],
       };
@@ -436,6 +510,7 @@ export class MatchContextController {
   }
 
   async restoreLatest(): Promise<MatchContextBinding | undefined> {
+    this.requireFormal();
     const generation = ++this.activeSelectionGeneration;
     return this.commitQueue.run(async () => {
       if (this.activeBinding !== undefined) return this.activeBinding;
@@ -451,6 +526,7 @@ export class MatchContextController {
     expectedPendingRevision: string,
     canActivate: () => boolean = () => true,
   ): Promise<MatchContextSelectionResult> {
+    if (this.temporary) return this.staleSelectionResult('');
     const pending = this.pendingOnlineCandidate;
     if (
       pending === undefined ||
@@ -505,6 +581,7 @@ export class MatchContextController {
     source: MatchContextSource,
     allowPlanUpdate: () => boolean = () => false,
   ) {
+    if (this.temporary) return this.staleSelectionResult('');
     const active = this.activeBinding;
     const revision = this.getActiveRevision();
     if (!active || isStandaloneLocalMatch(active)) return this.staleSelectionResult('');
@@ -591,6 +668,7 @@ export class MatchContextController {
 
   /** Network refresh only stages a candidate; explicit operator confirmation owns activation. */
   async stageOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
+    if (this.temporary) return this.staleSelectionResult(requestedMatchId);
     const generation = ++this.onlineCandidateGeneration;
     this.onlineCandidateAcquisition = generation;
     try {
@@ -629,6 +707,7 @@ export class MatchContextController {
     isCurrent: () => boolean,
     allowWithoutLocal = false,
   ): Promise<MatchContextSelectionResult> {
+    if (this.temporary) return this.staleSelectionResult('');
     let candidate: unknown;
     try {
       candidate = await source.load();
@@ -669,6 +748,7 @@ export class MatchContextController {
         diagnostics: [
           controllerIssue('source_conversion_failed', 'RivalHub BP 无法转换，本地比赛仍保持。', {
             diagnostics: error.diagnostics,
+            stage: error.stage,
           }),
         ],
       };

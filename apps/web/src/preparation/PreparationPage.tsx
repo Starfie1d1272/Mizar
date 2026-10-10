@@ -1,4 +1,5 @@
 import { AutomaticPreparation } from './AutomaticPreparation';
+import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
@@ -20,6 +21,7 @@ import { useLocalTournament } from './tournament';
 import { command, openTool, productionAction, useLocalRead, type Production } from './client';
 import { RosterCapture, type RosterCandidate } from './RosterCapture';
 import { Settings } from './Settings';
+import { UpdateNotification } from './UpdateNotification';
 import { ProgramPreview } from './ProgramPreview';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
@@ -190,6 +192,7 @@ export function PreparationPage() {
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
+        <UpdateNotification />
         <header className="preparation-heading">
           <div>
             <h1>
@@ -461,6 +464,7 @@ export function PreparationPage() {
                 </Panel>
               </div>
             ) : null}
+            <DemoTestPanel />
             <div className="preparation-tool-strip">
               <span>常用工具</span>
               {tools}

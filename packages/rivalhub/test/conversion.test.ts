@@ -121,3 +121,41 @@ it('preserves test purpose across provider parsing, saved documents and schedule
     'official-before',
   );
 });
+
+it('uses viewing URL rules at both manifest and document boundaries and sanitizes conversion failures', async () => {
+  const { toMatchDocumentV1, validateBroadcastManifest, BroadcastManifestConversionError } =
+    await import('../src/index.js');
+  const fixture = await readJson<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+  for (const url of ['http://video.example/live?a=1', 'https://video.example/live', null]) {
+    const candidate = structuredClone(fixture) as Mutable<BroadcastManifest>;
+    candidate.commentators[0]!.liveStreamUrl = url;
+    expect(validateBroadcastManifest(candidate).ok).toBe(true);
+    expect(toMatchDocumentV1(candidate).commentators[0]!.liveStreamUrl).toBe(url);
+  }
+  for (const url of [
+    'javascript:alert(1)',
+    'data:text/html,secret',
+    '//video.example/live',
+    '/live',
+    'http://user:secret@video.example/live',
+    'https://video.example/\\evil',
+    ' https://video.example/live',
+  ]) {
+    const candidate = structuredClone(fixture) as Mutable<BroadcastManifest>;
+    candidate.commentators[0]!.liveStreamUrl = url;
+    expect(validateBroadcastManifest(candidate).ok).toBe(false);
+  }
+  const candidate = structuredClone(fixture) as Mutable<BroadcastManifest>;
+  candidate.commentators[0]!.avatarUrl = 'http://user:private@video.example/avatar';
+  try {
+    toMatchDocumentV1(candidate);
+    throw new Error('expected failure');
+  } catch (error) {
+    expect(error).toBeInstanceOf(BroadcastManifestConversionError);
+    expect(error).toMatchObject({
+      stage: 'match_document',
+      diagnostics: [expect.objectContaining({ path: 'commentators.0.avatarUrl' })],
+    });
+    expect(JSON.stringify(error)).not.toContain('private');
+  }
+});

@@ -41,6 +41,11 @@ export class OutputService {
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+  private quarantined = false;
+  async setQuarantined(value: boolean): Promise<void> {
+    this.quarantined = value;
+    if (value) await this.outbox?.flushPending();
+  }
   private mapStartScope: string | undefined;
   private mapStartRevision = 0;
   private publishedMapStart: { revision: number; key: string } | undefined;
@@ -76,7 +81,12 @@ export class OutputService {
     if (this.options.liveSink !== undefined) {
       const lane = createLatestWinsConsumer<LiveSnapshotV1>({
         id: 'cloud-live',
-        send: (snapshot) => this.options.liveSink!.send(snapshot),
+        send: (snapshot) => {
+          const current = this.current(true);
+          return current !== null && current.cursor.liveSessionId === snapshot.cursor.liveSessionId
+            ? this.options.liveSink!.send(current)
+            : Promise.resolve();
+        },
         onDiagnostic: ({ code }) => this.onDiagnostic?.(`snapshot_${code}`),
       });
       // Cloud cadence is capped at 2 Hz; projecting the latest bundle every 500 ms
@@ -204,6 +214,7 @@ export class OutputService {
     producedAt: string,
     includeRadar: boolean,
   ): LiveSnapshotV1 | null {
+    if (this.quarantined) return null;
     try {
       return projectLiveSnapshotV1({ bundle, binding, producedAt, includeRadar });
     } catch {
@@ -251,7 +262,7 @@ export class OutputService {
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
 
-    if (binding?.origin === 'fixture') {
+    if (this.quarantined || binding?.origin === 'fixture') {
       return;
     }
 
@@ -362,6 +373,7 @@ export class OutputService {
   async retry(): Promise<void> {
     if (
       this.closed ||
+      this.quarantined ||
       this.outbox === undefined ||
       this.retryPending ||
       this.binding?.origin === 'fixture'
@@ -377,7 +389,7 @@ export class OutputService {
         await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
-          isCurrent: (event) => this.isCurrentForRetry(event),
+          isCurrent: (event) => this.quarantined || this.isCurrentForRetry(event),
           canSend: (event) => this.canSend(event),
         });
     } catch {
@@ -426,6 +438,7 @@ export class OutputService {
   private canSend(event: ReliableEventV1): boolean {
     const bundle = this.bundle;
     if (
+      this.quarantined ||
       bundle === undefined ||
       this.binding?.freshness !== 'fresh' ||
       !this.isCurrentForRetry(event)

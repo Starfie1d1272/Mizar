@@ -14,16 +14,57 @@ function Write-JsonAtomic($path, $value) {
   [IO.File]::WriteAllText($temp, ($value | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
   Move-Item -LiteralPath $temp -Destination $path -Force
 }
-function Assert-PlainPath([string]$path) {
-  if (![IO.Path]::IsPathRooted($path) -or $path -match '["\r\n]') { throw 'update_path_invalid' }
-  $cursor = [IO.Path]::GetFullPath($path)
-  while ($cursor) {
-    if (([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) -and ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint)) { throw 'update_reparse_point' }
-    $parent = [IO.Path]::GetDirectoryName($cursor)
-    if ($parent -eq $cursor) { break }
-    $cursor = $parent
+# Optional qualification timing never changes the transaction's decision or order.
+function Measure-UpdatePhase([string]$Name, [scriptblock]$Operation) {
+  if ($env:MIZAR_MEASURE_UPDATE -ne '1') { & $Operation; return }
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $status = 'failure'
+  try { & $Operation; $status = 'success' }
+  finally {
+    try {
+      $script:updatePhases.Add(@{ phase = $Name; durationMs = $clock.ElapsedMilliseconds; status = $status })
+      Write-JsonAtomic (Join-Path $StageRoot ($Mode.ToLowerInvariant() + '-timings.json')) @{
+        mode = $Mode; version = $plan.version; gitSha = $plan.gitSha
+        previousContentDigest = $plan.previousContentDigest; contentDigest = $plan.contentDigest
+        phases = @($script:updatePhases.ToArray())
+      }
+    } catch {
+      # A diagnostic failure must neither replace the operation's exception nor start rollback.
+      Write-Warning ('update_timing_write_failed [' + $Name + ']: ' + $_.Exception.Message) -WarningAction Continue
+    }
   }
 }
+if ($env:MIZAR_MEASURE_UPDATE -eq '1') { $script:updatePhases = [Collections.Generic.List[object]]::new() }
+
+# Keep every path/byte check; avoid invoking a provider cmdlet per manifest entry.
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Security.Cryptography;
+public static class MizarUpdateFiles {
+  public static void PlainPath(string path) {
+    if (!Path.IsPathRooted(path) || path.IndexOfAny(new char[]{'"','\r','\n'}) >= 0) throw new IOException("update_path_invalid");
+    for (string cursor=Path.GetFullPath(path); cursor!=null; cursor=Path.GetDirectoryName(cursor))
+      if ((File.Exists(cursor) || Directory.Exists(cursor)) && (File.GetAttributes(cursor) & FileAttributes.ReparsePoint)!=0)
+        throw new IOException("update_reparse_point");
+  }
+  public static string Hash(string path) {
+    PlainPath(path);
+    using (var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))
+    using (var hash=SHA256.Create())
+      return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();
+  }
+  public static void Delete(string path) {
+    PlainPath(path);
+    if (!File.Exists(path)) throw new FileNotFoundException("Product file is missing",path);
+    var attributes=File.GetAttributes(path);
+    if ((attributes & FileAttributes.ReadOnly)!=0) File.SetAttributes(path,attributes & ~FileAttributes.ReadOnly);
+    File.Delete(path);
+  }
+}
+'@
+function Assert-PlainPath([string]$path) { [MizarUpdateFiles]::PlainPath($path) }
+
 function Assert-Plan($plan) {
   if ($plan.schemaVersion -ne 1 -or $plan.version -notmatch '^\d+\.\d+\.\d+$' -or
     $plan.gitSha -notmatch '^[a-f0-9]{40}$' -or $plan.installerSha256 -notmatch '^[a-f0-9]{64}$' -or
@@ -58,9 +99,8 @@ function Assert-Payload([string]$directory, [string]$digest, [string]$version = 
     if ($line -notmatch '^([a-f0-9]{64})  (.+)$') { throw 'update_payload_manifest_invalid' }
     $hash = $Matches[1]; $name = $Matches[2]
     if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/' -or !$names.Add($name)) { throw 'update_payload_path_invalid' }
-    $file = Join-Path $directory $name
-    Assert-PlainPath $file
-    if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw 'update_payload_corrupt' }
+    $file = [IO.Path]::Combine($directory, $name)
+    if ([MizarUpdateFiles]::Hash($file) -ne $hash) { throw 'update_payload_corrupt' }
     $records[$name] = $hash
   }
   foreach ($required in @('Mizar.exe','resources/runtime/node.exe','resources/app/dist/server.js','resources/web/dist/index.html','resources/metadata/artifact.json')) {
@@ -212,27 +252,34 @@ try {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'update_host_exit_timeout' }
     Start-Sleep -Milliseconds 200
   }
-  Assert-Stopped
-  Assert-Installer $plan (Join-Path $StageRoot 'Installer.exe')
-  Assert-Payload $plan.bundleRoot $plan.previousContentDigest
-  if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
-  Save-Registration
-  Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse
-  Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest
+  Measure-UpdatePhase 'stopped-and-installer' {
+    Assert-Stopped
+    Assert-Installer $plan (Join-Path $StageRoot 'Installer.exe')
+  }
+  Measure-UpdatePhase 'previous-payload' { Assert-Payload $plan.bundleRoot $plan.previousContentDigest }
+  Measure-UpdatePhase 'reparse-and-registration' {
+    if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
+    Save-Registration
+  }
+  Measure-UpdatePhase 'backup-copy' { Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse }
+  Measure-UpdatePhase 'backup-payload' { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest }
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
   # Remove only the verified previous product files; preserve state and every untracked file.
-  foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
-    $name = $line.Substring(66)
-    if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
-    $file = Join-Path $plan.bundleRoot $name
-    Assert-PlainPath $file
-    Remove-Item -LiteralPath $file -Force
+  Measure-UpdatePhase 'remove-previous-files' {
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
+      $name = $line.Substring(66)
+      if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
+      $file = [IO.Path]::Combine($plan.bundleRoot, $name)
+      [MizarUpdateFiles]::Delete($file)
+    }
   }
-  $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
-  $installer.WaitForExit()
-  if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
-  Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+  Measure-UpdatePhase 'nsis-install' {
+    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
+    $installer.WaitForExit()
+    if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
+  }
+  Measure-UpdatePhase 'installed-payload' { Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha }
   if ($plan.coreArchiveSha256) {
     # Complete resources through the verified deployed App/SDK before committing.
     # Failure retains the existing program backup and enters the normal rollback.
@@ -263,7 +310,10 @@ try {
 } catch {
   [Console]::Error.WriteLine($_.ToString())
   [Console]::Error.WriteLine($_.ScriptStackTrace)
-  $code = [string]$_.Exception.Message
+  # Static file operations preserve the original named failure through invocation wrappers.
+  $cause = $_.Exception
+  while ($cause.InnerException) { $cause = $cause.InnerException }
+  $code = [string]$cause.Message
   if ($code -notmatch '^update_[a-z_]+$') { $code = 'update_installation_failed' }
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
   if ($journal.phase -eq 'installing') {

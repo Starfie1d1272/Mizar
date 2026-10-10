@@ -36,6 +36,12 @@ interface LocalTournamentState {
   readonly events: readonly LocalEventV1[];
   readonly teams: readonly LocalTeamV1[];
   readonly matches: readonly MatchDocumentV1[];
+  readonly trashedMatches: readonly {
+    readonly document: MatchDocumentV1;
+    readonly deletedAt: string | null;
+    readonly scheduleIndex: number | null;
+    readonly scheduleMatchIds: readonly string[];
+  }[];
   readonly selectedMatchId: string | null;
   readonly selectedAt: string | null;
 }
@@ -45,6 +51,7 @@ const emptyState = (): LocalTournamentState => ({
   events: [],
   teams: [],
   matches: [],
+  trashedMatches: [],
   selectedMatchId: null,
   selectedAt: null,
 });
@@ -52,7 +59,7 @@ const emptyState = (): LocalTournamentState => ({
 function readState(input: unknown): LocalTournamentState {
   if (Buffer.byteLength(JSON.stringify(input)) > 2_000_000)
     throw new Error('local_store_too_large');
-  const { events, teams, matches, selectedMatchId, selectedAt } =
+  const { events, teams, matches, trashedMatches, selectedMatchId, selectedAt } =
     localTournamentStateV1Schema.parse(input);
   if (selectedMatchId !== null && !matches.some((match) => match.matchId === selectedMatchId))
     throw new Error('local_selection_invalid');
@@ -68,7 +75,19 @@ function readState(input: unknown): LocalTournamentState {
         new Set(team.players.flatMap((player) => (player.steam64 === null ? [] : [player.steam64])))
           .size !== team.players.filter((player) => player.steam64 !== null).length,
     ) ||
-    new Set(matches.map((match) => match.matchId)).size !== matches.length ||
+    new Set([
+      ...matches.map((match) => match.matchId),
+      ...trashedMatches.map((item) => item.document.matchId),
+    ]).size !==
+      matches.length + trashedMatches.length ||
+    trashedMatches.some(
+      ({ document, deletedAt }) =>
+        deletedAt === null ||
+        !teams.some((team) => team.teamId === document.entrants.a.entryId) ||
+        !teams.some((team) => team.teamId === document.entrants.b.entryId) ||
+        (document.competition !== null &&
+          !events.some((event) => event.eventId === document.competition?.competitionId)),
+    ) ||
     events.some(
       (event) =>
         new Set(event.mapPool).size !== event.mapPool.length ||
@@ -103,9 +122,31 @@ function readState(input: unknown): LocalTournamentState {
     ),
     teams,
     matches,
+    trashedMatches,
     selectedMatchId,
     selectedAt,
   };
+}
+
+function restoreSchedulePosition(
+  ids: string[],
+  matchId: string,
+  original: readonly string[],
+  fallback: number | null,
+): void {
+  const originalIndex = original.indexOf(matchId);
+  const nextId = original.slice(originalIndex + 1).find((id) => ids.includes(id));
+  const previousId = original
+    .slice(0, Math.max(originalIndex, 0))
+    .reverse()
+    .find((id) => ids.includes(id));
+  const index =
+    nextId !== undefined
+      ? ids.indexOf(nextId)
+      : previousId !== undefined
+        ? ids.indexOf(previousId) + 1
+        : Math.min(fallback ?? ids.length, ids.length);
+  ids.splice(index, 0, matchId);
 }
 
 export class LocalTournamentStore {
@@ -257,6 +298,88 @@ export class LocalTournamentStore {
         selectedAt: new Date().toISOString(),
       });
       return document;
+    });
+  }
+
+  async trashMatch(matchId: string, canCommit: () => boolean): Promise<void> {
+    return this.queue.run(async () => {
+      if (!canCommit()) throw new Error('local_match_in_use');
+      const document = this.state.matches.find((match) => match.matchId === matchId);
+      if (!document) {
+        if (this.state.trashedMatches.some((item) => item.document.matchId === matchId)) return;
+        throw new Error('local_match_not_found');
+      }
+      if (this.state.trashedMatches.length >= 256) throw new Error('local_trash_full');
+      const event = this.state.events.find((item) => item.matchIds.includes(matchId));
+      const scheduleMatchIds = [...(event?.matchIds ?? [])];
+      for (const previous of this.state.trashedMatches) {
+        if (event && previous.document.competition?.competitionId === event.eventId)
+          restoreSchedulePosition(
+            scheduleMatchIds,
+            previous.document.matchId,
+            previous.scheduleMatchIds,
+            previous.scheduleIndex,
+          );
+      }
+      const selected = this.state.selectedMatchId === matchId;
+      await this.commit(
+        {
+          ...this.state,
+          matches: this.state.matches.filter((match) => match.matchId !== matchId),
+          events: this.state.events.map((item) => ({
+            ...item,
+            matchIds: item.matchIds.filter((id) => id !== matchId),
+          })),
+          trashedMatches: [
+            ...this.state.trashedMatches,
+            {
+              document,
+              deletedAt: new Date().toISOString(),
+              scheduleIndex: event?.matchIds.indexOf(matchId) ?? null,
+              scheduleMatchIds,
+            },
+          ],
+          selectedMatchId: selected ? null : this.state.selectedMatchId,
+          selectedAt: selected ? null : this.state.selectedAt,
+        },
+        canCommit,
+      );
+    });
+  }
+
+  async restoreMatch(matchId: string): Promise<void> {
+    return this.queue.run(async () => {
+      const item = this.state.trashedMatches.find((entry) => entry.document.matchId === matchId);
+      if (!item) {
+        if (this.state.matches.some((match) => match.matchId === matchId)) return;
+        throw new Error('local_match_not_found');
+      }
+      if (this.state.matches.length >= 256) throw new Error('local_matches_full');
+      const event = this.state.events.find(
+        (entry) => entry.eventId === item.document.competition?.competitionId,
+      );
+      const document = parseMatchDocumentV1({
+        ...item.document,
+        competition: event
+          ? {
+              competitionId: event.eventId,
+              name: event.name,
+              logoUrl: event.logoUrl,
+              themeColor: event.themeColor,
+            }
+          : null,
+      });
+      await this.commit({
+        ...this.state,
+        matches: [...this.state.matches, document],
+        trashedMatches: this.state.trashedMatches.filter((entry) => entry !== item),
+        events: this.state.events.map((entry) => {
+          if (entry.eventId !== event?.eventId) return entry;
+          const ids = [...entry.matchIds];
+          restoreSchedulePosition(ids, matchId, item.scheduleMatchIds, item.scheduleIndex);
+          return { ...entry, matchIds: ids };
+        }),
+      });
     });
   }
 

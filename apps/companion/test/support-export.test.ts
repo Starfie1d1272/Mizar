@@ -1,7 +1,14 @@
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import {
+  RivalHubConnection,
+  OFFICIAL_RIVALHUB_URL,
+} from '../src/match-context/rivalhub-connection.js';
+import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
+import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import { buildApp } from '../src/app.js';
 import { DebugEvidenceStore } from '../src/runtime/debug-state.js';
 import { readSupportLogs, SUPPORT_LOG_READ_BYTES } from '../src/support/logs.js';
@@ -32,6 +39,82 @@ const request = {
 };
 
 describe('support export', () => {
+  it('exports native Demo stages and correlated Companion exceptions through the user bundle', async () => {
+    const dir = await directory();
+    const operationId = '12345678-abcd-1234-abcd-123456789012';
+    const requestId = '87654321-abcd-1234-abcd-123456789012';
+    await writeFile(
+      join(dir, 'desktop.ndjson'),
+      [
+        { phase: 'file_canonicalize', errorKind: 'NotFound', osCode: 2, cause: 'file not found' },
+        { phase: 'runtime_json', category: 'Eof', line: 1, column: 42 },
+        {
+          phase: 'response_http',
+          status: 409,
+          code: 'demo_test_future_failure',
+          stage: 'future_restore_stage',
+          operationId,
+          requestId,
+          occurrences: 16,
+        },
+      ]
+        .map((error) =>
+          JSON.stringify({ stage: 'demo_test', result: 'failure', error: JSON.stringify(error) }),
+        )
+        .join('\n'),
+    );
+    await writeFile(
+      join(dir, 'companion.log'),
+      JSON.stringify({
+        event: 'demo-test',
+        stage: 'formal_restore',
+        result: 'failure',
+        diagnostic: {
+          operationId,
+          requestId,
+          error: {
+            name: 'Error',
+            message: 'restore failed',
+            cause: { code: 'EACCES', message: 'permission denied', password: 'do-not-export' },
+          },
+        },
+      }),
+    );
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain('do-not-export');
+      const logs = response.json<SupportBundle>().logs;
+      const native = logs.find((log) => log.name === 'desktop.ndjson')!.events;
+      expect(native[0]).toMatchObject({
+        stage: 'demo_test',
+        demoPhase: 'file_canonicalize',
+        osErrorCode: 2,
+        localDiagnostic: { errorKind: 'NotFound', cause: 'file not found' },
+      });
+      expect(native[1]).toMatchObject({
+        demoPhase: 'runtime_json',
+        localDiagnostic: { category: 'Eof', line: 1, column: 42 },
+      });
+      expect(native[2]).toMatchObject({
+        demoCode: 'demo_test_future_failure',
+        operationId,
+        requestId,
+        occurrences: 16,
+        localDiagnostic: { status: 409, stage: 'future_restore_stage' },
+      });
+      expect(logs.find((log) => log.name === 'companion.log')!.events[0]).toMatchObject({
+        stage: 'formal_restore',
+        operationId,
+        requestId,
+        localDiagnostic: { cause: { code: 'EACCES', message: 'permission denied' } },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('joins actual startup log formats while retaining failure evidence and excluding arbitrary text', async () => {
     const dir = await directory();
     const secrets = [
@@ -455,4 +538,104 @@ describe('support export', () => {
       await app.close();
     }
   });
+});
+
+it('exports actual LIVE diagnostic logs with stage and safe network causes through the existing support projection', async () => {
+  const dir = await directory();
+  const path = join(dir, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'private-token',
+      installationId: 'installation',
+      competitionId: 'competition',
+      displayName: 'Test',
+    }),
+  );
+  let recovering = false;
+  const connection = new RivalHubConnection(path, (url) => {
+    const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (endpoint.endsWith('/claim'))
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+    if (endpoint.endsWith('/reliable')) return Promise.resolve(new Response(null, { status: 204 }));
+    return recovering
+      ? Promise.resolve(Response.json({ accepted: true }))
+      : Promise.reject(
+          new TypeError('https://private.example/?token=private-token', {
+            cause: Object.assign(new Error('Bearer private-token'), {
+              name: 'FutureTransportError',
+              code: 'NEW_NETWORK_CODE',
+            }),
+          }),
+        );
+  });
+  await connection.load();
+  const logs: string[] = [];
+  const app = Fastify({
+    logger: {
+      stream: {
+        write(text: string) {
+          logs.push(text);
+        },
+      },
+    },
+  });
+  registerRivalHubConnectionRoutes(app, {
+    connection,
+    controller: null,
+    currentSnapshot: () => null,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+  });
+  const snapshot = {
+    matchId: 'match',
+    competitionId: 'competition',
+    players: [],
+    cursor: {
+      producerInstanceId: 'producer',
+      liveSessionId: 'session',
+      programSourceGeneration: 1,
+      mapEpoch: 1,
+    },
+  } as unknown as LiveSnapshotV1;
+  await connection.claim(snapshot, 'revision', false);
+  await connection.sendReliable(
+    { kind: 'map_started', matchId: 'match', cursor: snapshot.cursor } as ReliableEventV1,
+    snapshot,
+  );
+  let now = 0;
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+  try {
+    await connection.sendLive(snapshot);
+    now = 10000;
+    for (let index = 0; index < 3; index++) await connection.sendLive(snapshot);
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    await connection.sendLive(snapshot);
+    recovering = true;
+    await connection.sendLive(snapshot);
+    await writeFile(join(dir, 'companion.log'), logs.join(''));
+    const exported = await readSupportLogs(dir);
+    const events = exported.find((entry) => entry.name === 'companion.log')!.events;
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      stage: 'fetch',
+      result: 'failure',
+      localDiagnostic: {
+        name: 'TypeError',
+        cause: { name: 'FutureTransportError', code: 'NEW_NETWORK_CODE' },
+      },
+    });
+    expect(events[1]).toMatchObject({ stage: 'accepted', result: 'success' });
+    for (const text of [logs.join(''), JSON.stringify(exported)]) {
+      expect(text).not.toContain('private-token');
+      expect(text).not.toContain('private.example');
+    }
+  } finally {
+    clock.mockRestore();
+    await app.close();
+  }
 });
