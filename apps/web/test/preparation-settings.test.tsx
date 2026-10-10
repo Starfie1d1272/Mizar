@@ -35,6 +35,7 @@ vi.mock('../src/operator/RivalHubPreparationPanel', () => ({
 }));
 
 import { Settings } from '../src/preparation/Settings';
+import { ResourceSettings } from '../src/preparation/ResourceSettings';
 
 let root: Root | undefined;
 let container: HTMLDivElement;
@@ -127,5 +128,101 @@ describe('CS2 installation and conflict guidance', () => {
     });
     expect(container.textContent).not.toContain('GSI 已安装，请重新启动');
     expect(container.textContent).toContain('请处理上方列出的问题');
+  });
+});
+
+describe('official resource cache status', () => {
+  const status = {
+    packId: 'official:epl-default',
+    phase: 'missing',
+    activeVersion: null,
+    preparedVersion: null,
+    failure: null,
+  };
+  async function renderResource(
+    next: {
+      packId: string;
+      phase: string;
+      activeVersion: string | null;
+      preparedVersion: string | null;
+      failure: string | null;
+    } = status,
+  ) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ resources: [next] }),
+      }),
+    );
+    await act(async () => {
+      root!.render(<ResourceSettings />);
+      await Promise.resolve();
+    });
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('distinguishes missing cache from bundled Full availability and prepared from active', async () => {
+    await renderResource();
+    expect(container.textContent).toContain('暂无独立缓存');
+    expect(container.textContent).not.toContain('素材缺失');
+    act(() => root!.unmount());
+    root = createRoot(container);
+    await renderResource({ ...status, phase: 'ready', preparedVersion: '1.2.0' });
+    expect(container.textContent).toContain('已验证，待激活');
+    expect(container.textContent).toContain('已准备版本1.2.0');
+    expect(container.textContent).toContain('当前版本未激活');
+  });
+
+  it('preserves the distinction between failed operation and retained active version', async () => {
+    await renderResource({
+      ...status,
+      phase: 'failed',
+      activeVersion: '1.2.0',
+      failure: 'resource_file_corrupt',
+    });
+    expect(container.textContent).toContain('最近操作失败');
+    expect(container.textContent).toContain('当前版本1.2.0');
+    expect(
+      [...container.querySelectorAll('button')].some((button) => button.textContent === '查看诊断'),
+    ).toBe(true);
+    expect(container.textContent).toContain('resource_file_corrupt');
+  });
+
+  it('recovers a failed status query through a read-only retry', async () => {
+    const fetcher = vi
+      .fn<
+        (
+          path: string,
+          options: { cache: string; method?: string; signal: AbortSignal },
+        ) => Promise<unknown>
+      >()
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ resources: [{ ...status, phase: 'ready', activeVersion: '1.2.0' }] }),
+      });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => {
+      root!.render(<ResourceSettings />);
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('暂时无法查询');
+    expect(container.textContent).not.toContain('当前版本');
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === '刷新')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('验证完成');
+    expect(container.textContent).not.toContain('暂时无法查询');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const [path, options] of fetcher.mock.calls) {
+      expect(path).toBe('/local/v1/resources');
+      expect(options).toMatchObject({ cache: 'no-store' });
+      expect(options.method).toBeUndefined();
+    }
   });
 });

@@ -7,6 +7,7 @@ import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
+import { ResourceSettings } from './ResourceSettings';
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
@@ -83,6 +84,7 @@ export function Settings({ tab }: { tab: string }) {
       ) : tab === 'advanced' ? (
         <div className="settings-grid">
           <UpdateSettings />
+          <ResourceSettings />
           <Panel className="settings-card">
             <h2>运行信息</h2>
             <p>核对当前安装的 Mizar 版本与构建来源。</p>
