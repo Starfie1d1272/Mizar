@@ -177,6 +177,55 @@ public class UpdateFixture {
   const compiled = await run(['-File', compiler, '-Output', binaryPath]);
   assert.equal(compiled.code, 0, compiled.errors);
   const binary = await readFile(binaryPath);
+  // Independent filesystem facts for the exact compiled operations used above.
+  const ioFixture = join(root, 'file operations');
+  await mkdir(ioFixture);
+  const ioFile = join(ioFixture, '只读内容.bin');
+  const ioBytes = Buffer.from('independent file operation fixture');
+  await writeFile(ioFile, ioBytes);
+  const psLiteral = (text) => `'${text.replaceAll("'", "''")}'`;
+  const checkedIo = await run([
+    '-Command',
+    `
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(${psLiteral(script)}, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw ($errors | Out-String) }
+$definition = $ast.EndBlock.Statements | Where-Object { $_.Extent.Text.StartsWith('Add-Type -TypeDefinition') }
+Invoke-Expression $definition.Extent.Text
+$file = ${psLiteral(ioFile)}
+if ([MizarUpdateFiles]::Hash($file) -ne '${hash(ioBytes)}') { throw 'SHA mismatch' }
+$lock = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+try {
+  $rejected = $false
+  try { [MizarUpdateFiles]::Hash($file) | Out-Null } catch { $rejected = $true }
+  if (!$rejected) { throw 'Locked writer was read' }
+} finally { $lock.Dispose() }
+[IO.File]::SetAttributes($file, [IO.File]::GetAttributes($file) -bor [IO.FileAttributes]::ReadOnly)
+[MizarUpdateFiles]::Delete($file)
+if ([IO.File]::Exists($file)) { throw 'Read-only product file remained' }
+$rejected = $false
+try { [MizarUpdateFiles]::Delete($file) } catch { $rejected = $true }
+if (!$rejected) { throw 'Missing product file was ignored' }
+$rejected = $false
+try { [MizarUpdateFiles]::PlainPath('relative-file') } catch { $rejected = $_.Exception.GetBaseException().Message -eq 'update_path_invalid' }
+if (!$rejected) { throw 'Relative path accepted' }
+$outside = ${psLiteral(join(ioFixture, 'retained'))}
+$link = ${psLiteral(join(ioFixture, 'junction'))}
+[IO.Directory]::CreateDirectory($outside) | Out-Null
+[IO.File]::WriteAllText((Join-Path $outside 'unknown.txt'), 'preserve')
+cmd.exe /c mklink /J $link $outside | Out-Null
+if ($LASTEXITCODE) { throw 'Junction fixture creation failed' }
+$rejected = $false
+try { [MizarUpdateFiles]::Delete((Join-Path $link 'unknown.txt')) } catch { $rejected = $_.Exception.GetBaseException().Message -eq 'update_reparse_point' }
+if (!$rejected -or [IO.File]::ReadAllText((Join-Path $outside 'unknown.txt')) -ne 'preserve') { throw 'Reparse path touched unknown content' }
+[IO.Directory]::Delete($link)
+`,
+  ]);
+  assert.equal(checkedIo.code, 0, checkedIo.errors);
+  console.log(
+    'Native file operations preserve SHA, writer exclusion, read-only deletion and reparse rejection: PASS',
+  );
   for (const scenario of [
     'success',
     'success-no-shortcut',
@@ -194,6 +243,13 @@ public class UpdateFixture {
     await mkdir(join(state, 'updates/download-test'), { recursive: true });
     await writeFile(join(state, 'user-data.json'), 'untouched match and settings');
     const previous = await payload(installed, '1.0.0', binary);
+    if (scenario === 'success-no-shortcut') {
+      const readOnly = await run([
+        '-Command',
+        `[IO.File]::SetAttributes(${psLiteral(join(installed, 'resources/web/dist/index.html'))}, [IO.FileAttributes]::ReadOnly)`,
+      ]);
+      assert.equal(readOnly.code, 0, readOnly.errors);
+    }
     const registered = await run([
       '-Command',
       `New-Item 'HKCU:\\Software\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Mizar' -Name InstallDir -Value '${installed.replace(/'/g, "''")}' -PropertyType String -Force | Out-Null; New-Item 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Name DisplayVersion -Value '1.0.0' -PropertyType String -Force | Out-Null`,
