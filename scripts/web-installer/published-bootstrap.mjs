@@ -35,6 +35,7 @@ export async function authenticatePublishedBootstrap(options) {
       throw new AggregateError(
         [mirrorError, githubError],
         'Bootstrap mirror and canonical authentication both failed',
+        { cause: githubError },
       );
     }
   }

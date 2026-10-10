@@ -96,9 +96,11 @@ export async function downloadResourceOriginal({
         ),
       );
     } catch (githubError) {
+      if (sourceMode === 'github') throw githubError;
       throw new AggregateError(
         [mirrorError, githubError],
         'Resource mirror and canonical download both failed',
+        { cause: githubError },
       );
     }
   }

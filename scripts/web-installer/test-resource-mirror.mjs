@@ -47,6 +47,27 @@ requests.length = 0;
 assert.deepEqual(await read(), original);
 assert.equal(requests.at(-1), 'github.com');
 assert.throws(() => mirrorResourcePath('2.0.0', '../outside.json'));
+await assert.rejects(
+  () =>
+    downloadResourceOriginal({
+      version: '2.0.0',
+      name: 'resource-descriptor.json',
+      maximum: 65536,
+      signal: new globalThis.AbortController().signal,
+      fetcher: async (url) => {
+        throw new Error(
+          String(url).includes('box.nju.edu.cn')
+            ? 'original mirror failure'
+            : 'original canonical failure',
+        );
+      },
+    }),
+  (error) =>
+    error instanceof AggregateError &&
+    error.errors[0].message === 'original mirror failure' &&
+    error.errors[1].message === 'original canonical failure' &&
+    error.cause.message === 'original canonical failure',
+);
 console.log(
   'PASS: actual deployed resource transport uses read-only Box, keeps token off bytes/GitHub, falls back to canonical GitHub and rejects traversal; no signature/installation claim',
 );
