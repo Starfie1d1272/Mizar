@@ -49,11 +49,17 @@ assert.equal((await run(['-File', script, '-Mode', 'Recover', '-StageRoot', canc
 assert.equal((await json(join(state, 'updates/result.json'))).status, 'cancelled');
 await verifyPayload(installed);
 const stage = await prepare();
-const exitedHost = launch(['-Command', 'exit 0']);
-assert.equal((await exitedHost.done).code, 0);
-const writer = launch(['-File', script, '-Mode', 'Install', '-StageRoot', stage, '-HostProcessId', String(exitedHost.child.pid)]);
-const deadline = Date.now() + 60000;
+const host = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[Console]::WriteLine("host-ready"); [Console]::ReadLine() | Out-Null; exit 0'], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+const hostDone = new Promise((ok, bad) => { host.on('error', bad); host.on('exit', ok); });
+await new Promise((ok, bad) => { host.stdout.once('data', ok); host.once('error', bad); });
+const writer = launch(['-File', script, '-Mode', 'Install', '-StageRoot', stage, '-HostProcessId', String(host.pid)]);
+await delay(500);
+host.stdin.end('exit\n');
+assert.equal(await hostDone, 0, 'Controlled Host exits normally');
+await delay(1000);
+const deadline = Date.now() + 180000;
 let installerPid;
+let nextDiagnostic = 0;
 while (Date.now() < deadline && writer.child.exitCode === null) {
   const probe = await run(['-Command', `$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq ${literal(join(stage, 'Installer.exe'))} }; @($p | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress`]);
   assert.equal(probe.code, 0, probe.stderr);
@@ -62,7 +68,17 @@ while (Date.now() < deadline && writer.child.exitCode === null) {
     installerPid = Array.isArray(pids) ? pids[0] : pids;
     if (installerPid) break;
   }
+  if (Date.now() > nextDiagnostic) {
+    console.log('REAL_WRITER_WAIT ' + JSON.stringify({ hostPid: host.pid, writerPid: writer.child.pid, journal: await json(join(stage, 'journal.json')).catch(() => null), result: await json(join(stage, 'result.json')).catch(() => null) }));
+    nextDiagnostic = Date.now() + 10000;
+  }
   await delay(50);
+}
+if (!installerPid) {
+  const phase = await json(join(stage, 'journal.json')).catch(() => null);
+  console.log('REAL_WRITER_NOT_OBSERVED ' + JSON.stringify({ hostPid: host.pid, writerPid: writer.child.pid, writerExit: writer.child.exitCode, phase, result: await json(join(stage, 'result.json')).catch(() => null) }));
+  if (writer.child.exitCode === null) await run(['-Command', `& taskkill.exe /PID ${writer.child.pid} /T /F; exit $LASTEXITCODE`]);
+  console.log('REAL_WRITER_EXIT ' + JSON.stringify(await writer.done));
 }
 assert.ok(installerPid, 'A real staged NSIS writer must be observed, not a stub');
 assert.equal((await json(join(stage, 'journal.json'))).phase, 'installing');
