@@ -105,8 +105,8 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
   return (
     `# Mizar ${notes.version}\n\n` +
-    `**Windows 安装器**：[GitHub](${download}-${installer}.exe) · [Box 国内入口](${box})\n\n` +
-    `**完整离线 ZIP**：[GitHub](${download}.zip) · [Box 国内入口](${box})\n\n` +
+    `**Windows 安装器**：[Box 国内优先](${box}) · [GitHub 兜底](${download}-${installer}.exe)\n\n` +
+    `**完整离线 ZIP**：[Box 国内优先](${box}) · [GitHub 兜底](${download}.zip)\n\n` +
     `Box 同步可能稍晚，请以版本号为准。[安装与使用手册](${repo}/blob/${sourceSha}/docs/guide/quick-start.md)。\n\n` +
     `${notes.markdown}\n\n## 发行文件\n\n` +
     `下方 Assets 提供两种产品下载。更新与资源文件供程序校验和安装使用；验收记录保存在资格构建的 CI artifacts，NSIS 许可随对应版本保留。\n\n` +
