@@ -21,11 +21,16 @@ function Measure-UpdatePhase([string]$Name, [scriptblock]$Operation) {
   $status = 'failure'
   try { & $Operation; $status = 'success' }
   finally {
-    $script:updatePhases.Add(@{ phase = $Name; durationMs = $clock.ElapsedMilliseconds; status = $status })
-    Write-JsonAtomic (Join-Path $StageRoot ($Mode.ToLowerInvariant() + '-timings.json')) @{
-      mode = $Mode; version = $plan.version; gitSha = $plan.gitSha
-      previousContentDigest = $plan.previousContentDigest; contentDigest = $plan.contentDigest
-      phases = @($script:updatePhases.ToArray())
+    try {
+      $script:updatePhases.Add(@{ phase = $Name; durationMs = $clock.ElapsedMilliseconds; status = $status })
+      Write-JsonAtomic (Join-Path $StageRoot ($Mode.ToLowerInvariant() + '-timings.json')) @{
+        mode = $Mode; version = $plan.version; gitSha = $plan.gitSha
+        previousContentDigest = $plan.previousContentDigest; contentDigest = $plan.contentDigest
+        phases = @($script:updatePhases.ToArray())
+      }
+    } catch {
+      # A diagnostic failure must neither replace the operation's exception nor start rollback.
+      Write-Warning ('update_timing_write_failed [' + $Name + ']: ' + $_.Exception.Message) -WarningAction Continue
     }
   }
 }

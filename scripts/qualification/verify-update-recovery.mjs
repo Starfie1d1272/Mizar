@@ -14,12 +14,13 @@ const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'bundle/update-install.ps1');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 let ownsRegistration = false;
-async function run(args) {
+async function run(args, overrides = {}) {
   // The Host also removes an inherited PowerShell 7 module path before
   // launching Windows PowerShell 5.1, so its built-in modules load normally.
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
   );
+  Object.assign(env, overrides);
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', ...args],
@@ -39,7 +40,7 @@ async function run(args) {
   });
   return { code, output: output.replace(/^\uFEFF/, '').trim(), errors, pid: child.pid };
 }
-async function installWithHost(binaryPath, stage) {
+async function installWithHost(binaryPath, stage, env = {}) {
   // Keep a fresh, exact Host alive while Install starts; never reuse an old PID.
   const host = spawn(binaryPath, ['--host'], {
     windowsHide: true,
@@ -66,10 +67,13 @@ async function installWithHost(binaryPath, stage) {
     const readyPath = join(stage, 'install-script-ready.txt');
     const literal = (value) => `'${value.replace(/'/g, "''")}'`;
     let settled = false;
-    installation = run([
-      '-Command',
-      `[IO.File]::WriteAllText(${literal(readyPath)}, 'ready'); & ${literal(script)} -Mode Install -StageRoot ${literal(stage)} -HostProcessId ${host.pid}; exit $LASTEXITCODE`,
-    ]).then((result) => {
+    installation = run(
+      [
+        '-Command',
+        `[IO.File]::WriteAllText(${literal(readyPath)}, 'ready'); & ${literal(script)} -Mode Install -StageRoot ${literal(stage)} -HostProcessId ${host.pid}; exit $LASTEXITCODE`,
+      ],
+      env,
+    ).then((result) => {
       settled = true;
       return result;
     });
@@ -220,11 +224,33 @@ $rejected = $false
 try { [MizarUpdateFiles]::Delete((Join-Path $link 'unknown.txt')) } catch { $rejected = $_.Exception.GetBaseException().Message -eq 'update_reparse_point' }
 if (!$rejected -or [IO.File]::ReadAllText((Join-Path $outside 'unknown.txt')) -ne 'preserve') { throw 'Reparse path touched unknown content' }
 [IO.Directory]::Delete($link)
+# Execute the exact timing wrapper against an unwritable report path. Warning
+# preference Stop must not turn this optional diagnostic into a transaction failure.
+$functions = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Write-JsonAtomic', 'Measure-UpdatePhase') }, $true)
+foreach ($function in $functions) { Invoke-Expression $function.Extent.Text }
+$StageRoot = ${psLiteral(ioFixture)}; $Mode = 'Install'; $plan = @{}
+[IO.Directory]::CreateDirectory((Join-Path $StageRoot 'install-timings.json.tmp')) | Out-Null
+$env:MIZAR_MEASURE_UPDATE = '1'; $WarningPreference = 'Stop'
+$script:updatePhases = [Collections.Generic.List[object]]::new()
+$script:operations = 0
+$output = @(Measure-UpdatePhase 'success-fixture' { $script:operations++; 'operation-result' } 3>&1)
+$diagnostics = @($output | Where-Object { $_ -is [Management.Automation.WarningRecord] })
+$result = @($output | Where-Object { $_ -isnot [Management.Automation.WarningRecord] })
+if ($result -ne 'operation-result' -or $script:operations -ne 1) { throw 'Timing failure changed successful operation' }
+if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timing_write_failed') { throw 'Timing failure lacked explicit diagnostic' }
+$original = [IO.IOException]::new('original-operation-failure')
+$preserved = $false
+$diagnostics = @(& {
+  try { Measure-UpdatePhase 'failure-fixture' { $script:operations++; throw $original } }
+  catch { $script:preserved = [object]::ReferenceEquals($_.Exception, $original) }
+} 3>&1)
+if (!$preserved -or $script:operations -ne 2) { throw 'Timing failure replaced original exception' }
+if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timing_write_failed') { throw 'Original failure lacked timing diagnostic' }
 `,
   ]);
   assert.equal(checkedIo.code, 0, checkedIo.errors);
   console.log(
-    'Native file operations preserve SHA, writer exclusion, read-only deletion and reparse rejection: PASS',
+    'Native file operations and non-fatal timing write failures preserve verification and original outcomes: PASS',
   );
   for (const scenario of [
     'success',
@@ -283,6 +309,10 @@ if (!$rejected -or [IO.File]::ReadAllText((Join-Path $outside 'unknown.txt')) -n
     const stage = JSON.parse(prepared.output).stageRoot;
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
     await writeFile(join(stage, 'mode.txt'), success ? 'success' : scenario);
+    // An actual timing write failure must preserve both a successful commit and
+    // the original installer cancellation/rollback, using these existing cases.
+    const timingFault = scenario === 'success-no-shortcut' || scenario === 'failure';
+    if (timingFault) await mkdir(join(stage, 'install-timings.json.tmp'));
     let result;
     if (scenario.startsWith('committed-')) {
       await cp(installed, join(stage, 'previous'), { recursive: true });
@@ -381,13 +411,23 @@ if (!$rejected -or [IO.File]::ReadAllText((Join-Path $outside 'unknown.txt')) -n
       }
       assert.equal(result.code, 1, 'An existing Mizar process must prevent any installation');
     } else {
-      result = await installWithHost(binaryPath, stage);
+      result = await installWithHost(
+        binaryPath,
+        stage,
+        timingFault ? { MIZAR_MEASURE_UPDATE: '1' } : {},
+      );
       assert.equal(result.code, success ? 0 : 1, result.errors);
+      if (timingFault) {
+        assert.match(result.output, /update_timing_write_failed/);
+        if (!success) assert.match(result.errors, /update_installer_cancelled/);
+      }
     }
     const report = JSON.parse(
       (await readFile(join(state, 'updates/result.json'), 'utf8')).replace(/^\uFEFF/, ''),
     );
     assert.notEqual(report.code, 'update_host_exit_timeout', JSON.stringify(report));
+    if (timingFault)
+      assert.equal(report.code, success ? 'update_completed' : 'update_installer_cancelled');
     assert.equal(
       report.status,
       success ? 'installed' : scenario === 'remaining-process' ? 'cancelled' : 'restored',
