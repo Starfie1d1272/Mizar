@@ -20,6 +20,23 @@ $version = (& $compiler /VERSION | Out-String).Trim()
 if ($version -ne 'v3.11') { throw "Unexpected NSIS version: $version" }
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $output $ManifestName) | ConvertFrom-Json
 $files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+$phases = [Collections.Generic.List[object]]::new()
+$timingsName = if ($ManifestName -eq 'core-release-manifest.json') { 'core-setup-timings.json' } else { 'setup-timings.json' }
+function Invoke-SetupPhase([string]$Name, [scriptblock]$Operation) {
+  $timer = [Diagnostics.Stopwatch]::StartNew()
+  $status = 'failure'
+  try {
+    & $Operation
+    $status = 'success'
+  } finally {
+    $duration = $timer.ElapsedMilliseconds
+    $phases.Add([ordered]@{ phase = $Name; durationMs = $duration; status = $status })
+    [ordered]@{ schemaVersion = 1; gitSha = $manifest.gitSha; appVersion = $manifest.appVersion; archive = (Split-Path $archive -Leaf); phases = @($phases.ToArray()) } |
+      ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output $timingsName) -Encoding utf8NoBOM
+    Write-Host "SETUP_TIMING ${Name}: $duration ms ($status)"
+    if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Setup ${Name}: $duration ms ($status)" }
+  }
+}
 # NSIS has its own escaping rules. Never interpolate a payload path as instructions.
 function Escape-Nsis([string]$text) { $text.Replace('$', '$$').Replace('"', '$\"') }
 $remove = Join-Path $output 'setup-remove.nsh'
@@ -40,39 +57,49 @@ $installerAssets = @($assetManifest.files | ForEach-Object {
 $brandSource = Join-Path $PSScriptRoot ('../../' + $assetManifest.source)
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $brandSource).Hash.ToLowerInvariant() -ne $assetManifest.sourceSha256) { throw 'Installer brand source differs' }
 $icon = Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico'
-& $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" "/DREMOVE_FILES=$remove" $script
-if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+Invoke-SetupPhase 'compile' {
+  & $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" "/DREMOVE_FILES=$remove" $script
+  if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+}
 function Install-Setup {
   $process = Start-Process -FilePath $archive -ArgumentList @('/S', ('/D=' + $target)) -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw 'Setup installation failed' }
 }
-Install-Setup
-# Verify exact qualified payload before running anything from the installation.
-foreach ($file in $files) {
-  $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
-  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Setup payload differs: $relative" }
+Invoke-SetupPhase 'first-install' { Install-Setup }
+Invoke-SetupPhase 'first-payload-verification' {
+  # Verify exact qualified payload before running anything from the installation.
+  foreach ($file in $files) {
+    $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Setup payload differs: $relative" }
+  }
+  $extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
+    $relative = [IO.Path]::GetRelativePath($target, $_.FullName)
+    $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
+  })
+  if ($extra.Count) { throw 'Unexpected Setup payload files' }
 }
-$extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
-  $relative = [IO.Path]::GetRelativePath($target, $_.FullName)
-  $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
-})
-if ($extra.Count) { throw 'Unexpected Setup payload files' }
 if ($CaptureUi) {
-  & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path (Split-Path $output -Parent) 'installer-ui')
+  Invoke-SetupPhase 'interactive-install-and-launch' {
+    & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path (Split-Path $output -Parent) 'installer-ui')
+  }
 }
 $sentinel = Join-Path $env:LOCALAPPDATA 'Mizar\data\setup-smoke-sentinel.txt'
 if (Test-Path -LiteralPath $sentinel) { throw 'Refusing to overwrite existing smoke sentinel' }
 New-Item -ItemType Directory -Force -Path (Split-Path $sentinel) | Out-Null
 Set-Content -LiteralPath $sentinel -Value 'preserve-user-data'
 try {
-  Install-Setup
-  $process = Start-Process -FilePath (Join-Path $target 'Uninstall.exe') -ArgumentList @('/S', ('_?=' + $target)) -PassThru -Wait
-  if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $target 'Mizar.exe'))) { throw 'Setup uninstall failed' }
-  if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve-user-data') { throw 'User data changed' }
-  Install-Setup
-  foreach ($file in $files) {
-    $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Reinstall payload differs: $relative" }
+  Invoke-SetupPhase 'overwrite-install' { Install-Setup }
+  Invoke-SetupPhase 'uninstall-and-user-data' {
+    $process = Start-Process -FilePath (Join-Path $target 'Uninstall.exe') -ArgumentList @('/S', ('_?=' + $target)) -PassThru -Wait
+    if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $target 'Mizar.exe'))) { throw 'Setup uninstall failed' }
+    if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve-user-data') { throw 'User data changed' }
+  }
+  Invoke-SetupPhase 'reinstall' { Install-Setup }
+  Invoke-SetupPhase 'reinstall-payload-verification' {
+    foreach ($file in $files) {
+      $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
+      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Reinstall payload differs: $relative" }
+    }
   }
 } finally { Remove-Item -LiteralPath $sentinel -ErrorAction SilentlyContinue }
 $licenseName = 'NSIS-LICENSE.txt'
