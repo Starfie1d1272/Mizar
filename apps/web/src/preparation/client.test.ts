@@ -13,6 +13,7 @@ function setup(
   failure?: 'launch' | 'production' | 'restore' | 'presentation' | 'network',
   actualMode = 'preparation',
   newlyStarted = true,
+  running = true,
 ) {
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
@@ -26,9 +27,11 @@ function setup(
     return Promise.resolve(
       command === 'gsi_status'
         ? { installed: true, conflict: false }
-        : command === 'start_managed_cs2'
-          ? newlyStarted
-          : undefined,
+        : command === 'cs2_config_status'
+          ? { running, pending: true, phase: running ? 'running' : 'uncertain' }
+          : command === 'start_managed_cs2'
+            ? newlyStarted
+            : undefined,
     );
   });
   window.__TAURI_INTERNALS__ = {
@@ -62,9 +65,21 @@ describe('managed CS2 production entry and cleanup', () => {
       'gsi_status',
       '/local/v1/obs',
       'start_managed_cs2',
+      'cs2_config_status',
       '/operator/production',
       'present_production',
     ]);
+  });
+  it('keeps preparation and the pending game request while Steam is still starting', async () => {
+    const calls = setup(undefined, 'preparation', true, false);
+    await expect(productionAction('enter', preparation)).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      'gsi_status',
+      '/local/v1/obs',
+      'start_managed_cs2',
+      'cs2_config_status',
+    ]);
+    expect(calls).not.toContain('finish_managed_cs2');
   });
   it('does not enter production when the game cannot start', async () => {
     const calls = setup('launch');

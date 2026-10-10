@@ -273,6 +273,7 @@ it('requires the private Host and idle production, then prevents entry until upg
   const prepare = vi.fn(() => Promise.resolve({ schemaVersion: 1 }));
   const manager = {
     status: () => ({ phase: 'ready' }),
+    failure: vi.fn(),
     prepare,
     release: vi.fn(),
     start: vi.fn(),

@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { errorEvidence } from './diagnostics.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import {
   lstat,
@@ -69,6 +70,7 @@ export class UpdateManager {
   private planning = false;
   private settingsInvalid = false;
   private lastResult: string | null = null;
+  private operationId = randomUUID();
   private readonly root: string;
   private readonly source: UpdateSource;
   constructor(
@@ -81,17 +83,27 @@ export class UpdateManager {
       source?: UpdateSource;
       fetcher?: UpdateFetch;
       now?: () => number;
-      log?: (stage: string, code: string, version?: string) => void;
+      log?: (stage: string, code: string, version?: string, diagnostic?: unknown) => void;
     },
   ) {
     this.root = join(options.stateRoot, 'updates');
-    this.source = options.source ?? new StableSource(join(this.root, 'trust'));
+    this.source =
+      options.source ??
+      new StableSource(join(this.root, 'trust'), options.fetcher, 'auto', (stage, error) =>
+        this.failure(stage, error),
+      );
   }
   private now() {
     return this.options.now?.() ?? Date.now();
   }
   private event(stage: string, code: string) {
-    this.options.log?.(stage, code, this.candidate?.version);
+    this.options.log?.(stage, code, this.candidate?.version, { operationId: this.operationId });
+  }
+  failure(stage: string, error: unknown) {
+    this.options.log?.(stage, safeCode(error), this.candidate?.version, {
+      operationId: this.operationId,
+      error: errorEvidence(error),
+    });
   }
   private async saveConfig() {
     await writeFile(join(this.root, 'settings.tmp'), JSON.stringify(this.config), { mode: 0o600 });
@@ -107,6 +119,7 @@ export class UpdateManager {
       );
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.failure('settings_load', e);
         this.error = 'update_settings_invalid';
         this.phase = 'error';
         this.settingsInvalid = true;
@@ -116,7 +129,8 @@ export class UpdateManager {
       this.ready = readySchema.parse(
         JSON.parse(await readFile(join(this.root, 'ready.json'), 'utf8')),
       );
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('ready_load', error);
       this.ready = null;
     }
     for (const name of await readdir(this.root)) {
@@ -226,6 +240,7 @@ export class UpdateManager {
     }
   }
   private async doCheck(signal: AbortSignal) {
+    this.operationId = randomUUID();
     try {
       await this.saveConfig();
       const release = await this.source.latest(
@@ -270,7 +285,8 @@ export class UpdateManager {
           await this.verifyFile(this.ready, signal);
           this.phase = 'ready';
           return;
-        } catch {
+        } catch (error) {
+          this.failure('cached_download_verify', error);
           await this.discard();
         }
       }
@@ -279,7 +295,7 @@ export class UpdateManager {
     } catch (e) {
       this.phase = 'error';
       this.error = safeCode(e);
-      this.event('check', this.error);
+      this.failure('check', e);
     }
   }
   private async verifyFile(ready: z.infer<typeof readySchema>, signal?: AbortSignal) {
@@ -330,6 +346,7 @@ export class UpdateManager {
     return Promise.resolve();
   }
   private async doDownload(manifest: UpdateManifest, signal: AbortSignal) {
+    this.operationId = randomUUID();
     let directory: string | undefined;
     try {
       await this.discard();
@@ -383,7 +400,11 @@ export class UpdateManager {
           this.event('download', i === 0 ? 'mirror_verified' : 'github_verified');
           break;
         } catch (e) {
-          await rm(path, { force: true });
+          this.failure(i === 0 ? 'box_download' : 'github_download', e);
+          await rm(path, { force: true }).catch((cleanup: unknown) => {
+            this.failure('download_cleanup', cleanup);
+            throw new AggregateError([e, cleanup], 'update_cleanup_failed');
+          });
           signal.throwIfAborted();
           if (i === sources.length - 1) throw e;
           this.event('download', 'mirror_fallback');
@@ -395,11 +416,17 @@ export class UpdateManager {
       await rename(join(this.root, 'ready.tmp'), join(this.root, 'ready.json'));
       this.phase = 'ready';
     } catch (e) {
-      if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      if (directory)
+        await rm(directory, { recursive: true, force: true }).catch((error: unknown) =>
+          this.failure('download_cleanup', error),
+        );
       this.ready = null;
       this.phase = signal.aborted ? 'available' : 'error';
       this.error = signal.aborted ? 'update_cancelled' : safeCode(e);
-      this.event('download', this.error);
+      this.failure(
+        'download',
+        signal.aborted ? new Error(this.error, { cause: signal.reason }) : e,
+      );
     }
   }
   async cancel() {

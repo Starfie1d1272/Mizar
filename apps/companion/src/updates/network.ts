@@ -1,3 +1,4 @@
+import { UpdateRequestError } from './diagnostics.js';
 import { BOX_READ_TOKEN, UPDATE_REPOSITORY } from './contract.js';
 
 export type UpdateFetch = typeof globalThis.fetch;
@@ -42,6 +43,8 @@ export async function updateRequest(
         Accept: url.hostname === 'api.github.com' ? 'application/vnd.github+json' : '*/*',
         'User-Agent': 'Mizar-Stable-Updater',
       },
+    }).catch((cause: unknown) => {
+      throw new UpdateRequestError('update_network_failed', url.hostname, undefined, cause);
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location');
@@ -52,7 +55,7 @@ export async function updateRequest(
     }
     if (!response.ok || !response.body) {
       await response.body?.cancel();
-      throw new Error('update_network_failed');
+      throw new UpdateRequestError('update_network_failed', url.hostname, response.status);
     }
     if (
       response.headers.get('content-encoding') &&

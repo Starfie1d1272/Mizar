@@ -33,11 +33,13 @@ async function setup({
   source,
   fetcher,
   now,
+  log,
 }: {
   installed?: boolean;
   source?: UpdateSource;
   fetcher?: typeof fetch;
   now?: () => number;
+  log?: (stage: string, code: string, version?: string, diagnostic?: unknown) => void;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'mizar-update-'));
   directories.push(root);
@@ -61,6 +63,7 @@ async function setup({
             : new Response(bytes),
         )),
     ...(now ? { now } : {}),
+    ...(log ? { log } : {}),
   });
   managers.push(manager);
   await manager.load();
@@ -75,6 +78,28 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 describe('controlled update lifecycle', () => {
+  it('retains both source failures with HTTP status and a shared correlation ID outside UI', async () => {
+    const log =
+      vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
+    const { manager } = await setup({
+      log,
+      fetcher: () => Promise.resolve(new Response(null, { status: 503 })),
+    });
+    await manager.check();
+    await manager.download();
+    await finished(manager);
+    const failed = log.mock.calls.filter(
+      ([stage]) => stage === 'box_download' || stage === 'github_download',
+    );
+    expect(failed).toHaveLength(2);
+    expect(failed[0]?.[3]).toMatchObject({ error: { status: 503, source: 'box.nju.edu.cn' } });
+    expect(failed[1]?.[3]).toMatchObject({ error: { status: 503, source: 'github.com' } });
+    const details = failed.map((call) => call[3] as { operationId: string });
+    expect(details[0]?.operationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(details[0]?.operationId).toBe(details[1]?.operationId);
+    expect(manager.status().error).toBe('update_network_failed');
+    expect(JSON.stringify(manager.status())).not.toContain('UpdateRequestError');
+  });
   it.each(['installed', 'restored', 'cancelled'])(
     'only shows a completed %s attempt while its resulting payload is still installed',
     async (status) => {

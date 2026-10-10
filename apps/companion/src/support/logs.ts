@@ -10,6 +10,7 @@ const names = ['desktop.ndjson', 'supervisor.ndjson', 'companion.log', 'companio
 const stages = new Set([
   'process_start',
   'powershell',
+  'cs2_launch',
   'bundle_root_resolved',
   'mutex_acquired',
   'shutdown_scope',
@@ -101,15 +102,80 @@ function parse(line: string): Record<string, unknown> {
   }
 }
 
+const updateStages = new Set([
+  'check',
+  'download',
+  'operator_action',
+  'install_plan',
+  'box_metadata_fallback',
+  'box_core_fallback',
+  'cached_download_verify',
+  'box_download',
+  'github_download',
+  'settings_load',
+  'ready_load',
+  'download_cleanup',
+]);
+
+function updateCauses(value: unknown, depth = 0): unknown[] {
+  if (depth >= 4 || typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  const error = record(value);
+  const code =
+    typeof error.code === 'string' && /^(?:E[A-Z0-9_]{1,40}|update_[a-z_]{1,50})$/.test(error.code)
+      ? error.code
+      : null;
+  const status =
+    typeof error.status === 'number' &&
+    Number.isInteger(error.status) &&
+    error.status >= 100 &&
+    error.status <= 599
+      ? error.status
+      : null;
+  return [
+    {
+      code,
+      httpStatus: status,
+      source: choice(error.source, [
+        'box.nju.edu.cn',
+        'github.com',
+        'api.github.com',
+        'release-assets.githubusercontent.com',
+      ]),
+    },
+    ...updateCauses(error.cause, depth + 1),
+    ...(Array.isArray(error.errors)
+      ? error.errors.slice(0, 4).flatMap((cause) => updateCauses(cause, depth + 1))
+      : []),
+  ].slice(0, 12);
+}
+
 /** Unknown/free-text fields are not copied, even when the producer already redacted them. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
-  const stage = typeof entry.stage === 'string' && stages.has(entry.stage) ? entry.stage : null;
+  const update =
+    entry.event === 'update' && typeof entry.stage === 'string' && updateStages.has(entry.stage);
+  const stage =
+    typeof entry.stage === 'string' && (stages.has(entry.stage) || update) ? entry.stage : null;
+  const diagnostic = record(entry.diagnostic);
   const level = [10, 20, 30, 40, 50, 60].includes(Number(entry.level)) ? Number(entry.level) : null;
   if (stage === null && level === null) return null;
   const status = record(entry.res).statusCode;
   const error = typeof entry.error === 'string' ? entry.error : '';
   const osError = /\(os error (\d{1,6})\)/.exec(error);
   return {
+    ...(update
+      ? {
+          updateCode:
+            typeof entry.code === 'string' && /^update_[a-z_]{1,50}$/.test(entry.code)
+              ? entry.code
+              : null,
+          operationId:
+            typeof diagnostic.operationId === 'string' &&
+            /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(diagnostic.operationId)
+              ? diagnostic.operationId
+              : null,
+          causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
+        }
+      : {}),
     timestamp: timestamp(entry.time ?? entry.timestamp),
     session,
     stage: stage ?? 'companion_structured_log',
@@ -126,7 +192,8 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
         ? entry.code
         : null,
     osErrorCode: osError === null ? null : Number(osError[1]),
-    hasLocalError: entry.error !== undefined || entry.err !== undefined,
+    hasLocalError:
+      entry.error !== undefined || entry.err !== undefined || diagnostic.error !== undefined,
     gitSha: digest(entry.gitSha, 40),
     artifactSha256: digest(entry.artifactSha256, 64),
     appVersion:

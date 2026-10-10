@@ -1,3 +1,4 @@
+import { errorEvidence } from '../src/updates/diagnostics.js';
 import { createHash } from 'node:crypto';
 import {
   makeMachineMetadata,
@@ -739,4 +740,30 @@ it('binds the modern Core to four subjects of one Qualification and the authenti
     throw new Error('invalid_signature');
   };
   expect(() => selectQualifiedCore(carrier(), full, verifier)).toThrow('invalid_signature');
+});
+
+it('keeps nested transport codes while redacting credentials, signed URLs and schema input', () => {
+  const underlying = Object.assign(
+    new Error(
+      'connect ECONNRESET https://release-assets.githubusercontent.com/asset?signature=private-signature',
+    ),
+    { code: 'ECONNRESET' },
+  );
+  const error = new AggregateError(
+    [
+      new Error('Authorization: Bearer private-token'),
+      underlying,
+      Object.assign(new Error('private-match-data'), { name: 'ZodError' }),
+    ],
+    'update_provenance_failed',
+  );
+  const evidence = errorEvidence(new Error('fetch failed', { cause: error }));
+  expect(evidence).toMatchObject({
+    cause: { errors: [expect.anything(), { code: 'ECONNRESET' }, { name: 'ZodError' }] },
+  });
+  const text = JSON.stringify(evidence);
+  for (const sensitive of ['private-token', 'private-signature', 'private-match-data'])
+    expect(text).not.toContain(sensitive);
+  underlying.cause = underlying;
+  expect(JSON.stringify(errorEvidence(underlying))).toContain('truncated');
 });

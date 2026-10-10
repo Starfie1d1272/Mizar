@@ -199,8 +199,8 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
       version: process.env.MIZAR_APP_VERSION,
       currentContentDigest: productArtifact!,
       installed: process.env.MIZAR_DISTRIBUTION === 'installed',
-      log: (stage, code, version) =>
-        console.info(JSON.stringify({ event: 'update', stage, code, version })),
+      log: (stage, code, version, diagnostic) =>
+        console.info(JSON.stringify({ event: 'update', stage, code, version, diagnostic })),
     });
     await updates.load();
   }

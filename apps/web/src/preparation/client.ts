@@ -1,3 +1,4 @@
+import type { Cs2ConfigStatus } from './cs2-status';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
@@ -103,6 +104,10 @@ export async function productionAction(action: 'enter' | 'hide' | 'finish', stat
   let newlyStarted = false;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     newlyStarted = await desktopInvoke<boolean>('start_managed_cs2');
+    const gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+    // A submitted Steam request is waiting, not proof that CS2 is running.
+    // Keep preparation visible so the existing status/cancel controls remain available.
+    if (!gameStatus.running) return;
   }
   try {
     await command('/operator/production', { action, expectedRevision: state.revision });

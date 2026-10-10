@@ -94,6 +94,20 @@ describe('support export', () => {
           err: { stack: poison },
           unknown: secrets,
         }),
+        JSON.stringify({
+          event: 'update',
+          stage: 'github_download',
+          code: 'update_network_failed',
+          diagnostic: {
+            operationId: '12345678-abcd-1234-abcd-123456789012',
+            error: {
+              status: 503,
+              source: 'github.com',
+              message: poison,
+              cause: { code: 'ECONNRESET', stack: poison },
+            },
+          },
+        }),
       ].join('\n'),
     );
     await writeFile(join(dir, 'companion.stderr.log'), poison);
@@ -153,6 +167,13 @@ describe('support export', () => {
       expect(
         bundle.logs.find((log: { name: string }) => log.name === 'companion.log')?.events[1],
       ).toMatchObject({ session: failed?.session, level: 50, httpStatus: 500 });
+      expect(bundle.logs.find((log) => log.name === 'companion.log')?.events[2]).toMatchObject({
+        stage: 'github_download',
+        updateCode: 'update_network_failed',
+        operationId: '12345678-abcd-1234-abcd-123456789012',
+        hasLocalError: true,
+        causes: [{ httpStatus: 503, source: 'github.com' }, { code: 'ECONNRESET' }],
+      });
       expect(bundle.snapshot.runtime.gsiDiagnostics).toMatchObject({
         suppressedCount: 3,
         recent: [{ code: 'INVALID_FIELD', severity: 'warning' }],
