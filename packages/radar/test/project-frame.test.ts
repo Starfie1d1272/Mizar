@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { unboundIdentityResolution } from '@mizar/core/identity';
+import { unboundIdentityResolution, type IdentityResolution } from '@mizar/core/identity';
 import {
   createInitialRuntimeState,
   reduceRuntime,
@@ -103,6 +103,68 @@ describe('Radar frame projector', () => {
     expect(frame.players[0]).toHaveProperty('position');
     expect(frame).not.toHaveProperty('mapGeometry');
     expect(frame).not.toHaveProperty('future');
+  });
+
+  it('uses the shared live nickname rule for local radar without rewriting raw names', () => {
+    const source = observation();
+    const named: TelemetryObservation = {
+      ...source,
+      telemetry: {
+        ...source.telemetry,
+        map: { ...source.telemetry.map, sides: { ct: { name: 'Team' } } },
+        allPlayers: source.telemetry.allPlayers!.map((player) => ({
+          ...player,
+          displayName: 'Team | 同名🎮',
+        })),
+      },
+    };
+    const state = reduceRuntime(
+      createInitialRuntimeState('radar-producer'),
+      { kind: 'program-telemetry', sourceGeneration: 0, observation: named },
+      POLICY,
+    ).state;
+    const input = {
+      runtime: selectProgramSafeRuntimeView(state),
+      identity: unboundIdentityResolution(),
+      nowMonotonicMs: 0,
+      continuityPolicy: POLICY,
+    };
+    expect(projectRadarFrame(input).players[0]?.displayName).toBe('同名🎮');
+    expect(projectRadarFrame(input).players[1]?.displayName).toBe('Team | 同名🎮');
+    expect(named.telemetry.allPlayers![1]?.displayName).toBe('Team | 同名🎮');
+    const unbound = unboundIdentityResolution();
+    const identity: IdentityResolution = {
+      ...unbound,
+      state: 'matched',
+      sourceGeneration: input.runtime.cursor.programSourceGeneration,
+      mapEpoch: input.runtime.cursor.mapEpoch,
+      capabilities: { ...unbound.capabilities, canonicalPlayerMapping: true },
+      players: [
+        {
+          canonicalPlayerId: 'canonical-a',
+          entryId: 'a',
+          steam64: 'player-a',
+          sourcePlayerId: 'player-a',
+          displayName: 'Official Name',
+          observedDisplayName: 'Team | 同名🎮',
+          avatarUrl: null,
+          isStarter: true,
+          observerSlot: null,
+          side: 'CT',
+          evidence: 'current',
+        },
+      ],
+    };
+    expect(projectRadarFrame({ ...input, identity }).players[0]).toMatchObject({
+      sourcePlayerId: 'player-a',
+      canonicalPlayerId: 'canonical-a',
+      displayName: '同名🎮',
+    });
+    expect(
+      projectRadarFrame({ ...input, identity, nowMonotonicMs: 101 }).players[0]?.displayName,
+    ).toBe('Official Name');
+
+    expect(projectRadarFrame({ ...input, nowMonotonicMs: 101 }).players[0]?.displayName).toBeNull();
   });
 
   it('does not retain player facts when the current allplayers block is absent', () => {

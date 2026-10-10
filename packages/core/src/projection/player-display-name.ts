@@ -5,7 +5,9 @@ export function observedPlayerDisplayName(
 ): string | null {
   if (displayName === null) return null;
   const names = teamNames
-    .flatMap((name) => (name?.trim() ? [name.trim()] : []))
+    .flatMap((name) =>
+      name?.trim() ? [name.trim(), `[${name.trim()}]`, `【${name.trim()}】`] : [],
+    )
     .sort((left, right) => right.length - left.length);
   for (const name of names) {
     if (displayName.slice(0, name.length).toLowerCase() !== name.toLowerCase()) continue;
@@ -16,4 +18,22 @@ export function observedPlayerDisplayName(
     return nickname.length > 0 ? nickname : displayName;
   }
   return displayName;
+}
+
+/** Presentation only: canonical identity and raw telemetry remain unchanged. */
+export function livePlayerDisplayName(
+  observedName: string | null | undefined,
+  canonicalName: string | null | undefined,
+  teamNames: readonly (string | null | undefined)[],
+): { displayName: string | null; displayNameSource: 'observed' | 'canonical' | 'unavailable' } {
+  if (observedName?.trim()) {
+    return {
+      displayName: observedPlayerDisplayName(observedName, teamNames),
+      displayNameSource: 'observed',
+    };
+  }
+  return {
+    displayName: canonicalName ?? null,
+    displayNameSource: canonicalName == null ? 'unavailable' : 'canonical',
+  };
 }
