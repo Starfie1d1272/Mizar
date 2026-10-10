@@ -448,13 +448,12 @@ mod native {
             crate::cs2_session::SessionStore::new(log.state_root.clone())
                 .save(&serde_json::json!({
                     "version": 1, "pid": std::process::id(), "created": created,
-                    "executable": std::env::current_exe().unwrap()
+                    "executable": std::env::current_exe().unwrap(), "preserveSettings": true
                 }))
                 .unwrap();
-            let process = crate::managed_cs2::ManagedCs2::new(log)
-                .workspace_process()
-                .unwrap()
-                .unwrap();
+            let managed = crate::managed_cs2::ManagedCs2::new(log);
+            assert!(managed.preserve_settings());
+            let process = managed.workspace_process().unwrap().unwrap();
             let left = window(-10000);
             let dock = window(-10500);
             let game = window(-11000);
@@ -476,6 +475,8 @@ mod native {
             until(|| native.minimized(game.0));
             assert!(native.minimized(game.0));
             let mut tracker = crate::windows_host::GameTracker::default();
+            tracker.preserve_settings = managed.preserve_settings();
+            tracker.overlay_enabled = true;
             let tracked = crate::windows_host::Cs2Window {
                 pid: process.pid,
                 hwnd: game.0,
@@ -498,6 +499,10 @@ mod native {
             assert_eq!(rect(game.0), before);
             assert_eq!(unsafe { GetForegroundWindow() }, foreground);
             assert_eq!(unsafe { GetWindowLongW(game.0, -20) } & 0x8, 0);
+            // Preserved settings retain ownership for linkage, but the local
+            // HUD must remain off even if an earlier layout was managed.
+            tracker.managed = true;
+            assert!(tracker.overlay_rect().is_none());
             let dead = window(-11500);
             let hwnd = dead.0;
             drop(dead);
