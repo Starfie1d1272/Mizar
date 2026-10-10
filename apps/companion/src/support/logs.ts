@@ -110,6 +110,10 @@ function parse(line: string): Record<string, unknown> {
 const updateStages = new Set([
   'resource_cache_verify',
   'resource_store_open',
+  'trust_metadata',
+  'box_metadata',
+  'box_core_metadata',
+  'github_metadata',
   'qualification_proof_rejected',
   'check',
   'download',
@@ -213,6 +217,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
         : !update && typeof record(entry.err).message === 'string'
           ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
           : {}),
+    durationMs: count(diagnostic.durationMs),
     occurrences: Math.max(1, count(entry.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),
     session,
