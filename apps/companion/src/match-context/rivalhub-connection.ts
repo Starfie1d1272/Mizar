@@ -577,7 +577,7 @@ export class RivalHubConnection {
       return;
     }
     this.liveDelivery = {
-      status: dropped && !previous.notified ? 'dropped' : 'failing',
+      status: dropped && previous.status !== 'failing' ? 'dropped' : 'failing',
       reason,
       consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
       since: previous.since ?? performance.now(),

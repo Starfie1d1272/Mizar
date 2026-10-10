@@ -1026,7 +1026,7 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
       );
     await connection.sendLive(snapshot);
     expect(connection.view().liveDelivery).toMatchObject({
-      status: 'dropped',
+      status: 'failing',
       reason,
     });
     expect(connection.view().liveDelivery.consecutiveUnaccepted).toBeGreaterThan(1);
