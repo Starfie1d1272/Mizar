@@ -988,7 +988,8 @@ export function HudConsolePage() {
           >
             启用当前预设
           </Button>
-          <div aria-label="启用条件与引用">
+          <details aria-label="启用条件与引用" open={activationReasons.length > 0}>
+            <summary>共享引用与启用条件</summary>
             <span>
               共享布局引用 · {savedLayout?.name ?? selectedLayoutId}；共享外观引用 ·{' '}
               {savedTheme?.name ?? selectedThemeId}。保存引用资源可影响其他使用它的预设；保存 /
@@ -1016,7 +1017,7 @@ export function HudConsolePage() {
                 定位需处理编辑区
               </Button>
             ) : null}
-          </div>
+          </details>
         </section>
         <div className="hud-console__layout">
           <div className="hud-console__preview-column" ref={reviewFrameRef}>
@@ -1147,6 +1148,7 @@ export function HudConsolePage() {
               >
                 <div className="hud-console__replay-actions">
                   <Button
+                    variant="primary"
                     disabled={replaySession === null || replayState.isSeeking || replayLoading}
                     onClick={() =>
                       replayState.isPlaying ? replaySession?.pause() : replaySession?.play()

@@ -65,10 +65,7 @@
   gap: 0.55rem;
 }
 
-.hud-console__nav a,
-.hud-console__actions button,
-.hud-console__primary-action,
-.hud-console__widget-list button {
+.hud-console__nav a {
   border: 1px solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-control);
   color: var(--mizar-fg-primary);
@@ -85,17 +82,13 @@
   text-decoration: none;
 }
 
-.hud-console__nav a[aria-current='page'],
-.hud-console__primary-action {
+.hud-console__nav a[aria-current='page'] {
   background: var(--mizar-accent-primary);
   border-color: var(--mizar-accent-primary);
   color: var(--mizar-fg-on-accent);
 }
 
-.hud-console__nav a:hover,
-.hud-console__actions button:hover,
-.hud-console__primary-action:hover,
-.hud-console__widget-list button:hover {
+.hud-console__nav a:hover {
   border-color: var(--mizar-focus-ring);
 }
 
@@ -135,28 +128,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-}
-
-.hud-console__replay-actions button {
-  background: var(--mizar-bg-canvas);
-  border: 1px solid var(--mizar-border-default);
-  border-radius: var(--mizar-shape-control);
-  color: var(--mizar-fg-primary);
-  cursor: pointer;
-  font: inherit;
-  min-height: 2.3rem;
-  padding: 0.45rem 0.8rem;
-}
-
-.hud-console__replay-actions button:first-child {
-  background: var(--mizar-accent-primary);
-  border-color: var(--mizar-accent-primary);
-  color: var(--mizar-fg-on-accent);
-}
-
-.hud-console__replay-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .hud-console__replay-scrubber {
@@ -457,22 +428,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.hud-console__actions button,
-.hud-console__primary-action {
-  padding: 0.6rem 0.85rem;
-}
-
-.hud-console__actions button {
-  background: transparent;
-}
-
-.hud-console__actions button:disabled,
-.hud-console__primary-action:disabled,
-.hud-console__widget-list button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
 .hud-console__primary-action {
   justify-self: start;
 }
@@ -485,9 +440,7 @@
 
 .hud-console__widget-list button {
   align-items: center;
-  background: transparent;
   display: flex;
-  font-size: var(--mizar-type-size-small);
   gap: 0.35rem;
   justify-content: space-between;
   min-width: 0;
