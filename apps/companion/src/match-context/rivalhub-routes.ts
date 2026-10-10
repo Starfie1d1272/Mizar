@@ -18,8 +18,27 @@ export function registerRivalHubConnectionRoutes(
 ) {
   options.connection.setDiagnosticHandler?.((operation, error) => {
     if (operation === 'live_recovered')
-      app.log.info({ operation }, 'RivalHub LIVE delivery recovered');
-    else app.log.error({ err: error, operation }, 'RivalHub upstream request failed');
+      app.log.info(
+        { operation, event: 'rivalhub_live', stage: 'accepted', result: 'success' },
+        'RivalHub LIVE delivery recovered',
+      );
+    else if (operation === 'live') {
+      const failure =
+        error instanceof Error
+          ? (error.cause as { stage?: unknown; error?: unknown } | undefined)
+          : undefined;
+      app.log.error(
+        {
+          err: error,
+          operation,
+          event: 'rivalhub_live',
+          stage: failure?.stage ?? 'acceptance',
+          result: 'failure',
+          diagnostic: { error: failure?.error },
+        },
+        'RivalHub LIVE sustained delivery failure',
+      );
+    } else app.log.error({ err: error, operation }, 'RivalHub upstream request failed');
   });
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&

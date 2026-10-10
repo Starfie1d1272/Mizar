@@ -1067,7 +1067,7 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
     expect(connection.view().liveDelivery.reason).toBe('http_503');
     response = () => Promise.reject(new DOMException('private URL', 'TimeoutError'));
     await connection.sendLive(snapshot);
-    expect(connection.view().liveDelivery.reason).toBe('transport_failed');
+    expect(connection.view().liveDelivery.reason).toBe('timeout');
     expect(diagnostics).toHaveBeenCalledTimes(2);
     now += 12000;
     await connection.sendLive(snapshot);
@@ -1220,3 +1220,198 @@ it('loads HTTP viewing links through online select and identifies sanitized conv
     await app.close();
   }
 });
+
+const liveFailureCases = [
+  {
+    name: 'timeout',
+    stage: 'fetch',
+    reason: 'timeout',
+    error: { name: 'TimeoutError', code: 23 },
+    response: () => Promise.reject(new DOMException('private-token URL', 'TimeoutError')),
+  },
+  {
+    name: 'network cause',
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: {
+      name: 'TypeError',
+      cause: {
+        name: 'Error',
+        code: 'ECONNREFUSED',
+        cause: { name: 'Error', code: 'EHOSTUNREACH' },
+      },
+    },
+    response: () =>
+      Promise.reject(
+        new TypeError('private-token fetch', {
+          cause: Object.assign(new Error('private-token cause'), {
+            code: 'ECONNREFUSED',
+            cause: Object.assign(new Error('private-token host'), {
+              code: 'EHOSTUNREACH',
+              cause: new Error('private-token fourth level'),
+            }),
+          }),
+        }),
+      ),
+  },
+  {
+    name: 'nested network timeout',
+    stage: 'fetch',
+    reason: 'timeout',
+    error: { name: 'TypeError', cause: { name: 'Error', code: 'UND_ERR_CONNECT_TIMEOUT' } },
+    response: () =>
+      Promise.reject(
+        new TypeError('private-token URL', {
+          cause: Object.assign(new Error('private-token cause'), {
+            code: 'UND_ERR_CONNECT_TIMEOUT',
+          }),
+        }),
+      ),
+  },
+  {
+    name: 'invalid JSON',
+    stage: 'parse',
+    reason: 'invalid_response',
+    error: { name: 'SyntaxError' },
+    response: () => Promise.resolve(new Response('{"private-token invalid JSON')),
+  },
+  {
+    name: 'invalid shape',
+    stage: 'validate',
+    reason: 'invalid_response',
+    error: { name: 'LiveResponseShapeError', code: 'LIVE_RESPONSE_INVALID' },
+    response: () => Promise.resolve(Response.json({ accepted: 'private-token' })),
+  },
+  {
+    name: 'oversized body',
+    stage: 'read',
+    reason: 'response_too_large',
+    error: { name: 'LiveResponseLimitError', code: 'LIVE_RESPONSE_TOO_LARGE' },
+    response: () => Promise.resolve(new Response('private-token'.repeat(400))),
+  },
+  {
+    name: 'read error',
+    stage: 'read',
+    reason: 'response_read_failed',
+    error: { name: 'Error', code: 'ECONNRESET' },
+    response: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                Object.assign(new Error('private-token read'), { code: 'ECONNRESET' }),
+              );
+            },
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'cancel error',
+    stage: 'cancel',
+    reason: 'response_cancel_failed',
+    error: { name: 'Error', code: 'EPIPE' },
+    response: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            cancel() {
+              throw Object.assign(new Error('private-token cancel'), { code: 'EPIPE' });
+            },
+          }),
+          { status: 503 },
+        ),
+      ),
+  },
+  {
+    name: 'unknown names and codes',
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: { name: 'UnknownError' },
+    response: () =>
+      Promise.reject(
+        Object.assign(new Error('private-token message'), {
+          name: 'private-token',
+          code: 'ERR_PRIVATE_TOKEN',
+        }),
+      ),
+  },
+] as const;
+
+it.each(liveFailureCases)(
+  'retains only bounded safe LIVE $name evidence and diagnoses sustained failures once',
+  async ({ stage, reason, error, response }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-live-evidence-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: 'private-token',
+        installationId: 'installation',
+        competitionId: 'competition',
+        displayName: 'Test',
+      }),
+    );
+    let recovering = false;
+    const request = vi.fn<typeof fetch>((url) => {
+      const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (endpoint.endsWith('/claim'))
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+      if (endpoint.endsWith('/reliable'))
+        return Promise.resolve(new Response(null, { status: 204 }));
+      return recovering ? Promise.resolve(Response.json({ accepted: true })) : response();
+    });
+    const connection = new RivalHubConnection(path, request);
+    const diagnostics = vi.fn();
+    connection.setDiagnosticHandler(diagnostics);
+    await connection.load();
+    const snapshot = {
+      ...claimSnapshot,
+      matchId: 'match',
+      competitionId: 'competition',
+      cursor: { ...claimSnapshot.cursor, liveSessionId: 'session' },
+    };
+    await connection.claim(snapshot, 'revision', false);
+    await connection.sendReliable(
+      { kind: 'map_started', matchId: 'match', cursor: snapshot.cursor } as ReliableEventV1,
+      snapshot,
+    );
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      await connection.sendLive(snapshot);
+      expect(connection.view().liveDelivery).toMatchObject({ reason, failure: { stage, error } });
+      expect(diagnostics).not.toHaveBeenCalled();
+      now = 10_000;
+      for (let index = 0; index < 3; index++) await connection.sendLive(snapshot);
+      await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+      await connection.sendLive(snapshot);
+      expect(diagnostics).toHaveBeenCalledTimes(1);
+      const diagnostic = diagnostics.mock.calls[0]![1] as Error;
+      expect(diagnostic.cause).toEqual({ stage, error });
+      expect(diagnostic.message).toContain(`stage=${stage}`);
+      const serialized = JSON.stringify({
+        view: connection.view(),
+        message: diagnostic.message,
+        cause: diagnostic.cause,
+      });
+      expect(serialized).not.toContain('private-token');
+      expect(serialized).not.toContain('ERR_PRIVATE_TOKEN');
+      expect(serialized).not.toContain('stack');
+      recovering = true;
+      await connection.sendLive(snapshot);
+      expect(diagnostics).toHaveBeenCalledTimes(2);
+      expect(connection.view().liveDelivery).toMatchObject({
+        status: 'accepted',
+        failure: null,
+        consecutiveUnaccepted: 0,
+      });
+      expect(request).toHaveBeenCalledTimes(9);
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);

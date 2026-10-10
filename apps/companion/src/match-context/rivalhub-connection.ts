@@ -35,6 +35,83 @@ type Source = {
   mapStartAttempt?: symbol;
 };
 
+type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
+type LiveFailure = {
+  stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
+  error: LiveErrorEvidence;
+};
+
+// Do not retain messages/stacks: fetch and JSON errors can contain URLs, tokens or response bytes.
+function liveErrorEvidence(error: unknown, depth = 0): LiveErrorEvidence {
+  if (!(error instanceof Error)) return { name: 'UnknownError' };
+  const names = [
+    'Error',
+    'TypeError',
+    'SyntaxError',
+    'RangeError',
+    'AggregateError',
+    'SocketError',
+    'ConnectTimeoutError',
+    'HeadersTimeoutError',
+    'BodyTimeoutError',
+    'AbortError',
+    'TimeoutError',
+    'LiveResponseLimitError',
+    'LiveResponseShapeError',
+  ];
+  const name = names.includes(error.name) ? error.name : 'UnknownError';
+  const rawCode = 'code' in error ? error.code : undefined;
+  const codes = [
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'EPIPE',
+    'ECANCELED',
+    'ERR_INVALID_URL',
+    'ERR_STREAM_PREMATURE_CLOSE',
+    'ERR_INVALID_STATE',
+    'ABORT_ERR',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_SOCKET',
+    'UND_ERR_ABORTED',
+    'UND_ERR_DESTROYED',
+    'UND_ERR_CLOSED',
+    'LIVE_RESPONSE_TOO_LARGE',
+    'LIVE_RESPONSE_INVALID',
+  ];
+  const code =
+    typeof rawCode === 'string' && codes.includes(rawCode)
+      ? rawCode
+      : typeof rawCode === 'number' && Number.isInteger(rawCode) && rawCode >= 0 && rawCode <= 25
+        ? rawCode
+        : undefined;
+  return {
+    name,
+    ...(code === undefined ? {} : { code }),
+    ...(depth < 2 && error.cause !== undefined
+      ? { cause: liveErrorEvidence(error.cause, depth + 1) }
+      : {}),
+  };
+}
+function liveTimeout(error: LiveErrorEvidence): boolean {
+  return (
+    error.name === 'TimeoutError' ||
+    [
+      'ETIMEDOUT',
+      'UND_ERR_CONNECT_TIMEOUT',
+      'UND_ERR_HEADERS_TIMEOUT',
+      'UND_ERR_BODY_TIMEOUT',
+    ].includes(String(error.code ?? '')) ||
+    (error.cause !== undefined && liveTimeout(error.cause))
+  );
+}
+
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   return JSON.stringify([
     cursor.producerInstanceId,
@@ -98,6 +175,7 @@ export class RivalHubConnection {
     consecutiveUnaccepted: number;
     since: number | null;
     notified: boolean;
+    failure?: LiveFailure;
   } = {
     status: 'idle',
     reason: null,
@@ -153,6 +231,7 @@ export class RivalHubConnection {
           : {
               status: this.liveDelivery.status,
               reason: this.liveDelivery.reason,
+              failure: this.liveDelivery.failure ?? null,
               consecutiveUnaccepted: this.liveDelivery.consecutiveUnaccepted,
               durationMs:
                 this.liveDelivery.since === null
@@ -503,16 +582,19 @@ export class RivalHubConnection {
     const source = this.source;
     if (!source || source.matchId !== snapshot.matchId)
       throw new Error('rivalhub_live_unavailable');
-    let reason = 'transport_failed';
+    let reason: string;
     let accepted = false;
     let dropped = false;
     let lostAuthority = false;
+    let stage: LiveFailure['stage'] = 'fetch';
+    let failure: LiveFailure | undefined;
+    const signal = AbortSignal.timeout(4000);
     try {
       // LIVE is disposable: one bounded request, no retries and no response payload logging.
       const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
         method: 'POST',
         redirect: 'manual',
-        signal: AbortSignal.timeout(4000),
+        signal,
         headers: {
           authorization: `Bearer ${this.installation!.credential}`,
           'content-type': 'application/json',
@@ -522,22 +604,54 @@ export class RivalHubConnection {
       });
       if (response.ok || response.status === 429) {
         // Bounded response consumption; remote details/URLs are never diagnostics.
+        stage = 'read';
         const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
         let text = '';
         let bytes = 0;
+        let readFailed = false;
+        let readError: unknown;
         try {
           if (reader)
             for (;;) {
               const chunk = await reader.read();
               if (chunk.done) break;
               bytes += chunk.value.byteLength;
-              if (bytes > 4096) throw new Error('live_response_too_large');
+              if (bytes > 4096)
+                throw Object.assign(new Error(''), {
+                  name: 'LiveResponseLimitError',
+                  code: 'LIVE_RESPONSE_TOO_LARGE',
+                });
               text += new TextDecoder().decode(chunk.value);
             }
-        } finally {
-          await reader?.cancel();
+        } catch (error) {
+          readFailed = true;
+          readError = error;
         }
-        const result = JSON.parse(text) as { accepted?: unknown; reason?: unknown };
+        try {
+          await reader?.cancel();
+        } catch (error) {
+          if (!readFailed) {
+            stage = 'cancel';
+            readFailed = true;
+            readError = error;
+          }
+        }
+        reader?.releaseLock();
+        if (readFailed) throw readError;
+        stage = 'parse';
+        const parsed: unknown = JSON.parse(text);
+        stage = 'validate';
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed) ||
+          (response.ok && !('accepted' in parsed && typeof parsed.accepted === 'boolean'))
+        )
+          throw Object.assign(new Error(''), {
+            name: 'LiveResponseShapeError',
+            code: 'LIVE_RESPONSE_INVALID',
+          });
+        const result = parsed as { accepted?: unknown; reason?: unknown };
         accepted = response.ok && result.accepted === true;
         const normal = ['frame_expired', 'contended', 'delivery_dropped'];
         dropped =
@@ -553,10 +667,25 @@ export class RivalHubConnection {
       } else {
         reason = `http_${response.status}`;
         lostAuthority = response.status === 403;
+        stage = 'cancel';
         await response.body?.cancel();
       }
-    } catch {
-      /* A newer frame may recover; never resend this frame. */
+    } catch (error) {
+      const evidence = liveErrorEvidence(error);
+      failure = { stage, error: evidence };
+      reason =
+        liveTimeout(evidence) || (signal.aborted && evidence.name === 'AbortError')
+          ? 'timeout'
+          : evidence.code === 'LIVE_RESPONSE_TOO_LARGE'
+            ? 'response_too_large'
+            : stage === 'parse' || stage === 'validate'
+              ? 'invalid_response'
+              : stage === 'fetch'
+                ? 'network_failed'
+                : stage === 'cancel'
+                  ? 'response_cancel_failed'
+                  : 'response_read_failed';
+      // Keep only bounded evidence. A newer frame may recover; never resend this frame.
     }
     if (this.source !== source) throw new Error('rivalhub_live_unavailable');
     if (lostAuthority) {
@@ -582,6 +711,7 @@ export class RivalHubConnection {
       consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
       since: previous.since ?? performance.now(),
       notified: previous.notified,
+      ...(failure ? { failure } : previous.failure ? { failure: previous.failure } : {}),
     };
     const duration = performance.now() - this.liveDelivery.since!;
     let newlyNotified = false;
@@ -596,7 +726,8 @@ export class RivalHubConnection {
       this.onDiagnostic(
         'live',
         new Error(
-          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveUnaccepted}；durationMs=${Math.round(duration)}`,
+          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveUnaccepted}；durationMs=${Math.round(duration)}；stage=${this.liveDelivery.failure?.stage ?? 'acceptance'}`,
+          { cause: this.liveDelivery.failure },
         ),
       );
     }
