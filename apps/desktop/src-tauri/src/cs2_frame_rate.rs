@@ -323,7 +323,6 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
     let mut includes = vec![("autoexec.cfg".to_string(), true)];
     let mut aliases = BTreeSet::new();
     let mut commands = BTreeSet::new();
-    let mut spectator_startup_conflict = false;
     if localconfig.exists() {
         // Read only. Never put this file, its other fields, or tokens in a journal.
         let local = read_bounded(&localconfig, 16 * 1024 * 1024)?;
@@ -339,10 +338,6 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
                 "LaunchOptions",
             ],
         )? {
-            spectator_startup_conflict |= options
-                .value
-                .to_ascii_lowercase()
-                .contains("spec_usenumberkeys_nobinds");
             let tokens = lex(&options.value, true)?;
             for (index, token) in tokens.iter().enumerate() {
                 if let Some(command) = token.value.strip_prefix('+') {
@@ -401,9 +396,7 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
             return Err("CS2 启动配置引用过多，未修改游戏设置。".into());
         }
         let original = read_bounded(&path, FILE_LIMIT)?;
-        spectator_startup_conflict |= original
-            .to_ascii_lowercase()
-            .contains("spec_usenumberkeys_nobinds");
+
         total += original.len();
         if total > TOTAL_LIMIT {
             return Err("CS2 启动配置总量超过上限。".into());
@@ -420,9 +413,6 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
     }
     if !aliases.is_disjoint(&commands) {
         return Err("启动配置调用了自定义别名，无法保证帧率上限，请改为直接命令后重试。".into());
-    }
-    if spectator_startup_conflict {
-        files[0]["spectatorStartupConflict"] = json!(true);
     }
     Ok(files)
 }

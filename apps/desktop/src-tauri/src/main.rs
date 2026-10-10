@@ -548,10 +548,8 @@ async fn set_cs2_preferences(
     app: tauri::AppHandle,
     quality_preset: String,
     frame_rate_limit: u16,
-    spectator_number_keys: Option<bool>,
 ) -> Result<(), String> {
-    let mut preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
-    preferences.spectator_number_keys = spectator_number_keys.unwrap_or(false);
+    let preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;

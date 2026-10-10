@@ -16,7 +16,7 @@ export function Cs2LaunchSettings() {
   const qualityLabels = { 'very-high': '最高', high: '高', medium: '中', preserve: '保留原画质' };
   const [draft, setDraft] = useState<Pick<
     Cs2ConfigStatus,
-    'qualityPreset' | 'frameRateLimit' | 'spectatorNumberKeys'
+    'qualityPreset' | 'frameRateLimit'
   > | null>(null);
   const [saved, setSaved] = useState(false);
   const preferences = draft ?? status;
@@ -24,8 +24,7 @@ export function Cs2LaunchSettings() {
     draft &&
     status &&
     (draft.qualityPreset !== status.qualityPreset ||
-      draft.frameRateLimit !== status.frameRateLimit ||
-      Boolean(draft.spectatorNumberKeys) !== Boolean(status.spectatorNumberKeys)),
+      draft.frameRateLimit !== status.frameRateLimit),
   );
   function edit(next: NonNullable<typeof draft>) {
     setDraft(next);
@@ -41,7 +40,6 @@ export function Cs2LaunchSettings() {
       await desktopInvoke('set_cs2_preferences', {
         qualityPreset: preferences.qualityPreset,
         frameRateLimit: preferences.frameRateLimit,
-        spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
       });
       setSaved(true);
       refresh();
@@ -70,7 +68,6 @@ export function Cs2LaunchSettings() {
               onChange={(event) => {
                 if (preferences)
                   edit({
-                    spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
                     qualityPreset: event.target.value as Cs2ConfigStatus['qualityPreset'],
                     frameRateLimit: preferences.frameRateLimit,
                   });
@@ -90,7 +87,6 @@ export function Cs2LaunchSettings() {
                 if (preferences)
                   edit({
                     qualityPreset: preferences.qualityPreset,
-                    spectatorNumberKeys: Boolean(preferences.spectatorNumberKeys),
                     frameRateLimit: Number(event.target.value) as Cs2ConfigStatus['frameRateLimit'],
                   });
               }}
@@ -99,20 +95,7 @@ export function Cs2LaunchSettings() {
               <option value={30}>30 帧／秒（省资源）</option>
               <option value={0}>不限帧（可能导致雷达卡顿）</option>
             </Select>
-            <Select
-              label="数字键观战"
-              value={preferences?.spectatorNumberKeys ? 'enabled' : 'preserve'}
-              disabled={disabled}
-              onChange={(event) => {
-                if (preferences)
-                  edit({ ...preferences, spectatorNumberKeys: event.target.value === 'enabled' });
-              }}
-            >
-              <option value="preserve">保留原设置</option>
-              <option value="enabled">沿用已启用的原始数字键模式</option>
-            </Select>
           </div>
-          {preferences?.spectatorNumberKeys ? <p>仅用于已启用的观战模式，保留个人键位。</p> : null}
           {status?.spectatorWarning ? (
             <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
           ) : null}
@@ -145,7 +128,10 @@ export function Cs2LaunchSettings() {
         <summary>启动方式与配置恢复</summary>
         <p>无边框窗口 · 分辨率适配工作台</p>
         <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
-        <p>本次启动使用国际服、开发者控制台与 OBS 游戏捕获兼容选项。</p>
+        <p>
+          本次启动使用国际服、开发者控制台与 OBS
+          游戏捕获兼容选项，并加载数字键观战配置，保留个人键位。
+        </p>
         <div>
           <code>-console -allow_third_party_software -worldwide</code>
           <p>

@@ -10,7 +10,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   const [busy, setBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [feedback, setFeedback] = useState('');
-  async function run(action: () => Promise<unknown>, success = '原设置已恢复。') {
+  async function run(action: () => Promise<unknown>, success = '恢复检查已完成。') {
     if (busy || phase) return;
     setBusy(true);
     setFeedback('');
@@ -41,11 +41,19 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         {feedback ? <p>{feedback}</p> : null}
       </StatusBanner>
     );
-  if (!status?.pending && !phase && !feedback && !status?.message) return null;
+  if (
+    !status?.pending &&
+    !status?.spectatorRecoveryPending &&
+    !phase &&
+    !feedback &&
+    !status?.message
+  )
+    return null;
   const uncertain = status?.phase === 'uncertain';
   return (
     <StatusBanner
       tone={
+        status?.spectatorRecoveryPending ||
         status?.canPreserve ||
         (status?.pending &&
           !uncertain &&
@@ -70,9 +78,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                   : status.preserveSettings
                     ? '等待清理本次启动记录'
                     : 'CS2 原配置尚未恢复'
-              : status?.canPreserve
-                ? '未应用游戏设置，原始配置已备份'
-                : '原设置已恢复'}
+              : status?.spectatorRecoveryPending
+                ? '观战原值尚未恢复'
+                : status?.canPreserve
+                  ? '未应用游戏设置，原始配置已备份'
+                  : '原设置已恢复'}
         </strong>
         {status?.canPreserve ? (
           <p>
@@ -96,6 +106,9 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             checked={cancelled}
             onChange={(event) => setCancelled(event.target.checked)}
           />
+        ) : null}
+        {status?.spectatorRecoveryPending ? (
+          <p>{status.message || '观战原值备份仍保留，帧率和画质恢复不受影响。'}</p>
         ) : null}
         <div className="preparation-actions">
           {status?.canPreserve && production ? (
@@ -121,6 +134,18 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               打开直播工作台
             </Button>
           ) : null}
+          {status?.spectatorRecoveryPending ? (
+            <Button
+              disabled={busy || Boolean(phase) || Boolean(status.running)}
+              onClick={() =>
+                void run(() =>
+                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }),
+                )
+              }
+            >
+              重试恢复观战原值
+            </Button>
+          ) : null}
           {status?.pending ? (
             <Button
               disabled={busy || Boolean(phase) || !production || (uncertain && !cancelled)}
@@ -134,7 +159,9 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                       : production?.mode === 'preparation'
                         ? desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: cancelled })
                         : productionAction('finish', production!),
-                  status.preserveSettings ? '本次启动已结束，游戏设置保持不变。' : '原设置已恢复。',
+                  status.preserveSettings
+                    ? '本次启动已结束，游戏设置保持不变。'
+                    : '恢复检查已完成。',
                 )
               }
             >

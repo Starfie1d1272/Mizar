@@ -1,7 +1,11 @@
 //! Optional raw-number-key preset. Never own or rewrite personal key bindings.
 use crate::cs2_frame_rate::field;
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 const KEY: &str = "spec_usenumberkeys_nobinds";
 
@@ -20,17 +24,62 @@ fn boolean(value: &str) -> Result<bool, String> {
     }
 }
 
-/// First version only confirms an already-enabled machine field. It does not
-/// own archive writes: cloud scope has not yet been verified on current CS2.
-pub fn already_enabled(text: &str) -> Result<(), String> {
-    if boolean(&value(text)?.value)? {
-        Ok(())
-    } else {
-        Err(
-            "原数字键观战设置未启用，本次预设未应用。可在 CS2 中确认该设置，或选择保留原设置。"
-                .into(),
-        )
+pub const CFG_NAME: &str = "mizar_observer.cfg";
+const CFG: &[u8] = include_bytes!("../../../../config/mizar_observer.cfg");
+
+fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
+    executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(|game| game.join("csgo/cfg").join(CFG_NAME))
+        .ok_or_else(|| "观战 CFG 目录无法核实。".into())
+}
+
+/// Only create our fixed file, or accept identical bytes. Never replace an
+/// unknown file, including a symlink or a partially written previous install.
+pub fn install(executable: &Path) -> Result<(), String> {
+    let path = cfg_path(executable)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() != CFG.len() as u64
+                || fs::read(&path).map_err(|_| "无法核实观战 CFG。")? != CFG
+            {
+                return Err(
+                    "同名 mizar_observer.cfg 不属于当前固定配置，已保留原文件，未加载观战预设。"
+                        .into(),
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|_| "观战 CFG 无法部署，未加载观战预设。")?;
+            file.write_all(CFG)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "观战 CFG 未能完整保存，未加载观战预设。")?;
+            if fs::read(&path).map_err(|_| "观战 CFG 无法读回核实。")? != CFG {
+                return Err("观战 CFG 读回不一致，未加载观战预设。".into());
+            }
+        }
+        Err(_) => return Err("无法核实观战 CFG，未加载观战预设。".into()),
     }
+    Ok(())
+}
+
+pub fn restore(original: &str, current: &str) -> Result<String, String> {
+    let before = value(original).map_err(|_| "原观战字段备份无法核实。")?;
+    let now = value(current).map_err(|_| "当前观战字段缺失、重复或值异常，原值备份仍保留。")?;
+    if !boolean(&now.value)? && boolean(&before.value)? {
+        return Err("观战字段已被外部关闭，未覆盖外部修改；原值备份仍保留。".into());
+    }
+    let mut restored = current.to_string();
+    restored.replace_range(now.start..now.end, &original[before.start..before.end]);
+    Ok(restored)
 }
 
 /// Bounded, read-only eligibility check before launch only. Never part of FPS
@@ -84,8 +133,11 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
             if text.len() > 256 * 1024 || total > 1024 * 1024 {
                 return Err("观战配置镜像过大，数字键预设未应用。".into());
             }
-            if name == "cs2_machine_convars.vcfg_lastclouded"
-                || (entry.path() != machine && text.to_ascii_lowercase().contains(KEY))
+            if entry.path() != machine
+                && text.to_ascii_lowercase().contains(KEY)
+                && field(&text, &["config", "convars", KEY])
+                    .map_err(|_| "观战配置镜像字段无法可靠解析。")?
+                    .is_some()
             {
                 return Err(
                     "发现数字键观战设置的用户或云镜像，未接管该设置；个人绑定保持原样。".into(),
@@ -96,21 +148,20 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn prepare(files: &mut [Value], video: &Path) -> Result<(), String> {
+pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value, String> {
     check_archive(video)?;
     let record = files
-        .first_mut()
+        .first()
         .filter(|record| record["kind"] == "convars")
-        .ok_or("观战配置备份缺失，数字键预设未应用。")?;
-    if record["spectatorStartupConflict"] == true {
-        return Err("启动项或 CFG 已设置数字键观战模式，未覆盖个人配置；数字键预设未应用。".into());
-    }
+        .ok_or("观战配置备份缺失。")?;
     let original = record["original"]
         .as_str()
         .ok_or("观战配置原值备份缺失。")?;
-    already_enabled(original)?;
-    record["spectatorNumberKeys"] = json!(true);
-    Ok(())
+    value(original)?;
+    install(executable)?;
+    // Runtime +exec will enable true even when the original was false. Do not
+    // prewrite this archive field or change FPS's original/applied contract.
+    Ok(json!({"version":1,"video":video,"original":original}))
 }
 
 #[cfg(test)]
@@ -118,12 +169,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_accepts_already_enabled_archive_values_without_mutating_them() {
+    fn restores_both_original_boolean_states_preserving_other_game_edits() {
         for token in ["true", "1", "false", "0"] {
             let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{token}\"}}}}");
+            let current =
+                format!("\"config\" {{\"convars\" {{\"{KEY}\" \"true\" \"other\" \"new\"}}}}");
             assert_eq!(
-                already_enabled(&original).is_ok(),
-                matches!(token, "true" | "1")
+                restore(&original, &current).unwrap(),
+                current.replace("\"true\"", &format!("\"{token}\""))
             );
         }
     }
@@ -135,7 +188,7 @@ mod tests {
             format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\" \"{KEY}\" \"true\"}}}}"),
             format!("\"config\" {{\"convars\" {{\"{KEY}\" \"unknown\"}}}}"),
         ] {
-            assert!(already_enabled(&text).is_err());
+            assert!(value(&text).is_err());
         }
     }
 }

@@ -457,6 +457,10 @@ async function main() {
       join(rootDir, 'config', 'gamestate_integration_mizar.cfg.example'),
       join(resourcesDir, 'config', 'gamestate_integration_mizar.cfg.template'),
     );
+    await cp(
+      join(rootDir, 'config', 'mizar_observer.cfg'),
+      join(resourcesDir, 'config', 'mizar_observer.cfg'),
+    );
     await writeFile(
       join(stagingDir, 'README.txt'),
       `${await readFile(join(scriptDir, 'bundle', 'README.txt'), 'utf8')}`

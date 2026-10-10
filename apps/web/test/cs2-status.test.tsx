@@ -55,36 +55,26 @@ async function render() {
 }
 
 describe('CS2 configuration progress', () => {
-  it('saves the explicit number-key choice and shows a skipped-preset reason without reporting success', async () => {
+  it('keeps core settings available while optional spectator recovery remains pending and permits retry', async () => {
     await render();
-    const select =
-      container.querySelector<HTMLSelectElement>('select[aria-label="数字键观战"]') ??
-      [...container.querySelectorAll('select')].find((element) =>
-        element.querySelector('option[value="enabled"]'),
-      )!;
-    expect(select.value).toBe('preserve');
-    await act(async () => {
-      select.value = 'enabled';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      await Promise.resolve();
-    });
-    await act(async () => {
-      container
-        .querySelector('form')!
-        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      await Promise.resolve();
-    });
-    expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
-      qualityPreset: 'preserve',
-      frameRateLimit: 60,
-      spectatorNumberKeys: true,
-    });
     await poll({
       ...idle,
-      spectatorNumberKeys: true,
-      spectatorWarning: '原值缺失，数字键预设未应用。',
+      spectatorRecoveryPending: true,
+      spectatorWarning: '当前观战字段异常，原值备份仍保留。',
     });
-    expect(container.textContent).toContain('原值缺失，数字键预设未应用。');
+    expect(container.textContent).toContain('当前观战字段异常，原值备份仍保留。');
+    expect(container.querySelector('select')?.disabled).toBe(false);
+    const retry = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === '重试恢复观战原值',
+    )!;
+    expect(retry.disabled).toBe(false);
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('restore_cs2_backup', {
+      confirmSteamCancelled: false,
+    });
   });
 
   it('preserves an unsaved draft after a failed save and allows retry', async () => {
@@ -159,7 +149,6 @@ describe('CS2 configuration progress', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('set_cs2_preferences', {
       qualityPreset: 'preserve',
       frameRateLimit: 0,
-      spectatorNumberKeys: false,
     });
     expect(container.textContent).toContain('已保存，下次启动生效。');
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'start_managed_cs2')).toBe(
