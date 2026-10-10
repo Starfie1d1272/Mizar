@@ -49,7 +49,7 @@ namespace Mizar.WebInstaller {
         // a new executable entry from an external qualification directory.
         bool missingEntry=false;
         try { await Nsis.RunResourceBridge(plan,target,CancellationToken.None); }
-        catch(IOException error) { missingEntry=error.Message.Contains("缺少在线安装入口"); }
+        catch(InstallerActionRequired error) { missingEntry=error.InnerException!=null && error.InnerException.Message.Contains("缺少在线安装入口"); }
         Assert(missingEntry);
         Console.WriteLine("PASS: native production bridge refuses historical Core without its authenticated packaged entry");
         // Separately verify current App/SDK integration against these real Core bytes.
