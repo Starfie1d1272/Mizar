@@ -397,22 +397,9 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
-      # Cache transports bytes only; the original Downloader revalidates the fixed plan.
-      - name: Restore fixed legacy NSIS bytes
-        id: legacy-nsis-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .agent-tmp/web-installer/nsis-download-cache/*-Mizar-v*-Windows-x64-Setup.exe
-          key: legacy-nsis-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/web-installer/legacy-stable-plan.json') }}
       - name: Verify native UI, bounded download, real NSIS and actual SDK / Store / App
         shell: powershell
         run: ./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer -CaseGroup ${{ matrix.group }}
-      - name: Save verified fixed legacy NSIS bytes
-        if: ${{ github.ref == 'refs/heads/main' && steps.legacy-nsis-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .agent-tmp/web-installer/nsis-download-cache/*-Mizar-v*-Windows-x64-Setup.exe
-          key: ${{ steps.legacy-nsis-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

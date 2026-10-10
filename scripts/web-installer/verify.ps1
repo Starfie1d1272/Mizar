@@ -5,7 +5,7 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 # Update owns its complete installation chain and needs no Node/App deployment.
 if ($CaseGroup -eq 'update') {
-  & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup -DownloadCache (Join-Path $output 'nsis-download-cache')
+  & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup
   exit 0
 }
 # Download owns only its cache; it never reads or mutates installation state.

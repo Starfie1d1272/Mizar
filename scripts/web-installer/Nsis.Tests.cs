@@ -16,6 +16,16 @@ namespace Mizar.WebInstaller {
       if (phase == "waiting-for-installer") Waiting = true;
     }
   }
+  // Observe existing production phases without changing scheduling or assertions.
+  sealed class NativeUpdateTiming : IProgress<string> {
+    readonly System.Diagnostics.Stopwatch clock=System.Diagnostics.Stopwatch.StartNew();
+    string previous;
+    public void Report(string phase) {
+      if(phase==previous) return;
+      previous=phase;
+      Console.WriteLine("TIMING: native update phase "+phase+" at "+clock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+    }
+  }
   static class NsisTests {
     static void Assert(bool value) { if (!value) throw new Exception("NSIS assertion failed"); }
     static string Hash(string path) {using(var file=File.OpenRead(path)) using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();}
@@ -83,7 +93,7 @@ namespace Mizar.WebInstaller {
           Environment.SetEnvironmentVariable("MIZAR_MEASURE_UPDATE","1");
           try {
             var phaseClock=System.Diagnostics.Stopwatch.StartNew();
-            var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
+            var updated=await Nsis.Install(plan,installer,target,CancellationToken.None,new NativeUpdateTiming());
             Console.WriteLine("TIMING: same-version native update "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
             phaseClock.Restart();
             Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");Passed("same-version-update");
