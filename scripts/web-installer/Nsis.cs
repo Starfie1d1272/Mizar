@@ -368,12 +368,16 @@ namespace Mizar.WebInstaller {
     static void AssertUpdate(PendingInstall record) {
       string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","updates");
       Downloader.NoReparse(record.updateStage);
+      var binding=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(record.updateStage,"plan.json")));
+      if(Convert.ToString(binding["bundleRoot"])!=record.target || Convert.ToString(binding["stateRoot"])!=Path.GetDirectoryName(root)) throw new InstallerRecoveryRequired(record.target,"恢复计划目标不一致，保留现场。");
       if(Path.GetDirectoryName(record.updateStage)!=root || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(record.updateStage),"^install-[a-f0-9]{32}$") || Hash(Path.Combine(record.updateStage,"plan.json"))!=record.updatePlanSha256 || Hash(Path.Combine(record.updateStage,"update-install.ps1"))!=record.updateScriptSha256 || record.updateScriptSha256!=NativeScriptHash()) throw new InstallerRecoveryRequired(record.target,"更新恢复记录不完整，保留现场。");
     }
     static bool RecoverUpdate(Plan plan,string target,PendingInstall record) {
       if(record.target!=target || ProcessStillActive(record.ownerPid,record.ownerStarted)) throw new InstallerRecoveryRequired(target,"前一次更新尚未确认结束，请关闭旧安装器后再试。");
       AssertUpdate(record);
       if(record.stage=="update-prepared" && record.writerPid==0 && record.writerStarted==0) {
+        string journalPath=Path.Combine(record.updateStage,"journal.json");Downloader.NoReparse(journalPath);
+        if(new FileInfo(journalPath).Length>65536 || Convert.ToString(Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(journalPath))["phase"])!="prepared") throw new InstallerRecoveryRequired(target,"准备记录与写入日志不一致，保留现场。");
         var original=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(record.updateStage,"plan.json")));
         var artifact=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(target,"resources","metadata","artifact.json")));
         VerifiedPayload(target,Convert.ToString(artifact["appVersion"]),Convert.ToString(artifact["gitSha"]),Convert.ToString(original["previousContentDigest"]),false);

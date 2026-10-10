@@ -18,6 +18,7 @@ namespace Mizar.WebInstaller {
   }
   static class NsisTests {
     static void Assert(bool value) { if (!value) throw new Exception("NSIS assertion failed"); }
+    static string Hash(string path) {using(var file=File.OpenRead(path)) using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();}
     static async Task Run() {
       Plan plan;
       using (var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("legacy-plan.json"))
@@ -63,6 +64,22 @@ namespace Mizar.WebInstaller {
         try {
           var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
           Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");
+          var committed=(PendingInstall)typeof(FreshInstallResult).GetField("record",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(updated);
+          string script=Path.Combine(committed.updateStage,"update-install.ps1"),nativePlan=Path.Combine(committed.updateStage,"plan.json");
+          string stage;
+          using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" -Mode Prepare -PlanPath \""+nativePlan+"\"",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true})) {
+            var stdout=child.StandardOutput.ReadToEndAsync();var stderr=child.StandardError.ReadToEndAsync();
+            if(!child.WaitForExit(60000)) throw new IOException("Actual native Prepare timed out");
+            string output=await stdout,errors=await stderr;if(child.ExitCode!=0) throw new IOException(errors);
+            stage=Convert.ToString(new JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(output)["stageRoot"]);
+          }
+          var unwritten=Nsis.NewPending(plan,target,installer);unwritten.updateStage=stage;unwritten.updatePlanSha256=Hash(Path.Combine(stage,"plan.json"));unwritten.updateScriptSha256=Hash(Path.Combine(stage,"update-install.ps1"));
+          unwritten.ownerPid=prepared.ownerPid;unwritten.ownerStarted=prepared.ownerStarted;unwritten.stage="update-launching";Nsis.SavePending(unwritten,true);
+          bool launchAmbiguity=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {launchAmbiguity=true;}
+          Assert(launchAmbiguity && File.Exists(pending) && File.Exists(Path.Combine(target,"Mizar.exe")));
+          unwritten.stage="update-prepared";Nsis.SavePending(unwritten,false);
+          Assert(!Nsis.RecoverPending(plan,target) && !File.Exists(pending) && File.Exists(Path.Combine(target,"Mizar.exe")));
+          Console.WriteLine("PASS: real native Prepare with no writer recovers; ambiguous launch with no writer retains the pending record");
           await updated.RollbackAsync();
           Assert(File.Exists(Path.Combine(target,"Mizar.exe")) && File.ReadAllText(data)=="preserve user data");
           Console.WriteLine("PASS: real lightweight same-version repair/upgrade and rollback preserve the existing path and user data");
