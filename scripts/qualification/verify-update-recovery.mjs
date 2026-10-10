@@ -426,8 +426,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       (await readFile(join(state, 'updates/result.json'), 'utf8')).replace(/^\uFEFF/, ''),
     );
     assert.notEqual(report.code, 'update_host_exit_timeout', JSON.stringify(report));
-    if (timingFault)
-      assert.equal(report.code, success ? 'update_completed' : 'update_rolled_back');
+    if (timingFault) assert.equal(report.code, success ? 'update_completed' : 'update_rolled_back');
     assert.equal(
       report.status,
       success ? 'installed' : scenario === 'remaining-process' ? 'cancelled' : 'restored',
