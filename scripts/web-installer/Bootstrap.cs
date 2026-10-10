@@ -339,7 +339,7 @@ namespace Mizar.WebInstaller {
       amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
       launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
       launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
-      action.SetBounds(347,270,100,32); action.Text="安装";
+      action.SetBounds(347,270,100,32); action.Text=Nsis.HasPending() ? "恢复安装" : "安装";
       action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
       cancel.SetBounds(458,270,100,32); cancel.Text="关闭";
       cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
@@ -358,12 +358,12 @@ namespace Mizar.WebInstaller {
       stages.Report("checking-release");
       await Publication.Verify(plan,token);
       string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
-      if(installedCore==null && (Directory.Exists(target) || File.Exists(target))) {
+      if(installedCore==null && !Nsis.HasPending() && (Directory.Exists(target) || File.Exists(target))) {
         Nsis.VerifyInstalledCore(plan,target); // A directory alone never proves a resumable installation.
         installedCore=target;
       }
       if(installedCore==null) {
-        Nsis.ValidateDestination(target);
+        if(!Nsis.HasPending()) Nsis.ValidateDestination(target);
         stages.Report("downloading-core");
         string installer;
         using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
@@ -422,7 +422,7 @@ namespace Mizar.WebInstaller {
         heading.Text=current.IsCancellationRequested ? "已取消" : "下载超时";
         detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : "请检查网络后重试，或使用完整离线安装包。"; action.Text="重新开始";
       } catch(InstallerRecoveryRequired error) {
-        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请使用原安装器恢复。"; technicalDetails=error.Message;
+        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=error.Message;
       } catch(InstallerActionRequired error) {
         recoveryRequired=!error.CanRetry; heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=error.ToString(); action.Text="重试";
       } catch(UnauthorizedAccessException error) {

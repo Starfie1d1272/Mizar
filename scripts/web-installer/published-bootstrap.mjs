@@ -8,6 +8,7 @@ import { PACK_ID, LIMITS } from '@mizar/resource-pack-contract';
 import {
   RESOURCE_ASSET_NAMES as resourceNames,
   getResourceAuthorization,
+  verifyCatalogResourceMetadata,
   verifyResourceCatalogBytes,
   verifyResourceCatalogReceipt,
 } from '@mizar/resource-pack-contract/runtime';
@@ -41,7 +42,7 @@ async function authenticateBootstrapSource({
   signal = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(600000)]);
   if (version !== undefined && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
     throw new Error('Bootstrap version must be an exact Stable version');
-  const source = new StableSource(tufCachePath, fetcher);
+  const source = new StableSource(tufCachePath, fetcher, sourceMode);
   let selected = await source.latest(signal, version);
   if (version !== undefined && selected?.tag_name !== `v${version}`) {
     selected = await updateJson(
@@ -62,10 +63,9 @@ async function authenticateBootstrapSource({
     expectedCore &&
     (manifest.version !== expectedCore.version ||
       manifest.gitSha !== expectedCore.gitSha ||
-      (!expectedCore.coreMode &&
-        (manifest.installer.contentDigest !== expectedCore.contentDigest ||
-          manifest.installer.sha256 !== expectedCore.sha256 ||
-          manifest.installer.bytes !== expectedCore.bytes)))
+      manifest.installer.contentDigest !== expectedCore.contentDigest ||
+      manifest.installer.sha256 !== expectedCore.sha256 ||
+      manifest.installer.bytes !== expectedCore.bytes)
   )
     throw new Error('Published NSIS differs from the fixed native qualification identity');
   const prefix = `https://github.com/${repository}/releases/download/v${manifest.version}/`;
@@ -93,34 +93,51 @@ async function authenticateBootstrapSource({
   const identity = getResourceAuthorization(authorization);
   if (expectedCore && identity.core.archiveSha256 !== expectedCore.coreSha256)
     throw new Error('Published Core archive differs from the fixed native qualification identity');
-  // Signed descriptor/catalog bind the qualified Core ZIP. For a distinct Core,
-  // the native qualification pin binds its executed NSIS; the signed update
-  // envelope continues to bind the Full NSIS for existing clients. A second
-  // GitHub API asset listing is not a publisher authority and is unnecessary.
-  const inputs = {};
-  for (const [field, name, maximum, digest] of [
-    ['archiveBytes', identity.archive.name, LIMITS.archiveBytes, identity.archive.sha256],
-    ['archiveBundleBytes', names.archiveProof, 2097152],
-    ['statementBytes', names.publication, 65536, identity.publication.sha256],
-    ['publicationBundleBytes', names.publicationProof, 2097152],
-  ]) {
-    if (identity.assets[name] !== prefix + name)
-      throw new Error('Canonical resource origin changed');
-    const bytes = await downloadResourceOriginal({
+  // Core metadata and its NSIS are authenticated by the same-run Qualification
+  // proof before the resource catalog is consumed. Legacy Full remains supported.
+  const loadInputs = async (downloadSignal = signal) => {
+    const inputs = {};
+    for (const [field, name, maximum, digest] of [
+      ['archiveBundleBytes', names.archiveProof, 2097152],
+      ['statementBytes', names.publication, 65536, identity.publication.sha256],
+      ['publicationBundleBytes', names.publicationProof, 2097152],
+    ]) {
+      if (identity.assets[name] !== prefix + name)
+        throw new Error('Canonical resource origin changed');
+      const bytes = await downloadResourceOriginal({
+        version: manifest.version,
+        name,
+        maximum,
+        signal: downloadSignal,
+        fetcher,
+        sourceMode,
+      });
+      if (digest && hash(bytes) !== digest)
+        throw new Error('Authenticated resource asset bytes changed');
+      inputs[field] = Buffer.from(bytes);
+    }
+    await verifyCatalogResourceMetadata({
+      authorization,
+      ...inputs,
+      tufCachePath,
+      signal: downloadSignal,
+    });
+    const archiveBytes = await downloadResourceOriginal({
       version: manifest.version,
-      name,
-      maximum,
-      signal,
+      name: identity.archive.name,
+      maximum: LIMITS.archiveBytes,
+      signal: downloadSignal,
       fetcher,
       sourceMode,
     });
     if (
-      (digest && hash(bytes) !== digest) ||
-      (field === 'archiveBytes' && bytes.length !== identity.archive.bytes)
+      archiveBytes.length !== identity.archive.bytes ||
+      hash(archiveBytes) !== identity.archive.sha256
     )
-      throw new Error('Authenticated resource asset bytes changed');
-    inputs[field] = Buffer.from(bytes);
-  }
+      throw new Error('Authenticated resource archive bytes changed');
+    inputs.archiveBytes = Buffer.from(archiveBytes);
+    return inputs;
+  };
   return {
     corePlan: Object.freeze({
       version: manifest.version,
@@ -132,7 +149,7 @@ async function authenticateBootstrapSource({
       url: installerUrl(manifest),
     }),
     authorization,
-    inputs,
+    loadInputs,
   };
 }
 /** Read dual-proof policy from the unique Store's receipt without any network or extra cache. */
@@ -147,7 +164,10 @@ export async function restoreResourceAuthorization({ store, expectedCore, signal
         purpose: 'cache',
         signal: storeSignal,
       });
-      return createActivePolicyVerifier(getResourceAuthorization(authorization).policy)({
+      return createActivePolicyVerifier(
+        getResourceAuthorization(authorization).policy,
+        authorization,
+      )({
         receipt,
         signal: storeSignal,
       });

@@ -437,6 +437,9 @@ export class UpdateManager {
         version: this.candidate.version,
         gitSha: this.candidate.gitSha,
         contentDigest: this.candidate.installer.contentDigest,
+        ...(this.candidate.coreArchiveSha256
+          ? { coreArchiveSha256: this.candidate.coreArchiveSha256 }
+          : {}),
         previousContentDigest: this.options.currentContentDigest,
         bundleRoot: this.options.bundleRoot,
         stateRoot: this.options.stateRoot,

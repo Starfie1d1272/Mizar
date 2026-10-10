@@ -13,6 +13,7 @@ const { installOfficialPack } = await import(moduleUrl);
 let reads = 0;
 let installs = 0;
 let verifications = 0;
+let downloads = 0;
 const store = {
   getStatus: () => ({ phase: 'ready', activeVersion: '1.0.0', preparedVersion: null }),
   reuseActive: async () => {
@@ -32,6 +33,10 @@ await assert.rejects(
   installOfficialPack({
     store,
     inputs: {},
+    loadInputs: async () => {
+      downloads += 1;
+      throw new Error('Unverified policy must not download a ZIP');
+    },
     authorization: {
       schemaVersion: 'mizar.authenticated-resource-catalog.v1',
       policy: {
@@ -48,4 +53,5 @@ await assert.rejects(
 assert.equal(verifications, 0, 'Unverified catalog policy must not reach Store');
 assert.equal(reads, 0, 'Same-version bytes must not bypass target authorization');
 assert.equal(installs, 0, 'No unverified inputs may reach Store installation');
+assert.equal(downloads, 0, 'No unverified catalog may initiate resource downloads');
 console.log('PASS: ready same-version status cannot bypass target authorization');

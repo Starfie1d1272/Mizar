@@ -11,6 +11,7 @@ export async function machineMetadata(product, resources, index) {
     'core-release-manifest.json',
     'core-distribution-manifest.json',
     'NSIS-LICENSE.txt',
+    'qualification-provenance.json',
   ])
     files.set(name, await readFile(join(product, name)));
   for (const name of Object.values(RESOURCE_ASSET_NAMES))

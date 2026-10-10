@@ -26,6 +26,7 @@ function Assert-Plan($plan) {
   if ($plan.schemaVersion -ne 1 -or $plan.version -notmatch '^\d+\.\d+\.\d+$' -or
     $plan.gitSha -notmatch '^[a-f0-9]{40}$' -or $plan.installerSha256 -notmatch '^[a-f0-9]{64}$' -or
     $plan.contentDigest -notmatch '^[a-f0-9]{64}$' -or $plan.previousContentDigest -notmatch '^[a-f0-9]{64}$' -or
+    ($plan.coreArchiveSha256 -and $plan.coreArchiveSha256 -notmatch '^[a-f0-9]{64}$') -or
     $plan.installerBytes -le 0 -or $plan.installerBytes -gt 536870912) { throw 'update_plan_invalid' }
   foreach ($path in @($plan.bundleRoot, $plan.stateRoot, $plan.installer)) { Assert-PlainPath $path }
   $bundle = [IO.Path]::GetFullPath($plan.bundleRoot).TrimEnd('\')
@@ -37,7 +38,7 @@ function Assert-Plan($plan) {
   $updatesDirectory = [IO.Path]::GetFullPath((Join-Path $state 'updates')).TrimEnd('\')
   if ((Split-Path -Parent $downloadDirectory).TrimEnd('\') -ne $updatesDirectory -or
     $downloadName -notmatch '^download-[A-Za-z0-9_-]+$' -or
-    (Split-Path -Leaf $installerPath) -ne ('Mizar-v' + $plan.version + '-Windows-x64-Setup.exe')) { throw 'update_installer_path_invalid' }
+    (Split-Path -Leaf $installerPath) -ne ('Mizar-v' + $plan.version + '-Windows-x64-' + $(if ($plan.coreArchiveSha256) { 'Core-' } else { '' }) + 'Setup.exe')) { throw 'update_installer_path_invalid' }
 }
 function Assert-Installer($plan, [string]$path) {
   Assert-PlainPath $path
@@ -217,6 +218,20 @@ try {
   $installer.WaitForExit()
   if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
   Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+  if ($plan.coreArchiveSha256) {
+    # Complete resources through the verified deployed App/SDK before committing.
+    # Failure retains the existing program backup and enters the normal rollback.
+    $node = Join-Path $plan.bundleRoot 'resources/runtime/node.exe'
+    $bridge = Join-Path $plan.bundleRoot 'resources/app/dist/web-installer/installed-entry.mjs'
+    $env:MIZAR_STATE_ROOT = $plan.stateRoot
+    $savedNodeOptions = $env:NODE_OPTIONS; $savedNodePath = $env:NODE_PATH
+    try {
+      Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
+      Remove-Item Env:NODE_PATH -ErrorAction SilentlyContinue
+      & $node $bridge $plan.version $plan.gitSha $plan.contentDigest $plan.coreArchiveSha256 $plan.installerSha256 $plan.installerBytes
+      if ($LASTEXITCODE -ne 0) { throw 'update_resources_incomplete' }
+    } finally { $env:NODE_OPTIONS = $savedNodeOptions; $env:NODE_PATH = $savedNodePath }
+  }
   # Silent Setup removes the old shortcut and leaves its optional section off.
   # Preserve the user's existing shortcut without creating one for other users.
   $desktopShortcut = Join-Path $StageRoot 'shortcut-0'

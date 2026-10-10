@@ -20,6 +20,7 @@ import {
 export async function installOfficialPack({
   store,
   inputs,
+  loadInputs,
   authorization,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
@@ -28,7 +29,15 @@ export async function installOfficialPack({
   signal.throwIfAborted();
   const identity = getResourceAuthorization(authorization);
   const pinnedPolicy = { ...identity.policy, manifestSha256: identity.manifestSha256 };
-  const verifyActive = createActivePolicyVerifier(pinnedPolicy);
+  const verifyCurrent = createActivePolicyVerifier(pinnedPolicy, authorization);
+  let renewedReceipt;
+  const verifyActive = async (input) => {
+    const verified = await verifyCurrent(input);
+    // Retain authenticated old Core authorization even when actual cache files
+    // need repair. The replacement ZIP is independently verified below.
+    renewedReceipt = verified.receipt;
+    return verified;
+  };
   let cached;
   try {
     cached = await store.reuseActive(PACK_ID, verifyActive, { signal });
@@ -37,13 +46,20 @@ export async function installOfficialPack({
     // authenticated new publication. Offline identity failures remain failures.
     if (
       signal.aborted ||
-      !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
-        (name) => Buffer.isBuffer(inputs?.[name]),
-      )
+      (typeof loadInputs !== 'function' &&
+        !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
+          (name) => Buffer.isBuffer(inputs?.[name]),
+        ))
     )
       throw error;
   }
-  if (cached) return finishOfficialPack(store, cached, pinnedPolicy, signal);
+  if (cached)
+    return finishOfficialPack(store, cached, pinnedPolicy, signal, undefined, authorization);
+  if (loadInputs !== undefined) {
+    if (typeof loadInputs !== 'function') throw new Error('Official resource loader is invalid');
+    inputs = await loadInputs(signal);
+    signal.throwIfAborted();
+  }
   const frozenInputs = Object.fromEntries(
     [
       ['statementBytes', 64 * 1024],
@@ -83,12 +99,19 @@ export async function installOfficialPack({
         onProgress(bytes);
       }
       preparationSignal.throwIfAborted();
-      return verified.receipt;
+      return renewedReceipt ?? verified.receipt;
     },
     { packVersion: verified.manifest.packVersion, signal, force: true },
   );
   const active = await store.reuseActive(PACK_ID, verifyActive, { signal });
-  return finishOfficialPack(store, active, pinnedPolicy, signal, verified.manifestSha256);
+  return finishOfficialPack(
+    store,
+    active,
+    pinnedPolicy,
+    signal,
+    verified.manifestSha256,
+    authorization,
+  );
 }
 
 /** Preserve the old Web URLs while delegating all authorization/Range work to Store. */
@@ -114,6 +137,7 @@ async function finishOfficialPack(
   policy,
   signal,
   expectedManifest = policy.manifestSha256,
+  authorization,
 ) {
   if (
     !active ||
@@ -129,9 +153,13 @@ async function finishOfficialPack(
   }
   await assertDefaultEplReadable(store, signal);
   // Reads return snapshots; confirm the active identity still matches after them.
-  const confirmed = await store.reuseActive(PACK_ID, createActivePolicyVerifier(policy), {
-    signal,
-  });
+  const confirmed = await store.reuseActive(
+    PACK_ID,
+    createActivePolicyVerifier(policy, authorization),
+    {
+      signal,
+    },
+  );
   if (!confirmed || JSON.stringify(confirmed.identity) !== JSON.stringify(active.identity)) {
     throw new Error('Default official resource identity changed before completion');
   }

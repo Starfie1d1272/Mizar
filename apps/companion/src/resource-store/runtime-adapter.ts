@@ -7,6 +7,9 @@ import {
 } from '@mizar/resource-pack-contract';
 import {
   verifyResourceReceipt,
+  authorizeCachedResource,
+  getResourceAuthorization,
+  type ResourceCatalogAuthorization,
   type ResourceTrustPolicy,
 } from '@mizar/resource-pack-contract/runtime';
 import { createHash } from 'node:crypto';
@@ -73,10 +76,19 @@ export interface ResourceIdentity {
 /** Verify current pins offline; historical cache pins cannot authorize an installer shortcut. */
 export function createActivePolicyVerifier(
   policy: ResourceTrustPolicy,
+  authorization?: ResourceCatalogAuthorization,
 ): ActivePackVerification<ResourceIdentity> {
   const pinned = { ...policy };
-  const verify = createRuntimeVerifier(pinned);
+  const identity = authorization && getResourceAuthorization(authorization);
+  const verify = createRuntimeVerifier(pinned, [], identity?.core);
   return async ({ receipt, signal }) => {
+    let replacement;
+    if (identity?.origin?.publication) {
+      replacement = (
+        await authorizeCachedResource({ authorization: authorization!, receipt, signal })
+      ).receipt;
+      receipt = replacement;
+    }
     const descriptor = await verify({
       packId: PACK_ID,
       directory: '',
@@ -88,6 +100,7 @@ export function createActivePolicyVerifier(
     const manifest = (receipt as { manifestBase64: string }).manifestBase64;
     return {
       descriptor,
+      ...(replacement ? { receipt: replacement } : {}),
       identity: {
         packId: descriptor.packId,
         packVersion: descriptor.packVersion,

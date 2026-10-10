@@ -31,6 +31,7 @@ export function verifyResourcePublicationBytes(options: {
   archiveBytes: Buffer;
   archiveBundleBytes: Buffer;
   policy: ResourceTrustPolicy;
+  authorization?: ResourceCatalogAuthorization;
   tufCachePath: string;
   signal?: AbortSignal;
 }): Promise<VerifiedPackContent & { statement: ResourcePublication; receipt: ResourceReceipt }>;
@@ -42,6 +43,7 @@ export interface ResourceReceipt {
   publicationBundleBase64: string;
   archiveBundleBase64: string;
   catalog?: ResourceCatalogReceipt;
+  catalogHistory?: ResourceCatalogReceipt[];
   trust: {
     schemaVersion: 'mizar.sigstore-cache.v1';
     rootChain: string[];
@@ -90,6 +92,19 @@ export interface ResourceCatalogIdentity {
   };
   assets: Readonly<Record<string, string>>;
   descriptorSha256: string;
+  origin?: {
+    sourceSha: string;
+    publication?: {
+      promotionSha: string;
+      releaseVersion: string;
+      sha256: string;
+      sequence: number;
+      issuedAt: string;
+      expiresAt: string;
+    };
+  };
+  originAssets?: Readonly<Record<string, string>>;
+  authorization?: { sequence: number; issuedAt: string; expiresAt: string };
 }
 export function getResourceAuthorization(
   authorization: ResourceCatalogAuthorization,
@@ -129,3 +144,18 @@ export const RESOURCE_ASSET_NAMES: Readonly<{
   publication: string;
   publicationPromotion: string;
 }>;
+
+export function authorizeCachedResource(options: {
+  authorization: ResourceCatalogAuthorization;
+  receipt: unknown;
+  signal?: AbortSignal;
+}): Promise<{ manifest: import('./index.mjs').ResourcePackManifest; receipt: ResourceReceipt }>;
+
+export function verifyCatalogResourceMetadata(options: {
+  authorization: ResourceCatalogAuthorization;
+  statementBytes: Buffer;
+  publicationBundleBytes: Buffer;
+  archiveBundleBytes: Buffer;
+  tufCachePath: string;
+  signal?: AbortSignal;
+}): Promise<ResourcePublication>;

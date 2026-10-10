@@ -37,12 +37,22 @@ namespace Mizar.WebInstaller {
           bool pendingRejected=false;
           string guardedTarget=Path.Combine(root,"pending recovery path");
           try { await Nsis.Install(plan,installer,guardedTarget,CancellationToken.None); }
-          catch(IOException error) { pendingRejected=error.Message.Contains("前一次安装"); }
+          catch(InstallerRecoveryRequired) { pendingRejected=true; }
           Assert(pendingRejected && !Directory.Exists(guardedTarget) && File.Exists(pending));
           Console.WriteLine("PASS: persistent unfinished-install marker rejects a new writer and remains intact");
         } finally { File.Delete(pending); } // Only this test's exclusively created marker.
         string target=Path.Combine(root,"real NSIS path");
+        // Recover the real prepared transaction through Install, including the
+        // deleted marker's recreation and subsequent NSIS installation.
+        Directory.CreateDirectory(target);
+        var prepared=Nsis.NewPending(plan,target,installer);
+        using(var exited=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
+          prepared.ownerPid=exited.Id;prepared.ownerStarted=exited.StartTime.ToUniversalTime().Ticks;exited.WaitForExit();
+        }
+        File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),prepared.token);Nsis.SavePending(prepared,true);
         var result=await Nsis.Install(plan,installer,target,CancellationToken.None);
+        Assert(!File.Exists(pending));
+        Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
         // Exercise the real native production call: historical Core cannot supply
@@ -76,6 +86,14 @@ namespace Mizar.WebInstaller {
         // A second fresh attempt must not overwrite this installation or user registration.
         bool refused=false; try { await Nsis.Install(plan,installer,target,CancellationToken.None); } catch(IOException) { refused=true; }
         Assert(refused);
+        var completed=Nsis.NewPending(plan,target,installer);
+        completed.token=File.ReadAllText(Path.Combine(target,".mizar-bootstrap-owner"));
+        completed.ownerPid=prepared.ownerPid;completed.ownerStarted=prepared.ownerStarted;
+        completed.writerPid=prepared.ownerPid;completed.writerStarted=prepared.ownerStarted;completed.stage="complete";
+        Nsis.SavePending(completed,true);
+        result=await Nsis.Install(plan,installer,target,CancellationToken.None);
+        Assert(result.CoreInstalled && !File.Exists(pending));
+        Console.WriteLine("PASS: completed owned Core recovers without launching a second NSIS writer");
         await result.RollbackAsync();
         Assert(!Directory.Exists(target));
         var badIdentity = new JavaScriptSerializer().Deserialize<Plan>(new JavaScriptSerializer().Serialize(plan));

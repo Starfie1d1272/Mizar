@@ -73,6 +73,53 @@ namespace Mizar.WebInstaller {
         Assert(new Uri(url).Host=="box.nju.edu.cn"&&url.EndsWith(plan.name));
       }
     }
+    static void RecoveryContracts() {
+      string pending=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache","fresh-install.pending");
+      Directory.CreateDirectory(Path.GetDirectoryName(pending));
+      if(File.Exists(pending)) throw new IOException("Refusing to replace an existing recovery record");
+      string root=Path.Combine(Path.GetTempPath(),"Mizar-WebInstaller-Qualification",Guid.NewGuid().ToString("N"));
+      string target=Path.Combine(root,"owned fresh install"); Directory.CreateDirectory(target);
+      var plan=Good(); var record=Nsis.NewPending(plan,target,"unused-fixture-installer");
+      File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),record.token);
+      string retained=target+".incomplete-"+record.token;
+      try {
+        Nsis.SavePending(record,true);
+        bool rejected=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {rejected=true;}
+        Assert(rejected && Directory.Exists(target) && File.Exists(pending));
+        long endedAt; int endedPid;
+        using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
+          endedPid=child.Id;endedAt=child.StartTime.ToUniversalTime().Ticks;child.WaitForExit();
+        }
+        Assert(!Nsis.ProcessStillActive(endedPid,endedAt));
+        using(var current=System.Diagnostics.Process.GetCurrentProcess()) {
+          record.ownerPid=endedPid;record.ownerStarted=endedAt;record.writerPid=current.Id;record.writerStarted=current.StartTime.ToUniversalTime().Ticks;record.stage="writing";
+          Nsis.SavePending(record,false);
+          rejected=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {rejected=true;}
+          Assert(rejected && Directory.Exists(target) && File.Exists(pending));
+        }
+        foreach(string invalid in new[]{target,"{broken","{}"}) {
+          File.WriteAllText(pending,invalid);
+          rejected=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {rejected=true;}
+          Assert(rejected && File.ReadAllText(pending)==invalid && Directory.Exists(target));
+        }
+        record.writerPid=0; record.writerStarted=0; record.stage="prepared"; Nsis.SavePending(record,false);
+        Assert(!Nsis.RecoverPending(plan,target) && !Directory.Exists(target) && !File.Exists(pending));
+        // The next transaction creates the deleted marker, rather than replacing it.
+        Directory.CreateDirectory(target); File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),record.token);
+        Nsis.SavePending(record,!File.Exists(pending)); Assert(File.Exists(pending));
+        record.writerPid=endedPid;record.writerStarted=endedAt;record.stage="rollback-writing"; Nsis.SavePending(record,false);
+        File.WriteAllText(Path.Combine(target,"unknown-user-file"),"preserve exactly");
+        Assert(!Nsis.RecoverPending(plan,target));
+        Assert(!Directory.Exists(target) && File.ReadAllText(Path.Combine(retained,"unknown-user-file"))=="preserve exactly" && File.Exists(pending));
+        Assert(!Nsis.RecoverPending(plan,target)); // Restart after quarantine also preserves the original bytes.
+        Assert(File.ReadAllText(Path.Combine(retained,"unknown-user-file"))=="preserve exactly");
+        Console.WriteLine("PASS: legacy/corrupt pending records and live writers stay intact; owned partial installation is retained across recovery restart");
+      } finally {
+        File.Delete(pending);
+        // Only the fixture's new GUID root, never a user's installation.
+        if(Directory.Exists(root)) Directory.Delete(root,true);
+      }
+    }
     static async Task Run() {
       string root=Path.Combine(Path.GetTempPath(), "mizar-bootstrap-test-" + Guid.NewGuid());
       try {
@@ -122,6 +169,6 @@ namespace Mizar.WebInstaller {
         }
       } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
-    [STAThread] public static int Main() { try { PublicationContract(); BoxOnly().GetAwaiter().GetResult(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
+    [STAThread] public static int Main() { try { PublicationContract(); RecoveryContracts(); BoxOnly().GetAwaiter().GetResult(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
   }
 }

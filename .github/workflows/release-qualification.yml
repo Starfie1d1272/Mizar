@@ -20,9 +20,18 @@ on:
         description: 'Positive monotonically increasing official resource sequence'
         required: true
         type: number
+      resource_source_run:
+        description: 'Optional successful main Promotion run for original published resources; qualified reuse must retain original publication proofs'
+        required: false
+        type: string
+      resource_source_artifact:
+        description: 'Optional exact original publication artifact name; a unique Promotion resource artifact is selected automatically'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 env:
   RELEASE_LABEL: ${{ inputs.label }}
@@ -30,12 +39,16 @@ env:
   RESOURCE_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/release-resources
   RESOURCE_PACK_VERSION: ${{ inputs.resource_pack_version }}
   RESOURCE_SEQUENCE: ${{ inputs.resource_sequence }}
+  RESOURCE_SOURCE_RUN: ${{ inputs.resource_source_run }}
+  RESOURCE_SOURCE_ARTIFACT: ${{ inputs.resource_source_artifact }}
   QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/rivalhub-qualification-build
 
 jobs:
   build:
     runs-on: windows-2025
     timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
       archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
@@ -103,7 +116,27 @@ jobs:
         id: resources
         shell: pwsh
         run: |
-          node scripts/ci/resource-release.mjs prepare "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$env:RESOURCE_PACK_VERSION" "$env:RESOURCE_SEQUENCE"
+          if ($env:RESOURCE_SOURCE_RUN) {
+            if ($env:RESOURCE_SOURCE_RUN -notmatch '^\d+$') { throw 'Invalid original run' }
+            $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.head_branch -ne 'main' -or $run.path -notin @('.github/workflows/release-qualification.yml','.github/workflows/release-promotion.yml')) { throw 'Resource reuse requires a successful original main workflow' }
+            $artifactName = $env:RESOURCE_SOURCE_ARTIFACT
+            if (!$artifactName) {
+              if ($run.path -eq '.github/workflows/release-promotion.yml') {
+                $available = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact lookup failed' }
+                $resourceArtifacts = @($available.artifacts | Where-Object { !$_.expired -and $_.name.StartsWith('promotion-resources-') })
+                if ($available.total_count -gt 100 -or $resourceArtifacts.Count -ne 1) { throw 'Specify the exact original publication artifact; automatic selection is ambiguous' }
+                $artifactName = $resourceArtifacts[0].name
+              } else { $artifactName = 'release-qualified-resources' }
+            }
+            $original = Join-Path $env:RUNNER_TEMP 'original-resource-artifact'
+            gh run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$artifactName" --dir "$original"
+            if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact unavailable' }
+            node scripts/ci/resource-release.mjs reuse "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$original" "$env:RESOURCE_SEQUENCE"
+          } else {
+            node scripts/ci/resource-release.mjs prepare "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$env:RESOURCE_PACK_VERSION" "$env:RESOURCE_SEQUENCE"
+          }
           if ($LASTEXITCODE -ne 0) { throw 'Resource producer/source/catalog validation failed' }
           "artifact=release-resource-candidate-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
       - name: Preserve original resource candidate
@@ -340,6 +373,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
       id-token: write
       attestations: write
     env:
@@ -411,6 +445,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
             ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
             if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
+            "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
           }
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
@@ -431,18 +466,25 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
 
       - name: Attest original resource archive and frozen catalog qualification
+        if: ${{ inputs.resource_source_run == '' }}
         id: resource-qualified-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             ${{ env.RESOURCE_BUILD_ROOT }}/*.zip
             ${{ env.RESOURCE_BUILD_ROOT }}/resource-descriptor.json
+      - name: Attest only current Core authorization for reused resources
+        if: ${{ inputs.resource_source_run != '' }}
+        id: reused-resource-descriptor-provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.RESOURCE_BUILD_ROOT }}/resource-descriptor.json
       - name: Preserve and verify original resource Qualification proofs
         shell: pwsh
         env:
-          RESOURCE_QUALIFICATION_BUNDLE: ${{ steps.resource-qualified-provenance.outputs.bundle-path }}
+          RESOURCE_QUALIFICATION_BUNDLE: ${{ steps.resource-qualified-provenance.outputs.bundle-path || steps.reused-resource-descriptor-provenance.outputs.bundle-path }}
         run: |
-          Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-pack-provenance.json')
+          if (!$env:RESOURCE_SOURCE_RUN) { Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-pack-provenance.json') }
           Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-descriptor-qualification-provenance.json')
           node scripts/ci/resource-release.mjs qualified "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json')
           if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proof validation failed' }
@@ -459,9 +501,16 @@ jobs:
         env:
           PROVENANCE_BUNDLE: ${{ steps.qualified-provenance.outputs.bundle-path }}
         run: |
+          Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'qualification-provenance.json')
           if (Test-Path -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-manifest.json')) {
             Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-provenance.json')
           }
+
+      - name: Verify actual signed candidate through isolated client SDK
+        shell: pwsh
+        run: |
+          node scripts/qualification/verify-qualified-install.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:RESOURCE_BUILD_ROOT" "$env:QUALIFIED_CORE_DIRECTORY"
+          if ($LASTEXITCODE -ne 0) { throw 'Pre-publication client signature verification failed' }
 
       - name: Upload qualified portable product
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -482,6 +531,8 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-provenance.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/qualification-provenance.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/qualified-client-verification.json
           if-no-files-found: error
 
       - name: Upload release qualification evidence

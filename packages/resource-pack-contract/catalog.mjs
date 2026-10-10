@@ -24,6 +24,7 @@ export function createResourceDescriptor({
   sequence,
   issuedAt,
   expiresAt,
+  origin,
 }) {
   const coreVersion = core?.appVersion?.replace(/-rc\.\d+$/, '');
   requireValue(
@@ -58,10 +59,49 @@ export function createResourceDescriptor({
       Date.parse(expiresAt) - Date.parse(issuedAt) <= 366 * 86400000,
     '资源目录序号或有效期无效',
   );
+  if (origin !== undefined) {
+    requireValue(isSourceSha(origin?.sourceSha), '资源原始 Qualification 来源无效');
+    if (origin.publication !== undefined) {
+      const publication = origin.publication;
+      requireValue(
+        isSourceSha(publication.promotionSha) &&
+          /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(publication.releaseVersion) &&
+          isSha256(publication.sha256) &&
+          Number.isSafeInteger(publication.sequence) &&
+          publication.sequence > 0 &&
+          instant(publication.issuedAt) &&
+          instant(publication.expiresAt) &&
+          Date.parse(publication.expiresAt) > Date.parse(publication.issuedAt) &&
+          Date.parse(publication.expiresAt) - Date.parse(publication.issuedAt) <= 366 * 86400000,
+        '资源原始 Promotion 身份无效',
+      );
+      requireValue(
+        JSON.stringify(origin) ===
+          JSON.stringify({
+            sourceSha: origin.sourceSha,
+            publication: {
+              promotionSha: publication.promotionSha,
+              releaseVersion: publication.releaseVersion,
+              sha256: publication.sha256,
+              sequence: publication.sequence,
+              issuedAt: publication.issuedAt,
+              expiresAt: publication.expiresAt,
+            },
+          }),
+        '资源原始来源必须为固定字段',
+      );
+    } else
+      requireValue(
+        JSON.stringify(origin) === JSON.stringify({ sourceSha: origin.sourceSha }),
+        '资源原始来源必须为固定字段',
+      );
+  }
+  const original = origin?.publication;
   const names = [archive.name, ...Object.values(RESOURCE_ASSET_NAMES)];
   const prefix = `https://github.com/${REPOSITORY}/releases/download/v${core.appVersion}/`;
   return {
-    schemaVersion: 'mizar.resource-descriptor.v1',
+    schemaVersion: origin ? 'mizar.resource-descriptor.v2' : 'mizar.resource-descriptor.v1',
+    ...(origin ? { origin, authorization: { sequence, issuedAt, expiresAt } } : {}),
     repository: REPOSITORY,
     core: {
       appVersion: core.appVersion,
@@ -72,7 +112,12 @@ export function createResourceDescriptor({
     resources: [
       {
         packId: PACK_ID,
-        policy: { packVersion, sourceSha: core.gitSha, coreVersion, minimumSequence: sequence },
+        policy: {
+          packVersion,
+          sourceSha: origin?.sourceSha ?? core.gitSha,
+          coreVersion,
+          minimumSequence: original?.sequence ?? sequence,
+        },
         archive: {
           name: archive.name,
           bytes: archive.bytes,
@@ -80,7 +125,12 @@ export function createResourceDescriptor({
           format: 'zip',
         },
         manifestSha256,
-        publication: { name: RESOURCE_ASSET_NAMES.publication, sequence, issuedAt, expiresAt },
+        publication: {
+          name: RESOURCE_ASSET_NAMES.publication,
+          sequence: original?.sequence ?? sequence,
+          issuedAt: original?.issuedAt ?? issuedAt,
+          expiresAt: original?.expiresAt ?? expiresAt,
+        },
         assets: Object.fromEntries(names.map((name) => [name, prefix + name])),
       },
     ],
@@ -94,15 +144,23 @@ export function createResourceCatalog(
 ) {
   requireValue(isSourceSha(promotionSha) && isSha256(publicationSha256), '资源晋级目录身份无效');
   const entry = descriptor.resources[0];
+  if (descriptor.origin?.publication)
+    requireValue(
+      publicationSha256 === descriptor.origin.publication.sha256,
+      '复用声明摘要不等于原始授权',
+    );
   return {
     ...descriptor,
-    schemaVersion: 'mizar.resource-catalog.v1',
+    schemaVersion: descriptor.origin ? 'mizar.resource-catalog.v2' : 'mizar.resource-catalog.v1',
     descriptorSha256: sha256(descriptorBytes),
     promotionSha,
     resources: [
       {
         ...entry,
-        policy: { ...entry.policy, promotionSha },
+        policy: {
+          ...entry.policy,
+          promotionSha: descriptor.origin?.publication?.promotionSha ?? promotionSha,
+        },
         publication: { ...entry.publication, sha256: publicationSha256 },
       },
     ],
@@ -122,9 +180,10 @@ export function parseResourceCatalogBytes(descriptorBytes, catalogBytes, expecte
     packVersion: item.policy?.packVersion,
     archive: item.archive,
     manifestSha256: item.manifestSha256,
-    sequence: item.publication?.sequence,
-    issuedAt: item.publication?.issuedAt,
-    expiresAt: item.publication?.expiresAt,
+    sequence: raw.authorization?.sequence ?? item.publication?.sequence,
+    issuedAt: raw.authorization?.issuedAt ?? item.publication?.issuedAt,
+    expiresAt: raw.authorization?.expiresAt ?? item.publication?.expiresAt,
+    ...(raw.schemaVersion === 'mizar.resource-descriptor.v2' ? { origin: raw.origin } : {}),
   });
   requireValue(descriptorBytes.equals(jsonBytes(descriptor)), '资源资格目录不是固定规范字节');
   requireValue(

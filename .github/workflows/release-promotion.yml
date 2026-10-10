@@ -107,24 +107,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Qualified resource policy preparation failed' }
           $descriptor = Get-Content (Join-Path $env:RESOURCE_ROOT 'resource-descriptor.json') -Raw | ConvertFrom-Json
           $archive = Join-Path $env:RESOURCE_ROOT $descriptor.resources[0].archive.name
-          node scripts/qualification/resource-provenance/create.mjs "$archive" (Join-Path $env:RESOURCE_ROOT 'resource-pack-provenance.json') "$parameters" (Join-Path $env:RESOURCE_ROOT 'resource-publication.json')
+          if (!$descriptor.origin.publication) { node scripts/qualification/resource-provenance/create.mjs "$archive" (Join-Path $env:RESOURCE_ROOT 'resource-pack-provenance.json') "$parameters" (Join-Path $env:RESOURCE_ROOT 'resource-publication.json') }
           if ($LASTEXITCODE -ne 0) { throw 'Resource publication source/Qualification/CI authorization failed' }
       - name: Attest the publication and trusted resource catalog
-        if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' }}
+        if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' && env.RESOURCE_PUBLICATION_REUSED != 'true' }}
         id: resource-publication-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             ${{ env.RESOURCE_ROOT }}/resource-publication.json
             ${{ env.RESOURCE_ROOT }}/resource-catalog.json
+      - name: Attest only renewed Core compatibility catalog
+        if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' && env.RESOURCE_PUBLICATION_REUSED == 'true' }}
+        id: reused-resource-catalog-provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.RESOURCE_ROOT }}/resource-catalog.json
       - name: Freeze only fully verified publication assets
         if: ${{ env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
         env:
-          RESOURCE_PUBLICATION_BUNDLE: ${{ steps.resource-publication-provenance.outputs.bundle-path }}
+          RESOURCE_PUBLICATION_BUNDLE: ${{ steps.resource-publication-provenance.outputs.bundle-path || steps.reused-resource-catalog-provenance.outputs.bundle-path }}
         run: |
           if ($env:RESOURCE_RELEASE_EXISTS -ne 'true') {
-            Copy-Item -LiteralPath $env:RESOURCE_PUBLICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_ROOT 'resource-publication-provenance.json')
+            if ($env:RESOURCE_PUBLICATION_REUSED -ne 'true') { Copy-Item -LiteralPath $env:RESOURCE_PUBLICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_ROOT 'resource-publication-provenance.json') }
             Copy-Item -LiteralPath $env:RESOURCE_PUBLICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_ROOT 'resource-catalog-promotion-provenance.json')
           }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" freeze "$env:RESOURCE_ROOT" product/core-release-manifest.json "$env:RESOURCE_FROZEN_ROOT"
