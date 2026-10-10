@@ -15,6 +15,7 @@ export function platformTestFiles(platform = process.platform) {
     'scripts/qualification/product-logs.test.mjs',
     'scripts/qualification/supervisor.test.mjs',
     'scripts/qualification/offline.test.mjs',
+    'scripts/qualification/release-envelope.test.mjs',
     'apps/companion/test/capture-recorder.test.ts',
     'apps/companion/test/gsi-capture.integration.test.ts',
     'apps/companion/test/local-web-host.integration.test.ts',
