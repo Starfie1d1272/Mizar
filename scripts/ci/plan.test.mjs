@@ -184,9 +184,11 @@ describe('changed-surface CI planner', () => {
     ].map((path) => `apps/companion/src/${path}`);
     for (const path of [...packageSources, ...companionSources]) {
       expect(createCiPlan({ eventName, changedFiles: [path] }).requiredJobs, path).toEqual(
-        path.startsWith('apps/companion/')
-          ? ['quality', 'acceptance', 'platform']
-          : ['quality', 'acceptance'],
+        path === 'apps/companion/src/app.ts'
+          ? ['quality', 'acceptance', 'platform', 'installer_windows']
+          : path.startsWith('apps/companion/')
+            ? ['quality', 'acceptance', 'platform']
+            : ['quality', 'acceptance'],
       );
     }
   });
@@ -220,7 +222,10 @@ describe('changed-surface CI planner', () => {
   );
 
   it.each([
-    ['scripts/qualification/windows-setup.nsi', ['quality', 'qualification_windows']],
+    [
+      'scripts/qualification/windows-setup.nsi',
+      ['quality', 'qualification_windows', 'installer_windows'],
+    ],
     ['scripts/qualification/bundle/update-install.ps1', ['quality', 'qualification_windows']],
     [
       'scripts/qualification/verify-source-ci.mjs',
@@ -231,6 +236,7 @@ describe('changed-surface CI planner', () => {
         'platform',
         'qualification_offline',
         'qualification_windows',
+        'installer_windows',
       ],
     ],
     [
@@ -242,6 +248,7 @@ describe('changed-surface CI planner', () => {
         'platform',
         'qualification_offline',
         'qualification_windows',
+        'installer_windows',
       ],
     ],
     [
@@ -253,6 +260,7 @@ describe('changed-surface CI planner', () => {
         'platform',
         'qualification_offline',
         'qualification_windows',
+        'installer_windows',
       ],
     ],
     [
@@ -264,6 +272,7 @@ describe('changed-surface CI planner', () => {
         'platform',
         'qualification_offline',
         'qualification_windows',
+        'installer_windows',
       ],
     ],
     ['apps/desktop/src-tauri/src/main.rs', ['quality', 'qualification_windows']],
@@ -329,7 +338,12 @@ describe('changed-surface CI planner', () => {
             eventName,
             changedFiles: [path, 'scripts/qualification/windows-setup.nsi'],
           }).requiredJobs,
-        ).toEqual(['quality', 'qualification_offline', 'qualification_windows']);
+        ).toEqual([
+          'quality',
+          'qualification_offline',
+          'qualification_windows',
+          'installer_windows',
+        ]);
         expect(
           createCiPlan({
             eventName,
@@ -348,6 +362,7 @@ describe('changed-surface CI planner', () => {
           'platform',
           'qualification_offline',
           'qualification_windows',
+          'installer_windows',
         ]);
       }
     },
@@ -364,6 +379,40 @@ describe('changed-surface CI planner', () => {
         ],
       }).requiredJobs,
     ).toEqual(['quality', 'acceptance', 'platform', 'qualification_windows']);
+  });
+
+  it.each([
+    'scripts/web-installer/Nsis.cs',
+    'scripts/web-installer/Window.Tests.cs',
+    'packages/resource-pack-contract/catalog.mjs',
+    'apps/companion/src/resource-store/store.ts',
+    'apps/companion/test/resource-store/app-integration.test.ts',
+    'scripts/qualification/installer-assets/header.bmp',
+  ])('requires real installer integration after changing %s', (path) => {
+    const plan = createCiPlan({ changedFiles: [{ path, status: 'D' }] });
+    expect(plan.runInstaller).toBe(true);
+    expect(plan.requiredJobs).toContain('installer_windows');
+    expect(
+      evaluateCiGate({
+        planResult: 'success',
+        requiredJobs: ['installer_windows'],
+        jobResults: { installer_windows: 'skipped' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      evaluateCiGate({
+        planResult: 'success',
+        requiredJobs: ['installer_windows'],
+        jobResults: { installer_windows: 'failure' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      evaluateCiGate({
+        planResult: 'success',
+        requiredJobs: ['installer_windows'],
+        jobResults: { installer_windows: 'success' },
+      }).ok,
+    ).toBe(true);
   });
 
   it('adding a test cannot shrink producer or harness evidence', () => {

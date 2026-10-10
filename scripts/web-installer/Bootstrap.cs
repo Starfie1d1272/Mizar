@@ -16,7 +16,9 @@ namespace Mizar.WebInstaller {
     public string version, name, sha256, kind, gitSha, contentDigest;
     public long bytes;
     public string[] urls;
-    public bool allowExecute;
+    public bool allowExecute, publicationRequired;
+    public string coreName, coreSha256;
+    public long coreBytes;
     public void Validate() {
       if (schemaVersion != 1 || String.IsNullOrEmpty(version) ||
           String.IsNullOrEmpty(name) || name != Path.GetFileName(name) ||
@@ -33,6 +35,75 @@ namespace Mizar.WebInstaller {
         throw new InvalidDataException("固定 NSIS 安装授权不完整。");
       foreach (string url in urls) if (!Downloader.Allowed(new Uri(url)))
         throw new InvalidDataException("下载地址不受信任。");
+    }
+  }
+  // This only checks public availability of already-qualified pins. Publisher
+  // authentication remains the existing Qualification and SDK trust chain.
+  static class Publication {
+    internal static void ValidatePlan(Plan plan) {
+      plan.Validate();
+      if (!plan.allowExecute || !plan.publicationRequired ||
+          plan.coreName != "Mizar-v" + plan.version + "-Windows-x64.zip" ||
+          plan.coreBytes < 1 || plan.coreSha256 == null ||
+          !System.Text.RegularExpressions.Regex.IsMatch(plan.coreSha256,"^[a-f0-9]{64}$") ||
+          plan.urls.Length != 1 || plan.urls[0] != "https://github.com/Starfie1d1272/Mizar/releases/download/v" + plan.version + "/" + plan.name)
+        throw new InvalidDataException("正式安装身份不完整。");
+    }
+    internal static void Check(string json, Plan plan) {
+      ValidatePlan(plan);
+      var serializer=new JavaScriptSerializer {MaxJsonLength=2*1024*1024};
+      var release=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
+      DateTimeOffset published;
+      if (release==null || !release.ContainsKey("draft") || !(release["draft"] is bool) || (bool)release["draft"] ||
+          !release.ContainsKey("prerelease") || !(release["prerelease"] is bool) || (bool)release["prerelease"] ||
+          !release.ContainsKey("tag_name") || !Object.Equals(release["tag_name"],"v"+plan.version) ||
+          !release.ContainsKey("published_at") || !(release["published_at"] is string) ||
+          !DateTimeOffset.TryParse((string)release["published_at"],System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out published) || published> DateTimeOffset.UtcNow ||
+          !release.ContainsKey("assets") || !(release["assets"] is System.Collections.ArrayList))
+        throw new InvalidDataException("对应版本尚未正式公开发布。");
+      var assets=(System.Collections.ArrayList)release["assets"];
+      CheckAsset(assets,plan.name,plan.bytes,plan.sha256,plan.version);
+      CheckAsset(assets,plan.coreName,plan.coreBytes,plan.coreSha256,plan.version);
+    }
+    static void CheckAsset(System.Collections.ArrayList assets,string name,long bytes,string sha,string version) {
+      int matches=0;
+      foreach(object item in assets) {
+        var asset=item as System.Collections.Generic.Dictionary<string,object>;
+        if(asset==null || !asset.ContainsKey("name") || !Object.Equals(asset["name"],name)) continue;
+        matches++;
+        if(!asset.ContainsKey("size") || !(asset["size"] is int || asset["size"] is long) || Convert.ToInt64(asset["size"])!=bytes ||
+           !asset.ContainsKey("digest") || !Object.Equals(asset["digest"],"sha256:"+sha) ||
+           !asset.ContainsKey("browser_download_url") || !Object.Equals(asset["browser_download_url"],"https://github.com/Starfie1d1272/Mizar/releases/download/v"+version+"/"+name))
+          throw new InvalidDataException("公开资产与固定资格身份不一致。");
+      }
+      if(matches!=1) throw new InvalidDataException("公开资产缺失或重复。");
+    }
+    internal static async Task Verify(Plan plan,CancellationToken token) {
+      ValidatePlan(plan);
+      using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
+        deadline.CancelAfter(45000);
+        using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
+        using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
+        using(var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/Starfie1d1272/Mizar/releases/tags/v"+plan.version)) {
+          request.Headers.TryAddWithoutValidation("User-Agent","Mizar-WebInstaller");
+          request.Headers.TryAddWithoutValidation("Accept","application/vnd.github+json");
+          using(var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,deadline.Token).ConfigureAwait(false)) {
+            response.EnsureSuccessStatusCode();
+            using(var input=await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+            using(var output=new MemoryStream()) {
+              var buffer=new byte[16384];
+              for(;;) {
+                int count=await input.ReadAsync(buffer,0,buffer.Length,deadline.Token).ConfigureAwait(false);
+                if(count==0) break;
+                if(output.Length+count>2*1024*1024) throw new InvalidDataException("公开版本响应过大。");
+                output.Write(buffer,0,count);
+              }
+              deadline.Token.ThrowIfCancellationRequested();
+              Check(new System.Text.UTF8Encoding(false,true).GetString(output.ToArray()),plan);
+            }
+          }
+        }
+      }
     }
   }
   public sealed class Downloader {
@@ -80,7 +151,7 @@ namespace Mizar.WebInstaller {
       for (int n = 0; n < 5; n++) {
         if (!Allowed(current)) throw new InvalidDataException("下载重定向地址不受信任。");
         using (var request = new HttpRequestMessage(HttpMethod.Get, current)) {
-          request.Headers.TryAddWithoutValidation("User-Agent", "Mizar-WebInstaller-POC");
+          request.Headers.TryAddWithoutValidation("User-Agent", "Mizar-WebInstaller");
           var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
           int status = (int)response.StatusCode;
           if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
@@ -175,7 +246,7 @@ namespace Mizar.WebInstaller {
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
       plan=value; install=operation ?? Install; launch=start ?? (path=>Nsis.StartVerifiedProduct(plan,path));
       Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-      Text=demonstration ? "Mizar 安装 · 界面演示（未执行安装）" : plan.allowExecute ? "Mizar 安装 · 开发版" : "Mizar 在线安装 · 验证预览";
+      Text=demonstration ? "Mizar 安装 · 界面演示（未执行安装）" : "Mizar 安装";
       AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(590,330); MinimumSize=Size; MaximizeBox=false;
       StartPosition=FormStartPosition.CenterScreen; Font=new Font("Microsoft YaHei UI",9F); BackColor=Color.White;
       var banner=new Panel {Dock=DockStyle.Top,Height=80,BackColor=Color.FromArgb(14,24,41)};
@@ -188,14 +259,14 @@ namespace Mizar.WebInstaller {
       banner.Controls.Add(new Label {Text="Mizar",ForeColor=Color.White,Font=new Font("Segoe UI",24F),AutoSize=true,Location=new Point(96,17)});
       Controls.Add(banner);
       heading.SetBounds(32,104,526,32); heading.Font=new Font(Font.FontFamily,15F);
-      heading.Text=plan.allowExecute ? "安装 Mizar" : "下载验证预览";
+      heading.Text="安装 Mizar";
       detail.SetBounds(32,148,526,48);
-      detail.Text=plan.allowExecute ? "安装时需要连接网络。" : "下载公开许可文件并查看验证结果。";
+      detail.Text="安装时需要连接网络。";
       bar.SetBounds(32,212,526,10); bar.Visible=false;
       amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
       launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
       launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
-      action.SetBounds(347,270,100,32); action.Text=plan.allowExecute ? "安装" : "开始验证";
+      action.SetBounds(347,270,100,32); action.Text="安装";
       action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
       cancel.SetBounds(458,270,100,32); cancel.Text="关闭";
       cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
@@ -211,6 +282,8 @@ namespace Mizar.WebInstaller {
       FormClosing += (s,e)=>{if(cancellation!=null){RequestCancel();e.Cancel=true;}};
     }
     async Task<string> Install(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {
+      stages.Report("checking-release");
+      await Publication.Verify(plan,token);
       string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
       if(installedCore==null && (Directory.Exists(target) || File.Exists(target))) {
         Nsis.VerifyInstalledCore(plan,target); // A directory alone never proves a resumable installation.
@@ -218,6 +291,7 @@ namespace Mizar.WebInstaller {
       }
       if(installedCore==null) {
         Nsis.ValidateDestination(target);
+        stages.Report("downloading-core");
         string installer;
         using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
         using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
@@ -229,8 +303,9 @@ namespace Mizar.WebInstaller {
       token.ThrowIfCancellationRequested(); return installedCore;
     }
     internal void ShowStage(string phase) {
+      if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
-      heading.Text=phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
+      heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
       detail.Text=phase=="waiting-for-installer" ? "正在等待安装操作安全结束。" : "请稍候。";
     }
     internal void ShowCompleted(string path) {
@@ -259,7 +334,7 @@ namespace Mizar.WebInstaller {
       cancellation=new CancellationTokenSource(); var current=cancellation;
       action.Enabled=false; cancel.Text="取消"; launchChoice.Visible=false;
       downloading=true; bar.Visible=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=0; amount.Text="";
-      heading.Text=plan.allowExecute ? "正在下载 Mizar" : "正在下载"; detail.Text="请稍候。";
+      heading.Text="正在下载 Mizar"; detail.Text="请稍候。";
       try {
         var progress=new Progress<long>(n=>{
           if(cancellation!=current || !downloading || current.IsCancellationRequested || finished) return;
@@ -268,15 +343,8 @@ namespace Mizar.WebInstaller {
         var stages=new Progress<string>(phase=>{
           if(cancellation==current && !finished && !current.IsCancellationRequested) ShowStage(phase);
         });
-        if(plan.allowExecute) {
-          string path=await install(progress,stages,current.Token);
-          current.Token.ThrowIfCancellationRequested(); ShowCompleted(path);
-        } else {
-          using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
-          using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
-            await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),progress,current.Token);
-          heading.Text="下载验证完成"; detail.Text="公开许可文件验证完成。"; action.Text="再次验证";
-        }
+        string path=await install(progress,stages,current.Token);
+        current.Token.ThrowIfCancellationRequested(); ShowCompleted(path);
       } catch(OperationCanceledException) {
         heading.Text=current.IsCancellationRequested ? "已取消" : "下载超时";
         detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : "请检查网络后重试，或使用完整离线安装包。"; action.Text="重新开始";
@@ -287,7 +355,7 @@ namespace Mizar.WebInstaller {
       } catch(UnauthorizedAccessException error) {
         heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=error.Message; action.Text="重试";
       } catch(Exception error) {
-        heading.Text=plan.allowExecute ? "安装未完成" : "下载未完成";
+        heading.Text="安装未完成";
         bool network=false, invalid=false;
         for(Exception cause=error;cause!=null;cause=cause.InnerException) {if(cause is HttpRequestException || cause is OperationCanceledException) network=true; if(cause is InvalidDataException) invalid=true;}
         detail.Text=invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试，或使用完整离线安装包。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
@@ -305,10 +373,10 @@ namespace Mizar.WebInstaller {
         Plan plan;
         using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("plan.json"))
         using (var reader = new StreamReader(stream)) plan = new JavaScriptSerializer().Deserialize<Plan>(reader.ReadToEnd());
-        plan.Validate();
+        Publication.ValidatePlan(plan);
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new Window(plan)); return 0;
-      } catch { MessageBox.Show("安装验证预览无法启动。", "Mizar", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
+      } catch { MessageBox.Show("安装器无法启动。", "Mizar", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
     }
   }
 }
