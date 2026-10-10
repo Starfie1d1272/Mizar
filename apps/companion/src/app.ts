@@ -1,4 +1,9 @@
 import { errorEvidence } from './updates/diagnostics.js';
+import {
+  DemoTestController,
+  readDemoTestRecovery,
+  registerDemoTestRoutes,
+} from './demo-test/controller.js';
 import { BilibiliStatus } from './platform/bilibili.js';
 import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avatars.js';
 import { ProductionGuidanceStore } from './program-scenes/guidance.js';
@@ -184,6 +189,11 @@ function projectionDiagnosticDegradesRuntime(code: string): boolean {
 }
 
 export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
+  const demoMarkerPath = options.localTournamentPath
+    ? join(dirname(options.localTournamentPath), 'demo-test.json')
+    : undefined;
+  const demoRecovery = readDemoTestRecovery(demoMarkerPath);
+  const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
@@ -198,6 +208,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : { onSeriesProgressDiagnostic: options.onSeriesProgressDiagnostic }),
     });
+  if (demoRecovery) programRuntime.resetSession(true);
   const debugEvidenceStore =
     options.debugEvidenceStore ?? new DebugEvidenceStore(programRuntime.getSnapshot());
   debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
@@ -264,6 +275,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
   });
+  if (demoRecovery)
+    void outputService.setQuarantined(true).catch((error) =>
+      app.log.error(
+        {
+          event: 'demo-test',
+          stage: 'recovery_output_quarantine',
+          diagnostic: errorEvidence(error),
+        },
+        'Demo test quarantine failed',
+      ),
+    );
   const cstvSources = options.cstvSources ?? createCstvSourceManagers({});
   const objectiveReferenceSource = options.objectiveReferenceSource;
   const objectiveReferenceUnsubscribe =
@@ -376,7 +398,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
       cstvSources,
-      ...(options.matchContextBinding === undefined
+      ...(options.matchContextBinding === undefined || demoRecovery
         ? {}
         : { matchContextBinding: options.matchContextBinding }),
       ...(projectionNowMonotonicMs === undefined
@@ -560,6 +582,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     programCueCoordinator.afterRuntimeMutation(result);
     debugEvidenceStore.recordNormalizedObservation(observation);
     debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+    demoTest?.observationAccepted();
   };
 
   const rehearsal =
@@ -612,6 +635,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
+    beforeEnter: () => demoTest?.openFormalBoundary(),
+    finishTrial: async () => {
+      await demoTest?.finish();
+    },
     release: async () => {
       await options.rivalhubConnection?.release();
     },
@@ -625,6 +652,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           controller: matchContextController,
           runtime: programRuntime,
           isPreparationWaiting: () =>
+            !production.isTrialPending() &&
+            !matchContextController.isTemporary() &&
             production.get().mode === 'preparation' &&
             sceneController.get().active === 'waiting' &&
             sceneController.get().preparing === undefined,
@@ -733,8 +762,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.get('/local/v1/program-presentation', (_request, reply) => {
     const envelope = matchContextController?.getActiveDocumentEnvelope();
     const document = envelope?.freshness === 'fresh' ? envelope.document : null;
-    const schedule =
-      envelope?.source === 'local' && document?.competition
+    const schedule = demoTest.get().active
+      ? undefined
+      : envelope?.source === 'local' && document?.competition
         ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
         : options.rivalhubConnection?.getSchedule();
     return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
@@ -766,41 +796,119 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.rivalhubConnection)
     registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
-      canClaim: () => production.get().mode === 'live',
-      canUpdatePlan: () => programRuntime.canUpdateSeriesPlan(),
+      canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
+      canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
-  if (matchContextController !== null) {
-    app.addHook('onReady', async () => {
-      await localTournamentStore?.load();
-      const restored = await matchContextController.restoreLatest();
-      if (localTournamentStore === null) return;
-      const selected = localTournamentStore
-        .getSnapshot()
-        .matches.find(
-          (match) => match.matchId === localTournamentStore.getSnapshot().selectedMatchId,
-        );
-      const localSelectedAt = localTournamentStore.getSnapshot().selectedAt;
-      const localWasSelectedLast =
-        localSelectedAt !== null &&
-        Date.parse(localSelectedAt) >= Date.parse(restored?.storedAt ?? '1970-01-01T00:00:00.000Z');
-      if (
-        selected !== undefined &&
-        (restored === undefined || isStandaloneLocalMatch(restored) || localWasSelectedLast)
-      ) {
-        localMatchExit?.requireHostConfirmation();
-        matchContextController.activateLocalDocument(selected);
-      } else if (restored !== undefined && isStandaloneLocalMatch(restored)) {
-        const migrated = await localTournamentStore.importLegacyMatch(
-          toMatchDocumentV1(restored.manifest),
-        );
-        localMatchExit?.requireHostConfirmation();
-        matchContextController.activateLocalDocument(migrated);
-      }
-    });
-  }
+  const restoreFormal = async (trial = false) => {
+    if (matchContextController === null) return;
+    await localTournamentStore?.load();
+    const restored = trial
+      ? await matchContextController.restoreTemporaryBinding()
+      : await matchContextController.restoreLatest();
+    if (localTournamentStore === null) return;
+    const selected = localTournamentStore
+      .getSnapshot()
+      .matches.find(
+        (match) => match.matchId === localTournamentStore.getSnapshot().selectedMatchId,
+      );
+    const localSelectedAt = localTournamentStore.getSnapshot().selectedAt;
+    const localWasSelectedLast =
+      localSelectedAt !== null &&
+      Date.parse(localSelectedAt) >= Date.parse(restored?.storedAt ?? '1970-01-01T00:00:00.000Z');
+    if (
+      selected !== undefined &&
+      (restored === undefined || isStandaloneLocalMatch(restored) || localWasSelectedLast)
+    ) {
+      if (!trial) localMatchExit?.requireHostConfirmation();
+      if (trial) matchContextController.restoreTemporaryLocalDocument(selected);
+      else matchContextController.activateLocalDocument(selected);
+    } else if (restored !== undefined && isStandaloneLocalMatch(restored)) {
+      const migrated = await localTournamentStore.importLegacyMatch(
+        toMatchDocumentV1(restored.manifest),
+      );
+      if (!trial) localMatchExit?.requireHostConfirmation();
+      if (trial) matchContextController.restoreTemporaryLocalDocument(migrated);
+      else matchContextController.activateLocalDocument(migrated);
+    }
+  };
+  const demoTest = new DemoTestController({
+    canBegin: () => formalMutations.size === 0,
+    dataReady: () => {
+      const current = programRuntime.getCurrentState();
+      const telemetry = current.programTelemetry;
+      return (
+        projectionCoordinator.getCurrent().operator.runtime.telemetryFreshness === 'fresh' &&
+        programRuntime.getSourceFreshness(projectionNowMonotonicMs()) === 'fresh' &&
+        telemetry?.coverage.map === 'present' &&
+        telemetry.coverage.allPlayers === 'present' &&
+        (telemetry.telemetry.allPlayers?.length ?? 0) > 0 &&
+        telemetry.telemetry.map?.name !== undefined
+      );
+    },
+    diagnostic: (stage, error) =>
+      app.log.error(
+        { event: 'demo-test', stage, result: 'failure', diagnostic: error },
+        'Demo test operation failed',
+      ),
+    markerPath: demoMarkerPath,
+    recovery: demoRecovery,
+    context: matchContextController,
+    runtime: programRuntime,
+    scenes: sceneController,
+    production,
+    obs: async () => obsAdapter?.status(),
+    quarantineOutput: (value) => outputService.setQuarantined(value),
+    refresh: () => {
+      projectionCoordinator.refresh();
+      programCueCoordinator.afterRuntimeMutation();
+    },
+    restoreFormal: () => restoreFormal(true),
+    hold: () => director.hold(),
+  });
+  registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
+  app.addHook('onRequest', async (request, reply) => {
+    if (['GET', 'HEAD'].includes(request.method)) return;
+    const path = request.url.split('?')[0];
+    if (!path?.startsWith('/operator/')) return;
+    if (!production.isTrialPending() && demoTest?.get().active !== true) {
+      if (!path.startsWith('/operator/runtime/')) formalMutations.add(request.id);
+      return;
+    }
+    if (
+      [
+        '/operator/runtime/demo-test',
+        '/operator/runtime/stop',
+        '/operator/production',
+        '/operator/program-scene',
+      ].includes(path)
+    )
+      return;
+    // Trial presentation is manual. Keep all match, platform, update and resource mutations excluded.
+    return reply
+      .code(409)
+      .send({ error: 'demo_test_active', message: '请先结束试播并完成 CS2 恢复。' });
+  });
+  app.addHook('preHandler', async (request, reply) => {
+    if (demoTest?.get().active !== true || request.url.split('?')[0] !== '/operator/program-scene')
+      return;
+    const body = request.body as { sceneId?: unknown } | null;
+    if (body?.sceneId === 'waiting') return;
+    if (demoTest.get().phase !== 'playing' || !demoTest.get().dataReady)
+      return reply
+        .code(409)
+        .send({ error: 'demo_test_not_ready', message: '请等待有效的 Demo 观察数据。' });
+  });
+  app.addHook('onResponse', (request, _reply, done) => {
+    formalMutations.delete(request.id);
+    done();
+  });
+  app.addHook('onReady', async () => {
+    if (demoTest.get().active) await demoTest.recover();
+    else await restoreFormal();
+  });
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
@@ -874,6 +982,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ) {
         return reply.code(403).send({ error: 'runtime-control-denied' });
       }
+      // Host must finish the owned game and configuration transaction while
+      // this service is still available to keep the formal boundary isolated.
+      if (demoTest.get().active)
+        return reply.code(409).send({
+          message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
+        });
       // The capability-verified CLI stop uses the same transaction as both UIs.
       const result = await production.shutdown();
       if (result.code !== 200) return reply.code(result.code).send(result.value);
@@ -913,6 +1027,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.gsiToken !== undefined) {
     registerGsiIngress(app, {
       gsiToken: options.gsiToken,
+      canAccept: () => demoTest?.canAcceptGsi() ?? true,
+      canRecord: () => demoTest?.get().active !== true,
       recorder: currentRecorder,
       ...(options.gsiSequenceSource === undefined
         ? {}

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
   createMapPlayerStatsAccumulator,
@@ -76,6 +77,7 @@ export class ProgramRuntime {
   private seriesContext: MatchContext | undefined;
   private seriesOrigin: ContextOrigin | undefined;
   private fixtureSeriesProgressActive = false;
+  private transientSession = false;
   private seriesProgress: SeriesProgress | undefined;
   private seriesSideProof: SeriesSideProof | null = null;
   private readonly pendingSeriesEvents: SeriesProgressEvent[] = [];
@@ -94,6 +96,26 @@ export class ProgramRuntime {
       normalizedOptions.producerInstanceId,
       normalizedOptions.liveSession,
     );
+  }
+
+  /** Switch the sole runtime to a fresh isolated session; no telemetry survives. */
+  resetSession(transient: boolean): void {
+    const previous = this.state;
+    this.transientSession = transient;
+    this.state = {
+      ...createInitialRuntimeState(previous.producerInstanceId, {
+        kind: 'bound',
+        liveSessionId: randomUUID(),
+      }),
+      runtimeSeq: previous.runtimeSeq + 1,
+      programSource: { kind: 'cs2-gsi', generation: previous.programSource.generation + 1 },
+      objectiveTiming: createObjectiveTimingState(previous.programSource.generation + 1, 0),
+    };
+    this.lastDisposition = undefined;
+    this.recentTransitions.length = 0;
+    this.clearFixtureSeriesProgress();
+    this.deliveryRestoreAwaitingTelemetry = false;
+    this.restorePending = false;
   }
 
   /** Restore identities only before the first observation; never restore telemetry or clocks. */
@@ -202,7 +224,7 @@ export class ProgramRuntime {
     if (this.seriesProgress === undefined || matchChanged) {
       let initial = createSeriesProgress(context);
       let checkpoint;
-      if (effectiveOrigin !== 'fixture') {
+      if (!this.transientSession && effectiveOrigin !== 'fixture') {
         try {
           checkpoint = this.seriesProgressCheckpointStore?.load();
         } catch {
@@ -226,7 +248,7 @@ export class ProgramRuntime {
           this.restorePending = false;
         }
       } else {
-        if (effectiveOrigin !== 'fixture') {
+        if (!this.transientSession && effectiveOrigin !== 'fixture') {
           shouldPersist = true;
         }
         this.restorePending = false;
@@ -276,8 +298,10 @@ export class ProgramRuntime {
     });
     this.seriesProgress = reduced.progress;
     if (restoring) this.restorePending = false;
-    if (reduced.changed && effectiveOrigin !== 'fixture') shouldPersist = true;
-    if (shouldPersist && effectiveOrigin !== 'fixture') this.persistSeriesProgress();
+    if (reduced.changed && !this.transientSession && effectiveOrigin !== 'fixture')
+      shouldPersist = true;
+    if (shouldPersist && !this.transientSession && effectiveOrigin !== 'fixture')
+      this.persistSeriesProgress();
     return this.seriesProgress;
   }
 
@@ -508,6 +532,7 @@ export class ProgramRuntime {
     if (
       this.seriesProgress === undefined ||
       this.seriesProgressCheckpointStore === undefined ||
+      this.transientSession ||
       this.fixtureSeriesProgressActive ||
       this.seriesOrigin === 'fixture'
     ) {

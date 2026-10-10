@@ -1,4 +1,5 @@
 import { AutomaticPreparation } from './AutomaticPreparation';
+import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
 import type { ContextEnvelope } from '@mizar/core/match-context';
@@ -461,6 +462,7 @@ export function PreparationPage() {
                 </Panel>
               </div>
             ) : null}
+            <DemoTestPanel />
             <div className="preparation-tool-strip">
               <span>常用工具</span>
               {tools}
