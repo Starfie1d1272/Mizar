@@ -30,7 +30,7 @@ function metadata(role, bytes) {
   return Metadata.fromJSON(role, JSON.parse(bytes.toString('utf8')));
 }
 /** receipt 里的所有材料均不可信；必须从固定 SDK seed 验证 root 轮换和签名 target。不联网、不接受替换根。 */
-export function verifyTrustSnapshot(snapshot) {
+function verifiedTrust(snapshot) {
   requireValue(
     snapshot?.schemaVersion === 'mizar.sigstore-cache.v1' &&
       Array.isArray(snapshot.rootChain) &&
@@ -55,10 +55,49 @@ export function verifyTrustSnapshot(snapshot) {
   );
   // 只用于已授权缓存的历史签名：不把 TUF 元数据到期等同于已安装数据撤销。
   // 新安装仍先使用 SDK 的在线 TUF freshness 验证，不能通过此函数取得新安装资格。
-  return TrustedRoot.fromJSON(JSON.parse(material.toString('utf8')));
+  return { root, targets, material: TrustedRoot.fromJSON(JSON.parse(material.toString('utf8'))) };
 }
-export function createOfflineMizarVerifier(snapshot, workflow, sourceSha) {
-  const material = verifyTrustSnapshot(snapshot),
+export function verifyTrustSnapshot(snapshot) {
+  return verifiedTrust(snapshot).material;
+}
+/** Fresh first-install evidence; historical cache receipts alone never qualify. */
+export function verifyFreshTrustSnapshot(snapshot) {
+  const { root, targets, material } = verifiedTrust(snapshot);
+  const timestamp = metadata(MetadataKind.Timestamp, decode(snapshot.timestampBase64));
+  const snapshotBytes = decode(snapshot.snapshotBase64);
+  const repositorySnapshot = metadata(MetadataKind.Snapshot, snapshotBytes);
+  root.verifyDelegate(MetadataKind.Timestamp, timestamp);
+  root.verifyDelegate(MetadataKind.Snapshot, repositorySnapshot);
+  const snapshotPin = timestamp.signed.snapshotMeta;
+  requireValue(
+    snapshotPin.version === repositorySnapshot.signed.version,
+    'Offline timestamp does not bind the supplied snapshot version',
+  );
+  snapshotPin.verify(snapshotBytes);
+  const targetsPin = repositorySnapshot.signed.meta['targets.json'];
+  requireValue(
+    targetsPin && targetsPin.version === targets.signed.version,
+    'Offline snapshot does not bind the supplied targets version',
+  );
+  targetsPin.verify(decode(snapshot.targetsBase64));
+  const now = new Date();
+  for (const role of [root, timestamp, repositorySnapshot, targets]) {
+    requireValue(
+      Number.isFinite(Date.parse(role.signed.expires)) && !role.signed.isExpired(now),
+      'Offline first-install TUF metadata has expired',
+    );
+  }
+  return material;
+}
+export function createOfflineMizarVerifier(
+  snapshot,
+  workflow,
+  sourceSha,
+  { firstInstall = false } = {},
+) {
+  const material = firstInstall
+      ? verifyFreshTrustSnapshot(snapshot)
+      : verifyTrustSnapshot(snapshot),
     policy = mizarCertificatePolicy(workflow, sourceSha);
   const engine = new Verifier(toTrustMaterial(material), { ctlogThreshold: 1, tlogThreshold: 1 });
   return {
@@ -124,5 +163,15 @@ export async function captureTrustSnapshot(tufCachePath, signal) {
     trustedRootBase64: encode(await boundedFile(join(directory, 'targets/trusted_root.json'))),
   };
   verifyTrustSnapshot(snapshot);
+  return snapshot;
+}
+
+/** Capture originals after online SDK verification, with no new root or re-signing. */
+export async function captureFreshTrustSnapshot(tufCachePath, signal) {
+  const snapshot = await captureTrustSnapshot(tufCachePath, signal);
+  const directory = join(tufCachePath, 'tuf-repo-cdn.sigstore.dev');
+  snapshot.timestampBase64 = encode(await boundedFile(join(directory, 'timestamp.json')));
+  snapshot.snapshotBase64 = encode(await boundedFile(join(directory, 'snapshot.json')));
+  verifyFreshTrustSnapshot(snapshot);
   return snapshot;
 }
