@@ -32,6 +32,82 @@ const request = {
 };
 
 describe('support export', () => {
+  it('exports native Demo stages and correlated Companion exceptions through the user bundle', async () => {
+    const dir = await directory();
+    const operationId = '12345678-abcd-1234-abcd-123456789012';
+    const requestId = '87654321-abcd-1234-abcd-123456789012';
+    await writeFile(
+      join(dir, 'desktop.ndjson'),
+      [
+        { phase: 'file_canonicalize', errorKind: 'NotFound', osCode: 2, cause: 'file not found' },
+        { phase: 'runtime_json', category: 'Eof', line: 1, column: 42 },
+        {
+          phase: 'response_http',
+          status: 409,
+          code: 'demo_test_future_failure',
+          stage: 'future_restore_stage',
+          operationId,
+          requestId,
+          occurrences: 16,
+        },
+      ]
+        .map((error) =>
+          JSON.stringify({ stage: 'demo_test', result: 'failure', error: JSON.stringify(error) }),
+        )
+        .join('\n'),
+    );
+    await writeFile(
+      join(dir, 'companion.log'),
+      JSON.stringify({
+        event: 'demo-test',
+        stage: 'formal_restore',
+        result: 'failure',
+        diagnostic: {
+          operationId,
+          requestId,
+          error: {
+            name: 'Error',
+            message: 'restore failed',
+            cause: { code: 'EACCES', message: 'permission denied', password: 'do-not-export' },
+          },
+        },
+      }),
+    );
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain('do-not-export');
+      const logs = response.json<SupportBundle>().logs;
+      const native = logs.find((log) => log.name === 'desktop.ndjson')!.events;
+      expect(native[0]).toMatchObject({
+        stage: 'demo_test',
+        demoPhase: 'file_canonicalize',
+        osErrorCode: 2,
+        localDiagnostic: { errorKind: 'NotFound', cause: 'file not found' },
+      });
+      expect(native[1]).toMatchObject({
+        demoPhase: 'runtime_json',
+        localDiagnostic: { category: 'Eof', line: 1, column: 42 },
+      });
+      expect(native[2]).toMatchObject({
+        demoCode: 'demo_test_future_failure',
+        operationId,
+        requestId,
+        occurrences: 16,
+        localDiagnostic: { status: 409, stage: 'future_restore_stage' },
+      });
+      expect(logs.find((log) => log.name === 'companion.log')!.events[0]).toMatchObject({
+        stage: 'formal_restore',
+        operationId,
+        requestId,
+        localDiagnostic: { cause: { code: 'EACCES', message: 'permission denied' } },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('joins actual startup log formats while retaining failure evidence and excluding arbitrary text', async () => {
     const dir = await directory();
     const secrets = [

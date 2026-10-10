@@ -13,6 +13,7 @@ import { ObsAdapter, type ObsStatus } from '../src/obs/adapter.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { JsonSeriesProgressCheckpointStore } from '../src/series-progress/checkpoint-store.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
+import type { readSupportLogs } from '../src/support/logs.js';
 
 const browser = { origin: 'http://127.0.0.1:3000' };
 const host = { 'x-runtime-token': 'host-secret' };
@@ -45,6 +46,7 @@ async function setup() {
     seriesProgressCheckpointStore: checkpoint,
   });
   const options = {
+    supportLogsDirectory: root,
     localTournamentPath: join(root, 'local.json'),
     matchManifestPath: join(root, 'lkg.json'),
     obsConfigPath: join(root, 'obs.json'),
@@ -227,8 +229,47 @@ it('isolates real demo observations, preserves formal storage/checkpoint, and re
   expect(checkpointSave).not.toHaveBeenCalled();
   expect((await h.command('cancel')).statusCode).toBe(409);
   expect((await h.command('complete')).statusCode).toBe(409);
+  const failureLog = vi.spyOn(h.app.log, 'error');
   h.switchObs.mockRejectedValueOnce(new Error('OBS unavailable'));
-  expect((await h.command('finish')).statusCode).toBe(409);
+  const failedFinish = await h.command('finish');
+  expect(failedFinish.statusCode).toBe(409);
+  const failure = failedFinish.json<{
+    error: string;
+    stage: string;
+    operationId: string;
+    requestId: string;
+  }>();
+  expect(failure).toMatchObject({
+    error: 'demo_test_operation_failed',
+    stage: 'finish',
+    requestId: h.requestId,
+  });
+  const finishLog = failureLog.mock.calls
+    .map(([entry]) => entry as Record<string, unknown>)
+    .find((entry) => entry.event === 'demo-test' && entry.stage === 'finish')!;
+  expect(finishLog.diagnostic).toMatchObject({
+    operationId: failure.operationId,
+    requestId: h.requestId,
+  });
+  await writeFile(join(h.root, 'companion.log'), JSON.stringify(finishLog) + '\n');
+  const exportedFailure = await h.app.inject({
+    method: 'POST',
+    url: '/debug/support-bundle',
+    headers: browser,
+    payload: {},
+  });
+  expect(exportedFailure.statusCode).toBe(200);
+  expect(
+    exportedFailure
+      .json<{ logs: Awaited<ReturnType<typeof readSupportLogs>> }>()
+      .logs.find((entry) => entry.name === 'companion.log')?.events[0],
+  ).toMatchObject({
+    stage: 'finish',
+    operationId: failure.operationId,
+    requestId: h.requestId,
+    localDiagnostic: { name: 'Error' },
+  });
+
   expect((await h.app.inject('/local/v1/demo-test')).json<DemoTestView>()).toMatchObject({
     active: true,
     phase: 'stopping',
@@ -286,6 +327,28 @@ it('keeps failed initial gameplay takes actionable, preserves safe output, and b
   expect(evidence).toContain('initial_gameplay_take');
   expect(evidence).toContain('ECONNRESET');
   expect(evidence).toContain('WebSocket connection reset');
+  const takeLog = log.mock.calls[0]![0] as Record<string, unknown>;
+  const takeDiagnostic = takeLog.diagnostic as { operationId: string; requestId: string };
+  expect(takeDiagnostic.requestId).toBe(h.requestId);
+  await writeFile(join(h.root, 'companion.log'), JSON.stringify(takeLog) + '\n');
+  const exported = await h.app.inject({
+    method: 'POST',
+    url: '/debug/support-bundle',
+    headers: browser,
+    payload: {},
+  });
+  expect(exported.statusCode).toBe(200);
+  expect(
+    exported
+      .json<{ logs: Awaited<ReturnType<typeof readSupportLogs>> }>()
+      .logs.find((entry) => entry.name === 'companion.log')?.events[0],
+  ).toMatchObject({
+    stage: 'initial_gameplay_take',
+    operationId: takeDiagnostic.operationId,
+    requestId: h.requestId,
+    localDiagnostic: { cause: { code: 'ECONNRESET', message: 'WebSocket connection reset' } },
+  });
+
   expect((await h.app.inject('/local/v1/program-scenes')).json<ProgramSceneState>().active).toBe(
     'waiting',
   );
@@ -307,7 +370,13 @@ it('requires the private Host capability and preparation with connected non-stre
   expect((await h.command('begin', {}, { ...host, ...browser })).statusCode).toBe(403);
   expect((await h.command('begin', { demoPath: 'C:/secret.dem' })).statusCode).toBe(400);
   h.status.mockResolvedValueOnce({ ...obs, streaming: true });
-  expect((await h.command('begin')).statusCode).toBe(409);
+  const streaming = await h.command('begin');
+  expect(streaming.statusCode).toBe(409);
+  expect(streaming.json()).toMatchObject({
+    error: 'demo_test_obs_unavailable',
+    stage: 'begin',
+    requestId: h.requestId,
+  });
   h.status.mockResolvedValueOnce({
     ...obs,
     connection: 'unavailable',

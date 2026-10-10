@@ -17,7 +17,13 @@ static RETRY_FAILURE: Mutex<Option<(String, u64)>> = Mutex::new(None);
 
 fn failure(log: &DesktopLog, stage: &str, mut evidence: Value, retry: bool) {
     if retry {
-        let key = format!("{}:{stage}:{evidence}", log.session_id);
+        let mut signature = evidence.clone();
+        // A fresh Companion operation UUID identifies each attempted retry;
+        // it must not turn the same persistent failure into a log storm.
+        if let Some(fields) = signature.as_object_mut() {
+            fields.remove("operationId");
+        }
+        let key = format!("{}:{stage}:{signature}", log.session_id);
         if let Ok(mut previous) = RETRY_FAILURE.lock() {
             let count = match previous.as_mut() {
                 Some((saved, count)) if *saved == key => {
@@ -653,12 +659,7 @@ fn parse_response(bytes: &[u8], log: &DesktopLog) -> Result<Value, String> {
         )
     })?;
     if code != 200 {
-        failure(
-            log,
-            "response_http",
-            json!({"status":code,"cause":"companion_rejected","reason":rejection_reason(value["message"].as_str())}),
-            true,
-        );
+        failure(log, "response_http", rejection_evidence(&value, code), true);
         return Err(value["message"]
             .as_str()
             .unwrap_or("Demo 测试操作未完成，请重试。")
@@ -667,30 +668,45 @@ fn parse_response(bytes: &[u8], log: &DesktopLog) -> Result<Value, String> {
     Ok(value)
 }
 
-fn rejection_reason(message: Option<&str>) -> &'static str {
-    // DesktopLog bounds messages but cannot remove unknown paths or secrets.
-    // Only fixed messages in the private Demo contract may enter native logs;
-    // neither response bodies nor a future dynamic reason are copied through.
-    const REASONS: &[&str] = &[
-        "试播操作参数无效。",
-        "试播操作正在进行，请稍后重试。",
-        "试播状态已变化，请刷新后重试。",
-        "制作操作正在进行，请稍后重试。",
-        "已有试播需要先结束。",
-        "本机试播存储尚未就绪。",
-        "比赛资料正在修改，请完成后再试播。",
-        "请连接 OBS 并停止推流后再开始试播。",
-        "请先结束制作，完成升级或素材激活后再开始试播。",
-        "当前试播不能开始播放。",
-        "播放已开始，请先结束试播。",
-        "请先切换等待画面并退出受管 CS2。",
-        "试播操作未完成，隔离状态已保留；请处理问题后重试。",
-    ];
-    REASONS
-        .iter()
-        .copied()
-        .find(|reason| Some(*reason) == message)
-        .unwrap_or("[unknown rejection reason redacted]")
+fn rejection_evidence(value: &Value, status: u16) -> Value {
+    json!({"status":status,"cause":"companion_rejected",
+        "code":safe_identifier(value.get("error").or_else(|| value.get("code"))),
+        "stage":safe_identifier(value.get("stage")),
+        "operationId":safe_uuid(value.get("operationId")),
+        "requestId":safe_uuid(value.get("requestId"))})
+}
+
+fn safe_identifier(value: Option<&Value>) -> Option<&str> {
+    value.map(|value| {
+        value.as_str().filter(|text| {
+            !text.is_empty() && text.len() <= 64
+                && text.as_bytes()[0].is_ascii_alphabetic()
+                && text.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                // Bare long hex strings are capabilities rather than useful
+                // machine codes. Do not copy one even in a mislabeled field.
+                && !(text.len() >= 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        }).unwrap_or("[invalid identifier redacted]")
+    })
+}
+
+fn safe_uuid(value: Option<&Value>) -> Option<&str> {
+    value.map(|value| {
+        value
+            .as_str()
+            .filter(|id| {
+                id.len() == 36
+                    && id.bytes().enumerate().all(|(index, byte)| {
+                        if [8, 13, 18, 23].contains(&index) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    })
+                    && matches!(id.as_bytes()[14], b'1'..=b'8')
+                    && matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B')
+            })
+            .unwrap_or("[invalid UUID redacted]")
+    })
 }
 
 #[cfg(test)]
@@ -825,12 +841,37 @@ mod tests {
         .unwrap();
         assert!(status(&log).is_err());
         assert!(parse_response(b"HTTP/1.1 403 Forbidden\r\n\r\n{\"message\":\"private-runtime-secret C:\\\\private\\\\demo.dem\"}", &log).is_err());
+        let invalid = format!(
+            "HTTP/1.1 401 Unauthorized\r\n\r\n{}",
+            json!({
+            "error":"C:\\private\\demo.dem","stage":"private-runtime-secret/path",
+            "operationId":"private-runtime-secret","requestId":"private-runtime-secret"})
+        );
+        assert!(parse_response(invalid.as_bytes(), &log).is_err());
+        let capability = "abcdef0123456789".repeat(4);
+        let mislabeled = format!(
+            "HTTP/1.1 400 Bad Request\r\n\r\n{}",
+            json!({"code":capability,"stage":capability})
+        );
+        assert!(parse_response(mislabeled.as_bytes(), &log).is_err());
         let reason = "请连接 OBS 并停止推流后再开始试播。";
-        let rejected = format!("HTTP/1.1 409 Conflict\r\n\r\n{}", json!({"message":reason}));
+        let operation = request_id().unwrap();
+        let trial = request_id().unwrap();
+        let rejection = json!({"message":reason,"error":"demo_test_future_failure",
+            "stage":"waiting_take","operationId":operation,"requestId":trial});
+        let rejected = format!("HTTP/1.1 409 Conflict\r\n\r\n{rejection}");
         assert_eq!(
             parse_response(rejected.as_bytes(), &log).unwrap_err(),
             reason
         );
+        // New operation IDs correlate individual retries without defeating
+        // aggregation of an unchanged machine cause within the same trial.
+        for _ in 0..10000 {
+            let mut retry = rejection.clone();
+            retry["operationId"] = json!(request_id().unwrap());
+            let response = format!("HTTP/1.1 409 Conflict\r\n\r\n{retry}");
+            assert!(parse_response(response.as_bytes(), &log).is_err());
+        }
         fs::remove_file(log.state_root.join("data/runtime.json")).unwrap();
         for _ in 0..10000 {
             assert!(status(&log).is_err());
@@ -840,7 +881,9 @@ mod tests {
         assert!(!text.contains(root.to_str().unwrap()));
         assert!(!text.contains(private_name));
         assert!(!text.contains("private-runtime-secret"));
+        assert!(!text.contains(&capability));
         assert!(!text.contains("private\\\\demo.dem"));
+        assert!(!text.contains(reason));
         let evidence: Vec<Value> = text
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -863,7 +906,16 @@ mod tests {
             .iter()
             .any(|entry| entry["phase"] == "response_http"
                 && entry["status"] == 409
-                && entry["reason"] == reason));
+                && entry["code"] == "demo_test_future_failure"
+                && entry["stage"] == "waiting_take"
+                && entry["operationId"] == operation
+                && entry["requestId"] == trial));
+        assert!(evidence.iter().any(|entry| entry["status"] == 401
+            && entry["code"] == "[invalid identifier redacted]"
+            && entry["operationId"] == "[invalid UUID redacted]"));
+        assert!(evidence.iter().any(|entry| entry["status"] == 400
+            && entry["code"] == "[invalid identifier redacted]"
+            && entry["stage"] == "[invalid identifier redacted]"));
         assert!(evidence.iter().any(|entry| entry["phase"] == "runtime_open"
             && entry["occurrences"].as_u64().is_some_and(|value| value > 1)));
         fs::remove_dir_all(root).unwrap();

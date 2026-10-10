@@ -7,7 +7,7 @@ Host 私有接口为 `POST /operator/runtime/demo-test`，必须提供本次运�
 - `begin`：`{action:"begin",requestId:<UUID>,teamAName?:string,teamBName?:string}`，名称默认 A/B，最多 128 字符。
 - 后续：`{action:"playing"|"finish"|"complete"|"cancel",requestId:<UUID>}`。
 
-成功返回 200，与 `GET /local/v1/demo-test` 相同：`{active,phase,requestId,teamAName,teamBName,dataReady}`；phase 为 idle / starting / playing / stopping / recovery。参数错误 400、认证失败 403、互斥、未满足前提或事务失败 409；错误只返回中文提示，细节经脱敏记录在 Companion 日志。相同活动 begin/playing、已完成 requestId 的 complete/cancel/finish 可重试。
+成功返回 200，与 `GET /local/v1/demo-test` 相同：`{active,phase,requestId,teamAName,teamBName,dataReady}`；phase 为 idle / starting / playing / stopping / recovery。参数错误 400、认证失败 403、互斥、未满足前提或事务失败 409；参数与生命周期错误返回 `{error:<稳定机器码>,stage,operationId:<UUID>,requestId?:<试播 UUID>,message:<中文提示>}`；认证拒绝仅返回权限错误码。事务异常的响应与 Companion 日志共享 operationId / requestId，底层原因经现有脱敏记录。Native 仅保留有界机器标识与 UUID，不按中文提示白名单判定，不记录任意响应正文。相同活动 begin/playing、已完成 requestId 的 complete/cancel/finish 可重试。
 
 begin 只在原制作生命周期 preparation、无升级、无素材激活、无资料写入、OBS 已连接且未推流时接受。先 flush 正式 checkpoint，再原子写入本机资料目录的 `demo-test.json`，最后隔离输出、切换唯一 Runtime 的 session/source generation、建立无赛事 BO1 空名单临时 binding。该 binding 不写 LocalTournamentStore / Manifest LKG，临时 Runtime 不读取或写入正式系列 checkpoint。正式资料与后台平台刷新、claim、模板修改、资源激活和更新操作被隔离。
 
@@ -23,4 +23,6 @@ marker 在 Runtime / projection 组合之前同步探测。存在 marker 的重�
 
 活动试播（包括 recovery）拒绝直接停止 Companion。Host 正常退出先切安全画面、清理游戏并完成配置恢复，完成 complete 后才停止服务；EXE `--stop` 复用既有 Host 退出请求通道。外部强停或服务断线仍保留 marker 与 Host journal，重新启动后恢复。
 
-自动化证据在 `apps/companion/test/demo-test.test.ts`；Windows / CS2 / OBS 实机未验证。
+用户诊断包保留 Native `demo_test` 的实际 phase、OS / JSON / HTTP 证据，以及 Companion 各试播阶段的异常链、operationId 和 requestId；未知合法机器码与阶段仍可导出。重复 Native 请求的聚合不把每次新的 operationId 视为新事故。
+
+自动化证据在 `apps/companion/test/demo-test.test.ts` 与 `apps/companion/test/support-export.test.ts`，覆盖实际用户诊断包导出；Windows / CS2 / OBS 实机未验证。

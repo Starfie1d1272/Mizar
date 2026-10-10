@@ -154,11 +154,24 @@ export class DemoTestController {
     this.options.refresh();
   }
   async command(input: unknown): Promise<{ code: number; value: unknown }> {
+    const operationId = randomUUID();
     const parsed = commandSchema.safeParse(input);
-    if (!parsed.success) return { code: 400, value: { message: '试播操作参数无效。' } };
+    if (!parsed.success)
+      return {
+        code: 400,
+        value: {
+          error: 'demo_test_invalid_command',
+          stage: 'validate_command',
+          operationId,
+          message: '试播操作参数无效。',
+        },
+      };
     const body = parsed.data;
-    const conflict = (message: string) => ({ code: 409, value: { message } });
-    if (this.busy) return conflict('试播操作正在进行，请稍后重试。');
+    const conflict = (error: string, message: string, stage: string = body.action) => ({
+      code: 409,
+      value: { error, stage, operationId, requestId: body.requestId, message },
+    });
+    if (this.busy) return conflict('demo_test_busy', '试播操作正在进行，请稍后重试。');
     if (
       !this.marker &&
       this.completedRequestId === body.requestId &&
@@ -166,12 +179,12 @@ export class DemoTestController {
     )
       return { code: 200, value: this.get() };
     if (body.action !== 'begin' && this.marker?.requestId !== body.requestId)
-      return conflict('试播状态已变化，请刷新后重试。');
+      return conflict('demo_test_stale_state', '试播状态已变化，请刷新后重试。');
     if (
       body.action !== 'begin' &&
       !this.options.production.reserveTrialOperation(['complete', 'finish'].includes(body.action))
     )
-      return conflict('制作操作正在进行，请稍后重试。');
+      return conflict('demo_test_production_busy', '制作操作正在进行，请稍后重试。');
     this.busy = true;
     let stage = body.action as string;
     try {
@@ -179,14 +192,14 @@ export class DemoTestController {
         if (this.marker)
           return this.marker.requestId === body.requestId
             ? { code: 200, value: this.get() }
-            : conflict('已有试播需要先结束。');
+            : conflict('demo_test_already_active', '已有试播需要先结束。');
         if (!this.options.markerPath || !this.options.context)
-          return conflict('本机试播存储尚未就绪。');
+          return conflict('demo_test_storage_unavailable', '本机试播存储尚未就绪。');
         if (this.options.canBegin?.() === false)
-          return conflict('比赛资料正在修改，请完成后再试播。');
+          return conflict('demo_test_context_busy', '比赛资料正在修改，请完成后再试播。');
         const obs = await this.options.obs();
         if (obs?.connection !== 'connected' || obs.streaming)
-          return conflict('请连接 OBS 并停止推流后再开始试播。');
+          return conflict('demo_test_obs_unavailable', '请连接 OBS 并停止推流后再开始试播。');
         const marker: Marker = {
           version: 'mizar.demo-test.v1',
           requestId: body.requestId,
@@ -195,7 +208,7 @@ export class DemoTestController {
         };
         const document = trialDocument(marker);
         if (this.options.canBegin?.() === false)
-          return conflict('比赛资料正在修改，请完成后再试播。');
+          return conflict('demo_test_context_busy', '比赛资料正在修改，请完成后再试播。');
         const prepared = await this.options.production.prepareTrial(async () => {
           stage = 'checkpoint_flush';
           await this.options.runtime.flushSeriesProgressCheckpoint();
@@ -215,10 +228,15 @@ export class DemoTestController {
           this.restored = false;
           this.waitingConfirmed = false;
         });
-        if (!prepared) return conflict('请先结束制作，完成升级或素材激活后再开始试播。');
+        if (!prepared)
+          return conflict(
+            'demo_test_preparation_required',
+            '请先结束制作，完成升级或素材激活后再开始试播。',
+          );
       } else if (body.action === 'playing') {
         if (this.phase === 'playing') return { code: 200, value: this.get() };
-        if (this.phase !== 'starting') return conflict('当前试播不能开始播放。');
+        if (this.phase !== 'starting')
+          return conflict('demo_test_invalid_playing_phase', '当前试播不能开始播放。');
         this.options.production.setTrialPlaying();
         this.phase = 'playing';
         this.options.hold();
@@ -226,9 +244,9 @@ export class DemoTestController {
         await this.finish();
       } else {
         if (body.action === 'cancel' && this.phase !== 'starting')
-          return conflict('播放已开始，请先结束试播。');
+          return conflict('demo_test_already_playing', '播放已开始，请先结束试播。');
         if (body.action === 'complete' && this.phase !== 'recovery' && !this.waitingConfirmed)
-          return conflict('请先切换等待画面并退出受管 CS2。');
+          return conflict('demo_test_recovery_required', '请先切换等待画面并退出受管 CS2。');
         // Host calls complete only after managed CS2 exit and video restoration.
         this.dropFormalGsi = true;
         if (!this.restored) {
@@ -255,9 +273,18 @@ export class DemoTestController {
       }
       return { code: 200, value: this.get() };
     } catch (error) {
-      this.options.diagnostic(stage, errorEvidence(error));
+      this.options.diagnostic(stage, {
+        operationId,
+        requestId: body.requestId,
+        code: 'demo_test_operation_failed',
+        error: errorEvidence(error),
+      });
       if (!this.marker) this.options.production.setTrialPending(false);
-      return conflict('试播操作未完成，隔离状态已保留；请处理问题后重试。');
+      return conflict(
+        'demo_test_operation_failed',
+        '试播操作未完成，隔离状态已保留；请处理问题后重试。',
+        stage,
+      );
     } finally {
       this.busy = false;
       if (body.action !== 'begin') this.options.production.releaseTrialOperation();
@@ -302,7 +329,12 @@ export class DemoTestController {
     // Each failed attempt has evidence; telemetry frames cannot retry or log
     // again until the cooldown ends. Manual scene controls remain available.
     this.nextTakeAttemptAt = performance.now() + 5000;
-    this.options.diagnostic('initial_gameplay_take', errorEvidence(error));
+    this.options.diagnostic('initial_gameplay_take', {
+      operationId: randomUUID(),
+      requestId: this.marker?.requestId,
+      code: 'demo_test_initial_take_failed',
+      error: errorEvidence(error),
+    });
   }
 }
 
