@@ -6,7 +6,9 @@ import {
   MACHINE_METADATA_NAME,
 } from '@mizar/resource-pack-contract/transport';
 import { createVerifier } from 'sigstore';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { bundleFromJSON } from '@sigstore/bundle';
 import { TrustedRoot } from '@sigstore/protobuf-specs';
 import { Verifier, toSignedEntity, toTrustMaterial } from '@sigstore/verify';
@@ -820,4 +822,187 @@ it('preserves HTTP quota evidence when cancelling the failed response also fails
     rateLimited: true,
     cause: { message: 'independent response cleanup failure' },
   });
+});
+
+it('uses the real SDK fresh cache, refreshes expired metadata and rejects offline expiry', async () => {
+  const sdk = await vi.importActual<typeof import('sigstore')>('sigstore');
+  const cache = await mkdtemp(join(tmpdir(), 'mizar-tuf-'));
+  const repository = join(cache, 'tuf-repo-cdn.sigstore.dev');
+  const roles = new URL(
+    '../../../packages/resource-pack-contract/test-fixtures/tuf/',
+    import.meta.url,
+  );
+  await mkdir(join(repository, 'targets'), { recursive: true });
+  for (const role of ['timestamp', 'snapshot', 'targets'])
+    await copyFile(new URL(`first-install-${role}.tuf`, roles), join(repository, `${role}.json`));
+  // Root is seeded by the SDK; neither test nor application supplies a custom root.
+  await copyFile(
+    new URL('trusted_root.json', roles),
+    join(repository, 'targets', 'trusted_root.json'),
+  );
+  const network = vi.fn<typeof fetch>(() => Promise.reject(new Error('offline trust endpoint')));
+  vi.stubGlobal('fetch', network);
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-10T12:00:00Z'));
+  const options = {
+    tufCachePath: cache,
+    tufForceCache: true,
+    retry: 0,
+    timeout: 100,
+    certificateIssuer: 'https://token.actions.githubusercontent.com',
+    certificateIdentityURI: UPDATE_WORKFLOW,
+    ctLogThreshold: 1,
+    tlogThreshold: 1,
+  };
+  try {
+    // SDK seeding copies its seed target; overwrite with the authenticated fixture after initialization.
+    const verifier = await sdk.createVerifier(options);
+    expect(network).not.toHaveBeenCalled();
+    const { bundle, bytes } = await signedFixture();
+    expect(() =>
+      verifyAttestation(bytes, 'distribution-manifest.json', bundle, verifier),
+    ).not.toThrow();
+    const timestampBytes = await readFile(join(repository, 'timestamp.json'));
+    await rm(join(repository, 'timestamp.json'));
+    let timestamps = 0;
+    network.mockImplementation((input) => {
+      const url = fetchUrl(input);
+      if (url.endsWith('.root.json'))
+        return Promise.resolve(new Response('missing', { status: 404 }));
+      if (url.endsWith('/timestamp.json')) {
+        timestamps++;
+        return Promise.resolve(
+          timestamps === 1
+            ? new Response('unavailable', { status: 503 })
+            : new Response(timestampBytes),
+        );
+      }
+      throw new Error('unexpected trust URL');
+    });
+    await sdk.createVerifier({ ...options, retry: { retries: 1, minTimeout: 1, maxTimeout: 1 } });
+    expect(timestamps).toBe(2);
+    const timestamp = z
+      .object({ signed: z.object({ expires: z.string() }) })
+      .parse(JSON.parse(timestampBytes.toString()));
+    network.mockImplementation(() => Promise.reject(new Error('offline trust endpoint')));
+    vi.setSystemTime(new Date(timestamp.signed.expires));
+    await expect(sdk.createVerifier(options)).rejects.toThrow();
+    expect(network).toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    await rm(cache, { recursive: true, force: true });
+  }
+});
+
+it('keeps a Box success followed by trust failure distinct from GitHub throttling', async () => {
+  const index: unknown = JSON.parse(
+    await readFile(new URL('update-index-v2.json', fixture), 'utf8'),
+  );
+  const trustCause = Object.assign(new Error('trust endpoint timeout'), { code: 'ETIMEDOUT' });
+  vi.mocked(createVerifier).mockRejectedValueOnce(trustCause);
+  const metadata = vi
+    .spyOn(BoxSource.prototype, 'metadata')
+    .mockResolvedValue(Buffer.from(JSON.stringify(index)));
+  const github = vi.fn<typeof fetch>(() =>
+    Promise.resolve(new Response('forbidden', { status: 403 })),
+  );
+  const events: { stage: string; error: unknown; durationMs: number | undefined }[] = [];
+  try {
+    const source = new StableSource('/unused', github, 'auto', (stage, error, durationMs) =>
+      events.push({ stage, error, durationMs }),
+    );
+    await expect(source.latest(new AbortController().signal)).rejects.toThrow(
+      'update_trust_metadata_failed',
+    );
+    expect(github).not.toHaveBeenCalled();
+    expect(events.find((event) => event.stage === 'box_metadata')).toMatchObject({
+      error: undefined,
+    });
+    expect(
+      JSON.stringify(
+        errorEvidence(events.find((event) => event.stage === 'trust_metadata')?.error),
+      ),
+    ).toContain('ETIMEDOUT');
+    expect(createVerifier).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tufForceCache: true,
+        timeout: 8000,
+        retry: { retries: 1, minTimeout: 250, maxTimeout: 250 },
+        ctLogThreshold: 1,
+        tlogThreshold: 1,
+      }),
+    );
+  } finally {
+    metadata.mockRestore();
+  }
+});
+
+it('returns promptly on cancellation during SDK initialization and retains the trust stage', async () => {
+  const index = await readFile(new URL('update-index-v2.json', fixture));
+  const metadata = vi.spyOn(BoxSource.prototype, 'metadata').mockResolvedValue(index);
+  const abort = new AbortController();
+  let finish!: (verifier: BundleVerifier) => void;
+  vi.mocked(createVerifier).mockImplementationOnce(() => {
+    queueMicrotask(() => abort.abort(new Error('operator cancellation')));
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  try {
+    await expect(new StableSource('/unused').latest(abort.signal)).rejects.toThrow(
+      'operator cancellation',
+    );
+  } finally {
+    finish({ verify: vi.fn() });
+    metadata.mockRestore();
+  }
+});
+
+it('serializes a new check/instance behind a timed-out promotion verifier using the same cache', async () => {
+  const index = await readFile(new URL('update-index-v2.json', fixture));
+  const metadata = vi.spyOn(BoxSource.prototype, 'metadata').mockResolvedValue(index);
+  const trustDeadline = new AbortController();
+  let trustStages = 0;
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((milliseconds) => {
+    if (milliseconds === 20_000 && ++trustStages === 2) return trustDeadline.signal;
+    return new AbortController().signal;
+  });
+  let finishPromotion!: (verifier: BundleVerifier) => void;
+  let beganPromotion!: () => void;
+  const promotionBegan = new Promise<void>((resolve) => {
+    beganPromotion = resolve;
+  });
+  const verifier = { verify: vi.fn() };
+  vi.mocked(createVerifier)
+    .mockReset()
+    .mockResolvedValue(verifier)
+    .mockResolvedValueOnce(verifier)
+    .mockImplementationOnce(() => {
+      beganPromotion();
+      return new Promise((resolve) => {
+        finishPromotion = resolve;
+      });
+    });
+  try {
+    const first = new StableSource('/shared-cache').latest(new AbortController().signal);
+    await promotionBegan;
+    trustDeadline.abort(new DOMException('promotion trust deadline', 'TimeoutError'));
+    await expect(first).rejects.toThrow('update_trust_metadata_failed');
+    const second = new StableSource('/shared-cache').latest(new AbortController().signal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(createVerifier).toHaveBeenCalledTimes(2);
+    const queuedAbort = new AbortController();
+    const cancelled = new StableSource('/shared-cache').latest(queuedAbort.signal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    queuedAbort.abort(new Error('queued check cancelled'));
+    await expect(cancelled).rejects.toThrow('queued check cancelled');
+    finishPromotion(verifier);
+    expect((await second)?.tag_name).toBe('v1.1.0');
+    expect(createVerifier).toHaveBeenCalledTimes(4);
+  } finally {
+    finishPromotion?.(verifier);
+    metadata.mockRestore();
+    timeout.mockRestore();
+  }
 });

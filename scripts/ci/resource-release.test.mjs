@@ -43,7 +43,7 @@ afterAll(async () => rm(directory, { recursive: true, force: true }));
 describe('Release resource integration with the real official Pack', () => {
   it('binds all 43 actual materials, canonical bytes, exact Core identity and fixed public addresses', () => {
     expect(candidate.pack.manifest.files).toHaveLength(43);
-    expect(candidate.pack.manifest.totalBytes).toBe(85680266);
+    expect(candidate.pack.manifest.totalBytes).toBe(85664276);
     expect(candidate.entry.policy).toEqual({
       packVersion: '1.0.0',
       sourceSha,

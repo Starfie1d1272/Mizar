@@ -360,13 +360,70 @@ describe('support export', () => {
       [failure, ...Array<string>(40).fill(healthy)].join('\n'),
     );
     const logs = await readSupportLogs(dir);
-    expect(logs[0]?.events).toHaveLength(32);
+    expect(logs[0]?.events).toHaveLength(2);
+    expect(logs[0]?.events[1]).toMatchObject({ stage: 'main_page_load', occurrences: 40 });
     expect(logs[0]?.events[0]).toMatchObject({
       stage: 'main_window',
       result: 'failure',
       hasLocalError: true,
     });
     expect(logs[0]?.truncated).toBe(true);
+  });
+
+  it('reads native rotated logs and preserves multiple failure chains ahead of ordinary events', async () => {
+    const dir = await directory();
+    const failures = ['steam_launch', 'main_window', 'runtime_spawn'].map((stage) => ({
+      startupSessionId: 'session',
+      stage,
+      result: 'failure',
+      error: 'outer failure: OS access denied (os error 5)',
+    }));
+    // steam_launch is not a known export stage; the two known boundaries retain evidence.
+    await writeFile(
+      join(dir, 'desktop.1.ndjson'),
+      [
+        ...failures,
+        {
+          stage: 'cs2_launch',
+          result: 'success',
+          detail: 'stage=observe; stderr=window not ready\npassword=private-secret',
+        },
+        {
+          stage: 'workspace_group_restore',
+          result: 'failure',
+          detail: JSON.stringify({
+            stage: 'restore',
+            api: 'ShowWindowAsync',
+            lastError: 5,
+            gamePid: 1234,
+            created: 'private-process-identity',
+            path: 'C:\\Users\\private-user\\private-installation\\cs2.exe',
+            password: 'private-window-secret',
+          }),
+        },
+        ...Array.from({ length: 80 }, () => ({ stage: 'main_page_load', result: 'success' })),
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n'),
+    );
+    const history = (await readSupportLogs(dir)).find((file) => file.name === 'desktop.1.ndjson')!;
+    expect(history.events.filter((event) => event.hasLocalError)).toHaveLength(2);
+    expect(JSON.stringify(history.events)).toContain('OS access denied');
+    expect(JSON.stringify(history.events)).toContain('window not ready');
+    expect(JSON.stringify(history.events)).not.toContain('private-secret');
+    expect(history.events.find((event) => event.stage === 'workspace_group_restore')).toMatchObject(
+      {
+        result: 'failure',
+        localDiagnostic: { stage: 'restore', api: 'ShowWindowAsync', lastError: 5 },
+      },
+    );
+    expect(JSON.stringify(history.events)).not.toMatch(
+      /private-(?:process|user|installation|window)/,
+    );
+    expect(history.events.find((event) => event.stage === 'cs2_launch')).toHaveProperty(
+      'localDiagnostic',
+    );
+    expect(history.events.at(-1)).toMatchObject({ stage: 'main_page_load', occurrences: 80 });
   });
 
   it.skipIf(process.platform === 'win32')('rejects symlink log targets', async () => {

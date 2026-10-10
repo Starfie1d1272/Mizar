@@ -5,14 +5,14 @@ trap { Write-Cs2OperationFailure -Failure $_ -Stage 'selection'; exit 1 }
 $installation = Resolve-Cs2Input $Cs2Root
 $recordPath = Join-Path $script:StateRoot 'data\gsi-install\install.json'
 if (Test-Path -LiteralPath $recordPath -PathType Leaf) {
-    try { $record = Read-JsonFile $recordPath } catch { Stop-Cs2Discovery 'record-unreadable' }
+    try { $record = Read-JsonFile $recordPath } catch { Stop-Cs2Discovery 'record-unreadable' -Cause $_.Exception }
     $existing = [string]$record.cfgPath
     $target = Join-Path $installation.cfg 'gamestate_integration_mizar.cfg'
     if ($existing -ine $target) { Stop-Cs2Discovery 'restore-before-selection' }
 }
 $journalPath = Join-Path $script:StateRoot 'data\gsi-install\conflicts.json'
 if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
-    try { $journal = Read-JsonFile $journalPath } catch { Stop-Cs2Discovery 'record-unreadable' }
+    try { $journal = Read-JsonFile $journalPath } catch { Stop-Cs2Discovery 'record-unreadable' -Cause $_.Exception }
     if ([string]$journal.cfgDirectory -ine $installation.cfg) { Stop-Cs2Discovery 'restore-before-selection' }
 }
 $selectionPath = Get-Cs2SelectionPath

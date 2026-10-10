@@ -1,6 +1,8 @@
+import type { MatchContext } from '@mizar/core/match-context';
 import type { IdentityResolution } from '@mizar/core/identity';
 import {
   derivePlayerLifeState,
+  livePlayerDisplayName,
   getProjectionIdentityState,
   getProgramSafeRuntimeFreshness,
   isProjectionIdentityCurrent,
@@ -14,6 +16,7 @@ import type { RadarFrame, RadarGrenade, RadarPlayer } from './frame.js';
 export interface RadarProjectionInput {
   readonly runtime: ProgramSafeRuntimeView;
   readonly identity: IdentityResolution;
+  readonly context?: MatchContext;
   readonly nowMonotonicMs: number;
   readonly continuityPolicy: RuntimeContinuityPolicy;
 }
@@ -35,6 +38,29 @@ function canonicalPlayerFor(input: RadarProjectionInput, sourcePlayerId: string)
 
 function projectRadarPlayer(input: RadarProjectionInput, player: ObservedPlayer): RadarPlayer {
   const canonical = canonicalPlayerFor(input, player.sourcePlayerId);
+  const telemetry = input.runtime.telemetry;
+  const fresh =
+    getProgramSafeRuntimeFreshness(input.runtime, input.nowMonotonicMs, input.continuityPolicy) ===
+    'fresh';
+  const entrant =
+    canonical === undefined || input.context === undefined
+      ? undefined
+      : [input.context.entrants.a, input.context.entrants.b].find(
+          (item) => item.entryId === canonical.entryId,
+        );
+  const sideName =
+    fresh && telemetry?.coverage.map === 'present'
+      ? player.side === 'CT'
+        ? telemetry.telemetry.map?.sides?.ct?.name
+        : player.side === 'T'
+          ? telemetry.telemetry.map?.sides?.t?.name
+          : undefined
+      : undefined;
+  const { displayName } = livePlayerDisplayName(
+    fresh && telemetry?.coverage.allPlayers === 'present' ? player.displayName : null,
+    canonical?.displayName,
+    [entrant?.name, sideName],
+  );
   const candidates =
     player.weapons?.filter((weapon) => weapon.state === 'active' || weapon.state === 'reloading') ??
     [];
@@ -42,7 +68,7 @@ function projectRadarPlayer(input: RadarProjectionInput, player: ObservedPlayer)
   return {
     sourcePlayerId: player.sourcePlayerId,
     canonicalPlayerId: canonical?.canonicalPlayerId ?? null,
-    displayName: canonical?.displayName ?? player.displayName ?? null,
+    displayName,
     side: player.side ?? 'unknown',
     observerSlot: player.observerSlot ?? null,
     lifeState: derivePlayerLifeState(player.state?.health),

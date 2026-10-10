@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
 import type { Page, WebSocketRoute } from '@playwright/test';
 import { getBuiltinResolvedPreset } from '../../packages/hud-config/src/index.js';
 import { programSnapshotSchema } from '../../packages/protocol/src/program.js';
@@ -30,11 +31,43 @@ async function feed(page: Page, id: string) {
   await page.evaluate(() => document.fonts.ready);
 }
 
-test('all five HUDs consume the same GSI nickname in player rails, focus and pause rosters', async ({
+test('all five HUDs prefer the same GSI nickname over canonical roster names in player rails, focus and pause rosters', async ({
   page,
 }) => {
   const runtime = createProgramRuntime('nickname-regression');
+  const sourceManifest = JSON.parse(
+    readFileSync(
+      new URL(
+        '../../packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as BroadcastManifest;
+  const entrant = (side: 'a' | 'b', name: string, offset: number) => ({
+    ...sourceManifest.entrants[side],
+    name,
+    roster: {
+      ...sourceManifest.entrants[side].roster,
+      players: sourceManifest.entrants[side].roster.players.slice(0, 5).map((player, index) => ({
+        ...player,
+        steam64: String(76561198000000000n + BigInt(offset + index)),
+        displayName: `Official ${offset + index}`,
+      })),
+    },
+  });
+  const manifest: BroadcastManifest = {
+    ...sourceManifest,
+    entrants: { a: entrant('a', 'The Beast', 0), b: entrant('b', 'NJU美少女队', 5) },
+  };
   const coordinator = createProjectionCoordinator({
+    matchContextBinding: {
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    },
     programRuntime: runtime,
     cstvSources: createCstvSourceManagers({}),
     nowMonotonicMs: () => 0,
@@ -87,6 +120,12 @@ test('all five HUDs consume the same GSI nickname in player rails, focus and pau
       snapshots.push(coordinator.getPublisher('program').getCurrent()!);
     }
     expect(coordinator.getRosterEvidence()?.ct[0]?.displayName).toBe('The Beast TomatoDebu');
+    const current = coordinator.getCurrent();
+    expect(current.identity.state).toBe('matched');
+    expect(current.program.players[0]?.displayName).toBe('TomatoDebu');
+    expect(current.radar.players[0]?.displayName).toBe('TomatoDebu');
+    expect(current.identity.players[0]?.displayName).toBe('Official 0');
+
     expect(runtime.getCurrentState().programTelemetry?.telemetry.allPlayers?.[0]?.displayName).toBe(
       'The Beast TomatoDebu',
     );
