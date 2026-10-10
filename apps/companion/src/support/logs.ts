@@ -32,6 +32,7 @@ const stages = new Set([
   'main_page_load',
   'workspace_left',
   'workspace_dock',
+  'workspace_group_restore',
   'program_overlay',
   'content_protection',
   'tray',
@@ -168,6 +169,21 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
   ].slice(0, 12);
 }
 
+function windowRestoreDetail(value: string) {
+  const detail = parse(value);
+  return {
+    stage: choice(detail.stage, ['restore', 'restore_timeout', 'raise']),
+    api: choice(detail.api, ['ShowWindowAsync', 'SetWindowPos']),
+    lastError:
+      typeof detail.lastError === 'number' &&
+      Number.isInteger(detail.lastError) &&
+      detail.lastError >= 0 &&
+      detail.lastError <= 0xffffffff
+        ? detail.lastError
+        : null,
+  };
+}
+
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
@@ -200,23 +216,25 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ...(update && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
-    ...(!update && typeof entry.error === 'string'
-      ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
-      : !update &&
-          [
-            'powershell',
-            'cs2_launch',
-            'update_install',
-            'production_finish',
-            'webview2_preflight',
-            'webview2_recheck',
-            'webview2_recovery_action',
-          ].includes(stage ?? '') &&
-          typeof entry.detail === 'string'
-        ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-        : !update && typeof record(entry.err).message === 'string'
-          ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
-          : {}),
+    ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
+      ? { localDiagnostic: windowRestoreDetail(entry.detail) }
+      : !update && typeof entry.error === 'string'
+        ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
+        : !update &&
+            [
+              'powershell',
+              'cs2_launch',
+              'update_install',
+              'production_finish',
+              'webview2_preflight',
+              'webview2_recheck',
+              'webview2_recovery_action',
+            ].includes(stage ?? '') &&
+            typeof entry.detail === 'string'
+          ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
+          : !update && typeof record(entry.err).message === 'string'
+            ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
+            : {}),
     durationMs: count(diagnostic.durationMs),
     occurrences: Math.max(1, count(entry.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),

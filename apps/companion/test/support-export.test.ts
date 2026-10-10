@@ -381,6 +381,19 @@ describe('support export', () => {
           result: 'success',
           detail: 'stage=observe; stderr=window not ready\npassword=private-secret',
         },
+        {
+          stage: 'workspace_group_restore',
+          result: 'failure',
+          detail: JSON.stringify({
+            stage: 'restore',
+            api: 'ShowWindowAsync',
+            lastError: 5,
+            gamePid: 1234,
+            created: 'private-process-identity',
+            path: 'C:\\Users\\private-user\\private-installation\\cs2.exe',
+            password: 'private-window-secret',
+          }),
+        },
         ...Array.from({ length: 80 }, () => ({ stage: 'main_page_load', result: 'success' })),
       ]
         .map((event) => JSON.stringify(event))
@@ -391,6 +404,15 @@ describe('support export', () => {
     expect(JSON.stringify(history.events)).toContain('OS access denied');
     expect(JSON.stringify(history.events)).toContain('window not ready');
     expect(JSON.stringify(history.events)).not.toContain('private-secret');
+    expect(history.events.find((event) => event.stage === 'workspace_group_restore')).toMatchObject(
+      {
+        result: 'failure',
+        localDiagnostic: { stage: 'restore', api: 'ShowWindowAsync', lastError: 5 },
+      },
+    );
+    expect(JSON.stringify(history.events)).not.toMatch(
+      /private-(?:process|user|installation|window)/,
+    );
     expect(history.events.find((event) => event.stage === 'cs2_launch')).toHaveProperty(
       'localDiagnostic',
     );
