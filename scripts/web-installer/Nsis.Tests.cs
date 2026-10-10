@@ -18,6 +18,7 @@ namespace Mizar.WebInstaller {
   }
   static class NsisTests {
     static void Assert(bool value) { if (!value) throw new Exception("NSIS assertion failed"); }
+    static string Hash(string path) {using(var file=File.OpenRead(path)) using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();}
     static async Task Run() {
       Plan plan;
       using (var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("legacy-plan.json"))
@@ -41,7 +42,10 @@ namespace Mizar.WebInstaller {
           Assert(pendingRejected && !Directory.Exists(guardedTarget) && File.Exists(pending));
           Console.WriteLine("PASS: persistent unfinished-install marker rejects a new writer and remains intact");
         } finally { File.Delete(pending); } // Only this test's exclusively created marker.
-        string target=Path.Combine(root,"real NSIS path");
+        string target=Path.Combine(Path.GetTempPath(),"Mizar selected install "+Guid.NewGuid().ToString("N"));
+        Assert(Nsis.SelectDestination(target)==target);
+        bool unsafeSelection=false;try {Nsis.SelectDestination(Environment.GetFolderPath(Environment.SpecialFolder.Windows));} catch(InstallerActionRequired) {unsafeSelection=true;}
+        Assert(unsafeSelection);
         // Recover the real prepared transaction through Install, including the
         // deleted marker's recreation and subsequent NSIS installation.
         Directory.CreateDirectory(target);
@@ -54,7 +58,37 @@ namespace Mizar.WebInstaller {
         Assert(!File.Exists(pending));
         Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
+        Assert(String.Equals(Nsis.ResolveDestination(),target,StringComparison.OrdinalIgnoreCase));
+        bool relocation=false;try {Nsis.SelectDestination(Path.Combine(root,"different install"));} catch(InstallerActionRequired) {relocation=true;}
+        Assert(relocation && String.Equals(Nsis.ResolveDestination(),target,StringComparison.OrdinalIgnoreCase));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
+        // Re-enter the same lightweight installer against an already owned installation.
+        string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","upgrade-sentinel.txt");
+        if(File.Exists(data)) throw new IOException("Refusing to replace existing user sentinel");
+        Directory.CreateDirectory(Path.GetDirectoryName(data));File.WriteAllText(data,"preserve user data");
+        try {
+          var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
+          Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");
+          var committed=(PendingInstall)typeof(FreshInstallResult).GetField("record",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(updated);
+          string script=Path.Combine(committed.updateStage,"update-install.ps1"),nativePlan=Path.Combine(committed.updateStage,"plan.json");
+          string stage;
+          using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" -Mode Prepare -PlanPath \""+nativePlan+"\"",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true})) {
+            var stdout=child.StandardOutput.ReadToEndAsync();var stderr=child.StandardError.ReadToEndAsync();
+            if(!child.WaitForExit(60000)) throw new IOException("Actual native Prepare timed out");
+            string output=await stdout,errors=await stderr;if(child.ExitCode!=0) throw new IOException(errors);
+            stage=Convert.ToString(new JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(output)["stageRoot"]);
+          }
+          var unwritten=Nsis.NewPending(plan,target,installer);unwritten.updateStage=stage;unwritten.updatePlanSha256=Hash(Path.Combine(stage,"plan.json"));unwritten.updateScriptSha256=Hash(Path.Combine(stage,"update-install.ps1"));
+          unwritten.ownerPid=prepared.ownerPid;unwritten.ownerStarted=prepared.ownerStarted;unwritten.stage="update-launching";Nsis.SavePending(unwritten,true);
+          bool launchAmbiguity=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {launchAmbiguity=true;}
+          Assert(launchAmbiguity && File.Exists(pending) && File.Exists(Path.Combine(target,"Mizar.exe")));
+          unwritten.stage="update-prepared";Nsis.SavePending(unwritten,false);
+          Assert(!Nsis.RecoverPending(plan,target) && !File.Exists(pending) && File.Exists(Path.Combine(target,"Mizar.exe")));
+          Console.WriteLine("PASS: real native Prepare with no writer recovers; ambiguous launch with no writer retains the pending record");
+          await updated.RollbackAsync();
+          Assert(File.Exists(Path.Combine(target,"Mizar.exe")) && File.ReadAllText(data)=="preserve user data");
+          Console.WriteLine("PASS: real lightweight same-version repair/upgrade and rollback preserve the existing path and user data");
+        } finally {File.Delete(data);}
         // Exercise the real native production call: historical Core cannot supply
         // a new executable entry from an external qualification directory.
         bool missingEntry=false;
@@ -84,8 +118,9 @@ namespace Mizar.WebInstaller {
           Console.WriteLine("PASS: real NSIS-installed Core and deployed App bridge deny incomplete official resource installation");
         }
         // A second fresh attempt must not overwrite this installation or user registration.
+        string unknown=Path.Combine(target,"unknown-user-file.txt");File.WriteAllText(unknown,"keep");
         bool refused=false; try { await Nsis.Install(plan,installer,target,CancellationToken.None); } catch(IOException) { refused=true; }
-        Assert(refused);
+        Assert(refused && File.ReadAllText(unknown)=="keep");File.Delete(unknown);
         var completed=Nsis.NewPending(plan,target,installer);
         completed.token=File.ReadAllText(Path.Combine(target,".mizar-bootstrap-owner"));
         completed.ownerPid=prepared.ownerPid;completed.ownerStarted=prepared.ownerStarted;
@@ -96,6 +131,14 @@ namespace Mizar.WebInstaller {
         Console.WriteLine("PASS: completed owned Core recovers without launching a second NSIS writer");
         await result.RollbackAsync();
         Assert(!Directory.Exists(target));
+        string residue=Path.Combine(root,"uninstalled owner-only path"),stamp=new string('a',32);
+        Directory.CreateDirectory(residue);File.WriteAllText(Path.Combine(residue,".mizar-bootstrap-owner"),stamp);
+        var resumedResidue=await Nsis.Install(plan,installer,residue,CancellationToken.None);
+        string[] retained=Directory.GetDirectories(root,"uninstalled owner-only path.retained-*");
+        Assert(retained.Length==1 && File.ReadAllText(Path.Combine(retained[0],".mizar-bootstrap-owner"))==stamp);
+        await resumedResidue.RollbackAsync();
+        Assert(!Directory.Exists(residue) && File.Exists(Path.Combine(retained[0],".mizar-bootstrap-owner")));
+        Console.WriteLine("PASS: owner-only uninstall residue is preserved whole and fresh NSIS installation can resume");
         var badIdentity = new JavaScriptSerializer().Deserialize<Plan>(new JavaScriptSerializer().Serialize(plan));
         badIdentity.contentDigest = new string('0',64);
         string failedTarget=Path.Combine(root,"failed NSIS identity path");

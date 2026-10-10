@@ -1,3 +1,5 @@
+import { inspect } from 'node:util';
+import { safeLogText } from '../../../scripts/product-logs.mjs';
 import {
   MACHINE_METADATA_NAME,
   MACHINE_METADATA_MAX_BYTES,
@@ -6,6 +8,11 @@ import {
 import { RESOURCE_ASSET_NAMES } from '@mizar/resource-pack-contract/runtime';
 import { updateJson, updateRequest, boundedBytes } from '../updates/network.js';
 
+export function logBootstrapFallback(stage, error) {
+  process.stderr.write(
+    `${stage}: ${safeLogText(inspect(error, { depth: 8, customInspect: false, getters: false })).slice(0, 4096)}\n`,
+  );
+}
 const fixedNames = new Set(Object.values(RESOURCE_ASSET_NAMES));
 export function mirrorResourcePath(version, name) {
   if (
@@ -71,19 +78,30 @@ export async function downloadResourceOriginal({
       throw new Error('resource_mirror_link_invalid');
     // Never fall back after bytes have arrived and failed publisher verification.
     return extract(await boundedBytes(await updateRequest(url.href, deadline, fetcher), bound));
-  } catch {
+  } catch (mirrorError) {
+    if (sourceMode !== 'github')
+      logBootstrapFallback('resource mirror fallback ' + name, mirrorError);
     deadline.throwIfAborted();
     // All fallback bytes undergo the same sole SDK verification. No metadata,
     // pin or authority is taken from the failed mirror response.
-    return extract(
-      await boundedBytes(
-        await updateRequest(
-          `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${transportName}`,
-          deadline,
-          fetcher,
+    try {
+      return extract(
+        await boundedBytes(
+          await updateRequest(
+            `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${transportName}`,
+            deadline,
+            fetcher,
+          ),
+          bound,
         ),
-        bound,
-      ),
-    );
+      );
+    } catch (githubError) {
+      if (sourceMode === 'github') throw githubError;
+      throw new AggregateError(
+        [mirrorError, githubError],
+        'Resource mirror and canonical download both failed',
+        { cause: githubError },
+      );
+    }
   }
 }

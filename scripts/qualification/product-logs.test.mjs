@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
-import { awaitDesktopStart, createCompanionLog, createSupervisorLog } from './product-logs.mjs';
+import {
+  awaitDesktopStart,
+  createCompanionLog,
+  createSupervisorLog,
+  safeLogText,
+} from './product-logs.mjs';
 
 const roots = [];
 async function directory() {
@@ -127,4 +132,20 @@ describe('Desktop supervisor ownership gate', () => {
     expect(input.listenerCount('data')).toBe(0);
     input.destroy();
   });
+});
+
+it('redacts full credential headers and URL credentials without losing separate failure causes', () => {
+  const raw =
+    'Authorization: Bearer SECRETBEARER\nProxy-Authorization: Basic SECRETBASIC\ntoken=SECRETTOKEN api_key=SECRETAPI\nhttps://user:SECRETURL@example.com/file?sig=SECRETQUERY\nresource_path_unsafe: original failure';
+  const result = safeLogText(raw);
+  for (const secret of [
+    'SECRETBEARER',
+    'SECRETBASIC',
+    'SECRETTOKEN',
+    'SECRETAPI',
+    'SECRETURL',
+    'SECRETQUERY',
+  ])
+    expect(result).not.toContain(secret);
+  expect(result).toContain('resource_path_unsafe: original failure');
 });

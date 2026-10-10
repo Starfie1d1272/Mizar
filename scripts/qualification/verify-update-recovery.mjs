@@ -167,7 +167,7 @@ public class UpdateFixture {
     using (var app = Registry.CurrentUser.CreateSubKey(@"Software\Mizar")) app.SetValue("InstallDir", target);
     using (var uninstall = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar")) uninstall.SetValue("DisplayVersion", "1.1.0");
     if (mode == "success") { Copy(Path.Combine(stage, "new-payload"), target); return; }
-    if (mode == "failure") File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation");
+    if (mode == "failure") { File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation"); File.WriteAllText(Path.Combine(target, "unknown-user-file.txt"), "preserve unknown content"); }
     Environment.Exit(2);
   }
 }
@@ -346,6 +346,14 @@ public class UpdateFixture {
       'untouched match and settings',
     );
     assert.deepEqual(await readFile(join(installed, 'Mizar.exe')), binary);
+    if (scenario === 'failure')
+      assert.equal(
+        await readFile(
+          join(`${installed}.mizar-failed-${stage.split(/[\\/]/).at(-1)}`, 'unknown-user-file.txt'),
+          'utf8',
+        ),
+        'preserve unknown content',
+      );
     const registration = await run([
       '-Command',
       "$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); @{ directory = (Get-ItemProperty 'HKCU:\\Software\\Mizar').InstallDir; version = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar').DisplayVersion } | ConvertTo-Json -Compress",

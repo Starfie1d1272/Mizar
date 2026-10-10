@@ -1,3 +1,5 @@
+import { inspect } from 'node:util';
+import { safeLogText } from '../../../scripts/product-logs.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { access } from 'node:fs/promises';
@@ -76,7 +78,10 @@ try {
       expectedCore: { appVersion: artifact.appVersion, gitSha: artifact.gitSha },
       signal,
     });
-  } catch {
+  } catch (cachedError) {
+    process.stderr.write(
+      `${safeLogText(inspect(cachedError, { depth: 8, customInspect: false, getters: false })).slice(0, 4096)}\n`,
+    );
     signal.throwIfAborted();
     ({ authorization, inputs, loadInputs } = await authenticatePublishedBootstrap({
       version: artifact.appVersion,
@@ -104,7 +109,7 @@ try {
   );
 } catch (error) {
   process.stderr.write(
-    `${JSON.stringify({ code: 'bootstrap_incomplete', message: String(error.message).slice(0, 512) })}\n`,
+    `${JSON.stringify({ code: 'bootstrap_incomplete', diagnostic: safeLogText(inspect(error, { depth: 8, customInspect: false, getters: false, maxStringLength: 4096 })).slice(0, 32768) })}\n`,
   );
   process.exitCode = 1;
 } finally {
