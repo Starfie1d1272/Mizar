@@ -1066,7 +1066,20 @@ it('classifies disposable LIVE acceptance, bounded failures and recovery indepen
     await connection.sendLive(snapshot);
     expect(connection.view().liveDelivery.reason).toBe('transport_failed');
     expect(diagnostics).toHaveBeenCalledTimes(2);
-    expect(liveBodies).toHaveLength(15);
+    now += 12000;
+    await connection.sendLive(snapshot);
+    await connection.sendLive(snapshot);
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    response = () => Promise.resolve(Response.json({ accepted: false, reason: 'frame_expired' }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'dropped',
+      reason: 'frame_expired',
+      consecutiveFailures: 0,
+    });
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    expect(liveBodies).toHaveLength(19);
     expect(liveBodies[12]).toMatchObject({ cursor: { runtimeSeq: 999 } });
   } finally {
     clock.mockRestore();

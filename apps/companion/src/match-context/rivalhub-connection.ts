@@ -565,7 +565,7 @@ export class RivalHubConnection {
     }
     const previous = this.liveDelivery;
     if (accepted || dropped) {
-      if (previous.notified)
+      if (accepted && previous.notified)
         this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
       this.liveDelivery = {
         status: accepted ? 'accepted' : 'dropped',
