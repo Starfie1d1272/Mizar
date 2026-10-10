@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   mutation: vi.fn(),
   trial: null as DemoTestView | null,
   running: false,
+  canPreserve: false,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.invoke }));
 vi.mock('../src/preparation/client', () => ({
@@ -18,7 +19,7 @@ vi.mock('../src/preparation/client', () => ({
   checkObsBeforeLaunch: mocks.preflight,
 }));
 vi.mock('../src/preparation/cs2-status', () => ({
-  useCs2Status: () => ({ status: { running: mocks.running } }),
+  useCs2Status: () => ({ status: { running: mocks.running, canPreserve: mocks.canPreserve } }),
 }));
 vi.mock('../src/realtime/hud-config-client', () => ({
   useHudConfigEditorClient: () => ({
@@ -48,6 +49,7 @@ beforeEach(() => {
     dataReady: false,
   };
   mocks.running = false;
+  mocks.canPreserve = false;
   mocks.invoke.mockReset();
   mocks.preflight.mockReset().mockResolvedValue(true);
   mocks.mutation.mockReset();
@@ -105,6 +107,30 @@ it('preserves the selection and exposes a preflight error without launching', as
   expect(container.textContent).toContain('请先停止推流');
   expect(container.textContent).toContain('match.dem');
   expect(mocks.invoke).toHaveBeenCalledTimes(1);
+});
+
+it('retries the same selected demo with explicitly preserved settings after configuration failure', async () => {
+  await click('准备 Demo 试播');
+  mocks.invoke.mockResolvedValueOnce({ token: 'selected', name: 'match.dem' });
+  await click('选择本地 Demo');
+  mocks.invoke.mockRejectedValueOnce(new Error('配置接管未完成'));
+  await act(async () => {
+    container
+      .querySelector('form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  expect(container.textContent).toContain('match.dem');
+  expect(button('保持原设置启动试播')).toBeUndefined();
+  mocks.canPreserve = true;
+  act(() => root.render(<DemoTestPanel />));
+  await click('保持原设置启动试播');
+  expect(mocks.preflight).toHaveBeenCalledWith(true);
+  expect(mocks.invoke).toHaveBeenLastCalledWith('start_demo_test', {
+    token: 'selected',
+    teamAName: '队伍 A',
+    teamBName: '队伍 B',
+    preserveSettings: true,
+  });
 });
 
 it('keeps recovery visible and uses the native finish transaction instead of clearing browser state', async () => {

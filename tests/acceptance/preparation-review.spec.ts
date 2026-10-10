@@ -767,6 +767,18 @@ test('configured Steam key uses a non-secret mask and updates only with new inpu
 test('configuration failure offers an explicit preserved launch and keeps its limits visible', async ({
   page,
 }) => {
+  await page.route('**/local/v1/demo-test', (route) =>
+    route.fulfill({
+      json: {
+        active: false,
+        phase: 'idle',
+        requestId: null,
+        teamAName: '',
+        teamBName: '',
+        dataReady: false,
+      },
+    }),
+  );
   // Synthetic IPC fixture proves the user choice and command flow, not native CS2.
   await page.addInitScript(() => {
     const preserved = sessionStorage.getItem('fixture-preserved-launch') === 'yes';
