@@ -1195,8 +1195,10 @@ fn run_desktop(
     );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
+    let managed = managed_cs2::ManagedCs2::new(log.clone());
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
+    tracker.preserve_settings = managed.preserve_settings();
     let running = Arc::new(AtomicBool::new(true));
     let worker = Arc::new(Mutex::new(None::<thread::JoinHandle<()>>));
     let setup_worker = worker.clone();
@@ -1217,7 +1219,7 @@ fn run_desktop(
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(log.clone())
-        .manage(Mutex::new(managed_cs2::ManagedCs2::new(log.clone())))
+        .manage(Mutex::new(managed))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
         .manage(production_exit::VerifiedStop::default())
