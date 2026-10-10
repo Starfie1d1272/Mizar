@@ -769,11 +769,12 @@ test('configuration failure offers an explicit preserved launch and keeps its li
 }) => {
   // Synthetic IPC fixture proves the user choice and command flow, not native CS2.
   await page.addInitScript(() => {
+    const preserved = sessionStorage.getItem('fixture-preserved-launch') === 'yes';
     const state = {
       canPreserve: false,
-      preserveSettings: false,
-      pending: false,
-      running: false,
+      preserveSettings: preserved,
+      pending: preserved,
+      running: preserved,
       qualityPreset: 'very-high',
       frameRateLimit: 60,
       message: null as string | null,
@@ -792,6 +793,7 @@ test('configuration failure offers an explicit preserved launch and keeps its li
               state.message = 'cs2_video.txt / setting.defaultres：冲突重复，未修改配置。';
               throw new Error(state.message);
             }
+            sessionStorage.setItem('fixture-preserved-launch', 'yes');
             state.canPreserve = false;
             state.preserveSettings = true;
             state.pending = true;
@@ -836,4 +838,7 @@ test('configuration failure offers an explicit preserved launch and keeps its li
   ).toEqual([false, true]);
   expect(actions).toEqual([{ action: 'enter', expectedRevision: 'preserved-1' }]);
   await expect(page.getByRole('button', { name: '退出本次 CS2', exact: true })).toBeVisible();
+  await page.goto('/workspace/dock');
+  await expect(page.getByText('关闭本次游戏，保留游戏设置', { exact: true })).toBeVisible();
+  await expect(page.getByText('关闭游戏并恢复配置', { exact: true })).toHaveCount(0);
 });

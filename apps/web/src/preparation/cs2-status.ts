@@ -54,6 +54,6 @@ export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
   return phase === 'starting'
     ? '正在启动 CS2，等待 Steam…'
     : phase === 'restoring'
-      ? '正在关闭游戏并恢复配置…'
+      ? '正在关闭本次游戏…'
       : '正在检查 CS2 配置…';
 }
