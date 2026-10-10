@@ -56,12 +56,28 @@ export function releaseTimingReport({
     qualification.conclusion !== 'success' ||
     qualification.head_branch !== 'main' ||
     qualification.head_sha !== sourceSha ||
+    qualification.event !== 'workflow_dispatch' ||
     promotion.path !== '.github/workflows/release-promotion.yml' ||
     promotion.head_branch !== 'main' ||
-    (box && promotion.conclusion !== 'success')
+    promotion.event !== 'workflow_dispatch' ||
+    (box &&
+      (promotion.conclusion !== 'success' ||
+        box.path !== '.github/workflows/box-sync.yml' ||
+        box.head_branch !== 'main' ||
+        box.event !== 'workflow_run'))
   )
     throw new Error('Release timing source differs');
-  recovery ||= Date.parse(publishedAt) < Date.parse(promotion.created_at);
+  elapsed(qualification.updated_at, promotion.created_at);
+  elapsed(publishedAt, box ? promotion.updated_at : finishedAt);
+  if (box) {
+    elapsed(promotion.updated_at, box.created_at);
+    elapsed(box.created_at, finishedAt);
+  }
+  recovery ||=
+    qualification.run_attempt !== 1 ||
+    promotion.run_attempt !== 1 ||
+    (box && box.run_attempt !== 1) ||
+    Date.parse(publishedAt) < Date.parse(promotion.created_at);
   const result = {
     tag,
     sourceSha,
@@ -188,7 +204,18 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         }
       }
     } else throw new Error('Unknown release timing mode');
-  } catch {
+  } catch (error) {
+    if (
+      error.code === 'ENOENT' ||
+      error instanceof SyntaxError ||
+      [
+        'Invalid release timing order',
+        'Release timing source differs',
+        'Unknown release timing mode',
+      ].includes(error.message)
+    )
+      // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
+      throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
     // Missing timing evidence also cannot claim the fresh release budget passed.
     await recordReport(

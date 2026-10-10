@@ -9,6 +9,8 @@ const run = (id, path, created_at, updated_at) => ({
   conclusion: 'success',
   head_branch: 'main',
   head_sha: 'a'.repeat(40),
+  event: path === '.github/workflows/box-sync.yml' ? 'workflow_run' : 'workflow_dispatch',
+  run_attempt: 1,
 });
 const fixture = () => ({
   qualification: run(
@@ -52,6 +54,12 @@ it('counts qualification, handoffs and runner queues in the complete release bud
   expect(report.promotion.initialQueueMs).toBe(10000);
   expect(report.box.initialQueueMs).toBe(15000);
   expect(report.freshReleaseWithin600Seconds).toBe(true);
+  expect(
+    releaseTimingReport({
+      ...fixture(),
+      qualification: { ...fixture().qualification, run_attempt: 2 },
+    }).freshReleaseWithin600Seconds,
+  ).toBe(false);
   expect(report.build.cargoCache).toEqual({
     target: 'false',
     registry: 'true',
@@ -87,6 +95,21 @@ it('rejects mixed or failed source evidence and invalid clocks', () => {
     releaseTimingReport({
       ...fixture(),
       promotion: { ...fixture().promotion, conclusion: 'failure' },
+    }),
+  ).toThrow();
+  for (const patch of [
+    { path: '.github/workflows/ci.yml' },
+    { event: 'workflow_dispatch' },
+    { head_branch: 'feature' },
+    { created_at: '2026-10-10T00:05:00Z' },
+  ])
+    expect(() =>
+      releaseTimingReport({ ...fixture(), box: { ...fixture().box, ...patch } }),
+    ).toThrow();
+  expect(() =>
+    releaseTimingReport({
+      ...fixture(),
+      promotion: { ...fixture().promotion, created_at: '2026-10-10T00:03:00Z' },
     }),
   ).toThrow();
   for (const finishedAt of ['invalid', '2026-10-09T23:59:59Z'])

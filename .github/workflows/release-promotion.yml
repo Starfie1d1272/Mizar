@@ -295,7 +295,11 @@ jobs:
 
       - name: Record qualification trigger through verified publication timing
         if: ${{ !contains(inputs.tag, '-') }}
-        run: node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json
+        shell: pwsh
+        run: |
+          if (!(Test-Path -LiteralPath 'evidence-extracted/build-timings.json' -PathType Leaf)) { throw 'Qualified evidence is missing build timing' }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json
+          if ($LASTEXITCODE -ne 0) { throw 'Release timing identity/path validation failed' }
       - name: Preserve maintainer promotion records in CI only
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
