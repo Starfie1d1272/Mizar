@@ -406,6 +406,9 @@ impl ManagedCs2 {
         // Do not re-enable the formal runtime while Demo telemetry can still
         // arrive. The Companion owns the quarantine; the journal owns cleanup.
         self.store.restore()?;
+        if trial.is_some() && any_cs2_running(&self.log)? {
+            return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
+        }
         crate::demo_test::complete(&self.log, trial.as_deref())?;
         self.message = Some("原设置已恢复。".into());
         Ok(())
