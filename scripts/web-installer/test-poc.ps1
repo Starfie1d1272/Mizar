@@ -10,5 +10,5 @@ if ($LASTEXITCODE) { throw 'Bootstrap tests failed' }
 
 # Explicit UI-state demonstration executable; never included in the product bootstrap.
 $demo = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) 'ui-state-demo.exe'
-& $compiler /nologo /target:winexe /main:Mizar.WebInstaller.UiDemo "/out:$demo" "/win32icon:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\icon.ico" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "$PSScriptRoot\Bootstrap.cs" "$PSScriptRoot\Nsis.cs" "$PSScriptRoot\Window.Tests.cs"
+& $compiler /nologo /target:winexe /main:Mizar.WebInstaller.UiDemo "/out:$demo" "/resource:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\tray-icon.png,brand.png" "/win32icon:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\icon.ico" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "$PSScriptRoot\Bootstrap.cs" "$PSScriptRoot\Nsis.cs" "$PSScriptRoot\Window.Tests.cs"
 if ($LASTEXITCODE) { throw 'Explicit UI demonstration compilation failed' }

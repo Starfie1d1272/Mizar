@@ -179,7 +179,12 @@ namespace Mizar.WebInstaller {
       AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(590,330); MinimumSize=Size; MaximizeBox=false;
       StartPosition=FormStartPosition.CenterScreen; Font=new Font("Microsoft YaHei UI",9F); BackColor=Color.White;
       var banner=new Panel {Dock=DockStyle.Top,Height=80,BackColor=Color.FromArgb(14,24,41)};
-      banner.Controls.Add(new PictureBox {Image=Icon.ToBitmap(),SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(32,16),Size=new Size(48,48)});
+      var logo=Icon.ToBitmap();
+      using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("brand.png")) {
+        if(stream!=null) using(var image=Image.FromStream(stream)) {logo.Dispose();logo=new Bitmap(image);}
+      }
+      banner.Controls.Add(new PictureBox {Image=logo,SizeMode=PictureBoxSizeMode.CenterImage,Location=new Point(32,16),Size=new Size(48,48)});
+      Disposed += (s,e)=>logo.Dispose();
       banner.Controls.Add(new Label {Text="Mizar",ForeColor=Color.White,Font=new Font("Segoe UI",24F),AutoSize=true,Location=new Point(96,17)});
       Controls.Add(banner);
       heading.SetBounds(32,104,526,32); heading.Font=new Font(Font.FontFamily,15F);

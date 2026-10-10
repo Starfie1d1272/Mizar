@@ -4,7 +4,7 @@
 
 ## 下载引导器
 
-采用 Windows 自带 .NET Framework 4.x、WinForms、HttpClient。原生控件保留系统键盘和焦点，中文正文使用 Microsoft YaHei UI，页眉复用产品透明图标与深蓝品牌背景；不引入浏览器或 UI 框架。欢迎、下载、取消、失败重试和验证完成均说明当前实际状态。旧 NSIS 继续拥有系统安装、卸载与用户资料保留。当前窗口明确标识验证预览，不能声称安装已完成。
+采用 Windows 自带 .NET Framework 4.x、WinForms、HttpClient。原生控件保留系统键盘和焦点，中文正文使用 Microsoft YaHei UI，页眉复用既有透明双星托盘标志与深蓝品牌背景（ICO 仅用于窗口图标，不使用其底板作为页眉）；不引入浏览器或 UI 框架。欢迎、下载、取消、失败重试和验证完成均说明当前实际状态。旧 NSIS 继续拥有系统安装、卸载与用户资料保留。当前窗口明确标识验证预览，不能声称安装已完成。
 
 在 Windows PowerShell 执行：
 

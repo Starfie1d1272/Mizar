@@ -14,6 +14,6 @@ if ($CoreBootstrap) {
   $artifact = 'Mizar-WebInstaller-Core-Development.exe'
 }
 $exe = Join-Path $output $artifact
-& $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/win32icon:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\icon.ico" "/out:$exe" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/resource:$plan,plan.json" "$PSScriptRoot\Bootstrap.cs" "$PSScriptRoot\Nsis.cs"
+& $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/win32icon:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\icon.ico" "/out:$exe" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/resource:$plan,plan.json" "/resource:$PSScriptRoot\..\..\apps\desktop\src-tauri\icons\tray-icon.png,brand.png" "$PSScriptRoot\Bootstrap.cs" "$PSScriptRoot\Nsis.cs"
 if ($LASTEXITCODE) { throw 'Bootstrap compilation failed' }
 [ordered]@{artifact=(Split-Path $exe -Leaf); bytes=(Get-Item $exe).Length; sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant(); production=$false; developmentOnly=$true; coreBootstrap=[bool]$CoreBootstrap} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output $(if ($CoreBootstrap) { 'build-core.json' } else { 'build.json' })) -Encoding UTF8
