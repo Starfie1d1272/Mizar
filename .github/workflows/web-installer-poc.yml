@@ -6,6 +6,7 @@ on:
       - 'packages/resource-pack-contract/**'
       - 'apps/companion/src/resource-store/**'
       - 'scripts/qualification/installer-assets/**'
+      - 'apps/desktop/src-tauri/icons/icon.ico'
       - '.github/workflows/web-installer-poc.yml'
   workflow_dispatch:
 permissions:
