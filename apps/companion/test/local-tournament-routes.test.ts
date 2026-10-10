@@ -308,3 +308,66 @@ it('restores whichever provider was explicitly selected last', async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('requires explicit confirmation, protects the current context and restores without activating', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-trash-routes-'));
+  const app = buildApp({
+    localTournamentPath: join(directory, 'local.json'),
+    matchManifestPath: join(directory, 'match.json'),
+  });
+  const headers = { origin: 'http://127.0.0.1:3000' };
+  try {
+    await app.ready();
+    const create = async (name: string) =>
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/create',
+          headers,
+          payload: { teamA: name, teamB: '对手', format: 'bo1' },
+        })
+      ).json<{ matchId: string }>().matchId;
+    const first = await create('旧比赛');
+    const mutate = (
+      operation: string,
+      matchId: string,
+      confirmed = true,
+      origin = headers.origin,
+    ) =>
+      app.inject({
+        method: 'POST',
+        url: `/operator/local-match/${operation}`,
+        headers: { origin },
+        payload: { matchId, confirmed },
+      });
+    expect((await mutate('trash', first)).statusCode).toBe(409);
+    const second = await create('当前比赛');
+    const context = (await app.inject({ url: '/local/v1/match-document' })).body;
+    expect((await mutate('trash', first, false)).statusCode).toBe(400);
+    expect((await mutate('trash', first, true, 'https://example.com')).statusCode).toBe(403);
+    expect((await mutate('trash', first)).statusCode).toBe(200);
+    expect((await mutate('trash', first)).statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/select',
+          headers,
+          payload: { matchId: first },
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>().selectedMatchId,
+    ).toBe(second);
+    expect((await mutate('restore', first)).statusCode).toBe(200);
+    expect((await mutate('restore', first)).statusCode).toBe(200);
+    expect((await app.inject({ url: '/local/v1/match-document' })).body).toBe(context);
+    expect(
+      (await app.inject({ url: '/local/v1/tournament' })).json<TournamentView>().matches,
+    ).toHaveLength(2);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

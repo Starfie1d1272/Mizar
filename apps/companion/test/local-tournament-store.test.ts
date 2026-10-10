@@ -199,3 +199,102 @@ it('persists and reloads an independent match without fabricating an event or ro
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('atomically recycles selected matches, preserves shared assets and restores full documents after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-local-trash-'));
+  try {
+    const file = join(directory, 'store.json');
+    const store = new LocalTournamentStore(file);
+    const first = await store.createMatch({
+      teamA: 'A',
+      teamB: 'B',
+      format: 'bo3',
+      mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+    });
+    const second = await store.createMatch({
+      eventId: first.competition!.competitionId,
+      teamA: 'A',
+      teamB: 'C',
+      teamAId: first.entrants.a.entryId,
+      format: 'bo1',
+      mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+    });
+    const document = await store.saveMatch({
+      ...first,
+      scheduledAt: '2026-10-10T12:00:00.000Z',
+      matchLabel: '保留的比赛',
+      entrants: {
+        ...first.entrants,
+        a: { ...first.entrants.a, logoUrl: '/local/v1/local-assets/logo.png' },
+      },
+    });
+    await store.selectMatch(first.matchId);
+    const before = store.getSnapshot();
+    await expect(store.trashMatch(first.matchId, () => false)).rejects.toThrow();
+    expect(store.getSnapshot()).toEqual(before);
+    // The final durable guard also catches an active binding change during write.
+    let calls = 0;
+    await expect(store.trashMatch(first.matchId, () => ++calls < 3)).rejects.toThrow();
+    expect(store.getSnapshot()).toEqual(before);
+    await store.trashMatch(first.matchId, () => true);
+    await store.trashMatch(first.matchId, () => true);
+    expect(store.getSnapshot().teams).toEqual(before.teams);
+    expect(store.getSnapshot().matches).toEqual([second]);
+    expect(store.getSnapshot().selectedMatchId).toBeNull();
+    expect(store.getSnapshot().selectedAt).toBeNull();
+    expect(
+      store.scheduleWindow(first.competition!.competitionId)?.matches.map((match) => match.matchId),
+    ).toEqual([second.matchId]);
+    await expect(store.selectMatch(first.matchId)).rejects.toThrow();
+    const recovered = new LocalTournamentStore(file);
+    await recovered.load();
+    expect(recovered.getSnapshot().trashedMatches).toHaveLength(1);
+    expect(recovered.getSnapshot().trashedMatches[0]!.document).toEqual(document);
+    await recovered.restoreMatch(first.matchId);
+    await recovered.restoreMatch(first.matchId);
+    expect(
+      recovered.getSnapshot().matches.find((match) => match.matchId === first.matchId),
+    ).toEqual(document);
+    expect(recovered.getSnapshot().selectedMatchId).toBeNull();
+    expect(recovered.getSnapshot().events[0]!.matchIds).toEqual([first.matchId, second.matchId]);
+    expect(recovered.getSnapshot().trashedMatches).toEqual([]);
+    await recovered.trashMatch(first.matchId, () => true);
+    await recovered.saveEvent({ ...recovered.getSnapshot().events[0]!, name: '新赛事名' });
+    await recovered.restoreMatch(first.matchId);
+    expect(
+      recovered.getSnapshot().matches.find((match) => match.matchId === first.matchId)?.competition
+        ?.name,
+    ).toBe('新赛事名');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('restores imported local BP, maps, rosters and result facts without changes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-trash-facts-'));
+  try {
+    const file = join(directory, 'local.json');
+    const parsed = validateBroadcastManifest(
+      JSON.parse(
+        await readFile(
+          join(process.cwd(), 'packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
+          'utf8',
+        ),
+      ),
+    );
+    if (!parsed.ok) throw new Error('Invalid fixture');
+    const document = toMatchDocumentV1(parsed.value);
+    const store = new LocalTournamentStore(file);
+    await store.importLegacyMatch(document);
+    expect(document.maps.length).toBeGreaterThan(0);
+    expect(document.veto.length).toBeGreaterThan(0);
+    expect(document.entrants.a.players.length).toBeGreaterThan(0);
+    await store.trashMatch(document.matchId, () => true);
+    const recovered = new LocalTournamentStore(file);
+    await recovered.load();
+    await recovered.restoreMatch(document.matchId);
+    expect(recovered.getSnapshot().matches).toEqual([document]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

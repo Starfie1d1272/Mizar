@@ -40,6 +40,8 @@ export function registerLocalTournamentRoutes(
       events: state.events,
       teams: state.teams,
       matches: state.matches,
+      trashedMatches: state.trashedMatches,
+      inUseMatchId: active?.context.matchId ?? null,
       selectedMatchId: state.selectedMatchId,
       activeLocalMatchId:
         active?.origin === 'local' && active.localAuthoringMode === 'standalone'
@@ -221,6 +223,27 @@ export function registerLocalTournamentRoutes(
       return reply.code(404).send({ error: 'local_match_not_found' });
     }
   });
+
+  for (const operation of ['trash', 'restore'] as const) {
+    app.post(`/operator/local-match/${operation}`, { bodyLimit: 2048 }, async (request, reply) => {
+      if (!canMutate(originPolicy, request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const body = object(request.body);
+      if (typeof body?.matchId !== 'string' || body.confirmed !== true)
+        return reply.code(400).send({ message: '请确认要处理的本地比赛。' });
+      const matchId = body.matchId;
+      const canCommit = () => controller.getActiveBinding()?.context.matchId !== matchId;
+      try {
+        if (operation === 'trash') await store.trashMatch(matchId, canCommit);
+        else await store.restoreMatch(matchId);
+        return { ok: true };
+      } catch {
+        return reply
+          .code(409)
+          .send({ message: '比赛仍被使用或资料已变化，请切换比赛并刷新后重试。' });
+      }
+    });
+  }
 
   app.post('/operator/local-match/save', { bodyLimit: 131_072 }, async (request, reply) => {
     if (!canMutate(originPolicy, request.headers.origin))
