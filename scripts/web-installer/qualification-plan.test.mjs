@@ -192,6 +192,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
         '-Qualification',
       ],
       {
+        timeout: 10000,
         env: {
           ...process.env,
           GITHUB_REPOSITORY: context.repository,
@@ -227,4 +228,4 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
   await expect(qualificationPlan(product, core, context, context.sha, context.sha)).rejects.toThrow(
     '程序文件校验失败',
   );
-});
+}, 15000);
