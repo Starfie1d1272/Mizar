@@ -975,3 +975,181 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     expect(connection.view().paired).toBe(false);
   });
 });
+
+it('classifies disposable LIVE acceptance, bounded failures and recovery independently of reliable ACK', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-live-result-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test',
+      installationId: 'installation',
+      competitionId: 'competition',
+      displayName: 'Test',
+    }),
+  );
+  let response = () => Promise.resolve(Response.json({ accepted: true }));
+  const liveBodies: unknown[] = [];
+  const request = vi.fn<typeof fetch>(async (url, init) => {
+    const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (endpoint.endsWith('/claim')) return Response.json({ claimed: true, authorityRevision: 1 });
+    if (endpoint.endsWith('/reliable')) return new Response(null, { status: 204 });
+    liveBodies.push(JSON.parse(init!.body as string));
+    return response();
+  });
+  const connection = new RivalHubConnection(path, request);
+  const diagnostics = vi.fn();
+  connection.setDiagnosticHandler(diagnostics);
+  await connection.load();
+  const snapshot = {
+    ...claimSnapshot,
+    matchId: 'match',
+    competitionId: 'competition',
+    cursor: { ...claimSnapshot.cursor, liveSessionId: 'session' },
+  };
+  await connection.claim(snapshot, 'revision', false);
+  await connection.sendReliable(
+    { kind: 'map_started', matchId: 'match', cursor: snapshot.cursor } as ReliableEventV1,
+    snapshot,
+  );
+  await connection.sendLive(snapshot);
+  expect(connection.view().liveDelivery.status).toBe('accepted');
+  response = () => Promise.resolve(new Response(null, { status: 204 }));
+  await connection.sendLive(snapshot);
+  expect(connection.view().liveDelivery.status).toBe('failing');
+  for (const reason of ['frame_expired', 'contended', 'delivery_dropped', 'capacity']) {
+    response = () =>
+      Promise.resolve(
+        Response.json({ accepted: false, reason }, { status: reason === 'capacity' ? 429 : 200 }),
+      );
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'dropped',
+      reason,
+      consecutiveFailures: 0,
+    });
+  }
+  expect(diagnostics).not.toHaveBeenCalled();
+  const clock = vi.spyOn(performance, 'now');
+  let now = 0;
+  clock.mockImplementation(() => now);
+  try {
+    response = () => Promise.resolve(Response.json({ accepted: false }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('unknown_rejection');
+    response = () =>
+      Promise.resolve(Response.json({ accepted: false, reason: 'broadcast_unavailable' }));
+    for (let index = 0; index < 3; index++) {
+      now += 3000;
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).not.toHaveBeenCalled();
+    now += 3000;
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(1);
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive({ ...snapshot, cursor: { ...snapshot.cursor, runtimeSeq: 999 } });
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      reason: null,
+      consecutiveFailures: 0,
+      durationMs: 0,
+    });
+    expect(diagnostics).toHaveBeenCalledTimes(2);
+    response = () => Promise.resolve(new Response(null, { status: 503 }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('http_503');
+    response = () => Promise.reject(new DOMException('private URL', 'TimeoutError'));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('transport_failed');
+    expect(diagnostics).toHaveBeenCalledTimes(2);
+    expect(liveBodies).toHaveLength(15);
+    expect(liveBodies[12]).toMatchObject({ cursor: { runtimeSeq: 999 } });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it('loads HTTP viewing links through online select and identifies sanitized conversion failures', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-select-link-'));
+  temporary.push(directory);
+  const original = JSON.parse(
+    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
+  ) as BroadcastManifest;
+  let candidate = {
+    ...original,
+    commentators: [{ ...original.commentators[0]!, liveStreamUrl: 'http://video.example/live' }],
+  };
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'private-token',
+      installationId: 'installation',
+      competitionId: original.match.competition!.competitionId,
+      displayName: 'Test',
+    }),
+  );
+  const connection = new RivalHubConnection(path, () => Promise.resolve(Response.json(candidate)));
+  await connection.load();
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'manifest.json') }),
+  });
+  const logs: string[] = [];
+  const app = Fastify({
+    logger: {
+      stream: {
+        write: (text: string) => {
+          logs.push(text);
+        },
+      },
+    },
+  });
+  registerRivalHubConnectionRoutes(app, {
+    connection,
+    controller,
+    currentSnapshot: () => null,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+  });
+  const select = () =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/select',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { matchId: original.match.matchId },
+    });
+  try {
+    expect((await select()).statusCode).toBe(200);
+    expect(
+      controller.getPendingOnlineCandidate()?.binding.context.commentators[0]!.liveStreamUrl,
+    ).toBe('http://video.example/live');
+    candidate = {
+      ...candidate,
+      commentators: [
+        {
+          ...candidate.commentators[0]!,
+          avatarUrl: 'http://user:private-secret@video.example/avatar',
+        },
+      ],
+    };
+    const invalid = await select();
+    expect(invalid.statusCode).toBe(502);
+    expect(invalid.json<{ message: string; stage: string }>().message).toContain(
+      'commentators.0.avatarUrl',
+    );
+    expect(invalid.json<{ message: string; stage: string }>().stage).toBe('match_document');
+    expect(logs.join('')).toContain('source_conversion_failed');
+    expect(logs.join('')).not.toContain('private-secret');
+    expect(invalid.body).not.toContain('private-secret');
+  } finally {
+    await app.close();
+  }
+});

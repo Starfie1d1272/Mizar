@@ -17,7 +17,9 @@ export function registerRivalHubConnectionRoutes(
   },
 ) {
   options.connection.setDiagnosticHandler?.((operation, error) => {
-    app.log.error({ err: error, operation }, 'RivalHub upstream request failed');
+    if (operation === 'live_recovered')
+      app.log.info({ operation }, 'RivalHub LIVE delivery recovered');
+    else app.log.error({ err: error, operation }, 'RivalHub upstream request failed');
   });
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
@@ -207,9 +209,20 @@ export function registerRivalHubConnectionRoutes(
     try {
       const source = sourceFor(body.matchId);
       const outcome = await options.controller.stageOnlineMatch(body.matchId, source);
-      return outcome.ok
-        ? { pending: true }
-        : reply.code(502).send({ message: '比赛资料暂时无法获取。' });
+      if (outcome.ok) return { pending: true };
+      // Diagnostics contain contract paths/codes only, never rejected input values.
+      request.log.warn({ diagnostics: outcome.diagnostics }, 'RivalHub manifest selection failed');
+      const fields = outcome.diagnostics
+        .flatMap((item) => item.diagnostics ?? [])
+        .map((item) => item.path);
+      return reply.code(502).send({
+        stage: outcome.diagnostics.some((item) => item.stage === 'match_document')
+          ? 'match_document'
+          : 'manifest',
+        message: fields.length
+          ? `比赛资料字段无法使用：${[...new Set(fields)].slice(0, 8).join('、')}。请在网站修正字段格式或网址后重试。`
+          : '比赛资料暂时无法获取。',
+      });
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply.code(400).send({ message: '比赛资料无法使用。' });

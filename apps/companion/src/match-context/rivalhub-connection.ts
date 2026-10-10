@@ -92,6 +92,19 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
   private claimRevision = 0;
+  private liveDelivery: {
+    status: 'idle' | 'accepted' | 'dropped' | 'failing';
+    reason: string | null;
+    consecutiveFailures: number;
+    since: number | null;
+    notified: boolean;
+  } = {
+    status: 'idle',
+    reason: null,
+    consecutiveFailures: 0,
+    since: null,
+    notified: false,
+  };
 
   /** Local delivery identity only; never includes installation credentials. */
   reliableAuthorityScope(): string | null {
@@ -134,6 +147,18 @@ export class RivalHubConnection {
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
+      liveDelivery:
+        this.source === null
+          ? { status: 'idle', reason: null, consecutiveFailures: 0, durationMs: 0 }
+          : {
+              status: this.liveDelivery.status,
+              reason: this.liveDelivery.reason,
+              consecutiveFailures: this.liveDelivery.consecutiveFailures,
+              durationMs:
+                this.liveDelivery.since === null
+                  ? 0
+                  : Math.max(0, performance.now() - this.liveDelivery.since),
+            },
     };
   }
 
@@ -386,6 +411,13 @@ export class RivalHubConnection {
       activeDeviceName?: string;
     };
     if (result.claimed) {
+      this.liveDelivery = {
+        status: 'idle',
+        reason: null,
+        consecutiveFailures: 0,
+        since: null,
+        notified: false,
+      };
       this.claimRevision += 1;
       this.source = {
         matchId: snapshot.matchId,
@@ -424,7 +456,7 @@ export class RivalHubConnection {
   }
 
   private async upload(
-    operation: 'live' | 'reliable',
+    operation: 'reliable',
     body: unknown,
     matchId: string,
     signal?: AbortSignal,
@@ -468,8 +500,106 @@ export class RivalHubConnection {
     // after re-claim, generation advance and map change. No old snapshot is queued.
     if (this.source?.acknowledgedExecution !== executionKey(snapshot.cursor))
       throw new Error('rivalhub_map_start_pending');
-    if ((await this.upload('live', snapshot, snapshot.matchId)) !== 'accepted')
+    const source = this.source;
+    if (!source || source.matchId !== snapshot.matchId)
       throw new Error('rivalhub_live_unavailable');
+    let reason = 'transport_failed';
+    let accepted = false;
+    let dropped = false;
+    let lostAuthority = false;
+    try {
+      // LIVE is disposable: one bounded request, no retries and no response payload logging.
+      const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
+        method: 'POST',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(4000),
+        headers: {
+          authorization: `Bearer ${this.installation!.credential}`,
+          'content-type': 'application/json',
+          'x-rivalhub-authority': String(source.authorityRevision),
+        },
+        body: JSON.stringify(snapshot),
+      });
+      if (response.ok || response.status === 429) {
+        // Bounded response consumption; remote details/URLs are never diagnostics.
+        const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
+        let text = '';
+        let bytes = 0;
+        try {
+          if (reader)
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              bytes += chunk.value.byteLength;
+              if (bytes > 4096) throw new Error('live_response_too_large');
+              text += new TextDecoder().decode(chunk.value);
+            }
+        } finally {
+          await reader?.cancel();
+        }
+        const result = JSON.parse(text) as { accepted?: unknown; reason?: unknown };
+        accepted = response.ok && result.accepted === true;
+        const normal = ['frame_expired', 'contended', 'delivery_dropped'];
+        dropped =
+          (response.ok && result.accepted === false && normal.includes(String(result.reason))) ||
+          (response.status === 429 && result.reason === 'capacity');
+        reason = dropped
+          ? String(result.reason)
+          : result.reason === 'broadcast_unavailable'
+            ? 'broadcast_unavailable'
+            : response.ok
+              ? 'unknown_rejection'
+              : 'http_429';
+      } else {
+        reason = `http_${response.status}`;
+        lostAuthority = response.status === 403;
+        await response.body?.cancel();
+      }
+    } catch {
+      /* A newer frame may recover; never resend this frame. */
+    }
+    if (this.source !== source) throw new Error('rivalhub_live_unavailable');
+    if (lostAuthority) {
+      this.source = null;
+      this.activeDeviceName = '另一台制播设备';
+    }
+    const previous = this.liveDelivery;
+    if (accepted || dropped) {
+      if (previous.notified)
+        this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
+      this.liveDelivery = {
+        status: accepted ? 'accepted' : 'dropped',
+        reason: accepted ? null : reason,
+        consecutiveFailures: 0,
+        since: null,
+        notified: false,
+      };
+      return;
+    }
+    this.liveDelivery = {
+      status: 'failing',
+      reason,
+      consecutiveFailures: previous.consecutiveFailures + 1,
+      since: previous.since ?? performance.now(),
+      notified: previous.notified,
+    };
+    const duration = performance.now() - this.liveDelivery.since!;
+    let newlyNotified = false;
+    if (
+      !this.liveDelivery.notified &&
+      this.liveDelivery.consecutiveFailures >= 5 &&
+      duration >= 10_000
+    ) {
+      this.liveDelivery.notified = true;
+      newlyNotified = true;
+      this.onDiagnostic(
+        'live',
+        new Error(
+          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveFailures}；durationMs=${Math.round(duration)}`,
+        ),
+      );
+    }
+    if (lostAuthority || newlyNotified) throw new Error('rivalhub_live_unavailable');
   }
 
   async sendReliable(
