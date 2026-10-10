@@ -1,10 +1,10 @@
 # 快速开始与操作手册
 
-适用于 Windows x64 安装版与便携版。[南大云盘](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)提供国内下载，[GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)提供已发布版本、便携包与校验文件。功能适用范围见[数据源说明](data-source-capabilities.md)。
+适用于 Windows x64 安装版与便携版。[南大云盘](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads)提供国内下载，[GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)提供已发布版本、便携包与校验文件。功能适用范围见[数据源说明](data-source-capabilities.md)。
 
 ## 安装与升级
 
-首次使用请选择名称以 `-Setup.exe` 结尾的中文安装包，按向导安装到当前用户目录。GitHub 发布页的 Assets 同时提供便携 ZIP、校验文件和开发资料；便携 ZIP 适合解压后运行、自行管理程序目录。安装后双击 Mizar 打开准备中心。
+首次使用请选择名称以 `-WebInstaller.exe` 结尾的轻量安装器，按向导安装到当前用户目录。国内用户下载目录同时提供完整离线 ZIP；ZIP 适合解压后运行、自行管理程序目录。GitHub 发布页还保留程序使用的更新与资源文件。安装后双击 Mizar 打开准备中心。
 
 安装版将比赛、配置与日志保存在 `%LOCALAPPDATA%/Mizar`。升级前正常退出 Mizar 并备份该目录，再运行新版安装包。卸载会保留用户数据。
 

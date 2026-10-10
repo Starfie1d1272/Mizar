@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { releaseAttestationArgs } from './release-identity.mjs';
 import { publicProductAssets, assetInventory } from './release-assets.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
+import { verifyPublishedResourceMetadata } from '../ci/resource-release.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -165,7 +166,7 @@ async function verifyExistingPublication(release, identity, product) {
         ),
         { stdio: 'inherit', timeout: 60000 },
       );
-      return;
+      return carriers.length ? transport : undefined;
     }
     for (const name of ['update-publication.json', 'update-publication-provenance.json']) {
       const assets = release.assets.filter((a) => a.name === name);
@@ -219,7 +220,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   requireValue(['create', 'verify-existing'].includes(mode), '发布确认操作无效');
   const { identity, release } = await verifiedPublishedRelease(releasePath, refPath, tag, product);
   if (mode === 'verify-existing') {
-    await verifyExistingPublication(release, identity, product);
+    const carrier = await verifyExistingPublication(release, identity, product);
+    if (output && output !== '-')
+      await verifyPublishedResourceMetadata(
+        output,
+        await json(join(product, 'core-release-manifest.json')),
+        release,
+        carrier,
+      );
     console.log('已发布版本的完整必需资产与正式发布确认一致；不修改公开文件。');
   } else {
     requireValue(

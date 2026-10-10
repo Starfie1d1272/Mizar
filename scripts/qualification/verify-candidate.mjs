@@ -39,6 +39,36 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
         }
       }
     }
+    const core = JSON.parse(await readFile(join(product, 'core-release-manifest.json'), 'utf8'));
+    const identity = JSON.parse(
+      await readFile(join(evidenceRoot, 'core-setup', 'core-setup-identity.json'), 'utf8'),
+    );
+    if (
+      core.gitSha !== sourceSha ||
+      core.appVersion !== manifest.appVersion ||
+      core.resourceMode !== 'core' ||
+      core.derivedFrom?.archiveSha256 !== archiveSha256 ||
+      core.derivedFrom?.contentDigest !== manifest.contentDigest
+    )
+      throw new Error('Core 验收来源与 Full 不一致');
+    for (const field of [
+      'gitSha',
+      'archive',
+      'archiveSha256',
+      'contentDigest',
+      'appVersion',
+      'derivedFrom',
+    ])
+      if (JSON.stringify(identity[field]) !== JSON.stringify(core[field]))
+        throw new Error(`core-setup 验收身份不一致：${field}`);
+    const distribution = JSON.parse(
+      await readFile(join(product, 'core-distribution-manifest.json'), 'utf8'),
+    );
+    if (JSON.stringify(identity.distribution) !== JSON.stringify(distribution))
+      throw new Error('Core Setup 验收身份与分发清单不一致');
+    for (const lane of ['setup', 'core-setup'])
+      if (!(await readFile(join(evidenceRoot, lane, 'update-recovery.log'), 'utf8')).trim())
+        throw new Error(`${lane} 缺少恢复验收记录`);
   }
   return manifest;
 }

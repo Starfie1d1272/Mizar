@@ -189,7 +189,7 @@ export function UpdateSettings() {
       else
         window.open(
           source === 'mirror'
-            ? 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/'
+            ? 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads'
             : 'https://github.com/Starfie1d1272/Mizar/releases',
           '_blank',
           'noopener,noreferrer',
