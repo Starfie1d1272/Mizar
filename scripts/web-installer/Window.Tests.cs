@@ -17,6 +17,11 @@ namespace Mizar.WebInstaller {
       Application.EnableVisualStyles();
       string diagnostic=Window.DiagnosticText(new Exception("resource_path_unsafe https://example.com/file?token=secret access_token=hidden",new Exception("exit code 7 stderr source failure")));
       Assert(diagnostic.Contains("resource_path_unsafe") && diagnostic.Contains("exit code 7") && !diagnostic.Contains("token=secret") && !diagnostic.Contains("hidden"),"Diagnostic retains cause and exit evidence while redacting credentials");
+      string secrets=Window.DiagnosticText(new Exception("Authorization: Bearer TOPSECRET\r\nProxy-Authorization: Basic OTHERSECRET\r\ntoken=TOKENVALUE api_key=APISECRET password=PASSSECRET\r\nhttps://user:URLPASSWORD@example.com/file?sig=QUERYPASSWORD#FRAGMENTPASSWORD\r\n{\"access_token\":\"JSONSECRET\"}\r\nresource_path_unsafe",new Exception("exit code 7")));
+      foreach(string secret in new[]{"TOPSECRET","OTHERSECRET","TOKENVALUE","APISECRET","PASSSECRET","URLPASSWORD","QUERYPASSWORD","FRAGMENTPASSWORD","JSONSECRET"}) Assert(!secrets.Contains(secret),"Credentials must not appear in exported diagnostic: "+secret);
+      Assert(secrets.Contains("resource_path_unsafe") && secrets.Contains("exit code 7"),"Sanitization preserves the actionable cause");
+      Assert(Nsis.NativeFailure("-Mode Install","update_process_remaining",new Exception()).Message.Contains("正常退出"),"Known running process has an executable action");
+      Assert(Nsis.NativeFailure("-Mode Prepare","unknown failure",new Exception()).Message.Contains("更新准备"),"Unknown failure retains the actual phase");
       int launches=0, installs=0;
       Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation=(bytes,stages,token)=>{installs++;return Complete(bytes,stages,token);};
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
@@ -60,6 +65,9 @@ namespace Mizar.WebInstaller {
       }
       using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new InstallerActionRequired("请使用原安装器修复。");},path=>launches++,true)) {
         window.Show(); Pump(window.Start()); Assert(window.detail.Text=="请使用原安装器修复。" && !window.action.Enabled,"Existing installation error gives repair, not network advice");
+      }
+      using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new OperationCanceledException("trust metadata deadline");},path=>launches++,true)) {
+        window.Show();Pump(window.Start());Assert(window.heading.Text=="操作超时" && window.detail.Text.Contains("发布验证"),"Trust verification timeout must not be described as package download");
       }
       Console.WriteLine("PASS: real Native UI initial/progress/Finish choice/X/start retry/safe cancellation and repair behavior (UI fixtures only)");
     }

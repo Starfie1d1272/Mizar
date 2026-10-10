@@ -317,7 +317,7 @@ namespace Mizar.WebInstaller {
     internal readonly CheckBox launchChoice = new CheckBox();
     readonly LinkLabel details = new LinkLabel();
     CancellationTokenSource cancellation;
-    string installedCore, technicalDetails;
+    string installedCore, technicalDetails, activePhase="checking-release";
     bool finished, recoveryRequired, downloading, launchFailed;
     public Window(Plan value) : this(value,null,null,false) { }
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
@@ -378,6 +378,7 @@ namespace Mizar.WebInstaller {
       token.ThrowIfCancellationRequested(); return installedCore;
     }
     internal void ShowStage(string phase) {
+      if(phase!="waiting-for-installer") activePhase=phase;
       if(phase=="checking-cache" || phase=="connecting-download" || phase=="validating-download") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-cache" ? "正在检查已有下载" : phase=="validating-download" ? "正在验证下载文件" : "正在连接下载源";detail.Text="请稍候。";return;}
       if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在备份原程序";detail.Text="请稍候。";return;}
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
@@ -403,9 +404,14 @@ namespace Mizar.WebInstaller {
       Close();
     }
     internal static string DiagnosticText(Exception error) {
+      // Match the established capture sanitizer's credential names and bare Bearer values.
+      var options=System.Text.RegularExpressions.RegexOptions.IgnoreCase;
       string text=error.ToString();
-      text=System.Text.RegularExpressions.Regex.Replace(text,@"(https?://[^\s?]+)\?[^\s]+","$1?[redacted]",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-      return System.Text.RegularExpressions.Regex.Replace(text,@"((?:authorization|access_token|refresh_token|password|secret)\s*[:=]\s*)[^\s]+","$1[redacted]",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"\b(?:authorization|proxy-authorization|cookie|set-cookie)[""']?\s*[:=]\s*[^\r\n]+","[redacted credential header]",options);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"\bBearer\s+[A-Za-z0-9._~+/-]+=*","Bearer [redacted]",options);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"\b(auth|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|api[_-]?key)[""']?\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^\s,;&""'<>]+)","$1=[redacted]",options);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"(https?://)[^/\s@]+@","$1[redacted]@",options);
+      return System.Text.RegularExpressions.Regex.Replace(text,@"(https?://[^\s?#]+)[?#][^\s]+","$1?[redacted]",options);
     }
     void ShowDetails() {
       using(var dialog=new Form {Text="安装诊断",Width=720,Height=440,StartPosition=FormStartPosition.CenterParent}) {
@@ -416,7 +422,7 @@ namespace Mizar.WebInstaller {
         buttons.Controls.AddRange(new Control[]{copy,export});dialog.Controls.Add(content);dialog.Controls.Add(buttons);dialog.ShowDialog(this);
       }
     }
-    string ErrorDetails(Exception error) {return DiagnosticText(error)+"\r\n诊断日志："+SaveDiagnostic(error);}
+    string ErrorDetails(Exception error) {return "失败阶段："+activePhase+"\r\n"+DiagnosticText(error)+"\r\n诊断日志："+SaveDiagnostic(error);}
     internal static string SaveDiagnostic(Exception error) {
       try {
         string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","logs");
@@ -445,9 +451,10 @@ namespace Mizar.WebInstaller {
         });
         string path=await install(progress,stages,current.Token);
         current.Token.ThrowIfCancellationRequested(); ShowCompleted(path);
-      } catch(OperationCanceledException) {
-        heading.Text=current.IsCancellationRequested ? "已取消" : "下载超时";
-        detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : "请检查网络后重试，或使用完整离线安装包。"; action.Text="重新开始";
+      } catch(OperationCanceledException error) {
+        technicalDetails=ErrorDetails(error);
+        heading.Text=current.IsCancellationRequested ? "已取消" : "操作超时";
+        detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : (activePhase=="checking-release" ? "发布验证超时，请检查网络后重试。" : activePhase=="downloading-core" || activePhase=="connecting-download" ? "下载超时，请检查网络后重试。" : "当前操作超时，请查看诊断后重试。"); action.Text="重新开始";
       } catch(InstallerRecoveryRequired error) {
         recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=ErrorDetails(error);
       } catch(InstallerActionRequired error) {
