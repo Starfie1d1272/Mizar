@@ -16,9 +16,30 @@ pub fn unconfirmed_launch(value: &Value) -> bool {
         && (value["pid"].as_u64().is_none() || value["created"].as_u64().is_none())
 }
 
+/// Preserve system classification without forwarding custom messages, paths,
+/// or configuration bytes to UI, desktop logs, or the user support bundle.
+pub(crate) fn io_error(summary: &str, error: &std::io::Error) -> String {
+    format!(
+        "{summary} [ioKind={:?}; osCode={}]",
+        error.kind(),
+        error
+            .raw_os_error()
+            .map_or_else(|| "none".into(), |code| code.to_string())
+    )
+}
+
+fn json_error(summary: &str, error: &serde_json::Error) -> String {
+    format!(
+        "{summary} [jsonCategory={:?}; line={}; column={}]",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("配置路径无效。")?;
-    fs::create_dir_all(parent).map_err(|_| "无法创建配置目录。")?;
+    fs::create_dir_all(parent).map_err(|error| io_error("无法创建配置目录。", &error))?;
     let temp = parent.join(format!(
         ".mizar-{}-{}.tmp",
         std::process::id(),
@@ -32,13 +53,14 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .write(true)
             .create_new(true)
             .open(&temp)
-            .map_err(|_| "无法准备配置写入。")?;
+            .map_err(|error| io_error("无法准备配置写入。", &error))?;
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
-            .map_err(|_| "配置未能完整保存。")?;
+            .map_err(|error| io_error("配置未能完整保存。", &error))?;
         drop(file);
         replace(&temp, path)?;
-        if fs::read(path).map_err(|_| "配置读回验证失败。")? != bytes {
+        if fs::read(path).map_err(|error| io_error("配置读回验证失败。", &error))? != bytes
+        {
             return Err("配置读回验证失败。".into());
         }
         Ok(())
@@ -49,7 +71,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn replace(from: &Path, to: &Path) -> Result<(), String> {
-    fs::rename(from, to).map_err(|_| "配置写入失败，备份仍保留。".into())
+    fs::rename(from, to).map_err(|error| io_error("配置写入失败，备份仍保留。", &error))
 }
 #[cfg(windows)]
 fn replace(from: &Path, to: &Path) -> Result<(), String> {
@@ -61,7 +83,10 @@ fn replace(from: &Path, to: &Path) -> Result<(), String> {
     let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 1 | 8) } == 0 {
-        Err("配置写入失败，备份仍保留。".into())
+        Err(io_error(
+            "配置写入失败，备份仍保留。",
+            &std::io::Error::last_os_error(),
+        ))
     } else {
         Ok(())
     }
@@ -105,6 +130,100 @@ impl SessionStore {
             return Err("CS2 恢复记录过大，未修改游戏设置。".into());
         }
         atomic_write(&self.journal_path(), &bytes)
+    }
+    fn spectator_path(&self) -> PathBuf {
+        self.root.join("spectator-recovery.json")
+    }
+    pub fn spectator_pending(&self) -> bool {
+        !fs::symlink_metadata(self.spectator_path())
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    }
+    fn spectator_record(&self) -> Result<Option<Value>, String> {
+        let metadata = match fs::symlink_metadata(self.spectator_path()) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(io_error(
+                    "观战恢复记录无法读取，请打开备份目录检查。",
+                    &error,
+                ))
+            }
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024
+        {
+            return Err("观战恢复记录格式或大小异常，请打开备份目录检查。".into());
+        }
+        let bytes = fs::read(self.spectator_path())
+            .map_err(|error| io_error("观战恢复记录无法读取。", &error))?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("观战恢复记录过大。".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| json_error("观战恢复记录损坏，请打开备份目录检查。", &error))
+    }
+    pub fn spectator_warning(&self) -> Option<String> {
+        match self.spectator_record() {
+            Ok(Some(record)) => record["warning"].as_str().map(str::to_string),
+            Ok(None) => None,
+            Err(error) => Some(error),
+        }
+    }
+    /// Same owner, separate durable optional-field record. No core transaction
+    /// or settings gate depends on this file. Caller must confirm CS2 has exited.
+    pub fn restore_spectator(&self) -> Result<(), String> {
+        let Some(mut record) = self.spectator_record()? else {
+            return Ok(());
+        };
+        let result = (|| {
+            if record["version"] != 1 {
+                return Err("观战恢复记录版本不支持。".into());
+            }
+            let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
+            if !video.is_absolute() || video.file_name().is_none_or(|v| v != "cs2_video.txt") {
+                return Err("观战恢复路径无效。".into());
+            }
+            crate::cs2_spectator::check_archive(video)?;
+            let original = record["original"].as_str().ok_or("观战原值备份缺失。")?;
+            if original.len() > 256 * 1024 {
+                return Err("观战原值备份过大。".into());
+            }
+            let machine = video
+                .parent()
+                .ok_or("观战配置目录缺失。")?
+                .join("cs2_machine_convars.vcfg");
+            let metadata = fs::symlink_metadata(&machine)
+                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > 256 * 1024
+            {
+                return Err("当前观战配置无法安全核实。".into());
+            }
+            let current = fs::read_to_string(&machine)
+                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
+            if current.len() > 256 * 1024 {
+                return Err("当前观战配置过大。".into());
+            }
+            let restored = crate::cs2_spectator::restore(original, &current)?;
+            if restored != current {
+                atomic_write(&machine, restored.as_bytes())?;
+            }
+            fs::remove_file(self.spectator_path())
+                .map_err(|error| io_error("观战原值已恢复，但记录未清理，请重试。", &error))
+        })();
+        if let Err(error) = result {
+            let warning = format!("观战原值尚未恢复：{error} 帧率与画质恢复不受影响；退出游戏后可重试或打开备份目录检查。");
+            record["warning"] = json!(warning);
+            atomic_write(
+                &self.spectator_path(),
+                &serde_json::to_vec_pretty(&record)
+                    .map_err(|error| json_error("观战恢复诊断无法保存。", &error))?,
+            )
+            .map_err(|error| format!("{warning} 恢复诊断未能更新，原值记录仍保留：{error}"))?;
+            return Err(warning);
+        }
+        Ok(())
     }
     pub fn preferences(&self) -> Result<Preferences, String> {
         match fs::read(self.root.join("preferences.json")) {
@@ -209,9 +328,32 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        let frames =
-            cs2_frame_rate::prepare(video, executable, self.preferences()?.frame_rate_limit)?;
-        self.prepare_files(video, executable, size, Some(frames))
+        let preferences = self.preferences()?;
+        let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
+        let spectator = if self.spectator_pending() {
+            Err("上次观战字段尚未恢复，本次未加载观战 CFG；可退出游戏后重试恢复。".into())
+        } else {
+            crate::cs2_spectator::prepare(&frames, video, executable)
+        };
+        let mut journal = self.prepare_files(video, executable, size, Some(frames))?;
+        let armed = spectator.and_then(|record| {
+            // This exact original must survive core recovery and restart even if
+            // optional restore later fails. Save it before allowing +exec.
+            atomic_write(
+                &self.spectator_path(),
+                &serde_json::to_vec_pretty(&record)
+                    .map_err(|error| json_error("观战原值备份无法保存。", &error))?,
+            )?;
+            Ok(())
+        });
+        match armed {
+            Ok(()) => journal["spectatorCfg"] = json!(true),
+            Err(warning) => {
+                journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"))
+            }
+        }
+        self.save(&journal)?;
+        Ok(journal)
     }
     fn prepare_files(
         &self,
@@ -265,9 +407,9 @@ impl SessionStore {
         Ok(value)
     }
     /// Caller must independently confirm no CS2 process can still write this file.
-    pub fn restore(&self) -> Result<(), String> {
+    pub fn restore(&self) -> Result<Option<String>, String> {
         let Some(value) = self.load()? else {
-            return Ok(());
+            return Ok(None);
         };
         if unconfirmed_launch(&value) {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
@@ -298,6 +440,7 @@ impl SessionStore {
             // Nothing was owned or changed. In particular, never replace game
             // writes made during this session with an incident snapshot.
             return fs::remove_file(self.journal_path())
+                .map(|_| None)
                 .map_err(|_| "启动记录尚未清理，请重试。".into());
         }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
@@ -349,8 +492,12 @@ impl SessionStore {
                     .map_err(|_| "帧率备份无法保存。")?,
             )?;
         }
+        // Optional errors retain their own original + diagnostic and cannot
+        // prevent completion of the existing FPS/video transaction.
+        let spectator_error = self.restore_spectator().err();
         fs::remove_file(self.journal_path())
-            .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())
+            .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())?;
+        Ok(spectator_error)
     }
 }
 
@@ -432,6 +579,210 @@ mod tests {
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
     }
+    #[test]
+    fn optional_error_evidence_retains_system_codes_and_json_positions_without_input_contents() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "private-path-and-config",
+        );
+        let rendered = io_error("无法读取。", &io);
+        assert!(rendered.contains("ioKind=PermissionDenied"));
+        assert!(!rendered.contains("private-path-and-config"));
+        assert!(io_error("无法读取。", &std::io::Error::from_raw_os_error(5)).contains("osCode=5"));
+        let error =
+            serde_json::from_str::<Value>("{\n\"original\":\"private-configuration\"").unwrap_err();
+        let rendered = json_error("记录损坏。", &error);
+        assert!(rendered.contains("jsonCategory=Eof"));
+        assert!(rendered.contains("line=2"));
+        assert!(rendered.contains("column="));
+        assert!(!rendered.contains("private-configuration"));
+    }
+
+    #[test]
+    fn observer_cfg_supports_zero_and_one_and_restores_exact_values_without_rebinding() {
+        for token in ["0", "1", "false", "true"] {
+            let (root, video, machine, executable, store) = frame_setup();
+            let original = format!("\"config\" {{\"convars\" {{\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"{token}\" \"other\" \"old\"}}}}");
+            fs::write(&machine, &original).unwrap();
+            let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+            let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\"}}";
+            fs::write(&keys, bindings).unwrap();
+            let journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1440, 810).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(journal["spectatorCfg"], true);
+            let applied = fs::read_to_string(&machine).unwrap();
+            assert!(applied.contains(&format!("\"spec_usenumberkeys_nobinds\" \"{token}\"")));
+            assert!(store.spectator_pending());
+            let cfg = root.join("game/csgo/cfg/mizar_observer.cfg");
+            let commands = fs::read_to_string(&cfg).unwrap();
+            assert!(commands
+                .lines()
+                .any(|line| line == "spec_usenumberkeys_nobinds 1"));
+            assert!(!commands.contains("bind "));
+            crate::cs2_spectator::install(&executable).unwrap();
+            fs::write(
+                &machine,
+                applied
+                    .replace(&format!("\"{token}\""), "\"1\"")
+                    .replace("\"old\"", "\"new\""),
+            )
+            .unwrap();
+            store.restore().unwrap();
+            assert_eq!(
+                fs::read_to_string(&machine).unwrap(),
+                original.replace("\"old\"", "\"new\"")
+            );
+            assert_eq!(fs::read_to_string(keys).unwrap(), bindings);
+            assert!(!video
+                .parent()
+                .unwrap()
+                .join("cs2_user_keys_0_slot1.vcfg")
+                .exists());
+            assert!(store.load().unwrap().is_none());
+            assert!(!store.spectator_pending());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn missing_value_skips_and_optional_cloud_or_field_errors_never_block_core_recovery() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let size = cs2_video::VideoSize::new(1440, 810).unwrap();
+        let skipped = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert!(skipped["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("未应用"));
+        assert!(!fs::read_to_string(&machine)
+            .unwrap()
+            .contains("spec_usenumberkeys_nobinds"));
+        store.restore().unwrap();
+        fs::write(
+            &machine,
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}",
+        )
+        .unwrap();
+        let original = fs::read_to_string(&machine).unwrap();
+        let video_before = fs::read(&video).unwrap();
+        let active = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert_eq!(active["spectatorCfg"], true);
+        // +exec changes the runtime value; CS2 may archive it at exit.
+        fs::write(
+            &machine,
+            fs::read_to_string(&machine)
+                .unwrap()
+                .replace("\"false\"", "\"true\""),
+        )
+        .unwrap();
+        let remote = video
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("remote");
+        fs::create_dir_all(&remote).unwrap();
+        let mirror = remote.join("cs2_user_convars.vcfg");
+        let cloud = "\"config\" {\"convars\" {\"spec_usenumberkeys_nobinds\" \"true\"}}";
+        fs::write(&mirror, cloud).unwrap();
+        // Game-time optional edits must not become ownership or block FPS/video.
+        let changed = fs::read_to_string(&machine)
+            .unwrap()
+            .replace("\"true\"", "\"unknown\"");
+        fs::write(&machine, changed).unwrap();
+        assert!(store.restore().unwrap().unwrap().contains("镜像"));
+        assert!(store.load().unwrap().is_none());
+        assert_eq!(fs::read(&video).unwrap(), video_before);
+        assert_eq!(
+            fs::read_to_string(&machine).unwrap(),
+            original.replace("\"false\"", "\"unknown\"")
+        );
+        assert_eq!(fs::read_to_string(&mirror).unwrap(), cloud);
+        // A subsequent launch still works, but read-only mirror eligibility skips the optional preset.
+        let next = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert!(next["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("尚未恢复"));
+        assert!(next.get("spectatorCfg").is_none());
+        store.restore().unwrap();
+        assert!(store.spectator_pending());
+        fs::remove_file(&mirror).unwrap();
+        assert!(store.restore_spectator().unwrap_err().contains("字段"));
+        fs::write(&machine, original.replace("\"false\"", "\"1\"")).unwrap();
+        let restarted = SessionStore::new(root.clone());
+        restarted.restore_spectator().unwrap();
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        assert!(!restarted.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn personal_startup_cfg_is_preserved_and_unknown_observer_file_only_skips_optional_preset() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original =
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}";
+        fs::write(&machine, original).unwrap();
+        fs::write(
+            root.join("game/csgo/cfg/auto.cfg"),
+            "fps_max 0; spec_usenumberkeys_nobinds false\n",
+        )
+        .unwrap();
+        let journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(journal["spectatorCfg"], true);
+        assert_eq!(
+            fs::read_to_string(root.join("game/csgo/cfg/auto.cfg")).unwrap(),
+            "fps_max 60; spec_usenumberkeys_nobinds false\n"
+        );
+        assert!(fs::read_to_string(&machine)
+            .unwrap()
+            .contains("\"spec_usenumberkeys_nobinds\" \"false\""));
+        store.restore().unwrap();
+        let preserved = store.prepare_preserved(&video, &executable).unwrap();
+        assert!(preserved.get("spectatorCfg").is_none());
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        store.restore().unwrap();
+        fs::write(root.join("game/csgo/cfg/auto.cfg"), "fps_max 0\n").unwrap();
+        let cfg = root.join("game/csgo/cfg/mizar_observer.cfg");
+        let unknown = "echo personal-file\n";
+        fs::write(&cfg, unknown).unwrap();
+        let skipped = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert!(skipped.get("spectatorCfg").is_none());
+        assert!(skipped["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("同名"));
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), unknown);
+        assert!(!store.spectator_pending());
+        store.restore().unwrap();
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn frame_rate_startup_override_and_crash_recovery_restore_exact_user_config() {
         for limit in [60, 30, 0] {

@@ -11,10 +11,10 @@ const FILE_LIMIT: usize = 256 * 1024;
 const TOTAL_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
-struct Token {
-    value: String,
-    start: usize,
-    end: usize,
+pub(crate) struct Token {
+    pub(crate) value: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
     quoted: bool,
 }
 
@@ -90,7 +90,7 @@ fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
     Ok(result)
 }
 
-fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String> {
+pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String> {
     fn walk(
         tokens: &[Token],
         i: &mut usize,
@@ -396,6 +396,7 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
             return Err("CS2 启动配置引用过多，未修改游戏设置。".into());
         }
         let original = read_bounded(&path, FILE_LIMIT)?;
+
         total += original.len();
         if total > TOTAL_LIMIT {
             return Err("CS2 启动配置总量超过上限。".into());

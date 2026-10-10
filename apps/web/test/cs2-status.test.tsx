@@ -55,6 +55,28 @@ async function render() {
 }
 
 describe('CS2 configuration progress', () => {
+  it('keeps core settings available while optional spectator recovery remains pending and permits retry', async () => {
+    await render();
+    await poll({
+      ...idle,
+      spectatorRecoveryPending: true,
+      spectatorWarning: '当前观战字段异常，原值备份仍保留。',
+    });
+    expect(container.textContent).toContain('当前观战字段异常，原值备份仍保留。');
+    expect(container.querySelector('select')?.disabled).toBe(false);
+    const retry = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === '重试恢复观战原值',
+    )!;
+    expect(retry.disabled).toBe(false);
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('restore_cs2_backup', {
+      confirmSteamCancelled: false,
+    });
+  });
+
   it('preserves an unsaved draft after a failed save and allows retry', async () => {
     await render();
     const select = container.querySelector('select')!;

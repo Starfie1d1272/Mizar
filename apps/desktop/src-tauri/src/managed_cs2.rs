@@ -375,7 +375,7 @@ impl ManagedCs2 {
             .is_some();
         let preferences = self.store.preferences()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -429,14 +429,41 @@ impl ManagedCs2 {
             value["launchCancelled"] = json!(true);
             self.store.save(&value)?;
         }
-        // Do not re-enable the formal runtime while Demo telemetry can still
-        // arrive. The Companion owns the quarantine; the journal owns cleanup.
-        self.store.restore()?;
+        // Preserve Demo quarantine until all core cleanup has completed.
+        let had_spectator = self.store.spectator_pending();
+        let spectator_error = self.store.restore()?;
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
         }
         crate::demo_test::complete(&self.log, trial.as_deref())?;
-        self.message = Some("原设置已恢复。".into());
+        if self.store.spectator_pending() {
+            self.log.event(
+                "cs2_spectator_restore",
+                "failure",
+                spectator_error
+                    .as_deref()
+                    .or(self.store.spectator_warning().as_deref()),
+            );
+            self.message = Some(format!(
+                "{} {}",
+                if value["preserveSettings"] == true {
+                    "本次启动已结束，游戏设置保持不变；观战原值仍待恢复。"
+                } else {
+                    "帧率与画质已恢复，观战原值仍待恢复。"
+                },
+                spectator_error.unwrap_or_default()
+            ));
+        } else {
+            if had_spectator {
+                self.log.event(
+                    "cs2_spectator_restore",
+                    "success",
+                    Some("stage=restore; originalField=restored"),
+                );
+            }
+            self.message = Some("原设置已恢复。".into());
+        }
+
         Ok(())
     }
     pub fn poll(&mut self) {
@@ -555,6 +582,27 @@ impl ManagedCs2 {
             }
         };
         self.can_preserve = false;
+        if journal["spectatorCfg"] == true {
+            if let Err(error) = crate::cs2_spectator::install(&executable) {
+                journal["spectatorCfg"] = json!(false);
+                journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
+            }
+        }
+        if !preserve {
+            self.log.event(
+                "cs2_spectator_cfg",
+                if journal["spectatorCfg"] == true {
+                    "success"
+                } else {
+                    "failure"
+                },
+                Some(
+                    &json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME,
+                    "runtime":"unverified", "reason":journal["spectatorWarning"]})
+                    .to_string(),
+                ),
+            );
+        }
         if let Some((_, request_id)) = demo {
             journal["demoTestRequestId"] = json!(request_id);
         }
@@ -583,6 +631,9 @@ impl ManagedCs2 {
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
                 ]);
+                if journal["spectatorCfg"] == true {
+                    command.args(["+exec", crate::cs2_spectator::CFG_NAME]);
+                }
             } else {
                 command.args(["-applaunch", "730"]);
             }
@@ -641,7 +692,29 @@ impl ManagedCs2 {
         self.store.backup_directory()
     }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
-        let result = self.recover(confirm_steam_cancelled);
+        let result = self.recover(confirm_steam_cancelled).and_then(|_| {
+            if self.store.load()?.is_none() && self.store.spectator_pending() {
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
+                thread::sleep(Duration::from_millis(1500));
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
+                if let Err(error) = self.store.restore_spectator() {
+                    self.log
+                        .event("cs2_spectator_restore", "failure", Some(&error));
+                    return Err(error);
+                }
+                self.log.event(
+                    "cs2_spectator_restore",
+                    "success",
+                    Some("stage=retry; originalField=restored"),
+                );
+                self.message = Some("观战原值已恢复。".into());
+            }
+            Ok(())
+        });
         if let Err(error) = &result {
             self.message = Some(error.clone());
         }

@@ -153,6 +153,7 @@ async function assertBundleSmoke(outputRoot) {
     'scripts/qualification-supervisor.mjs',
     'scripts/qualification-contract.json',
     'config/gamestate_integration_mizar.cfg.template',
+    'config/mizar_observer.cfg',
     'metadata/artifact.json',
     'metadata/SHA256SUMS',
     'README.txt',
@@ -211,6 +212,12 @@ async function assertBundleSmoke(outputRoot) {
   );
   if (!config.includes('REPLACE_WITH_GSI_TOKEN'))
     throw new Error('qualification 配置模板缺少 token 占位符');
+  if (
+    !(await readFile(join(bundleDir, 'resources/config/mizar_observer.cfg'))).equals(
+      await readFile(join(rootDir, 'config/mizar_observer.cfg')),
+    )
+  )
+    throw new Error('观战 CFG 与固定源文件不一致');
   const scripts = await readFile(join(bundleDir, 'resources/scripts/start.ps1'), 'utf8');
   await assertGsiScriptContract(join(bundleDir, 'resources/scripts'));
   const readme = await readFile(join(bundleDir, 'README.txt'), 'utf8');

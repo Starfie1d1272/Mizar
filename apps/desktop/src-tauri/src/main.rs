@@ -5,6 +5,7 @@ mod cs2_diagnostics;
 mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
+mod cs2_spectator;
 mod cs2_video;
 mod demo_test;
 mod desktop_worker;

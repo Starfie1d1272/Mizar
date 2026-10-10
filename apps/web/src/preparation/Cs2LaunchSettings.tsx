@@ -96,6 +96,9 @@ export function Cs2LaunchSettings() {
               <option value={0}>不限帧（可能导致雷达卡顿）</option>
             </Select>
           </div>
+          {status?.spectatorWarning ? (
+            <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
+          ) : null}
           <p>默认 60 帧／秒，为雷达与 OBS 留出图形资源。30 帧／秒适合资源紧张或 30 帧播出。</p>
           {preferences?.frameRateLimit === 0 ? (
             <StatusBanner tone="danger">
@@ -125,7 +128,10 @@ export function Cs2LaunchSettings() {
         <summary>启动方式与配置恢复</summary>
         <p>无边框窗口 · 分辨率适配工作台</p>
         <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
-        <p>本次启动使用国际服、开发者控制台与 OBS 游戏捕获兼容选项。</p>
+        <p>
+          本次启动使用国际服、开发者控制台与 OBS
+          游戏捕获兼容选项，并加载数字键观战配置，保留个人键位。
+        </p>
         <div>
           <code>-console -allow_third_party_software -worldwide</code>
           <p>
