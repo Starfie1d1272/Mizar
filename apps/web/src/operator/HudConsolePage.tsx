@@ -1310,7 +1310,9 @@ export function HudConsolePage() {
                 gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
               />
             </div>
-            <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
+            {workspace === 'layout' ? (
+              <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
+            ) : null}
           </div>
 
           <div className="hud-console__editor-column">

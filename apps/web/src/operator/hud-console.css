@@ -774,6 +774,16 @@
     flex-direction: column;
     min-height: 0;
     overflow-y: auto;
+    container-type: size;
+  }
+  .hud-console__replay {
+    max-height: 40cqh;
+    overflow-y: auto;
+    gap: var(--mizar-layout-compact);
+    padding: var(--mizar-layout-compact);
+  }
+  .hud-console__status {
+    padding: var(--mizar-layout-compact);
   }
   .hud-console__preview-column > :not(.hud-console__canvas-space) {
     flex-shrink: 0;

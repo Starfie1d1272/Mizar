@@ -32,9 +32,7 @@ export function OfficialResourceStatus() {
     <div aria-label="官方素材缓存状态">
       {status !== 'ready' || !value ? (
         <p role="status">
-          {status === 'loading'
-            ? '正在读取官方素材状态。'
-            : '独立缓存状态暂不可确认；未改变现有素材。'}
+          {status === 'loading' ? '正在读取官方素材状态。' : '暂时无法读取素材状态，请重新检查。'}
         </p>
       ) : (
         <ul>
@@ -43,21 +41,19 @@ export function OfficialResourceStatus() {
               <strong>
                 {resource.packId === 'official:epl-default' ? 'EPL 演练素材' : resource.packId}
               </strong>
-              <p>
-                {phases[resource.phase] ?? '状态无法识别'} ·{' '}
-                {resource.activeVersion ? '有活动版本' : '尚无活动缓存'}
-              </p>
-              {resource.phase === 'missing' ? <p>随包素材沿用既有读取路径。</p> : null}
-              {resource.phase === 'downloading' ? (
-                <p>已下载 {resource.downloadedBytes.toLocaleString()} 字节</p>
+              {resource.phase === 'downloading' || resource.phase === 'verifying' ? (
+                <p>{phases[resource.phase]}</p>
               ) : null}
               {resource.failure ? (
                 <StatusBanner tone="warning">
-                  素材处理未完成；请在更新与支持中检查。现有活动版本是否仍可读取需以实际预览为准。
+                  素材处理未完成，请重新检查或查看更新与支持。
                 </StatusBanner>
               ) : null}
               <details>
                 <summary>版本与诊断</summary>
+                <p>
+                  {phases[resource.phase]} · 已下载 {resource.downloadedBytes.toLocaleString()} 字节
+                </p>
                 <p>
                   活动 · {resource.activeVersion ?? '无'}；已准备 ·{' '}
                   {resource.preparedVersion ?? '无'}；可回退 · {resource.rollbackVersion ?? '无'}

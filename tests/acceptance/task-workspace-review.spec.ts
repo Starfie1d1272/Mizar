@@ -411,8 +411,14 @@ test('task workspaces use real local data and keep candidate browsing separate f
       '节目已处于 waiting，真实 Companion 分项收尾确认；浏览器不能验收 Host 游戏与配置',
     );
   } finally {
-    await context.unrouteAll({ behavior: 'wait' });
-    await app.close();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await context.unrouteAll({ behavior: 'wait' });
+    } finally {
+      try {
+        await app.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
   }
 });

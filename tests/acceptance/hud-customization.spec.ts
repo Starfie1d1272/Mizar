@@ -151,9 +151,15 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await program.close();
   } finally {
     resumeService?.();
-    await context.unrouteAll({ behavior: 'wait' });
-    await app.close();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await context.unrouteAll({ behavior: 'wait' });
+    } finally {
+      try {
+        await app.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -277,9 +283,15 @@ test('preset files export, edit, import and activate without replacing resources
     await expect(page.getByRole('button', { name: '导入预设文件', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: '导出预设文件', exact: true })).toBeDisabled();
   } finally {
-    await context.unrouteAll({ behavior: 'wait' });
-    await app.close();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await context.unrouteAll({ behavior: 'wait' });
+    } finally {
+      try {
+        await app.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -342,8 +354,11 @@ test('HUD summaries distinguish loading, unavailable and last confirmed configur
     await expect(page.getByRole('alert').filter({ hasText: /最近确认：Mizar/ })).toBeVisible();
   } finally {
     resume!();
-    await context.unrouteAll({ behavior: 'wait' });
-    await app.close();
+    try {
+      await context.unrouteAll({ behavior: 'wait' });
+    } finally {
+      await app.close();
+    }
   }
 });
 
@@ -446,7 +461,10 @@ test('HUD resource directory targets the single editor by ID, preserves dirty dr
     expect((await app.inject('/local/v1/hud-config')).body).toBe(originalOnAir);
     await missing.close();
   } finally {
-    await context.unrouteAll({ behavior: 'wait' });
-    await app.close();
+    try {
+      await context.unrouteAll({ behavior: 'wait' });
+    } finally {
+      await app.close();
+    }
   }
 });
