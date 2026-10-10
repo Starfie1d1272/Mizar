@@ -567,13 +567,13 @@ it('authenticates the real v1.1 dual signatures transported in the GitHub envelo
     const changed = structuredClone(index);
     mutate(changed);
     carrier = Buffer.from(JSON.stringify(changed));
-    release.assets[0]!.size = carrier.length;
-    release.assets[0]!.digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
+    release.assets[0].size = carrier.length;
+    release.assets[0].digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
     await expect(source.authenticate(release, signal)).rejects.toThrow();
   }
   carrier = Buffer.from(indexBytes);
-  release.assets[0]!.size = carrier.length;
-  release.assets[0]!.digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
+  release.assets[0].size = carrier.length;
+  release.assets[0].digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
   release.id = releaseId + 1;
   await expect(source.authenticate(release, signal)).rejects.toThrow('update_publication_mismatch');
   release.id = releaseId;
