@@ -423,6 +423,7 @@ namespace Mizar.WebInstaller {
       string prepared=await Native(script,"-Mode Prepare -PlanPath \""+path+"\"");
       var info=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(prepared);
       var record=NewPending(plan,target,installer);record.updateStage=Convert.ToString(info["stageRoot"]);record.updatePlanSha256=Hash(Path.Combine(record.updateStage,"plan.json"));record.updateScriptSha256=Hash(Path.Combine(record.updateStage,"update-install.ps1"));record.stage="update-prepared";SavePending(record,true);
+      Exception failure=null;
       try {
         if(progress!=null) progress.Report("installing-core");
         using(var stopped=Process.Start(new ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
@@ -432,13 +433,14 @@ namespace Mizar.WebInstaller {
         VerifiedRuntime(plan,target,false);record.coreResourcesReady=core;
         if(token.IsCancellationRequested) {await RollbackUpdateOwned(record);token.ThrowIfCancellationRequested();}
         File.Delete(PendingPath());return new FreshInstallResult(target,record);
-      } catch(Exception original) {
-        if(record.writerPid>0 && !ProcessStillActive(record.writerPid,record.writerStarted)) {
-          try {await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",record);File.Delete(PendingPath());}
-          catch(Exception recovery) {throw new InstallerRecoveryRequired(target,"更新及自动恢复未完成。请保留现场，关闭旧安装器后重新打开以恢复。",new AggregateException(original,recovery));}
-        }
-        throw;
+      } catch(Exception original) {failure=original;}
+      // The installed .NET Framework compiler is C# 5: recovery awaits belong outside catch.
+      if(File.Exists(PendingPath()) && record.writerPid>0 && !ProcessStillActive(record.writerPid,record.writerStarted)) {
+        try {await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",record);File.Delete(PendingPath());}
+        catch(Exception recovery) {throw new InstallerRecoveryRequired(target,"更新及自动恢复未完成。请保留现场，关闭旧安装器后重新打开以恢复。",new AggregateException(failure,recovery));}
       }
+      System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+      throw new InvalidOperationException("Unreachable");
     }
     static async Task<string> ReadBridgeOutput(StreamReader reader) {
       var result=new System.Text.StringBuilder(); var buffer=new char[1024];
