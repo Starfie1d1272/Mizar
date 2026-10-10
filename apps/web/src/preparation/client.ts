@@ -72,8 +72,7 @@ const toolPaths = {
 export async function openTool(tool: Tool, presetId?: string) {
   if (window.__TAURI_INTERNALS__)
     await desktopInvoke('open_tool', { tool, ...(tool === 'hud' && presetId ? { presetId } : {}) });
-  else if (tool !== 'hud')
-    window.open(toolPaths[tool], `mizar-${tool === 'bp' ? 'preview' : tool}`);
+  else if (tool !== 'hud') window.open(toolPaths[tool], `mizar-${tool}`);
   else {
     const path = toolPaths.hud + (presetId ? `?preset=${encodeURIComponent(presetId)}` : '');
     // A same-origin named editor preserves its in-flight drafts through its own selection gate.

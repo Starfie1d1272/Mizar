@@ -24,16 +24,22 @@ test('HUD settings preview → save → disk reload → activate → Program', a
   const filePath = join(directory, 'hud.json');
   let store = new HudConfigStore({ filePath });
   let app = buildApp({ hudConfigStore: store });
+  let serviceReady = Promise.resolve();
+  let resumeService: () => void = () => undefined;
+  const inFlight = new Set<Promise<unknown>>();
   try {
     await app.ready();
     await context.route(/\/(?:operator|local\/v1)\/hud-config$/, async (route) => {
+      await serviceReady;
       const request = route.request();
-      const response = await app.inject({
+      const injection = app.inject({
         method: request.method() as 'GET' | 'POST',
         url: new URL(request.url()).pathname,
         headers: request.headers(),
         ...(request.postData() === null ? {} : { payload: request.postData()! }),
       });
+      inFlight.add(injection);
+      const response = await injection.finally(() => inFlight.delete(injection));
       await route.fulfill({
         status: response.statusCode,
         headers: response.headers as Record<string, string>,
@@ -80,11 +86,16 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await page.getByRole('button', { name: '另存为', exact: true }).click();
     await expect(page.getByText('已另存为「内容定制验收」。', { exact: true })).toBeVisible();
     expect(store.getState().etag).toBe(originalEtag);
+    serviceReady = new Promise<void>((resolve) => {
+      resumeService = resolve;
+    });
+    await Promise.all(inFlight);
     await app.close();
     store = new HudConfigStore({ filePath });
     await store.load();
     app = buildApp({ hudConfigStore: store });
     await app.ready();
+    resumeService();
     await page.reload();
     await page.getByRole('button', { name: '预设', exact: true }).click();
     await page
@@ -139,6 +150,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     ).toEqual(resolved);
     await program.close();
   } finally {
+    resumeService?.();
     await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });

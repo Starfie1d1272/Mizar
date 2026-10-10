@@ -100,12 +100,14 @@ export function LocalTournamentEditor({
   scope = 'match',
   eventId,
   onDirtyChange,
+  onCancel,
   canSave = true,
 }: {
   readonly canSave?: boolean;
   readonly scope?: 'match' | 'resources';
   readonly document?: MatchDocumentV1 | null;
   readonly eventId?: string;
+  readonly onCancel?: () => void;
   readonly onDirtyChange?: (dirty: boolean) => void;
   readonly section?: 'details' | 'roster' | 'maps' | 'overview';
   readonly view: LocalTournamentView | null;
@@ -123,6 +125,7 @@ export function LocalTournamentEditor({
   const [eventPool, setEventPool] = useState<readonly string[]>(event?.mapPool ?? []);
   const [eventBo3Rules, setEventBo3Rules] = useState(event?.bo3Rules ?? DEFAULT_BO3_BP_RULES);
   const [savedMessage, setSavedMessage] = useState('');
+  const [editingMeta, setEditingMeta] = useState(section === 'details');
   const previousDocument = useRef(selected);
   useEffect(() => {
     const previous = previousDocument.current;
@@ -209,7 +212,11 @@ export function LocalTournamentEditor({
           }}
         >
           {section === 'details' || section === 'overview' ? (
-            <details open={section === 'details'} className="match-meta-edit">
+            <details
+              open={editingMeta}
+              onToggle={(change) => setEditingMeta(change.currentTarget.open)}
+              className="match-meta-edit"
+            >
               <summary>
                 场次信息 · {draft.format.toUpperCase()} · {draft.stageLabel || '阶段待填写'}
               </summary>
@@ -265,7 +272,7 @@ export function LocalTournamentEditor({
           ) : null}
           {section === 'roster' || section === 'overview'
             ? (['a', 'b'] as const).map((side) => (
-                <fieldset key={side}>
+                <fieldset key={side} hidden={section === 'overview' && editingMeta}>
                   <legend>{draft.entrants[side].name || `队伍 ${side.toUpperCase()}`}</legend>
                   <details open={section === 'roster'}>
                     <summary>编辑队伍资料</summary>
@@ -425,10 +432,7 @@ export function LocalTournamentEditor({
             });
           }}
         >
-          <p>
-            保存会传播赛事名称、Logo 与品牌色至同赛事所有比赛；仅仍沿用旧默认的比赛同步地图池。BO3
-            默认规则供 BP 准备使用；已保存禁选步骤不改写。包含当前本场时可能立即刷新节目。
-          </p>
+          <p>保存应用到同赛事比赛；已保存 BP 保留。</p>
           {section === 'details' || section === 'overview' ? (
             <>
               <label>
@@ -513,9 +517,26 @@ export function LocalTournamentEditor({
               </fieldset>
             </>
           ) : null}
-          <Button type="submit" disabled={!canSave}>
-            保存赛事资料
-          </Button>
+          <div className="event-editor-actions">
+            <Button type="submit" variant="primary" disabled={!canSave}>
+              保存赛事资料
+            </Button>
+            {onCancel ? (
+              <Button
+                onClick={() => {
+                  setEventName(event.name);
+                  setEventLogo(event.logoUrl);
+                  setEventTheme(event.themeColor);
+                  setEventPool(event.mapPool);
+                  setEventBo3Rules(event.bo3Rules ?? DEFAULT_BO3_BP_RULES);
+                  setSavedMessage('');
+                  onCancel();
+                }}
+              >
+                取消编辑
+              </Button>
+            ) : null}
+          </div>
         </form>
       ) : null}
       {scope === 'resources' &&

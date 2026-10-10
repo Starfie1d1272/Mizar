@@ -9,6 +9,7 @@ type Story = StoryObj<typeof meta>;
 export const Tool: Story = {
   args: {
     title: '节目预览',
+    fill: true,
     children: (
       <main>
         <Panel>

@@ -116,12 +116,13 @@ export function EventMatchWorkspace({
               key={eventId}
               mode="create"
               initialEventId={event?.eventId ?? ''}
+              onCancel={() => setCreating(false)}
               beforeApply={() => canWrite && canChange()}
               action={action}
               onSelected={() => window.location.assign('/?tab=match')}
             />
           </Panel>
-        ) : match ? (
+        ) : !editing && match ? (
           <>
             <MatchDocumentView document={match} section="details" />
             <div className="preparation-actions">
@@ -162,14 +163,14 @@ export function EventMatchWorkspace({
               <MatchDocumentView document={match} section="maps" />
             </details>
           </>
-        ) : (
+        ) : !editing ? (
           <Panel>
             <h2>比赛详情</h2>
             <p>选择赛程中的一场查看双方、名单与地图；浏览不会自动载入。</p>
           </Panel>
-        )}
+        ) : null}
         {event ? (
-          <div hidden={!editing} className="event-inline-edit" key={eventId}>
+          <div hidden={!editing || creating} className="event-inline-edit" key={eventId}>
             <h2>赛事品牌与默认规则 · {event.name}</h2>
             <LocalTournamentEditor
               eventId={eventId}
@@ -178,6 +179,7 @@ export function EventMatchWorkspace({
               action={action}
               scope="resources"
               canSave={canWrite}
+              onCancel={() => setEditing(false)}
               section="overview"
               onDirtyChange={markDirty}
             />

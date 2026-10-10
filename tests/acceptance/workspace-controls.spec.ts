@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { WebSocketRoute } from '@playwright/test';
 import { radarSnapshotSchema } from '../../packages/protocol/src/radar.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
@@ -85,6 +85,14 @@ test('OBS setup buttons launch the configured target, configure, check and repai
     });
   expect(requests.some((request) => request.path.endsWith('/ensure'))).toBe(false);
   await expect(page.getByRole('button', { name: '检查配置', exact: true })).toHaveCount(0);
+  const evidence = process.env.MIZAR_REVIEW_FIXTURE_SCREENSHOTS;
+  if (evidence) {
+    await mkdir(evidence, { recursive: true });
+    await page.screenshot({
+      path: join(evidence, 'obs-connected-contract-fixture.png'),
+      fullPage: false,
+    });
+  }
   await page.locator('summary').filter({ hasText: 'WebSocket 连接设置' }).click();
   await page.getByLabel('WebSocket 端口').fill('4466');
   await page.getByLabel('WebSocket 密码').fill('ui-test-password');
@@ -95,6 +103,11 @@ test('OBS setup buttons launch the configured target, configure, check and repai
   await page.waitForTimeout(3200);
   await expect(page.getByLabel('WebSocket 密码')).toBeFocused();
   await expect(page.getByLabel('WebSocket 密码')).toHaveValue('ui-test-password');
+  if (evidence)
+    await page.screenshot({
+      path: join(evidence, 'obs-editing-contract-fixture.png'),
+      fullPage: false,
+    });
   await page.getByRole('button', { name: '保存并测试', exact: true }).click();
   await expect
     .poll(() => requests)

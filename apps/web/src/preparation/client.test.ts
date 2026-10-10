@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { productionAction, type Production } from './client';
+import { openTool, productionAction, type Production } from './client';
 
 const preparation: Production = { mode: 'preparation', revision: 'one', canEnter: true };
 
@@ -116,4 +116,16 @@ describe('managed CS2 production entry and cleanup', () => {
     await expect(productionAction('finish', preparation)).rejects.toThrow('窗口未打开');
     expect(calls).toEqual(['/operator/production', 'present_production', 'finish_managed_cs2']);
   });
+});
+
+it('keeps formal BP and independent Program preview in separate browser tools', async () => {
+  const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  try {
+    await openTool('bp');
+    await openTool('preview');
+    expect(open.mock.calls.map(([url]) => url)).toEqual(['/operator/bp', '/preview']);
+    expect(open.mock.calls[0]![1]).not.toBe(open.mock.calls[1]![1]);
+  } finally {
+    open.mockRestore();
+  }
 });

@@ -779,18 +779,17 @@
   overflow: auto;
   box-sizing: border-box;
 }
+.hud-console__preview-column:fullscreen .hud-console__canvas-space {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: flex;
+  justify-content: center;
+}
 .hud-console__preview-column:fullscreen .hud-console__canvas-frame {
-  width: min(100%, calc((100dvh - 240px) * 16 / 9));
+  width: min(100%, calc(100cqh * 16 / 9));
   align-self: center;
   flex-shrink: 0;
-}
-
-@media (min-width: 1200px) and (min-height: 900px) {
-  .hud-console__preview-column:not(:fullscreen) {
-    position: sticky;
-    top: 1rem;
-    align-self: start;
-  }
 }
 
 .hud-console__versions {
@@ -815,21 +814,58 @@
   font-size: var(--mizar-type-size-small);
 }
 
-/* Keep the canvas and version controls inside the desktop window. */
-@media (min-width: 1200px) and (min-height: 800px) {
+/* Allocate the editor and preview from the actual remaining tool window. */
+@media (min-width: 1200px) {
   .hud-console {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     padding: var(--mizar-layout-padding);
     min-height: 0;
+  }
+  .hud-console > :not(.hud-console__layout) {
+    flex-shrink: 0;
   }
   .hud-console__versions {
     margin-block: 0;
   }
+  .hud-console__layout {
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+  }
+  .hud-console__preview-column:not(:fullscreen) {
+    position: static;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .hud-console__preview-column > :not(.hud-console__canvas-space) {
+    flex-shrink: 0;
+  }
+  .hud-console__canvas-space {
+    flex: 1;
+    min-height: 0;
+    container-type: size;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
   .hud-console__canvas-frame {
-    width: min(100%, calc((100dvh - 650px) * 16 / 9));
-    margin-inline: auto;
+    width: min(100%, calc(100cqh * 16 / 9));
+    flex-shrink: 0;
+  }
+  .hud-console__preview-caption {
+    margin-block: var(--mizar-layout-compact);
+  }
+  .hud-console__editor-column {
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .hud-console__editor-fieldset {
-    max-height: calc(100dvh - 460px);
+    min-height: 0;
     overflow-y: auto;
     scrollbar-gutter: stable;
   }
@@ -840,8 +876,6 @@
     padding-block: var(--mizar-layout-gap);
     z-index: 1;
   }
-}
-@media (min-width: 1200px) and (min-height: 800px) {
   .hud-console__replay {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: center;

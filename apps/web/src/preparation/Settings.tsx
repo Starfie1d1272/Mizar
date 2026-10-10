@@ -128,7 +128,7 @@ export function Settings({ tab }: { tab: string }) {
           </Panel>
         </div>
       ) : tab === 'obs' ? (
-        <div className="obs-setup">
+        <div className="obs-setup" data-connected={obs?.connection === 'connected'}>
           <header className="obs-setup__heading">
             <h2>
               {new URLSearchParams(window.location.search).has('prepare')
@@ -290,10 +290,7 @@ export function Settings({ tab }: { tab: string }) {
               >
                 修复 Mizar 场景
               </Button>
-              <p>
-                修复前停止推流与录制。检查通过后，在 OBS
-                中核对游戏画面、音频电平和直播输出音轨，并录制试听。
-              </p>
+              <p>在 OBS 核对游戏画面与声音，并录制试听。</p>
               <Button
                 disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
                 onClick={() =>

@@ -928,13 +928,11 @@ export function HudConsolePage() {
   };
 
   return (
-    <ToolShell title="HUD 编辑器">
+    <ToolShell title="HUD 编辑器" fill>
       <main className="hud-console" data-surface="hud-console">
         <header className="hud-console__header">
           <div>
-            <p className="hud-console__eyebrow">Mizar</p>
             <h1>HUD 编辑器</h1>
-            <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
           </div>
           <div className="hud-console__header-meta">
             <span>连接状态</span>
@@ -954,10 +952,10 @@ export function HudConsolePage() {
         <section className="hud-console__versions" aria-label="编辑与正式播出版本">
           <div>
             <strong>正在编辑 · {presetDraft.name}</strong>
-            <span>
-              {hasDirtyDraft ? '未保存修改' : '已保存资源'} · 资源版本{' '}
-              {hudEditor.revision ?? '读取中'}
-            </span>
+            <details>
+              <summary>{hasDirtyDraft ? '未保存修改' : '已保存资源'}</summary>
+              <span>资源版本 {hudEditor.revision ?? '读取中'}</span>
+            </details>
           </div>
           <div>
             <strong>
@@ -968,14 +966,17 @@ export function HudConsolePage() {
                   ? '正在读取'
                   : '无法确认'}
             </strong>
-            <span role={onAir.status === 'error' ? 'alert' : 'status'}>
-              {onAir.status === 'ready'
-                ? `启用版本 ${onAir.activeRevision}`
-                : onAir.activeRevision
-                  ? `最近确认：${onAir.current.preset.name} · 版本 ${onAir.activeRevision}；当前状态待重查`
-                  : '尚无已确认的播出配置'}
-              {onAir.status === 'ready' && activationStale ? ' · 有保存尚未应用' : ''}
-            </span>
+            <details>
+              <summary>播出版本与状态</summary>
+              <span role={onAir.status === 'error' ? 'alert' : 'status'}>
+                {onAir.status === 'ready'
+                  ? `启用版本 ${onAir.activeRevision}`
+                  : onAir.activeRevision
+                    ? `最近确认：${onAir.current.preset.name} · 版本 ${onAir.activeRevision}；当前状态待重查`
+                    : '尚无已确认的播出配置'}
+                {onAir.status === 'ready' && activationStale ? ' · 有保存尚未应用' : ''}
+              </span>
+            </details>
           </div>
           <Button
             disabled={activationReasons.length > 0}
@@ -1272,38 +1273,40 @@ export function HudConsolePage() {
               </section>
             ) : null}
 
-            <HudCanvasPreview
-              videoBackground={
-                mapBackground && replayFixture?.video && replaySession ? (
-                  <ReplayVideoBackground
-                    key={replayFixture.video.url}
-                    source={replayFixture.video}
-                    session={replaySession}
-                    onFallback={() => setPreviewSource('fixture')}
-                  />
-                ) : undefined
-              }
-              mapBackground={mapBackground}
-              radarSnapshot={activeRadarSnapshot}
-              radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
-              presentationRevision={
-                activePreviewSource === 'replay' ? replayState.presentationRevision : 0
-              }
-              canvasFrameRef={canvasFrameRef}
-              connectionState={program.state}
-              editorMode={workspace === 'layout' ? 'layout' : 'preview'}
-              editorInteractive={editorReady && workspace === 'layout'}
-              liveSource={activePreviewSource === 'current-live'}
-              onRadarResizePointerDown={workspace === 'layout' ? startRadarResize : undefined}
-              onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
-              resolvedPreset={previewResolved}
-              selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
-              showCenter={workspace === 'layout' && showCenter}
-              showGrid={workspace === 'layout' && showGrid}
-              showSafeArea={workspace === 'layout' && showSafeArea}
-              snapshot={activeSnapshot}
-              gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
-            />
+            <div className="hud-console__canvas-space">
+              <HudCanvasPreview
+                videoBackground={
+                  mapBackground && replayFixture?.video && replaySession ? (
+                    <ReplayVideoBackground
+                      key={replayFixture.video.url}
+                      source={replayFixture.video}
+                      session={replaySession}
+                      onFallback={() => setPreviewSource('fixture')}
+                    />
+                  ) : undefined
+                }
+                mapBackground={mapBackground}
+                radarSnapshot={activeRadarSnapshot}
+                radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
+                presentationRevision={
+                  activePreviewSource === 'replay' ? replayState.presentationRevision : 0
+                }
+                canvasFrameRef={canvasFrameRef}
+                connectionState={program.state}
+                editorMode={workspace === 'layout' ? 'layout' : 'preview'}
+                editorInteractive={editorReady && workspace === 'layout'}
+                liveSource={activePreviewSource === 'current-live'}
+                onRadarResizePointerDown={workspace === 'layout' ? startRadarResize : undefined}
+                onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
+                resolvedPreset={previewResolved}
+                selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
+                showCenter={workspace === 'layout' && showCenter}
+                showGrid={workspace === 'layout' && showGrid}
+                showSafeArea={workspace === 'layout' && showSafeArea}
+                snapshot={activeSnapshot}
+                gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
+              />
+            </div>
             <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
           </div>
 

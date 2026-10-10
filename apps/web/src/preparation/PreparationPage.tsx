@@ -205,7 +205,7 @@ export function PreparationPage() {
                 资料刷新失败，保留最近资料与草稿供核对；恢复连接前禁止保存。
               </StatusBanner>
             ) : null}
-            {selecting || !match ? (
+            {selecting || (!match && ['match', 'bp'].includes(task)) ? (
               <Panel className="production-selection">
                 <h2>选择本场</h2>
                 <div className="preparation-actions" aria-label="本场选择方式">
@@ -241,6 +241,10 @@ export function PreparationPage() {
                       !matchDirty || window.confirm('本场资料有未保存修改，放弃草稿并创建下一场？')
                     }
                     mode="create"
+                    onCancel={() => {
+                      setSelecting(false);
+                      setSelectionIntent('existing');
+                    }}
                     action={action}
                     onSelected={() => setSelecting(false)}
                   />
@@ -259,19 +263,21 @@ export function PreparationPage() {
                 {selectionIntent === 'online' ? <RivalHubPreparationPanel mode="matches" /> : null}
               </Panel>
             ) : null}
-            <nav className="preparation-tabs" aria-label="本场任务">
-              {tasks.map(([id, label]) => (
-                <Button
-                  key={id}
-                  aria-current={
-                    task === id || (task === 'bp' && id === 'match') ? 'page' : undefined
-                  }
-                  onClick={() => navigateTask(id)}
-                >
-                  {label}
-                </Button>
-              ))}
-            </nav>
+            {match && !selecting ? (
+              <nav className="preparation-tabs" aria-label="本场任务">
+                {tasks.map(([id, label]) => (
+                  <Button
+                    key={id}
+                    aria-current={
+                      task === id || (task === 'bp' && id === 'match') ? 'page' : undefined
+                    }
+                    onClick={() => navigateTask(id)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </nav>
+            ) : null}
             <Cs2Recovery production={production} />
           </>
         ) : null}
@@ -323,7 +329,7 @@ export function PreparationPage() {
           </>
         ) : (
           <>
-            <section hidden={task !== 'match'} aria-label="本场准备工作区">
+            <section hidden={task !== 'match' || selecting || !match} aria-label="本场准备工作区">
               {match ? (
                 <>
                   <div className="match-workspace-heading">
@@ -371,14 +377,9 @@ export function PreparationPage() {
                     />
                   ) : null}
                 </>
-              ) : (
-                <Panel>
-                  <h2>先建立双方，其他资料可以逐步补齐</h2>
-                  <p>已有本地比赛、快速建立 BO 或 RivalHub 候选均可开始；无需先连接游戏设备。</p>
-                </Panel>
-              )}
+              ) : null}
             </section>
-            <section hidden={task !== 'bp'} aria-label="正式 BP 子任务">
+            <section hidden={task !== 'bp' || selecting || !match} aria-label="正式 BP 子任务">
               <div className="match-workspace-heading">
                 <h2>正式 BP · 影响播出</h2>
                 <Button onClick={() => navigateTask('match')}>返回本场准备</Button>
@@ -386,10 +387,10 @@ export function PreparationPage() {
               <p>同一本场上下文；赛前可编辑与播放，无需 CS2 / GSI。返回本场保留资料草稿。</p>
               {visited.has('bp') ? <BpWorkbench /> : null}
             </section>
-            <section hidden={task !== 'picture'} aria-label="画面检查工作区">
+            <section hidden={task !== 'picture' || selecting} aria-label="画面检查工作区">
               {visited.has('picture') ? <PictureWorkspace action={action} /> : null}
             </section>
-            <section hidden={task !== 'check'} aria-label="开播检查工作区">
+            <section hidden={task !== 'check' || selecting} aria-label="开播检查工作区">
               <div className="production-preflight">
                 <Panel>
                   <h2>完成开播所需事项</h2>
@@ -443,7 +444,7 @@ export function PreparationPage() {
                 <AutomaticPreparation />
               ) : null}
             </section>
-            <section hidden={task !== 'finish'} aria-label="恢复与收尾工作区">
+            <section hidden={task !== 'finish' || selecting} aria-label="恢复与收尾工作区">
               <Panel>
                 <h2>恢复与收尾</h2>
                 {production?.cleanup ? (

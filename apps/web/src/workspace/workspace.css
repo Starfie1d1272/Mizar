@@ -284,8 +284,6 @@
   font-size: var(--mizar-type-size-small);
   color: var(--mizar-fg-muted);
 }
-@media (max-height: 210px) {
-}
 .workspace-dock span {
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
@@ -405,11 +403,7 @@
 }
 
 .workspace-dock {
-  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
   container-type: size;
-}
-.workspace-dock > .workspace-direction {
-  grid-template-rows: auto auto auto;
 }
 .workspace-dock > section {
   padding: var(--mizar-layout-compact);

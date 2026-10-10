@@ -85,8 +85,9 @@ export function ProgramPreview({
     }, duration);
     return () => clearTimeout(timer);
   }, [demo, demoIndex, settledKey, frame.key, preview, intro]);
+  const PreviewContainer = standalone ? Panel : 'section';
   return (
-    <Panel className="program-preview-panel">
+    <PreviewContainer className="program-preview-panel">
       {standalone ? null : <h2>节目画面</h2>}
       {allowCurrent ? (
         <Select
@@ -189,7 +190,7 @@ export function ProgramPreview({
       {standalone ? null : (
         <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>
       )}
-    </Panel>
+    </PreviewContainer>
   );
 }
 
