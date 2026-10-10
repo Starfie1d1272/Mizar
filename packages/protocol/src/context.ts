@@ -205,6 +205,17 @@ export const localTournamentStateV1Schema = z.strictObject({
     )
     .max(128),
   matches: z.array(matchDocumentV1Schema).max(256),
+  trashedMatches: z
+    .array(
+      z.strictObject({
+        document: matchDocumentV1Schema,
+        deletedAt: instant,
+        scheduleIndex: z.number().int().min(0).nullable(),
+        scheduleMatchIds: z.array(id).max(256).default([]),
+      }),
+    )
+    .max(256)
+    .default([]),
   selectedMatchId: id.nullable(),
   selectedAt: instant,
 });
