@@ -28,6 +28,19 @@ namespace Mizar.WebInstaller {
     static HttpResponseMessage Response(byte[] bytes) { return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) }; }
     static void Assert(bool condition) { if (!condition) throw new Exception("Assertion failed"); }
     static async Task Reject(Func<Task> action) { try { await action(); } catch { return; } throw new Exception("Expected rejection"); }
+    static void PublicationContract() {
+      // Public-state fixtures only: these are not publisher authentication evidence.
+      var plan=new Plan {schemaVersion=1,kind="nsis-setup",version="9.0.0",name="Mizar-v9.0.0-Windows-x64-Setup.exe",bytes=4,sha256=new string('a',64),gitSha=new string('b',40),contentDigest=new string('c',64),allowExecute=true,publicationRequired=true,coreName="Mizar-v9.0.0-Windows-x64.zip",coreBytes=8,coreSha256=new string('d',64),urls=new[]{"https://github.com/Starfie1d1272/Mizar/releases/download/v9.0.0/Mizar-v9.0.0-Windows-x64-Setup.exe"}};
+      string json="{\"draft\":false,\"prerelease\":false,\"tag_name\":\"v9.0.0\",\"published_at\":\"2020-01-01T00:00:00Z\",\"assets\":[{\"name\":\""+plan.name+"\",\"size\":4,\"digest\":\"sha256:"+plan.sha256+"\",\"browser_download_url\":\""+plan.urls[0]+"\"},{\"name\":\""+plan.coreName+"\",\"size\":8,\"digest\":\"sha256:"+plan.coreSha256+"\",\"browser_download_url\":\"https://github.com/Starfie1d1272/Mizar/releases/download/v9.0.0/"+plan.coreName+"\"}]}";
+      Publication.Check(json,plan);
+      foreach(string bad in new[]{json.Replace("\"draft\":false","\"draft\":true"),json.Replace("\"prerelease\":false","\"prerelease\":true"),json.Replace("2020-01-01","2999-01-01"),json.Replace("\"tag_name\":\"v9.0.0\"","\"tag_name\":\"v8.0.0\""),json.Replace("\"size\":4","\"size\":5"),json.Replace("sha256:"+plan.sha256,"sha256:"+new string('e',64)),json.Replace("sha256:"+plan.coreSha256,"sha256:"+new string('e',64)),json.Replace("github.com/Starfie1d1272/Mizar/releases/download","evil.invalid/download"),json.Replace("\"assets\":[","\"assets\":[] ,\"ignored\":[")}) {
+        bool rejected=false; try {Publication.Check(bad,plan);} catch {rejected=true;} Assert(rejected);
+      }
+      string firstAsset=json.Substring(json.IndexOf("[{",StringComparison.Ordinal)+1,json.IndexOf("},{",StringComparison.Ordinal)-json.IndexOf("[{",StringComparison.Ordinal));
+      bool duplicateDenied=false; try {Publication.Check(json.Replace("[{","["+firstAsset+",{"),plan);} catch {duplicateDenied=true;} Assert(duplicateDenied);
+      plan.publicationRequired=false;
+      bool denied=false; try {Publication.ValidatePlan(plan);} catch {denied=true;} Assert(denied);
+    }
     static async Task Run() {
       string root=Path.Combine(Path.GetTempPath(), "mizar-bootstrap-test-" + Guid.NewGuid());
       try {
@@ -77,6 +90,6 @@ namespace Mizar.WebInstaller {
         }
       } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
-    [STAThread] public static int Main() { try { Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
+    [STAThread] public static int Main() { try { PublicationContract(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
   }
 }
