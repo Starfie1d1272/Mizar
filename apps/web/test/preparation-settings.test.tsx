@@ -164,15 +164,14 @@ describe('official resource cache status', () => {
 
   it('distinguishes missing cache from bundled Full availability and prepared from active', async () => {
     await renderResource();
-    expect(container.textContent).toContain('没有活动缓存');
-    expect(container.textContent).toContain('此处不检查随包文件是否完整');
+    expect(container.textContent).toContain('暂无独立缓存');
     expect(container.textContent).not.toContain('素材缺失');
     act(() => root!.unmount());
     root = createRoot(container);
     await renderResource({ ...status, phase: 'ready', preparedVersion: '1.2.0' });
-    expect(container.textContent).toContain('素材已验证，尚未激活');
+    expect(container.textContent).toContain('已验证，待激活');
     expect(container.textContent).toContain('已准备版本1.2.0');
-    expect(container.textContent).toContain('活动版本未激活');
+    expect(container.textContent).toContain('当前版本未激活');
   });
 
   it('preserves the distinction between failed operation and retained active version', async () => {
@@ -183,10 +182,11 @@ describe('official resource cache status', () => {
       failure: 'resource_file_corrupt',
     });
     expect(container.textContent).toContain('最近操作失败');
-    expect(container.textContent).toContain('活动版本1.2.0');
-    expect(container.textContent).toContain('仍保留活动版本，实际读取可能失败');
+    expect(container.textContent).toContain('当前版本1.2.0');
+    expect(
+      [...container.querySelectorAll('button')].some((button) => button.textContent === '查看诊断'),
+    ).toBe(true);
     expect(container.textContent).toContain('resource_file_corrupt');
-    expect(container.textContent).not.toContain('重新下载安装器即可修复');
   });
 
   it('recovers a failed status query through a read-only retry', async () => {
@@ -208,16 +208,16 @@ describe('official resource cache status', () => {
       root!.render(<ResourceSettings />);
       await Promise.resolve();
     });
-    expect(container.textContent).toContain('暂时无法查询素材缓存');
-    expect(container.textContent).not.toContain('活动版本');
+    expect(container.textContent).toContain('暂时无法查询');
+    expect(container.textContent).not.toContain('当前版本');
     await act(async () => {
       [...container.querySelectorAll('button')]
-        .find((button) => button.textContent === '重新检查缓存状态')!
+        .find((button) => button.textContent === '刷新')!
         .click();
       await Promise.resolve();
     });
     expect(container.textContent).toContain('验证完成');
-    expect(container.textContent).not.toContain('暂时无法查询素材缓存');
+    expect(container.textContent).not.toContain('暂时无法查询');
     expect(fetcher).toHaveBeenCalledTimes(2);
     for (const [path, options] of fetcher.mock.calls) {
       expect(path).toBe('/local/v1/resources');

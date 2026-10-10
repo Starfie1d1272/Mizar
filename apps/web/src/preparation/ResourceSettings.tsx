@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Button, Panel, StatusBanner } from '../ui';
+import { openTool } from './client';
 
 const phases = {
-  missing: '没有活动缓存',
+  missing: '暂无独立缓存',
   downloading: '正在准备素材',
   verifying: '正在验证素材',
   ready: '验证完成',
@@ -61,27 +62,25 @@ export function ResourceSettings() {
 
   return (
     <Panel className="settings-card">
-      <h2>官方示例素材</h2>
-      <p>
-        查看素材缓存状态。没有活动缓存时，Full
-        版本仍会尝试读取随包素材；此处不检查随包文件是否完整。
-      </p>
+      <h2>示例素材</h2>
       {loading ? (
-        <p role="status">正在读取缓存状态…</p>
+        <p role="status">正在查询…</p>
       ) : resources === null ? (
-        <StatusBanner tone="warning">暂时无法查询素材缓存，请重新检查或导出诊断包。</StatusBanner>
+        <StatusBanner tone="warning">暂时无法查询，请刷新。</StatusBanner>
       ) : resources.length === 0 ? (
-        <p>没有配置官方素材缓存。</p>
+        <p>暂无独立缓存。</p>
       ) : (
         resources.map((resource) => (
           <div key={resource.packId}>
             <p>
               {resource.packId === 'official:epl-default' ? 'EPL 官方示例' : resource.packId} ·{' '}
-              {phases[resource.phase]}
+              {resource.phase === 'ready' && !resource.activeVersion
+                ? '已验证，待激活'
+                : phases[resource.phase]}
             </p>
             <dl className="settings-identity">
               <div>
-                <dt>活动版本</dt>
+                <dt>当前版本</dt>
                 <dd>{resource.activeVersion ?? '未激活'}</dd>
               </div>
               {resource.preparedVersion ? (
@@ -91,26 +90,26 @@ export function ResourceSettings() {
                 </div>
               ) : null}
             </dl>
-            {resource.phase === 'ready' && !resource.activeVersion ? (
-              <p>素材已验证，尚未激活。</p>
-            ) : null}
             {resource.phase === 'failed' || resource.phase === 'incompatible' ? (
-              <StatusBanner tone="warning">
-                {resource.activeVersion
-                  ? '仍保留活动版本，实际读取可能失败。'
-                  : '当前没有活动缓存。'}
-                请导出诊断包排查。应用内暂不提供素材重新下载；安装未完成时，请回到安装器查看失败提示并重试。
-              </StatusBanner>
-            ) : null}
-            {resource.failure ? (
-              <details className="settings-details">
-                <summary>错误信息</summary>
-                <code>{resource.failure}</code>
-              </details>
+              <Button onClick={() => void openTool('diagnostics')}>查看诊断</Button>
             ) : null}
           </div>
         ))
       )}
+      <details className="settings-details">
+        <summary>详情</summary>
+        {resources
+          ?.filter((resource) => resource.failure)
+          .map((resource) => (
+            <p key={resource.packId}>
+              <code>{resource.failure}</code>
+            </p>
+          ))}
+        <p>缓存状态不代表随包素材是否完整。没有活动缓存时，Full 版本仍会尝试读取随包素材。</p>
+        <p>
+          刷新只查询状态。安装未完成时，可回安装器查看失败提示并重试；其他读取问题请导出诊断包排查。
+        </p>
+      </details>
       <div className="preparation-actions">
         <Button
           disabled={loading}
@@ -120,7 +119,7 @@ export function ResourceSettings() {
             setRefresh((value) => value + 1);
           }}
         >
-          重新检查缓存状态
+          刷新
         </Button>
       </div>
     </Panel>
