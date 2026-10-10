@@ -375,7 +375,7 @@ impl ManagedCs2 {
             .is_some();
         let preferences = self.store.preferences()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -461,7 +461,7 @@ impl ManagedCs2 {
                     Some("stage=restore; originalField=restored"),
                 );
             }
-            self.message = Some("原设置已恢复。".into());
+            self.message = Some(spectator_error.unwrap_or_else(|| "原设置已恢复。".into()));
         }
 
         Ok(())
@@ -603,8 +603,23 @@ impl ManagedCs2 {
                 ),
             );
         }
-        if let Some((_, request_id)) = demo {
+        if let Some((argument, request_id)) = demo {
             journal["demoTestRequestId"] = json!(request_id);
+            journal["demoPlaybackCfg"] = crate::demo_test::playback_cfg_plan(request_id, argument)?;
+            self.store.save(&journal)?;
+            if let Err((error, created)) = crate::demo_test::install_playback_cfg(&journal) {
+                // A create_new collision never grants ownership of an existing file.
+                // Keep core configuration recovery available after a refused install.
+                if !created {
+                    if let Some(object) = journal.as_object_mut() {
+                        object.remove("demoPlaybackCfg");
+                    }
+                } else {
+                    journal["demoPlaybackCfgError"] = json!(error);
+                }
+                self.store.save(&journal)?;
+                return Err(error);
+            }
         }
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
@@ -637,8 +652,13 @@ impl ManagedCs2 {
             } else {
                 command.args(["-applaunch", "730"]);
             }
-            if let Some((argument, _)) = demo {
-                command.args(["+playdemo", argument]);
+            if demo.is_some() {
+                command.args([
+                    "+exec",
+                    journal["demoPlaybackCfg"]["name"]
+                        .as_str()
+                        .ok_or("Demo 播放 CFG 名称缺失。")?,
+                ]);
             }
             command
                 .creation_flags(0x08000000)
@@ -712,6 +732,21 @@ impl ManagedCs2 {
                     Some("stage=retry; originalField=restored"),
                 );
                 self.message = Some("观战原值已恢复。".into());
+            }
+            if self.store.load()?.is_none() && self.store.playback_cleanup_pending() {
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再清理试播文件。".into());
+                }
+                thread::sleep(Duration::from_millis(1500));
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再清理试播文件。".into());
+                }
+                self.store.restore_playback_cleanup().map_err(|error| {
+                    self.log
+                        .event("demo_playback_cleanup", "failure", Some(&error));
+                    error
+                })?;
+                self.message = Some("原设置已恢复，试播文件已清理。".into());
             }
             Ok(())
         });

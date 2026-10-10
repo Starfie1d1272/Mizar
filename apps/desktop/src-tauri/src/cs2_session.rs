@@ -225,6 +225,124 @@ impl SessionStore {
         }
         Ok(())
     }
+    fn playback_cleanup_directory(&self) -> PathBuf {
+        self.root.join("demo-playback-cleanup")
+    }
+    // Handoff ownership before clearing the core journal. Legacy journals are
+    // supported too; if persistence fails, core restoration still proceeds and
+    // the original journal remains the durable ownership evidence.
+    fn preserve_playback_cleanup(&self, value: &Value) -> Result<(), String> {
+        if value.get("demoPlaybackCfg").is_none() {
+            return Ok(());
+        }
+        let id = crate::demo_test::playback_cleanup_id(value)?;
+        let path = self.playback_cleanup_directory().join(format!("{id}.json"));
+        let journal = json!({"executable":value["executable"],
+            "demoTestRequestId":value["demoTestRequestId"], "demoPlaybackCfg":value["demoPlaybackCfg"], "demoPlaybackCfgError":value["demoPlaybackCfgError"]});
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                let previous = self.read_playback_cleanup(&path)?;
+                if previous["journal"] != journal {
+                    return Err("试播文件清理记录冲突，原记录仍保留。".into());
+                }
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(io_error("试播文件清理记录无法核实，原记录仍保留。", &error)),
+        }
+        let record = json!({"version":1,"journal":journal});
+        atomic_write(
+            &path,
+            &serde_json::to_vec_pretty(&record)
+                .map_err(|e| json_error("试播文件清理记录无法保存。", &e))?,
+        )
+    }
+    fn read_playback_cleanup(&self, path: &Path) -> Result<Value, String> {
+        let metadata =
+            fs::symlink_metadata(path).map_err(|e| io_error("试播文件清理记录无法读取。", &e))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
+            return Err("试播文件清理记录格式或大小异常，原记录仍保留。".into());
+        }
+        let record: Value = serde_json::from_slice(
+            &fs::read(path).map_err(|e| io_error("试播文件清理记录无法读取。", &e))?,
+        )
+        .map_err(|e| json_error("试播文件清理记录无法解析。", &e))?;
+        let id = crate::demo_test::playback_cleanup_id(&record["journal"])?;
+        if record["version"] != 1
+            || path.file_name() != Some(std::ffi::OsStr::new(&format!("{id}.json")))
+        {
+            return Err("试播文件清理记录身份无效，原记录仍保留。".into());
+        }
+        Ok(record)
+    }
+    pub fn playback_cleanup_pending(&self) -> bool {
+        match fs::read_dir(self.playback_cleanup_directory()) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        }
+    }
+    /// Explicit retry only, after caller independently confirms no CS2 runs.
+    pub fn restore_playback_cleanup(&self) -> Result<(), String> {
+        let entries = match fs::read_dir(self.playback_cleanup_directory()) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(io_error("试播文件清理目录无法读取。", &e)),
+        };
+        let mut errors = Vec::new();
+        for (index, entry) in entries.enumerate() {
+            if index >= 128 {
+                errors.push("试播文件清理记录过多，请打开备份目录检查。".into());
+                break;
+            }
+            let result = (|| {
+                let path = entry
+                    .map_err(|e| io_error("试播文件清理记录无法枚举。", &e))?
+                    .path();
+                let mut record = self.read_playback_cleanup(&path)?;
+                if let Err(error) = crate::demo_test::cleanup_playback_cfg(&record["journal"]) {
+                    record["warning"] = json!(error);
+                    atomic_write(
+                        &path,
+                        &serde_json::to_vec_pretty(&record)
+                            .map_err(|e| json_error("试播文件清理诊断无法保存。", &e))?,
+                    )
+                    .map_err(|e| format!("{error} 诊断未更新，原记录仍保留：{e}"))?;
+                    return Err(error);
+                }
+                fs::remove_file(path)
+                    .map_err(|e| io_error("试播文件已清理，清理记录仍待重试。", &e))
+            })();
+            if let Err(error) = result {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "原画质和帧率恢复不受影响；试播文件清理待重试：{}",
+                errors.join(" ")
+            ))
+        }
+    }
+    fn finish_core_restore(
+        &self,
+        handoff: Result<(), String>,
+        spectator_error: Option<String>,
+    ) -> Result<Option<String>, String> {
+        let playback_error = match handoff {
+            Ok(()) => {
+                fs::remove_file(self.journal_path())
+                    .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())?;
+                self.restore_playback_cleanup().err()
+            }
+            Err(error) => Some(format!(
+                "原画质和帧率已恢复；清理证据转存失败，原启动记录仍保留：{error}"
+            )),
+        };
+        let warnings: Vec<_> = spectator_error.into_iter().chain(playback_error).collect();
+        Ok((!warnings.is_empty()).then(|| warnings.join(" ")))
+    }
     pub fn preferences(&self) -> Result<Preferences, String> {
         match fs::read(self.root.join("preferences.json")) {
             Ok(bytes) => Preferences::from_json(
@@ -414,6 +532,7 @@ impl SessionStore {
         if unconfirmed_launch(&value) {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
         }
+        let playback_handoff = self.preserve_playback_cleanup(&value);
         if value["version"] == 3 {
             if value["preserveSettings"] != true
                 || [
@@ -439,9 +558,7 @@ impl SessionStore {
             }
             // Nothing was owned or changed. In particular, never replace game
             // writes made during this session with an incident snapshot.
-            return fs::remove_file(self.journal_path())
-                .map(|_| None)
-                .map_err(|_| "启动记录尚未清理，请重试。".into());
+            return self.finish_core_restore(playback_handoff, None);
         }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
         if path.file_name().and_then(|n| n.to_str()) != Some("cs2_video.txt") || !path.is_absolute()
@@ -495,9 +612,7 @@ impl SessionStore {
         // Optional errors retain their own original + diagnostic and cannot
         // prevent completion of the existing FPS/video transaction.
         let spectator_error = self.restore_spectator().err();
-        fs::remove_file(self.journal_path())
-            .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())?;
-        Ok(spectator_error)
+        self.finish_core_restore(playback_handoff, spectator_error)
     }
 }
 
@@ -578,6 +693,118 @@ mod tests {
         fs::write(cfg.join("crosshair.cfg"), "cl_crosshairsize 2\n").unwrap();
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
+    }
+    #[test]
+    fn changed_or_partially_written_demo_cfg_never_blocks_core_restore_and_can_retry() {
+        for partial in [false, true] {
+            let (root, video, machine, executable, store) = frame_setup();
+            let video_before = fs::read(&video).unwrap();
+            let machine_before = fs::read(&machine).unwrap();
+            let mut journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1440, 810).unwrap(),
+                )
+                .unwrap();
+            assert_ne!(fs::read(&video).unwrap(), video_before);
+            assert_ne!(fs::read(&machine).unwrap(), machine_before);
+            let id = crate::demo_test::request_id().unwrap();
+            journal["demoTestRequestId"] = json!(id);
+            journal["demoPlaybackCfg"] =
+                crate::demo_test::playback_cfg_plan(&id, "\"D:/sample.dem\"").unwrap();
+            store.save(&journal).unwrap();
+            let path = root
+                .join("game/csgo/cfg")
+                .join(journal["demoPlaybackCfg"]["name"].as_str().unwrap());
+            if partial {
+                let (error, created) =
+                    crate::demo_test::install_playback_cfg_with(&journal, |file, bytes| {
+                        file.write_all(&bytes[..7])?;
+                        Err(std::io::Error::from_raw_os_error(5))
+                    })
+                    .unwrap_err();
+                assert!(created);
+                assert!(error.contains("osCode=5"));
+                journal["demoPlaybackCfgError"] = json!(error);
+                store.save(&journal).unwrap();
+            } else {
+                crate::demo_test::install_playback_cfg(&journal).unwrap();
+                fs::write(&path, b"external edit").unwrap();
+            }
+            let external = fs::read(&path).unwrap();
+            let warning = store.restore().unwrap().unwrap();
+            assert!(warning.contains("试播文件清理待重试"));
+            assert!(store.load().unwrap().is_none());
+            assert_eq!(fs::read(&video).unwrap(), video_before);
+            assert_eq!(fs::read(&machine).unwrap(), machine_before);
+            assert_eq!(fs::read(&path).unwrap(), external);
+            let restarted = SessionStore::new(root.clone());
+            assert!(restarted.playback_cleanup_pending());
+            let record_path = restarted
+                .playback_cleanup_directory()
+                .join(format!("{id}.json"));
+            let record = restarted.read_playback_cleanup(&record_path).unwrap();
+            assert_eq!(
+                record["journal"]["demoPlaybackCfg"],
+                journal["demoPlaybackCfg"]
+            );
+            assert!(record["warning"].as_str().unwrap().contains("已变化"));
+            if partial {
+                assert!(record["journal"]["demoPlaybackCfgError"]
+                    .as_str()
+                    .unwrap()
+                    .contains("osCode=5"));
+            }
+            assert!(restarted.restore_playback_cleanup().is_err());
+            assert_eq!(fs::read(&path).unwrap(), external);
+            fs::write(
+                &path,
+                journal["demoPlaybackCfg"]["content"].as_str().unwrap(),
+            )
+            .unwrap();
+            restarted.restore_playback_cleanup().unwrap();
+            restarted.restore_playback_cleanup().unwrap();
+            assert!(!path.exists());
+            assert!(!restarted.playback_cleanup_pending());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn failed_cleanup_handoff_restores_core_and_keeps_original_ownership_journal() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let video_before = fs::read(&video).unwrap();
+        let machine_before = fs::read(&machine).unwrap();
+        let mut journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        let id = crate::demo_test::request_id().unwrap();
+        journal["demoTestRequestId"] = json!(id);
+        journal["demoPlaybackCfg"] =
+            crate::demo_test::playback_cfg_plan(&id, "\"D:/sample.dem\"").unwrap();
+        store.save(&journal).unwrap();
+        crate::demo_test::install_playback_cfg(&journal).unwrap();
+        fs::write(store.playback_cleanup_directory(), b"occupied").unwrap();
+        assert!(store
+            .restore()
+            .unwrap()
+            .unwrap()
+            .contains("原启动记录仍保留"));
+        assert_eq!(fs::read(&video).unwrap(), video_before);
+        assert_eq!(fs::read(&machine).unwrap(), machine_before);
+        assert_eq!(
+            store.load().unwrap().unwrap()["demoPlaybackCfg"],
+            journal["demoPlaybackCfg"]
+        );
+        fs::remove_file(store.playback_cleanup_directory()).unwrap();
+        assert!(store.restore().unwrap().is_none());
+        assert!(store.load().unwrap().is_none());
+        assert!(!store.playback_cleanup_pending());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn optional_error_evidence_retains_system_codes_and_json_positions_without_input_contents() {

@@ -44,6 +44,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   if (
     !status?.pending &&
     !status?.spectatorRecoveryPending &&
+    !status?.demoCleanupPending &&
     !phase &&
     !feedback &&
     !status?.message
@@ -54,6 +55,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
     <StatusBanner
       tone={
         status?.spectatorRecoveryPending ||
+        status?.demoCleanupPending ||
         status?.canPreserve ||
         (status?.pending &&
           !uncertain &&
@@ -80,9 +82,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                     : 'CS2 原配置尚未恢复'
               : status?.spectatorRecoveryPending
                 ? '观战原值尚未恢复'
-                : status?.canPreserve
-                  ? '未应用游戏设置，原始配置已备份'
-                  : '原设置已恢复'}
+                : status?.demoCleanupPending
+                  ? '原设置已恢复，试播文件待清理'
+                  : status?.canPreserve
+                    ? '未应用游戏设置，原始配置已备份'
+                    : '原设置已恢复'}
         </strong>
         {status?.canPreserve ? (
           <p>
@@ -110,6 +114,12 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         {status?.spectatorRecoveryPending ? (
           <p>{status.message || '观战原值备份仍保留，帧率和画质恢复不受影响。'}</p>
         ) : null}
+        {status?.demoCleanupPending ? (
+          <p>
+            {status.message ||
+              '原画质和帧率已恢复；改动的试播文件及清理记录仍保留，可重试或打开备份目录检查。'}
+          </p>
+        ) : null}
         <div className="preparation-actions">
           {status?.canPreserve && production ? (
             <Button
@@ -132,6 +142,18 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               }
             >
               打开直播工作台
+            </Button>
+          ) : null}
+          {status?.demoCleanupPending ? (
+            <Button
+              disabled={busy || Boolean(phase) || Boolean(status.running)}
+              onClick={() =>
+                void run(() =>
+                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }),
+                )
+              }
+            >
+              重试清理试播文件
             </Button>
           ) : null}
           {status?.spectatorRecoveryPending ? (

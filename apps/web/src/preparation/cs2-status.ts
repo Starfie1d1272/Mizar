@@ -5,6 +5,7 @@ export interface Cs2ConfigStatus {
   qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
   frameRateLimit: 0 | 30 | 60;
   spectatorRecoveryPending?: boolean;
+  demoCleanupPending?: boolean;
   spectatorWarning?: string | null;
   canPreserve?: boolean;
   preserveSettings?: boolean;

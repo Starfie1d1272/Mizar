@@ -27,7 +27,7 @@ fn boolean(value: &str) -> Result<bool, String> {
 pub const CFG_NAME: &str = "mizar_observer.cfg";
 const CFG: &[u8] = include_bytes!("../../../../config/mizar_observer.cfg");
 
-fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
+pub(crate) fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
     executable
         .parent()
         .and_then(Path::parent)
