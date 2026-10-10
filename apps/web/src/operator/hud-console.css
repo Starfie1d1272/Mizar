@@ -22,7 +22,6 @@
   justify-content: space-between;
 }
 
-.hud-console__eyebrow,
 .hud-console__kicker {
   color: var(--mizar-focus-ring);
   font-size: var(--mizar-type-size-small);
@@ -36,13 +35,6 @@
   letter-spacing: -0.045em;
   line-height: 1.04;
   margin: 0;
-}
-
-.hud-console__intro {
-  color: var(--mizar-fg-secondary);
-  line-height: 1.5;
-  margin: 0.6rem 0 0;
-  max-width: 48rem;
 }
 
 .hud-console__header-meta {
@@ -74,7 +66,6 @@
 }
 
 .hud-console__nav a,
-.hud-console__tabs button,
 .hud-console__actions button,
 .hud-console__primary-action,
 .hud-console__widget-list button {
@@ -95,7 +86,6 @@
 }
 
 .hud-console__nav a[aria-current='page'],
-.hud-console__tabs button.is-active,
 .hud-console__primary-action {
   background: var(--mizar-accent-primary);
   border-color: var(--mizar-accent-primary);
@@ -103,7 +93,6 @@
 }
 
 .hud-console__nav a:hover,
-.hud-console__tabs button:hover,
 .hud-console__actions button:hover,
 .hud-console__primary-action:hover,
 .hud-console__widget-list button:hover {
@@ -269,20 +258,6 @@
   width: 100%;
 }
 
-.hud-console__preview-toolbar > div {
-  display: grid;
-  gap: 0.15rem;
-  margin-right: auto;
-}
-
-.hud-console__preview-toolbar strong {
-  font-size: var(--mizar-type-size-body);
-}
-
-.hud-console__preview-toolbar .hud-console__kicker {
-  margin-bottom: 0;
-}
-
 .hud-console__source-status[data-connection-state='live'] {
   color: var(--mizar-fg-link);
 }
@@ -388,14 +363,6 @@
   border: 1px solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-control);
   padding: 0.45rem;
-}
-
-.hud-console__editor-column > .hud-console__tabs button {
-  padding: 0.55rem 0.85rem;
-}
-
-.hud-console__editor-column > .hud-console__tabs button:not(.is-active) {
-  background: transparent;
 }
 
 .hud-console__editor-fieldset {
@@ -728,10 +695,6 @@
     flex-direction: column;
   }
 
-  .hud-console__preview-toolbar > div {
-    margin-right: 0;
-  }
-
   .hud-console__layout {
     grid-template-columns: 1fr;
   }
@@ -833,6 +796,23 @@
     flex: 1;
     min-height: 0;
     align-items: stretch;
+  }
+  .hud-console__preview-toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .hud-console__preview-toolbar label {
+    min-width: 0;
+  }
+  .hud-console__preview-toolbar select {
+    width: 100%;
+  }
+  .hud-console__source-help {
+    grid-column: 1 / 4;
+    order: 1;
+  }
+  .hud-console__source-status {
+    order: 1;
   }
   .hud-console__preview-column:not(:fullscreen) {
     position: static;

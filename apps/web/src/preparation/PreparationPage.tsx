@@ -27,6 +27,7 @@ import { Cs2Recovery } from './Cs2Recovery';
 import { SpectatorWorkflow } from './SpectatorWorkflow';
 import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { PictureWorkspace } from './PictureWorkspace';
+import { OfficialResourceStatus } from './OfficialResourceStatus';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import './preparation.css';
 import './production.css';
@@ -315,6 +316,10 @@ export function PreparationPage() {
                 <h2>HUD 预设与文件</h2>
                 <HudPresetDirectory action={action} />
                 <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
+                <details>
+                  <summary>官方演练素材</summary>
+                  <OfficialResourceStatus />
+                </details>
               </Panel>
             ) : view ? (
               <EventMatchWorkspace

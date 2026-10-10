@@ -1,5 +1,6 @@
 import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
+import { OfficialResourceStatus } from '../preparation/OfficialResourceStatus';
 import { ToolShell } from '../patterns';
 import {
   Fragment,
@@ -966,17 +967,18 @@ export function HudConsolePage() {
                   ? '正在读取'
                   : '无法确认'}
             </strong>
-            <details>
-              <summary>播出版本与状态</summary>
+            {onAir.status === 'ready' ? (
+              <details>
+                <summary>{activationStale ? '有保存尚未应用' : '播出配置已确认'}</summary>
+                <span>启用版本 {onAir.activeRevision}</span>
+              </details>
+            ) : (
               <span role={onAir.status === 'error' ? 'alert' : 'status'}>
-                {onAir.status === 'ready'
-                  ? `启用版本 ${onAir.activeRevision}`
-                  : onAir.activeRevision
-                    ? `最近确认：${onAir.current.preset.name} · 版本 ${onAir.activeRevision}；当前状态待重查`
-                    : '尚无已确认的播出配置'}
-                {onAir.status === 'ready' && activationStale ? ' · 有保存尚未应用' : ''}
+                {onAir.activeRevision
+                  ? `最近确认：${onAir.current.preset.name} · 版本 ${onAir.activeRevision}；当前状态待重查`
+                  : '尚无已确认的播出配置'}
               </span>
-            </details>
+            )}
           </div>
           <Button
             disabled={activationReasons.length > 0}
@@ -1036,18 +1038,7 @@ export function HudConsolePage() {
                   全屏预览
                 </Button>
               ) : null}
-              <div>
-                <span className="hud-console__kicker">预览</span>
-                <strong>
-                  {activePreviewSource === 'fixture'
-                    ? fixtureLabel(fixtureId)
-                    : activePreviewSource === 'replay'
-                      ? (replayFixture?.title ?? (replayLoading ? '正在载入回放' : '回放不可用'))
-                      : previewSourceLive
-                        ? '实时比赛'
-                        : '实时数据不可用'}
-                </strong>
-              </div>
+
               <label>
                 来源
                 <select
@@ -1064,13 +1055,19 @@ export function HudConsolePage() {
                   </option>
                 </select>
               </label>
-              <p className="hud-console__hint">
-                {activePreviewSource === 'fixture'
-                  ? '静态样例名单与比分仅用于检查版式，不代表本场已核实。'
-                  : activePreviewSource === 'replay'
-                    ? '实景回放来自已记录的示例比赛，不代表本场名单或实时状态。'
-                    : '当前观战数据只读预览；是否属于本场及首发身份需在制播中核对。'}
-              </p>
+              <details className="hud-console__source-help">
+                <summary>
+                  预览来源说明 ·{' '}
+                  {activePreviewSource === 'current-live' ? '当前观战资料' : '示例资料，非本场事实'}
+                </summary>{' '}
+                <p className="hud-console__hint">
+                  {activePreviewSource === 'fixture'
+                    ? '静态样例名单与比分仅用于检查版式，不代表本场已核实。'
+                    : activePreviewSource === 'replay'
+                      ? '实景回放来自已记录的示例比赛，不代表本场名单或实时状态。'
+                      : '当前观战数据只读预览；是否属于本场及首发身份需在制播中核对。'}
+                </p>
+              </details>
               {activePreviewSource === 'fixture' ? (
                 <label>
                   场景
@@ -1238,6 +1235,10 @@ export function HudConsolePage() {
                   {replayLoadError !== null ? (
                     <>
                       <span role="alert">{replayLoadError}</span>
+                      <details>
+                        <summary>官方素材状态与恢复</summary>
+                        <OfficialResourceStatus />
+                      </details>
                       <Button onClick={() => setPreviewSource('fixture')}>切换静态样例</Button>
                     </>
                   ) : null}
@@ -1315,7 +1316,6 @@ export function HudConsolePage() {
               {WORKSPACES.map((item) => (
                 <Button
                   aria-current={workspace === item.id ? 'page' : undefined}
-                  className={workspace === item.id ? 'is-active' : undefined}
                   key={item.id}
                   onClick={() => changeWorkspace(item.id)}
                   type="button"

@@ -1,6 +1,7 @@
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ResourceStore } from '../../apps/companion/src/resource-store/store.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
@@ -13,6 +14,7 @@ test('task workspaces use real local data and keep candidate browsing separate f
   const app = buildApp({
     matchManifestPath: join(directory, 'match.json'),
     localTournamentPath: join(directory, 'tournament.json'),
+    resources: { root: join(directory, 'assets') },
   });
   let unavailableMatch = false;
   let unavailableTournament = false;
@@ -331,6 +333,20 @@ test('task workspaces use real local data and keep candidate browsing separate f
     await page.getByRole('button', { name: '返回本场准备', exact: true }).click();
     await expect(page.getByRole('button', { name: '保存比赛资料', exact: true })).toBeVisible();
     await page.goto('/resources?tab=hud');
+    await page.getByText('官方演练素材', { exact: true }).click();
+    await expect(page.getByLabel('官方素材缓存状态')).toContainText('独立缓存未准备');
+    const resourceStore = app.getDecorator<() => ResourceStore>('getResourceStore')();
+    await expect(
+      resourceStore.installVerified('official:epl-default', () => Promise.resolve({})),
+    ).rejects.toThrow('resource_policy_unavailable');
+    await page.getByRole('button', { name: '重新读取素材状态', exact: true }).click();
+    await expect(page.getByLabel('官方素材缓存状态')).toContainText('素材处理失败');
+    await capture(
+      '11-resource-store-rejection',
+      '资源 → 官方演练素材 → 缺少授权策略的实际 Store 拒绝 → 重新读取',
+      '同一真实 Store 查询失败，不新建下载器；原 Full 路径保留，这不是正式签名正例',
+    );
+    await page.getByText('官方演练素材', { exact: true }).click();
     const popupPromise = context.waitForEvent('page');
     await page.getByRole('button', { name: '编辑 Mizar 默认预设', exact: true }).click();
     const editor = await popupPromise;

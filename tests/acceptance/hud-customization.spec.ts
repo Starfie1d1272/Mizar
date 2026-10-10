@@ -342,6 +342,7 @@ test('HUD summaries distinguish loading, unavailable and last confirmed configur
     await expect(page.getByRole('alert').filter({ hasText: /最近确认：Mizar/ })).toBeVisible();
   } finally {
     resume!();
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
   }
 });
@@ -445,6 +446,7 @@ test('HUD resource directory targets the single editor by ID, preserves dirty dr
     expect((await app.inject('/local/v1/hud-config')).body).toBe(originalOnAir);
     await missing.close();
   } finally {
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
   }
 });
