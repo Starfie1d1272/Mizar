@@ -14,7 +14,7 @@ function setup(
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
-  gameStates: { running: boolean; pending: boolean }[] = [],
+  gameStates: { running?: boolean; pending?: boolean; busy?: boolean }[] = [],
 ) {
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
@@ -92,6 +92,7 @@ describe('managed CS2 production entry and cleanup', () => {
   });
   it('continues the original entry intent after the late game is confirmed without launching again', async () => {
     const calls = setup(undefined, 'preparation', true, false, [
+      { busy: true },
       { running: false, pending: true },
       { running: true, pending: true },
     ]);

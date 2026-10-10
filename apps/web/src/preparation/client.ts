@@ -109,7 +109,8 @@ export async function productionAction(action: 'enter' | 'hide' | 'finish', stat
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
     while (!gameStatus.running) {
-      if (!gameStatus.pending || window.location.href !== entryLocation) return;
+      if ((!gameStatus.busy && !gameStatus.pending) || window.location.href !== entryLocation)
+        return;
       await new Promise<void>((resolve) => setTimeout(resolve, 1000));
       if (window.location.href !== entryLocation) return;
       gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
