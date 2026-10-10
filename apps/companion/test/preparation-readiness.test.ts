@@ -69,12 +69,16 @@ it('requires connected OBS, aligned scene and no configuration findings', () => 
 it('never treats an unchecked adapter as a verified OBS configuration', async () => {
   const adapter = new ObsAdapter(new ObsConfigStore('/unused/obs.json'), 'http://127.0.0.1:3000');
   rpc.unavailable = true;
-  // Unavailable transport still exposes the initial check finding, not an empty success.
-  const status = await adapter.status();
-  expect(status.findings).toEqual([
-    { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
-  ]);
-  rpc.unavailable = false;
+  try {
+    const status = await adapter.status();
+    // Disconnected transport cannot verify scenes; empty findings must not mean ready.
+    expect(status.connection).toBe('unavailable');
+    expect(status.findings).toEqual([]);
+    expect(obsReadiness(status, 'waiting').ready).toBe(false);
+  } finally {
+    rpc.unavailable = false;
+    await adapter.close();
+  }
 });
 
 it('checks actual OBS configuration during status reads and exposes RPC check failure separately from connection', async () => {

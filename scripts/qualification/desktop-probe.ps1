@@ -97,8 +97,10 @@ public static class MizarDesktopProbe {
     public static void DismissFailure(uint processId) {
         foreach (var window in Windows(processId)) {
             if (window.className == "#32770" && window.title == "Mizar \u542f\u52a8\u5931\u8d25") {
-                // Standard native error dialog: choose No (exit), never WM_CLOSE
-                // on the normal main window (which intentionally hides to tray).
+                // Close only the native failure dialog (MessageBox or recovery TaskDialog).
+                // Never close the normal main window, which intentionally hides to tray.
+                PostMessage(new IntPtr(window.hwnd), 0x0010, IntPtr.Zero, IntPtr.Zero);
+                // A legacy Yes/No MessageBox ignores WM_CLOSE; choose No as well.
                 PostMessage(new IntPtr(window.hwnd), 0x0111, new IntPtr(7), IntPtr.Zero);
             }
         }

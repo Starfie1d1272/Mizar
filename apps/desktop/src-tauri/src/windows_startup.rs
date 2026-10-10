@@ -269,6 +269,168 @@ impl ExitSignal {
     }
 }
 
+const WEBVIEW2_DOWNLOAD_PAGE: &str =
+    "https://developer.microsoft.com/en-us/microsoft-edge/webview2/";
+
+fn open_recovery_target(target: &str) -> io::Result<()> {
+    let open: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            open.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        Err(io::Error::other(format!("ShellExecuteW failed ({result})")))
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WebviewRecoveryAction {
+    Download,
+    Recheck,
+    Logs,
+    Exit,
+}
+
+fn webview_recovery_choice(failed_recheck: bool) -> Result<WebviewRecoveryAction, String> {
+    use windows::{
+        core::PCWSTR,
+        Win32::UI::Controls::{
+            TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
+        },
+    };
+    let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let title = wide("Mizar 启动失败");
+    let instruction = wide(if failed_recheck {
+        "仍未检测到界面运行库，请安装后重新检测。"
+    } else {
+        "缺少界面运行库，请安装后重新检测。"
+    });
+    let content = wide("“前往安装”将打开微软官方页面。详细原因可在日志中查看。");
+    let installation = wide("选择 Microsoft Edge WebView2 Evergreen Standalone Installer（x64）安装或修复，完成后选择“重新检测”。若设备限制安装，请联系管理员。Mizar 不会自动下载或执行安装程序。");
+    let expand = wide("安装说明");
+    let collapse = wide("收起安装说明");
+    let labels = [
+        wide("前往安装"),
+        wide("重新检测"),
+        wide("查看日志"),
+        wide("退出"),
+    ];
+    let buttons: Vec<_> = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| TASKDIALOG_BUTTON {
+            nButtonID: 1001 + index as i32,
+            pszButtonText: PCWSTR(label.as_ptr()),
+        })
+        .collect();
+    let config = TASKDIALOGCONFIG {
+        cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+        pszWindowTitle: PCWSTR(title.as_ptr()),
+        pszMainInstruction: PCWSTR(instruction.as_ptr()),
+        pszContent: PCWSTR(content.as_ptr()),
+        pszExpandedInformation: PCWSTR(installation.as_ptr()),
+        pszExpandedControlText: PCWSTR(expand.as_ptr()),
+        pszCollapsedControlText: PCWSTR(collapse.as_ptr()),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: 1001,
+        ..Default::default()
+    };
+    let mut selected = 0;
+    unsafe { TaskDialogIndirect(&config, Some(&mut selected), None, None) }
+        .map_err(|error| format!("WebView2 recovery dialog: {error:?}"))?;
+    Ok(match selected {
+        1001 => WebviewRecoveryAction::Download,
+        1002 => WebviewRecoveryAction::Recheck,
+        1003 => WebviewRecoveryAction::Logs,
+        _ => WebviewRecoveryAction::Exit,
+    })
+}
+
+fn run_webview_recovery(
+    mut choose: impl FnMut(bool) -> Result<WebviewRecoveryAction, String>,
+    mut check: impl FnMut() -> Result<String, String>,
+    mut open: impl FnMut(WebviewRecoveryAction) -> io::Result<()>,
+    mut record: impl FnMut(&str, &str, Option<&str>),
+) -> bool {
+    let mut failed = false;
+    loop {
+        match choose(failed) {
+            Ok(WebviewRecoveryAction::Recheck) => match check() {
+                Ok(version) => {
+                    record("webview2_recheck", "success", Some(&version));
+                    return true;
+                }
+                Err(error) => {
+                    record("webview2_recheck", "failure", Some(&error));
+                    failed = true;
+                }
+            },
+            Ok(action @ (WebviewRecoveryAction::Download | WebviewRecoveryAction::Logs)) => {
+                if let Err(error) = open(action) {
+                    record(
+                        "webview2_recovery_action",
+                        "failure",
+                        Some(&error.to_string()),
+                    );
+                }
+            }
+            Ok(WebviewRecoveryAction::Exit) => return false,
+            Err(error) => {
+                record("webview2_recovery_action", "failure", Some(&error));
+                return false;
+            }
+        }
+    }
+}
+
+pub fn recover_webview(
+    log: &crate::startup_log::DesktopLog,
+    check: impl FnMut() -> Result<String, String>,
+) -> bool {
+    run_webview_recovery(
+        |failed| {
+            let choice = webview_recovery_choice(failed);
+            if choice.is_err() {
+                failure_dialog("WebView2 Runtime 不可用。请在微软官方页面安装或修复 Evergreen Standalone Installer（x64），然后重新启动 Mizar。网吧限制安装时请联系管理员。\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/", Some(&log.directory));
+            }
+            choice
+        },
+        check,
+        |action| {
+            let target = match action {
+                WebviewRecoveryAction::Download => WEBVIEW2_DOWNLOAD_PAGE.to_owned(),
+                WebviewRecoveryAction::Logs => log.directory.to_string_lossy().into_owned(),
+                _ => unreachable!(),
+            };
+            let outcome = open_recovery_target(&target);
+            if outcome.is_err() {
+                let message = match action {
+                    WebviewRecoveryAction::Download => format!("无法打开安装页面。\n\n按 Ctrl+C 复制此提示，在浏览器中打开官方地址：\n{WEBVIEW2_DOWNLOAD_PAGE}"),
+                    _ => format!("无法打开日志目录。\n\n按 Ctrl+C 复制此提示中的目录，再用文件资源管理器打开：\n{target}"),
+                };
+                let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+                let title: Vec<u16> = "Mizar 启动失败\0".encode_utf16().collect();
+                unsafe {
+                    MessageBoxW(0, message.as_ptr(), title.as_ptr(), 0x10);
+                }
+            }
+            outcome
+        },
+        |stage, result, detail| log.event(stage, result, detail),
+    )
+}
+
 pub fn failure_dialog(message: &str, logs: Option<&Path>) {
     let detail = match logs {
         Some(directory) => format!("Mizar 桌面界面启动失败。\n\n{message}\n\n诊断日志目录：{}\n\n是否打开日志目录？选择“否”退出。", directory.display()),
@@ -453,5 +615,68 @@ mod tests {
         assert!(borrowed.try_wait().unwrap().is_none());
         drop(outside);
         borrowed.wait().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod webview_recovery_tests {
+    use super::*;
+    #[test]
+    fn recheck_failure_stays_in_recovery_and_success_resumes_startup() {
+        let mut choices = vec![
+            WebviewRecoveryAction::Download,
+            WebviewRecoveryAction::Recheck,
+            WebviewRecoveryAction::Logs,
+            WebviewRecoveryAction::Recheck,
+        ]
+        .into_iter();
+        let mut checks = vec![
+            Err("missing runtime HRESULT 0x80070002".into()),
+            Ok("123.0".into()),
+        ]
+        .into_iter();
+        let mut failed_states = Vec::new();
+        let mut opened = Vec::new();
+        let mut events = Vec::new();
+        assert!(run_webview_recovery(
+            |failed| {
+                failed_states.push(failed);
+                Ok(choices.next().unwrap())
+            },
+            || checks.next().unwrap(),
+            |action| {
+                opened.push(action);
+                Ok(())
+            },
+            |stage, result, detail| events.push((
+                stage.to_owned(),
+                result.to_owned(),
+                detail.map(str::to_owned)
+            ))
+        ));
+        assert_eq!(failed_states, [false, false, true, true]);
+        assert_eq!(
+            opened,
+            [WebviewRecoveryAction::Download, WebviewRecoveryAction::Logs]
+        );
+        assert_eq!(
+            events[0].2.as_deref(),
+            Some("missing runtime HRESULT 0x80070002")
+        );
+        assert_eq!(events[1].1, "success");
+    }
+    #[test]
+    fn exit_and_unavailable_native_dialog_never_resume_startup() {
+        for choice in [
+            Ok(WebviewRecoveryAction::Exit),
+            Err("native dialog unavailable".into()),
+        ] {
+            assert!(!run_webview_recovery(
+                |_| choice.clone(),
+                || panic!("must not probe"),
+                |_| panic!("must not open"),
+                |_, _, _| ()
+            ));
+        }
     }
 }

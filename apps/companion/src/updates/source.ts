@@ -103,6 +103,7 @@ export class StableSource {
     private readonly cachePath: string,
     private readonly fetcher: UpdateFetch = globalThis.fetch,
     private readonly sourceMode: 'auto' | 'github' = 'auto',
+    private readonly diagnostic?: (stage: string, error: unknown) => void,
   ) {}
   private async verify(
     bytes: Buffer,
@@ -117,18 +118,23 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     let verifiedCommit: string | undefined;
+    const failures: unknown[] = [];
     for (const bundle of bundles) {
       try {
         verifiedCommit = verifyAttestation(bytes, 'update-manifest.json', bundle, verifier);
         break;
-      } catch {
+      } catch (error) {
+        failures.push(error);
+        this.diagnostic?.('qualification_proof_rejected', error);
         /* No alternative signer or trust root is accepted. */
       }
     }
-    if (!verifiedCommit) throw new Error('update_provenance_failed');
+    if (!verifiedCommit) throw new AggregateError(failures, 'update_provenance_failed');
     const manifest = updateManifestSchema.parse(JSON.parse(bytes.toString('utf8')));
     if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
     return manifest;
@@ -144,7 +150,8 @@ export class StableSource {
       if (sourceMode === 'auto') {
         try {
           carrier = await new BoxSource(this.fetcher).machine(manifest.version, signal);
-        } catch {
+        } catch (error) {
+          this.diagnostic?.('box_core_fallback', error);
           signal.throwIfAborted();
         }
       }
@@ -165,6 +172,8 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     return selectQualifiedCore(carrier, manifest, verifier);
@@ -185,6 +194,8 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     const promotionSha = verifyAttestation(
@@ -260,7 +271,8 @@ export class StableSource {
       };
       this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, attempt) };
       return release;
-    } catch {
+    } catch (error) {
+      if (this.sourceMode !== 'github') this.diagnostic?.('box_metadata_fallback', error);
       signal.throwIfAborted();
     }
     // 'latest' alone can select a release by publication date rather than SemVer.

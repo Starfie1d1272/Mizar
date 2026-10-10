@@ -36,27 +36,107 @@ impl PendingUpdate {
         }
     }
 }
-fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
-    let state_path = log.state_root.join("data/runtime.json");
-    if fs::metadata(&state_path).map_or(true, |m| m.len() > 64 * 1024) {
-        return Err("本地服务身份无法读取。".into());
+fn io_failure(log: &DesktopLog, phase: &str, error: &std::io::Error, summary: &str) -> String {
+    log.event(
+        "update_install",
+        "failure",
+        Some(&format!(
+            "phase={phase}; os_code={:?}; cause={error:?}",
+            error.raw_os_error()
+        )),
+    );
+    summary.into()
+}
+fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summary: &str) -> String {
+    log.event(
+        "update_install",
+        "failure",
+        Some(&format!(
+            "phase={phase}; json_category={:?}; line={}; column={}",
+            error.classify(),
+            error.line(),
+            error.column()
+        )),
+    );
+    summary.into()
+}
+fn release_plan(log: &DesktopLog) {
+    if request(log, "release").is_err() {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=release_after_failure; failed; see preceding request phase and cause"),
+        );
     }
-    let state: Value =
-        serde_json::from_slice(&fs::read(state_path).map_err(|_| "本地服务身份无法读取。")?)
-            .map_err(|_| "本地服务身份无效。")?;
+}
+fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
+    log.event(
+        "update_install",
+        "begin",
+        Some(&format!("phase=install_plan_request; action={action}")),
+    );
+    let state_path = log.state_root.join("data/runtime.json");
+    let metadata = fs::metadata(&state_path).map_err(|error| {
+        io_failure(
+            log,
+            "runtime_metadata",
+            &error,
+            "无法读取本地服务身份，升级未启动。旧版仍可用，请查看诊断或从正式发布页下载。",
+        )
+    })?;
+    if metadata.len() > 64 * 1024 {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=runtime_metadata; size_limit_exceeded"),
+        );
+        return Err(
+            "无法读取本地服务身份，升级未启动。旧版仍可用，请查看诊断或从正式发布页下载。".into(),
+        );
+    }
+    let state: Value = serde_json::from_slice(&fs::read(state_path).map_err(|error| {
+        io_failure(
+            log,
+            "runtime_read",
+            &error,
+            "无法读取本地服务身份，升级未启动。旧版仍可用，请查看诊断或从正式发布页下载。",
+        )
+    })?)
+    .map_err(|error| {
+        json_failure(
+            log,
+            "runtime_json",
+            &error,
+            "本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。",
+        )
+    })?;
     let token = state["controlToken"]
         .as_str()
         .filter(|v| v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit()))
-        .ok_or("本地服务身份无效。")?;
+        .ok_or_else(|| {
+            log.event(
+                "update_install",
+                "failure",
+                Some("phase=runtime_identity; control_token_shape_invalid"),
+            );
+            "本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。"
+        })?;
     let deadline = Instant::now() + Duration::from_secs(75);
     let address: SocketAddr = "127.0.0.1:3000".parse().unwrap();
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
-        .map_err(|_| "无法连接更新服务。")?;
+    let mut stream =
+        TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|error| {
+            io_failure(
+                log,
+                "tcp_connect",
+                &error,
+                "无法连接本地更新服务，升级未启动。请重新打开 Mizar 后检查更新。",
+            )
+        })?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
-        .map_err(|_| "无法提交更新请求。")?;
+        .map_err(|error| io_failure(log, "tcp_write_timeout", &error, "无法提交更新请求。"))?;
     let body = json!({"action": action}).to_string();
-    stream.write_all(format!("POST /operator/updates/install-plan HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nx-runtime-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).map_err(|_| "更新请求未完成。")?;
+    stream.write_all(format!("POST /operator/updates/install-plan HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nx-runtime-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).map_err(|error| io_failure(log, "tcp_write", &error, "更新请求未完成。"))?;
     let mut bytes = Vec::new();
     loop {
         stream
@@ -65,29 +145,72 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
                     .checked_duration_since(Instant::now())
                     .ok_or("更新来源重新验证超时。")?,
             ))
-            .map_err(|_| "更新响应未完成。")?;
+            .map_err(|error| io_failure(log, "tcp_read_timeout", &error, "更新响应未完成。"))?;
         let mut chunk = [0; 4096];
-        let count = stream.read(&mut chunk).map_err(|_| "更新响应未完成。")?;
+        let count = stream
+            .read(&mut chunk)
+            .map_err(|error| io_failure(log, "tcp_read", &error, "更新响应未完成。"))?;
         if count == 0 {
             break;
         }
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.len() > 64 * 1024 {
+            log.event(
+                "update_install",
+                "failure",
+                Some("phase=response_read; size_limit_exceeded"),
+            );
             return Err("更新响应超出限制。".into());
         }
     }
-    let text = std::str::from_utf8(&bytes).map_err(|_| "更新响应无效。")?;
-    let (headers, body) = text.split_once("\r\n\r\n").ok_or("更新响应无效。")?;
+    let text = std::str::from_utf8(&bytes).map_err(|error| {
+        log.event(
+            "update_install",
+            "failure",
+            Some(&format!("phase=response_utf8; cause={error}")),
+        );
+        "更新响应无效。"
+    })?;
+    let (headers, body) = text.split_once("\r\n\r\n").ok_or_else(|| {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=response_framing; missing_header_separator"),
+        );
+        "更新响应格式无效，升级未启动。请查看诊断或从正式发布页下载。"
+    })?;
     if headers.to_ascii_lowercase().contains("transfer-encoding:") {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=response_framing; unsupported_transfer_encoding"),
+        );
         return Err("更新响应格式不支持。".into());
     }
-    let value: Value = serde_json::from_str(body).map_err(|_| "更新响应无效。")?;
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| json_failure(log, "response_json", &error, "更新响应无效。"))?;
     if headers.split_whitespace().nth(1) != Some("200") {
+        let status = headers
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok());
+        log.event(
+            "update_install",
+            "failure",
+            Some(&format!(
+                "phase=install_plan_http; action={action}; status={status:?}"
+            )),
+        );
         return Err(value["message"]
             .as_str()
             .unwrap_or("更新尚未就绪，请重新检查。")
             .into());
     }
+    log.event(
+        "update_install",
+        "success",
+        Some(&format!("phase=install_plan_request; action={action}")),
+    );
     Ok(value)
 }
 fn same_path(value: &Value, expected: &Path) -> bool {
@@ -173,16 +296,23 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         let log = host.state::<DesktopLog>();
         let root = crate::bundle_root()?
             .canonicalize()
-            .map_err(|_| "安装目录不可用。")?;
+            .map_err(|error| io_failure(&log, "root_canonicalize", &error, "安装目录不可用。"))?;
         let plan = match request(&log, "prepare") {
             Ok(plan) => plan,
             Err(error) => {
-                let _ = request(&log, "release");
+                release_plan(&log);
                 return Err(error);
             }
         };
         let prepared: Result<(), String> = (|| {
-            validate_plan(&plan, &root, &log.state_root)?;
+            validate_plan(&plan, &root, &log.state_root).map_err(|error| {
+                log.event(
+                    "update_install",
+                    "failure",
+                    Some(&format!("phase=plan_validate; cause={error}")),
+                );
+                error
+            })?;
             let plan = provider_plan(plan, &root, &log.state_root)?;
             let path = log
                 .state_root
@@ -192,11 +322,16 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 .write(true)
                 .create_new(true)
                 .open(&path)
-                .map_err(|_| "安装准备记录无法创建。")?;
+                .map_err(|error| {
+                    io_failure(&log, "plan_create", &error, "安装准备记录无法创建。")
+                })?;
             let write = file.write_all(plan.to_string().as_bytes());
             drop(file);
-            if write.is_err() {
-                let _ = fs::remove_file(&path);
+            if let Err(error) = write {
+                io_failure(&log, "plan_write", &error, "安装准备记录未能保存。");
+                if let Err(error) = fs::remove_file(&path) {
+                    io_failure(&log, "plan_cleanup", &error, "安装准备记录清理失败。");
+                }
                 return Err("安装准备记录未能保存。".into());
             }
             let mut command = crate::background_powershell();
@@ -212,11 +347,16 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 .arg("-PlanPath")
                 .arg(powershell::provider_path(&path));
             let result = powershell::run(command, &log, "更新安装准备", Duration::from_secs(60));
-            let _ = fs::remove_file(&path);
-            let value: Value = serde_json::from_str(&result?).map_err(|_| "安装工具响应无效。")?;
+            if let Err(error) = fs::remove_file(&path) {
+                io_failure(&log, "plan_cleanup", &error, "安装准备记录清理失败。");
+            }
+            let value: Value = serde_json::from_str(&result?)
+                .map_err(|error| json_failure(&log, "helper_json", &error, "安装工具响应无效。"))?;
             let stage = PathBuf::from(value["stageRoot"].as_str().ok_or("安装工具目录缺失。")?)
                 .canonicalize()
-                .map_err(|_| "安装工具目录不可用。")?;
+                .map_err(|error| {
+                    io_failure(&log, "helper_directory", &error, "安装工具目录不可用。")
+                })?;
             let name = stage
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -237,12 +377,19 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             Ok(())
         })();
         if prepared.is_err() {
-            let _ = request(&log, "release");
+            release_plan(&log);
         }
         prepared
     })
     .await
-    .unwrap_or_else(|_| Err("升级准备未完成，请重试。".into()));
+    .unwrap_or_else(|error| {
+        app.state::<DesktopLog>().event(
+            "update_install",
+            "failure",
+            Some(&format!("phase=prepare_task; cause={error:?}")),
+        );
+        Err("升级准备未完成，请重试。".into())
+    });
     pending.preparing.store(false, Ordering::Release);
     result?;
     app.exit(0);
@@ -252,12 +399,19 @@ pub fn cancel(app: &tauri::AppHandle) {
     let mut cancelled = false;
     if let Ok(mut pending) = app.state::<PendingUpdate>().stage.lock() {
         if let Some(stage) = pending.take() {
-            let _ = fs::remove_dir_all(stage);
+            if let Err(error) = fs::remove_dir_all(stage) {
+                io_failure(
+                    &app.state::<DesktopLog>(),
+                    "stage_cleanup",
+                    &error,
+                    "更新暂存清理失败。",
+                );
+            }
             cancelled = true;
         }
     }
     if cancelled {
-        let _ = request(&app.state::<DesktopLog>(), "release");
+        release_plan(&app.state::<DesktopLog>());
     }
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
@@ -280,9 +434,14 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command
-        .spawn()
-        .map_err(|_| "安装工具未能启动，旧版保持可用。请重新打开 Mizar 后重试。")?;
+    command.spawn().map_err(|error| {
+        io_failure(
+            log,
+            "helper_spawn",
+            &error,
+            "安装工具启动失败，旧版仍可用。请查看诊断中的系统错误，或从正式发布页下载。",
+        )
+    })?;
     log.event("update_install", "helper_started", None);
     Ok(())
 }
@@ -291,6 +450,37 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn io_and_json_failures_keep_stage_and_codes_without_runtime_input() {
+        let root = std::env::temp_dir().join(format!(
+            "mizar-update-evidence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let log = DesktopLog::new(&root, Some(root.join("state"))).unwrap();
+        io_failure(
+            &log,
+            "runtime_read",
+            &std::io::Error::from_raw_os_error(5),
+            "short UI",
+        );
+        let error =
+            serde_json::from_str::<Value>(r#"{"controlToken":"private-control-token","secret":} "#)
+                .unwrap_err();
+        json_failure(&log, "runtime_json", &error, "short UI");
+        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        assert!(evidence.contains("runtime_read"));
+        assert!(evidence.contains("os_code=Some(5)"));
+        assert!(evidence.contains("runtime_json"));
+        assert!(evidence.contains("json_category=Syntax"));
+        assert!(!evidence.contains("private-control-token"));
+        assert!(!evidence.contains("controlToken"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn serialized_installation_plan_has_paths_windows_powershell_can_read() {

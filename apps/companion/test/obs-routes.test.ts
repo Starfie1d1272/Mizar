@@ -41,7 +41,7 @@ it('resolves a native OBS launch target only for the local operator without laun
 it.each([
   ['未找到 OBS，请在设置中选择 obs64.exe。', '未找到 OBS，请在设置中选择 obs64.exe。'],
   ['OBS 程序未能打开。', 'OBS 程序未能打开。'],
-  ['unexpected failure with private-password', 'OBS 操作未完成，请检查连接与配置。'],
+  ['unexpected failure with private-password', 'OBS 操作失败，具体原因未确认。请查看诊断后处理。'],
 ])(
   'provides safe OBS startup recovery without exposing arbitrary errors: %s',
   async (failure, message) => {
@@ -92,6 +92,31 @@ it('keeps the OBS WebSocket password out of local status and refuses cross-origi
     expect((await store.read()).password).toBe('secret-probe');
   } finally {
     await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('explains authentication failure during scene check without returning the password or scene guidance', async () => {
+  const check = vi
+    .spyOn(ObsAdapter.prototype, 'check')
+    .mockRejectedValue(Object.assign(new Error('Authentication failed'), { code: 4009 }));
+  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-auth-'));
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/obs/check',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      message: 'OBS 密码验证失败，尚未连接。请重新复制 WebSocket 密码，粘贴后保存并测试连接。',
+    });
+    expect(response.body).not.toContain('场景检查');
+  } finally {
+    await app.close();
+    check.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
 });

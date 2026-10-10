@@ -46,9 +46,9 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   return (
     <StatusBanner
       tone={
-        status?.pending && (!status.running || Boolean(status.message))
+        status?.pending && !uncertain && (!status.running || Boolean(status.message))
           ? 'warning'
-          : phase || status?.running
+          : phase || uncertain || status?.running
             ? 'info'
             : 'success'
       }
@@ -58,9 +58,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           {phase
             ? cs2OperationLabel(phase)
             : status?.pending
-              ? status.running
-                ? 'CS2 正在运行，原配置已备份'
-                : 'CS2 原配置尚未恢复'
+              ? uncertain
+                ? '正在等待 Steam 启动 CS2'
+                : status.running
+                  ? 'CS2 正在运行，原配置已备份'
+                  : 'CS2 原配置尚未恢复'
               : '原设置已恢复'}
         </strong>
         {status?.pending ? (
