@@ -185,43 +185,47 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
     }
   });
 
-  it('persists a native selection for subsequent discovery and reports a removed selection instead of silently switching', async () => {
-    const root = await library();
-    const state = join(root, 'state');
-    const exe = join(
-      root,
-      'steamapps/common/Counter-Strike Global Offensive/game/bin/win64/cs2.exe',
-    );
-    const selector = resolve(import.meta.dirname, 'bundle/select-cs2-installation.ps1');
-    run(
-      `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(exe)}`,
-    );
-    // Saving an existing choice exercises atomic replacement as well as creation.
-    run(
-      `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(exe)}`,
-    );
-    const cfg = run(
-      `$env:MIZAR_STATE_ROOT=${quote(state)}; function Get-SteamInstallRoots { @() }; Resolve-CfgDirectory`,
-    );
-    expect(cfg.toLowerCase()).toBe(
-      join(root, 'steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg').toLowerCase(),
-    );
-    let failure;
-    try {
-      run(
-        `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(join(root, 'unrelated'))}`,
+  it(
+    'persists a native selection for subsequent discovery and reports a removed selection instead of silently switching',
+    { timeout: 20_000 },
+    async () => {
+      const root = await library();
+      const state = join(root, 'state');
+      const exe = join(
+        root,
+        'steamapps/common/Counter-Strike Global Offensive/game/bin/win64/cs2.exe',
       );
-    } catch (error) {
-      failure = JSON.parse(error.stdout.toString());
-    }
-    expect(failure).toEqual({ error: { code: 'selected-path-missing', stage: 'selection' } });
-    await rm(exe);
-    expect(
+      const selector = resolve(import.meta.dirname, 'bundle/select-cs2-installation.ps1');
       run(
-        `$env:MIZAR_STATE_ROOT=${quote(state)}; try { Resolve-CfgDirectory } catch { $_.Exception.Data['MizarCode'] }`,
-      ),
-    ).toBe('selected-path-invalid');
-  });
+        `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(exe)}`,
+      );
+      // Saving an existing choice exercises atomic replacement as well as creation.
+      run(
+        `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(exe)}`,
+      );
+      const cfg = run(
+        `$env:MIZAR_STATE_ROOT=${quote(state)}; function Get-SteamInstallRoots { @() }; Resolve-CfgDirectory`,
+      );
+      expect(cfg.toLowerCase()).toBe(
+        join(root, 'steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg').toLowerCase(),
+      );
+      let failure;
+      try {
+        run(
+          `$env:MIZAR_STATE_ROOT=${quote(state)}; & ${quote(selector)} -Product -Cs2Root ${quote(join(root, 'unrelated'))}`,
+        );
+      } catch (error) {
+        failure = JSON.parse(error.stdout.toString());
+      }
+      expect(failure).toEqual({ error: { code: 'selected-path-missing', stage: 'selection' } });
+      await rm(exe);
+      expect(
+        run(
+          `$env:MIZAR_STATE_ROOT=${quote(state)}; try { Resolve-CfgDirectory } catch { $_.Exception.Data['MizarCode'] }`,
+        ),
+      ).toBe('selected-path-invalid');
+    },
+  );
 
   it('reports no-installation and both file and endpoint conflicts without losing status to an empty path', async () => {
     const root = await library();

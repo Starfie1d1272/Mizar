@@ -124,3 +124,16 @@ it('optional reuse cannot bypass failed latest main CI or missing aggregate gate
     verifySourceCi(repository, sha, apiFor([run], []), { allowMergeReuse: true }),
   ).toThrow('缺少完整 CI');
 });
+
+it.each(['update', 'faults'])(
+  'requires the isolated installer %s job from this exact run and source',
+  (group) => {
+    const name = `installer / Windows / ${group}`;
+    for (const list of [
+      jobs.filter((job) => job.name !== name),
+      jobs.map((job) => (job.name === name ? { ...job, conclusion: 'skipped' } : job)),
+      [...jobs, ...jobs.filter((job) => job.name === name)],
+    ])
+      expect(() => verifySourceCi(repository, sha, apiFor([run], list))).toThrow('缺少完整 CI');
+  },
+);

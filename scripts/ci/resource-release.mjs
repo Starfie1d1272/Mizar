@@ -262,29 +262,34 @@ async function withVerifiedSnapshot(
       manifest.gitSha,
       join(directory, names.descriptorQualification),
     );
-    verifyProof(
-      join(directory, candidate.entry.archive.name),
-      candidate.entry.policy.sourceSha,
-      join(directory, names.archiveQualification),
-    );
+    // A published declaration verifies this same frozen archive proof below.
+    // Fresh qualification has no declaration and must verify the archive directly.
+    if (!originalPublication && !published)
+      verifyProof(
+        join(directory, candidate.entry.archive.name),
+        candidate.entry.policy.sourceSha,
+        join(directory, names.archiveQualification),
+      );
     if (originalPublication) {
       requireValue(
         sha256(frozen.get(names.publication)) === originalPublication.sha256,
         '复用声明不是原始规范字节',
       );
       const statement = JSON.parse(frozen.get(names.publication).toString('utf8'));
-      const result = await verifyResourcePublication({
-        statementPath: join(directory, names.publication),
-        publicationBundlePath: join(directory, names.publicationPromotion),
-        archivePath: join(directory, candidate.entry.archive.name),
-        archiveBundlePath: join(directory, names.archiveQualification),
-        policy: {
-          ...candidate.entry.policy,
-          promotionSha: originalPublication.promotionSha,
-          now: Date.now(),
-        },
-        purpose: 'cache',
-      });
+      const result = published
+        ? { statement }
+        : await verifyResourcePublication({
+            statementPath: join(directory, names.publication),
+            publicationBundlePath: join(directory, names.publicationPromotion),
+            archivePath: join(directory, candidate.entry.archive.name),
+            archiveBundlePath: join(directory, names.archiveQualification),
+            policy: {
+              ...candidate.entry.policy,
+              promotionSha: originalPublication.promotionSha,
+              now: Date.now(),
+            },
+            purpose: 'cache',
+          });
       requireValue(
         frozen.get(names.publication).equals(jsonBytes(result.statement)),
         '原始声明不是规范字节',

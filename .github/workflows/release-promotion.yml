@@ -155,10 +155,8 @@ jobs:
           Expand-Archive -LiteralPath "product/$env:PRODUCT_ARCHIVE" -DestinationPath extracted
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-          node scripts/qualification/release-identity.mjs attestation "product/$env:PRODUCT_ARCHIVE" $env:SOURCE_SHA
-          if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP provenance verification failed' }
-          node scripts/qualification/release-identity.mjs attestation product/release-manifest.json $env:SOURCE_SHA
-          if ($LASTEXITCODE -ne 0) { throw 'Qualified source/version manifest provenance verification failed' }
+          node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA "product/$env:PRODUCT_ARCHIVE" product/release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP and source/version manifest provenance verification failed' }
       - name: Verify distinct qualified Core original bytes and provenance
         shell: pwsh
         run: |
@@ -169,38 +167,34 @@ jobs:
           if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
           node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
-          foreach ($name in @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe'))) {
-            node scripts/qualification/release-identity.mjs attestation (Join-Path product $name) $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Original Core qualification provenance failed' }
-          }
+          $subjects = @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe')) | ForEach-Object { Join-Path product $_ }
+          node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA @subjects
+          if ($LASTEXITCODE -ne 0) { throw 'Original Core qualification provenance failed' }
 
       - name: Verify qualified installer provenance
         shell: pwsh
         run: |
           $distributionPath = 'product/distribution-manifest.json'
+          $subjects = @()
           if (Test-Path -LiteralPath $distributionPath) {
             $distribution = Get-Content $distributionPath -Raw | ConvertFrom-Json
-            node scripts/qualification/release-identity.mjs attestation "product/$($distribution.archive)" $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Setup provenance verification failed' }
-            node scripts/qualification/release-identity.mjs attestation $distributionPath $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Setup manifest provenance verification failed' }
+            $subjects += @("product/$($distribution.archive)", $distributionPath)
           }
           $updatePath = 'product/update-manifest.json'
           if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+$') {
             if (!(Test-Path -LiteralPath $updatePath)) { throw 'Stable update manifest is required' }
-            node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Stable update provenance verification failed' }
             node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA --bundle product/update-provenance.json
             if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
             $bootstrap = "product/Mizar-v$($distribution.appVersion)-Windows-x64-WebInstaller.exe"
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product > public-assets.json
             if ($LASTEXITCODE -ne 0) { throw 'Native candidate identity failed' }
-            node scripts/qualification/release-identity.mjs attestation $bootstrap $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Original native installer provenance failed' }
-            node scripts/qualification/release-identity.mjs attestation product/web-installer-build.json $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Original native candidate metadata provenance failed' }
+            $subjects += @($updatePath, $bootstrap, 'product/web-installer-build.json')
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
+          }
+          if ($subjects.Count -gt 0) {
+            node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA @subjects
+            if ($LASTEXITCODE -ne 0) { throw 'Original installer/update metadata provenance failed' }
           }
       - name: Resolve release and tag existence without treating API failure as absence
         shell: pwsh
