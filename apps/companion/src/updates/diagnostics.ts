@@ -12,7 +12,9 @@ export function redactDiagnosticText(value: string): string {
     })
     .split('\n')
     .map((line) =>
-      /authorization|bearer|token|password|secret|api[_-]?key/i.test(line)
+      /(?:authorization|token|password|credential|secret|api[_-]?key)["']?\s*[:=]|bearer\s+\S+|rh_mizar_[a-z0-9_-]+/i.test(
+        line,
+      )
         ? '[credential-bearing line redacted]'
         : line,
     )
