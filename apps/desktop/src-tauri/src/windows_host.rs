@@ -177,6 +177,7 @@ pub struct GameTracker {
     pub generation: u64,
     monitor: Monitor,
     pub managed: bool,
+    pub preserve_settings: bool,
     pub overlay_enabled: bool,
     pub fullscreen_layout: bool,
     frame: Option<crate::window_frame::GameFrame>,
@@ -247,6 +248,12 @@ impl GameTracker {
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
         self.last_work_area = Some(work);
         let mut layout = workspace_layout(work);
+        if self.preserve_settings {
+            self.managed = false;
+            self.alignment_retries = 0;
+            self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
+            return Some(layout);
+        }
         if let Some(window) = self.window {
             if self.frame.is_none() {
                 self.frame = crate::window_frame::GameFrame::capture(window.hwnd, window.pid);
@@ -302,7 +309,7 @@ impl GameTracker {
         let mut foreground_pid = 0;
         unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid); }
         let foreground_owned = foreground_pid == window.pid || foreground_pid == std::process::id();
-        overlay_visible(self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
+        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
     }
     pub fn restore_focus(&self) -> bool {
         self.window.is_some_and(|window| unsafe {

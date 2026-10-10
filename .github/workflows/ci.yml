@@ -347,6 +347,10 @@ jobs:
         shell: pwsh
         run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
 
+      - name: Verify Setup preparation overlap and failure joining
+        shell: pwsh
+        run: node scripts/qualification/verify-setup-preparation.mjs
+
       - name: Verify native update cancellation and recovery
         shell: pwsh
         timeout-minutes: 5
