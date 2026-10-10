@@ -12,6 +12,8 @@ const stages = new Set([
   'process_start',
   'powershell',
   'cs2_launch',
+  'webview2_recheck',
+  'webview2_recovery_action',
   'bundle_root_resolved',
   'mutex_acquired',
   'shutdown_scope',
@@ -181,7 +183,13 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ...(update && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
-    ...(['powershell', 'cs2_launch'].includes(stage ?? '') &&
+    ...([
+      'powershell',
+      'cs2_launch',
+      'webview2_preflight',
+      'webview2_recheck',
+      'webview2_recovery_action',
+    ].includes(stage ?? '') &&
     (typeof entry.error === 'string' || typeof entry.detail === 'string')
       ? {
           localDiagnostic: redactDiagnosticText(

@@ -1667,7 +1667,9 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     }
     if let Err(error) = job_cleanup {
         log.event(cleanup_stage, "failure", Some(&error));
-        return outcome.and(Err(error));
+        return Err(format!(
+            "startup_rollback_failed: {error}\nOriginal startup outcome: {outcome:?}"
+        ));
     }
     log.event(cleanup_stage, "success", None);
     if outcome.is_ok() {
@@ -1797,9 +1799,15 @@ fn main() {
         "success",
         Some(&windows_startup::windows_version()),
     );
-    if let Err(error) = start_gui(&root, &log) {
+    while let Err(error) = start_gui(&root, &log) {
         log.event("startup_failed", "failure", Some(&error));
-        failure_dialog(&error, Some(&log.directory));
+        if error.starts_with("webview2_preflight:") {
+            if windows_startup::recover_webview(&log, webview_preflight) {
+                continue;
+            }
+        } else {
+            failure_dialog(&error, Some(&log.directory));
+        }
         std::process::exit(1);
     }
 }
