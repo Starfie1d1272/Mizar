@@ -21,13 +21,13 @@ $resourceChecks = Start-Job -ArgumentList (Get-Location).Path, $PSScriptRoot, $b
   # Native diagnostics do not define success: require each actual exit code.
   $ErrorActionPreference = 'Continue'
   Set-Location -LiteralPath $repository -ErrorAction Stop
-  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
+  $global:LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   node "$scripts/test-resource-mirror.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/resource-mirror.mjs')
   if ($LASTEXITCODE) { throw 'Box resource transport failed' }
-  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
+  $global:LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   pnpm exec vitest run scripts/web-installer/qualification-plan.test.mjs scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs scripts/web-installer/core-reuse.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
   if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
-  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
+  $global:LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   node "$scripts/test-pack-cache-boundary.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/install-official-pack.mjs')
   if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
 }
