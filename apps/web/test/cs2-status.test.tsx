@@ -102,7 +102,7 @@ describe('CS2 configuration progress', () => {
     expect(container.textContent).toContain('退出 CS2 并恢复设置');
     expect(container.querySelector('select')?.hasAttribute('disabled')).toBe(true);
     await poll({ busy: true, phase: 'restoring' });
-    expect(container.textContent?.match(/正在关闭游戏并恢复配置…/g)).toHaveLength(1);
+    expect(container.textContent?.match(/正在关闭本次游戏…/g)).toHaveLength(1);
   });
 
   it('saves quality and frame limit together and reports unlimited-frame risk in text', async () => {

@@ -46,7 +46,10 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   return (
     <StatusBanner
       tone={
-        status?.pending && !uncertain && (!status.running || Boolean(status.message))
+        status?.canPreserve ||
+        (status?.pending &&
+          !uncertain &&
+          (!status.running || (Boolean(status.message) && !status.preserveSettings)))
           ? 'warning'
           : phase || uncertain || status?.running
             ? 'info'
@@ -61,16 +64,30 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               ? uncertain
                 ? '正在等待 Steam 启动 CS2'
                 : status.running
-                  ? 'CS2 正在运行，原配置已备份'
-                  : 'CS2 原配置尚未恢复'
-              : '原设置已恢复'}
+                  ? status.preserveSettings
+                    ? 'CS2 正在运行，已保持原游戏设置'
+                    : 'CS2 正在运行，原配置已备份'
+                  : status.preserveSettings
+                    ? '等待清理本次启动记录'
+                    : 'CS2 原配置尚未恢复'
+              : status?.canPreserve
+                ? '未应用游戏设置，原始配置已备份'
+                : '原设置已恢复'}
         </strong>
+        {status?.canPreserve ? (
+          <p>
+            {status.message} 保持原设置继续时，不应用自动画质、帧率和游戏窗口布局，本机 HUD
+            覆盖停用。
+          </p>
+        ) : null}
         {status?.pending ? (
           <p>
             {status.message ||
               (uncertain
                 ? 'Steam 启动结果待确认，请先检查游戏和 Steam 启动请求。'
-                : '退出工作台会关闭本次游戏并恢复配置；异常退出后可在这里重试。')}
+                : status.preserveSettings
+                  ? '已保持原游戏设置；退出工作台会关闭本次游戏，保留游戏期间的新设置及原始备份。'
+                  : '退出工作台会关闭本次游戏并恢复配置；异常退出后可在这里重试。')}
           </p>
         ) : null}
         {uncertain ? (
@@ -81,6 +98,19 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           />
         ) : null}
         <div className="preparation-actions">
+          {status?.canPreserve && production ? (
+            <Button
+              disabled={busy || Boolean(phase)}
+              onClick={() =>
+                void run(
+                  () => productionAction('enter', production, true),
+                  '已保持原游戏设置打开工作台。',
+                )
+              }
+            >
+              保持原游戏设置继续
+            </Button>
+          ) : null}
           {status?.running && production ? (
             <Button
               disabled={busy || Boolean(phase)}
@@ -95,18 +125,26 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || Boolean(phase) || !production || (uncertain && !cancelled)}
               onClick={() =>
-                void run(() =>
-                  status.running && production
-                    ? production.mode === 'preparation'
-                      ? desktopInvoke('finish_managed_cs2')
-                      : productionAction('finish', production)
-                    : production?.mode === 'preparation'
-                      ? desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: cancelled })
-                      : productionAction('finish', production!),
+                void run(
+                  () =>
+                    status.running && production
+                      ? production.mode === 'preparation'
+                        ? desktopInvoke('finish_managed_cs2')
+                        : productionAction('finish', production)
+                      : production?.mode === 'preparation'
+                        ? desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: cancelled })
+                        : productionAction('finish', production!),
+                  status.preserveSettings ? '本次启动已结束，游戏设置保持不变。' : '原设置已恢复。',
                 )
               }
             >
-              {status.running ? '退出 CS2 并恢复设置' : '恢复配置备份'}
+              {status.preserveSettings
+                ? status.running
+                  ? '退出本次 CS2'
+                  : '清理启动记录'
+                : status.running
+                  ? '退出 CS2 并恢复设置'
+                  : '恢复配置备份'}
             </Button>
           ) : null}
           <Button

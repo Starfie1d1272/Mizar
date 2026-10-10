@@ -103,7 +103,11 @@ export async function checkObsBeforeLaunch(requireStoppedOutput = false) {
   return true;
 }
 
-export async function productionAction(action: 'enter' | 'hide' | 'finish', state: Production) {
+export async function productionAction(
+  action: 'enter' | 'hide' | 'finish',
+  state: Production,
+  preserveSettings = false,
+) {
   if (window.__TAURI_INTERNALS__ && action !== 'hide') {
     const response = await fetch('/local/v1/demo-test', {
       cache: 'no-store',
@@ -122,7 +126,10 @@ export async function productionAction(action: 'enter' | 'hide' | 'finish', stat
   if (action === 'enter' && !(await checkObsBeforeLaunch())) return;
   let newlyStarted = false;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
-    newlyStarted = await desktopInvoke<boolean>('start_managed_cs2');
+    newlyStarted = await desktopInvoke<boolean>(
+      'start_managed_cs2',
+      preserveSettings ? { preserveSettings: true } : undefined,
+    );
     let gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
