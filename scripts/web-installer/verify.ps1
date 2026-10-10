@@ -17,12 +17,17 @@ if ($LASTEXITCODE) { throw 'Bridge deployment failed' }
 # UI/NSIS checks remain ordered because they share Windows installation state.
 $resourceChecks = Start-Job -ArgumentList (Get-Location).Path, $PSScriptRoot, $bridge -ScriptBlock {
   param($repository, $scripts, $deployed)
-  $ErrorActionPreference = 'Stop'
-  Set-Location -LiteralPath $repository
+  # PowerShell 5.1 captures native stderr as ErrorRecords in background jobs.
+  # Native diagnostics do not define success: require each actual exit code.
+  $ErrorActionPreference = 'Continue'
+  Set-Location -LiteralPath $repository -ErrorAction Stop
+  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   node "$scripts/test-resource-mirror.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/resource-mirror.mjs')
   if ($LASTEXITCODE) { throw 'Box resource transport failed' }
+  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   pnpm exec vitest run scripts/web-installer/qualification-plan.test.mjs scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs scripts/web-installer/core-reuse.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
   if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
+  $LASTEXITCODE = 1 # A missing command must fail even without a native exit code.
   node "$scripts/test-pack-cache-boundary.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/install-official-pack.mjs')
   if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
 }
@@ -30,6 +35,7 @@ $nativeFailure = $null
 try {
   & "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
   & "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
+  if ($resourceChecks.State -eq 'Failed') { throw 'Windows resource checks failed before NSIS' }
   $previous = @{}
   foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
   try {
