@@ -58,7 +58,25 @@ export function assertPublication(publication, manifestBytes, manifest) {
   );
 }
 
+async function compactLayout(product) {
+  try {
+    await readFile(join(product, 'qualification-provenance.json'));
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
 async function expectedAssets(product, evidence) {
+  if (await compactLayout(product)) {
+    const { productAssets } = await import('./release-envelope.mjs');
+    return Promise.all(
+      (await productAssets(product)).map(async (path) => {
+        const bytes = await readFile(path);
+        return { name: basename(path), size: bytes.length, sha256: sha256(bytes) };
+      }),
+    );
+  }
   const paths = [];
   for (const folder of [product, evidence])
     for (const entry of await readdir(folder, { withFileTypes: true }))
@@ -81,7 +99,18 @@ async function verifiedPublishedRelease(releasePath, refPath, tag, product, evid
   return { identity, release };
 }
 
-async function verifyExistingPublication(release, identity, product) {
+async function verifyExistingPublication(release, identity, product, evidence) {
+  if (await compactLayout(product)) {
+    const { verifyCompactExisting } = await import('./release-envelope.mjs');
+    await verifyCompactExisting(
+      release,
+      { object: { type: 'commit', sha: identity.gitSha } },
+      identity,
+      product,
+      evidence,
+    );
+    return;
+  }
   if (!/^v\d+\.\d+\.\d+$/.test(identity.tag)) return;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-publication-'));
   try {
@@ -143,7 +172,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     evidence,
   );
   if (mode === 'verify-existing') {
-    await verifyExistingPublication(release, identity, product);
+    await verifyExistingPublication(release, identity, product, evidence);
     console.log('已发布版本的完整必需资产与正式发布确认一致；不修改公开文件。');
   } else {
     requireValue(

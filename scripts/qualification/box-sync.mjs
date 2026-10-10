@@ -9,10 +9,19 @@ import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
 import { releaseAttestationArgs } from './release-identity.mjs';
 import { assertPublication } from './update-publication.mjs';
+import {
+  decodeEvidence,
+  evidenceName,
+  makeUpdateIndex,
+  verifyCoreEvidence,
+  verifyEvidencePublication,
+  verifyPromotionEvidence,
+} from './release-envelope.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
 const origin = 'https://box.nju.edu.cn';
+const offlinePattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64\.zip$/;
 const setupPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-Setup\.exe$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -90,6 +99,50 @@ export function validateRelease(release, manifest, distribution, tag, tagSha) {
     size: distribution.archiveBytes,
     sha256: distribution.archiveSha256,
     asset: assets[0],
+    gitSha: manifest.gitSha,
+    releaseId: release.id,
+  };
+}
+
+export function validateOfflineRelease(release, manifest, tag, tagSha) {
+  requireValue(
+    /^v\d+\.\d+\.\d+$/.test(tag) &&
+      release.tag_name === tag &&
+      !release.draft &&
+      !release.prerelease &&
+      release.published_at,
+    '离线包不是同版本正式发行',
+  );
+  requireValue(
+    manifest.schemaVersion === 1 &&
+      manifest.gitSha === tagSha &&
+      /^[a-f0-9]{40}$/.test(tagSha) &&
+      manifest.appVersion === tag.slice(1) &&
+      manifest.developmentOnly === false &&
+      manifest.desktopBuildProfile === 'release' &&
+      manifest.archive === `Mizar-${tag}-Windows-x64.zip` &&
+      shaPattern.test(manifest.archiveSha256),
+    '离线包源码、版本或完整构建身份不一致',
+  );
+  const found = release.assets.filter((a) => a.name === manifest.archive);
+  requireValue(
+    found.length === 1 &&
+      Number.isSafeInteger(found[0].size) &&
+      found[0].size > 0 &&
+      found[0].size <= 1073741824 &&
+      found[0].digest === `sha256:${manifest.archiveSha256}` &&
+      found[0].browser_download_url ===
+        `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${manifest.archive}`,
+    'Release 离线包大小、地址或摘要不一致',
+  );
+  return {
+    name: manifest.archive,
+    version: manifest.appVersion,
+    size: found[0].size,
+    sha256: manifest.archiveSha256,
+    asset: found[0],
+    gitSha: manifest.gitSha,
+    releaseId: release.id,
   };
 }
 
@@ -197,26 +250,38 @@ async function verifyRemote(box, path, identity) {
 }
 
 // Upload and verify before removing anything from Stable. Archive is never pruned here.
-export async function syncStable({ box, identity, bytes, resolveIdentity }) {
+async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pattern) {
   requireValue(
     bytes.length === identity.size && digest(bytes) === identity.sha256,
     '本地安装包校验失败',
   );
+  requireValue(pattern.exec(identity.name)?.[1] === identity.version, '分发包名称或版本无效');
   await box.initialize();
-  const stable = await box.list('/Stable');
+  if (folder === '/Offline') {
+    const matches = (await box.list('/')).filter((entry) => entry.name === 'Offline');
+    requireValue(
+      matches.length <= 1 && (!matches.length || matches[0].type === 'dir'),
+      'Offline 必须是独立目录',
+    );
+    if (!matches.length) await box.api('dir', '/Offline', 'POST', { operation: 'mkdir' });
+  }
+  const current = await box.list(folder);
   requireValue(
-    stable.every((e) => e.type === 'file' && setupPattern.test(e.name)),
-    'Stable 存在非正式安装包；请维护者核对',
+    current.every((e) => e.type === 'file' && pattern.test(e.name)),
+    `${folder.slice(1)} 存在不支持的分发文件；请维护者核对`,
   );
-  const old = stable.filter((e) => e.name !== identity.name);
+  const old = current.filter((e) => e.name !== identity.name);
   const verified = [];
   // Validate all names and published identities before any mutation, including downgrade retries.
   for (const entry of old) {
-    const version = setupPattern.exec(entry.name)[1];
-    requireValue(older(version, identity.version), 'Stable 已有更新版本；跳过旧版本同步');
+    const version = pattern.exec(entry.name)[1];
+    requireValue(
+      older(version, identity.version),
+      `${folder.slice(1)} 已有更新版本；跳过旧版本同步`,
+    );
     const previous = await resolveIdentity(`v${version}`);
     requireValue(previous.name === entry.name, '旧安装包名称不一致');
-    await verifyRemote(box, `/Stable/${entry.name}`, previous);
+    await verifyRemote(box, `${folder}/${entry.name}`, previous);
     verified.push(previous);
   }
   const archive = await box.list('/Archive');
@@ -224,34 +289,60 @@ export async function syncStable({ box, identity, bytes, resolveIdentity }) {
     if (archive.some((e) => e.name === previous.name))
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
   }
-  if (!stable.some((e) => e.name === identity.name))
-    await box.upload('/Stable', identity.name, bytes);
-  await verifyRemote(box, `/Stable/${identity.name}`, identity);
+  if (!current.some((e) => e.name === identity.name))
+    await box.upload(folder, identity.name, bytes);
+  await verifyRemote(box, `${folder}/${identity.name}`, identity);
   for (const previous of verified) {
     // Repeat the new download check before each operation that removes an old public file.
-    await verifyRemote(box, `/Stable/${identity.name}`, identity);
+    await verifyRemote(box, `${folder}/${identity.name}`, identity);
     if (archive.some((e) => e.name === previous.name)) {
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
-      await box.remove(`/Stable/${previous.name}`);
+      await box.remove(`${folder}/${previous.name}`);
     } else {
-      await box.move('/Stable', '/Archive', previous.name);
+      await box.move(folder, '/Archive', previous.name);
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
     }
   }
-  const after = await box.list('/Stable');
+  const after = await box.list(folder);
   requireValue(
     after.length === 1 && after[0].name === identity.name,
-    '新版已保留；Stable 尚需整理，可重试同一版本',
+    `新版已保留；${folder.slice(1)} 尚需整理，可重试同一版本`,
   );
-  return '同步成功：Stable 已保留一个经过校验的正式安装包；Archive 保留回滚版本。';
+  return `同步成功：${folder.slice(1)} 已保留一个经过校验的正式分发包；Archive 保留回滚版本。`;
 }
 
-export async function syncStableRelease({ box, identity, bytes, resolveIdentity, updateIndex }) {
+export async function syncStable(options) {
+  return syncPackage(options, '/Stable', setupPattern);
+}
+export async function syncOffline(options) {
+  return syncPackage(options, '/Offline', offlinePattern);
+}
+
+export async function syncStableRelease({
+  box,
+  identity,
+  bytes,
+  resolveIdentity,
+  offline,
+  updateIndex,
+}) {
+  requireValue(
+    offline?.identity && offline.bytes && offline.resolveIdentity,
+    '缺少同源完整离线 ZIP',
+  );
+  requireValue(
+    offline.identity.version === identity.version &&
+      offline.identity.gitSha === identity.gitSha &&
+      offline.identity.releaseId === identity.releaseId,
+    '安装器与离线 ZIP 必须属于同源同版正式发行',
+  );
+  await syncOffline({ box, ...offline });
   const result = await syncStable({ box, identity, bytes, resolveIdentity });
   if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
   await verifyRemote(box, `/Stable/${identity.name}`, identity);
+  await verifyRemote(box, `/Offline/${offline.identity.name}`, offline.identity);
   const root = await box.list('/');
   const updates = root.find((e) => e.name === 'Updates');
   requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
@@ -308,24 +399,92 @@ async function github(path) {
     })
   ).json();
 }
+async function downloadReleaseAsset(release, tag, name, maximum = 65536) {
+  const assets = release.assets.filter((asset) => asset.name === name);
+  requireValue(
+    assets.length === 1 &&
+      Number.isSafeInteger(assets[0].size) &&
+      assets[0].size > 0 &&
+      assets[0].size <= maximum &&
+      assets[0].browser_download_url ===
+        `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${name}`,
+    'Release 资产名称、大小或地址无效',
+  );
+  const response = await checkedFetch(assets[0].browser_download_url, {}, 600000);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    requireValue(size <= assets[0].size && size <= maximum, 'Release 下载字节超限');
+    chunks.push(chunk);
+  }
+  const bytes = Buffer.concat(chunks);
+  requireValue(
+    bytes.length === assets[0].size && assets[0].digest === `sha256:${digest(bytes)}`,
+    'Release 下载身份不一致',
+  );
+  return bytes;
+}
 async function releaseIdentity(tag) {
   requireValue(/^v\d+\.\d+\.\d+$/.test(tag), '无效正式版本标签');
   const release = await github(`releases/tags/${tag}`);
   const ref = await github(`git/ref/tags/${tag}`);
   requireValue(ref.object.type === 'commit', '发布标签必须直接指向已验源码');
-  const getJson = async (name) => {
-    const assets = release.assets.filter((a) => a.name === name);
-    requireValue(assets.length === 1, 'Release 缺少唯一发布清单');
-    const url = assets[0].browser_download_url;
-    requireValue(
-      url === `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${name}`,
-      '发布资产地址不一致',
+  const compact = release.assets.some((asset) => asset.name === 'update-index.json');
+  let manifestBytes, distributionBytes, entries;
+  if (compact) {
+    entries = decodeEvidence(
+      await downloadReleaseAsset(release, tag, evidenceName(tag.slice(1)), 67108864),
     );
-    return (await checkedFetch(url)).json();
-  };
-  const manifest = await getJson('release-manifest.json');
-  const distribution = await getJson('distribution-manifest.json');
-  return validateRelease(release, manifest, distribution, tag, ref.object.sha);
+    await verifyCoreEvidence(entries, ref.object.sha);
+    await verifyPromotionEvidence(entries);
+    await verifyEvidencePublication(entries, release);
+    manifestBytes = entries.get('product/release-manifest.json');
+    distributionBytes = entries.get('product/distribution-manifest.json');
+  } else {
+    manifestBytes = await downloadReleaseAsset(release, tag, 'release-manifest.json');
+    distributionBytes = await downloadReleaseAsset(release, tag, 'distribution-manifest.json');
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-source-'));
+    try {
+      for (const [name, bytes] of [
+        ['release-manifest.json', manifestBytes],
+        ['distribution-manifest.json', distributionBytes],
+      ]) {
+        await writeFile(join(directory, name), bytes);
+        await promisify(execFile)(
+          'gh',
+          releaseAttestationArgs(join(directory, name), ref.object.sha),
+        );
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+  const manifest = JSON.parse(manifestBytes),
+    distribution = JSON.parse(distributionBytes);
+  const identity = validateRelease(release, manifest, distribution, tag, ref.object.sha);
+  identity.offline = validateOfflineRelease(release, manifest, tag, ref.object.sha);
+  identity.release = release;
+  if (compact) {
+    const expected = makeUpdateIndex(
+      entries.get('product/update-manifest.json'),
+      entries.get('product/update-provenance.json'),
+      entries.get('update-publication.json'),
+      entries.get('update-publication-provenance.json'),
+    );
+    const update = JSON.parse(entries.get('product/update-manifest.json'));
+    requireValue(
+      update.version === identity.version &&
+        update.gitSha === identity.gitSha &&
+        update.installer.name === identity.name &&
+        update.installer.sha256 === identity.sha256 &&
+        update.installer.bytes === identity.size,
+      '更新信封与同版正式安装包不一致',
+    );
+    identity.updateIndex = await downloadReleaseAsset(release, tag, 'update-index.json', 2097152);
+    requireValue(identity.updateIndex.equals(expected), '公开更新信封与已验原证明不一致');
+  }
+  return identity;
 }
 
 async function main() {
@@ -355,10 +514,14 @@ async function main() {
       `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${identity.name}`,
     '安装包地址不一致',
   );
-  const bytes = Buffer.from(
-    await (await checkedFetch(identity.asset.browser_download_url, {}, 600000)).arrayBuffer(),
+  const release = identity.release;
+  const bytes = await downloadReleaseAsset(release, tag, identity.name, identity.size);
+  const offlineBytes = await downloadReleaseAsset(
+    release,
+    tag,
+    identity.offline.name,
+    identity.offline.size,
   );
-  const release = await github(`releases/tags/${tag}`);
   const metadata = release.assets.filter((a) =>
     [
       'update-manifest.json',
@@ -367,8 +530,8 @@ async function main() {
       'update-publication-provenance.json',
     ].includes(a.name),
   );
-  let updateIndex;
-  if (metadata.length) {
+  let updateIndex = identity.updateIndex;
+  if (!updateIndex && metadata.length) {
     requireValue(metadata.length === 4, '正式更新资料缺少清单、来源证明或发布确认');
     const assets = [];
     const directory = await mkdtemp(join(tmpdir(), 'mizar-update-proof-'));
@@ -382,8 +545,11 @@ async function main() {
               `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/update-${kind}.json`,
           '更新资料地址或大小无效',
         );
-        const data = Buffer.from(
-          await (await checkedFetch(asset.browser_download_url)).arrayBuffer(),
+        const data = await downloadReleaseAsset(
+          release,
+          tag,
+          asset.name,
+          kind.includes('provenance') ? 2097152 : 65536,
         );
         requireValue(
           data.length === asset.size && asset.digest === `sha256:${digest(data)}`,
@@ -404,6 +570,7 @@ async function main() {
       );
       requireValue(
         update.version === identity.version &&
+          update.gitSha === identity.gitSha &&
           update.installer.name === identity.name &&
           update.installer.sha256 === identity.sha256 &&
           update.installer.bytes === identity.size,
@@ -424,22 +591,28 @@ async function main() {
           'promotion',
         ),
       );
-      updateIndex = Buffer.from(
-        JSON.stringify({
-          schemaVersion: 'mizar.update-index.v2',
-          manifestBase64: assets.find((a) => a.kind === 'manifest').bytes.toString('base64'),
-          provenance: JSON.parse(assets.find((a) => a.kind === 'provenance').bytes),
-          publicationBase64: assets.find((a) => a.kind === 'publication').bytes.toString('base64'),
-          publicationProvenance: JSON.parse(
-            assets.find((a) => a.kind === 'publication-provenance').bytes,
-          ),
-        }) + '\n',
+      updateIndex = makeUpdateIndex(
+        assets.find((a) => a.kind === 'manifest').bytes,
+        assets.find((a) => a.kind === 'provenance').bytes,
+        assets.find((a) => a.kind === 'publication').bytes,
+        assets.find((a) => a.kind === 'publication-provenance').bytes,
       );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
-  return syncStableRelease({ box, identity, bytes, resolveIdentity: releaseIdentity, updateIndex });
+  return syncStableRelease({
+    box,
+    identity,
+    bytes,
+    resolveIdentity: releaseIdentity,
+    offline: {
+      identity: identity.offline,
+      bytes: offlineBytes,
+      resolveIdentity: async (tag) => (await releaseIdentity(tag)).offline,
+    },
+    updateIndex,
+  });
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {

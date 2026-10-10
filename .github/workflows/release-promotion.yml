@@ -83,6 +83,9 @@ jobs:
         run: |
           git fetch --depth 1 origin $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Source fetch failed' }
+          $layout = git ls-tree $env:SOURCE_SHA -- scripts/qualification/release-envelope.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified source release layout lookup failed' }
+          "RELEASE_ENVELOPE_ENABLED=$([bool]$layout)" >> $env:GITHUB_ENV
           $bridge = git ls-tree $env:SOURCE_SHA -- scripts/ci/resource-release.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Qualified source resource contract lookup failed' }
           if (!$bridge) {
@@ -185,7 +188,12 @@ jobs:
             'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
             exit 0
           }
-          $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
+          if ($env:RELEASE_ENVELOPE_ENABLED -eq 'True') {
+            $assets = @(node scripts/qualification/release-envelope.mjs assets product evidence | ConvertFrom-Json)
+            if ($LASTEXITCODE -ne 0) { throw 'Compact product asset selection failed' }
+          } else {
+            $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
+          }
           if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -File).FullName) }
           $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
           node scripts/qualification/release-notes.mjs $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
@@ -219,7 +227,10 @@ jobs:
         id: publication-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          subject-path: update-publication.json
+          subject-path: |
+            update-publication.json
+            promotion-identity.json
+            promotion-ci.json
       - name: Upload and verify publication authorization
         if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
@@ -229,9 +240,43 @@ jobs:
           Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination update-publication-provenance.json
           gh attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }
+          if ($env:RELEASE_ENVELOPE_ENABLED -eq 'True') {
+            Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination promotion-records-provenance.json
+            exit 0
+          }
           gh release upload $env:RELEASE_TAG update-publication.json update-publication-provenance.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
           node scripts/qualification/update-publication.mjs verify-existing published-release.json published-ref.json $env:RELEASE_TAG product evidence
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
+      - name: Attest original prerelease promotion records
+        if: ${{ env.RELEASE_ENVELOPE_ENABLED == 'True' && contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        id: prerelease-records
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            promotion-identity.json
+            promotion-ci.json
+      - name: Publish one immutable evidence archive and the existing update envelope
+        if: ${{ env.RELEASE_ENVELOPE_ENABLED == 'True' && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        shell: pwsh
+        env:
+          PRERELEASE_RECORDS_BUNDLE: ${{ steps.prerelease-records.outputs.bundle-path }}
+        run: |
+          if ($env:RELEASE_TAG -match '-rc\.') { Copy-Item -LiteralPath $env:PRERELEASE_RECORDS_BUNDLE -Destination promotion-records-provenance.json }
+          New-Item -ItemType Directory -Path release-envelopes | Out-Null
+          $resources = '-'
+          if ($env:RESOURCE_ENABLED -eq 'true') { $resources = $env:RESOURCE_FROZEN_ROOT }
+          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Publication lookup before evidence freeze failed' }
+          node scripts/qualification/release-envelope.mjs finalize product evidence "$resources" release-envelopes published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Original evidence/update envelope assembly failed' }
+          gh release upload $env:RELEASE_TAG @((Get-ChildItem release-envelopes -File).FullName)
+          if ($LASTEXITCODE -ne 0) { throw 'Evidence upload failed; refusing overwrite on retry' }
+          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'Final compact release readback failed' }
+          gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
+          if ($LASTEXITCODE -ne 0) { throw 'Final compact tag readback failed' }
+          node scripts/qualification/update-publication.mjs verify-existing published-release.json published-ref.json $env:RELEASE_TAG product evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Original compact release evidence verification failed' }

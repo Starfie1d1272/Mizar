@@ -4,6 +4,8 @@ import {
   digest,
   syncStable,
   syncStableRelease,
+  syncOffline,
+  validateOfflineRelease,
   validateRelease,
   BoxClient,
   probe,
@@ -78,6 +80,10 @@ const previous = make('1.0.0'),
 const run = (box, identity = next) =>
   syncStable({ box, identity, bytes: identity.bytes, resolveIdentity: async () => previous });
 
+const offline = (setup) => ({ ...setup, name: `Mizar-v${setup.version}-Windows-x64.zip` });
+const offlinePrevious = offline(previous),
+  offlineNext = offline(next);
+
 describe('云盘稳定版同步', () => {
   it('完成安装包校验与归档才发布 Updates 清单，失败保留原清单，重试幂等', async () => {
     const oldIndex = Buffer.from('old signed index');
@@ -97,6 +103,11 @@ describe('云盘稳定版同步', () => {
         bytes: next.bytes,
         resolveIdentity: async () => previous,
         updateIndex,
+        offline: {
+          identity: offlineNext,
+          bytes: offlineNext.bytes,
+          resolveIdentity: async () => offlinePrevious,
+        },
       });
     await expect(sync()).rejects.toThrow('archival failed');
     expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
@@ -266,5 +277,157 @@ describe('已发布安装包身份', () => {
     expect(() =>
       validateRelease(release, { ...manifest, ...change }, distribution, 'v1.0.1', sha),
     ).toThrow();
+  });
+});
+
+describe('完整离线 ZIP 的独立镜像与共同发布屏障', () => {
+  const runOffline = (box, identity = offlineNext) =>
+    syncOffline({
+      box,
+      identity,
+      bytes: identity.bytes,
+      resolveIdentity: async () => offlinePrevious,
+    });
+  it('Archive 保留完整旧 ZIP，同版重试不上传或覆盖', async () => {
+    const box = fakeBox({ [`/Offline/${offlinePrevious.name}`]: offlinePrevious.bytes });
+    await runOffline(box);
+    expect(box.stored.get(`/Archive/${offlinePrevious.name}`)).toEqual(offlinePrevious.bytes);
+    expect(box.stored.get(`/Offline/${offlineNext.name}`)).toEqual(offlineNext.bytes);
+    box.operations = [];
+    await runOffline(box);
+    expect(box.operations).toEqual([]);
+  });
+  it('损坏、Archive 冲突、外部文件与降版在整理前拒绝', async () => {
+    for (const files of [
+      { [`/Offline/${offlineNext.name}`]: Buffer.from('bad') },
+      {
+        [`/Offline/${offlinePrevious.name}`]: offlinePrevious.bytes,
+        [`/Archive/${offlinePrevious.name}`]: Buffer.from('bad'),
+      },
+      { '/Offline/manual.zip': Buffer.from('keep') },
+    ]) {
+      const box = fakeBox(files);
+      await expect(runOffline(box)).rejects.toThrow();
+      expect(box.operations).toEqual([]);
+    }
+    const newer = fakeBox({ [`/Offline/${offlineNext.name}`]: offlineNext.bytes });
+    await expect(runOffline(newer, offlinePrevious)).rejects.toThrow('更新版本');
+    expect(newer.operations).toEqual([]);
+  });
+  it('离线上传损坏或归档中断时保留旧 Updates，重试完成后才发布', async () => {
+    const old = Buffer.from('old signed update index'),
+      current = Buffer.from('new signed update index');
+    const box = fakeBox({
+      [`/Offline/${offlinePrevious.name}`]: offlinePrevious.bytes,
+      [`/Stable/${previous.name}`]: previous.bytes,
+      '/Updates/latest.json': old,
+    });
+    const upload = box.upload;
+    box.upload = async function (folder, name, bytes) {
+      await upload.call(this, folder, name, folder === '/Offline' ? Buffer.from('bad') : bytes);
+    };
+    const sync = () =>
+      syncStableRelease({
+        box,
+        identity: next,
+        bytes: next.bytes,
+        resolveIdentity: async () => previous,
+        offline: {
+          identity: offlineNext,
+          bytes: offlineNext.bytes,
+          resolveIdentity: async () => offlinePrevious,
+        },
+        updateIndex: current,
+      });
+    await expect(sync()).rejects.toThrow('内容冲突');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(old);
+    expect(box.stored.get(`/Offline/${offlinePrevious.name}`)).toEqual(offlinePrevious.bytes);
+    expect(box.stored.get(`/Stable/${previous.name}`)).toEqual(previous.bytes);
+    box.stored.delete(`/Offline/${offlineNext.name}`); // Operator removes only this failed fixture upload.
+    box.upload = upload;
+    const move = box.move;
+    box.move = async () => {
+      throw Error('offline archive interrupted');
+    };
+    await expect(sync()).rejects.toThrow('archive interrupted');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(old);
+    box.move = move;
+    await sync();
+    expect(box.stored.get('/Updates/latest.json')).toEqual(current);
+    expect(box.stored.get(`/Archive/${offlinePrevious.name}`)).toEqual(offlinePrevious.bytes);
+  });
+  it('缺少离线包或跨版本包不能启动镜像事务', async () => {
+    const box = fakeBox();
+    await expect(
+      syncStableRelease({
+        box,
+        identity: next,
+        bytes: next.bytes,
+        resolveIdentity: async () => previous,
+      }),
+    ).rejects.toThrow('缺少');
+    await expect(
+      syncStableRelease({
+        box,
+        identity: next,
+        bytes: next.bytes,
+        resolveIdentity: async () => previous,
+        offline: {
+          identity: offlinePrevious,
+          bytes: offlinePrevious.bytes,
+          resolveIdentity: async () => offlinePrevious,
+        },
+      }),
+    ).rejects.toThrow('同源同版');
+    expect(box.operations).toEqual([]);
+  });
+  it('仅接收同标签、精确源码与正式完整构建的唯一 ZIP', () => {
+    const manifest = {
+      schemaVersion: 1,
+      appVersion: '1.0.1',
+      gitSha: 'a'.repeat(40),
+      archive: offlineNext.name,
+      archiveSha256: offlineNext.sha256,
+      developmentOnly: false,
+      desktopBuildProfile: 'release',
+    };
+    const asset = {
+      name: offlineNext.name,
+      size: offlineNext.size,
+      digest: `sha256:${offlineNext.sha256}`,
+      browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.1/${offlineNext.name}`,
+    };
+    const release = {
+      id: 42,
+      tag_name: 'v1.0.1',
+      draft: false,
+      prerelease: false,
+      published_at: '2026-10-10T00:00:00Z',
+      assets: [asset],
+    };
+    expect(validateOfflineRelease(release, manifest, 'v1.0.1', manifest.gitSha).sha256).toBe(
+      offlineNext.sha256,
+    );
+    for (const change of [
+      { draft: true },
+      { prerelease: true },
+      { assets: [] },
+      { assets: [asset, asset] },
+      { assets: [{ ...asset, digest: 'sha256:' + 'b'.repeat(64) }] },
+      { assets: [{ ...asset, browser_download_url: 'https://evil.invalid/zip' }] },
+    ]) {
+      expect(() =>
+        validateOfflineRelease({ ...release, ...change }, manifest, 'v1.0.1', manifest.gitSha),
+      ).toThrow();
+    }
+    for (const change of [
+      { developmentOnly: true },
+      { desktopBuildProfile: 'ci' },
+      { schemaVersion: 2 },
+      { gitSha: 'b'.repeat(40) },
+    ])
+      expect(() =>
+        validateOfflineRelease(release, { ...manifest, ...change }, 'v1.0.1', manifest.gitSha),
+      ).toThrow();
   });
 });
