@@ -226,6 +226,54 @@ test('task workspaces use real local data and keep candidate browsing separate f
       '名称 / 品牌 / 地图池 / BO3 规则与保存、取消处于同一工作面',
     );
     await page.getByRole('button', { name: '取消编辑', exact: true }).click();
+    // Discarding one editor must destroy its draft and leave the next editor's guard intact.
+    await page.getByRole('button', { name: '编辑赛事品牌与默认规则', exact: true }).click();
+    await page.getByLabel('赛事名称', { exact: true }).fill('应放弃的赛事名称');
+    await page.getByRole('button', { name: new RegExp(`${teamA} vs ${teamB}`) }).click();
+    await page.getByRole('button', { name: '编辑赛事品牌与默认规则', exact: true }).click();
+    await expect(page.getByLabel('赛事名称', { exact: true })).toHaveValue(eventName);
+    await page.getByRole('button', { name: '取消编辑', exact: true }).click();
+    await page.getByRole('button', { name: '编辑比赛', exact: true }).click();
+    const editedTeam = page.getByLabel('队名', { exact: true }).first();
+    await editedTeam.fill('应保留的比赛草稿');
+    const savedEvent = (await app.inject('/local/v1/tournament')).json<{
+      events: {
+        eventId: string;
+        logoUrl: string | null;
+        themeColor: string | null;
+        mapPool: string[];
+        bo3Rules: unknown;
+      }[];
+    }>().events[0]!;
+    const externalSave = await app.inject({
+      method: 'POST',
+      url: '/operator/local-event/save',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { ...savedEvent, name: '应放弃的赛事名称' },
+    });
+    expect(externalSave.statusCode).toBe(200);
+    await expect(page.getByLabel('浏览赛事', { exact: true })).toContainText('应放弃的赛事名称');
+    const restoreEvent = await app.inject({
+      method: 'POST',
+      url: '/operator/local-event/save',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { ...savedEvent, name: eventName },
+    });
+    expect(restoreEvent.statusCode).toBe(200);
+    await expect(page.getByLabel('浏览赛事', { exact: true })).toContainText(eventName);
+    page.removeAllListeners('dialog');
+    let discardAsked = false;
+    page.on('dialog', async (dialog) => {
+      discardAsked = true;
+      await dialog.dismiss();
+    });
+    await page.getByRole('button', { name: '编辑赛事品牌与默认规则', exact: true }).click();
+    expect(discardAsked).toBe(true);
+    await expect(editedTeam).toHaveValue('应保留的比赛草稿');
+    await expect(page.getByLabel('赛事名称', { exact: true })).toHaveCount(0);
+    page.removeAllListeners('dialog');
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: '取消编辑', exact: true }).click();
     await capture('09-event-details', '取消编辑 → 返回比赛详情', '左侧赛程不变，右侧恢复候选详情');
     await page.reload();
     if (evidence) await mkdir(evidence, { recursive: true });

@@ -122,6 +122,7 @@ export function EventMatchWorkspace({
           onClick={() => {
             if (!canChange()) return;
             setCreating((value) => !value);
+            setEditing(false);
             setEditingMatch(false);
           }}
         >
@@ -223,8 +224,8 @@ export function EventMatchWorkspace({
             <p>选择赛程中的一场查看双方、名单与地图；浏览不会自动载入。</p>
           </Panel>
         ) : null}
-        {event ? (
-          <div hidden={!editing || creating} className="event-inline-edit" key={eventId}>
+        {event && editing && !creating ? (
+          <div className="event-inline-edit" key={eventId}>
             <h2>赛事品牌与默认规则 · {event.name}</h2>
             <LocalTournamentEditor
               eventId={eventId}
