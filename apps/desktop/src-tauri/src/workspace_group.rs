@@ -17,12 +17,27 @@ impl Members {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Operation {
+    Complete,
+    Skipped,
+    Failed(u32),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub stage: &'static str,
+    pub api: &'static str,
+    pub last_error: Option<u32>,
+}
 trait Windows {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
     fn foreground(&self) -> isize;
     fn ready(&self, hwnd: isize) -> bool;
     fn minimized(&self, hwnd: isize) -> bool;
-    fn restore(&mut self, hwnd: isize) -> bool;
-    fn raise_behind(&mut self, hwnd: isize, selected: isize) -> bool;
+    fn restore(&mut self, hwnd: isize) -> Operation;
+    fn raise_behind(&mut self, hwnd: isize, selected: isize) -> Operation;
 }
 
 #[derive(Default)]
@@ -30,66 +45,91 @@ pub struct Group {
     members: Option<Members>,
     inside: bool,
     last_foreground: isize,
-    // One bounded transaction; a rejected call is not retried each tick.
-    pending: Option<(isize, u8)>,
+    // One transaction and a monotonic deadline, independent of worker delays.
+    pending: Option<(isize, std::time::Instant, bool)>,
 }
 impl Group {
-    fn tick(&mut self, windows: &mut impl Windows, members: Option<Members>) {
+    fn tick(&mut self, windows: &mut impl Windows, members: Option<Members>) -> Option<Failure> {
         let selected = windows.foreground();
         if self.members != members {
             self.members = members;
-            // Identity becoming available is not itself a user activation.
             self.inside = members.is_some_and(|m| m.contains(self.last_foreground));
             self.pending = None;
         }
         self.last_foreground = selected;
         let Some(members) = members else {
-            return;
+            return None;
         };
         let inside = members.contains(selected);
         if !inside {
             self.inside = false;
             self.pending = None;
-            return;
+            return None;
         }
         if !self.inside {
-            self.pending = Some((selected, 8)); // <= 2s on the existing 250ms worker
+            self.pending = Some((
+                selected,
+                windows.now() + std::time::Duration::from_secs(2),
+                false,
+            ));
         }
         self.inside = true;
-        let Some((expected, remaining)) = self.pending else {
-            return;
-        };
-        // Do not move peers behind a different member after the user changes
-        // focus, or behind a disabled owner while a modal dialog is open.
+        let (expected, deadline, submitted) = self.pending.take()?;
+        // User cancellation, hide, exit, modal and topmost windows are skips,
+        // not errors. Consuming pending ensures at most one failure per entry.
         if expected != selected || !members.handles().into_iter().all(|h| windows.ready(h)) {
-            self.pending = None;
-            return;
+            return None;
         }
-        self.pending = None;
+        if windows.now() >= deadline {
+            return Some(Failure {
+                stage: "restore_timeout",
+                api: "ShowWindowAsync",
+                last_error: None,
+            });
+        }
         let mut waiting = false;
         for hwnd in members.handles().into_iter().filter(|h| *h != selected) {
             if windows.foreground() != expected {
-                return;
+                return None;
             }
             if windows.minimized(hwnd) {
-                // Submit each restore once, then only observe its completion.
-                if remaining == 8 && !windows.restore(hwnd) {
-                    return;
+                if !submitted {
+                    match windows.restore(hwnd) {
+                        Operation::Complete => (),
+                        Operation::Skipped => return None,
+                        Operation::Failed(code) => {
+                            return Some(Failure {
+                                stage: "restore",
+                                api: "ShowWindowAsync",
+                                last_error: Some(code),
+                            })
+                        }
+                    }
                 }
                 waiting = true;
             }
         }
         if waiting {
-            if remaining > 1 {
-                self.pending = Some((expected, remaining - 1));
-            }
-            return;
+            self.pending = Some((expected, deadline, true));
+            return None;
         }
         for hwnd in members.handles().into_iter().filter(|h| *h != selected) {
-            if windows.foreground() != expected || !windows.raise_behind(hwnd, expected) {
-                return;
+            if windows.foreground() != expected {
+                return None;
+            }
+            match windows.raise_behind(hwnd, expected) {
+                Operation::Complete => (),
+                Operation::Skipped => return None,
+                Operation::Failed(code) => {
+                    return Some(Failure {
+                        stage: "raise",
+                        api: "SetWindowPos",
+                        last_error: Some(code),
+                    })
+                }
             }
         }
+        None
     }
 }
 
@@ -121,6 +161,11 @@ mod native {
             h: i32,
             flags: u32,
         ) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetLastError() -> u32;
+        fn SetLastError(code: u32);
     }
     fn window_pid(hwnd: isize) -> u32 {
         let mut pid = 0;
@@ -169,10 +214,17 @@ mod native {
         members: Members,
         allowed: &'a dyn Fn() -> bool,
     }
-    fn raise_without_activation(hwnd: isize, selected: isize) -> bool {
+    fn raise_without_activation(hwnd: isize, selected: isize) -> Operation {
         // NOSIZE | NOMOVE | NOACTIVATE | NOOWNERZORDER | ASYNCWINDOWPOS.
         // The caller validates a non-topmost anchor; no TOPMOST toggle is used.
-        unsafe { SetWindowPos(hwnd, selected, 0, 0, 0, 0, 0x4213) != 0 }
+        unsafe {
+            SetLastError(0);
+            if SetWindowPos(hwnd, selected, 0, 0, 0, 0, 0x4213) != 0 {
+                Operation::Complete
+            } else {
+                Operation::Failed(GetLastError())
+            }
+        }
     }
     impl Windows for NativeWindows<'_> {
         fn foreground(&self) -> isize {
@@ -200,14 +252,28 @@ mod native {
         fn minimized(&self, hwnd: isize) -> bool {
             unsafe { IsIconic(hwnd) != 0 }
         }
-        fn restore(&mut self, hwnd: isize) -> bool {
-            self.ready(hwnd) && unsafe { ShowWindowAsync(hwnd, 4) != 0 } // SW_SHOWNOACTIVATE
+        fn restore(&mut self, hwnd: isize) -> Operation {
+            if !self.ready(hwnd) {
+                return Operation::Skipped;
+            }
+            unsafe {
+                // Clear stale thread errors: ShowWindowAsync may fail without
+                // setting an extended error. Zero is recorded as unavailable.
+                SetLastError(0);
+                if ShowWindowAsync(hwnd, 4) != 0 {
+                    Operation::Complete
+                }
+                // SW_SHOWNOACTIVATE
+                else {
+                    Operation::Failed(GetLastError())
+                }
+            }
         }
-        fn raise_behind(&mut self, hwnd: isize, selected: isize) -> bool {
-            self.ready(hwnd)
-                && self.ready(selected)
-                && self.foreground() == selected
-                && raise_without_activation(hwnd, selected)
+        fn raise_behind(&mut self, hwnd: isize, selected: isize) -> Operation {
+            if !self.ready(hwnd) || !self.ready(selected) || self.foreground() != selected {
+                return Operation::Skipped;
+            }
+            raise_without_activation(hwnd, selected)
         }
     }
     pub fn synchronize(
@@ -215,7 +281,7 @@ mod native {
         process: Option<&WorkspaceProcess>,
         panels: Option<[isize; 2]>,
         allowed: &dyn Fn() -> bool,
-    ) {
+    ) -> Option<Failure> {
         let members = process.zip(panels).and_then(|(process, panels)| {
             find_game(process).map(|game| Members {
                 left: panels[0],
@@ -232,12 +298,13 @@ mod native {
                     allowed,
                 },
                 Some(members),
-            );
+            )
         } else {
             group.members = None;
             group.inside = false;
             group.pending = None;
             group.last_foreground = unsafe { GetForegroundWindow() };
+            None
         }
     }
 
@@ -420,11 +487,14 @@ mod native {
             assert_eq!(tracker.generation, generation);
             assert!(game_window(game.0, process.pid)); // minimized is still discoverable
             assert!(!game_window(game.0, process.pid.wrapping_add(1)));
-            assert!(native.restore(game.0));
+            assert_eq!(native.restore(game.0), Operation::Complete);
             until(|| !native.minimized(game.0));
             assert!(!native.minimized(game.0));
             assert_eq!(rect(game.0), before);
-            assert!(raise_without_activation(game.0, left.0));
+            assert_eq!(
+                raise_without_activation(game.0, left.0),
+                Operation::Complete
+            );
             assert_eq!(rect(game.0), before);
             assert_eq!(unsafe { GetForegroundWindow() }, foreground);
             assert_eq!(unsafe { GetWindowLongW(game.0, -20) } & 0x8, 0);
@@ -432,7 +502,7 @@ mod native {
             let hwnd = dead.0;
             drop(dead);
             assert!(!native.ready(hwnd));
-            assert!(!native.restore(hwnd));
+            assert_eq!(native.restore(hwnd), Operation::Skipped);
             drop(process);
             std::fs::remove_dir_all(root).unwrap();
         }
@@ -459,9 +529,15 @@ mod tests {
         restores: Vec<isize>,
         raises: Vec<(isize, isize)>,
         reject_restore: bool,
+        reject_raise: bool,
+        skip_operations: bool,
+        now: Option<std::time::Instant>,
         switch_after_raise: bool,
     }
     impl Windows for Desktop {
+        fn now(&self) -> std::time::Instant {
+            self.now.unwrap_or_else(std::time::Instant::now)
+        }
         fn foreground(&self) -> isize {
             self.foreground
         }
@@ -471,16 +547,30 @@ mod tests {
         fn minimized(&self, hwnd: isize) -> bool {
             self.minimized.contains(&hwnd)
         }
-        fn restore(&mut self, hwnd: isize) -> bool {
+        fn restore(&mut self, hwnd: isize) -> Operation {
+            if self.skip_operations {
+                return Operation::Skipped;
+            }
             self.restores.push(hwnd);
-            !self.reject_restore
+            if self.reject_restore {
+                Operation::Failed(5)
+            } else {
+                Operation::Complete
+            }
         }
-        fn raise_behind(&mut self, hwnd: isize, selected: isize) -> bool {
+        fn raise_behind(&mut self, hwnd: isize, selected: isize) -> Operation {
+            if self.skip_operations {
+                return Operation::Skipped;
+            }
             self.raises.push((hwnd, selected));
             if self.switch_after_raise {
                 self.foreground = 99;
             }
-            true
+            if self.reject_raise {
+                Operation::Failed(87)
+            } else {
+                Operation::Complete
+            }
         }
     }
     #[test]
@@ -491,23 +581,23 @@ mod tests {
                 foreground: 99,
                 ..Default::default()
             };
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             desktop.foreground = selected;
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             assert_eq!(desktop.foreground, selected);
             assert_eq!(desktop.raises.len(), 2);
             assert!(desktop
                 .raises
                 .iter()
                 .all(|(peer, anchor)| *peer != selected && *anchor == selected));
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             desktop.foreground = if selected == 1 { 2 } else { 1 };
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             assert_eq!(desktop.raises.len(), 2);
             desktop.foreground = 99;
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             desktop.foreground = selected;
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             assert_eq!(desktop.raises.len(), 4);
         }
     }
@@ -519,32 +609,92 @@ mod tests {
             minimized: [2, 3].into(),
             ..Default::default()
         };
-        group.tick(&mut desktop, Some(MEMBERS));
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         assert_eq!(desktop.restores, [2, 3]);
         assert!(desktop.raises.is_empty());
         desktop.minimized.clear();
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         assert_eq!(desktop.raises, [(2, 1), (3, 1)]);
     }
     #[test]
-    fn blocked_or_rejected_restore_does_not_loop() {
+    fn restore_failure_and_timeout_are_reported_once_per_transaction() {
         for rejected in [false, true] {
+            let start = std::time::Instant::now();
             let mut group = Group::default();
             let mut desktop = Desktop {
                 foreground: 1,
                 minimized: [3].into(),
                 reject_restore: rejected,
+                now: Some(start),
                 ..Default::default()
             };
+            let first = group.tick(&mut desktop, Some(MEMBERS));
+            desktop.now = Some(start + std::time::Duration::from_secs(2));
+            let second = group.tick(&mut desktop, Some(MEMBERS));
+            let expected = if rejected {
+                Failure {
+                    stage: "restore",
+                    api: "ShowWindowAsync",
+                    last_error: Some(5),
+                }
+            } else {
+                Failure {
+                    stage: "restore_timeout",
+                    api: "ShowWindowAsync",
+                    last_error: None,
+                }
+            };
+            assert_eq!(first.or(second), Some(expected));
+            assert!(first.is_none() || second.is_none());
             for _ in 0..20 {
-                group.tick(&mut desktop, Some(MEMBERS));
+                assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
             }
             desktop.minimized.clear();
-            group.tick(&mut desktop, Some(MEMBERS));
+            assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
             assert_eq!(desktop.restores, [3]);
             assert!(desktop.raises.is_empty());
         }
+    }
+    #[test]
+    fn cancellation_between_validation_and_native_call_is_not_a_failure() {
+        for minimized in [false, true] {
+            let mut group = Group::default();
+            let mut desktop = Desktop {
+                foreground: 1,
+                skip_operations: true,
+                ..Default::default()
+            };
+            if minimized {
+                desktop.minimized.insert(3);
+            }
+            for _ in 0..20 {
+                assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
+            }
+            assert!(desktop.restores.is_empty());
+            assert!(desktop.raises.is_empty());
+        }
+    }
+    #[test]
+    fn raise_failure_preserves_api_error_and_is_not_repeated() {
+        let mut group = Group::default();
+        let mut desktop = Desktop {
+            foreground: 1,
+            reject_raise: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            group.tick(&mut desktop, Some(MEMBERS)),
+            Some(Failure {
+                stage: "raise",
+                api: "SetWindowPos",
+                last_error: Some(87)
+            })
+        );
+        for _ in 0..20 {
+            assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
+        }
+        assert_eq!(desktop.raises, [(2, 1)]);
     }
     #[test]
     fn hidden_disabled_invalid_or_topmost_member_blocks_the_transaction() {
@@ -554,9 +704,9 @@ mod tests {
             unavailable: [3].into(),
             ..Default::default()
         };
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         desktop.unavailable.clear();
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         assert!(desktop.restores.is_empty());
         assert!(desktop.raises.is_empty());
     }
@@ -569,10 +719,10 @@ mod tests {
                 minimized: [3].into(),
                 ..Default::default()
             };
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             desktop.foreground = next;
             desktop.minimized.clear();
-            group.tick(&mut desktop, Some(MEMBERS));
+            let _ = group.tick(&mut desktop, Some(MEMBERS));
             assert!(desktop.raises.is_empty());
         }
     }
@@ -584,7 +734,7 @@ mod tests {
             switch_after_raise: true,
             ..Default::default()
         };
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         assert_eq!(desktop.raises, [(1, 3)]);
         assert_eq!(desktop.foreground, 99);
     }
@@ -596,8 +746,8 @@ mod tests {
             minimized: [3].into(),
             ..Default::default()
         };
-        group.tick(&mut desktop, Some(MEMBERS));
-        group.tick(&mut desktop, None);
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, None);
         desktop.minimized.clear();
         desktop.foreground = 3;
         let replacement = Members {
@@ -605,10 +755,10 @@ mod tests {
             created: 20,
             ..MEMBERS
         };
-        group.tick(&mut desktop, Some(replacement));
+        let _ = group.tick(&mut desktop, Some(replacement));
         assert!(desktop.raises.is_empty());
         desktop.foreground = 4;
-        group.tick(&mut desktop, Some(replacement));
+        let _ = group.tick(&mut desktop, Some(replacement));
         assert_eq!(desktop.raises, [(1, 4), (2, 4)]);
     }
     #[test]
@@ -618,9 +768,9 @@ mod tests {
             foreground: 1,
             ..Default::default()
         };
-        group.tick(&mut desktop, Some(MEMBERS));
-        group.tick(&mut desktop, None);
-        group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
+        let _ = group.tick(&mut desktop, None);
+        let _ = group.tick(&mut desktop, Some(MEMBERS));
         assert_eq!(desktop.raises, [(2, 1), (3, 1)]);
     }
 }

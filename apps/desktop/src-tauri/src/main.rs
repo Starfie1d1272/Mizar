@@ -1392,7 +1392,20 @@ fn run_desktop(
                         .and_then(|(left, dock)| left.hwnd().ok().zip(dock.hwnd().ok()))
                         .map(|(left, dock)| [left.0 as isize, dock.0 as isize]);
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
-                        workspace_group::synchronize(&mut group, process.as_ref(), panels, &allowed);
+                        if let Some(failure) = workspace_group::synchronize(
+                            &mut group, process.as_ref(), panels, &allowed,
+                        ) {
+                            if let Some(process) = &process {
+                                host.state::<DesktopLog>().event(
+                                    "workspace_group_restore", "failure",
+                                    Some(&serde_json::json!({
+                                        "stage": failure.stage, "api": failure.api,
+                                        "lastError": failure.last_error,
+                                        "gamePid": process.pid, "created": process.created
+                                    }).to_string()),
+                                );
+                            }
+                        }
                     }
                     // Cross-process CS2 calls stay off the Tauri main loop.
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
