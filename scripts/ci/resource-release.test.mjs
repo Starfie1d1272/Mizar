@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+import { jsonBytes } from '../../packages/resource-pack-contract/content.mjs';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
@@ -6,11 +8,14 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, URL } from 'node:url';
 import {
   prepareResourceCandidate,
+  makeResourceDescriptor,
   readResourceCandidate,
   makePublishedCatalog,
   verifyQualifiedResources,
   verifyPublishedResources,
   freezePublishedResources,
+  publishedResourceMetadata,
+  restorePublishedResourceBindings,
 } from './resource-release.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -51,8 +56,45 @@ describe('Release resource integration with the real official Pack', () => {
     });
     expect(Object.keys(candidate.entry.assets)).toHaveLength(8);
     expect(candidate.entry.assets['resource-catalog.json']).toBe(
-      'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-catalog.json',
+      'https://github.com/Starfie1d1272/Mizar/releases/download/data-v1.1.0/resource-catalog.json',
     );
+  });
+  it('still reads canonical historical v descriptors without changing their bytes', async () => {
+    const legacy = makeResourceDescriptor(candidate.pack, manifest, candidate.entry.publication);
+    const bytes = jsonBytes(legacy);
+    await writeFile(join(folder, 'resource-descriptor.json'), bytes);
+    try {
+      const historical = await readResourceCandidate(folder, manifest);
+      expect(historical.bytes).toEqual(bytes);
+      expect(historical.entry.assets['resource-catalog.json']).toBe(
+        'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-catalog.json',
+      );
+      const asset = {
+        name: 'resource-descriptor.json',
+        size: bytes.length,
+        sha256: 'c'.repeat(64),
+      };
+      const release = {
+        tag_name: 'v1.1.0',
+        draft: false,
+        prerelease: false,
+        published_at: '2026-01-01T00:00:00Z',
+        assets: [
+          {
+            name: asset.name,
+            size: asset.size,
+            digest: `sha256:${asset.sha256}`,
+            browser_download_url: historical.entry.assets[asset.name],
+          },
+        ],
+      };
+      expect(() => publishedResourceMetadata(release, legacy, [asset])).not.toThrow();
+      expect(() =>
+        publishedResourceMetadata({ ...release, draft: true }, legacy, [asset]),
+      ).toThrow();
+    } finally {
+      await writeFile(join(folder, 'resource-descriptor.json'), descriptorBytes);
+    }
   });
   it('allows a later main promoter without relabeling the original qualified resource source', () => {
     const catalog = makePublishedCatalog(candidate, 'b'.repeat(40));
@@ -61,6 +103,93 @@ describe('Release resource integration with the real official Pack', () => {
     expect(catalog.resources[0].policy.promotionSha).toBe('b'.repeat(40));
     expect(catalog.descriptorSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(catalog.resources[0].publication.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it('restores exact original Promotion subjects from either surviving subject or proof identity', () => {
+    const promotionSha = 'b'.repeat(40);
+    const catalog = makePublishedCatalog(candidate, promotionSha);
+    const catalogBytes = jsonBytes(catalog);
+    const files = new Map([['resource-catalog.json', catalogBytes]]);
+    expect(restorePublishedResourceBindings(candidate, files)).toBe(promotionSha);
+    expect(files.get('resource-catalog.json')).toEqual(catalogBytes);
+    const publicationBytes = files.get('resource-publication.json');
+    const fromPublication = new Map([['resource-publication.json', publicationBytes]]);
+    expect(restorePublishedResourceBindings(candidate, fromPublication)).toBe(promotionSha);
+    expect(fromPublication.get('resource-catalog.json')).toEqual(catalogBytes);
+    const proof = jsonBytes({
+      dsseEnvelope: {
+        payload: Buffer.from(
+          JSON.stringify({
+            predicate: {
+              buildDefinition: {
+                resolvedDependencies: [
+                  {
+                    uri: 'git+https://github.com/Starfie1d1272/Mizar@refs/heads/main',
+                    digest: { gitCommit: promotionSha },
+                  },
+                ],
+              },
+            },
+          }),
+        ).toString('base64'),
+      },
+    });
+    const fromProof = new Map([['resource-catalog-promotion-provenance.json', proof]]);
+    expect(restorePublishedResourceBindings(candidate, fromProof)).toBe(promotionSha);
+    expect(fromProof.get('resource-catalog.json')).toEqual(catalogBytes);
+    expect(fromProof.get('resource-publication.json')).toEqual(publicationBytes);
+    // This derives untrusted bindings only; installation still requires real proofs.
+    expect(restorePublishedResourceBindings(candidate, new Map())).toBeNull();
+    const changed = new Map([['resource-catalog.json', Buffer.from('{}')]]);
+    expect(() => restorePublishedResourceBindings(candidate, changed)).toThrow();
+    const mixed = new Map([
+      ['resource-catalog.json', catalogBytes],
+      ['resource-publication.json', jsonBytes({ promotionSha: 'd'.repeat(40) })],
+    ]);
+    expect(() => restorePublishedResourceBindings(candidate, mixed)).toThrow('晋级身份');
+  });
+  it('checks present assets on a partial data Release and rejects changed metadata', () => {
+    const expected = [
+      { name: 'resource-descriptor.json', size: descriptorBytes.length, sha256: 'c'.repeat(64) },
+    ];
+    const asset = {
+      name: expected[0].name,
+      size: expected[0].size,
+      digest: `sha256:${expected[0].sha256}`,
+      browser_download_url: candidate.entry.assets[expected[0].name],
+    };
+    const release = {
+      tag_name: 'data-v1.1.0',
+      draft: false,
+      prerelease: true,
+      published_at: '2026-01-01T00:00:00Z',
+      assets: [asset],
+    };
+    expect(() => publishedResourceMetadata(release, candidate.descriptor, expected)).not.toThrow();
+    expect(() =>
+      publishedResourceMetadata(
+        { ...release, draft: true, published_at: null },
+        candidate.descriptor,
+        expected,
+        true,
+        true,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      publishedResourceMetadata({ ...release, assets: [] }, candidate.descriptor, expected, true),
+    ).not.toThrow();
+    expect(() =>
+      publishedResourceMetadata({ ...release, assets: [] }, candidate.descriptor, expected),
+    ).toThrow('缺失');
+    for (const changed of [
+      { ...release, prerelease: false },
+      { ...release, tag_name: 'v1.1.0' },
+      { ...release, draft: true },
+      { ...release, assets: [{ ...asset, digest: `sha256:${'d'.repeat(64)}` }] },
+      { ...release, assets: [asset, asset] },
+    ])
+      expect(() =>
+        publishedResourceMetadata(changed, candidate.descriptor, expected, true),
+      ).toThrow();
   });
   it.each([
     ['developmentOnly', true],

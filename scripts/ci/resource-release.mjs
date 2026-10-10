@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -21,6 +22,7 @@ import {
   RESOURCE_ASSET_NAMES as names,
   createResourceDescriptor,
   createResourceCatalog,
+  resourceAssetReleaseTag,
 } from '../../packages/resource-pack-contract/catalog.mjs';
 
 const equal = (a, b, message) => requireValue(JSON.stringify(a) === JSON.stringify(b), message);
@@ -62,6 +64,7 @@ export function makeResourceDescriptor(pack, manifest, parameters) {
   assertCompatibility(pack.manifest.compatibility, policy.coreVersion);
   return createResourceDescriptor({
     core,
+    assetReleaseTag: parameters.assetReleaseTag,
     packVersion: policy.packVersion,
     archive: publication.archive,
     manifestSha256: pack.manifestSha256,
@@ -100,7 +103,12 @@ export async function prepareResourceCandidate(
   const expiresAt = new Date(Math.floor(now / 1000) * 1000 + 90 * 86400000)
     .toISOString()
     .replace('.000Z', 'Z');
-  const catalog = makeResourceDescriptor(pack, manifest, { sequence, issuedAt, expiresAt });
+  const catalog = makeResourceDescriptor(pack, manifest, {
+    sequence,
+    issuedAt,
+    expiresAt,
+    assetReleaseTag: `data-v${core.appVersion}`,
+  });
   await mkdir(output, { recursive: false });
   await writeFile(join(output, catalog.resources[0].archive.name), pack.archiveBytes, {
     flag: 'wx',
@@ -123,7 +131,10 @@ export async function readResourceCandidate(folder, manifest) {
   const pack = verifyPackBytes(archiveBytes, {
     coreVersion: manifest.appVersion.replace(/-rc\.\d+$/, ''),
   });
-  const expected = makeResourceDescriptor(pack, manifest, entry.publication);
+  const expected = makeResourceDescriptor(pack, manifest, {
+    ...entry.publication,
+    assetReleaseTag: resourceAssetReleaseTag(catalog),
+  });
   equal(catalog, expected, '目录字段、策略、摘要或下载地址与真实候选不一致');
   requireValue(bytes.equals(jsonBytes(expected)), '目录必须保持原始规范字节，拒绝额外或重复字段');
   return { descriptor: catalog, bytes, archiveBytes, pack, entry: expected.resources[0] };
@@ -253,13 +264,23 @@ export async function freezePublishedResources(folder, manifest, destination) {
     return candidate;
   });
 }
-function publishedResourceMetadata(release, catalog, expected) {
+export function publishedResourceMetadata(
+  release,
+  catalog,
+  expected,
+  allowMissing = false,
+  allowDraft = false,
+) {
+  const tag = resourceAssetReleaseTag(catalog);
   requireValue(
-    release.tag_name === `v${catalog.core.appVersion}` && !release.draft && release.published_at,
+    release.tag_name === tag &&
+      (allowDraft || (!release.draft && release.published_at)) &&
+      (!tag.startsWith('data-v') || release.prerelease === true),
     '资源必须来自已公开的同版本发行，拒绝覆盖未完成草稿',
   );
   for (const asset of expected) {
     const found = release.assets.filter((item) => item.name === asset.name);
+    if (allowMissing && found.length === 0) continue;
     requireValue(
       found.length === 1 &&
         found[0].size === asset.size &&
@@ -289,14 +310,98 @@ function lookupGithubObject(path) {
     throw new Error('发行或标签查询失败；未知状态不能触发签发或发布', { cause: error });
   }
 }
-async function resolvePublishedResourceFiles(folder, manifest) {
+export function restorePublishedResourceBindings(candidate, files) {
+  const shas = [];
+  for (const name of [names.catalog, names.publication])
+    if (files.has(name)) shas.push(JSON.parse(files.get(name).toString('utf8')).promotionSha);
+  for (const name of [names.catalogPromotion, names.publicationPromotion]) {
+    if (!files.has(name)) continue;
+    const bundle = JSON.parse(files.get(name).toString('utf8'));
+    const statement = JSON.parse(Buffer.from(bundle.dsseEnvelope?.payload ?? '', 'base64'));
+    const dependencies = statement.predicate?.buildDefinition?.resolvedDependencies;
+    const commits = dependencies?.filter(
+      (dependency) => dependency.uri === `git+https://github.com/${repository}@refs/heads/main`,
+    );
+    requireValue(commits?.length === 1, '已有晋级证明必须绑定唯一原晋级源码');
+    shas.push(commits[0].digest?.gitCommit);
+  }
+  if (shas.length === 0) return null;
+  const promotionSha = shas[0];
+  requireValue(
+    isSourceSha(promotionSha) && shas.every((sha) => sha === promotionSha),
+    '已有目录、声明及证明的晋级身份不一致',
+  );
+  const catalog = makePublishedCatalog(candidate, promotionSha);
+  const publication = makePublication(candidate.pack, {
+    ...candidate.entry.publication,
+    promotionSha,
+  });
+  for (const [name, bytes] of [
+    [names.catalog, jsonBytes(catalog)],
+    [names.publication, jsonBytes(publication)],
+  ]) {
+    requireValue(
+      !files.has(name) || files.get(name).equals(bytes),
+      '已有目录或声明与原资格身份、规范字节不一致',
+    );
+    files.set(name, bytes);
+  }
+  return promotionSha;
+}
+async function recoverPromotionProof(folder, subject, proof, promotionSha) {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-resource-proof-'));
+  try {
+    const subjectPath = resolve(folder, subject);
+    const bytes = await boundedRead(subjectPath, 65536);
+    execFileSync('gh', ['attestation', 'download', subjectPath, '--repo', repository], {
+      cwd: directory,
+      stdio: 'pipe',
+      timeout: 60000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const candidates = (
+      await boundedRead(join(directory, `sha256:${sha256(bytes)}.jsonl`), 2 * 1024 * 1024)
+    )
+      .toString('utf8')
+      .trim()
+      .split('\n');
+    for (const candidate of candidates) {
+      const path = join(directory, proof);
+      const bundle = jsonBytes(JSON.parse(candidate));
+      await writeFile(path, bundle);
+      try {
+        verifyProof(subjectPath, promotionSha, path, 'promotion');
+      } catch {
+        continue;
+      }
+      await writeFile(join(folder, proof), bundle, { flag: 'wx' });
+      return;
+    }
+    throw new Error(`不能恢复原晋级证明，拒绝重新签发：${proof}`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+export async function resolvePublishedResourceFiles(folder, manifest) {
   const candidate = await verifyQualifiedResources(folder, manifest);
-  const tag = `v${manifest.appVersion}`;
+  const tag = resourceAssetReleaseTag(candidate.descriptor);
+  const dataRelease = tag.startsWith('data-v');
   const release = lookupGithubObject(`releases/tags/${tag}`);
-  if (release === null) return false;
-  // First bind the existing immutable qualified files before downloading proofs.
+  const expectedNames = expectedResourceNames(candidate, true);
+  if (dataRelease) {
+    const ref = lookupGithubObject(`git/ref/tags/${tag}`);
+    requireValue(
+      (ref === null && release === null) ||
+        (ref?.object?.type === 'commit' && ref.object.sha === manifest.gitSha),
+      '技术发行标签必须绑定原 Core 资格源码',
+    );
+  }
+  if (release === null)
+    return { found: false, complete: false, reusePromotion: false, missing: expectedNames };
+  // Existing qualified bytes must match; absent assets remain eligible for safe upload.
   const qualified = await resourceAssetInventory(folder, manifest);
-  publishedResourceMetadata(release, candidate.descriptor, qualified);
+  publishedResourceMetadata(release, candidate.descriptor, qualified, dataRelease, dataRelease);
+  const downloaded = new Map();
   for (const name of [
     names.catalog,
     names.publication,
@@ -304,20 +409,62 @@ async function resolvePublishedResourceFiles(folder, manifest) {
     names.catalogPromotion,
   ]) {
     const matches = release.assets.filter((asset) => asset.name === name);
+    if (matches.length === 0) {
+      requireValue(dataRelease, `已有发行缺少唯一资源授权：${name}`);
+      continue;
+    }
+    const limit = [names.publication, names.catalog].includes(name) ? 65536 : 2097152;
     requireValue(
       matches.length === 1 &&
         matches[0].size > 0 &&
-        matches[0].size <= ([names.publication, names.catalog].includes(name) ? 65536 : 2097152),
-      `已有发行缺少唯一资源授权：${name}`,
+        matches[0].size <= limit &&
+        /^sha256:[a-f0-9]{64}$/.test(matches[0].digest) &&
+        matches[0].browser_download_url === candidate.entry.assets[name],
+      `已有发行资源授权重复、地址、大小或摘要无效：${name}`,
     );
     execFileSync(
       'gh',
       ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', folder],
       { stdio: 'pipe', timeout: 60000 },
     );
+    const bytes = await boundedRead(join(folder, name), limit);
+    requireValue(
+      bytes.length === matches[0].size && `sha256:${sha256(bytes)}` === matches[0].digest,
+      `已有发行资源授权下载字节不符：${name}`,
+    );
+    downloaded.set(name, bytes);
   }
-  await verifyPublishedResourceMetadata(folder, manifest, release);
-  return true;
+  // Derivation never authorizes: recover both original subjects, then verify every
+  // proof against its original main Promotion identity before reusing the snapshot.
+  const promotionSha = restorePublishedResourceBindings(candidate, downloaded);
+  if (promotionSha) {
+    for (const name of [names.catalog, names.publication])
+      if (!release.assets.some((asset) => asset.name === name))
+        await writeFile(join(folder, name), downloaded.get(name), { flag: 'wx' });
+    for (const [subject, proof] of [
+      [names.catalog, names.catalogPromotion],
+      [names.publication, names.publicationPromotion],
+    ]) {
+      if (!downloaded.has(proof)) await recoverPromotionProof(folder, subject, proof, promotionSha);
+      else verifyProof(join(folder, subject), promotionSha, join(folder, proof), 'promotion');
+    }
+    await verifyPublishedResources(folder, manifest);
+    const inventory = await resourceAssetInventory(folder, manifest, true);
+    publishedResourceMetadata(release, candidate.descriptor, inventory, dataRelease, dataRelease);
+  }
+
+  const missing = expectedNames.filter(
+    (name) => !release.assets.some((asset) => asset.name === name),
+  );
+  if (missing.length === 0 && !release.draft)
+    await verifyPublishedResourceMetadata(folder, manifest, release);
+  return {
+    found: true,
+    complete: missing.length === 0 && !release.draft,
+    reusePromotion: Boolean(promotionSha),
+    promotionSha,
+    missing,
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -380,9 +527,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   } else if (mode === 'freeze') {
     await freezePublishedResources(folder, manifest, argument);
   } else if (mode === 'resolve') {
-    const exists = await resolvePublishedResourceFiles(folder, manifest);
+    const result = await resolvePublishedResourceFiles(folder, manifest);
     requireValue(process.env.GITHUB_ENV, '发行工作流环境缺失');
-    await appendFile(process.env.GITHUB_ENV, `RESOURCE_RELEASE_EXISTS=${exists}\n`);
+    await appendFile(
+      process.env.GITHUB_ENV,
+      `RESOURCE_RELEASE_EXISTS=${result.complete}\nRESOURCE_RELEASE_FOUND=${result.found}\nRESOURCE_REUSE_PROMOTION=${result.reusePromotion}\nRESOURCE_PROMOTION_SHA=${result.promotionSha ?? ''}\nRESOURCE_RELEASE_MISSING=${JSON.stringify(result.missing)}\n`,
+    );
   } else if (mode === 'published-release') {
     await verifyPublishedResourceMetadata(
       folder,

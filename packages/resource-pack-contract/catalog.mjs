@@ -24,6 +24,7 @@ export function createResourceDescriptor({
   sequence,
   issuedAt,
   expiresAt,
+  assetReleaseTag = `v${core?.appVersion}`,
 }) {
   const coreVersion = core?.appVersion?.replace(/-rc\.\d+$/, '');
   requireValue(
@@ -55,8 +56,12 @@ export function createResourceDescriptor({
       Date.parse(expiresAt) - Date.parse(issuedAt) <= 366 * 86400000,
     '资源目录序号或有效期无效',
   );
+  requireValue(
+    [`v${core.appVersion}`, `data-v${core.appVersion}`].includes(assetReleaseTag),
+    '资源资产发行标签无效',
+  );
   const names = [archive.name, ...Object.values(RESOURCE_ASSET_NAMES)];
-  const prefix = `https://github.com/${REPOSITORY}/releases/download/v${core.appVersion}/`;
+  const prefix = `https://github.com/${REPOSITORY}/releases/download/${assetReleaseTag}/`;
   return {
     schemaVersion: 'mizar.resource-descriptor.v1',
     repository: REPOSITORY,
@@ -82,6 +87,29 @@ export function createResourceDescriptor({
       },
     ],
   };
+}
+// Transport is restricted to the two exact release locations for this Core.
+// Canonical reconstruction below also rejects missing/extra asset fields.
+export function resourceAssetReleaseTag(descriptor) {
+  const entry = descriptor?.resources?.[0];
+  const version = descriptor?.core?.appVersion;
+  requireValue(
+    typeof version === 'string' &&
+      /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version) &&
+      isVersion(entry?.policy?.packVersion) &&
+      entry?.archive?.name === `Mizar-official-epl-default-${entry.policy.packVersion}.zip`,
+    '资源资产发行身份无效',
+  );
+  const assetNames = [entry.archive.name, ...Object.values(RESOURCE_ASSET_NAMES)];
+  const tag = [`v${version}`, `data-v${version}`].find((candidate) =>
+    assetNames.every(
+      (name) =>
+        entry?.assets?.[name] ===
+        `https://github.com/${REPOSITORY}/releases/download/${candidate}/${name}`,
+    ),
+  );
+  requireValue(tag, '资源资产地址必须绑定唯一受控发行标签');
+  return tag;
 }
 export function createResourceCatalog(
   descriptor,
@@ -116,6 +144,7 @@ export function parseResourceCatalogBytes(descriptorBytes, catalogBytes, expecte
   const item = raw.resources[0];
   const descriptor = createResourceDescriptor({
     core: raw.core,
+    assetReleaseTag: resourceAssetReleaseTag(raw),
     packVersion: item.policy?.packVersion,
     archive: item.archive,
     manifestSha256: item.manifestSha256,

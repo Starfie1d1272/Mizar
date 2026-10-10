@@ -6,6 +6,7 @@ import {
   createResourceDescriptor,
   createResourceCatalog,
   parseResourceCatalogBytes,
+  resourceAssetReleaseTag,
 } from './catalog.mjs';
 import { jsonBytes } from './content.mjs';
 import {
@@ -21,10 +22,11 @@ const core = {
   archive: 'Mizar-v1.1.0-Windows-x64.zip',
   archiveSha256: 'a'.repeat(64),
 };
-function candidate() {
+function candidate(assetReleaseTag) {
   // Canonical structural data only; no claimed signing or trusted policy.
   const descriptor = createResourceDescriptor({
     core,
+    assetReleaseTag,
     packVersion: '1.0.0',
     archive: {
       name: 'Mizar-official-epl-default-1.0.0.zip',
@@ -95,50 +97,78 @@ describe('original Qualification descriptor and Promotion catalog client boundar
       }),
     ).toThrow('必须先认证');
   });
-  it('requires real fixed-root original descriptor proof offline, including expired cached catalogs', async () => {
-    const c = candidate(),
-      fixture = new URL('../../apps/companion/test/fixtures/updates/', import.meta.url);
-    const proof = await readFile(new URL('distribution.attestation.json', fixture));
-    const receipt = {
-      schemaVersion: 'mizar.resource-catalog-receipt.v1',
-      descriptorBase64: c.descriptorBytes.toString('base64'),
-      descriptorBundleBase64: proof.toString('base64'),
-      catalogBase64: c.catalogBytes.toString('base64'),
-      catalogBundleBase64: proof.toString('base64'),
-      trust: {
-        schemaVersion: 'mizar.sigstore-cache.v1',
-        rootChain: [],
-        targetsBase64: (
-          await readFile(new URL('./test-fixtures/tuf/targets.json', import.meta.url))
-        ).toString('base64'),
-        trustedRootBase64: (
-          await readFile(new URL('./test-fixtures/tuf/trusted_root.json', import.meta.url))
-        ).toString('base64'),
-      },
-    };
-    const network = vi.fn(() => {
-      throw new Error('offline test must never fetch');
-    });
-    vi.stubGlobal('fetch', network);
-    try {
-      // This existing genuine main Qualification signature is for distribution-manifest,
-      // not the new descriptor. Reaching subject rejection proves actual cryptography ran.
-      await expect(
-        verifyResourceCatalogReceipt({ receipt, expectedCore: core, purpose: 'cache' }),
-      ).rejects.toThrow('subject');
-      await expect(
-        verifyResourceReceipt({
-          receipt: { schemaVersion: 'mizar.resource-receipt.v1', catalog: receipt },
-          expectedCore: core,
-          purpose: 'cache',
-        }),
-      ).rejects.toThrow('subject');
-      await expect(
-        verifyResourceCatalogReceipt({ receipt, expectedCore: core, purpose: 'install' }),
-      ).rejects.toThrow('过期');
-      expect(network).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
+  it('accepts both exact release locations while rejecting mixed tags and arbitrary mirrors', () => {
+    for (const tag of ['v1.1.0', 'data-v1.1.0']) {
+      const c = candidate(tag);
+      expect(resourceAssetReleaseTag(c.descriptor)).toBe(tag);
+      expect(
+        parseResourceCatalogBytes(c.descriptorBytes, c.catalogBytes, core).entry.assets[
+          'resource-catalog.json'
+        ],
+      ).toBe(
+        `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/resource-catalog.json`,
+      );
+      for (const replacement of [
+        'v1.2.0',
+        'data-v1.2.0',
+        'data-v1.1.0/extra',
+        tag === 'v1.1.0' ? 'data-v1.1.0' : 'v1.1.0',
+      ]) {
+        const changed = globalThis.structuredClone(c.descriptor);
+        changed.resources[0].assets['resource-catalog.json'] =
+          `https://github.com/Starfie1d1272/Mizar/releases/download/${replacement}/resource-catalog.json`;
+        expect(() => parseResourceCatalogBytes(jsonBytes(changed), c.catalogBytes, core)).toThrow();
+      }
     }
+    expect(() => candidate('mirror-v1.1.0')).toThrow('标签');
   });
+  it.each(['v1.1.0', 'data-v1.1.0'])(
+    'requires real fixed-root original descriptor proof offline for %s, including expired cached catalogs',
+    async (tag) => {
+      const c = candidate(tag),
+        fixture = new URL('../../apps/companion/test/fixtures/updates/', import.meta.url);
+      const proof = await readFile(new URL('distribution.attestation.json', fixture));
+      const receipt = {
+        schemaVersion: 'mizar.resource-catalog-receipt.v1',
+        descriptorBase64: c.descriptorBytes.toString('base64'),
+        descriptorBundleBase64: proof.toString('base64'),
+        catalogBase64: c.catalogBytes.toString('base64'),
+        catalogBundleBase64: proof.toString('base64'),
+        trust: {
+          schemaVersion: 'mizar.sigstore-cache.v1',
+          rootChain: [],
+          targetsBase64: (
+            await readFile(new URL('./test-fixtures/tuf/targets.json', import.meta.url))
+          ).toString('base64'),
+          trustedRootBase64: (
+            await readFile(new URL('./test-fixtures/tuf/trusted_root.json', import.meta.url))
+          ).toString('base64'),
+        },
+      };
+      const network = vi.fn(() => {
+        throw new Error('offline test must never fetch');
+      });
+      vi.stubGlobal('fetch', network);
+      try {
+        // This existing genuine main Qualification signature is for distribution-manifest,
+        // not the new descriptor. Reaching subject rejection proves actual cryptography ran.
+        await expect(
+          verifyResourceCatalogReceipt({ receipt, expectedCore: core, purpose: 'cache' }),
+        ).rejects.toThrow('subject');
+        await expect(
+          verifyResourceReceipt({
+            receipt: { schemaVersion: 'mizar.resource-receipt.v1', catalog: receipt },
+            expectedCore: core,
+            purpose: 'cache',
+          }),
+        ).rejects.toThrow('subject');
+        await expect(
+          verifyResourceCatalogReceipt({ receipt, expectedCore: core, purpose: 'install' }),
+        ).rejects.toThrow('过期');
+        expect(network).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });
