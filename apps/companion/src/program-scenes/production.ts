@@ -12,6 +12,8 @@ export function registerProductionRoutes(
     hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
+    beforeEnter?: () => void;
+    finishTrial?: () => Promise<void>;
   },
 ) {
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
@@ -19,10 +21,11 @@ export function registerProductionRoutes(
   let busy = false;
   let shuttingDown = false;
   let updatePending = false;
+  let trialPending = false;
   const view = () => ({
     mode,
     revision,
-    canEnter: !shuttingDown && !updatePending && options.hasContext(),
+    canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
   });
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
@@ -30,6 +33,7 @@ export function registerProductionRoutes(
   async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
     if (
       busy ||
+      (trialPending && !['finish', 'shutdown'].includes(String(body?.action))) ||
       (updatePending && body?.action !== 'shutdown') ||
       (shuttingDown && body?.action !== 'shutdown') ||
       body?.expectedRevision !== revision
@@ -46,10 +50,15 @@ export function registerProductionRoutes(
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
+        options.beforeEnter?.();
         mode = 'live';
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
+        if (trialPending) {
+          stage = 'production_safe_scene';
+          await options.finishTrial?.();
+        }
         // Both normal exit paths use this same safe-scene/release transaction.
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
@@ -100,8 +109,50 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    isTrialPending: () => trialPending,
+    reserveTrialOperation: (allowShutdownCleanup = false) => {
+      if (!trialPending || busy || (shuttingDown && !allowShutdownCleanup) || updatePending)
+        return false;
+      busy = true;
+      return true;
+    },
+    releaseTrialOperation: () => {
+      busy = false;
+    },
+    setTrialPlaying: () => {
+      mode = 'live';
+      revision = randomUUID();
+    },
+    setTrialPreparation: () => {
+      mode = 'preparation';
+      revision = randomUUID();
+    },
+    prepareTrial: async (commit: () => Promise<void>): Promise<boolean> => {
+      if (
+        mode !== 'preparation' ||
+        busy ||
+        shuttingDown ||
+        updatePending ||
+        trialPending ||
+        options.scenes.get().preparing !== undefined
+      )
+        return false;
+      trialPending = true;
+      busy = true;
+      try {
+        await commit();
+        return true;
+      } finally {
+        busy = false;
+      }
+    },
+    setTrialPending: (value: boolean) => {
+      trialPending = value;
+    },
+
     withResourceActivation: async (commit: () => Promise<void>): Promise<boolean> => {
       if (
+        trialPending ||
         mode !== 'preparation' ||
         busy ||
         shuttingDown ||
@@ -122,7 +173,8 @@ export function registerProductionRoutes(
       }
     },
     reserveUpdate: () => {
-      if (mode !== 'preparation' || busy || shuttingDown || updatePending) return false;
+      if (trialPending || mode !== 'preparation' || busy || shuttingDown || updatePending)
+        return false;
       updatePending = true;
       return true;
     },

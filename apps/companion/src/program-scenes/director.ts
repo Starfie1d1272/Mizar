@@ -196,7 +196,7 @@ export class ProgramDirector {
     }
     if (!this.wasProduction) {
       this.wasProduction = true;
-      this.resume();
+      if (!this.manual) this.resume();
     }
     if (this.failure && !this.manual) {
       this.view = { ...this.view, mode: 'blocked', reason: this.failure };

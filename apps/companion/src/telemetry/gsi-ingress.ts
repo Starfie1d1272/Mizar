@@ -52,6 +52,8 @@ export type CompanionRuntimeDiagnosticCode =
 
 export interface GsiIngressOptions {
   readonly gsiToken: string;
+  readonly canAccept?: () => boolean;
+  readonly canRecord?: () => boolean;
   readonly recorder: CaptureRecorderSource;
   readonly sequenceSource?: GsiSequenceSource;
   readonly onAcceptedRaw?: AcceptedRawSink;
@@ -136,6 +138,11 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
         return;
       }
 
+      if (options.canAccept?.() === false) {
+        sendNoContent(reply);
+        return;
+      }
+
       const receive = clock.now();
       const acceptedSequence = nextSequence();
       const payload = withoutAuth(root);
@@ -146,12 +153,13 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
       };
 
       try {
-        resolveCaptureRecorder(options.recorder).tryRecord({
-          sequence: acceptedSequence,
-          receivedAt: receive.receivedAt,
-          receivedMonotonicMs: receive.receivedMonotonicMs,
-          payload,
-        });
+        if (options.canRecord?.() !== false)
+          resolveCaptureRecorder(options.recorder).tryRecord({
+            sequence: acceptedSequence,
+            receivedAt: receive.receivedAt,
+            receivedMonotonicMs: receive.receivedMonotonicMs,
+            payload,
+          });
       } catch {
         reportRuntimeDiagnostic(options, 'recorder_unexpected_failure');
       }
