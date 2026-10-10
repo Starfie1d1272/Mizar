@@ -12,14 +12,14 @@
 </p>
 
 <p align="center">
-  <a href="https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/">下载 Windows 安装包</a> ·
+  <a href="https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads">下载 Windows 安装包</a> ·
   <a href="docs/guide/quick-start.md">开始使用</a> ·
   <a href="docs/screenshots/README.md">画面预览</a> ·
   <a href="docs/README.md">使用文档</a> ·
   <a href="CONTRIBUTING.md">参与开发</a>
 </p>
 
-**[下载 Windows 安装包（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
+**[下载 Windows 安装包（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
 
 首次使用请选择名称以 `-Setup.exe` 结尾的 Windows x64 中文安装包，按向导完成安装。便携 ZIP 供解压后运行、自行管理程序目录使用；历史版本和校验文件见 GitHub Releases。安装与升级步骤见[快速开始](docs/guide/quick-start.md)。
 

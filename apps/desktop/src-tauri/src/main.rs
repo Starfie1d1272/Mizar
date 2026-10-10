@@ -834,7 +834,7 @@ async fn install_update(window: tauri::WebviewWindow, app: tauri::AppHandle) -> 
 #[tauri::command]
 fn open_update_page(source: String, version: Option<String>) -> Result<(), String> {
     let url = if source == "mirror" {
-        "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/".to_string()
+        "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads".to_string()
     } else if source == "github" {
         let base = "https://github.com/Starfie1d1272/Mizar/releases";
         if let Some(version) = version {

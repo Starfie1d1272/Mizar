@@ -100,7 +100,7 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
     throw new Error('发布说明构建身份无效');
   const repo = 'https://github.com/Starfie1d1272/Mizar';
   const tag = `v${notes.version}`;
-  const box = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/';
+  const box = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads';
   const installer = /^\d+\.\d+\.\d+$/.test(notes.version) ? 'WebInstaller' : 'Setup';
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
   return (
