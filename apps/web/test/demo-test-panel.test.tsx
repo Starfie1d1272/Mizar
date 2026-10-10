@@ -118,6 +118,7 @@ it('retries the same selected demo with explicitly preserved settings after conf
     container
       .querySelector('form')!
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await Promise.resolve();
   });
   expect(container.textContent).toContain('match.dem');
   expect(button('保持原设置启动试播')).toBeUndefined();
