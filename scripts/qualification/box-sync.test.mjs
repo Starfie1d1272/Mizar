@@ -9,6 +9,8 @@ import {
   syncResourceFiles,
   syncRuntimeFiles,
   syncBootstrap,
+  syncUserDownloads,
+  rollbackDownloads,
   validateOfflineRelease,
   validateRelease,
   BoxClient,
@@ -62,15 +64,25 @@ const make = (version, bytes = Buffer.from(version)) => ({
 });
 function fakeBox(files = {}) {
   const stored = new Map(Object.entries(files));
+  const directories = new Set();
   return {
     stored,
     operations: [],
     async initialize() {},
     async list(folder) {
       const prefix = `${folder === '/' ? '' : folder}/`;
-      return [...stored.keys()]
-        .filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
-        .map((p) => ({ name: p.slice(prefix.length), type: 'file' }));
+      const entries = new Map();
+      for (const path of [...stored.keys(), ...directories]) {
+        if (!path.startsWith(prefix)) continue;
+        const relative = path.slice(prefix.length);
+        const name = relative.split('/')[0];
+        if (name)
+          entries.set(name, {
+            name,
+            type: relative.includes('/') || directories.has(path) ? 'dir' : 'file',
+          });
+      }
+      return [...entries.values()];
     },
     async hash(path) {
       const b = stored.get(path);
@@ -90,7 +102,11 @@ function fakeBox(files = {}) {
       this.operations.push('remove');
       stored.delete(path);
     },
-    async api() {
+    async api(endpoint, path, method, body) {
+      if (endpoint === 'dir' && method === 'POST' && body.operation === 'mkdir') {
+        directories.add(path);
+        this.operations.push('mkdir');
+      }
       return { type: 'file' };
     },
   };
@@ -580,7 +596,7 @@ it('mirrors immutable resource transport bytes before pointer publication and re
   await expect(syncResourceFiles({ box, version: '1.0.1', files })).rejects.toThrow();
   expect(box.operations).toEqual([]);
 });
-it('keeps the NSIS machine backend alongside the recommended lightweight EXE', async () => {
+it('keeps the legacy machine backend while placing the lightweight EXE in user Downloads', async () => {
   const bootstrap = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
   const box = fakeBox({ ['/Stable/' + next.name]: next.bytes });
   await syncBootstrap({
@@ -590,7 +606,8 @@ it('keeps the NSIS machine backend alongside the recommended lightweight EXE', a
     resolveIdentity: async () => previous,
   });
   expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
-  expect(box.stored.get('/Stable/' + bootstrap.name)).toEqual(bootstrap.bytes);
+  expect(box.stored.get('/Stable/Downloads/' + bootstrap.name)).toEqual(bootstrap.bytes);
+  expect(box.stored.has('/Stable/' + bootstrap.name)).toBe(false);
 });
 
 it('keeps Runtime original carrier/backend immutable across retries and refuses changed readback before uploading', async () => {
@@ -605,7 +622,7 @@ it('keeps Runtime original carrier/backend immutable across retries and refuses 
   const readback = vi.spyOn(box, 'hash');
   await syncRuntimeFiles({ box, version, files });
   expect(readback).toHaveBeenCalledTimes(files.length);
-  expect(box.operations).toEqual(['upload', 'upload']);
+  expect(box.operations).toEqual(['mkdir', 'mkdir', 'upload', 'upload']);
   box.operations.length = 0;
   readback.mockClear();
   await syncRuntimeFiles({ box, version, files });
@@ -614,4 +631,207 @@ it('keeps Runtime original carrier/backend immutable across retries and refuses 
   box.stored.set('/Runtime/v2.0.0/machine-metadata.json', Buffer.from('changed'));
   await expect(syncRuntimeFiles({ box, version, files })).rejects.toThrow();
   expect(box.operations).toEqual([]);
+});
+
+describe('the public download pair and legacy compatibility boundary', () => {
+  const bootstrapIdentity = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+  const bootstrap = {
+    identity: bootstrapIdentity,
+    bytes: bootstrapIdentity.bytes,
+    resolveIdentity: async () => undefined,
+  };
+  const offlineIdentity = { ...next, name: 'Mizar-v1.0.1-Windows-x64.zip' };
+  const offline = {
+    identity: offlineIdentity,
+    bytes: offlineIdentity.bytes,
+    resolveIdentity: async () => undefined,
+  };
+  const legacy = () =>
+    fakeBox({
+      ['/Stable/' + next.name]: next.bytes,
+      ['/Stable/' + bootstrapIdentity.name]: bootstrapIdentity.bytes,
+      ['/Offline/' + offlineIdentity.name]: offlineIdentity.bytes,
+      '/Archive/manual-keep.zip': Buffer.from('operator backup'),
+    });
+  const sync = (box) =>
+    syncUserDownloads({
+      box,
+      bootstrap,
+      offline,
+      resolveIdentity: async () => undefined,
+      accept: async () => 'fixture acceptance',
+    });
+  it('moves only the verified legacy lightweight entry, leaves the Full path intact and repeats without uploads', async () => {
+    const box = legacy();
+    await sync(box);
+    expect((await box.list('/Stable/Downloads')).map((e) => e.name).sort()).toEqual(
+      [bootstrapIdentity.name, offlineIdentity.name].sort(),
+    );
+    expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
+    expect(box.stored.has('/Stable/' + bootstrapIdentity.name)).toBe(false);
+    expect(box.stored.get('/Archive/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
+    expect(box.stored.get('/Archive/manual-keep.zip')).toEqual(Buffer.from('operator backup'));
+    expect(box.stored.has('/Offline/' + offlineIdentity.name)).toBe(false);
+    expect(box.operations.filter((op) => op === 'upload').length).toBe(1); // Only the tiny EXE; the ZIP was moved.
+    box.operations.length = 0;
+    await sync(box);
+    expect(box.operations).toEqual([]);
+  });
+  it('rejects changed bytes, unknown user files, Archive collisions and newer versions before migration', async () => {
+    for (const corrupt of [
+      ['/Stable/' + bootstrapIdentity.name, Buffer.from('changed')],
+      ['/Archive/' + bootstrapIdentity.name, Buffer.from('changed')],
+      ['/Stable/Downloads/' + next.name, next.bytes],
+      ['/Stable/Downloads/Mizar-v9.0.0-Windows-x64.zip', Buffer.from('newer')],
+    ]) {
+      const box = legacy();
+      box.stored.set(...corrupt);
+      await expect(sync(box)).rejects.toThrow();
+      expect(box.operations).toEqual([]);
+      expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
+    }
+  });
+  it('preserves the old root on interrupted archival, then permits same-version retry and non-destructive rollback', async () => {
+    const box = legacy();
+    const move = box.move;
+    box.move = async () => {
+      throw Error('migration interrupted');
+    };
+    await expect(sync(box)).rejects.toThrow('migration interrupted');
+    expect(box.stored.get('/Stable/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
+    box.move = move;
+    await sync(box);
+    await rollbackDownloads({ box, identity: next, offline, bootstrap });
+    expect(box.stored.get('/Stable/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
+    expect(box.stored.get('/Offline/' + offlineIdentity.name)).toEqual(offlineIdentity.bytes);
+    expect((await box.list('/Stable/Downloads')).map((e) => e.name)).toEqual([
+      bootstrapIdentity.name,
+    ]);
+    expect(box.stored.get('/Archive/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
+    box.operations.length = 0;
+    await rollbackDownloads({ box, identity: next, offline, bootstrap });
+    expect(box.operations).toEqual([]);
+    box.stored.set('/Stable/' + bootstrapIdentity.name, Buffer.from('unknown bytes'));
+    await expect(rollbackDownloads({ box, identity: next, offline, bootstrap })).rejects.toThrow(
+      '内容冲突',
+    );
+    expect(box.operations).toEqual([]);
+  });
+  it('requires anonymous directory identity and exact original bytes without sending credentials', async () => {
+    const listing = {
+      dir_path: '/Stable/Downloads/',
+      dirent_list: [bootstrapIdentity, offlineIdentity].map((f) => ({
+        file_name: f.name,
+        file_path: '/Downloads/' + f.name,
+        size: f.size,
+        is_dir: false,
+      })),
+    };
+    const mocked = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      expect(options.headers).toBeUndefined();
+      const parsed = new URL(url);
+      if (parsed.pathname.includes('dirents')) return new Response(JSON.stringify(listing));
+      return new Response(
+        parsed.searchParams.get('p').endsWith('.zip') ? offline.bytes : bootstrap.bytes,
+      );
+    });
+    vi.resetModules();
+    const { verifyPublicDownloads: publicDownloads } = await import('./box-sync.mjs');
+    try {
+      await expect(publicDownloads({ offline, bootstrap })).resolves.toContain('匿名验收成功');
+      listing.dir_path = '/another-share/Downloads/';
+      await expect(publicDownloads({ offline, bootstrap })).rejects.toThrow('未就绪');
+      listing.dir_path = '/Stable/Downloads/';
+      mocked.mockImplementation(async (url) =>
+        new URL(url).pathname.includes('dirents')
+          ? new Response(JSON.stringify(listing))
+          : new Response(Buffer.from('bad')),
+      );
+      await expect(publicDownloads({ offline, bootstrap })).rejects.toThrow('原字节');
+    } finally {
+      mocked.mockRestore();
+      vi.resetModules();
+    }
+  });
+});
+
+it('keeps the existing update pointer when the newly migrated user route fails anonymous acceptance', async () => {
+  const lightweight = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+  const zip = { ...next, name: 'Mizar-v1.0.1-Windows-x64.zip' };
+  const oldIndex = Buffer.from('previous signed pointer');
+  const box = fakeBox({
+    ['/Stable/' + next.name]: next.bytes,
+    ['/Stable/' + lightweight.name]: lightweight.bytes,
+    ['/Offline/' + zip.name]: zip.bytes,
+    '/Updates/latest.json': oldIndex,
+  });
+  vi.stubGlobal('fetch', async () => new Response('not created or not public', { status: 404 }));
+  try {
+    vi.resetModules();
+    const { syncStableRelease: sync } = await import('./box-sync.mjs');
+    await expect(
+      sync({
+        box,
+        identity: next,
+        bytes: next.bytes,
+        resolveIdentity: async () => previous,
+        offline: { identity: zip, bytes: zip.bytes, resolveIdentity: async () => undefined },
+        bootstrap: {
+          identity: lightweight,
+          bytes: lightweight.bytes,
+          resolveIdentity: async () => undefined,
+        },
+        updateIndex: Buffer.from('new signed pointer'),
+      }),
+    ).rejects.toThrow('HTTP 404');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
+    expect(box.stored.get('/Stable/' + lightweight.name)).toEqual(lightweight.bytes);
+    expect(box.stored.has('/Archive/' + lightweight.name)).toBe(false);
+    expect(box.stored.get('/Offline/' + zip.name)).toEqual(zip.bytes);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
+});
+
+it('bounds routine anonymous ZIP acceptance to a range probe instead of another full ZIP download', async () => {
+  const zip = { ...next, name: 'Mizar-v1.0.1-Windows-x64.zip' };
+  const lightweight = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+  const transport = vi.fn(async (url, options) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes('dirents'))
+      return new Response(
+        JSON.stringify({
+          dir_path: '/Stable/Downloads/',
+          dirent_list: [zip, lightweight].map((f) => ({
+            file_name: f.name,
+            file_path: '/Downloads/' + f.name,
+            size: f.size,
+            is_dir: false,
+          })),
+        }),
+      );
+    if (parsed.searchParams.get('p').endsWith('.zip')) {
+      expect(options.headers).toEqual({ Range: 'bytes=0-0' });
+      return new Response(zip.bytes.subarray(0, 1), {
+        status: 206,
+        headers: { 'content-range': `bytes 0-0/${zip.size}` },
+      });
+    }
+    expect(options.headers).toBeUndefined();
+    return new Response(lightweight.bytes);
+  });
+  vi.stubGlobal('fetch', transport);
+  try {
+    vi.resetModules();
+    const { verifyPublicDownloads: accept } = await import('./box-sync.mjs');
+    await expect(
+      accept({ offline: { identity: zip }, bootstrap: { identity: lightweight }, full: false }),
+    ).resolves.toContain('ZIP 原字节由同步校验');
+    expect(transport).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
 });
