@@ -310,15 +310,18 @@ fn webview_recovery_choice(failed_recheck: bool) -> Result<WebviewRecoveryAction
     let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
     let title = wide("Mizar 启动失败");
     let instruction = wide(if failed_recheck {
-        "仍未检测到可用的 WebView2 Runtime"
+        "仍未检测到界面运行库，请安装后重新检测。"
     } else {
-        "需要安装或修复 WebView2 Runtime"
+        "缺少界面运行库，请安装后重新检测。"
     });
-    let content = wide("Mizar 的桌面界面需要 Microsoft Edge WebView2 Runtime。\n\n打开微软官方页面，选择 Evergreen Standalone Installer（x64）并按提示安装或修复，然后选择“重新检测”。若网吧限制安装，请联系管理员。\n\n完整错误已保存到日志。");
+    let content = wide("“前往安装”将打开微软官方页面。详细原因可在日志中查看。");
+    let installation = wide("选择 Microsoft Edge WebView2 Evergreen Standalone Installer（x64）安装或修复，完成后选择“重新检测”。若设备限制安装，请联系管理员。Mizar 不会自动下载或执行安装程序。");
+    let expand = wide("安装说明");
+    let collapse = wide("收起安装说明");
     let labels = [
-        wide("打开微软官方页面"),
+        wide("前往安装"),
         wide("重新检测"),
-        wide("打开日志"),
+        wide("查看日志"),
         wide("退出"),
     ];
     let buttons: Vec<_> = labels
@@ -335,6 +338,9 @@ fn webview_recovery_choice(failed_recheck: bool) -> Result<WebviewRecoveryAction
         pszWindowTitle: PCWSTR(title.as_ptr()),
         pszMainInstruction: PCWSTR(instruction.as_ptr()),
         pszContent: PCWSTR(content.as_ptr()),
+        pszExpandedInformation: PCWSTR(installation.as_ptr()),
+        pszExpandedControlText: PCWSTR(expand.as_ptr()),
+        pszCollapsedControlText: PCWSTR(collapse.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
         nDefaultButton: 1001,
@@ -402,14 +408,24 @@ pub fn recover_webview(
         },
         check,
         |action| {
-            open_recovery_target(
-                match action {
-                    WebviewRecoveryAction::Download => WEBVIEW2_DOWNLOAD_PAGE.to_owned(),
-                    WebviewRecoveryAction::Logs => log.directory.to_string_lossy().into_owned(),
-                    _ => unreachable!(),
+            let target = match action {
+                WebviewRecoveryAction::Download => WEBVIEW2_DOWNLOAD_PAGE.to_owned(),
+                WebviewRecoveryAction::Logs => log.directory.to_string_lossy().into_owned(),
+                _ => unreachable!(),
+            };
+            let outcome = open_recovery_target(&target);
+            if outcome.is_err() {
+                let message = match action {
+                    WebviewRecoveryAction::Download => format!("无法打开安装页面。\n\n按 Ctrl+C 复制此提示，在浏览器中打开官方地址：\n{WEBVIEW2_DOWNLOAD_PAGE}"),
+                    _ => format!("无法打开日志目录。\n\n按 Ctrl+C 复制此提示中的目录，再用文件资源管理器打开：\n{target}"),
+                };
+                let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+                let title: Vec<u16> = "Mizar 启动失败\0".encode_utf16().collect();
+                unsafe {
+                    MessageBoxW(0, message.as_ptr(), title.as_ptr(), 0x10);
                 }
-                .as_str(),
-            )
+            }
+            outcome
         },
         |stage, result, detail| log.event(stage, result, detail),
     )
