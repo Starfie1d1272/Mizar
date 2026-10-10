@@ -155,6 +155,10 @@ export async function verifyResourceReceipt({
     );
     const catalogs = [...(receipt.catalogHistory ?? []), receipt.catalog];
     const matching = catalogs.filter((item) => {
+      requireValue(
+        item?.schemaVersion === 'mizar.resource-catalog-receipt.v1',
+        '资源目录 receipt 版本无效',
+      );
       const descriptor = JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8'));
       return (
         descriptor.core?.appVersion === corePin.appVersion &&
