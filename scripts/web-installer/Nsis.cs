@@ -159,8 +159,13 @@ namespace Mizar.WebInstaller {
       using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) return !HasPending() && (key==null || String.IsNullOrEmpty(Convert.ToString(key.GetValue("InstallDir"))));
     }
     internal static string SelectDestination(string directory) {
-      if(!Path.IsPathRooted(directory)) throw new InstallerActionRequired("请选择完整的安装目录路径。");
-      string target=Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);AssertSafeSelection(target);
+      directory=(directory ?? "").Trim();
+      if(!System.Text.RegularExpressions.Regex.IsMatch(directory,@"^[A-Za-z]:[\\/]")) throw new InstallerActionRequired("请输入含盘符的完整安装路径，例如 D:\\Mizar；不支持相对路径或网络目录。");
+      if(System.Text.RegularExpressions.Regex.IsMatch(directory,@"%[^%]+%")) throw new InstallerActionRequired("请填写实际安装路径，不支持环境变量；也可点击「更改」选择目录。");
+      string target;
+      try {target=Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);}
+      catch(Exception error) {if(!(error is ArgumentException) && !(error is NotSupportedException) && !(error is PathTooLongException)) throw;throw new InstallerActionRequired("安装路径格式有误，请删除非法字符或缩短路径后重试。",true,error);}
+      AssertSafeSelection(target);
       using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
         string registered=key==null ? null : Convert.ToString(key.GetValue("InstallDir"));
         if(!String.IsNullOrEmpty(registered) && !String.Equals(Path.GetFullPath(registered).TrimEnd(Path.DirectorySeparatorChar),target,StringComparison.OrdinalIgnoreCase)) throw new InstallerActionRequired("升级将沿用原安装位置，请勿迁移已有安装。");

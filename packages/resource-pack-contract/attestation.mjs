@@ -1,5 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createVerifier } from 'sigstore';
+import { resolve } from 'node:path';
+import { platform } from 'node:process';
 import { isSourceSha, isSha256, requireValue } from './index.mjs';
 import { sha256 } from './content.mjs';
 import { REPOSITORY } from './publication.mjs';
@@ -28,15 +30,48 @@ export function mizarCertificatePolicy(workflow, sourceSha) {
     },
   };
 }
+// SDK initialization can outlive a caller's deadline. Serialize all signer
+// policies/instances using the same cache until the SDK has actually settled.
+// This is process-local; existing Host shutdown and installer ownership keep
+// the updater and its post-exit resource bridge from overlapping across processes.
+/** @type {Map<string, Promise<import('sigstore').BundleVerifier>>} */
+const tufInitializations = new Map();
+/**
+ * @param {import('sigstore').VerifyOptions} options
+ * @param {AbortSignal} [signal]
+ */
+export function createTufVerifier(options, signal) {
+  const path = options.tufCachePath === undefined ? 'sdk-default' : resolve(options.tufCachePath);
+  const key = platform === 'win32' ? path.toLowerCase() : path;
+  const previous = tufInitializations.get(key) ?? Promise.resolve();
+  const pending = previous
+    .catch(() => undefined)
+    .then(() => {
+      signal?.throwIfAborted();
+      return createVerifier(options);
+    });
+  tufInitializations.set(key, pending);
+  void pending
+    .finally(() => {
+      if (tufInitializations.get(key) === pending) tufInitializations.delete(key);
+    })
+    .catch(() => undefined);
+  return pending;
+}
+
 /** 沿用既有 issuer/CT/tlog/Sigstore TUF 根，并与 CLI 一致绑定证书 source-ref/digest。 */
 export async function createMizarVerifier(workflow, sourceSha, tufCachePath) {
-  return createVerifier({
+  return createTufVerifier({
     ...mizarCertificatePolicy(workflow, sourceSha),
     ctLogThreshold: 1,
     tlogThreshold: 1,
     tufCachePath,
-    retry: 0,
-    timeout: 5000,
+    // Use only the SDK's authenticated, unexpired cache; it refreshes missing
+    // or invalid roles. Resource completion must not force another refresh
+    // immediately after the updater has authenticated the same TUF repository.
+    tufForceCache: true,
+    retry: { retries: 1, minTimeout: 250, maxTimeout: 250 },
+    timeout: 8000,
   });
 }
 /** 供现有更新验证器共用的已配置 verifier 边界；资源生产入口不接收外部 verifier。 */

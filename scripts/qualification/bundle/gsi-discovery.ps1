@@ -44,8 +44,8 @@ function Convert-VdfPath {
 
 
 function Stop-Cs2Discovery {
-    param([string]$Code, [int]$CandidateCount = 0)
-    $exception = [InvalidOperationException]::new($Code)
+    param([string]$Code, [int]$CandidateCount = 0, [Exception]$Cause = $null)
+    $exception = [InvalidOperationException]::new($Code, $Cause)
     $exception.Data['MizarCode'] = $Code
     $exception.Data['CandidateCount'] = $CandidateCount
     throw $exception
@@ -148,7 +148,7 @@ function Get-SavedCs2Input {
             $selection = Get-Content -LiteralPath $selectionPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($selection.version -ne 1 -or $selection.root -isnot [string]) { Stop-Cs2Discovery 'selection-unreadable' }
             return $selection.root
-        } catch { Stop-Cs2Discovery 'selection-unreadable' }
+        } catch { Stop-Cs2Discovery 'selection-unreadable' -Cause $_.Exception }
     }
     # Existing GSI selections also identify the installation used for managed launch.
     $recordPath = Join-Path (Split-Path -Parent $selectionPath) 'gsi-install\install.json'
@@ -157,7 +157,7 @@ function Get-SavedCs2Input {
             $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($record.cfgPath -isnot [string] -or -not $record.cfgPath) { Stop-Cs2Discovery 'record-unreadable' }
             return Split-Path -Parent $record.cfgPath
-        } catch { Stop-Cs2Discovery 'record-unreadable' }
+        } catch { Stop-Cs2Discovery 'record-unreadable' -Cause $_.Exception }
     }
     return $null
 }

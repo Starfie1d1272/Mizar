@@ -29,7 +29,12 @@ namespace Mizar.WebInstaller {
         Assert(!window.detail.Text.Contains("网络"),"Welcome does not preemptively warn about network");
         Assert(window.destination.Visible && window.destination.Text.EndsWith("Mizar") && window.browse.Visible,"Welcome exposes the default destination without another page");
         Assert(!window.bar.Visible && !window.launchChoice.Visible,"Initial window must hide progress and launch choice");
-        Pump(window.Start());
+        Assert(!window.destination.ReadOnly && window.destination.TabStop,"Fresh destination accepts keyboard editing and paste");
+        string selected=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"Mizar 手动输入 "+Guid.NewGuid().ToString("N"));
+        window.destination.Text="relative";Pump(window.Start());
+        Assert(installs==0 && window.destination.Visible && window.heading.Text=="请修改安装位置","Invalid draft cannot begin installation and remains editable");
+        window.destination.Text="  "+selected+"  ";Pump(window.Start());
+        Assert(window.destination.Text==selected && installs==1 && window.destination.ReadOnly,"Submit normalizes the visible path once and freezes it during the transaction");
         Assert(window.openLocation.Visible && !window.destination.Visible,"Completion exposes the installation folder");
         Assert(window.heading.Text=="安装完成" && window.launchChoice.Visible && window.launchChoice.Checked,"Completion has checked launch choice");
         Assert(launches==0,"Reaching completion must not launch");
