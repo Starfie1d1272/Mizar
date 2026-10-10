@@ -10,7 +10,7 @@
 ./scripts/web-installer/build.ps1 -ProductDirectory <产品目录> -CoreDirectory <解压Core目录> -OutputDirectory <产物目录> -Qualification
 ```
 
-入口复用既有 Qualification 身份检查、更新清单和完整载荷验证，拒绝其它工作流、源码不一致、缺少安装桥和改变的原资产。它只编译原生引导器，不重建 Core。Qualification 同时证明原 EXE 和构建身份；Promotion 验证这些原字节后发布，拒绝同名不同内容。构建报告保持未发布、未取得生产安装证据的状态，不能把已有自动化当成新版本实机验收。
+入口复用既有 Qualification 身份检查、更新清单和完整载荷验证，拒绝其它工作流、源码不一致、缺少安装桥和改变的原资产。它只编译原生引导器，不重建 Core。签发后显式传入最终已核验的 Core 解压目录，使用部署内 SDK 和依赖做隔离客户端验证，不依赖签发 job 的 checkout node_modules。Qualification 同时证明原 EXE 和构建身份；Promotion 验证这些原字节后发布，拒绝同名不同内容。构建报告保持未发布、未取得生产安装证据的状态，不能把已有自动化当成新版本实机验收。
 
 ## 下载与验证
 
@@ -26,7 +26,7 @@ Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 
 
 新事务保留固定安装计划摘要、安装器摘要、配对目录 token 和进程 PID/创建时间。重新打开同一安装器的「恢复安装」在原独占锁内核对记录与旧写入结束：完整程序继续资源准备；部分程序移到同级 `*.incomplete-<事务ID>` 原样保留，再安装到新目录。未知文本 marker、损坏记录、活动或无法查询的进程保持现场。卸载回滚也记录写入进程；旧写入确认结束后，残留安装原样保留再修复。进程启动与 PID/创建时间持久化之间的窗口，以及旧版只记录 `rollback` 的 marker，仍拒绝自动恢复，需要人工核对；不能直接删除 marker 强行重试。
 
-资源目录 v2 将当前 Core 的 Qualification/Promotion 授权与原 Pack Qualification、原发行声明 Promotion 与原发布版本/规范地址分开；v1 保持原严格绑定。跨兼容 Core 复用保存原主 catalog，并在同一 receipt 附加当前 Core 授权，旧 Core 回滚仍可使用原主 catalog。Qualification 可选 `resource_source_run` 和精确 `resource_source_artifact`（原 Promotion 的 publication artifact，或保留原发行证明的后续资格 artifact），先验证原始 Qualification/Promotion 签名与实际内容再复制原 ZIP/证明，只签发新 Core 描述符，不改写 Pack 原始 SHA 或重打包。
+资源目录 v2 将当前 Core 的 Qualification/Promotion 授权与原 Pack Qualification、原发行声明 Promotion 与原发布版本/规范地址分开；v1 保持原严格绑定。跨兼容 Core 复用保存原主 catalog，并在同一 receipt 附加当前 Core 授权，旧 Core 回滚仍可使用原主 catalog。Qualification 可选 `resource_source_run` 和可选精确 `resource_source_artifact`（默认从成功 Promotion 任务唯一的资源 artifact 选择；后续资格 artifact 必须保留原发行证明，旧的仅 Qualification 资源 artifact 会拒绝），先验证原始 Qualification/Promotion 签名与实际内容再复制原 ZIP/证明，只签发新 Core 描述符，不改写 Pack 原始 SHA 或重打包。
 
 ## 验证边界
 

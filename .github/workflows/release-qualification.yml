@@ -21,17 +21,17 @@ on:
         required: true
         type: number
       resource_source_run:
-        description: 'Optional successful main run containing already verified resource bytes'
+        description: 'Optional successful main Promotion run for original published resources; qualified reuse must retain original publication proofs'
         required: false
         type: string
       resource_source_artifact:
-        description: 'Exact original artifact name; defaults to qualified resources'
+        description: 'Optional exact original publication artifact name; a unique Promotion resource artifact is selected automatically'
         required: false
-        default: release-qualified-resources
         type: string
 
 permissions:
   contents: read
+  actions: read
 
 env:
   RELEASE_LABEL: ${{ inputs.label }}
@@ -47,6 +47,8 @@ jobs:
   build:
     runs-on: windows-2025
     timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
       archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
@@ -118,8 +120,18 @@ jobs:
             if ($env:RESOURCE_SOURCE_RUN -notmatch '^\d+$') { throw 'Invalid original run' }
             $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN" | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.head_branch -ne 'main' -or $run.path -notin @('.github/workflows/release-qualification.yml','.github/workflows/release-promotion.yml')) { throw 'Resource reuse requires a successful original main workflow' }
+            $artifactName = $env:RESOURCE_SOURCE_ARTIFACT
+            if (!$artifactName) {
+              if ($run.path -eq '.github/workflows/release-promotion.yml') {
+                $available = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact lookup failed' }
+                $resourceArtifacts = @($available.artifacts | Where-Object { !$_.expired -and $_.name.StartsWith('promotion-resources-') })
+                if ($available.total_count -gt 100 -or $resourceArtifacts.Count -ne 1) { throw 'Specify the exact original publication artifact; automatic selection is ambiguous' }
+                $artifactName = $resourceArtifacts[0].name
+              } else { $artifactName = 'release-qualified-resources' }
+            }
             $original = Join-Path $env:RUNNER_TEMP 'original-resource-artifact'
-            gh run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$env:RESOURCE_SOURCE_ARTIFACT" --dir "$original"
+            gh run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$artifactName" --dir "$original"
             if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact unavailable' }
             node scripts/ci/resource-release.mjs reuse "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$original" "$env:RESOURCE_SEQUENCE"
           } else {
@@ -361,6 +373,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
       id-token: write
       attestations: write
     env:
@@ -432,6 +445,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
             ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
             if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
+            "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
           }
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
@@ -495,7 +509,7 @@ jobs:
       - name: Verify actual signed candidate through isolated client SDK
         shell: pwsh
         run: |
-          node scripts/qualification/verify-qualified-install.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:RESOURCE_BUILD_ROOT"
+          node scripts/qualification/verify-qualified-install.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:RESOURCE_BUILD_ROOT" "$env:QUALIFIED_CORE_DIRECTORY"
           if ($LASTEXITCODE -ne 0) { throw 'Pre-publication client signature verification failed' }
 
       - name: Upload qualified portable product

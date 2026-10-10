@@ -1,20 +1,33 @@
 import { Buffer } from 'node:buffer';
 import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join, basename, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import {
-  createMizarVerifier,
-  verifyMizarAttestation,
-} from '../../packages/resource-pack-contract/attestation.mjs';
-import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
+import { verifyPayload } from './product-runtime.mjs';
 import { verifyQualifiedResources } from '../ci/resource-release.mjs';
 
 // Consume the actual same-run original bytes in isolation after signing. This
 // step has no publication authority and never invokes Promotion or production mirrors.
-const [product, resources] = process.argv.slice(2).map((value) => resolve(value));
+const [product, resources, coreDirectory] = process.argv.slice(2).map((value) => resolve(value));
 const isolation = await mkdtemp(join(tmpdir(), 'mizar-qualified-install-'));
 try {
+  if (!coreDirectory) throw new Error('Verified extracted Core directory is required');
+  const coreBytes = await readFile(join(product, 'core-release-manifest.json'));
+  const core = JSON.parse(coreBytes);
+  const artifact = await verifyPayload(coreDirectory);
+  if (
+    artifact.appVersion !== core.appVersion ||
+    artifact.gitSha !== core.gitSha ||
+    artifact.artifactSha256 !== core.contentDigest
+  )
+    throw new Error('Extracted Core differs from the qualified candidate');
+  // The signing job has no checkout node_modules. Load only the verified
+  // production SDK and its bundled dependencies from the explicit extraction.
+  const sdk = join(coreDirectory, 'resources/app/node_modules/@mizar/resource-pack-contract/dist');
+  const { createMizarVerifier, verifyMizarAttestation } = await import(
+    pathToFileURL(join(sdk, 'attestation.js')).href
+  );
+  const { makeMachineMetadata } = await import(pathToFileURL(join(sdk, 'transport.js')).href);
   const bytes = await readFile(join(product, 'update-manifest.json'));
   const full = JSON.parse(bytes);
   const bundleBytes = await readFile(join(product, 'qualification-provenance.json'));
@@ -36,12 +49,7 @@ try {
     'core-distribution-manifest.json',
   ])
     files.set(name, await readFile(join(product, name)));
-  const core = JSON.parse(files.get('core-release-manifest.json'));
-  const deployed = join(
-    product,
-    basename(core.archive, '.zip'),
-    'resources/app/dist/updates/core.js',
-  );
+  const deployed = join(coreDirectory, 'resources/app/dist/updates/core.js');
   const { selectQualifiedCore } = await import(pathToFileURL(deployed).href);
   const selected = selectQualifiedCore(makeMachineMetadata(files), full, verifier);
   if (
