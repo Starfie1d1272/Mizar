@@ -4,7 +4,7 @@ import { desktopInvoke } from '../workspace/client';
 import './updates.css';
 import { openTool } from './client';
 
-interface UpdateStatus {
+export interface UpdateStatus {
   phase:
     | 'idle'
     | 'checking'
@@ -17,6 +17,8 @@ interface UpdateStatus {
     | 'error';
   productionRevision: string;
   automatic: boolean;
+  notificationPending?: boolean;
+  notificationSafe?: boolean;
   currentVersion: string;
   distribution: 'installed' | 'portable';
   error: string | null;
@@ -347,6 +349,7 @@ export function UpdateSettings() {
               disabled={waiting || downloading || requested}
               onChange={(event) => void action('automatic', event.target.checked)}
             />
+            <p>启动时检查，持续运行每 6 小时复查；下载和安装由你决定。</p>
           </details>
         ) : null}
       </div>

@@ -15,6 +15,8 @@ async function updateFixture(page: import('@playwright/test').Page) {
     phase: 'available',
     productionRevision: 'preparation-1',
     automatic: false,
+    notificationPending: false,
+    notificationSafe: false,
     currentVersion: '1.0.0',
     distribution: 'installed',
     error: null as string | null,
@@ -29,14 +31,30 @@ async function updateFixture(page: import('@playwright/test').Page) {
   };
   const actions: string[] = [];
   let completeDownload = false;
+  let notifyGate: Promise<void> | null = null;
+  let statusReads = 0;
   await page.route('**/operator/obs/launch-target', (route) =>
     route.fulfill({ json: { executablePath: 'C:\\OBS\\obs64.exe' } }),
   );
-  await page.route('**/local/v1/updates', (route) => route.fulfill({ json: status }));
+  await page.route('**/local/v1/updates', (route) => {
+    statusReads++;
+    return route.fulfill({ json: status });
+  });
   await page.route('**/operator/updates', async (route) => {
     const body = route.request().postDataJSON() as { action: string; enabled?: boolean };
     actions.push(body.action);
     if (body.action === 'automatic') status.automatic = body.enabled ?? false;
+    if (body.action === 'notify') {
+      const notification =
+        status.notificationPending && status.notificationSafe
+          ? { version: status.candidate.version, notes: status.candidate.notes }
+          : null;
+      const response = { ...status, notification };
+      if (notifyGate) await notifyGate;
+      await route.fulfill({ json: response });
+      return;
+    }
+    if (body.action === 'dismiss-notification') status.notificationPending = false;
     if (body.action === 'download') {
       status.phase = completeDownload ? 'ready' : 'downloading';
       status.downloadedBytes = completeDownload ? 100 : 40;
@@ -69,9 +87,135 @@ async function updateFixture(page: import('@playwright/test').Page) {
     completeDownload: () => {
       completeDownload = true;
     },
+    statusReads: () => statusReads,
+    pauseNotify: () => {
+      let resume!: () => void;
+      notifyGate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      return () => {
+        notifyGate = null;
+        resume();
+      };
+    },
     commands: () => page.evaluate(() => Reflect.get(window, 'updateCommands') as string[]),
   };
 }
+
+test('desktop update reminders wait for safe idle, dismiss once and open the existing update settings', async ({
+  page,
+}) => {
+  const { status, actions, commands } = await updateFixture(page);
+  status.automatic = true;
+  status.notificationPending = true;
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '总览', exact: true })).toBeVisible();
+  const dialog = page.getByRole('dialog', { name: '发现新版 v1.1.0' });
+  await expect(dialog).not.toBeVisible();
+  expect(actions).toEqual([]);
+  status.notificationSafe = true;
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(status.candidate.notes, { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('update-notification.png') });
+  await dialog.getByRole('button', { name: '稍后', exact: true }).focus();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => status.notificationPending).toBe(false);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '总览', exact: true })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  expect(actions).toEqual(['notify', 'dismiss-notification']);
+  status.candidate.version = '1.2.0';
+  status.notificationPending = true;
+  const newer = page.getByRole('dialog', { name: '发现新版 v1.2.0' });
+  await expect(newer).toBeVisible();
+  await newer.getByRole('button', { name: '查看更新', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\?tab=advanced$/);
+  await expect(page.getByRole('heading', { name: '应用更新', exact: true })).toBeVisible();
+  await expect
+    .poll(() => actions)
+    .toEqual(['notify', 'dismiss-notification', 'notify', 'dismiss-notification']);
+  expect(await commands()).toEqual([]);
+});
+
+for (const interruption of ['poll', 'input', 'focus', 'production'] as const) {
+  test(`desktop reminder survives ${interruption} while its read is pending`, async ({ page }) => {
+    const { status, actions, statusReads, pauseNotify } = await updateFixture(page);
+    status.automatic = true;
+    status.notificationPending = true;
+    status.notificationSafe = true;
+    const resume = pauseNotify();
+    await page.addInitScript(() => {
+      Object.assign(window, { reminderFocused: true });
+      document.hasFocus = () => Reflect.get(window, 'reminderFocused') === true;
+    });
+    await page.goto('/');
+    await expect.poll(() => actions.length).toBe(1);
+    const initialReads = statusReads();
+    if (interruption === 'input') {
+      await page.evaluate(() => {
+        const input = document.createElement('input');
+        input.id = 'reminder-input';
+        document.body.append(input);
+      });
+      await page.locator('#reminder-input').fill('正在输入');
+    } else if (interruption === 'focus') {
+      await page.evaluate(() => Reflect.set(window, 'reminderFocused', false));
+    } else if (interruption === 'production') {
+      status.notificationSafe = false;
+    }
+    // Ensure a status poll actually rerenders while the first response is pending.
+    await expect.poll(statusReads, { timeout: 10000 }).toBeGreaterThan(initialReads);
+    const response = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/operator/updates') &&
+        (response.request().postDataJSON() as { action?: string } | null)?.action === 'notify',
+    );
+    resume();
+    await response;
+    const dialog = page.getByRole('dialog', { name: '发现新版 v1.1.0' });
+    if (interruption !== 'poll') {
+      const readsAfterResponse = statusReads();
+      await expect.poll(statusReads, { timeout: 10000 }).toBeGreaterThan(readsAfterResponse);
+      await expect(dialog).not.toBeVisible();
+      expect(status.notificationPending).toBe(true);
+      expect(actions).not.toContain('dismiss-notification');
+      if (interruption === 'input')
+        await page
+          .locator('#reminder-input')
+          .evaluate((input) => (input as HTMLInputElement).blur());
+      if (interruption === 'focus')
+        await page.evaluate(() => Reflect.set(window, 'reminderFocused', true));
+      status.notificationSafe = true;
+    }
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    expect(status.notificationPending).toBe(true);
+    await dialog.getByRole('button', { name: '稍后', exact: true }).click();
+    await expect.poll(() => status.notificationPending).toBe(false);
+    expect(actions.filter((action) => action === 'dismiss-notification')).toHaveLength(1);
+  });
+}
+
+test('a displayed reminder pauses for production and resumes until explicitly closed', async ({
+  page,
+}) => {
+  const { status, actions } = await updateFixture(page);
+  status.automatic = true;
+  status.notificationPending = true;
+  status.notificationSafe = true;
+  await page.goto('/');
+  const dialog = page.getByRole('dialog', { name: '发现新版 v1.1.0' });
+  await expect(dialog).toBeVisible();
+  status.notificationSafe = false;
+  await expect(dialog).not.toBeVisible();
+  expect(status.notificationPending).toBe(true);
+  expect(actions).toEqual(['notify']);
+  status.notificationSafe = true;
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '稍后', exact: true }).click();
+  await expect.poll(() => status.notificationPending).toBe(false);
+  expect(actions).toEqual(['notify', 'dismiss-notification']);
+});
 
 test('update cancellation and postponement preserve the download choice without installing later', async ({
   page,

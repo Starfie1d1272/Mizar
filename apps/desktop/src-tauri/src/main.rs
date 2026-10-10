@@ -1524,6 +1524,7 @@ fn run_desktop(
                 }
             }
             setup_log.event("setup_complete", "success", None);
+            updates::check_on_startup(setup_log.clone());
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
