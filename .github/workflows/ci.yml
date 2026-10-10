@@ -87,7 +87,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
@@ -160,7 +161,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
@@ -209,7 +211,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
@@ -288,7 +291,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
@@ -384,7 +388,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
@@ -421,7 +426,8 @@ jobs:
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
-          cache: true
+          # Routine shards use ephemeral stores; preserve repository cache space for Cargo.
+          cache: false
           cache-dependency-path: pnpm-lock.yaml
           require-lockfile: true
           install: false
