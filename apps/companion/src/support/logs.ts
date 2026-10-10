@@ -1,4 +1,4 @@
-import { errorEvidence, redactDiagnosticText } from '../updates/diagnostics.js';
+import { boundDiagnostic, errorEvidence, redactDiagnosticText } from '../updates/diagnostics.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
@@ -151,7 +151,7 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
   ].slice(0, 12);
 }
 
-/** Unknown/free-text fields are not copied, even when the producer already redacted them. */
+/** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
     entry.event === 'update' && typeof entry.stage === 'string' && updateStages.has(entry.stage);
@@ -179,7 +179,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
         }
       : {}),
     ...(update && diagnostic.error !== undefined
-      ? { localDiagnostic: errorEvidence(diagnostic.error) }
+      ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
     ...(['powershell', 'cs2_launch'].includes(stage ?? '') &&
     (typeof entry.error === 'string' || typeof entry.detail === 'string')

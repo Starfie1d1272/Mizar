@@ -10,6 +10,8 @@ export function redactDiagnosticText(value: string): string {
         return '[redacted-url]';
       }
     })
+    .replace(/([a-z]:[\\/]+Users[\\/]+)[^\\/\s]+/gi, '$1[user]')
+    .replace(/(\/(?:home|Users)\/)[^/\s]+/g, '$1[user]')
     .split('\n')
     .map((line) =>
       /(?:authorization|token|password|credential|secret|api[_-]?key)["']?\s*[:=]|bearer\s+\S+|rh_mizar_[a-z0-9_-]+/i.test(
@@ -20,6 +22,27 @@ export function redactDiagnosticText(value: string): string {
     )
     .join('\n');
   return clean.length > 4096 ? clean.slice(0, 4096) + ' [truncated at 4096 characters]' : clean;
+}
+
+/** Keep cause structure while bounding encoded size, including escaped/multibyte text. */
+export function boundDiagnostic(value: unknown, maxBytes: number): unknown {
+  if (Buffer.byteLength(JSON.stringify(value, null, 2)) <= maxBytes) return value;
+  const clip = (entry: unknown, characters: number): unknown => {
+    if (typeof entry === 'string')
+      return entry.length > characters ? entry.slice(0, characters) + ' [truncated]' : entry;
+    if (Array.isArray(entry)) return entry.slice(0, 4).map((part) => clip(part, characters));
+    if (typeof entry === 'object' && entry !== null)
+      return Object.fromEntries([
+        ...Object.entries(entry).map(([key, field]) => [key, clip(field, characters)]),
+        ['truncated', true],
+      ]);
+    return entry;
+  };
+  for (const characters of [512, 256, 128, 64]) {
+    const bounded = clip(value, characters);
+    if (Buffer.byteLength(JSON.stringify(bounded, null, 2)) <= maxBytes) return bounded;
+  }
+  return { truncated: true, message: 'Diagnostic exceeded the bounded export budget' };
 }
 
 function serializedError(value: object): string {
@@ -53,12 +76,26 @@ export function errorEvidence(error: unknown): unknown {
       stack?: unknown;
       issues?: unknown[];
     };
+    const schemaError = original.name === 'ZodError' && Array.isArray(fields.issues);
+    const stack =
+      typeof fields.stack === 'string'
+        ? schemaError
+          ? fields.stack
+              .split('\n')
+              .filter((line) => /^\s+at /.test(line))
+              .join('\n')
+          : fields.stack
+        : undefined;
     return {
       name: redactDiagnosticText(typeof original.name === 'string' ? original.name : 'Error'),
       message: redactDiagnosticText(
-        typeof original.message === 'string' ? original.message : serializedError(value),
+        schemaError
+          ? 'Schema validation failed; see issue codes and paths'
+          : typeof original.message === 'string'
+            ? original.message
+            : serializedError(value),
       ),
-      ...(typeof fields.stack === 'string' ? { stack: redactDiagnosticText(fields.stack) } : {}),
+      ...(stack === undefined ? {} : { stack: redactDiagnosticText(stack) }),
       ...(Array.isArray(fields.issues)
         ? {
             issues: fields.issues.slice(0, 16).map((issue) => {
@@ -93,7 +130,7 @@ export function errorEvidence(error: unknown): unknown {
         : {}),
     };
   };
-  return visit(error, 0);
+  return boundDiagnostic(visit(error, 0), 32 * 1024);
 }
 
 export class UpdateRequestError extends Error {

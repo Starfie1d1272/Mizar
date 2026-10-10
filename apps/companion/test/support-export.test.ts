@@ -288,6 +288,53 @@ describe('support export', () => {
     }
   });
 
+  it('bounds large cause chains per event while retaining the latest failure in every file', async () => {
+    const dir = await directory();
+    const leaf = {
+      name: 'Error',
+      message: 'latest original cause ' + '故障'.repeat(700),
+      stack: 'at C:\\Users\\private-user\\Mizar\\network.js:12:1 ' + 'x'.repeat(700),
+    };
+    const line =
+      JSON.stringify({
+        event: 'update',
+        stage: 'download',
+        result: 'failure',
+        code: 'update_operation_failed',
+        time: Date.now(),
+        diagnostic: {
+          error: {
+            name: 'AggregateError',
+            message: 'latest transfer failed',
+            errors: Array.from({ length: 4 }, () => ({ ...leaf, cause: leaf })),
+          },
+        },
+      }) + '\n';
+    for (const name of [
+      'desktop.ndjson',
+      'supervisor.ndjson',
+      'companion.log',
+      'companion.stderr.log',
+    ])
+      for (const suffix of ['', '.1', '.2', '.3'])
+        await writeFile(join(dir, name + suffix), line.repeat(5));
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(Buffer.byteLength(response.body)).toBeLessThanOrEqual(SUPPORT_BUNDLE_MAX_BYTES);
+      expect(response.body).not.toContain('private-user');
+      for (const log of response.json<SupportBundle>().logs) {
+        const diagnostic = JSON.stringify(log.events.at(-1));
+        expect(diagnostic).toContain('latest transfer failed');
+        expect(diagnostic).toContain('latest original cause');
+        expect(diagnostic).toContain('truncated');
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it('keeps a long escaped Desktop failure among later healthy records', async () => {
     const dir = await directory();
     const failure = JSON.stringify({

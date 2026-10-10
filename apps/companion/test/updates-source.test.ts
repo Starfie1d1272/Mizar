@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { errorEvidence } from '../src/updates/diagnostics.js';
 import { createHash } from 'node:crypto';
 import {
@@ -772,23 +773,26 @@ it('retains string exceptions, stack and bounded schema issue metadata without s
   expect(errorEvidence('unusual original failure')).toMatchObject({
     message: 'unusual original failure',
   });
-  const schema = Object.assign(new Error('schema validation failed'), {
-    name: 'ZodError',
+  const parsed = z
+    .object({
+      version: z.string().superRefine((value, context) => {
+        context.addIssue({ code: 'custom', message: `rejected ${value}` });
+      }),
+      bytes: z.number(),
+    })
+    .safeParse({ version: 'private-input', bytes: 'private-type-value' });
+  expect(parsed.success).toBe(false);
+  const evidence = errorEvidence(parsed.error);
+  expect(evidence).toMatchObject({
     issues: [
-      {
-        code: 'invalid_type',
-        path: ['installer', 'bytes'],
-        expected: 'number',
-        input: 'private-input',
-      },
+      { code: 'custom', path: ['version'] },
+      { code: 'invalid_type', path: ['bytes'], expected: 'number' },
     ],
   });
-  const evidence = errorEvidence(schema);
-  expect(evidence).toMatchObject({
-    issues: [{ code: 'invalid_type', path: ['installer', 'bytes'], expected: 'number' }],
-  });
-  expect((evidence as { stack?: unknown }).stack).toContain('schema validation failed');
+  const wrapped = errorEvidence(new Error('schema wrapper', { cause: parsed.error }));
+  expect((wrapped as { stack?: unknown }).stack).toContain('at ');
   expect(JSON.stringify(evidence)).not.toContain('private-input');
+  expect(JSON.stringify(evidence)).not.toContain('private-type-value');
   expect(JSON.stringify(errorEvidence(new Error('x'.repeat(10_000))))).toContain('truncated');
 });
 
