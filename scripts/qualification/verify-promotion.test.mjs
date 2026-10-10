@@ -1,11 +1,160 @@
 import { Buffer } from 'node:buffer';
 import { expect, it } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { verifyPromotion } from './verify-promotion.mjs';
 import { assertPublishedAssets, assertPublication } from './update-publication.mjs';
+import { makeUpdateIndex } from './update-index.mjs';
+import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
+
+it('completes the real publication readback CLI without a module wait cycle', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar publication CLI '));
+  const product = join(root, 'product');
+  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const gitSha = 'a'.repeat(40),
+    promotionSha = 'b'.repeat(40),
+    version = '1.2.0';
+  const web = `Mizar-v${version}-Windows-x64-WebInstaller.exe`;
+  const originals = new Map(
+    ['full.zip', 'FullSetup.exe', 'CoreSetup.exe', web].map((name) => [name, Buffer.from(name)]),
+  );
+  const manifestBytes = Buffer.from(JSON.stringify({ version, gitSha }));
+  originals.set('update-manifest.json', manifestBytes);
+  const publication = {
+    schemaVersion: 'mizar.update-publication.v1',
+    repository: 'Starfie1d1272/Mizar',
+    version,
+    gitSha,
+    promotionSha,
+    manifestSha256: hash(manifestBytes),
+    releaseId: 42,
+    publishedAt: '2026-10-10T00:00:00Z',
+  };
+  const index = makeUpdateIndex(
+    manifestBytes,
+    Buffer.from('{}'),
+    Buffer.from(JSON.stringify(publication)),
+    Buffer.from('{}'),
+  );
+  const carrier = makeMachineMetadata(new Map([['update-index.json', index]]));
+  originals.set('machine-metadata.json', carrier);
+  try {
+    await mkdir(product);
+    for (const [name, bytes] of originals) await writeFile(join(product, name), bytes);
+    const full = {
+      appVersion: version,
+      gitSha,
+      archive: 'full.zip',
+      archiveSha256: hash(originals.get('full.zip')),
+    };
+    const core = {
+      appVersion: version,
+      gitSha,
+      resourceMode: 'core',
+      archive: 'core.zip',
+      archiveSha256: 'c'.repeat(64),
+      contentDigest: 'd'.repeat(64),
+      derivedFrom: { archiveSha256: full.archiveSha256 },
+    };
+    for (const [name, value] of [
+      ['release-manifest.json', full],
+      ['distribution-manifest.json', { appVersion: version, gitSha, archive: 'FullSetup.exe' }],
+      ['core-release-manifest.json', core],
+      [
+        'core-distribution-manifest.json',
+        {
+          appVersion: version,
+          gitSha,
+          archive: 'CoreSetup.exe',
+          contentDigest: core.contentDigest,
+          originalArchiveSha256: core.archiveSha256,
+        },
+      ],
+      [
+        'web-installer-build.json',
+        {
+          artifact: web,
+          gitSha,
+          version,
+          sha256: hash(originals.get(web)),
+          bytes: originals.get(web).length,
+          core: core.archive,
+          installer: 'CoreSetup.exe',
+        },
+      ],
+    ])
+      await writeFile(join(product, name), JSON.stringify(value));
+    const identity = { tag: 'v1.2.0', gitSha };
+    const release = {
+      id: 42,
+      tag_name: identity.tag,
+      draft: false,
+      prerelease: false,
+      published_at: publication.publishedAt,
+      assets: [...originals].map(([name, bytes]) => ({
+        name,
+        size: bytes.length,
+        digest: `sha256:${hash(bytes)}`,
+        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v1.2.0/${name}`,
+      })),
+    };
+    await writeFile(join(root, 'promotion-identity.json'), JSON.stringify(identity));
+    await writeFile(join(root, 'release.json'), JSON.stringify(release));
+    await writeFile(
+      join(root, 'ref.json'),
+      JSON.stringify({ object: { type: 'commit', sha: gitSha } }),
+    );
+    const calls = join(root, 'gh-calls.jsonl');
+    const hook = join(root, 'transport-fixture.mjs');
+    // External gh transport is a fixture; this proves CLI lifecycle and retained
+    // verifier calls, not signatures. Real published dual signatures are checked separately.
+    await writeFile(
+      hook,
+      `import child from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { appendFileSync, copyFileSync } from 'node:fs';
+import { join } from 'node:path';
+child.execFileSync = (command, args) => {
+  if (command !== 'gh') throw Error('Unexpected external command');
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args)+'\\n');
+  if (args[0] === 'release' && args[1] === 'download') copyFileSync(${JSON.stringify(join(product, 'machine-metadata.json'))}, join(args[args.indexOf('--dir')+1], 'machine-metadata.json'));
+  else if (args[0] !== 'attestation' || args[1] !== 'verify') throw Error('Unexpected gh mutation');
+  return Buffer.alloc(0);
+};
+syncBuiltinESMExports();`,
+    );
+    const stdout = execFileSync(
+      process.execPath,
+      [
+        '--import',
+        hook,
+        resolve('scripts/qualification/update-publication.mjs'),
+        'verify-existing',
+        'release.json',
+        'ref.json',
+        identity.tag,
+        product,
+      ],
+      { cwd: root, encoding: 'utf8', timeout: 10000 },
+    );
+    expect(stdout).toContain('完整必需资产与正式发布确认一致');
+    const operations = (await readFile(calls, 'utf8')).trim().split('\n').map(JSON.parse);
+    expect(operations.map((args) => args.slice(0, 2))).toEqual([
+      ['release', 'download'],
+      ['attestation', 'verify'],
+      ['attestation', 'verify'],
+    ]);
+    expect(operations.slice(1).map((args) => args[args.indexOf('--source-digest') + 1])).toEqual([
+      gitSha,
+      promotionSha,
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it('requires every original published asset before treating a promotion retry as complete', () => {
   const identity = { tag: 'v1.1.0', gitSha: 'a'.repeat(40) };

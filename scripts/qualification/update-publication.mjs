@@ -13,6 +13,8 @@ import { execFileSync } from 'node:child_process';
 import { releaseAttestationArgs } from './release-identity.mjs';
 import { publicProductAssets, assetInventory } from './release-assets.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
+import { assertPublication } from './publication-contract.mjs';
+export { assertPublication } from './publication-contract.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -47,23 +49,6 @@ export function assertPublishedAssets(release, ref, identity, expected) {
       `已发布资产缺失或身份不一致：${asset.name}`,
     );
   }
-}
-
-export function assertPublication(publication, manifestBytes, manifest) {
-  requireValue(
-    publication.schemaVersion === 'mizar.update-publication.v1' &&
-      publication.repository === repository &&
-      publication.version === manifest.version &&
-      publication.gitSha === manifest.gitSha &&
-      publication.manifestSha256 === sha256(manifestBytes) &&
-      /^[a-f0-9]{40}$/.test(publication.promotionSha) &&
-      Number.isSafeInteger(publication.releaseId) &&
-      publication.releaseId > 0 &&
-      typeof publication.publishedAt === 'string' &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(publication.publishedAt) &&
-      Number.isFinite(Date.parse(publication.publishedAt)),
-    '正式发布确认与更新清单不一致',
-  );
 }
 
 async function expectedAssets(product) {
