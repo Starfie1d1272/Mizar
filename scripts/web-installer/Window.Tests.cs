@@ -64,9 +64,9 @@ namespace Mizar.WebInstaller {
   static class UiDemo {
     [STAThread] static void Main(string[] args) {
       Application.EnableVisualStyles();
-      var window=new Window(WindowTests.UiPlan(),(bytes,stages,token)=>Task.FromResult("UI-only-not-installed"),path=>{throw new Exception("界面演示，不启动产品。");},true);
-      window.Shown += (s,e)=>{
-        if(args.Length>0 && args[0]=="installing") {window.ShowStage("installing-core");window.action.Enabled=false;window.action.Text="安装";}
+      var window=new Window(WindowTests.UiPlan(),async (bytes,stages,token)=>{stages.Report("installing-core");await Task.Delay(Timeout.Infinite,token);return "UI-only-not-installed";},path=>{throw new Exception("界面演示，不启动产品。");},true);
+      window.Shown += async (s,e)=>{
+        if(args.Length>0 && args[0]=="installing") {await window.Start();window.Close();}
         else {window.ShowCompleted("UI-only-not-installed");if(args.Length>0 && args[0]=="start-failed") window.action.PerformClick();}
       };
       Application.Run(window);
