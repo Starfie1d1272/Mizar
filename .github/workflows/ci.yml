@@ -39,6 +39,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 2
+          sparse-checkout: scripts/ci
 
       - name: Record GitHub simulation identity before executing repository code
         shell: bash
@@ -368,7 +369,15 @@ jobs:
         group: [update, faults]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: ${{ matrix.group == 'update' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/web-installer
+            scripts/qualification/bundle
+      - if: ${{ matrix.group == 'faults' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
       - if: ${{ matrix.group == 'faults' }}
@@ -457,6 +466,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          sparse-checkout: scripts/ci
 
       - name: Download browser identity evidence
         if: ${{ needs.plan.outputs.run_acceptance == 'true' }}

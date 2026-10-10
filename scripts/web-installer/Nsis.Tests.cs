@@ -21,12 +21,12 @@ namespace Mizar.WebInstaller {
     static string Hash(string path) {using(var file=File.OpenRead(path)) using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();}
     static readonly System.Collections.Generic.List<string> cases = new System.Collections.Generic.List<string>();
     static void Passed(string name) { cases.Add(name); }
-    static async Task Run(string group) {
+    static async Task Run(string group, string downloadCache) {
       Plan plan;
       using (var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("legacy-plan.json"))
       using (var reader=new StreamReader(stream)) plan=new JavaScriptSerializer().Deserialize<Plan>(reader.ReadToEnd());
       string root=Path.Combine(Path.GetTempPath(), "Mizar-WebInstaller-Qualification", Guid.NewGuid().ToString());
-      string cache=Path.Combine(root,"downloads"); Directory.CreateDirectory(root);
+      string cache=downloadCache ?? Path.Combine(root,"downloads"); Directory.CreateDirectory(root);
       bool complete=false;
       try {
         string installer;
@@ -195,8 +195,18 @@ namespace Mizar.WebInstaller {
     }
     public static int Main(string[] args) {
       try {
-        if(args.Length!=2 || (args[0]!="all" && args[0]!="update" && args[0]!="faults")) throw new IOException("Unknown NSIS qualification group");
-        ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12; Run(args[0]).GetAwaiter().GetResult();
+        ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
+        if(args.Length==2 && args[0]=="download") {
+          Plan plan;
+          using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("legacy-plan.json"))
+          using(var reader=new StreamReader(stream)) plan=new JavaScriptSerializer().Deserialize<Plan>(reader.ReadToEnd());
+          using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
+          using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
+            new Downloader(client).Download(plan,args[1],new IgnoreProgress(),CancellationToken.None).GetAwaiter().GetResult();
+          return 0;
+        }
+        if((args.Length!=2 && args.Length!=3) || (args[0]!="all" && args[0]!="update" && args[0]!="faults")) throw new IOException("Unknown NSIS qualification group");
+        Run(args[0],args.Length==3 ? args[2] : null).GetAwaiter().GetResult();
         var evidence=new { group=args[0], cases=cases.ToArray(), sourceSha=Environment.GetEnvironmentVariable("GITHUB_SHA"), runId=Environment.GetEnvironmentVariable("GITHUB_RUN_ID"), attempt=Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT") };
         using(var output=new FileStream(args[1],FileMode.CreateNew,FileAccess.Write,FileShare.None))
         using(var writer=new StreamWriter(output,new System.Text.UTF8Encoding(false))) writer.Write(new JavaScriptSerializer().Serialize(evidence));
