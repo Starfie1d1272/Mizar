@@ -14,10 +14,24 @@ import {
   BoxClient,
   probe,
   promotionTag,
+  cacheReleaseIdentities,
 } from './box-sync.mjs';
 
 const { URL, Response, ReadableStream, DOMException } = globalThis;
 
+it('shares same-run verified identity lookup across package kinds, without bypassing rejection', async () => {
+  const lookup = vi.fn(async (tag) => {
+    if (tag === 'v1.0.0') throw new Error('invalid publication');
+    return { version: tag, offline: {}, bootstrap: {} };
+  });
+  const resolveIdentity = cacheReleaseIdentities(lookup);
+  const [full, offline] = await Promise.all([resolveIdentity('v1.1.0'), resolveIdentity('v1.1.0')]);
+  expect(full).toBe(offline);
+  expect(lookup).toHaveBeenCalledTimes(1);
+  await expect(resolveIdentity('v1.0.0')).rejects.toThrow('invalid publication');
+  await expect(resolveIdentity('v1.0.0')).rejects.toThrow('invalid publication');
+  expect(lookup).toHaveBeenCalledTimes(2);
+});
 describe('成功发布任务的版本标签', () => {
   const run = { id: 42, display_title: 'Release Promotion' };
   const job = { run_id: 42, status: 'completed', conclusion: 'success', name: '发布 Mizar v1.0.0' };
@@ -552,11 +566,15 @@ it('mirrors immutable resource transport bytes before pointer publication and re
     return { name, bytes, size: bytes.length, sha256: digest(bytes) };
   });
   const box = fakeBox();
+  const readback = vi.spyOn(box, 'hash');
   await syncResourceFiles({ box, version: '1.0.1', files });
+  expect(readback).toHaveBeenCalledTimes(files.length);
   for (const file of files)
     expect(box.stored.get('/Resources/v1.0.1/' + file.name)).toEqual(file.bytes);
   box.operations.length = 0;
+  readback.mockClear();
   await syncResourceFiles({ box, version: '1.0.1', files });
+  expect(readback).toHaveBeenCalledTimes(files.length);
   expect(box.operations).toEqual([]);
   box.stored.set('/Resources/v1.0.1/' + files[0].name, Buffer.from('changed'));
   await expect(syncResourceFiles({ box, version: '1.0.1', files })).rejects.toThrow();
@@ -584,10 +602,14 @@ it('keeps Runtime original carrier/backend immutable across retries and refuses 
     { name: 'Mizar-v2.0.0-Windows-x64-Core-Setup.exe', bytes: backend },
   ].map((f) => ({ ...f, size: f.bytes.length, sha256: digest(f.bytes) }));
   const box = fakeBox();
+  const readback = vi.spyOn(box, 'hash');
   await syncRuntimeFiles({ box, version, files });
+  expect(readback).toHaveBeenCalledTimes(files.length);
   expect(box.operations).toEqual(['upload', 'upload']);
   box.operations.length = 0;
+  readback.mockClear();
   await syncRuntimeFiles({ box, version, files });
+  expect(readback).toHaveBeenCalledTimes(files.length);
   expect(box.operations).toEqual([]);
   box.stored.set('/Runtime/v2.0.0/machine-metadata.json', Buffer.from('changed'));
   await expect(syncRuntimeFiles({ box, version, files })).rejects.toThrow();

@@ -187,7 +187,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [portable, setup]
+        lane: [portable, setup, core-setup]
     env:
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
@@ -256,15 +256,17 @@ jobs:
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
           & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
       - name: Install pinned NSIS
-        if: ${{ matrix.lane == 'setup' }}
+        if: ${{ matrix.lane != 'portable' }}
         shell: pwsh
         run: choco install nsis --version=3.11 -y --no-progress
 
       - name: Verify native update cancellation and recovery
-        if: ${{ matrix.lane == 'setup' }}
+        if: ${{ matrix.lane != 'portable' }}
         shell: pwsh
         timeout-minutes: 5
-        run: node scripts/qualification/verify-update-recovery.mjs
+        run: |
+          node scripts/qualification/verify-update-recovery.mjs | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-recovery.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Native update recovery failed' }
 
       - name: Build and verify same-content NSIS installer
         if: ${{ matrix.lane == 'setup' }}
@@ -281,7 +283,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
 
       - name: Qualify distinct Core payload and real NSIS installation
-        if: ${{ matrix.lane == 'setup' }}
+        if: ${{ matrix.lane == 'core-setup' }}
         shell: pwsh
         run: |
           $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
@@ -293,7 +295,7 @@ jobs:
           ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $payload[0].FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -ManifestName core-release-manifest.json -DistributionName core-distribution-manifest.json
           $root = @(Get-ChildItem -LiteralPath $installed -Directory)
           if ($root.Count -ne 1) { throw 'Core installation is ambiguous' }
-          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA
+          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "core-setup-identity.json")
           if ($LASTEXITCODE -ne 0) { throw 'Core identity or resource boundary failed' }
           node scripts/qualification/product-smoke.mjs $root[0].FullName
           if ($LASTEXITCODE -ne 0) { throw 'Real installed Core startup failed' }
@@ -301,6 +303,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Real Core desktop startup failed' }
 
       - name: Record successful lane identity
+        if: ${{ matrix.lane != 'core-setup' }}
         shell: pwsh
         env:
           LANE: ${{ matrix.lane }}
@@ -311,10 +314,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
 
       - name: Upload verified distribution
-        if: ${{ matrix.lane == 'setup' }}
+        if: ${{ matrix.lane != 'portable' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-setup
+          name: release-setup-${{ matrix.lane }}
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
@@ -331,11 +334,11 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }
-          $extractedRoot = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          $extractedRoot = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } elseif ('${{ matrix.lane }}' -eq 'core-setup') { Join-Path $env:RUNNER_TEMP 'core installed qualification' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
           if (Test-Path -LiteralPath $extractedRoot) {
             $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
             if ($null -ne $bundle) {
@@ -395,7 +398,8 @@ jobs:
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-setup
+          pattern: release-setup-*
+          merge-multiple: true
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -420,7 +424,7 @@ jobs:
         shell: pwsh
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          foreach ($lane in @('portable', 'setup')) {
+          foreach ($lane in @('portable', 'setup', 'core-setup')) {
             $archive = Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-$env:RELEASE_LABEL-$lane-evidence.zip"
             Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $evidenceRoot $lane)
           }

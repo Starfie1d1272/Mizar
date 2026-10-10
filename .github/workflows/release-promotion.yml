@@ -232,7 +232,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
             $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
             if (@($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
-              node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product
+              $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
+              node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product "$resourceArgument"
               if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
               'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
             }
@@ -288,17 +289,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product
+          $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product "$resourceArgument"
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
-
-      - name: Verify final original machine resource bytes after authorization upload
-        if: ${{ env.RESOURCE_ENABLED == 'true' && !contains(inputs.tag, '-') }}
-        shell: pwsh
-        run: |
-          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > machine-published-release.json
-          if ($LASTEXITCODE -ne 0) { throw 'Final carrier release lookup failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json machine-published-release.json
-          if ($LASTEXITCODE -ne 0) { throw 'Final original resource carrier readback failed' }
 
       - name: Preserve maintainer promotion records in CI only
         if: ${{ always() }}
