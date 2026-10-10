@@ -37,9 +37,15 @@ export function safeLogText(value, secrets = []) {
   }
   return text
     .replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer [redacted]')
+    .replace(
+      /((?:authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*(?:(?:Bearer|Basic)\s+)?)[^\r\n]+/gi,
+      '$1[redacted]',
+    )
+    .replace(/(https?:\/\/)[^/\s@]+@/gi, '$1[redacted]@')
+    .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]+/gi, '$1?[redacted]')
     .replace(/rh_mizar_[a-zA-Z0-9_-]+/g, '[redacted]')
     .replace(
-      /((?:token|password|credential|authorization)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi,
+      /((?:token|access[_-]?token|refresh[_-]?token|api[_-]?key|password|passwd|secret|client[_-]?secret|credential|authorization)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi,
       '$1[redacted]',
     );
 }

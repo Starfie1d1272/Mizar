@@ -1,8 +1,10 @@
 param(
-  [ValidateSet('Prepare', 'Install', 'Recover')][string]$Mode,
+  [ValidateSet('Prepare', 'Install', 'Recover', 'Rollback')][string]$Mode,
   [string]$PlanPath,
   [string]$StageRoot,
-  [int]$HostProcessId = 0
+  [int]$HostProcessId = 0,
+  [switch]$NoLaunch,
+  [switch]$KeepBackup
 )
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -16,8 +18,8 @@ function Assert-PlainPath([string]$path) {
   if (![IO.Path]::IsPathRooted($path) -or $path -match '["\r\n]') { throw 'update_path_invalid' }
   $cursor = [IO.Path]::GetFullPath($path)
   while ($cursor) {
-    if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'update_reparse_point' }
-    $parent = Split-Path -Parent $cursor
+    if (([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) -and ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint)) { throw 'update_reparse_point' }
+    $parent = [IO.Path]::GetDirectoryName($cursor)
     if ($parent -eq $cursor) { break }
     $cursor = $parent
   }
@@ -159,7 +161,7 @@ function Restore-Previous {
   Restore-Registration
   Record-Result 'restored' 'update_rolled_back'
   Recovery-Registration $false
-  Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
+  # Retain the displaced directory: unverified files must never be deleted during recovery.
 }
 
 if ($Mode -eq 'Prepare') {
@@ -185,6 +187,7 @@ $StageRoot = [IO.Path]::GetFullPath($StageRoot).TrimEnd('\')
 if ((Split-Path -Parent $StageRoot) -ne [IO.Path]::GetFullPath((Join-Path $plan.stateRoot 'updates')).TrimEnd('\') -or
   (Split-Path -Leaf $StageRoot) -notmatch '^install-[a-f0-9]{32}$') { throw 'update_stage_invalid' }
 try {
+  if ($Mode -eq 'Rollback') { Restore-Previous; exit 0 }
   if ($Mode -eq 'Recover') {
     Recovery-Registration $true
     $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
@@ -214,6 +217,14 @@ try {
   Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
+  # Remove only the verified previous product files; preserve state and every untracked file.
+  foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
+    $name = $line.Substring(66)
+    if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
+    $file = Join-Path $plan.bundleRoot $name
+    Assert-PlainPath $file
+    Remove-Item -LiteralPath $file -Force
+  }
   $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
   $installer.WaitForExit()
   if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
@@ -241,17 +252,19 @@ try {
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'committed' }
   Record-Result 'installed' 'update_completed'
   Recovery-Registration $false
-  Remove-Item -LiteralPath (Join-Path $StageRoot 'previous') -Recurse -Force
-  Remove-Item -LiteralPath (Join-Path $StageRoot 'Installer.exe') -Force
+  if (!$KeepBackup) { Remove-Item -LiteralPath (Join-Path $StageRoot 'previous') -Recurse -Force }
+  if (!$KeepBackup) { Remove-Item -LiteralPath (Join-Path $StageRoot 'Installer.exe') -Force }
   $env:MIZAR_STATE_ROOT = $plan.stateRoot
-  Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot
+  if (!$NoLaunch) { Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot }
 } catch {
+  [Console]::Error.WriteLine($_.ToString())
+  [Console]::Error.WriteLine($_.ScriptStackTrace)
   $code = [string]$_.Exception.Message
   if ($code -notmatch '^update_[a-z_]+$') { $code = 'update_installation_failed' }
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
   if ($journal.phase -eq 'installing') {
     try { Restore-Previous }
-    catch { Recovery-Registration $true; Record-Result 'recovery-required' $code }
+    catch { [Console]::Error.WriteLine($_.ToString()); [Console]::Error.WriteLine($_.ScriptStackTrace); Recovery-Registration $true; Record-Result 'recovery-required' $code }
   } elseif ($journal.phase -eq 'committed') {
     # A committed journal is not evidence that the current files are intact.
     # Cleanup/launch errors may still be successful installs, but corruption
