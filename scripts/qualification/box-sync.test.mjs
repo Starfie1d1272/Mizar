@@ -271,6 +271,49 @@ describe('云盘稳定版同步', () => {
       }
     },
   );
+  it.each(['recover', 'exhausted', 'write', 'http', 'abort'])(
+    '只读连接重试边界：%s',
+    async (failure) => {
+      vi.useFakeTimers();
+      const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const signals = [];
+      const transport = vi.fn(async (_url, options) => {
+        signals.push(options.signal);
+        if (failure === 'http') return new Response('{}', { status: 503 });
+        if (failure === 'abort') throw new DOMException('private error', 'AbortError');
+        if (failure === 'recover' && signals.length === 2) return new Response('[]');
+        throw new TypeError('private error', { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+      });
+      vi.stubGlobal('fetch', transport);
+      try {
+        vi.resetModules();
+        const { BoxClient: TransportClient } = await import('./box-sync.mjs');
+        const request = new TransportClient('fixture-token').api(
+          'dir',
+          '/Archive',
+          failure === 'write' ? 'POST' : 'GET',
+        );
+        const assertion =
+          failure === 'recover'
+            ? expect(request).resolves.toEqual([])
+            : expect(request).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(3000);
+        await assertion;
+        expect(transport).toHaveBeenCalledTimes(
+          failure === 'recover' ? 2 : failure === 'exhausted' ? 3 : 1,
+        );
+        expect(new Set(signals).size).toBe(signals.length);
+        const logs = output.mock.calls.flat().join('\n');
+        if (failure === 'recover') expect(logs).toContain('1s 后重试 1/2');
+        if (failure === 'exhausted') expect(logs).toContain('2s 后重试 2/2');
+      } finally {
+        output.mockRestore();
+        vi.unstubAllGlobals();
+        vi.resetModules();
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe('已发布安装包身份', () => {

@@ -190,12 +190,23 @@ async function boxStage(stage, action) {
 async function checkedFetch(url, options = {}, timeout = 120000) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   let response;
-  try {
-    response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
-  } catch (error) {
-    throw new MirrorError(
-      `网络请求失败或超时（${safeNetworkCode(error)}，请求上限${timeout}ms）；保留现有文件，可重试同一版本`,
-    );
+  const readOnlyBox = (options.method ?? 'GET') === 'GET' && new URL(url).origin === origin;
+  for (let attempt = 0; ; attempt++) {
+    const signal = AbortSignal.timeout(timeout);
+    try {
+      response = await fetch(url, { ...options, signal });
+      break;
+    } catch (error) {
+      const code = safeNetworkCode(error);
+      if (readOnlyBox && code === 'UND_ERR_CONNECT_TIMEOUT' && !signal.aborted && attempt < 2) {
+        console.log(`Box 只读连接超时，${attempt + 1}s 后重试 ${attempt + 1}/2`);
+        await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
+        continue;
+      }
+      throw new MirrorError(
+        `网络请求失败或超时（${code}，请求上限${timeout}ms）；保留现有文件，可重试同一版本`,
+      );
+    }
   }
   requireValue(response.ok, `远端请求失败（HTTP ${response.status}）；保留现有文件`);
   return response;
