@@ -156,7 +156,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/demo-test` 提供有限试播状态：`active`、`phase`（`idle / starting / playing / stopping / recovery`）、`requestId`、双方名称及 `dataReady`。`dataReady` 表示当前新鲜观战数据覆盖，不证明选定文件已经加载，不返回文件路径或私有令牌。
 
-`POST /operator/runtime/demo-test` 仅供持有本次服务私有 `x-runtime-token` 的 Host 使用，拒绝任何网页 Origin。命令为带 UUID `requestId` 的 `begin / playing / finish / complete / cancel`；`begin` 可附双方名称，其余不得附路径、控制台文本或比赛文档。`begin` 需要准备状态、已连接且未推流的 OBS；`playing` 由 Host 再次核对受管进程后提交；`finish` 隔离输入并切等待，`complete` 仅在 Host 确认游戏退出与配置恢复后提交，`cancel` 仅用于未发出游戏启动的准备撤销。重试使用原操作 ID，冲突保持隔离。恢复记录损坏时返回新的恢复 ID，Host 按自己的进程日志安全收尾后再确认，不能把损坏字段当控制权。
+`POST /operator/runtime/demo-test` 仅供持有本次服务私有 `x-runtime-token` 的 Host 使用，拒绝任何网页 Origin。命令为带 UUID `requestId` 的 `begin / playing / finish / complete / cancel`；`begin` 可附双方名称，其余不得附路径、控制台文本或比赛文档。`begin` 需要准备状态、已连接且未推流的 OBS；`playing` 由 Host 再次核对受管进程后提交；`finish` 隔离输入并切等待，`complete` 仅在 Host 确认游戏退出与配置恢复后提交，`cancel` 仅用于未发出游戏启动的准备撤销。重试使用原试播 `requestId`，冲突保持隔离。参数与生命周期错误返回稳定机器码 `error`、实际 `stage`、单次操作 UUID `operationId`、可用时的试播 `requestId` 及中文 `message`；底层异常与响应共享关联号，用户导出的诊断包保留阶段和脱敏原因链，不记录任意私有响应正文。恢复记录损坏时返回新的恢复 ID，Host 按自己的进程日志安全收尾后再确认，不能把损坏字段当控制权。
 
 桌面 `select_demo_file` 只返回本次短期 token 与文件名；`start_demo_test` 使用 token 和双方名称，`enter_demo_test / finish_demo_test` 使用操作 ID。原路径及文件格式校验留在 Host，游戏播放请求使用固定命令与参数；浏览器和局域网不能选择或启动任意本机文件。
 
