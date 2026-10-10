@@ -10,7 +10,7 @@ OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Mizar"
 InstallDirRegKey HKCU "Software\Mizar" "InstallDir"
 RequestExecutionLevel user
-SetCompressor /SOLID lzma
+SetCompressor zlib
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING

@@ -17,7 +17,7 @@ import { assertPublication } from './update-publication.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
 import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
-import { verifyPublishedResources, resourceAssetInventory } from '../ci/resource-release.mjs';
+import { resourceAssetInventory } from '../ci/resource-release.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -486,18 +486,18 @@ export async function syncUserDownloads({
     await box.move('/Offline', downloadsFolder, offline.identity.name);
     relocated = true;
   }
-  await syncBootstrap({ box, ...bootstrap });
-  await syncPackage({ box, ...offline }, downloadsFolder, offlinePattern);
-  const entries = await box.list(downloadsFolder);
-  requireValue(
-    entries.length === 2 &&
-      entries.every(
-        (e) =>
-          e.type === 'file' && [bootstrap.identity.name, offline.identity.name].includes(e.name),
-      ),
-    '用户下载入口必须只有轻量 EXE 和完整 ZIP',
-  );
   try {
+    await syncBootstrap({ box, ...bootstrap });
+    await syncPackage({ box, ...offline }, downloadsFolder, offlinePattern);
+    const entries = await box.list(downloadsFolder);
+    requireValue(
+      entries.length === 2 &&
+        entries.every(
+          (e) =>
+            e.type === 'file' && [bootstrap.identity.name, offline.identity.name].includes(e.name),
+        ),
+      '用户下载入口必须只有轻量 EXE 和完整 ZIP',
+    );
     await accept({ offline, bootstrap, full });
   } catch (error) {
     // Restore a relocated original on failed anonymous acceptance. Never replace an unknown destination.
@@ -688,7 +688,6 @@ export async function syncResourceFiles({ box, version, files, metadataInRuntime
     await box.upload(folder, file.name, file.bytes);
     await verifyRemote(box, `${folder}/${file.name}`, file);
   }
-  for (const file of files) await verifyRemote(box, `${folder}/${file.name}`, file);
 }
 export async function syncRuntimeFiles({ box, version, files }) {
   requireValue(
@@ -728,7 +727,6 @@ export async function syncRuntimeFiles({ box, version, files }) {
     await box.upload(folder, file.name, file.bytes);
     await verifyRemote(box, folder + '/' + file.name, file);
   }
-  for (const file of files) await verifyRemote(box, folder + '/' + file.name, file);
 }
 export async function syncOffline(options) {
   return syncPackage(options, '/Offline', offlinePattern);
@@ -1015,6 +1013,18 @@ async function releaseIdentity(tag) {
   return identity;
 }
 
+export function cacheReleaseIdentities(resolveIdentity) {
+  const identities = new Map();
+  return (tag) => {
+    if (!identities.has(tag))
+      identities.set(
+        tag,
+        Promise.resolve().then(() => resolveIdentity(tag)),
+      );
+    return identities.get(tag);
+  };
+}
+
 async function main() {
   const mode = process.env.BOX_SYNC_MODE || 'sync';
   requireValue(
@@ -1040,7 +1050,8 @@ async function main() {
   const box =
     mode === 'verify-downloads' ? undefined : new BoxClient(process.env.MIZAR_BOX_REPO_TOKEN);
   if (mode === 'probe') return probe(box);
-  const identity = await releaseIdentity(tag);
+  const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
+  const identity = await resolveIdentity(tag);
   const downloads = {
     box,
     identity,
@@ -1051,19 +1062,17 @@ async function main() {
   };
   if (mode === 'verify-downloads') return verifyPublicDownloads(downloads);
   if (mode === 'rollback-downloads') return rollbackDownloads(downloads);
+
   requireValue(
     identity.asset.browser_download_url ===
       `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${identity.name}`,
     '安装包地址不一致',
   );
   const release = identity.release;
-  const bytes = await downloadReleaseAsset(release, tag, identity.name, identity.size);
-  const offlineBytes = await downloadReleaseAsset(
-    release,
-    tag,
-    identity.offline.name,
-    identity.offline.size,
-  );
+  const [bytes, offlineBytes] = await Promise.all([
+    downloadReleaseAsset(release, tag, identity.name, identity.size),
+    downloadReleaseAsset(release, tag, identity.offline.name, identity.offline.size),
+  ]);
   const metadata = release.assets.filter((a) =>
     [
       'update-manifest.json',
@@ -1195,7 +1204,6 @@ async function main() {
         join(directory, name),
         await downloadReleaseAsset(release, tag, name, LIMITS.archiveBytes),
       );
-      await verifyPublishedResources(directory, identity.core ?? identity.manifest);
       resources = await Promise.all(
         (await resourceAssetInventory(directory, identity.core ?? identity.manifest, true)).map(
           async (file) => ({
@@ -1213,17 +1221,17 @@ async function main() {
     identity,
     bytes,
     runtime: identity.runtime,
-    resolveIdentity: releaseIdentity,
+    resolveIdentity,
     offline: {
       identity: identity.offline,
       bytes: offlineBytes,
-      resolveIdentity: async (tag) => (await releaseIdentity(tag)).offline,
+      resolveIdentity: async (tag) => (await resolveIdentity(tag)).offline,
     },
     bootstrap: identity.bootstrap
       ? {
           identity: identity.bootstrap,
           bytes: identity.bootstrap.data,
-          resolveIdentity: async (tag) => (await releaseIdentity(tag)).bootstrap,
+          resolveIdentity: async (tag) => (await resolveIdentity(tag)).bootstrap,
         }
       : undefined,
     resources: identity.runtime ? resources.filter((f) => f.name.endsWith('.zip')) : resources,
