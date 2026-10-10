@@ -108,6 +108,8 @@ function parse(line: string): Record<string, unknown> {
 }
 
 const updateStages = new Set([
+  'resource_cache_verify',
+  'resource_store_open',
   'qualification_proof_rejected',
   'check',
   'download',
@@ -165,7 +167,7 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
-    ['update', 'production', 'obs'].includes(String(entry.event)) &&
+    ['update', 'production', 'obs', 'resource'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
     updateStages.has(entry.stage);
   const stage =
@@ -194,22 +196,24 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ...(update && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
-    ...([
-      'powershell',
-      'cs2_launch',
-      'update_install',
-      'production_finish',
-      'webview2_preflight',
-      'webview2_recheck',
-      'webview2_recovery_action',
-    ].includes(stage ?? '') &&
-    (typeof entry.error === 'string' || typeof entry.detail === 'string')
-      ? {
-          localDiagnostic: redactDiagnosticText(
-            typeof entry.error === 'string' ? entry.error : String(entry.detail),
-          ),
-        }
-      : {}),
+    ...(!update && typeof entry.error === 'string'
+      ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
+      : !update &&
+          [
+            'powershell',
+            'cs2_launch',
+            'update_install',
+            'production_finish',
+            'webview2_preflight',
+            'webview2_recheck',
+            'webview2_recovery_action',
+          ].includes(stage ?? '') &&
+          typeof entry.detail === 'string'
+        ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
+        : !update && typeof record(entry.err).message === 'string'
+          ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
+          : {}),
+    occurrences: Math.max(1, count(entry.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),
     session,
     stage: stage ?? 'companion_structured_log',
@@ -235,6 +239,10 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
         ? entry.appVersion
         : null,
   };
+}
+
+function isFailure(event: NonNullable<ReturnType<typeof projectEvent>>): boolean {
+  return event.result === 'failure' || event.hasLocalError || (event.level ?? 0) >= 40;
 }
 
 async function readLog(directory: string, name: string, salt: string) {
@@ -283,12 +291,27 @@ async function readLog(directory: string, name: string, salt: string) {
         return projectEvent(entry, session);
       })
       .filter((event) => event !== null);
-    const selected = entries.slice(-SUPPORT_LOG_EVENTS);
-    const lastFailure = entries
-      .map((event) => event.result === 'failure' || event.hasLocalError)
-      .lastIndexOf(true);
-    if (lastFailure >= 0 && lastFailure < entries.length - SUPPORT_LOG_EVENTS)
-      selected[0] = entries[lastFailure]!;
+    // Page navigation is context, not a reason to evict an earlier failure.
+    const aggregated: typeof entries = [];
+    const pageLoads = new Map<string | null, (typeof entries)[number]>();
+    for (const event of entries) {
+      if (event.stage === 'main_page_load' && event.result === 'success') {
+        const previous = pageLoads.get(event.session);
+        if (previous) {
+          previous.occurrences += event.occurrences;
+          previous.timestamp = event.timestamp;
+          continue;
+        }
+        pageLoads.set(event.session, event);
+      }
+      aggregated.push(event);
+    }
+    const failures = aggregated.filter(isFailure).slice(-SUPPORT_LOG_EVENTS);
+    const context = aggregated
+      .filter((event) => !isFailure(event))
+      .slice(-(SUPPORT_LOG_EVENTS - failures.length) || aggregated.length);
+    const keep = new Set([...failures, ...(failures.length === SUPPORT_LOG_EVENTS ? [] : context)]);
+    const selected = aggregated.filter((event) => keep.has(event));
     return {
       ...result,
       status: 'read',
@@ -309,20 +332,30 @@ async function readLog(directory: string, name: string, salt: string) {
 export async function readSupportLogs(directory: string | undefined) {
   if (directory === undefined) return [];
   const salt = randomBytes(32).toString('hex');
-  const files = names.flatMap((name) => [name, ...[1, 2, 3].map((index) => `${name}.${index}`)]);
+  const files = names.flatMap((name) => [
+    name,
+    ...[1, 2, 3].map((index) =>
+      name === 'desktop.ndjson' ? `desktop.${index}.ndjson` : `${name}.${index}`,
+    ),
+  ]);
   // Sequential bounded reads avoid burst allocation or an unbounded file traversal.
   const results = [];
-  for (const name of files) results.push(await readLog(directory, name, salt));
+  for (const name of files) {
+    let result = await readLog(directory, name, salt);
+    // Older collectors used suffix rotation names; retain compatibility without
+    // charging the bounded export twice for the same history slot.
+    if (result.status === 'missing' && /^desktop\.[123]\.ndjson$/.test(name))
+      result = await readLog(directory, `desktop.ndjson.${name.split('.')[1]}`, salt);
+    results.push(result);
+  }
   // Reserve 64 KiB for the manifest/current snapshot. Keep each file's latest failure.
   while (Buffer.byteLength(JSON.stringify(results, null, 2)) > 192 * 1024) {
     const file = results
       .filter((item) => item.events.length > 1)
       .sort((left, right) => right.events.length - left.events.length)[0];
     if (file === undefined) break;
-    const lastFailure = file.events
-      .map((event) => event.result === 'failure' || event.hasLocalError)
-      .lastIndexOf(true);
-    file.events.splice(lastFailure === 0 ? 1 : 0, 1);
+    const context = file.events.findIndex((event) => !isFailure(event));
+    file.events.splice(context >= 0 ? context : 0, 1);
     file.truncated = true;
     file.omittedLines += 1;
   }
