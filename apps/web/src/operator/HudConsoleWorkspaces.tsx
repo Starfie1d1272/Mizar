@@ -15,7 +15,7 @@ import {
 
 import { HudPresetFiles } from './HudPresetFiles';
 import { HudWidgetInspector } from './HudWidgetInspector';
-import { activePresetId, resourceFor, resourceList } from './hud-console-drafts';
+import { activePresetId, resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
 
 const ANCHOR_LABELS: Record<(typeof HUD_ANCHORS)[number], string> = {
@@ -86,10 +86,6 @@ function widgetLabel(id: HudWidgetId): string {
   return HUD_WIDGET_LABELS[id];
 }
 
-function resourceName(resource: HudPreset | HudLayout | HudTheme | undefined): string {
-  return resource?.name ?? '未找到资源';
-}
-
 export function HudConsoleWorkspaces({
   workspace,
   configDocument,
@@ -132,9 +128,6 @@ export function HudConsoleWorkspaces({
   onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
   const activePresetResourceId = activePresetId(configDocument);
-  const activePresetName = resourceName(
-    resourceFor(configDocument, 'preset', activePresetResourceId),
-  );
   const previewMatchesPresetReferences =
     selectedLayoutId === presetDraft.layoutId && selectedThemeId === presetDraft.themeId;
   const activationLabel = hasDirtyDraft
@@ -155,6 +148,7 @@ export function HudConsoleWorkspaces({
     return (
       <div className="hud-console__actions">
         <Button
+          variant={isBuiltin(id) ? 'secondary' : 'primary'}
           disabled={busy || !editorReady || isBuiltin(id) || invalid}
           onClick={() => onSubmitMutation(kind, false)}
           type="button"
@@ -162,6 +156,7 @@ export function HudConsoleWorkspaces({
           保存
         </Button>
         <Button
+          variant={isBuiltin(id) ? 'primary' : 'secondary'}
           disabled={busy || !editorReady || invalid}
           onClick={() => onSubmitMutation(kind, true)}
           type="button"
@@ -185,40 +180,7 @@ export function HudConsoleWorkspaces({
   if (workspace === 'preset') {
     return (
       <section className="hud-console__workspace" aria-label="HUD 预设编辑">
-        <div className="hud-console__workspace-heading">
-          <div>
-            <span className="hud-console__kicker">预设</span>
-            <h2>管理播出预设</h2>
-          </div>
-        </div>
-        <div className="hud-console__preset-status" aria-label="HUD 预设状态">
-          <div>
-            <span>当前启用</span>
-            <strong>{activePresetName}</strong>
-          </div>
-          <div>
-            <span>当前编辑</span>
-            <strong>{presetDraft.name.trim() || '未命名预设'}</strong>
-          </div>
-          <span
-            className={
-              activationLabel === '已启用'
-                ? 'hud-console__badge'
-                : 'hud-console__badge hud-console__badge--warning'
-            }
-          >
-            {activationLabel}
-          </span>
-        </div>
-        <HudPresetFiles
-          disabled={busy || !editorReady || hasDirtyDraft}
-          exportDisabled={!previewMatchesPresetReferences}
-          onImport={onImportPresetFile}
-          onExport={onExportPresetFile}
-        />
-        <p className="hud-console__hint">
-          先保存更改再分享或导入。导入会创建新副本，启用后才会上屏。
-        </p>
+        <span className="hud-console__badge">{activationLabel}</span>
         <label className="hud-console__field">
           预设
           <select
@@ -295,8 +257,17 @@ export function HudConsoleWorkspaces({
             }
           />
         )}
+        <details>
+          <summary>导入与导出预设</summary>
+          <HudPresetFiles
+            disabled={busy || !editorReady || hasDirtyDraft}
+            exportDisabled={!previewMatchesPresetReferences}
+            onImport={onImportPresetFile}
+            onExport={onExportPresetFile}
+          />
+          <p className="hud-console__hint">导入创建新副本；先保存，再分享或明确启用。</p>
+        </details>
         {renderResourceActions('preset', presetDirty, selectedPresetId)}
-        <p className="hud-console__hint">保存资源后，在常显版本区明确启用当前预设上屏。</p>
       </section>
     );
   }

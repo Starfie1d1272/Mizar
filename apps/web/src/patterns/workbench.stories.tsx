@@ -42,3 +42,15 @@ export const Technical: Story = {
   name: '诊断界面',
   parameters: { surface: 'technical' },
 };
+
+export const Canvas: Story = {
+  name: '画布与固定检视器',
+  args: { ...args, layout: 'canvas' },
+  decorators: [
+    (Story) => (
+      <div style={{ height: '80vh' }}>
+        <Story />
+      </div>
+    ),
+  ],
+};

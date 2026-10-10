@@ -33,6 +33,7 @@ export function EventMatchWorkspace({
   const [editing, setEditing] = useState(query.get('tab') === 'event');
   const [creating, setCreating] = useState(false);
   const [editingMatch, setEditingMatch] = useState(false);
+  const [editingMatchScope, setEditingMatchScope] = useState<'match' | 'candidate'>('candidate');
   const dirty = useRef(false);
   const canChange = () =>
     !dirty.current || window.confirm('赛事资料有未保存修改，放弃后切换资源？');
@@ -145,17 +146,22 @@ export function EventMatchWorkspace({
           <>
             <header className="library-detail-heading">
               <span>{match.matchId === view?.activeLocalMatchId ? '当前本场' : '候选比赛'}</span>
-              <Button
-                disabled={!canWrite || match.matchId !== view?.activeLocalMatchId}
-                onClick={() => {
-                  if (canChange()) setEditingMatch(true);
-                }}
-              >
-                编辑比赛
-              </Button>
-              {match.matchId !== view?.activeLocalMatchId ? (
-                <small>载入后可编辑本场资料</small>
-              ) : null}
+              {!editingMatch ? (
+                <Button
+                  disabled={!canWrite}
+                  onClick={() => {
+                    if (!canChange()) return;
+                    setEditingMatchScope(
+                      match.matchId === view?.activeLocalMatchId ? 'match' : 'candidate',
+                    );
+                    setEditingMatch(true);
+                  }}
+                >
+                  编辑比赛
+                </Button>
+              ) : (
+                <span>正在编辑比赛</span>
+              )}
             </header>
             <div className="library-detail-body" hidden={editingMatch}>
               <MatchDocumentView document={match} section="details" />
@@ -173,6 +179,7 @@ export function EventMatchWorkspace({
                 refresh={refresh}
                 action={action}
                 canSave={canWrite}
+                scope={editingMatchScope}
                 section="overview"
                 onDirtyChange={markDirty}
                 onCancel={() => setEditingMatch(false)}

@@ -103,7 +103,6 @@ test('task workspaces use real local data and keep candidate browsing separate f
     await expect(page.getByRole('button', { name: '保存比赛资料', exact: true })).toBeVisible();
     for (let side = 0; side < 2; side++) {
       const team = page.locator('.preparation-editor fieldset').nth(side);
-      await team.getByText('手动编辑名单', { exact: true }).click();
       for (let player = 0; player < 5; player++) {
         await team.getByRole('button', { name: '添加选手', exact: true }).click();
         await team
@@ -248,9 +247,9 @@ test('task workspaces use real local data and keep candidate browsing separate f
         await page.goto(url);
         await expect(page.locator('main.production-page')).toBeVisible();
         if (name === 'match')
-          await expect(page.locator('.preparation-editor fieldset').first()).toContainText(
-            playerName(0, 4),
-          );
+          await expect(
+            page.locator('.preparation-editor fieldset').first().getByLabel('选手名称').nth(4),
+          ).toHaveValue(playerName(0, 4));
         if (name === 'check')
           await expect(page.locator('.spectator-workflow li').nth(2)).toContainText(
             '进入制播工作区',
@@ -328,6 +327,41 @@ test('task workspaces use real local data and keep candidate browsing separate f
       (await app.inject('/local/v1/tournament')).json<{ activeLocalMatchId: string }>()
         .activeLocalMatchId,
     ).toBe(activeBefore);
+    const activeDocumentBeforeEdit = (await app.inject('/local/v1/match-document')).body;
+    await page.getByRole('button', { name: '编辑比赛', exact: true }).click();
+    await page.getByText(/^场次信息 ·/).click();
+    await page.getByLabel('阶段名称', { exact: true }).fill('候选场次修订');
+    await expectActionInWindow('保存比赛资料');
+    await capture(
+      '10-candidate-edit',
+      '浏览候选 → 编辑比赛 → 修改场次',
+      '按比赛 ID 编辑，未载入本场',
+    );
+    await page.getByRole('button', { name: '保存比赛资料', exact: true }).click();
+    await expect(page.getByText('比赛资料已保存。', { exact: true })).toBeVisible();
+    const candidateAfterEdit = (await app.inject('/local/v1/tournament')).json<{
+      activeLocalMatchId: string;
+      matches: { stageLabel: string; entrants: { b: { name: string } } }[];
+    }>();
+    expect(candidateAfterEdit.activeLocalMatchId).toBe(activeBefore);
+    expect(
+      candidateAfterEdit.matches.find((item) => item.entrants.b.name === teamB)?.stageLabel,
+    ).toBe('候选场次修订');
+    expect((await app.inject('/local/v1/match-document')).body).toBe(activeDocumentBeforeEdit);
+    expect(matchSelectionWrites).toEqual([]);
+    await page.getByLabel('阶段名称', { exact: true }).fill('候选场次再次修订');
+    await expect(page.getByRole('button', { name: '保存比赛资料', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: '保存比赛资料', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const state = (await app.inject('/local/v1/tournament')).json<{
+          matches: { stageLabel: string; entrants: { b: { name: string } } }[];
+        }>();
+        return state.matches.find((item) => item.entrants.b.name === teamB)?.stageLabel;
+      })
+      .toBe('候选场次再次修订');
+    expect((await app.inject('/local/v1/match-document')).body).toBe(activeDocumentBeforeEdit);
+    expect(matchSelectionWrites).toEqual([]);
     await page.goto('/?tab=maps');
     await expect(page.getByRole('region', { name: '正式 BP 子任务' })).toBeVisible();
     await page.getByRole('button', { name: '返回本场准备', exact: true }).click();

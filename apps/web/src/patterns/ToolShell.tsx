@@ -21,7 +21,7 @@ export function ToolShell({
           <img src="/brand/mizar-mark.svg" alt="" width="24" height="24" />
           Mizar
         </span>
-        <span>{title}</span>
+        <h1>{title}</h1>
       </header>
       <div id="tool-content" tabIndex={-1}>
         {children}

@@ -1,8 +1,22 @@
+// Compact references from docs/screenshots/hud-*.png; never represent the selected live match.
+import pulseReference from './hud-reference/pulse.webp';
+import eslReference from './hud-reference/esl.webp';
+import iemReference from './hud-reference/iem.webp';
+import ewcReference from './hud-reference/ewc.webp';
+import pwReference from './hud-reference/pw.webp';
 import type { HudPreset } from '@mizar/hud-config';
 import { useHudConfigClient, useHudConfigEditorClient } from '../realtime/hud-config-client';
 import { resourceFor, resourceList } from '../operator/hud-console-drafts';
 import { Button } from '../ui';
 import { openTool } from './client';
+
+const styleReferences: Record<string, string> = {
+  default: pulseReference,
+  esl: eslReference,
+  iem: iemReference,
+  ewc: ewcReference,
+  perfectworld: pwReference,
+};
 
 /** Read the existing authoring document; editing remains in the single HUD editor. */
 export function HudPresetDirectory({
@@ -23,6 +37,13 @@ export function HudPresetDirectory({
     <ul className="hud-preset-directory" aria-label="HUD 预设目录">
       {(resourceList(document, 'preset') as HudPreset[]).map((preset) => (
         <li key={preset.id}>
+          <figure>
+            <img
+              src={styleReferences[preset.widgets['top-score-bar'].variant] ?? pulseReference}
+              alt=""
+            />
+            <figcaption>内置风格参考 · 非本场画面</figcaption>
+          </figure>
           <div>
             <strong>{preset.name}</strong> ·{' '}
             {preset.id.startsWith('builtin:') ? '内置只读' : '自定义'} ·{' '}

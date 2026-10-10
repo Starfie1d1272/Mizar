@@ -41,9 +41,9 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await page.getByText(/^场次信息 ·/).click();
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     await page.getByLabel('阶段名称').fill('决赛');
-    await page.getByRole('button', { name: '画面检查', exact: true }).click();
+    await page.getByRole('button', { name: '画面', exact: true }).click();
     await expect(page.getByRole('region', { name: '画面检查工作区' })).toBeVisible();
-    await page.getByRole('button', { name: '本场准备', exact: true }).click();
+    await page.getByRole('button', { name: '资料', exact: true }).click();
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     await page.getByRole('button', { name: '保存比赛资料' }).click();
     await expect(page.getByText('比赛资料已保存。', { exact: true })).toBeVisible();
@@ -145,7 +145,6 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await page.getByText(/^场次信息 ·/).click();
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     await page.goto('/?tab=roster');
-    await page.getByText('编辑队伍资料', { exact: true }).first().click();
     await page.getByLabel('队名', { exact: true }).first().fill('甲队更新');
     await expect(
       page.getByText(

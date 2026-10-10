@@ -40,6 +40,8 @@ RivalHub 输入同时接受 `rivalhub.broadcast-manifest.v1` 与 `.v2`。v1 的�
 | `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与比赛顺序 |
 | `POST /operator/local-asset` | 受大小限制的 PNG/JPEG/WebP 资源 |
 
+比赛库候选编辑使用 `POST /operator/local-match/:matchId/save`，提交 `expectedDocument` 完整文档快照及 `document` 中的可编辑资料。版本冲突或目标已成为当前本场返回 409。保存不选择比赛、不刷新播出或在线权威绑定；比分、BP、地图和赛事身份沿用已保存事实。
+
 队伍复用通过明确 `teamId` 选择，不按同名猜测；更新模板不改写其他比赛已有快照。保存核对当前上下文修订号、结构和引用，持久化使用原子替换。
 
 RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比赛与赛程分别维护最近有效缓存（LKG），恢复重新解析、校验和转换。赛程缓存按赛事与请求时间窗口核对兼容性。

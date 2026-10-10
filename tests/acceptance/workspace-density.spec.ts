@@ -226,6 +226,7 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       return route.fulfill({ json: { ok: true } });
     });
     await page.goto('/');
+    await page.goto('/?tab=check');
     await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
     if (connection === 'connected') {
       await expect(page).toHaveURL(/\/workspace$/);
@@ -258,6 +259,7 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/');
+  await page.goto('/?tab=check');
   await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
@@ -287,6 +289,7 @@ for (const gsi of [
       route.fulfill({ json: { mode: 'preparation', revision: 'preflight', canEnter: true } }),
     );
     await page.goto('/');
+    await page.goto('/?tab=check');
     await page.getByRole('button', { name: '启动新制作并进入现场', exact: true }).click();
     await expect(page).toHaveURL(/settings\?tab=gsi&prepare=1$/);
   });

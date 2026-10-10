@@ -180,7 +180,7 @@ test('optional Steam avatars explain key acquisition and open the fixed official
       },
     });
   });
-  await page.goto('/settings?tab=gsi');
+  await page.goto('/settings?tab=preferences');
   await expect(page.getByRole('heading', { name: 'Steam 头像（可选）' })).toBeVisible();
   await expect(page.getByText(/域名（Domain Name）建议填写/)).toContainText('localhost');
   const link = page.getByRole('link', { name: '获取 Steam Web API Key（Steam 官方）' });
@@ -189,7 +189,7 @@ test('optional Steam avatars explain key acquisition and open the fixed official
   expect(await page.evaluate(() => Reflect.get(window, 'steamKeyCommands') as string[])).toContain(
     'open_steam_api_key',
   );
-  await expect(page).toHaveURL(/\/settings\?tab=gsi$/);
+  await expect(page).toHaveURL(/\/settings\?tab=preferences$/);
   await expect(page.getByRole('button', { name: '保存密钥', exact: true })).toBeDisabled();
 });
 
@@ -327,7 +327,7 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
     await page.route('**/local/v1/obs', (route) =>
       route.fulfill({ json: { connection: 'connected', findings: [] } }),
     );
-    await page.goto('/settings?tab=gsi');
+    await page.goto('/settings?tab=preferences');
     await expect(page.getByRole('heading', { name: 'CS2 启动设置' })).toBeVisible();
     const quality = page.getByRole('combobox', { name: '游戏画质', exact: true });
     const frames = page.getByRole('combobox', { name: '游戏帧率上限', exact: true });
@@ -667,7 +667,7 @@ test('a starting operation reports progress while navigation remains usable', as
   );
   await page.goto('/');
   await expect(page.getByText('正在启动 CS2，等待 Steam…', { exact: true })).toBeVisible();
-  await page.goto('/settings?tab=gsi');
+  await page.goto('/settings?tab=preferences');
   await expect(page.getByRole('button', { name: '保存启动设置', exact: true })).toBeDisabled();
   await page.goto('/settings?tab=obs');
   await expect(page.getByRole('heading', { name: 'OBS 连接与配置' })).toBeVisible();
@@ -684,7 +684,7 @@ test('configured Steam key uses a non-secret mask and updates only with new inpu
     writes.push(route.request().postDataJSON());
     return route.fulfill({ json: { ok: true } });
   });
-  await page.goto('/settings?tab=gsi');
+  await page.goto('/settings?tab=preferences');
   const key = page.getByLabel('Steam Web API Key（可选，推荐填写）');
   await expect(key).toHaveValue('');
   await expect(key).toHaveAttribute('placeholder', '••••••••••••');

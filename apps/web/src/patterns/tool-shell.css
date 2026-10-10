@@ -38,3 +38,8 @@
   min-height: 0;
   overflow-y: auto;
 }
+
+.mizar-tool-shell > .mizar-tool-heading > h1 {
+  margin: 0;
+  font: inherit;
+}

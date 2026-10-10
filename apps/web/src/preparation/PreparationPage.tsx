@@ -6,6 +6,7 @@ import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { ProductionStatus } from '../workspace/ProductionStatus';
+import { ObsConfidence } from '../workspace/WorkspacePage';
 import { BpWorkbench } from '../bp/BpPage';
 import { Button, Panel, StatusBanner } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
@@ -51,6 +52,7 @@ const settings = [
   ['gsi', 'CS2 / GSI'],
   ['obs', 'OBS'],
   ['rivalhub', 'RivalHub'],
+  ['preferences', '偏好'],
   ['advanced', '更新与支持'],
 ] as const;
 
@@ -175,16 +177,18 @@ export function PreparationPage() {
           {!isSettings && !isResources ? (
             <div className="preparation-actions">
               <Button onClick={() => setSelecting((value) => !value)}>选择 / 切换本场</Button>
-              <Button
-                variant={tab === 'check' ? 'primary' : 'secondary'}
-                disabled={busy || matchDirty || !production?.canEnter}
-                onClick={() =>
-                  production &&
-                  void action(() => productionAction('enter', production, setProgress))
-                }
-              >
-                {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
-              </Button>
+              {tab === 'check' ? (
+                <Button
+                  variant={tab === 'check' ? 'primary' : 'secondary'}
+                  disabled={busy || matchDirty || !production?.canEnter}
+                  onClick={() =>
+                    production &&
+                    void action(() => productionAction('enter', production, setProgress))
+                  }
+                >
+                  {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
+                </Button>
+              ) : null}
               <details className="production-actions-menu">
                 <summary>更多操作</summary>
                 <Button onClick={() => navigateTask('finish')}>恢复与收尾</Button>
@@ -293,34 +297,58 @@ export function PreparationPage() {
         {isSettings ? (
           <>
             <nav className="preparation-tabs" aria-label="设置分区">
-              {settings.map(([id, label]) => (
+              {(
+                [
+                  ['gsi', '本机连接'],
+                  ['preferences', '偏好'],
+                  ['advanced', '更新与支持'],
+                ] as const
+              ).map(([id, label]) => (
                 <a
                   key={id}
                   href={`/settings?tab=${id}`}
-                  aria-current={tab === id ? 'page' : undefined}
+                  aria-current={
+                    (id === 'gsi' ? ['gsi', 'obs', 'rivalhub'].includes(tab) : tab === id)
+                      ? 'page'
+                      : undefined
+                  }
                 >
                   {label}
                 </a>
               ))}
             </nav>
-            {tab !== 'gsi' ? <Cs2Recovery production={production} /> : null}
+            {tab !== 'preferences' ? <Cs2Recovery production={production} /> : null}
             {query.get('returnTask') === 'check' || query.get('prepare') === '1' ? (
               <a href="/?tab=check">返回开播检查</a>
+            ) : null}
+            {['gsi', 'obs', 'rivalhub'].includes(tab) ? (
+              <nav className="settings-connection-tabs" aria-label="本机连接">
+                {settings
+                  .filter(([id]) => ['gsi', 'obs', 'rivalhub'].includes(id))
+                  .map(([id, label]) => (
+                    <a
+                      key={id}
+                      href={`/settings?tab=${id}`}
+                      aria-current={tab === id ? 'page' : undefined}
+                    >
+                      {label}
+                    </a>
+                  ))}
+              </nav>
             ) : null}
             <Settings tab={tab} />
           </>
         ) : isResources ? (
           <>
             {requested === 'hud' ? (
-              <Panel>
-                <h2>HUD 预设与文件</h2>
+              <section className="hud-resource-workspace">
                 <HudPresetDirectory action={action} />
                 <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
                 <details>
                   <summary>官方演练素材</summary>
                   <OfficialResourceStatus />
                 </details>
-              </Panel>
+              </section>
             ) : view ? (
               <EventMatchWorkspace
                 view={view}
@@ -334,21 +362,13 @@ export function PreparationPage() {
           </>
         ) : (
           <>
-            <section hidden={task !== 'match' || selecting || !match} aria-label="本场准备工作区">
+            <section
+              className="match-task"
+              hidden={task !== 'match' || selecting || !match}
+              aria-label="本场准备工作区"
+            >
               {match ? (
                 <>
-                  <div className="match-workspace-heading">
-                    <div>
-                      <h2>本场准备</h2>
-                      <p>
-                        {match.competition?.name ?? '独立比赛'} · {match.stageLabel || '阶段待填写'}{' '}
-                        · 地图计划与双方首发在本场持续准备。
-                      </p>
-                    </div>
-                    <Button variant="primary" onClick={() => navigateTask('bp')}>
-                      准备正式 BP
-                    </Button>
-                  </div>
                   <RivalHubSyncControls />
                   {local ? (
                     <LocalTournamentEditor
@@ -361,26 +381,43 @@ export function PreparationPage() {
                       scope="match"
                       canSave={canEdit && tournamentStatus === 'ready'}
                       onDirtyChange={setMatchDirty}
+                      onNext={() => navigateTask('picture')}
+                      rosterTools={
+                        canEdit ? (
+                          <RosterCapture
+                            names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
+                            onSaved={() => void refresh()}
+                          />
+                        ) : null
+                      }
+                      afterRoster={
+                        <div className="match-plan-row">
+                          <details className="match-plan-summary">
+                            <summary>
+                              地图计划与已保存禁选 ·{' '}
+                              {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
+                            </summary>
+                            <MatchDocumentView document={match} section="maps" />
+                          </details>
+                          <Button onClick={() => navigateTask('bp')}>准备正式 BP</Button>
+                        </div>
+                      }
                     />
                   ) : (
                     <>
                       <MatchDocumentView document={match} section="details" />
                       <MatchDocumentView document={match} section="roster" />
+                      <details className="match-plan-summary">
+                        <summary>
+                          地图计划与已保存禁选 ·{' '}
+                          {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
+                        </summary>
+                        <MatchDocumentView document={match} section="maps" />
+                      </details>
+
+                      <Button onClick={() => navigateTask('bp')}>准备正式 BP</Button>
                     </>
                   )}
-                  <details className="match-plan-summary">
-                    <summary>
-                      地图计划与已保存禁选 ·{' '}
-                      {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
-                    </summary>
-                    <MatchDocumentView document={match} section="maps" />
-                  </details>
-                  {local && canEdit ? (
-                    <RosterCapture
-                      names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
-                      onSaved={() => void refresh()}
-                    />
-                  ) : null}
                 </>
               ) : null}
             </section>
@@ -399,49 +436,62 @@ export function PreparationPage() {
             </section>
             <section hidden={task !== 'check' || selecting} aria-label="开播检查工作区">
               <div className="production-preflight">
-                <Panel>
-                  <h2>完成开播所需事项</h2>
-                  <p>资料、BP 与样例预览可离线准备；真实比赛画面与雷达依赖进入观战后的有效数据。</p>
+                <section className="preflight-checklist" aria-label="开播检查列表">
+                  <h2>开播检查</h2>
                   {!capabilities ? (
-                    <p>正在读取检查状态，不推断已就绪。</p>
+                    <p role="status">正在读取检查状态</p>
                   ) : (
-                    <>
-                      {capabilities
-                        .filter((item) => !item.ready)
-                        .map((item) => (
-                          <a
-                            className="preparation-readiness"
-                            key={item.label}
-                            href={`${item.href}${item.href.includes('?') ? '&' : '?'}returnTask=check`}
-                          >
-                            <div>
-                              <strong>{item.label} · 待确认</strong>
-                              <p>{item.reason}</p>
-                            </div>
-                            <span>{item.action ?? '检查 / 重查'}</span>
-                          </a>
-                        ))}
-                      <details>
-                        <summary>
-                          已确认 {capabilities.filter((item) => item.ready).length} 项 ·
-                          默认配置可复用
-                        </summary>
-                        {capabilities
-                          .filter((item) => item.ready)
-                          .map((item) => (
-                            <p key={item.label}>
-                              {item.label} · {item.reason}
-                            </p>
-                          ))}
-                      </details>
-                    </>
+                    capabilities
+                      .filter((item) =>
+                        ['CS2 / GSI', 'OBS', '比赛上下文', '比赛画面'].includes(item.label),
+                      )
+                      .map((item) => (
+                        <details key={item.label} open={!item.ready}>
+                          <summary>
+                            {item.label} · {item.ready ? '已确认' : '待处理'}
+                          </summary>
+                          <p>{item.reason}</p>
+                          {!item.ready ? (
+                            <a
+                              href={`${item.href}${item.href.includes('?') ? '&' : '?'}returnTask=check`}
+                            >
+                              {item.action ?? '检查 / 重查'}
+                            </a>
+                          ) : null}
+                        </details>
+                      ))
                   )}
-                  <Button onClick={() => navigateTask('match')}>返回本场继续准备</Button>
-                </Panel>
-                <div>
+                  {capabilities ? (
+                    <details>
+                      <summary>画面与身份详情</summary>
+                      {capabilities
+                        .filter(
+                          (item) =>
+                            !['CS2 / GSI', 'OBS', '比赛上下文', '比赛画面'].includes(item.label),
+                        )
+                        .map((item) => (
+                          <p key={item.label}>
+                            {item.label} · {item.ready ? '已确认' : item.reason}
+                            {!item.ready ? (
+                              <>
+                                {' '}
+                                · <a href={item.href}>检查</a>
+                              </>
+                            ) : null}
+                          </p>
+                        ))}
+                    </details>
+                  ) : null}
                   <SpectatorWorkflow capabilities={capabilities} production={production} />
+                  <Button onClick={() => navigateTask('match')}>返回本场继续准备</Button>
+                </section>
+                <section className="preflight-confidence" aria-label="开播画面确认">
+                  <h2>OBS 实际画面</h2>
+                  <ObsConfidence />
                   {match ? <ProductionStatus matchId={match.matchId} /> : null}
-                </div>
+                  <a href="/settings?tab=obs&returnTask=check">检查 OBS 连接与音画</a>
+                  <small>缩略图无声音；请在 OBS 核对音画后开始推流。</small>
+                </section>
               </div>
               {task === 'check' &&
               production?.mode === 'preparation' &&

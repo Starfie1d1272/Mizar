@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -202,6 +202,73 @@ it('creates and restores a standalone local match before BP, with a persistent l
       },
     });
     expect(saved.statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/create',
+          headers,
+          payload: { teamA: 'NJU C', teamB: 'NJU D', format: 'bo1' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const before = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    const activeDocument = (await app.inject('/local/v1/match-document')).body;
+    const production = (await app.inject('/local/v1/production')).body;
+    const candidate = before.matches.find((item) => item.matchId === matchId)!;
+    const candidateUrl = `/operator/local-match/${matchId}/save`;
+    const payload = {
+      expectedDocument: candidate,
+      document: { ...candidate, stageLabel: 'Candidate edited', scoreA: 99, maps: [] },
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: candidateUrl,
+          headers: { origin: 'https://untrusted.example' },
+          payload,
+        })
+      ).statusCode,
+    ).toBe(403);
+    const saves = await Promise.all(
+      ['Candidate edited', 'Concurrent editor'].map((stageLabel) =>
+        app.inject({
+          method: 'POST',
+          url: candidateUrl,
+          headers,
+          payload: { ...payload, document: { ...payload.document, stageLabel } },
+        }),
+      ),
+    );
+    expect(saves.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const after = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    expect(after.selectedMatchId).toBe(before.selectedMatchId);
+    expect(after.contextRevision).toBe(before.contextRevision);
+    expect((await app.inject('/local/v1/match-document')).body).toBe(activeDocument);
+    expect((await app.inject('/local/v1/production')).body).toBe(production);
+    const edited = after.matches.find((item) => item.matchId === matchId)!;
+    expect(['Candidate edited', 'Concurrent editor']).toContain(edited.stageLabel);
+    expect(edited.scoreA).toBe(candidate.scoreA);
+    expect(edited.maps).toEqual(candidate.maps);
+    expect(edited.veto).toEqual(candidate.veto);
+    const active = after.matches.find((item) => item.matchId === after.selectedMatchId)!;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/operator/local-match/${active.matchId}/save`,
+          headers,
+          payload: {
+            expectedDocument: active,
+            document: { ...active, stageLabel: 'Reject active' },
+          },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (await app.inject({ method: 'POST', url: candidateUrl, headers, payload })).statusCode,
+    ).toBe(409);
   } finally {
     await app.close();
   }
@@ -234,8 +301,23 @@ it('serves the same Mizar document envelope for a RivalHub binding', async () =>
   );
   const validated = validateBroadcastManifest(fixture);
   if (!validated.ok) throw new Error('RivalHub fixture invalid');
+  const localPath = join(directory, 'tournament.json');
+  const library = new LocalTournamentStore(localPath);
+  await library.load();
+  const candidate = await library.createMatch({
+    teamA: 'Campus A',
+    teamB: 'Campus B',
+    format: 'bo1',
+    mapPool: [...DEFAULT_LOCAL_BP_MAP_POOL],
+  });
+  // Persisted candidates exist without a local production selection.
+  await writeFile(
+    localPath,
+    JSON.stringify({ ...library.getSnapshot(), selectedMatchId: null, selectedAt: null }),
+  );
   const app = buildApp({
     matchManifestPath: join(directory, 'match.json'),
+    localTournamentPath: localPath,
     matchContextBinding: {
       manifest: validated.value,
       context: toMatchContext(validated.value),
@@ -252,6 +334,26 @@ it('serves the same Mizar document envelope for a RivalHub binding', async () =>
       source: 'rivalhub',
       document: { schemaVersion: 'mizar.match-document.v1' },
     });
+    const before = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    const active = response.body;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/operator/local-match/${candidate.matchId}/save`,
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: {
+            expectedDocument: candidate,
+            document: { ...candidate, stageLabel: 'Library only' },
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect((await app.inject('/local/v1/match-document')).body).toBe(active);
+    const after = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    expect(after.selectedMatchId).toBe(before.selectedMatchId);
+    expect(after.contextRevision).toBe(before.contextRevision);
+    expect(after.matches[0]!.stageLabel).toBe('Library only');
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

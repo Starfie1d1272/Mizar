@@ -8,20 +8,21 @@ import { buildApp } from '../../apps/companion/src/app.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
 
-test('three product entries lead to production, reusable resources and machine settings', async ({
+test('four product entries lead to the current match, library, HUD resources and settings', async ({
   page,
 }) => {
   await page.goto('/');
   for (const [label, path, title] of [
-    ['资源', '/resources', '资源'],
+    ['比赛库', '/resources', '比赛库'],
+    ['HUD', '/resources?tab=hud', 'HUD'],
     ['设置', '/settings', '本机设置'],
-    ['制播', '/', '本场准备'],
+    ['本场', '/', '本场准备'],
   ] as const) {
     await page
       .getByRole('navigation', { name: '制作导航' })
       .getByRole('link', { name: label, exact: true })
       .click();
-    expect(new URL(page.url()).pathname).toBe(path);
+    expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(path);
     await expect(page.getByRole('heading', { name: title, level: 1, exact: true })).toBeVisible();
   }
 });

@@ -84,7 +84,12 @@ export function Settings({ tab }: { tab: string }) {
   }
   return (
     <>
-      {tab === 'rivalhub' ? (
+      {tab === 'preferences' ? (
+        <div className="settings-preferences">
+          <Cs2LaunchSettings />
+          <SteamAvatarSettings />
+        </div>
+      ) : tab === 'rivalhub' ? (
         <RivalHubPreparationPanel mode="settings" />
       ) : tab === 'advanced' ? (
         <div className="settings-grid">
@@ -155,11 +160,11 @@ export function Settings({ tab }: { tab: string }) {
           </section>
           <div className="obs-setup__cards">
             <div className="obs-setup__connection-stack">
-              <Panel>
+              <section className="obs-settings-section">
                 <h3>打开 OBS</h3>
                 <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
                 <Button
-                  variant="primary"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() => void action(() => obsCommand('open'))}
                 >
@@ -181,7 +186,7 @@ export function Settings({ tab }: { tab: string }) {
                     </Button>
                   </details>
                 ) : null}
-              </Panel>
+              </section>
               <details open={connectionEditing}>
                 <summary
                   onClick={(event) => {
@@ -191,7 +196,7 @@ export function Settings({ tab }: { tab: string }) {
                 >
                   WebSocket 连接设置
                 </summary>
-                <Panel>
+                <section className="obs-settings-section">
                   <h3>连接控制</h3>
                   <p>填写 OBS 提供的端口与密码。</p>
                   <form
@@ -249,10 +254,10 @@ export function Settings({ tab }: { tab: string }) {
                       </Button>
                     </details>
                   ) : null}
-                </Panel>
+                </section>
               </details>
             </div>
-            <Panel>
+            <section className="obs-settings-section">
               <h3>实际画面与输出检查</h3>
               <ObsConfidence />
               <div className="obs-setup__signals">
@@ -313,7 +318,7 @@ export function Settings({ tab }: { tab: string }) {
                   画布 {obs.video.canvas} · 输出 {obs.video.output} · {obs.video.fps.toFixed(0)} fps
                 </small>
               ) : null}
-            </Panel>
+            </section>
           </div>
           {obs?.findings.map((finding) => (
             <StatusBanner key={finding.code} tone="warning">
@@ -478,8 +483,6 @@ export function Settings({ tab }: { tab: string }) {
               {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
             </details>
           </Panel>
-          <Cs2LaunchSettings />
-          <SteamAvatarSettings />
         </div>
       )}
       {message ? <StatusBanner tone={messageTone}>{message}</StatusBanner> : null}

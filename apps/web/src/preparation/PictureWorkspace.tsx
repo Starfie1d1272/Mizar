@@ -3,6 +3,7 @@ import type { HudPreset } from '@mizar/hud-config';
 import { useHudConfigClient, useHudConfigEditorClient } from '../realtime/hud-config-client';
 import { resourceFor, resourceList } from '../operator/hud-console-drafts';
 import { Button, Panel, Select } from '../ui';
+import { Workbench } from '../patterns';
 import { ProgramPreview } from './ProgramPreview';
 import { openTool } from './client';
 import { LocalOverlayControls } from './LocalOverlayControls';
@@ -26,97 +27,95 @@ export function PictureWorkspace({
     presets.find((preset) => preset.id === onAir.current.preset.id) ??
     presets[0];
   return (
-    <div className="picture-workspace">
-      <ProgramPreview allowCurrent />
-      <Panel className="picture-presets">
-        <h2>HUD 检视器</h2>
-        <Select
-          label="检查 HUD 预设"
-          value={selected?.id ?? ''}
-          disabled={editor.status !== 'ready'}
-          onChange={(event) => {
-            setSelectedId(event.target.value);
-            const url = new URL(window.location.href);
-            url.searchParams.set('preset', event.target.value);
-            window.history.replaceState(null, '', url);
-          }}
-        >
-          {!presets.length ? <option value="">正在读取已保存配置</option> : null}
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name} · {preset.id.startsWith('builtin:') ? '内置' : '自定义'}
-            </option>
-          ))}
-        </Select>
-        <h3>
-          正式播出 ·{' '}
-          {onAir.status === 'loading'
-            ? '正在读取'
-            : onAir.status === 'ready'
-              ? onAir.current.preset.name
-              : '无法确认'}
-        </h3>
-        {onAir.status === 'error' ? (
-          <p role="alert">
-            {onAir.activeRevision === null
-              ? '尚无已确认的播出配置。'
-              : `最近确认：${onAir.current.preset.name}；当前启用状态待重查。`}
-          </p>
-        ) : null}
-        {selected && editor.document ? (
-          <>
-            <details>
-              <summary>共享布局与外观</summary>
-              <p>
-                共享布局 ·{' '}
-                {resourceFor(editor.document, 'layout', selected.layoutId)?.name ??
-                  selected.layoutId}
-                <br />
-                共享外观 ·{' '}
-                {resourceFor(editor.document, 'theme', selected.themeId)?.name ?? selected.themeId}
-              </p>
-            </details>
-            <Button
-              disabled={editor.status !== 'ready'}
-              onClick={() => void action(() => openTool('hud', selected.id))}
-            >
-              编辑此预设
-            </Button>
-            <p>
-              {onAir.status !== 'ready'
-                ? '启用状态待重查。'
-                : selected.id === onAir.current.preset.id
-                  ? '所选预设已正式启用。'
-                  : '所选预设尚未启用；在编辑器检查其样例 / 回放。'}
+    <Workbench
+      layout="canvas"
+      className="picture-workspace"
+      preview={<ProgramPreview allowCurrent />}
+      inspector={
+        <Panel className="picture-presets">
+          <h2>HUD 检视器</h2>
+          <Select
+            label="检查 HUD 预设"
+            value={selected?.id ?? ''}
+            disabled={editor.status !== 'ready'}
+            onChange={(event) => {
+              setSelectedId(event.target.value);
+              const url = new URL(window.location.href);
+              url.searchParams.set('preset', event.target.value);
+              window.history.replaceState(null, '', url);
+            }}
+          >
+            {!presets.length ? <option value="">正在读取已保存配置</option> : null}
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name} · {preset.id.startsWith('builtin:') ? '内置' : '自定义'}
+              </option>
+            ))}
+          </Select>
+          <h3>
+            正式播出 ·{' '}
+            {onAir.status === 'loading'
+              ? '正在读取'
+              : onAir.status === 'ready'
+                ? `${onAir.current.preset.name}${selected?.id === onAir.current.preset.id ? ' · 所选已启用' : ''}`
+                : '无法确认'}
+          </h3>
+          {onAir.status === 'error' ? (
+            <p role="alert">
+              {onAir.activeRevision === null
+                ? '尚无已确认的播出配置。'
+                : `最近确认：${onAir.current.preset.name}；当前启用状态待重查。`}
             </p>
-          </>
-        ) : (
-          <p>连接未就绪，不使用样例配置冒充已保存选择。</p>
-        )}
-        <small>画布使用正式配置；浏览预设不改变播出。</small>
-        <details>
-          <summary>本机观战工具</summary>
-          <LocalOverlayControls />
-          <SpectatorHudCommands />
-        </details>
-        <details>
-          <summary>资源与启用详情</summary>
-          <p>
-            配置状态 · {editor.status === 'ready' ? '已连接' : '待重查'} ·{' '}
-            {editor.activationStale ? '保存尚未应用' : '保存与启用分别确认'}
-          </p>
-          <small>
-            资源版本 {editor.revision ?? '未知'} · 启用版本 {onAir.activeRevision ?? '未知'}
-          </small>
-        </details>
-        {onNext ? (
-          <div className="picture-next">
-            <Button variant="primary" onClick={onNext}>
-              进入开播检查
-            </Button>
-          </div>
-        ) : null}
-      </Panel>
-    </div>
+          ) : null}
+          {selected && editor.document ? (
+            <>
+              <details>
+                <summary>共享布局与外观</summary>
+                <p>
+                  共享布局 ·{' '}
+                  {resourceFor(editor.document, 'layout', selected.layoutId)?.name ??
+                    selected.layoutId}
+                  <br />
+                  共享外观 ·{' '}
+                  {resourceFor(editor.document, 'theme', selected.themeId)?.name ??
+                    selected.themeId}
+                </p>
+              </details>
+              <Button
+                disabled={editor.status !== 'ready'}
+                onClick={() => void action(() => openTool('hud', selected.id))}
+              >
+                编辑此预设
+              </Button>
+            </>
+          ) : (
+            <p>连接未就绪，不使用样例配置冒充已保存选择。</p>
+          )}
+          <small>画布显示播出配置；选择预设后可打开编辑器检查其样例。</small>
+          <details>
+            <summary>本机观战工具</summary>
+            <LocalOverlayControls />
+            <SpectatorHudCommands />
+          </details>
+          <details>
+            <summary>资源与启用详情</summary>
+            <p>
+              配置状态 · {editor.status === 'ready' ? '已连接' : '待重查'} ·{' '}
+              {editor.activationStale ? '保存尚未应用' : '保存与启用分别确认'}
+            </p>
+            <small>
+              资源版本 {editor.revision ?? '未知'} · 启用版本 {onAir.activeRevision ?? '未知'}
+            </small>
+          </details>
+          {onNext ? (
+            <div className="picture-next">
+              <Button variant="primary" onClick={onNext}>
+                进入开播检查
+              </Button>
+            </div>
+          ) : null}
+        </Panel>
+      }
+    />
   );
 }

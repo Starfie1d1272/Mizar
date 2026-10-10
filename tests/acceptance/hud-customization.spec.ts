@@ -220,6 +220,7 @@ test('preset files export, edit, import and activate without replacing resources
       buffer: Buffer.from('{}'),
     });
     await expect(page.getByRole('alert').filter({ hasText: /配置|文件|预设/ })).toBeVisible();
+    await page.getByText('导入与导出预设', { exact: true }).click();
     const downloadEvent = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出预设文件', exact: true }).click();
     const download = await downloadEvent;
@@ -429,6 +430,7 @@ test('HUD resource directory targets the single editor by ID, preserves dirty dr
     await expect(page.getByRole('button', { name: '启用当前预设', exact: true })).toBeDisabled();
     await expect(page.getByLabel('启用条件与引用')).toContainText('布局有未保存更改');
     await expect(page.getByLabel('启用条件与引用')).toContainText('共享外观引用');
+    await page.getByText('共享引用与启用条件', { exact: true }).click();
     await page.getByRole('button', { name: '定位需处理编辑区' }).click();
     await expect(page.getByRole('button', { name: '布局', exact: true })).toBeFocused();
     await page.evaluate(() =>

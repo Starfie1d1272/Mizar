@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState, type ReactNode, type SetStateAction } from 'react';
 import { Button, Checkbox, StatusBanner, Select } from '../ui';
 import { LOCAL_BP_MAP_CATALOG, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
 import type { Bo3BpRules } from '@mizar/core/projection';
@@ -47,7 +47,7 @@ async function command(path: string, payload: unknown): Promise<void> {
   if (!response.ok)
     throw new Error(
       response.status === 409
-        ? '本场已变化，请核对后重新保存；当前草稿保留。'
+        ? '比赛资料已变化，请核对后重新保存；当前草稿保留。'
         : '本地比赛保存失败，请检查填写内容。',
     );
 }
@@ -102,9 +102,15 @@ export function LocalTournamentEditor({
   onDirtyChange,
   onCancel,
   canSave = true,
+  rosterTools,
+  afterRoster,
+  onNext,
 }: {
   readonly canSave?: boolean;
-  readonly scope?: 'match' | 'resources';
+  readonly rosterTools?: ReactNode;
+  readonly afterRoster?: ReactNode;
+  readonly onNext?: () => void;
+  readonly scope?: 'match' | 'candidate' | 'resources';
   readonly document?: MatchDocumentV1 | null;
   readonly eventId?: string;
   readonly onCancel?: () => void;
@@ -118,7 +124,30 @@ export function LocalTournamentEditor({
   const event = view?.events.find(
     (item) => item.eventId === (eventId ?? selected?.competition?.competitionId),
   );
-  const [draft, setDraft] = useState<MatchDocumentV1 | null>(selected ?? null);
+  const [matchEdit, setMatchEdit] = useState({
+    draft: selected ?? null,
+    baseline: selected,
+    observed: selected,
+  });
+  const draft = matchEdit.draft;
+  const candidateBase = matchEdit.baseline;
+  if (scope !== 'resources' && selected && matchEdit.observed !== selected) {
+    const wasClean =
+      JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(matchEdit.observed));
+    setMatchEdit({
+      observed: selected,
+      baseline:
+        wasClean || JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(selected))
+          ? selected
+          : matchEdit.baseline,
+      draft: wasClean ? selected : matchEdit.draft,
+    });
+  }
+  const setDraft = (update: SetStateAction<MatchDocumentV1 | null>) =>
+    setMatchEdit((current) => ({
+      ...current,
+      draft: typeof update === 'function' ? update(current.draft) : update,
+    }));
   const [eventName, setEventName] = useState(event?.name ?? '');
   const [eventLogo, setEventLogo] = useState<string | null>(event?.logoUrl ?? null);
   const [eventTheme, setEventTheme] = useState<string | null>(event?.themeColor ?? null);
@@ -126,19 +155,8 @@ export function LocalTournamentEditor({
   const [eventBo3Rules, setEventBo3Rules] = useState(event?.bo3Rules ?? DEFAULT_BO3_BP_RULES);
   const [savedMessage, setSavedMessage] = useState('');
   const [editingMeta, setEditingMeta] = useState(section === 'details');
-  const previousDocument = useRef(selected);
-  useEffect(() => {
-    const previous = previousDocument.current;
-    previousDocument.current = selected;
-    if (scope !== 'match' || !selected) return;
-    setDraft((current) =>
-      JSON.stringify(editableMatch(current)) === JSON.stringify(editableMatch(previous))
-        ? selected
-        : current,
-    );
-  }, [selected, scope]);
   const dirty =
-    scope === 'match'
+    scope !== 'resources'
       ? draft !== null &&
         JSON.stringify(editableMatch(draft)) !== JSON.stringify(editableMatch(selected))
       : event !== undefined &&
@@ -163,17 +181,19 @@ export function LocalTournamentEditor({
   }, [dirty, onDirtyChange]);
   if (
     view === null ||
-    (scope === 'match' && draft === null) ||
-    (scope === 'resources' && event === undefined) ||
-    (scope === 'match' && view?.activeLocalMatchId !== draft?.matchId)
+    (scope !== 'resources' && draft === null) ||
+    (scope === 'resources' && event === undefined)
   )
     return null;
 
   const contextReady =
     canSave &&
-    (scope !== 'match' ||
-      JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
-        JSON.stringify(selected));
+    (scope === 'resources' ||
+      ((scope === 'match'
+        ? view.activeLocalMatchId === draft?.matchId
+        : view.activeLocalMatchId !== draft?.matchId) &&
+        JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
+          JSON.stringify(scope === 'candidate' ? candidateBase : selected)));
   const updateEntrant = (side: 'a' | 'b', patch: Partial<MatchDocumentV1['entrants']['a']>) =>
     setDraft((current) =>
       current === null
@@ -189,23 +209,32 @@ export function LocalTournamentEditor({
   return (
     <div className="preparation-editor" data-section={section} data-scope={scope}>
       {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
-      {scope === 'match' && draft !== null && section !== 'maps' ? (
+      {scope !== 'resources' && draft !== null && section !== 'maps' ? (
         <form
           onSubmit={(submit) => {
             submit.preventDefault();
             if (!contextReady) return;
             if (
               !window.confirm(
-                '保存将更新本场资料，并同步队伍库中的队名、队标与名单，影响今后复用。当前节目可能刷新，确认保存？',
+                scope === 'candidate'
+                  ? '保存将更新这场比赛与队伍库，影响今后复用；不会载入本场或修改当前播出。确认保存？'
+                  : '保存将更新本场资料，并同步队伍库中的队名、队标与名单，影响今后复用。当前节目可能刷新，确认保存？',
               )
             )
               return;
             setSavedMessage('');
             void action(async () => {
-              await command('/operator/local-match/save', {
-                expectedContextRevision: view.contextRevision,
-                document: { ...selected, ...editableMatch(draft) },
-              });
+              await command(
+                scope === 'candidate'
+                  ? `/operator/local-match/${encodeURIComponent(draft.matchId)}/save`
+                  : '/operator/local-match/save',
+                {
+                  ...(scope === 'candidate'
+                    ? { expectedDocument: candidateBase }
+                    : { expectedContextRevision: view.contextRevision }),
+                  document: { ...selected, ...editableMatch(draft) },
+                },
+              );
               await refresh();
               setSavedMessage('比赛资料已保存。');
             });
@@ -271,12 +300,12 @@ export function LocalTournamentEditor({
                 </div>
               </details>
             ) : null}
+            {rosterTools ? <div className="editor-roster-tools">{rosterTools}</div> : null}
             {section === 'roster' || section === 'overview'
               ? (['a', 'b'] as const).map((side) => (
                   <fieldset key={side} hidden={section === 'overview' && editingMeta}>
                     <legend>{draft.entrants[side].name || `队伍 ${side.toUpperCase()}`}</legend>
-                    <details open={section === 'roster'}>
-                      <summary>编辑队伍资料</summary>
+                    <div className="editor-team-name">
                       <label>
                         队名{' '}
                         <input
@@ -284,6 +313,9 @@ export function LocalTournamentEditor({
                           onChange={(change) => updateEntrant(side, { name: change.target.value })}
                         />
                       </label>
+                    </div>
+                    <details>
+                      <summary>队标图片</summary>
                       <label>
                         队标图片{' '}
                         <input
@@ -306,16 +338,8 @@ export function LocalTournamentEditor({
                         />
                       ) : null}
                     </details>
-                    <ul>
-                      {draft.entrants[side].players.map((player) => (
-                        <li key={player.playerId}>
-                          {player.displayName ?? '未命名选手'} ·{' '}
-                          {player.isStarter ? '首发' : '替补'}
-                        </li>
-                      ))}
-                    </ul>
-                    <details>
-                      <summary>手动编辑名单</summary>
+                    <section className="editor-player-fields" aria-label="编辑名单">
+                      <h4>名单</h4>
                       {draft.entrants[side].players.map((player, index) => (
                         <div key={player.playerId} className="workspace-roster-row">
                           <input
@@ -393,19 +417,37 @@ export function LocalTournamentEditor({
                       >
                         添加选手
                       </Button>
-                    </details>
+                    </section>
                   </fieldset>
                 ))
               : null}
+            {afterRoster ? <div className="editor-match-plan">{afterRoster}</div> : null}
             <p>
-              保存本场同时同步队伍库的队名、队标与名单；已有其他比赛快照不改写，今后复用使用更新后的队伍。
+              {scope === 'candidate'
+                ? '保存这场比赛及队伍库；当前本场与播出不变，今后复用使用更新后的队伍。'
+                : '保存本场同时同步队伍库的队名、队标与名单；已有其他比赛快照不改写，今后复用使用更新后的队伍。'}
             </p>
-            {!contextReady ? <p role="status">正在核对本场连接与保存版本；资料草稿保留。</p> : null}
+            {!contextReady ? (
+              <p role="status">
+                {scope === 'candidate'
+                  ? '比赛库版本或本场选择已变化，或连接待恢复；草稿保留，请取消后重新核对。'
+                  : '正在核对本场连接与保存版本；资料草稿保留。'}
+              </p>
+            ) : null}
           </div>
           <div className="event-editor-actions">
-            <Button type="submit" variant="primary" disabled={!contextReady}>
+            <Button
+              type="submit"
+              variant={dirty || !onNext ? 'primary' : 'secondary'}
+              disabled={!contextReady}
+            >
               保存比赛资料
             </Button>
+            {onNext ? (
+              <Button variant={dirty ? 'secondary' : 'primary'} disabled={dirty} onClick={onNext}>
+                进入画面检查
+              </Button>
+            ) : null}
             {onCancel ? (
               <Button
                 onClick={() => {
