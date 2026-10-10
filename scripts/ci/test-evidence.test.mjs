@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { browserIdentities, verifyBrowserEvidence, verifyBrowserShards } from './test-evidence.mjs';
+import { readBrowserShards } from './verify-browser-shards.mjs';
 
 function report(names, result = undefined) {
   return {
@@ -86,4 +90,79 @@ it('requires shard union to cover the same FULL exactly once', () => {
   expect(() =>
     verifyBrowserShards([shard(['first']), { ...shard(['second']), full: report(['second']) }]),
   ).toThrow('different FULL');
+});
+
+describe('same-source browser evidence across partial workflow reruns', () => {
+  const context = { attempt: 2, runId: '42', sourceSha: 'a'.repeat(40) };
+  function fixture(action) {
+    const root = mkdtempSync(join(tmpdir(), 'mizar-browser-evidence-'));
+    const save = (shard, attempt = 1, changes = {}) => {
+      const directory = join(
+        root,
+        `browser-evidence-${attempt}-${shard}`,
+        'test-evidence',
+        `${shard}-2`,
+      );
+      mkdirSync(directory, { recursive: true });
+      const values = {
+        identity: { ...context, attempt, shard, count: 2 },
+        full: report(['first', 'second']),
+        selected: report([shard === 1 ? 'first' : 'second']),
+        actual: report([shard === 1 ? 'first' : 'second'], passed),
+        ...changes,
+      };
+      for (const [name, value] of Object.entries(values))
+        writeFileSync(join(directory, `${name}.json`), JSON.stringify(value));
+    };
+    try {
+      return action(root, save);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  it('uses prior successful shards when only another job or the gate reruns', () => {
+    fixture((root, save) => {
+      save(1);
+      save(2);
+      expect(verifyBrowserShards(readBrowserShards(root, 2, context))).toEqual({
+        full: 2,
+        passed: 2,
+      });
+      save(2, 2);
+      expect(verifyBrowserShards(readBrowserShards(root, 2, context))).toEqual({
+        full: 2,
+        passed: 2,
+      });
+    });
+  });
+  it('rejects a failed newest shard instead of reusing its earlier success', () => {
+    fixture((root, save) => {
+      save(1);
+      save(2);
+      save(2, 2, { actual: report(['second'], { status: 'failed', retry: 0 }) });
+      expect(() => verifyBrowserShards(readBrowserShards(root, 2, context))).toThrow('non-passing');
+    });
+  });
+  it.each([
+    { runId: '43' },
+    { sourceSha: 'b'.repeat(40) },
+    { attempt: 1 },
+    { shard: 1 },
+    { count: 3 },
+  ])('rejects newest evidence with a different identity: %j', (change) => {
+    fixture((root, save) => {
+      save(1);
+      save(2);
+      save(2, 2, { identity: { ...context, shard: 2, count: 2, ...change } });
+      expect(() => readBrowserShards(root, 2, context)).toThrow('identity differs');
+    });
+  });
+  it('rejects a missing shard and evidence from a future attempt', () => {
+    fixture((root, save) => {
+      save(1);
+      expect(() => readBrowserShards(root, 2, context)).toThrow('missing browser shard');
+      save(2, 3);
+      expect(() => readBrowserShards(root, 2, context)).toThrow('unexpected attempt');
+    });
+  });
 });

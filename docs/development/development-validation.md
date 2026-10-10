@@ -85,6 +85,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 - 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
 - 基础质量检查（`quality`）分为静态检查、单元测试、样例、类型与构建四路并行任务；全部选中任务通过后汇总成功。
 - 浏览器验收按实测文件耗时均衡分成八个独立任务，每个任务使用与锁文件版本一致、固定官方镜像 digest 的浏览器及完整原生依赖，使用一个工作进程串行执行；全部分片通过后，ci-gate 核对八份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`MIZAR_BROWSER_SHARDING=balanced pnpm acceptance:ci --shard=N/8` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
+- 同一 CI run 的部分重跑复用未重跑分片的原证据；每份证据绑定精确 checkout SHA、run、attempt 和分片身份，门禁只选择每个分片的最新 attempt。缺失、损坏、不同身份或最新失败直接拒绝，不回退旧成功；分片并集仍须完整覆盖同一 FULL。
 - 基础质量已选中时，设计任务只执行自身的 token 检查，架构和设计契约由基础质量统一执行；仅设计任务选中时仍执行这些门禁。
 - Windows/macOS 验证本平台类型、生产构建、文件系统、进程与传输；完整 JavaScript 单元测试由 Ubuntu Quality 负责。平台消费者清单由 `scripts/ci/platform-contracts.mjs` 维护，执行报告拒绝缺失文件、失败、空执行与新增跳过。Windows 原生任务编译并执行真实 Rust/Tauri 宿主测试和更新取消/恢复检查；完整包、EXE GUI 与安装器验收由 Release Qualification 负责。Full 的 macOS 消费者统一由 offline 任务执行，不再重复另起同 OS 平台任务。
 - 资源 Store 的持久化、租约、取消、损坏恢复、路径/链接与 TOCTOU，以及原 URL 的 App/HTTP 接线测试纳入平台消费者清单，在真实 Windows/macOS 文件系统执行；该证据不代替正式资源签名正例或 OBS 实机验收。

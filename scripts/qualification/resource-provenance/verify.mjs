@@ -1,9 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { releaseAttestationArgs } from '../release-identity.mjs';
+import { verifyReleaseAttestations } from '../release-identity.mjs';
 import { LIMITS, requireValue } from '../../../packages/resource-pack-contract/index.mjs';
 import { verifyPackBytes } from '../../asset-packs/pack.mjs';
 import { boundedRead } from './io.mjs';
@@ -41,16 +40,15 @@ export async function verifyResourcePublication({
     await writeFile(archive, archiveBytes);
     await writeFile(publicationProof, publicationBundle);
     await writeFile(archiveProof, archiveBundle);
-    execFileSync(
-      'gh',
-      releaseAttestationArgs(publication, statement.promotionSha, publicationProof, 'promotion'),
-      { stdio: 'pipe', timeout: 60_000, maxBuffer: 2 * 1024 * 1024 },
-    );
-    execFileSync('gh', releaseAttestationArgs(archive, statement.sourceSha, archiveProof), {
-      stdio: 'pipe',
-      timeout: 60_000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
+    await verifyReleaseAttestations([
+      {
+        file: publication,
+        sourceSha: statement.promotionSha,
+        bundle: publicationProof,
+        workflow: 'promotion',
+      },
+      { file: archive, sourceSha: statement.sourceSha, bundle: archiveProof },
+    ]);
     return { statement, ...pack };
   } finally {
     await rm(directory, { recursive: true, force: true });

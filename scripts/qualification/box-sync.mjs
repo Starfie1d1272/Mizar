@@ -29,7 +29,12 @@ const bootstrapPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-WebInstaller\.exe$
 const setupPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-Setup\.exe$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-class MirrorError extends Error {}
+class MirrorError extends Error {
+  constructor(message, httpStatus) {
+    super(message);
+    this.httpStatus = httpStatus;
+  }
+}
 const requireValue = (ok, message) => {
   if (!ok) throw new MirrorError(message);
 };
@@ -182,7 +187,7 @@ async function boxStage(stage, action) {
     const elapsed = Math.round(globalThis.performance.now() - started);
     console.log(`Box ${stage} 失败（${elapsed}ms）`);
     if (error instanceof MirrorError)
-      throw new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`);
+      throw new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`, error.httpStatus);
     const code = safeNetworkCode(error);
     if (code !== 'network')
       throw new MirrorError(`Box ${stage}（${elapsed}ms）：网络请求失败（${code}）；保留现有文件`);
@@ -210,7 +215,8 @@ async function checkedFetch(url, options = {}, timeout = 120000) {
       );
     }
   }
-  requireValue(response.ok, `远端请求失败（HTTP ${response.status}）；保留现有文件`);
+  if (!response.ok)
+    throw new MirrorError(`远端请求失败（HTTP ${response.status}）；保留现有文件`, response.status);
   return response;
 }
 
@@ -226,6 +232,7 @@ export class BoxClient {
       'download-link',
       'upload-link',
       'sync-batch-move-item',
+      'sync-batch-copy-item',
       'file',
     ].includes(endpoint)
       ? endpoint
@@ -303,6 +310,13 @@ export class BoxClient {
   }
   async move(from, to, name) {
     await this.api('sync-batch-move-item', undefined, 'POST', {
+      src_parent_dir: from,
+      dst_parent_dir: to,
+      src_dirents: [name],
+    });
+  }
+  async copy(from, to, name) {
+    await this.api('sync-batch-copy-item', undefined, 'POST', {
       src_parent_dir: from,
       dst_parent_dir: to,
       src_dirents: [name],
@@ -393,8 +407,8 @@ async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pa
     await box.upload(folder, identity.name, bytes);
   await verifyRemote(box, `${folder}/${identity.name}`, identity);
   for (const previous of verified) {
-    // Repeat the new download check before each operation that removes an old public file.
-    await verifyRemote(box, `${folder}/${identity.name}`, identity);
+    // The new bytes were verified above. Old bytes remain verified in Archive;
+    // the new public bytes are read back again before publishing the update pointer.
     if (archive.some((e) => e.name === previous.name)) {
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
       await box.remove(`${folder}/${previous.name}`);
@@ -648,8 +662,18 @@ export async function rollbackDownloads({ box, identity, offline, bootstrap }) {
   return '旧公开入口已恢复原轻量 EXE；Full 兼容后端与 Offline ZIP 已核验；Downloads 目录及 Archive 保留，更新指针不变。';
 }
 
-export async function syncResourceFiles({ box, version, files, metadataInRuntime = false }) {
+export async function syncResourceFiles({
+  box,
+  version,
+  files,
+  metadataInRuntime = false,
+  reuseVersion,
+}) {
   requireValue(/^\d+\.\d+\.\d+$/.test(version), '资源镜像版本无效');
+  requireValue(
+    !reuseVersion || (/^\d+\.\d+\.\d+$/.test(reuseVersion) && older(reuseVersion, version)),
+    '原资源镜像版本无效',
+  );
   const zip = files.filter((f) => /^Mizar-official-epl-default-\d+\.\d+\.\d+\.zip$/.test(f.name));
   const expected = [...(metadataInRuntime ? [] : Object.values(resourceNames)), zip[0]?.name];
   requireValue(
@@ -685,7 +709,27 @@ export async function syncResourceFiles({ box, version, files, metadataInRuntime
   for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
     await verifyRemote(box, `${folder}/${file.name}`, file);
   for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
-    await box.upload(folder, file.name, file.bytes);
+    let copied = false;
+    if (file.name.endsWith('.zip') && reuseVersion) {
+      const source = `/Resources/v${reuseVersion}`;
+      if (
+        (await box.list('/Resources')).some(
+          (e) => e.name === `v${reuseVersion}` && e.type === 'dir',
+        ) &&
+        (await box.list(source)).some((e) => e.name === file.name && e.type === 'file')
+      ) {
+        // A directory hint is not provenance: both sides must match the currently verified original ZIP.
+        await verifyRemote(box, `${source}/${file.name}`, file);
+        try {
+          await box.copy(source, folder, file.name);
+          copied = true;
+        } catch (error) {
+          if (![404, 405, 501].includes(error.httpStatus)) throw error;
+          console.log('Box 服务端复制未提供；使用已验证原资源上传，保留原目录');
+        }
+      }
+    }
+    if (!copied) await box.upload(folder, file.name, file.bytes);
     await verifyRemote(box, `${folder}/${file.name}`, file);
   }
 }
@@ -742,6 +786,7 @@ export async function syncStableRelease({
   resources,
   updateIndex,
   runtime,
+  resourceReuseVersion,
 }) {
   requireValue(
     offline?.identity && offline.bytes && offline.resolveIdentity,
@@ -761,19 +806,44 @@ export async function syncStableRelease({
       '轻量安装器必须是同源同版正式原资产',
     );
   await box.initialize();
-  if (runtime) await syncRuntimeFiles({ box, version: identity.version, files: runtime });
-  if (resources)
-    await syncResourceFiles({
-      box,
-      version: identity.version,
-      files: resources,
-      metadataInRuntime: Boolean(runtime),
-    });
-  if (!bootstrap) await syncOffline({ box, ...offline });
-  const result = await syncStable({ box, identity, bytes, resolveIdentity });
-  if (bootstrap) {
-    await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
-  }
+  // Wait for every writer before reporting failure. No failed sibling may publish the pointer.
+  const settle = async (tasks) => {
+    const results = await Promise.allSettled(tasks);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    return results.map((result) => result.value);
+  };
+  const distribution = async () => {
+    if (!bootstrap) {
+      await syncOffline({ box, ...offline });
+      return syncStable({ box, identity, bytes, resolveIdentity });
+    }
+    const stable = await box.list('/Stable');
+    // First migration touches the legacy root; retain its ordered rollback contract.
+    if (stable.some((e) => bootstrapPattern.test(e.name))) {
+      const result = await syncStable({ box, identity, bytes, resolveIdentity });
+      await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
+      return result;
+    }
+    const [result] = await settle([
+      syncStable({ box, identity, bytes, resolveIdentity }),
+      syncUserDownloads({ box, offline, bootstrap, resolveIdentity }),
+    ]);
+    return result;
+  };
+  const [, , result] = await settle([
+    runtime ? syncRuntimeFiles({ box, version: identity.version, files: runtime }) : undefined,
+    resources
+      ? syncResourceFiles({
+          box,
+          version: identity.version,
+          files: resources,
+          metadataInRuntime: Boolean(runtime),
+          reuseVersion: resourceReuseVersion,
+        })
+      : undefined,
+    distribution(),
+  ]);
   if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
@@ -1179,7 +1249,7 @@ async function main() {
       await rm(directory, { recursive: true, force: true });
     }
   }
-  let resources;
+  let resources, resourceReuseVersion;
   if (identity.originals || release.assets.some((a) => a.name === resourceNames.descriptor)) {
     const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-resources-'));
     try {
@@ -1212,6 +1282,11 @@ async function main() {
           }),
         ),
       );
+      // This is only a storage hint after original publication verification above.
+      const originalVersion = JSON.parse(await readFile(join(directory, resourceNames.catalog)))
+        .origin?.publication?.releaseVersion;
+      resourceReuseVersion =
+        originalVersion && older(originalVersion, identity.version) ? originalVersion : undefined;
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -1235,6 +1310,7 @@ async function main() {
         }
       : undefined,
     resources: identity.runtime ? resources.filter((f) => f.name.endsWith('.zip')) : resources,
+    resourceReuseVersion,
     updateIndex,
   });
 }

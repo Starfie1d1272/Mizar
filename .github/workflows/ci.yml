@@ -231,6 +231,22 @@ jobs:
           pnpm --filter @mizar/companion... --filter @mizar/web... --fail-if-no-match run build
           pnpm local-web:production-browser-smoke
 
+      - name: Bind browser evidence to this workflow run and exact source
+        if: ${{ always() }}
+        env:
+          BROWSER_SHARD: ${{ matrix.shard }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          const shard = Number(process.env.BROWSER_SHARD);
+          const directory = `.agent-tmp/test-evidence/${shard}-8`;
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(`${directory}/identity.json`, JSON.stringify({
+            sourceSha: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID,
+            attempt: Number(process.env.GITHUB_RUN_ATTEMPT), shard, count: 8,
+          }));
+          NODE
+
       - name: Preserve browser test identities and production evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -421,7 +437,16 @@ jobs:
     name: ci-gate
     if: always()
     needs:
-      [plan, quality, design, acceptance, platform, qualification_offline, qualification_windows, installer_windows]
+      [
+        plan,
+        quality,
+        design,
+        acceptance,
+        platform,
+        qualification_offline,
+        qualification_windows,
+        installer_windows,
+      ]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -432,7 +457,7 @@ jobs:
         if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: browser-evidence-${{ github.run_attempt }}-*
+          pattern: browser-evidence-*
           path: .agent-tmp/browser-shards
 
       - name: Verify all browser shards cover FULL exactly once
