@@ -77,15 +77,9 @@ export function errorEvidence(error: unknown): unknown {
       issues?: unknown[];
     };
     const schemaError = original.name === 'ZodError' && Array.isArray(fields.issues);
-    const stack =
-      typeof fields.stack === 'string'
-        ? schemaError
-          ? fields.stack
-              .split('\n')
-              .filter((line) => /^\s+at /.test(line))
-              .join('\n')
-          : fields.stack
-        : undefined;
+    // Zod message/stack headers can embed arbitrary rejected values, including fake callsites.
+    // Keep the wrapper's stack and safe issue metadata instead of copying this header.
+    const stack = !schemaError && typeof fields.stack === 'string' ? fields.stack : undefined;
     return {
       name: redactDiagnosticText(typeof original.name === 'string' ? original.name : 'Error'),
       message: redactDiagnosticText(

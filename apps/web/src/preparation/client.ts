@@ -100,11 +100,11 @@ export async function checkObsBeforeLaunch() {
 }
 
 export async function productionAction(action: 'enter' | 'hide' | 'finish', state: Production) {
+  const entryLocation = window.location.href;
   if (action === 'enter' && !(await checkObsBeforeLaunch())) return;
   let newlyStarted = false;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     newlyStarted = await desktopInvoke<boolean>('start_managed_cs2');
-    const entryLocation = window.location.href;
     let gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
@@ -116,6 +116,7 @@ export async function productionAction(action: 'enter' | 'hide' | 'finish', stat
       gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
     }
   }
+  if (action === 'enter' && window.location.href !== entryLocation) return;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision });
     if (window.__TAURI_INTERNALS__) {

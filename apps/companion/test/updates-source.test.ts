@@ -776,7 +776,10 @@ it('retains string exceptions, stack and bounded schema issue metadata without s
   const parsed = z
     .object({
       version: z.string().superRefine((value, context) => {
-        context.addIssue({ code: 'custom', message: `rejected ${value}` });
+        context.addIssue({
+          code: 'custom',
+          message: `rejected ${value}\n    at private-type-value`,
+        });
       }),
       bytes: z.number(),
     })
