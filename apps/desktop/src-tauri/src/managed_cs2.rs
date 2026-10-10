@@ -327,6 +327,7 @@ pub struct ManagedCs2 {
     log: crate::startup_log::DesktopLog,
     message: Option<String>,
     launch_observation: Option<Value>,
+    can_preserve: bool,
 }
 impl ManagedCs2 {
     pub fn new(log: crate::startup_log::DesktopLog) -> Self {
@@ -335,6 +336,7 @@ impl ManagedCs2 {
             log,
             message: None,
             launch_observation: None,
+            can_preserve: false,
         }
     }
     pub fn status(&self) -> Result<Value, String> {
@@ -347,7 +349,7 @@ impl ManagedCs2 {
             .is_some();
         let preferences = self.store.preferences()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -372,7 +374,11 @@ impl ManagedCs2 {
                 value["pid"] = json!(pid);
                 value["created"] = json!(created);
                 self.store.save(&value)?;
-                self.message = None;
+                self.message = if value["preserveSettings"] == true {
+                    Some("已保持原游戏设置；未应用自动画质、帧率和游戏窗口布局，本机 HUD 覆盖已停用。".into())
+                } else {
+                    None
+                };
             } else if !confirm_steam_cancelled {
                 self.message = Some("正在等待 Steam 启动 CS2；配置较低或网络较慢时可能需要更久。Mizar 会继续跟踪；如需取消，请先取消 Steam 启动请求，再恢复备份。".into());
                 return Ok(());
@@ -405,7 +411,19 @@ impl ManagedCs2 {
             self.message = Some(error);
         }
     }
+    pub fn preserve_settings(&self) -> bool {
+        // Corrupt/unreadable journals must also prevent automatic game layout.
+        self.store.load().map_or(true, |value| {
+            value.is_some_and(|v| v["preserveSettings"] == true)
+        })
+    }
     pub fn start(&mut self) -> Result<bool, String> {
+        self.start_with_settings(false)
+    }
+    pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
+        if preserve && !self.can_preserve {
+            return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
+        }
         if let Some(value) = self.store.load()? {
             if owned_process(&value, &self.log)?.is_some() {
                 return Ok(false);
@@ -423,10 +441,36 @@ impl ManagedCs2 {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         self.message = None;
-        let size = crate::windows_host::launch_viewport()?;
-        let mut journal = self
-            .store
-            .prepare_with_frame_rate(&video, &executable, size)?;
+        let size = if preserve {
+            None
+        } else {
+            Some(crate::windows_host::launch_viewport()?)
+        };
+        let mut journal = if preserve {
+            self.store.prepare_preserved(&video, &executable)?
+        } else {
+            self.can_preserve = false;
+            self.store.backup_originals(&video)?;
+            match self.store.prepare_backed_up(
+                &video,
+                &executable,
+                size.ok_or("工作台游戏尺寸缺失。")?,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.can_preserve = self.store.load()?.is_none();
+                    self.message = Some(error.clone());
+                    // Parser errors contain only fixed categories / known keys.
+                    self.log.event(
+                        "cs2_launch",
+                        "failure",
+                        Some(&format!("stage=prepare; {error}")),
+                    );
+                    return Err(error);
+                }
+            }
+        };
+        self.can_preserve = false;
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
         journal["launchAttempted"] = json!(true);
@@ -438,10 +482,10 @@ impl ManagedCs2 {
         journal["launchTime"] = json!(launch_time);
         self.store.save(&journal)?;
         let launch: Result<bool, String> = (|| {
-            Command::new(&steam)
-                .current_dir(steam.parent().ok_or("Steam 程序目录无效。")?)
-                .args(LAUNCH_ARGS)
-                .args([
+            let mut command = Command::new(&steam);
+            command.current_dir(steam.parent().ok_or("Steam 程序目录无效。")?);
+            if let Some(size) = size {
+                command.args(LAUNCH_ARGS).args([
                     "-w",
                     &size.width.to_string(),
                     "-h",
@@ -451,7 +495,11 @@ impl ManagedCs2 {
                         .as_u64()
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
-                ])
+                ]);
+            } else {
+                command.args(["-applaunch", "730"]);
+            }
+            command
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -586,6 +634,10 @@ mod tests {
             managed.poll();
         }
         assert_eq!(managed.status().unwrap()["phase"], "uncertain");
+        managed.can_preserve = true;
+        assert_eq!(managed.status().unwrap()["canPreserve"], false);
+        assert!(!managed.start_with_settings(true).unwrap());
+        assert!(!managed.preserve_settings());
         assert!(managed.store.load().unwrap().is_some());
         assert!(managed.finish().is_err());
         assert_ne!(std::fs::read(&video).unwrap(), original);

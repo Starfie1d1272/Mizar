@@ -4,6 +4,8 @@ import { desktopInvoke } from '../workspace/client';
 export interface Cs2ConfigStatus {
   qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
   frameRateLimit: 0 | 30 | 60;
+  canPreserve?: boolean;
+  preserveSettings?: boolean;
   pending: boolean;
   running: boolean;
   message: string | null;
@@ -52,6 +54,6 @@ export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
   return phase === 'starting'
     ? '正在启动 CS2，等待 Steam…'
     : phase === 'restoring'
-      ? '正在关闭游戏并恢复配置…'
+      ? '正在关闭本次游戏…'
       : '正在检查 CS2 配置…';
 }
