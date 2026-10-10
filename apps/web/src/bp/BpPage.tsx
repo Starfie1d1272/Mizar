@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Dialog } from '../ui';
+import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { BpControls } from './BpControls';
 import { BpLocalEditor } from './BpLocalEditor';
@@ -43,6 +44,23 @@ export function BpPage() {
   return <BpPresentation snapshot={snapshot} animate={animate} />;
 }
 
+/** Editing and formal playback share a task; the adjacent preview remains read-only. */
+export function BpWorkbench() {
+  return (
+    <div className="bp-workbench">
+      <BpWorkspaceControls />
+      <section className="bp-workbench-preview" aria-label="BP 画面检查，只读">
+        <h2>BP 画面检查 · 只读</h2>
+        <ScenePreviewViewport
+          frame={{ key: 'bp', scene: 'bp', src: '/program/bp?preview=1', immediate: true }}
+          onSettled={() => {}}
+        />
+        <p>左侧播放 / 收起影响正式播出，此处只读取同一 BP 状态。</p>
+      </section>
+    </div>
+  );
+}
+
 export function BpWorkspaceControls() {
   const { snapshot } = useBpSession();
   const { workspace, connected, loading } = useBpWorkspace();
@@ -61,6 +79,12 @@ export function BpWorkspaceControls() {
 
   async function returnToRivalhub() {
     if (!workspace || sourceBusy || !workspace.pendingRivalhub) return;
+    if (
+      !window.confirm(
+        `将本场切换为 ${workspace.pendingRivalhub.entrants.a.name} vs ${workspace.pendingRivalhub.entrants.b.name} 的 RivalHub 资料？未提交的修改不会保存，确认应用？`,
+      )
+    )
+      return;
     setSourceBusy(true);
     setWorkspaceMessage('');
     try {
@@ -247,7 +271,8 @@ export function BpWorkspaceControls() {
 
       {import.meta.env.DEV ||
       new URLSearchParams(window.location.search).get('qualification') === '1' ? (
-        <section className="bp-scene-testing" aria-labelledby="bp-scene-testing-title">
+        <details className="bp-scene-testing">
+          <summary>场景测试 · 内置演示数据</summary>
           <div className="bp-demo-heading">
             <h2 id="bp-scene-testing-title">场景测试</h2>
             <p>使用内置赛事数据检查 BP 画面、动画与 OBS 输出，不修改当前比赛。</p>
@@ -270,13 +295,14 @@ export function BpWorkspaceControls() {
               </article>
             ))}
           </div>
-        </section>
+        </details>
       ) : null}
       {localEditorOpen && workspace ? (
         <Dialog
           open
           title="编辑比赛 BP"
           className="bp-editor-dialog"
+          showCloseButton={false}
           canClose={canCloseEditor}
           onClose={() => setLocalEditorOpen(false)}
         >
@@ -295,20 +321,6 @@ export function BpWorkspaceControls() {
             />
           </div>
         </Dialog>
-      ) : demoActive === null && localSource && workspace?.localDraft ? (
-        <section className="bp-local-summary" aria-label="本地 BP">
-          <div>
-            <span className="bp-workspace-eyebrow">本地比赛</span>
-            <h2>本地 BP 已保存</h2>
-            <p>
-              {workspace.localDraft.entrants.a.name} vs {workspace.localDraft.entrants.b.name} ·{' '}
-              {workspace.localDraft.format.toUpperCase()}
-            </p>
-          </div>
-          <button type="button" className="bp-button" onClick={() => setLocalEditorOpen(true)}>
-            编辑本地 BP
-          </button>
-        </section>
       ) : null}
 
       <footer className="bp-technical-info">

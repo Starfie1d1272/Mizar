@@ -28,7 +28,7 @@ function ButtonsExample() {
         确认
       </Button>{' '}
       <Button>取消</Button> <Button disabled>不可用</Button> <Button loading>保存</Button>{' '}
-      <IconButton label="关闭预览">×</IconButton>
+      <IconButton label="关闭预览">×</IconButton> <Button aria-current="page">当前任务</Button>
       <p role="status">已确认 {count} 次</p>
     </Panel>
   );

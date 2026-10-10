@@ -1,135 +1,115 @@
-import { AutomaticPreparation } from './AutomaticPreparation';
-import { matchRound } from './match-presentation';
-import { ProductionStatus } from '../workspace/ProductionStatus';
+import { useEffect, useState } from 'react';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
-import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
-import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
-import { useEffect, useState } from 'react';
-import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { useHudConfigClient } from '../realtime/hud-config-client';
-import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
-import { Button, Panel, StatusBanner, StatusPill } from '../ui';
-import { LocalOverlayControls } from './LocalOverlayControls';
+import { ProductionStatus } from '../workspace/ProductionStatus';
+import { ObsConfidence } from '../workspace/WorkspacePage';
+import { BpWorkbench } from '../bp/BpPage';
+import { Button, Panel, StatusBanner } from '../ui';
 import { LocalMatchControls } from './LocalMatchControls';
+import { MatchDocumentView } from './MatchDocumentView';
 import { useLocalTournament } from './tournament';
-import { command, openTool, productionAction, useLocalRead, type Production } from './client';
-import { RosterCapture, type RosterCandidate } from './RosterCapture';
+import {
+  openTool,
+  productionAction,
+  productionEntryLabel,
+  useLocalRead,
+  useLocalReadWithTime,
+  type Production,
+} from './client';
+import { RosterCapture } from './RosterCapture';
 import { Settings } from './Settings';
-import { ProgramPreview } from './ProgramPreview';
-import { SpectatorHudCommands } from './SpectatorHudCommands';
+import { AutomaticPreparation } from './AutomaticPreparation';
+import { useCs2Status } from './cs2-status';
 import { Cs2Recovery } from './Cs2Recovery';
 import { SpectatorWorkflow } from './SpectatorWorkflow';
+import { EventMatchWorkspace } from './EventMatchWorkspace';
+import { PictureWorkspace } from './PictureWorkspace';
+import { OfficialResourceStatus } from './OfficialResourceStatus';
+import { HudPresetDirectory } from './HudPresetDirectory';
 import './preparation.css';
+import './production.css';
 
-const tabs = {
-  '/matches': [
-    ['details', '比赛资料'],
-    ['roster', '队伍与名单'],
-    ['maps', '地图与 BP'],
-  ],
-  '/picture': [
-    ['program', '节目'],
-    ['hud', 'HUD'],
-    ['overlay', '本机 HUD'],
-  ],
-  '/settings': [
-    ['gsi', 'CS2 与 GSI'],
-    ['obs', 'OBS'],
-    ['rivalhub', 'RivalHub'],
-    ['advanced', '高级'],
-  ],
-} as const;
-
-export interface RivalsRehearsalView {
-  loaded: boolean;
-  focusMatchId: string | null;
-  selectedMatchId: string | null;
-  stageIndex: number;
-  stages: { label: string; scene: string }[];
-  provenance: {
-    competitionSource: string;
-    capturedAt: string;
-    gameplaySource: string;
-    gameplayRelationship: string;
-    missingLogoEntryId: string | null;
-  } | null;
-}
-
-function TeamBadge({ name, logoUrl }: { readonly name: string; readonly logoUrl: string | null }) {
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  return (
-    <span className="preparation-team-badge" aria-hidden="true">
-      {logoUrl && logoUrl !== failedUrl ? (
-        <img src={logoUrl} alt="" onError={() => setFailedUrl(logoUrl)} />
-      ) : (
-        name.slice(0, 1)
-      )}
-    </span>
-  );
-}
+const tasks = [
+  ['match', '资料'],
+  ['picture', '画面'],
+  ['check', '开播'],
+] as const;
+const taskFor = (tab: string | null, path: string) =>
+  tab === 'finish'
+    ? 'finish'
+    : tab === 'maps' || tab === 'bp'
+      ? 'bp'
+      : path === '/picture' || tab === 'hud' || tab === 'program' || tab === 'picture'
+        ? 'picture'
+        : tab === 'prepare' || tab === 'check'
+          ? 'check'
+          : 'match';
+const settings = [
+  ['gsi', 'CS2 / GSI'],
+  ['obs', 'OBS'],
+  ['rivalhub', 'RivalHub'],
+  ['preferences', '偏好'],
+  ['advanced', '更新与支持'],
+] as const;
 
 export function PreparationPage() {
-  const path = window.location.pathname === '/operator' ? '/' : window.location.pathname;
-  const options = tabs[path as keyof typeof tabs];
-  const requestedTab = new URLSearchParams(window.location.search).get('tab');
-  const createFromServer =
-    new URLSearchParams(window.location.search).get('createFromServer') === '1';
-  const openMatchSelection =
-    new URLSearchParams(window.location.search).has('select') ||
-    new URLSearchParams(window.location.search).has('createLocal');
-  const tab =
-    (path === '/matches' && createFromServer ? 'roster' : undefined) ??
-    options?.find(([key]) => key === requestedTab)?.[0] ??
-    options?.[0][0] ??
-    '';
-  const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
+  const path = window.location.pathname;
+  const query = new URLSearchParams(window.location.search);
+  const isSettings = path === '/settings';
+  const isResources = path === '/resources';
+  const requested = query.get('tab');
+  const [task, setTask] = useState(() => taskFor(requested, path));
+  const [visited, setVisited] = useState(() => new Set([taskFor(requested, path)]));
+  const tab = isSettings ? (settings.find(([id]) => id === requested)?.[0] ?? 'gsi') : task;
+  function navigateTask(next: string) {
+    setTask(next);
+    setVisited((current) => new Set([...current, next]));
+    const url = new URL(window.location.href);
+    url.pathname = '/';
+    url.searchParams.set('tab', next);
+    window.history.pushState(null, '', url);
+  }
+  useEffect(() => {
+    const restore = () => {
+      const next = taskFor(
+        new URLSearchParams(window.location.search).get('tab'),
+        window.location.pathname,
+      );
+      setTask(next);
+      setVisited((current) => new Set([...current, next]));
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
+  const read = useLocalReadWithTime<ContextEnvelope<MatchDocumentV1>>(
+    '/local/v1/match-document',
+    2000,
+    0,
+    true,
+  );
+  const envelope = read.value;
   const match = envelope?.document;
-  const matchGuidance = useLocalRead<ProductionGuidance>(
-    path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
-      ? '/local/v1/production-guidance'
-      : null,
-    5000,
-  );
-  const { view, refresh } = useLocalTournament();
-  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
-  const scenes = useProgramScenes();
-  const hud = useHudConfigClient();
+  const { view, refresh, status: tournamentStatus } = useLocalTournament();
+  const cs2 = useCs2Status();
   const production = useLocalRead<Production>('/local/v1/production');
-  const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
-    '/local/v1/rivalhub-connection',
-  );
-  const rehearsal = useLocalRead<RivalsRehearsalView>(
-    import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1'
-      ? '/local/v1/rivals-rehearsal'
-      : null,
-  );
-
-  const hasSampleCapability =
-    (import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1') && rehearsal !== null;
-  const rehearsalSchedule = useLocalRead<{
-    competition: { name: string };
-    matches: {
-      matchId: string;
-      scheduledAt: string | null;
-      entrantA: { name: string };
-      entrantB: { name: string };
-      format: string;
-      stageLabel?: string | null;
-    }[];
-  }>(
-    envelope?.source === 'fixture' && rehearsal?.loaded
-      ? '/local/v1/rivals-rehearsal/schedule'
-      : null,
-  );
-
+  const capabilities =
+    useLocalRead<
+      { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
+    >('/local/v1/readiness');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-
+  const [selecting, setSelecting] = useState(
+    query.has('select') || query.has('createLocal') || query.has('createFromServer'),
+  );
+  const [selectionIntent, setSelectionIntent] = useState<'existing' | 'create' | 'online'>(() =>
+    query.has('createLocal') || query.has('createFromServer') ? 'create' : 'existing',
+  );
+  const [matchDirty, setMatchDirty] = useState(false);
+  const [progress, setProgress] = useState('');
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
@@ -142,557 +122,456 @@ export function PreparationPage() {
       setBusy(false);
     }
   }
-
   useEffect(() => {
     const enter = () => {
-      void fetch('/local/v1/production', { cache: 'no-store' })
-        .then((response) => response.json() as Promise<Production>)
-        .then((current) => productionAction('enter', current))
-        .catch((error: Error) => setMessage(error.message));
+      if (matchDirty) {
+        setMessage('本场有未保存修改，请先保存资料再进入现场；当前草稿保留。');
+        return;
+      }
+      void action(async () => {
+        const response = await fetch('/local/v1/production', { cache: 'no-store' });
+        if (!response.ok) throw new Error('无法读取制作状态。');
+        await productionAction('enter', (await response.json()) as Production, setProgress);
+      });
     };
     window.addEventListener('mizar-enter', enter);
     return () => window.removeEventListener('mizar-enter', enter);
-  }, []);
-
-  const tools = (
-    <div className="preparation-actions">
-      {(
-        [
-          ['hud', 'HUD 编辑器'],
-          ['bp', 'BP 工作台'],
-          ['preview', '节目预览'],
-          ['diagnostics', '运行诊断'],
-        ] as const
-      ).map(([tool, label]) => (
-        <Button key={tool} onClick={() => void action(() => openTool(tool))}>
-          {label}
-        </Button>
-      ))}
-    </div>
-  );
-
-  const capabilities =
-    useLocalRead<
-      { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
-    >('/local/v1/readiness');
-
-  const problems = (capabilities ?? []).filter((item) => !item.ready && item.action);
-  const pending = (capabilities ?? []).filter((item) => !item.ready && !item.action);
-  const completed = (capabilities ?? []).filter((item) => item.ready);
-  const settingsTitle: Record<string, string> = {
-    gsi: '游戏设置',
-    obs: 'OBS 连接',
-    rivalhub: '赛事平台',
-    advanced: '高级设置',
-  };
-
+  });
+  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
+  const canEdit = read.status === 'ready' && envelope?.freshness === 'fresh';
   return (
-    <OperatorShell active={path}>
-      <main className="preparation" data-page={path}>
-        <AutomaticPreparation />
-        <header className="preparation-heading">
-          <div>
+    <OperatorShell active={isSettings ? '/settings' : isResources ? '/resources' : '/'}>
+      <main
+        className="preparation production-page"
+        data-task={isResources ? `resource-${requested ?? 'matches'}` : tab}
+      >
+        <header className="preparation-heading production-identity">
+          <div role="region" aria-label="本场上下文">
             <h1>
-              {path === '/matches'
-                ? '比赛资料'
-                : path === '/picture'
-                  ? '播出画面'
-                  : path === '/settings'
-                    ? (settingsTitle[tab] ?? '设置')
-                    : '总览'}
+              {isSettings
+                ? '本机设置'
+                : isResources
+                  ? requested === 'hud'
+                    ? 'HUD'
+                    : '比赛库'
+                  : match
+                    ? tab === 'picture'
+                      ? '画面'
+                      : tab === 'check'
+                        ? '开播'
+                        : '本场资料'
+                    : '本场准备'}
             </h1>
+            <p>
+              {!isSettings && !isResources
+                ? match
+                  ? `${match.entrants.a.name} vs ${match.entrants.b.name} · ${match.competition?.name ?? '独立比赛'} · ${match.format.toUpperCase()} · ${envelope?.source === 'local' ? '本地资料' : envelope?.source === 'fixture' ? '排练资料' : 'RivalHub'}${read.status === 'stale' || envelope?.freshness === 'stale' ? ' · 资料过期，只读' : ''}`
+                  : '先建立本场，可离线准备名单、BP 与视觉。'
+                : isResources
+                  ? requested === 'hud'
+                    ? '预设与播出配置'
+                    : '赛事 · 赛程 · 阵容'
+                  : '可复用的本机配置与诊断'}
+            </p>
           </div>
-          <Button
-            variant="primary"
-            disabled={busy || !production?.canEnter}
-            onClick={() => production && void action(() => productionAction('enter', production))}
-          >
-            {production?.mode === 'hidden' || production?.mode === 'live'
-              ? '打开直播工作台'
-              : window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
-          </Button>
+          {!isSettings && !isResources ? (
+            <div className="preparation-actions">
+              <Button onClick={() => setSelecting((value) => !value)}>选择 / 切换本场</Button>
+              {tab === 'check' ? (
+                <Button
+                  variant={tab === 'check' ? 'primary' : 'secondary'}
+                  disabled={busy || matchDirty || !production?.canEnter}
+                  onClick={() =>
+                    production &&
+                    void action(() => productionAction('enter', production, setProgress))
+                  }
+                >
+                  {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
+                </Button>
+              ) : null}
+              <details className="production-actions-menu">
+                <summary>更多操作</summary>
+                <Button onClick={() => navigateTask('finish')}>恢复与收尾</Button>
+              </details>
+            </div>
+          ) : null}
         </header>
-
-        {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
-        {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
-        {options && path !== '/settings' ? (
-          <nav className="preparation-tabs" aria-label="页面分区">
-            {options.map(([key, label]) => (
-              <a
-                key={key}
-                href={`${path}?tab=${key}`}
-                aria-current={key === tab ? 'page' : undefined}
-              >
-                {label}
-              </a>
-            ))}
-          </nav>
+        {matchDirty ? (
+          <p role="status">本场有未保存修改；任务切换保留草稿，进入现场前请先保存。</p>
         ) : null}
-
-        {path === '/' ? (
-          <div className="preparation-dashboard" data-selected={Boolean(match)}>
-            {!match ? (
-              <Panel className="preparation-task-panel">
-                <div className="preparation-task-content">
-                  <div className="preparation-task-header">
-                    <div>
-                      <h2>选择比赛</h2>
-                      <p>选择已有比赛，或新建本地比赛。</p>
-                    </div>
-                  </div>
-                  <div className="preparation-actions">
-                    {rivalhub?.paired ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          window.location.href = '/matches?select=1';
-                        }}
-                      >
-                        从 RivalHub 选择比赛
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          window.location.href = '/settings?tab=rivalhub';
-                        }}
-                      >
-                        连接 RivalHub
-                      </Button>
-                    )}
-                    <CurrentServerMatchEntry />
+        {tournamentStatus === 'stale' ? (
+          <StatusBanner tone="warning">
+            赛事读取失败，保留最近资料与草稿；连接恢复并核对前禁止保存或载入。
+          </StatusBanner>
+        ) : null}
+        {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
+        {progress ? <p role="status">{progress}</p> : null}
+        {production?.cleanup && tab !== 'finish' ? (
+          <StatusBanner tone="info">
+            本场已有收尾回执。<a href="/?tab=finish">查看分项结果与继续恢复</a>
+          </StatusBanner>
+        ) : null}
+        {!isSettings && !isResources ? (
+          <>
+            {read.status === 'stale' ? (
+              <StatusBanner tone="warning">
+                资料刷新失败，保留最近资料与草稿供核对；恢复连接前禁止保存。
+              </StatusBanner>
+            ) : null}
+            {selecting || (!match && ['match', 'bp'].includes(task)) ? (
+              <Panel className="production-selection">
+                <h2>选择本场</h2>
+                <div className="preparation-actions" aria-label="本场选择方式">
+                  {(
+                    [
+                      ['existing', '已有本地比赛'],
+                      ['create', '新建本地比赛'],
+                      ['online', 'RivalHub'],
+                    ] as const
+                  ).map(([id, label]) => (
                     <Button
-                      variant="primary"
-                      onClick={() => {
-                        window.location.href = '/matches?createLocal=1#local-match';
+                      key={id}
+                      aria-pressed={selectionIntent === id}
+                      onClick={() => setSelectionIntent(id)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <div hidden={selectionIntent !== 'existing'}>
+                  <LocalMatchControls
+                    beforeApply={() =>
+                      !matchDirty || window.confirm('本场资料有未保存修改，放弃草稿并切换？')
+                    }
+                    mode="select"
+                    action={action}
+                    onSelected={() => setSelecting(false)}
+                  />
+                </div>
+                <div hidden={selectionIntent !== 'create'}>
+                  <LocalMatchControls
+                    beforeApply={() =>
+                      !matchDirty || window.confirm('本场资料有未保存修改，放弃草稿并创建下一场？')
+                    }
+                    mode="create"
+                    onCancel={() => {
+                      setSelecting(false);
+                      setSelectionIntent('existing');
+                    }}
+                    action={action}
+                    onSelected={() => setSelecting(false)}
+                  />
+                  <details open={query.has('createFromServer')}>
+                    <summary>从当前服务器识别双方 · 需有效 5v5 数据</summary>
+                    <RosterCapture
+                      create
+                      autoOpen={query.has('createFromServer')}
+                      onSaved={() => {
+                        void refresh();
+                        setSelecting(false);
                       }}
-                    >
-                      新建本地比赛
-                    </Button>
-                  </div>
-                  {hasSampleCapability ? (
-                    <details className="preparation-sample-entry">
-                      <summary>体验示例</summary>
-                      <Button
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          void action(async () => {
-                            await command('/operator/rivals-rehearsal/load');
-                            window.location.reload();
-                          })
-                        }
-                      >
-                        加载示例比赛
-                      </Button>
-                    </details>
-                  ) : null}
+                    />
+                  </details>
                 </div>
-                <div className="preparation-task-art" aria-hidden="true">
-                  <img src="/brand/mizar-mark.svg" alt="" />
-                </div>
+                {selectionIntent === 'online' ? <RivalHubPreparationPanel mode="matches" /> : null}
               </Panel>
-            ) : (
-              <Panel className="preparation-match">
-                <div className="preparation-match__meta">
-                  <span>
-                    {match.competition?.name} · {match.format.toUpperCase()}
-                  </span>
-                  <StatusPill tone="info">
-                    {envelope?.source === 'fixture'
-                      ? '示例比赛'
-                      : envelope?.source === 'local'
-                        ? '本地比赛'
-                        : 'RivalHub'}
-                    {envelope?.freshness === 'stale' ? ' · 缓存资料' : ''}
-                  </StatusPill>
-                </div>
-                <h2 className="preparation-match__teams">
-                  <span className="preparation-match__team">
-                    <TeamBadge name={match.entrants.a.name} logoUrl={match.entrants.a.logoUrl} />
-                    <strong title={match.entrants.a.name}>{match.entrants.a.name}</strong>
-                  </span>
-                  <span className="preparation-match__versus">
-                    VS · {match.format.toUpperCase()}
-                  </span>
-                  <span className="preparation-match__team">
-                    <TeamBadge name={match.entrants.b.name} logoUrl={match.entrants.b.logoUrl} />
-                    <strong title={match.entrants.b.name}>{match.entrants.b.name}</strong>
-                  </span>
-                </h2>
-                <p>
-                  {[
-                    match.stageLabel,
-                    matchRound(match),
-                    match.matchLabel,
-                    match.scheduledAt
-                      ? new Date(match.scheduledAt).toLocaleString('zh-CN', {
-                          timeZone: 'Asia/Shanghai',
-                          hour12: false,
-                        })
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
-                <div className="preparation-match__summary">
-                  <span>BP · {match.veto.length > 0 ? `${match.veto.length} 步` : '暂无记录'}</span>
-                  <span>
-                    名单 · 首发 {match.entrants.a.players.filter((p) => p.isStarter).length} /{' '}
-                    {match.entrants.b.players.filter((p) => p.isStarter).length} 人
-                  </span>
-                  <span>
-                    地图 · 已确定 {match.maps.length} 图（
-                    {match.maps.map((m) => m.mapName.replace(/^de_/, '')).join(' · ')}）
-                  </span>
-                </div>
-                <div className="preparation-actions">
+            ) : null}
+            {match && !selecting ? (
+              <nav className="preparation-tabs" aria-label="本场任务">
+                {tasks.map(([id, label]) => (
                   <Button
-                    variant="secondary"
-                    onClick={() => {
-                      window.location.href = '/matches';
-                    }}
+                    key={id}
+                    aria-current={
+                      task === id || (task === 'bp' && id === 'match') ? 'page' : undefined
+                    }
+                    onClick={() => navigateTask(id)}
                   >
-                    查看比赛资料
+                    {label}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      window.location.href = '/matches?select=1';
-                    }}
-                  >
-                    切换比赛
-                  </Button>
-                  {hasSampleCapability && envelope?.source === 'fixture' ? (
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/stop');
-                          window.location.reload();
-                        })
-                      }
-                    >
-                      退出示例
-                    </Button>
-                  ) : null}
-                </div>
-              </Panel>
-            )}
-
-            <SpectatorWorkflow capabilities={capabilities} production={production} />
-            {match ? (
-              <div className="preparation-overview">
-                <Panel>
-                  <div className="preparation-check-heading">
-                    <h2>开播检查</h2>
-                    <StatusPill
-                      tone={
-                        capabilities === null
-                          ? 'info'
-                          : problems.length
-                            ? 'warning'
-                            : pending.length
-                              ? 'info'
-                              : 'success'
-                      }
-                    >
-                      {capabilities === null
-                        ? '读取中'
-                        : problems.length
-                          ? `${problems.length} 项待处理`
-                          : pending.length
-                            ? '待确认'
-                            : '已就绪'}
-                    </StatusPill>
-                  </div>
-                  {completed.length ? (
-                    <div className="preparation-completed" aria-label="已完成检查">
-                      {completed.map(({ label }) => (
-                        <span key={label}>
-                          <span aria-hidden="true">✓ </span>
-                          {label === '比赛上下文' ? '比赛资料' : label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {problems.map(({ label, reason, href, action: nextAction }) => (
+                ))}
+              </nav>
+            ) : null}
+            <Cs2Recovery production={production} />
+          </>
+        ) : null}
+        {isSettings ? (
+          <>
+            <nav className="preparation-tabs" aria-label="设置分区">
+              {(
+                [
+                  ['gsi', '本机连接'],
+                  ['preferences', '偏好'],
+                  ['advanced', '更新与支持'],
+                ] as const
+              ).map(([id, label]) => (
+                <a
+                  key={id}
+                  href={`/settings?tab=${id}`}
+                  aria-current={
+                    (id === 'gsi' ? ['gsi', 'obs', 'rivalhub'].includes(tab) : tab === id)
+                      ? 'page'
+                      : undefined
+                  }
+                >
+                  {label}
+                </a>
+              ))}
+            </nav>
+            {tab !== 'preferences' ? <Cs2Recovery production={production} /> : null}
+            {query.get('returnTask') === 'check' || query.get('prepare') === '1' ? (
+              <a href="/?tab=check">返回开播检查</a>
+            ) : null}
+            {['gsi', 'obs', 'rivalhub'].includes(tab) ? (
+              <nav className="settings-connection-tabs" aria-label="本机连接">
+                {settings
+                  .filter(([id]) => ['gsi', 'obs', 'rivalhub'].includes(id))
+                  .map(([id, label]) => (
                     <a
-                      className="preparation-readiness"
-                      data-tone="warning"
-                      key={label}
-                      href={href}
-                      aria-label={nextAction ?? `检查 ${label}`}
+                      key={id}
+                      href={`/settings?tab=${id}`}
+                      aria-current={tab === id ? 'page' : undefined}
                     >
-                      <svg
-                        aria-hidden="true"
-                        className="preparation-check-icon"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                      >
-                        <circle cx="12" cy="12" r="9" />
-                        <path d="M12 7v6" />
-                        <circle cx="12" cy="17" r="0.75" fill="currentColor" stroke="none" />
-                      </svg>
-                      <div>
-                        <strong>{label === '比赛上下文' ? '比赛资料' : label}</strong>
-                        <p>{reason}</p>
-                      </div>
-                      <span className="mizar-button">{label === 'OBS' ? '配置' : '检查'}</span>
+                      {label}
                     </a>
                   ))}
-                  {pending.length ? (
-                    <details className="preparation-pending">
-                      <summary>待确认 · {pending.length} 项</summary>
-                      {pending.map(({ label, reason, href }) => (
-                        <a key={label} href={href}>
-                          <strong>{label}</strong>
-                          <span>{reason}</span>
-                        </a>
-                      ))}
-                    </details>
-                  ) : null}
-                </Panel>
-              </div>
+              </nav>
             ) : null}
-            <div className="preparation-tool-strip">
-              <span>常用工具</span>
-              {tools}
-            </div>
-            {match && production && production.mode !== 'preparation' ? (
-              <ProductionStatus matchId={match.matchId} />
-            ) : null}
-            {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
-              <details className="preparation-rehearsal-stage">
-                <summary>示例体验</summary>
-                <div className="preparation-task-header">
-                  <div>
-                    {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                      <p>当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}</p>
-                    ) : (
-                      <p>返回初始示例比赛后，可切换阶段。</p>
-                    )}
-                  </div>
-                </div>
-                {envelope?.source === 'fixture' &&
-                rehearsal?.loaded &&
-                rehearsalSchedule?.matches ? (
-                  <div className="preparation-schedule-selector">
-                    <label htmlFor="rehearsal-match-select">切换示例比赛：</label>
-                    <select
-                      id="rehearsal-match-select"
-                      value={rehearsal.selectedMatchId ?? ''}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const matchId = e.target.value;
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/select', { matchId });
-                          window.location.reload();
-                        });
-                      }}
-                    >
-                      {rehearsalSchedule.matches.map((m) => (
-                        <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                          {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                          {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
-                {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                  <div className="preparation-rehearsal-stage-buttons">
-                    {rehearsal.stages.map((stage, idx) => (
-                      <Button
-                        key={stage.label}
-                        aria-pressed={rehearsal.stageIndex === idx}
-                        variant={rehearsal.stageIndex === idx ? 'primary' : 'secondary'}
-                        disabled={busy}
-                        onClick={() =>
-                          void action(async () => {
-                            await command('/operator/rivals-rehearsal/stage', { index: idx });
-                          })
-                        }
-                      >
-                        {stage.label}
-                      </Button>
-                    ))}
-                  </div>
-                ) : null}
-              </details>
-            ) : null}
-          </div>
-        ) : path === '/matches' ? (
+            <Settings tab={tab} />
+          </>
+        ) : isResources ? (
           <>
-            <RivalHubSyncControls />
-            <details
-              className="preparation-switch"
-              open={!match || createFromServer || openMatchSelection}
+            {requested === 'hud' ? (
+              <section className="hud-resource-workspace">
+                <HudPresetDirectory action={action} />
+                <Button onClick={() => void action(() => openTool('hud'))}>管理 HUD 资源</Button>
+                <details>
+                  <summary>官方演练素材</summary>
+                  <OfficialResourceStatus />
+                </details>
+              </section>
+            ) : view ? (
+              <EventMatchWorkspace
+                view={view}
+                refresh={refresh}
+                action={action}
+                canWrite={tournamentStatus === 'ready'}
+              />
+            ) : (
+              <p>正在读取本地赛事与比赛；读取失败时不替换为样例。</p>
+            )}
+          </>
+        ) : (
+          <>
+            <section
+              className="match-task"
+              hidden={task !== 'match' || selecting || !match}
+              aria-label="本场准备工作区"
             >
-              <summary>切换比赛</summary>
-              {!match ? (
-                <RosterCapture create autoOpen={createFromServer} onSaved={() => void refresh()} />
-              ) : null}
-              {hasSampleCapability && rehearsal?.loaded && rehearsalSchedule?.matches ? (
+              {match ? (
                 <>
-                  <h2>{rehearsalSchedule.competition.name} · 示例赛程</h2>
-                  <div className="preparation-schedule-selector">
-                    <label htmlFor="rehearsal-match-select-tab">切换示例比赛：</label>
-                    <select
-                      id="rehearsal-match-select-tab"
-                      value={rehearsal.selectedMatchId ?? ''}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const matchId = e.target.value;
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/select', { matchId });
-                          window.location.reload();
-                        });
-                      }}
-                    >
-                      {rehearsalSchedule.matches.map((m) => (
-                        <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                          {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                          {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <RivalHubSyncControls />
+                  {local ? (
+                    <LocalTournamentEditor
+                      key={match.matchId}
+                      document={match}
+                      section="overview"
+                      view={view}
+                      refresh={refresh}
+                      action={action}
+                      scope="match"
+                      canSave={canEdit && tournamentStatus === 'ready'}
+                      onDirtyChange={setMatchDirty}
+                      onNext={() => navigateTask('picture')}
+                      rosterTools={
+                        canEdit ? (
+                          <RosterCapture
+                            names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
+                            onSaved={() => void refresh()}
+                          />
+                        ) : null
+                      }
+                      afterRoster={
+                        <div className="match-plan-row">
+                          <details className="match-plan-summary">
+                            <summary>
+                              地图计划与已保存禁选 ·{' '}
+                              {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
+                            </summary>
+                            <MatchDocumentView document={match} section="maps" />
+                          </details>
+                          <Button onClick={() => navigateTask('bp')}>准备正式 BP</Button>
+                        </div>
+                      }
+                    />
+                  ) : (
+                    <>
+                      <MatchDocumentView document={match} section="details" />
+                      <MatchDocumentView document={match} section="roster" />
+                      <details className="match-plan-summary">
+                        <summary>
+                          地图计划与已保存禁选 ·{' '}
+                          {match.maps.length ? `${match.maps.length} 张图` : '待准备 BP'}
+                        </summary>
+                        <MatchDocumentView document={match} section="maps" />
+                      </details>
+
+                      <Button onClick={() => navigateTask('bp')}>准备正式 BP</Button>
+                    </>
+                  )}
                 </>
               ) : null}
-              <h2 id="local-match">本地比赛</h2>
-              <LocalMatchControls action={action} />
-              <h2>RivalHub</h2>
-              <RivalHubPreparationPanel mode="matches" />
-            </details>
-            {match && local ? (
-              <>
-                {tab === 'roster' ? (
-                  <RosterCapture
-                    names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
-                    onSaved={() => void refresh()}
-                  />
-                ) : null}
-                <LocalTournamentEditor
-                  document={match}
-                  section={tab as MatchSection}
-                  view={view}
-                  refresh={refresh}
-                  action={action}
-                />
-              </>
-            ) : match ? (
-              <>
-                <div className="preparation-match__meta">
-                  <span>
-                    {envelope?.source === 'local'
-                      ? '正在读取本地编辑状态。'
-                      : envelope?.source === 'fixture'
-                        ? 'RivalHub 赛事快照 · 示例比赛'
-                        : 'RivalHub 比赛资料'}
-                  </span>
-                  {matchGuidance?.matchId === match.matchId &&
-                  matchGuidance.rivalhubUrl &&
-                  envelope?.source !== 'fixture' ? (
-                    <a
-                      href={matchGuidance.rivalhubUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => {
-                        if (!window.__TAURI_INTERNALS__) return;
-                        event.preventDefault();
-                        void action(() =>
-                          desktopInvoke('open_rivalhub_workbench', {
-                            url: matchGuidance.rivalhubUrl,
-                          }),
-                        );
-                      }}
-                    >
-                      在网站管理
-                    </a>
+            </section>
+            <section hidden={task !== 'bp' || selecting || !match} aria-label="正式 BP 子任务">
+              <div className="match-workspace-heading">
+                <h2>正式 BP · 影响播出</h2>
+                <Button onClick={() => navigateTask('match')}>返回本场准备</Button>
+              </div>
+              <p>同一本场上下文；赛前可编辑与播放，无需 CS2 / GSI。返回本场保留资料草稿。</p>
+              {visited.has('bp') ? <BpWorkbench /> : null}
+            </section>
+            <section hidden={task !== 'picture' || selecting} aria-label="画面检查工作区">
+              {visited.has('picture') ? (
+                <PictureWorkspace action={action} onNext={() => navigateTask('check')} />
+              ) : null}
+            </section>
+            <section
+              hidden={task !== 'check' || selecting}
+              aria-label="开播检查工作区"
+              tabIndex={0}
+            >
+              <small className="preflight-scroll-hint">检查项与操作可在此区域向下滚动查看。</small>
+              <div className="production-preflight">
+                <section className="preflight-checklist" aria-label="开播检查列表">
+                  <h2>开播检查</h2>
+                  {!capabilities ? (
+                    <p role="status">正在读取检查状态</p>
+                  ) : (
+                    capabilities
+                      .filter((item) =>
+                        ['CS2 / GSI', 'OBS', '比赛上下文', '比赛画面'].includes(item.label),
+                      )
+                      .map((item) => (
+                        <details key={item.label} open={!item.ready}>
+                          <summary>
+                            {item.label} · {item.ready ? '已确认' : '待处理'}
+                          </summary>
+                          <p>{item.reason}</p>
+                          {!item.ready || item.label === 'OBS' ? (
+                            <a
+                              href={`${item.href}${item.href.includes('?') ? '&' : '?'}returnTask=check`}
+                            >
+                              {item.action ?? '检查 / 重查'}
+                            </a>
+                          ) : null}
+                        </details>
+                      ))
+                  )}
+                  {capabilities ? (
+                    <details>
+                      <summary>画面与身份详情</summary>
+                      {capabilities
+                        .filter(
+                          (item) =>
+                            !['CS2 / GSI', 'OBS', '比赛上下文', '比赛画面'].includes(item.label),
+                        )
+                        .map((item) => (
+                          <p key={item.label}>
+                            {item.label} · {item.ready ? '已确认' : item.reason}
+                            {!item.ready ? (
+                              <>
+                                {' '}
+                                · <a href={item.href}>检查</a>
+                              </>
+                            ) : null}
+                          </p>
+                        ))}
+                    </details>
                   ) : null}
-                </div>
-                {tab !== 'maps' ? (
-                  <MatchDocumentView document={match} section={tab as MatchSection} />
-                ) : null}
-              </>
-            ) : null}
-            {tab === 'maps' && match ? (
-              <>
-                <MatchDocumentView document={match} section="maps" />
-                <Panel>
-                  <h2>BP 制作</h2>
-                  <p>
-                    {scenes?.available.includes('bp')
-                      ? 'BP 已就绪'
-                      : (scenes?.blocked.bp ?? '等待 BP 数据')}
-                  </p>
-                  <Button onClick={() => void action(() => openTool('bp'))}>打开 BP 工作台</Button>
-                </Panel>
-              </>
-            ) : null}
-          </>
-        ) : path === '/picture' ? (
-          tab === 'program' ? (
-            <>
-              <ProgramPreview />
-            </>
-          ) : tab === 'hud' ? (
-            <Panel>
-              <h2>{hud.current.preset.name}</h2>
-              <p>布局 · {hud.current.layout.name}</p>
-              <p>外观 · {hud.current.theme.name}</p>
-              <p>
-                {HUD_WIDGET_REGISTRY.filter(
-                  (widget) =>
-                    hud.current.layout.widgets[widget.id].visible &&
-                    widget.rendererAvailability === 'implemented',
-                )
-                  .map((widget) => widget.label)
-                  .join(' · ')}
-              </p>
-              <Button onClick={() => void action(() => openTool('hud'))}>打开 HUD 编辑器</Button>
-            </Panel>
-          ) : (
-            <div className="preparation-overlay-workspace">
-              <Panel className="preparation-overlay-display">
-                <header>
-                  <h2>本机 HUD</h2>
-                  <p>仅影响本机显示，OBS 播出不变。其他 HUD 跟随当前预设。</p>
-                </header>
-                <LocalOverlayControls />
-              </Panel>
+                  <SpectatorWorkflow capabilities={capabilities} production={production} />
+                  <Button onClick={() => navigateTask('match')}>返回本场继续准备</Button>
+                </section>
+                <section className="preflight-confidence" aria-label="开播画面确认">
+                  <h2>OBS 实际画面</h2>
+                  <ObsConfidence showRepairAction={false} showAudioHint={false} />
+                  <small>缩略图无声音；请在 OBS 核对音画后开始推流。</small>
+                </section>
+              </div>
+              {task === 'check' &&
+              production?.mode === 'preparation' &&
+              !cs2.status?.pending &&
+              !cs2.phase &&
+              (!window.__TAURI_INTERNALS__ || cs2.status !== null) ? (
+                <AutomaticPreparation />
+              ) : null}
+            </section>
+            <section hidden={task !== 'finish' || selecting} aria-label="恢复与收尾工作区">
               <Panel>
-                <SpectatorHudCommands />
+                <h2>恢复与收尾</h2>
+                {production?.cleanup ? (
+                  <ul aria-label="Companion 清理回执">
+                    <li>
+                      收起节目 ·{' '}
+                      {production.cleanup.scene === 'confirmed'
+                        ? '已确认'
+                        : production.cleanup.scene === 'failed'
+                          ? '失败，可重试'
+                          : '待确认'}
+                    </li>
+                    <li>
+                      释放网站数据源 ·{' '}
+                      {production.cleanup.source === 'confirmed'
+                        ? '已确认'
+                        : production.cleanup.source === 'failed'
+                          ? '失败，可重试'
+                          : '待确认'}
+                    </li>
+                    <li>回执时间 · {new Date(production.cleanup.at).toLocaleString('zh-CN')}</li>
+                  </ul>
+                ) : (
+                  <p>尚无本次服务的收尾回执。</p>
+                )}
+                <p>
+                  结束制播会收起节目、释放本机网站源、关闭受管理 CS2 并恢复配置。OBS
+                  推流和录制继续由你在 OBS
+                  中操作；网站官方结果需另行提交。重试会重新执行整个收尾流程，请分别核对节目、网站数据源与
+                  Host 回执。
+                </p>
+                <p>
+                  Host 游戏与配置 ·{' '}
+                  {window.__TAURI_INTERNALS__
+                    ? cs2.error
+                      ? '读取失败，请重查'
+                      : cs2.phase
+                        ? '正在操作'
+                        : cs2.status
+                          ? cs2.status.pending
+                            ? '备份尚待恢复'
+                            : cs2.status.running
+                              ? '游戏仍在运行'
+                              : '未检测到受管理游戏或待恢复备份'
+                          : '正在读取'
+                    : '浏览器无法验收 Windows 游戏与配置'}
+                </p>
+                <ProductionStatus matchId={match?.matchId ?? null} />
+                <Button
+                  disabled={busy || !production}
+                  onClick={() => {
+                    if (
+                      production &&
+                      window.confirm(
+                        '结束本场制作、关闭受管理游戏并恢复配置？OBS 推流 / 录制不会自动停止。',
+                      )
+                    )
+                      void action(() => productionAction('finish', production, setProgress));
+                  }}
+                >
+                  结束制播 / 重试收尾
+                </Button>
               </Panel>
-            </div>
-          )
-        ) : (
-          <Settings tab={tab} />
+            </section>
+          </>
         )}
       </main>
     </OperatorShell>
   );
-}
-
-function CurrentServerMatchEntry() {
-  const result = useLocalRead<{ candidate: RosterCandidate | null }>('/local/v1/roster-candidate');
-  return result?.candidate ? (
-    <Button
-      variant="secondary"
-      onClick={() => {
-        window.location.href = '/matches?tab=roster&createFromServer=1';
-      }}
-    >
-      从当前服务器创建比赛
-    </Button>
-  ) : null;
 }

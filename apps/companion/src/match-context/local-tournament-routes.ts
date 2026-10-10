@@ -8,6 +8,7 @@ import type { MatchContextController } from './controller.js';
 import { LocalTournamentStore } from './local-tournament-store.js';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
 import { localBo3BpRulesSchema } from '@mizar/protocol/bp';
+import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 
 function canMutate(policy: LocalWebOriginPolicy, origin: string | undefined): boolean {
   return policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -243,6 +244,52 @@ export function registerLocalTournamentRoutes(
       return reply.code(400).send({ error: 'local_match_save_failed' });
     }
   });
+
+  // Library authoring never selects a match or updates the active provider snapshot.
+  app.post<{ Params: { matchId: string } }>(
+    '/operator/local-match/:matchId/save',
+    { bodyLimit: 262_144 },
+    async (request, reply) => {
+      if (!canMutate(originPolicy, request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const target = store
+        .getSnapshot()
+        .matches.find((match) => match.matchId === request.params.matchId);
+      if (!target) return reply.code(404).send({ error: 'local_match_not_found' });
+      const body = object(request.body);
+      const proposed = object(body?.document);
+      if (!body || !proposed || proposed.matchId !== target.matchId)
+        return reply.code(400).send({ error: 'local_match_invalid' });
+      let expected: string;
+      try {
+        expected = JSON.stringify(parseMatchDocumentV1(body.expectedDocument));
+      } catch {
+        return reply.code(400).send({ error: 'local_match_invalid' });
+      }
+      const canCommit = () =>
+        controller.getActiveBinding()?.context.matchId !== target.matchId &&
+        JSON.stringify(
+          store.getSnapshot().matches.find((match) => match.matchId === target.matchId),
+        ) === expected;
+      if (!canCommit()) return reply.code(409).send({ error: 'local_match_conflict' });
+      try {
+        // Only editable authoring fields; scores, BP, maps and event identity remain authoritative.
+        const document = parseMatchDocumentV1({
+          ...target,
+          format: proposed.format,
+          stageLabel: proposed.stageLabel,
+          roundLabel: proposed.roundLabel,
+          scheduledAt: proposed.scheduledAt,
+          entrants: proposed.entrants,
+        });
+        localDocumentBindingManifest(document);
+        await store.saveMatch(document, canCommit);
+        return { ok: true, matchId: target.matchId };
+      } catch {
+        return reply.code(canCommit() ? 400 : 409).send({ error: 'local_match_save_failed' });
+      }
+    },
+  );
 
   app.post('/operator/local-event/save', { bodyLimit: 8192 }, async (request, reply) => {
     if (!canMutate(originPolicy, request.headers.origin))

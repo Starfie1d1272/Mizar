@@ -1,3 +1,9 @@
+import Fastify from 'fastify';
+import type { ProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import { BpSession } from '../src/bp/controller.js';
+import { ProgramSceneController } from '../src/program-scenes/controller.js';
+import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import { expect, it, vi } from 'vitest';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { checkObsAudio, setupObsAudio } from '../src/obs/audio.js';
@@ -406,4 +412,97 @@ it('prepares without a running game, performs no repeated writes, and preserves 
   ).toBe(true);
   expect(obs.inputs.get(scene.browserInput)!.settings.url).toBe('https://operator.example');
   expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+});
+
+it.each(['gameplay', 'waiting'] as const)(
+  'reconfirms internal %s against actual emergency through real OBS readback',
+  async (id) => {
+    const obs = new FakeObs();
+    await repairObsConfiguration(obs, baseUrl);
+    obs.currentScene = 'Emergency';
+    const projections = {
+      getCurrent: () => ({
+        operator: {
+          runtime: { telemetryFreshness: 'fresh' },
+          matchContext: { freshness: 'fresh' },
+          identity: { state: 'matched' },
+        },
+        program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+      }),
+      getBpAssessment: () => ({ readiness: 'missing' }),
+    } as unknown as ProjectionCoordinator;
+    const scenes = new ProgramSceneController(
+      projections,
+      new BpSession(() => null),
+      (target, options) => switchObsScene(obs, target, options),
+    );
+    scenes.forceScene(id);
+    obs.calls = [];
+    const app = Fastify();
+    const release = vi.fn(() => Promise.resolve());
+    const lifecycle = registerProductionRoutes(app, {
+      originPolicy: createLocalWebOriginPolicy(),
+      hasContext: () => true,
+      scenes,
+      release,
+    });
+    try {
+      if (id === 'gameplay') expect((await scenes.select(id, scenes.get().revision)).ok).toBe(true);
+      else {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/operator/production',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'finish', expectedRevision: lifecycle.get().revision },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(lifecycle.get().cleanup).toMatchObject({ scene: 'confirmed', source: 'confirmed' });
+        expect(release).toHaveBeenCalledOnce();
+      }
+      expect(obs.currentScene).toBe(
+        obsDesiredScenes(baseUrl).find((scene) => scene.id === id)!.sceneName,
+      );
+      expect(obs.calls).toContain('SetCurrentProgramScene');
+      expect(obs.calls.at(-1)).toBe('GetCurrentProgramScene');
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+it('rejects an ACK without target readback and retains the last Mizar confirmation when rollback also fails', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.currentScene = 'Emergency';
+  const call = obs.call.bind(obs);
+  vi.spyOn(obs, 'call').mockImplementation((type, data) => {
+    // OBS accepts writes, but a concurrent operator keeps another scene on air.
+    if (type === 'SetCurrentProgramScene') return Promise.resolve({});
+    return call(type, data);
+  });
+  await expect(switchObsScene(obs, 'waiting')).rejects.toThrow('未切入目标场景');
+  const projections = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh' },
+        identity: { state: 'matched' },
+      },
+      program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+    }),
+    getBpAssessment: () => ({ readiness: 'missing' }),
+  } as unknown as ProjectionCoordinator;
+  const scenes = new ProgramSceneController(
+    projections,
+    new BpSession(() => null),
+    (target, options) => switchObsScene(obs, target, options),
+  );
+  scenes.forceScene('gameplay');
+  const revision = scenes.get().revision;
+  expect(await scenes.select('waiting', revision)).toMatchObject({
+    ok: false,
+    message: expect.stringContaining('实际播出场景无法确认') as unknown,
+  });
+  expect(scenes.get()).toMatchObject({ active: 'gameplay', revision });
+  expect(obs.currentScene).toBe('Emergency');
 });

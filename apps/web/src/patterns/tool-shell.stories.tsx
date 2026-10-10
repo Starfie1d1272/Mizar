@@ -9,10 +9,10 @@ type Story = StoryObj<typeof meta>;
 export const Tool: Story = {
   args: {
     title: '节目预览',
+    fill: true,
     children: (
       <main>
         <Panel>
-          <h1>节目预览</h1>
           <Field label="预览名称" />
           <Button disabled>等待数据</Button>
         </Panel>

@@ -1,6 +1,6 @@
 import { Panel } from '../ui';
 import { useCs2Status } from './cs2-status';
-import type { Production } from './client';
+import { productionEntryLabel, type Production } from './client';
 
 export function SpectatorWorkflow({
   capabilities,
@@ -15,7 +15,7 @@ export function SpectatorWorkflow({
   const obs = capabilities?.find((item) => item.label === 'OBS');
   return (
     <Panel className="spectator-workflow">
-      <details open={production?.mode === 'preparation' && !gameData?.ready}>
+      <details>
         <summary>
           开播流程 ·{' '}
           {gameData?.ready
@@ -30,7 +30,7 @@ export function SpectatorWorkflow({
             <span>首次先安装，已打开的 CS2 请先退出。</span>
           </li>
           <li>
-            <a href="/settings?tab=obs">配置 OBS 控制连接</a>
+            <strong>配置 OBS 控制连接</strong>
             <span>
               在 OBS「工具 → WebSocket 服务器设置」启用服务，填写端口与密码，检查 Mizar 场景。
               {obs?.ready ? '连接与场景检查已通过。' : ''}
@@ -40,9 +40,7 @@ export function SpectatorWorkflow({
             <strong>{status?.running ? 'CS2 已启动' : '从 Mizar 启动游戏'}</strong>
             <span>
               点击右上角「
-              {production?.mode === 'preparation' && window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
+              {productionEntryLabel(production, Boolean(window.__TAURI_INTERNALS__))}
               」。
             </span>
           </li>
@@ -55,12 +53,12 @@ export function SpectatorWorkflow({
             </span>
           </li>
           <li>
-            <a href="/picture?tab=overlay">隐藏 CS2 原生 HUD</a>
+            <a href="/?tab=hud">隐藏 CS2 原生 HUD</a>
             <span>复制命令，在 CS2 控制台粘贴并回车。</span>
           </li>
           <li>
-            <a href="/settings?tab=obs">检查 OBS 实际画面</a>
-            <span>核对游戏、HUD、声音，再在 OBS 开始推流。</span>
+            <strong>检查 OBS 实际画面</strong>
+            <span>确认后在 OBS 开始推流。</span>
           </li>
         </ol>
       </details>

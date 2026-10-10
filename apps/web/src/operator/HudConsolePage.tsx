@@ -1,6 +1,7 @@
 import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
-import { ToolShell } from '../patterns';
+import { OfficialResourceStatus } from '../preparation/OfficialResourceStatus';
+import { ToolShell, Workbench } from '../patterns';
 import {
   Fragment,
   useCallback,
@@ -76,6 +77,7 @@ import {
   HudConfigMutationError,
   mutateHudConfig,
   useHudConfigEditorClient,
+  useHudConfigClient,
   type HudConfigMutation,
   type HudConfigMutationResponse,
 } from '../realtime/hud-config-client';
@@ -147,6 +149,7 @@ export function HudConsolePage() {
     import.meta.env.VITE_VISUAL_FIXTURES === '1' &&
     new URLSearchParams(window.location.search).get('hud-config') !== 'companion';
   const hudEditor = useHudConfigEditorClient(!visualFixtureMode);
+  const onAir = useHudConfigClient(!visualFixtureMode);
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');
   const radar = useSyncExternalStore(
@@ -160,6 +163,11 @@ export function HudConsolePage() {
   const configDocument = authoritativeDocument ?? fixtureDocument;
   const editorReady = authoritativeDocument !== null;
   const editorStatus = visualFixtureMode ? 'ready' : hudEditor.status;
+  const requestedPresetId = new URLSearchParams(window.location.search).get('preset');
+  const requestedPresetMissing =
+    editorReady &&
+    requestedPresetId !== null &&
+    resourceFor(configDocument, 'preset', requestedPresetId) === undefined;
   const initialDocument = fixtureDocument;
   const [workspace, setWorkspace] = useState<HudWorkspace>('preset');
   const [mapBackground, setMapBackground] = useState(true);
@@ -211,6 +219,7 @@ export function HudConsolePage() {
   const [showSafeArea, setShowSafeArea] = useState(false);
   const [snapToGridEnabled, setSnapToGridEnabled] = useState(true);
   const [commandState, setCommandState] = useState<string | null>(null);
+  const [commandError, setCommandError] = useState(false);
   const [busy, setBusy] = useState(false);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
   const authoritativeDocumentRef = useRef<HudConfigDocument | null>(null);
@@ -344,6 +353,25 @@ export function HudConsolePage() {
   };
   const hasDirtyDraft = presetDirty || layoutDirty || themeDirty;
   const activationStale = hudEditor.activationStale;
+  const activationReasons = [
+    ...(busy ? ['正在处理上一项操作，请稍候。'] : []),
+    ...(!editorReady || (!visualFixtureMode && hudEditor.status !== 'ready')
+      ? ['配置连接未就绪；保留草稿，连接恢复后再启用。']
+      : []),
+    ...(presetDirty ? ['预设有未保存更改，请在预设区保存或另存。'] : []),
+    ...(layoutDirty ? ['布局有未保存更改，请在布局区保存或另存。'] : []),
+    ...(themeDirty ? ['外观有未保存更改，请先处理外观资源。'] : []),
+    ...(selectedLayoutId !== presetDraft.layoutId
+      ? ['预览布局与预设引用不匹配，请在预设区核对布局引用。']
+      : []),
+    ...(selectedThemeId !== presetDraft.themeId
+      ? ['预览外观与预设引用不匹配，请核对预设引用。']
+      : []),
+    ...(Object.values(draftConflicts).some(Boolean)
+      ? ['资源已在另一页面更新，请先处理冲突。']
+      : []),
+  ];
+
   const currentReplayEvent = replayFixture?.events.find(
     (event) => event.id === replayState.currentEventId,
   );
@@ -382,6 +410,24 @@ export function HudConsolePage() {
       committed: pendingMutationRef.current,
     });
 
+    const requestedPreset = new URLSearchParams(window.location.search).get('preset');
+    if (authoritativeDocumentRef.current === null && requestedPreset) {
+      const requested = resourceFor(nextDocument, 'preset', requestedPreset) as
+        HudPreset | undefined;
+      if (requested) {
+        Object.assign(merged.ids, {
+          preset: requested.id,
+          layout: requested.layoutId,
+          theme: requested.themeId,
+        });
+        Object.assign(merged.drafts, {
+          preset: clone(requested),
+          layout: clone(resourceFor(nextDocument, 'layout', requested.layoutId) as HudLayout),
+          theme: clone(resourceFor(nextDocument, 'theme', requested.themeId) as HudTheme),
+        });
+      }
+    }
+
     authoritativeDocumentRef.current = nextDocument;
     observedRevisionRef.current = nextRevision;
     pendingMutationRef.current = null;
@@ -394,6 +440,7 @@ export function HudConsolePage() {
     setThemeDraft(merged.drafts.theme);
     setDraftConflicts(merged.conflicts);
     if (Object.values(merged.conflicts).some(Boolean)) {
+      setCommandError(true);
       setCommandState('已在另一页面更新，请先处理冲突。');
     }
   }, [
@@ -497,7 +544,11 @@ export function HudConsolePage() {
   function selectResource(kind: HudWorkspace, id: string): void {
     if (!editorReady) return;
     const resource = resourceFor(configDocument, kind, id);
-    if (resource === undefined) return;
+    if (resource === undefined) {
+      setCommandError(true);
+      setCommandState('请求的 HUD 资源不存在；保留当前草稿。');
+      return;
+    }
     const blockReason = hudResourceNavigationBlockReason(
       kind,
       resource,
@@ -528,12 +579,23 @@ export function HudConsolePage() {
       setThemeDraftValue(clone(resource as HudTheme));
     }
     setCommandState(null);
+    setCommandError(false);
   }
+
+  useEffect(() => {
+    const select = (event: Event) => {
+      const id: unknown = (event as CustomEvent<unknown>).detail;
+      if (typeof id === 'string') selectResource('preset', id);
+    };
+    window.addEventListener('mizar:hud-select-preset', select);
+    return () => window.removeEventListener('mizar:hud-select-preset', select);
+  });
 
   function changeWorkspace(next: HudWorkspace): void {
     if (next === workspace) return;
     setWorkspace(next);
     setCommandState(null);
+    setCommandError(false);
   }
 
   function updatePresetReference(kind: 'layout' | 'theme', id: string): void {
@@ -599,6 +661,7 @@ export function HudConsolePage() {
     };
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const response = await mutateHudConfig(command);
       applyResponse(response);
@@ -614,8 +677,10 @@ export function HudConsolePage() {
       if (kind === 'theme') setSelectedThemeId(nextId);
       setCommandState(saveAs ? `已另存为「${saved.name}」。` : '已保存。');
     } catch (error: unknown) {
+      setCommandError(true);
       if (error instanceof HudConfigMutationError && error.status === 409) {
         setDraftConflicts((current) => ({ ...current, [kind]: true }));
+        setCommandError(true);
         setCommandState('已在另一页面更新，请先处理冲突。');
       } else {
         setCommandState('HUD 操作未完成，请检查配置连接后重试。');
@@ -630,6 +695,7 @@ export function HudConsolePage() {
     const expectedEditorRevision = hudEditor.revision;
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const value = await readHudPresetFile(file);
       const response = await mutateHudConfig({
@@ -643,6 +709,7 @@ export function HudConsolePage() {
         `已导入「${value.preset.name.trim()}」。请在预设列表中选择并预览，启用后才会上屏。`,
       );
     } catch (error: unknown) {
+      setCommandError(true);
       setCommandState(
         error instanceof HudConfigMutationError && error.status === 409
           ? '已在另一页面更新，请重新读取后导入。'
@@ -666,16 +733,19 @@ export function HudConsolePage() {
       return;
     try {
       downloadHudPresetFile(presetDraft, layoutDraft, themeDraft);
+      setCommandError(false);
       setCommandState('已导出预设文件，包含组件方案、布局与外观。');
     } catch {
+      setCommandError(true);
       setCommandState('预设文件未导出，请检查当前配置。');
     }
   }
 
   async function activateSelectedPreset(): Promise<void> {
-    if (busy || !editorReady || hudEditor.revision === null) return;
+    if (activationReasons.length > 0 || hudEditor.revision === null) return;
     setBusy(true);
     setCommandState(null);
+    setCommandError(false);
     try {
       const response = await mutateHudConfig({
         kind: 'activate-preset',
@@ -685,6 +755,7 @@ export function HudConsolePage() {
       applyResponse(response);
       setCommandState('当前预设已启用。');
     } catch (error: unknown) {
+      setCommandError(true);
       setCommandState(
         error instanceof HudConfigMutationError && error.status === 409
           ? '已在另一页面更新，请先处理冲突。'
@@ -858,340 +929,422 @@ export function HudConsolePage() {
   };
 
   return (
-    <ToolShell title="HUD 编辑器">
+    <ToolShell title="HUD 编辑器" fill>
       <main className="hud-console" data-surface="hud-console">
-        <header className="hud-console__header">
+        {requestedPresetMissing ? (
+          <p role="alert">请求的 HUD 预设不存在；保留当前资源，未启用任何新预设。</p>
+        ) : null}
+        <section className="hud-console__versions" aria-label="编辑与正式播出版本">
           <div>
-            <p className="hud-console__eyebrow">Mizar</p>
-            <h1>HUD 编辑器</h1>
-            <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
-          </div>
-          <div className="hud-console__header-meta">
-            <span>连接状态</span>
-            <strong>
+            <strong>正在编辑 · {presetDraft.name}</strong>
+            <span>
               {!editorReady
                 ? '正在读取配置'
                 : editorStatus === 'error'
-                  ? '连接异常，使用最近保存的配置'
-                  : '已连接'}
+                  ? '连接异常，最近保存快照'
+                  : hasDirtyDraft
+                    ? '未保存修改'
+                    : '已保存资源'}
+            </span>
+          </div>
+          <div>
+            <strong>
+              正式播出 ·{' '}
+              {onAir.status === 'ready'
+                ? onAir.current.preset.name
+                : onAir.status === 'loading'
+                  ? '正在读取'
+                  : '无法确认'}
             </strong>
-          </div>
-        </header>
-
-        <div className="hud-console__layout">
-          <div className="hud-console__preview-column" ref={reviewFrameRef}>
-            <section className="hud-console__preview-toolbar" aria-label="预览设置">
-              <Select
-                label="预览背景"
-                value={mapBackground ? 'map' : 'plain'}
-                onChange={(event) => setMapBackground(event.target.value === 'map')}
-              >
-                <option value="map">{replayFixture?.video ? '游戏画面' : '静态地图'}</option>
-                <option value="plain">纯色底板</option>
-              </Select>
-              {document.fullscreenEnabled ? (
-                <Button
-                  onClick={() =>
-                    void reviewFrameRef.current?.requestFullscreen().catch(() => undefined)
-                  }
-                >
-                  全屏预览
-                </Button>
-              ) : null}
-              <div>
-                <span className="hud-console__kicker">预览</span>
-                <strong>
-                  {activePreviewSource === 'fixture'
-                    ? fixtureLabel(fixtureId)
-                    : activePreviewSource === 'replay'
-                      ? (replayFixture?.title ?? (replayLoading ? '正在载入回放' : '回放不可用'))
-                      : previewSourceLive
-                        ? '实时比赛'
-                        : '实时数据不可用'}
-                </strong>
-              </div>
-              <label>
-                来源
-                <select
-                  aria-label="预览来源"
-                  value={activePreviewSource}
-                  onChange={(event) =>
-                    setPreviewSource(event.target.value as 'fixture' | 'replay' | 'current-live')
-                  }
-                >
-                  <option value="fixture">静态样例</option>
-                  <option value="replay">实景回放</option>
-                  <option disabled={!previewSourceLive} value="current-live">
-                    实时比赛
-                  </option>
-                </select>
-              </label>
-              {activePreviewSource === 'fixture' ? (
-                <label>
-                  场景
-                  <select
-                    aria-label="示例比赛"
-                    value={fixtureId}
-                    onChange={(event) => setFixtureId(event.target.value as ProgramFixtureId)}
-                  >
-                    {HUD_EDITOR_FIXTURE_GROUPS.map((group) => (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.ids.map((id) => (
-                          <option key={id} value={id}>
-                            {fixtureLabel(id)}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {activePreviewSource === 'replay' ? (
-                <label>
-                  回放来源
-                  <select
-                    aria-label="回放来源"
-                    value={replaySourceId}
-                    onChange={(event) => {
-                      setPendingReplayIndex(null);
-                      setReplaySourceId(event.target.value as ReplaySourceId);
-                    }}
-                  >
-                    <option value="epl-inferno-video">EPL · Inferno · 实景回放</option>
-                    <option value="epl-inferno-opening">EPL · Inferno · 开局</option>
-                    <option value="epl-inferno-final-round">EPL · Inferno · 决胜回合</option>
-                    {import.meta.env.DEV && (
-                      <>
-                        <option value="ancient-round-03">历史回归 · Ancient · 第 3 回合</option>
-                        <option value="ancient-round-11-defuse">
-                          历史回归 · Ancient · 第 11 回合拆弹
-                        </option>
-                      </>
-                    )}
-                    {import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1' ? (
-                      <option value="nuke-demo-round-01">
-                        Nuke · Legacy / Falcons · Demo 回合 1
-                      </option>
-                    ) : null}
-                  </select>
-                </label>
-              ) : null}
-              <span
-                className="hud-console__source-status"
-                data-connection-state={activePreviewSource === 'replay' ? 'replay' : program.state}
-                {...radarDiagnosticAttributes}
-              >
-                {activePreviewSource === 'replay'
-                  ? replayLoadError === null
-                    ? replayLoading
-                      ? '正在加载实景回放'
-                      : '实景回放'
-                    : '重放素材不可用'
-                  : activePreviewSource === 'fixture'
-                    ? '示例画面'
-                    : connectionLabel(program.state)}
-                {activePreviewSource === 'current-live' && unsupportedRadarMap !== null
-                  ? ` · 雷达不可用：不支持地图 ${unsupportedRadarMap}`
-                  : null}
+            {onAir.status === 'ready' ? (
+              <span>{activationStale ? '有保存尚未应用' : '播出配置已确认'}</span>
+            ) : (
+              <span role={onAir.status === 'error' ? 'alert' : 'status'}>
+                {onAir.activeRevision
+                  ? `最近确认：${onAir.current.preset.name}；当前状态待重查`
+                  : '尚无已确认的播出配置'}
               </span>
-            </section>
-
-            {activePreviewSource === 'replay' ? (
-              <section
-                aria-label="重放控制"
-                className="hud-console__replay"
-                data-replay-cursor={replayFrame?.cursor.sequence ?? ''}
-                data-replay-event-kind={currentReplayEvent?.kind ?? ''}
-              >
-                <div className="hud-console__replay-actions">
+            )}
+          </div>
+          <Button
+            disabled={
+              activationReasons.length > 0 ||
+              (onAir.status === 'ready' &&
+                selectedPresetId === onAir.current.preset.id &&
+                !activationStale)
+            }
+            onClick={() => {
+              void activateSelectedPreset();
+            }}
+          >
+            启用当前预设
+          </Button>
+        </section>
+        <Workbench
+          layout="canvas"
+          className="hud-console__layout"
+          preview={
+            <div className="hud-console__preview-column" ref={reviewFrameRef}>
+              <section className="hud-console__preview-toolbar" aria-label="预览设置">
+                <Select
+                  label="预览背景"
+                  value={mapBackground ? 'map' : 'plain'}
+                  onChange={(event) => setMapBackground(event.target.value === 'map')}
+                >
+                  <option value="map">{replayFixture?.video ? '游戏画面' : '静态地图'}</option>
+                  <option value="plain">纯色底板</option>
+                </Select>
+                {document.fullscreenEnabled ? (
                   <Button
-                    disabled={replaySession === null || replayState.isSeeking || replayLoading}
                     onClick={() =>
-                      replayState.isPlaying ? replaySession?.pause() : replaySession?.play()
+                      void reviewFrameRef.current?.requestFullscreen().catch(() => undefined)
                     }
-                    type="button"
                   >
-                    {replayState.isPlaying ? '暂停' : '播放'}
+                    全屏预览
                   </Button>
-                  <Button
-                    disabled={replaySession === null || replayState.isSeeking || replayLoading}
-                    onClick={() => {
-                      setPendingReplayIndex(null);
-                      void replaySession?.restart();
-                    }}
-                    type="button"
-                  >
-                    重播
-                  </Button>
-                  <Button
-                    aria-label="上一个语义事件"
-                    disabled={replaySession === null || replayState.isSeeking}
-                    onClick={() => stepReplayEvent(-1)}
-                    type="button"
-                  >
-                    上一事件
-                  </Button>
-                  <Button
-                    aria-label="下一个语义事件"
-                    disabled={replaySession === null || replayState.isSeeking}
-                    onClick={() => stepReplayEvent(1)}
-                    type="button"
-                  >
-                    下一事件
-                  </Button>
-                </div>
-                <label className="hud-console__replay-scrubber">
-                  回放进度
-                  <input
-                    aria-label="回放进度"
-                    disabled={replaySession === null || replayState.isSeeking || replayLoading}
-                    max={Math.max(0, (replayFixture?.manifest.frameCount ?? 1) - 1)}
-                    min={0}
-                    onChange={(event) => setPendingReplayIndex(Number(event.target.value))}
-                    onKeyUp={() => commitReplaySeek()}
-                    onPointerUp={(event) => commitReplaySeek(Number(event.currentTarget.value))}
-                    type="range"
-                    value={Math.max(
-                      0,
-                      Math.min(
-                        pendingReplayIndex ?? replayState.currentIndex,
-                        (replayFixture?.manifest.frameCount ?? 1) - 1,
-                      ),
-                    )}
-                  />
-                </label>
-                <label className="hud-console__replay-event-select">
-                  语义事件
+                ) : null}
+
+                <label>
+                  来源
                   <select
-                    aria-label="语义事件"
-                    disabled={replaySession === null || replayState.isSeeking || replayLoading}
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        setPendingReplayIndex(null);
-                        void replaySession?.seekEvent(event.target.value);
-                      }
-                    }}
-                    value={currentReplayEvent?.id ?? ''}
+                    aria-label="预览来源"
+                    value={activePreviewSource}
+                    onChange={(event) =>
+                      setPreviewSource(event.target.value as 'fixture' | 'replay' | 'current-live')
+                    }
                   >
-                    <option value="">当前窗口无事件</option>
-                    {replayFixture?.events.map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {event.sequence} · {event.label}
-                      </option>
-                    ))}
+                    <option value="fixture">静态样例</option>
+                    <option value="replay">实景回放</option>
+                    <option disabled={!previewSourceLive} value="current-live">
+                      实时比赛
+                    </option>
                   </select>
                 </label>
-                <div className="hud-console__replay-readout" aria-live="polite">
-                  <span>
-                    {replayFrame === null
-                      ? '00:00.000'
-                      : replayTimeLabel(replayFrame.cursor.scheduledElapsedUs)}
-                  </span>
-                  <span>序列 {replayFrame?.cursor.sequence ?? '—'}</span>
-                  <span>{currentReplayEvent?.label ?? '当前窗口无语义事件'}</span>
-                  {replayState.isSeeking ? <span>正在重建回放前缀…</span> : null}
-                  {replayLoadError !== null ? (
-                    <>
-                      <span role="alert">{replayLoadError}</span>
-                      <Button onClick={() => setPreviewSource('fixture')}>切换静态样例</Button>
-                    </>
-                  ) : null}
-                  {replayState.error !== null ? (
-                    <span role="alert">重放未完成，请重新载入素材后重试。</span>
-                  ) : null}
-                </div>
-                {replayFixture !== null ? (
-                  <details className="hud-console__replay-provenance">
-                    <summary>来源、覆盖与完整性</summary>
-                    <dl>
-                      <dt>原始 capture</dt>
-                      <dd>{replayFixture.manifest.source.sourceCaptureId}</dd>
-                      <dt>来源 SHA-256</dt>
-                      <dd>{replayFixture.manifest.source.sourceFramesSha256}</dd>
-                      <dt>帧 / 语义事件</dt>
-                      <dd>
-                        {replayFixture.manifest.frameCount} / {replayFixture.manifest.eventCount}
-                      </dd>
-                      <dt>Sanitizer</dt>
-                      <dd>v{replayFixture.manifest.source.sanitizerVersion}</dd>
-                      {replayFixture.manifest.coverage
-                        .filter((item) => item.status !== 'observed')
-                        .map((item) => (
-                          <Fragment key={item.kind}>
-                            <dt>{item.kind}</dt>
-                            <dd>{item.status}</dd>
-                          </Fragment>
-                        ))}
-                    </dl>
-                  </details>
+
+                {activePreviewSource === 'fixture' ? (
+                  <label>
+                    场景
+                    <select
+                      aria-label="示例比赛"
+                      value={fixtureId}
+                      onChange={(event) => setFixtureId(event.target.value as ProgramFixtureId)}
+                    >
+                      {HUD_EDITOR_FIXTURE_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.ids.map((id) => (
+                            <option key={id} value={id}>
+                              {fixtureLabel(id)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
-              </section>
-            ) : null}
-
-            <HudCanvasPreview
-              videoBackground={
-                mapBackground && replayFixture?.video && replaySession ? (
-                  <ReplayVideoBackground
-                    key={replayFixture.video.url}
-                    source={replayFixture.video}
-                    session={replaySession}
-                    onFallback={() => setPreviewSource('fixture')}
-                  />
-                ) : undefined
-              }
-              mapBackground={mapBackground}
-              radarSnapshot={activeRadarSnapshot}
-              radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
-              presentationRevision={
-                activePreviewSource === 'replay' ? replayState.presentationRevision : 0
-              }
-              canvasFrameRef={canvasFrameRef}
-              connectionState={program.state}
-              editorMode={workspace === 'layout' ? 'layout' : 'preview'}
-              editorInteractive={editorReady && workspace === 'layout'}
-              liveSource={activePreviewSource === 'current-live'}
-              onRadarResizePointerDown={workspace === 'layout' ? startRadarResize : undefined}
-              onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
-              resolvedPreset={previewResolved}
-              selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
-              showCenter={workspace === 'layout' && showCenter}
-              showGrid={workspace === 'layout' && showGrid}
-              showSafeArea={workspace === 'layout' && showSafeArea}
-              snapshot={activeSnapshot}
-              gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
-            />
-            <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
-          </div>
-
-          <div className="hud-console__editor-column">
-            <div className="hud-console__tabs" aria-label="HUD 编辑区域">
-              {WORKSPACES.map((item) => (
-                <Button
-                  aria-current={workspace === item.id ? 'page' : undefined}
-                  className={workspace === item.id ? 'is-active' : undefined}
-                  key={item.id}
-                  onClick={() => changeWorkspace(item.id)}
-                  type="button"
+                {activePreviewSource === 'replay' ? (
+                  <label>
+                    回放来源
+                    <select
+                      aria-label="回放来源"
+                      value={replaySourceId}
+                      onChange={(event) => {
+                        setPendingReplayIndex(null);
+                        setReplaySourceId(event.target.value as ReplaySourceId);
+                      }}
+                    >
+                      <option value="epl-inferno-video">EPL · Inferno · 实景回放</option>
+                      <option value="epl-inferno-opening">EPL · Inferno · 开局</option>
+                      <option value="epl-inferno-final-round">EPL · Inferno · 决胜回合</option>
+                      {import.meta.env.DEV && (
+                        <>
+                          <option value="ancient-round-03">历史回归 · Ancient · 第 3 回合</option>
+                          <option value="ancient-round-11-defuse">
+                            历史回归 · Ancient · 第 11 回合拆弹
+                          </option>
+                        </>
+                      )}
+                      {import.meta.env.DEV && import.meta.env.VITE_VISUAL_FIXTURES === '1' ? (
+                        <option value="nuke-demo-round-01">
+                          Nuke · Legacy / Falcons · Demo 回合 1
+                        </option>
+                      ) : null}
+                    </select>
+                  </label>
+                ) : null}
+                <span
+                  className="hud-console__source-status"
+                  data-connection-state={
+                    activePreviewSource === 'replay' ? 'replay' : program.state
+                  }
+                  {...radarDiagnosticAttributes}
                 >
-                  {item.label}
-                </Button>
-              ))}
+                  {activePreviewSource === 'replay'
+                    ? replayLoadError === null
+                      ? replayLoading
+                        ? '正在加载实景回放'
+                        : '回放示例，非本场事实'
+                      : '重放素材不可用'
+                    : activePreviewSource === 'fixture'
+                      ? '示例资料，非本场事实'
+                      : connectionLabel(program.state)}
+                  {activePreviewSource === 'current-live' && unsupportedRadarMap !== null
+                    ? ` · 雷达不可用：不支持地图 ${unsupportedRadarMap}`
+                    : null}
+                </span>
+              </section>
+
+              <div className="hud-console__canvas-space">
+                <HudCanvasPreview
+                  videoBackground={
+                    mapBackground && replayFixture?.video && replaySession ? (
+                      <ReplayVideoBackground
+                        key={replayFixture.video.url}
+                        source={replayFixture.video}
+                        session={replaySession}
+                        onFallback={() => setPreviewSource('fixture')}
+                      />
+                    ) : undefined
+                  }
+                  mapBackground={mapBackground}
+                  radarSnapshot={activeRadarSnapshot}
+                  radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
+                  presentationRevision={
+                    activePreviewSource === 'replay' ? replayState.presentationRevision : 0
+                  }
+                  canvasFrameRef={canvasFrameRef}
+                  connectionState={program.state}
+                  editorMode={workspace === 'layout' ? 'layout' : 'preview'}
+                  editorInteractive={editorReady && workspace === 'layout'}
+                  liveSource={activePreviewSource === 'current-live'}
+                  onRadarResizePointerDown={workspace === 'layout' ? startRadarResize : undefined}
+                  onWidgetPointerDown={workspace === 'layout' ? startMove : undefined}
+                  resolvedPreset={previewResolved}
+                  selectedWidgetId={workspace === 'layout' ? selectedWidgetId : null}
+                  showCenter={workspace === 'layout' && showCenter}
+                  showGrid={workspace === 'layout' && showGrid}
+                  showSafeArea={workspace === 'layout' && showSafeArea}
+                  snapshot={activeSnapshot}
+                  gg={activePreviewSource === 'fixture' && fixtureId === 'gameplay-map-ended-gg'}
+                />
+              </div>
+              {activePreviewSource === 'replay' ? (
+                <section
+                  aria-label="重放控制"
+                  className="hud-console__replay"
+                  data-replay-cursor={replayFrame?.cursor.sequence ?? ''}
+                  data-replay-event-kind={currentReplayEvent?.kind ?? ''}
+                >
+                  <div className="hud-console__replay-actions">
+                    <Button
+                      disabled={replaySession === null || replayState.isSeeking || replayLoading}
+                      onClick={() =>
+                        replayState.isPlaying ? replaySession?.pause() : replaySession?.play()
+                      }
+                      type="button"
+                    >
+                      {replayState.isPlaying ? '暂停' : '播放'}
+                    </Button>
+                    <Button
+                      disabled={replaySession === null || replayState.isSeeking || replayLoading}
+                      onClick={() => {
+                        setPendingReplayIndex(null);
+                        void replaySession?.restart();
+                      }}
+                      type="button"
+                    >
+                      重播
+                    </Button>
+                    <Button
+                      aria-label="上一个语义事件"
+                      disabled={replaySession === null || replayState.isSeeking}
+                      onClick={() => stepReplayEvent(-1)}
+                      type="button"
+                    >
+                      上一事件
+                    </Button>
+                    <Button
+                      aria-label="下一个语义事件"
+                      disabled={replaySession === null || replayState.isSeeking}
+                      onClick={() => stepReplayEvent(1)}
+                      type="button"
+                    >
+                      下一事件
+                    </Button>
+                  </div>
+                  <label className="hud-console__replay-scrubber">
+                    回放进度
+                    <input
+                      aria-label="回放进度"
+                      disabled={replaySession === null || replayState.isSeeking || replayLoading}
+                      max={Math.max(0, (replayFixture?.manifest.frameCount ?? 1) - 1)}
+                      min={0}
+                      onChange={(event) => setPendingReplayIndex(Number(event.target.value))}
+                      onKeyUp={() => commitReplaySeek()}
+                      onPointerUp={(event) => commitReplaySeek(Number(event.currentTarget.value))}
+                      type="range"
+                      value={Math.max(
+                        0,
+                        Math.min(
+                          pendingReplayIndex ?? replayState.currentIndex,
+                          (replayFixture?.manifest.frameCount ?? 1) - 1,
+                        ),
+                      )}
+                    />
+                  </label>
+                  <label className="hud-console__replay-event-select">
+                    语义事件
+                    <select
+                      aria-label="语义事件"
+                      disabled={replaySession === null || replayState.isSeeking || replayLoading}
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          setPendingReplayIndex(null);
+                          void replaySession?.seekEvent(event.target.value);
+                        }
+                      }}
+                      value={currentReplayEvent?.id ?? ''}
+                    >
+                      <option value="">当前窗口无事件</option>
+                      {replayFixture?.events.map((event) => (
+                        <option key={event.id} value={event.id}>
+                          {event.sequence} · {event.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="hud-console__replay-readout" aria-live="polite">
+                    <span>
+                      {replayFrame === null
+                        ? '00:00.000'
+                        : replayTimeLabel(replayFrame.cursor.scheduledElapsedUs)}
+                    </span>
+                    <span>序列 {replayFrame?.cursor.sequence ?? '—'}</span>
+                    <span>{currentReplayEvent?.label ?? '当前窗口无语义事件'}</span>
+                    {replayState.isSeeking ? <span>正在重建回放前缀…</span> : null}
+                    {replayLoadError !== null ? (
+                      <>
+                        <span role="alert">{replayLoadError}</span>
+                        <details>
+                          <summary>官方素材状态与恢复</summary>
+                          <OfficialResourceStatus />
+                        </details>
+                        <Button onClick={() => setPreviewSource('fixture')}>切换静态样例</Button>
+                      </>
+                    ) : null}
+                    {replayState.error !== null ? (
+                      <span role="alert">重放未完成，请重新载入素材后重试。</span>
+                    ) : null}
+                  </div>
+                </section>
+              ) : null}
+
+              {workspace === 'layout' ? (
+                <p className="hud-console__preview-caption">1920 × 1080 · 10px 网格</p>
+              ) : null}
             </div>
-            <fieldset className="hud-console__editor-fieldset" disabled={!editorReady}>
-              <HudConsoleWorkspaces {...workspaceProps} />
-            </fieldset>
-          </div>
-        </div>
+          }
+          inspector={
+            <div className="hud-console__editor-column">
+              <div className="hud-console__tabs" aria-label="HUD 编辑区域">
+                {WORKSPACES.map((item) => (
+                  <Button
+                    aria-current={workspace === item.id ? 'page' : undefined}
+                    key={item.id}
+                    onClick={() => changeWorkspace(item.id)}
+                    type="button"
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
+              <fieldset className="hud-console__editor-fieldset" disabled={!editorReady}>
+                <HudConsoleWorkspaces {...workspaceProps} />
+                <details aria-label="启用条件与引用">
+                  <summary>共享引用与启用条件</summary>
+                  <span>
+                    共享布局引用 · {savedLayout?.name ?? selectedLayoutId}；共享外观引用 ·{' '}
+                    {savedTheme?.name ?? selectedThemeId}。保存引用资源可影响其他使用它的预设；保存
+                    / 另存与正式启用分开。
+                  </span>
+                  {activationReasons.length ? (
+                    <ul>
+                      {activationReasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span>资源已保存，可明确启用上屏。</span>
+                  )}
+                  {activationReasons.length ? (
+                    <Button
+                      onClick={() => {
+                        changeWorkspace(layoutDirty ? 'layout' : 'preset');
+                        const buttons = document.querySelectorAll<HTMLButtonElement>(
+                          '.hud-console__tabs button',
+                        );
+                        buttons[layoutDirty ? 1 : 0]?.focus();
+                      }}
+                    >
+                      定位需处理编辑区
+                    </Button>
+                  ) : null}
+                </details>
+                <details className="hud-console__source-help">
+                  <summary>预览来源与版本详情</summary>
+                  <h4>
+                    预览来源说明 ·{' '}
+                    {activePreviewSource === 'current-live'
+                      ? '当前观战资料'
+                      : '示例资料，非本场事实'}
+                  </h4>
+                  <p className="hud-console__hint">
+                    {activePreviewSource === 'fixture'
+                      ? '静态样例名单与比分仅用于检查版式，不代表本场已核实。'
+                      : activePreviewSource === 'replay'
+                        ? '实景回放来自已记录的示例比赛，不代表本场名单或实时状态。'
+                        : '当前观战数据只读预览；是否属于本场及首发身份需在制播中核对。'}
+                  </p>
+                  {replayFixture !== null ? (
+                    <section className="hud-console__replay-provenance">
+                      <h4>来源、覆盖与完整性</h4>
+                      <dl>
+                        <dt>原始 capture</dt>
+                        <dd>{replayFixture.manifest.source.sourceCaptureId}</dd>
+                        <dt>来源 SHA-256</dt>
+                        <dd>{replayFixture.manifest.source.sourceFramesSha256}</dd>
+                        <dt>帧 / 语义事件</dt>
+                        <dd>
+                          {replayFixture.manifest.frameCount} / {replayFixture.manifest.eventCount}
+                        </dd>
+                        <dt>Sanitizer</dt>
+                        <dd>v{replayFixture.manifest.source.sanitizerVersion}</dd>
+                        {replayFixture.manifest.coverage
+                          .filter((item) => item.status !== 'observed')
+                          .map((item) => (
+                            <Fragment key={item.kind}>
+                              <dt>{item.kind}</dt>
+                              <dd>{item.status}</dd>
+                            </Fragment>
+                          ))}
+                      </dl>
+                    </section>
+                  ) : null}
+                  <h4>版本诊断</h4>
+                  <p>
+                    资源版本 {hudEditor.revision ?? '未知'} · 启用版本{' '}
+                    {onAir.activeRevision ?? '未知'}
+                  </p>
+                </details>
+              </fieldset>
+            </div>
+          }
+        />
 
         {commandState !== null || !editorReady ? (
           <div
             aria-live="polite"
             className="hud-console__status"
-            role={
-              commandState?.includes('冲突') || commandState?.includes('未完成')
-                ? 'alert'
-                : 'status'
-            }
+            role={commandError ? 'alert' : 'status'}
           >
             {commandState ?? '正在读取配置。'}
           </div>

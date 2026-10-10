@@ -166,22 +166,29 @@ export class ProgramSceneController {
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
     const reason = this.blockedReason(id, automaticValid !== undefined);
     if (reason !== null) return { ok: false as const, message: reason };
-    if (this.active !== id) {
+    if (this.active !== id || !automaticValid) {
       const abort = new AbortController();
       if (automaticValid) this.automaticSwitch = abort;
       const previous = this.active;
+      const changing = previous !== id;
       const nextRevision = randomUUID();
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
         // A Cut is not delayed by the obsolete automatic transition or its signal.
-        await this.switchObs?.(this.active, {
-          transition: programTransition(id, this.active, true),
-        }).catch(() => undefined);
+        let confirmed = true;
+        try {
+          await this.switchObs?.(this.active, {
+            transition: programTransition(id, this.active, true),
+          });
+        } catch {
+          confirmed = false;
+        }
         if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
           this.bpSession.finishSceneExit();
+        return confirmed;
       };
       try {
-        if (id === 'bp') {
+        if (changing && id === 'bp') {
           const bp = this.bpSession.get();
           if (bp.state === 'hidden') {
             if (this.bpSession.command('play', bp.revision) === null)
@@ -211,18 +218,25 @@ export class ProgramSceneController {
           abort.signal.aborted ||
           expectedRevision !== this.revision
         ) {
-          await rollback();
+          const restored = await rollback();
           return {
             ok: false as const,
-            message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
+            message: restored
+              ? (stillBlocked ?? '自动编排请求已失效，保持当前场景。')
+              : '请求已失效且 OBS 回退未能确认；实际播出场景无法确认，请检查 OBS。',
           };
         }
-        if (previous === 'bp') this.bpSession.finishSceneExit();
+        if (changing && previous === 'bp') this.bpSession.finishSceneExit();
         this.active = id;
         this.revision = nextRevision;
       } catch {
-        await rollback();
-        return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
+        const restored = await rollback();
+        return {
+          ok: false as const,
+          message: restored
+            ? 'OBS 场景切换未完成，已重新确认最近的 Mizar 场景。'
+            : 'OBS 场景切换与回退均未能确认；实际播出场景无法确认，请检查 OBS。',
+        };
       } finally {
         this.preparing = undefined;
         if (this.automaticSwitch === abort) this.automaticSwitch = undefined;

@@ -27,3 +27,19 @@
   outline: var(--mizar-line-focus) solid var(--mizar-focus-ring);
   z-index: 100;
 }
+
+.mizar-tool-shell[data-fill='true'] {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.mizar-tool-shell[data-fill='true'] > #tool-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mizar-tool-shell > .mizar-tool-heading > h1 {
+  margin: 0;
+  font: inherit;
+}

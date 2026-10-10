@@ -81,14 +81,25 @@ export function registerRivalHubConnectionRoutes(
       });
     return refreshing;
   };
+  let automaticMatchId: string | null = null;
+  let automaticAttempts = 0;
+  let automaticTask: Promise<void> | null = null;
+  async function stopAutomaticClaim() {
+    automaticMatchId = null;
+    await automaticTask;
+  }
   const timer = setInterval(() => {
+    tryAutomaticClaim();
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
         .then(refresh)
         .catch(() => undefined);
   }, 10_000);
   timer.unref();
-  app.addHook('onClose', () => clearInterval(timer));
+  app.addHook('onClose', async () => {
+    clearInterval(timer);
+    await stopAutomaticClaim();
+  });
   const observedLineupReady = () => {
     const snapshot = options.currentSnapshot();
     return (
@@ -107,6 +118,42 @@ export function registerRivalHubConnectionRoutes(
       ).size === 10
     );
   };
+  // Only a newly started production arms this bounded, match-scoped request.
+  // Reading, reconnecting and reopening the workspace never create intent.
+  function tryAutomaticClaim() {
+    if (!automaticMatchId || automaticTask) return;
+    const binding = linkedBinding();
+    const connection = options.connection.view();
+    if (
+      binding?.context.matchId !== automaticMatchId ||
+      binding.origin !== 'online' ||
+      !connection.paired ||
+      connection.activeSourceMatchId ||
+      connection.activeDeviceName ||
+      automaticAttempts >= 5
+    ) {
+      automaticMatchId = null;
+      return;
+    }
+    if ((options.canClaim && !options.canClaim()) || !observedLineupReady()) return;
+    const snapshot = options.currentSnapshot();
+    if (!snapshot || snapshot.matchId !== automaticMatchId) return;
+    automaticAttempts++;
+    automaticTask = options.connection
+      .claim(snapshot, binding.manifest.revision, false)
+      .then(async () => {
+        const current = linkedBinding();
+        if (current?.context.matchId !== snapshot.matchId || current.origin !== 'online')
+          await options.connection.release();
+        automaticMatchId = null;
+      })
+      .catch((error: unknown) => {
+        app.log.error({ err: error }, 'RivalHub automatic source claim failed');
+      })
+      .finally(() => {
+        automaticTask = null;
+      });
+  }
   app.post('/operator/rivalhub/refresh', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -134,7 +181,9 @@ export function registerRivalHubConnectionRoutes(
           : options.canClaim && !options.canClaim()
             ? '进入现场后可以成为本场数据源。'
             : !observedLineupReady()
-              ? '等待当前比赛的十人首发数据；就绪后自动认领，也可手动重试。'
+              ? automaticMatchId
+                ? '等待当前比赛的十人首发数据；新制作就绪后自动认领，也可手动重试。'
+                : '等待当前比赛的十人首发数据；就绪后可明确恢复提供网站数据。'
               : null,
       lastRefreshAt,
       refreshError,
@@ -162,6 +211,7 @@ export function registerRivalHubConnectionRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
     try {
+      await stopAutomaticClaim();
       await options.connection.disconnect();
       return options.connection.view();
     } catch (error) {
@@ -218,6 +268,7 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/claim', { bodyLimit: 128 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    await stopAutomaticClaim();
     if (options.canClaim && !options.canClaim())
       return reply.code(409).send({ message: '请先进入现场。' });
     const binding = options.controller?.getActiveBinding();
@@ -246,6 +297,7 @@ export function registerRivalHubConnectionRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
     try {
+      await stopAutomaticClaim();
       await options.connection.release();
       return options.connection.view();
     } catch (error) {
@@ -253,4 +305,13 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(502).send({ message: '数据源停止未确认，请稍后再试。' });
     }
   });
+  return {
+    beginProduction: () => {
+      const binding = linkedBinding();
+      automaticMatchId = binding?.origin === 'online' ? binding.context.matchId : null;
+      automaticAttempts = 0;
+      tryAutomaticClaim();
+    },
+    stopAutomaticClaim,
+  };
 }

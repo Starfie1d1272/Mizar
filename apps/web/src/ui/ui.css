@@ -46,6 +46,11 @@
   background: var(--mizar-bg-hover);
   border-color: var(--mizar-border-strong);
 }
+.mizar-button[data-variant='secondary'][aria-current='page'] {
+  background: var(--mizar-bg-selected);
+  color: var(--mizar-fg-link);
+  border-color: var(--mizar-accent-primary);
+}
 .mizar-button[data-variant='primary'] {
   color: var(--mizar-fg-on-accent);
   background: var(--mizar-accent-primary);

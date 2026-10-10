@@ -611,13 +611,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   }
+  let sourceControl: ReturnType<typeof registerRivalHubConnectionRoutes> | undefined;
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
+    beginSource: () => sourceControl?.beginProduction(),
     release: async () => {
+      await sourceControl?.stopAutomaticClaim();
       await options.rivalhubConnection?.release();
     },
   });
@@ -720,7 +723,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.onlineManifestConfig === undefined ? {} : { config: options.onlineManifestConfig }),
   });
   if (options.rivalhubConnection)
-    registerRivalHubConnectionRoutes(app, {
+    sourceControl = registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
       canClaim: () => production.get().mode === 'live',
       canUpdatePlan: () => programRuntime.canUpdateSeriesPlan(),

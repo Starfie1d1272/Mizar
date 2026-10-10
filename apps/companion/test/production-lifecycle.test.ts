@@ -150,11 +150,13 @@ it.each(['live', 'hidden'] as const)(
       return Promise.resolve();
     });
     const app = Fastify();
+    const beginSource = vi.fn();
     const lifecycle = registerProductionRoutes(app, {
       originPolicy: createLocalWebOriginPolicy(),
       hasContext: () => true,
       scenes,
       release,
+      beginSource,
     });
     const send = (action: string) =>
       app.inject({
@@ -165,13 +167,22 @@ it.each(['live', 'hidden'] as const)(
       });
     try {
       await send('enter');
+      await send('enter');
+      await send('hide');
+      await send('enter');
+      expect(beginSource).toHaveBeenCalledTimes(1);
       if (mode === 'hidden') await send('hide');
       const before = lifecycle.get();
       calls.length = 0;
       switchObs.mockRejectedValueOnce(new Error('OBS down'));
       expect((await send('finish')).statusCode).toBe(409);
       expect(release).not.toHaveBeenCalled();
-      expect(lifecycle.get()).toEqual(before);
+      expect(lifecycle.get()).toMatchObject({
+        mode: before.mode,
+        revision: before.revision,
+        canEnter: before.canEnter,
+      });
+      expect(lifecycle.get().cleanup).toMatchObject({ scene: 'failed', source: 'pending' });
       expect(scenes.get().active).toBe('gameplay');
       release.mockImplementationOnce(() => {
         calls.push('release');
@@ -181,9 +192,15 @@ it.each(['live', 'hidden'] as const)(
       expect((await send('finish')).statusCode).toBe(409);
       expect(calls).toEqual(['waiting', 'release']);
       expect(scenes.get().active).toBe('waiting');
-      expect(lifecycle.get()).toEqual(before);
+      expect(lifecycle.get()).toMatchObject({
+        mode: before.mode,
+        revision: before.revision,
+        canEnter: before.canEnter,
+      });
+      expect(lifecycle.get().cleanup).toMatchObject({ scene: 'confirmed', source: 'failed' });
       expect((await send('finish')).statusCode).toBe(200);
       expect(lifecycle.get().mode).toBe('preparation');
+      expect(lifecycle.get().cleanup).toMatchObject({ scene: 'confirmed', source: 'confirmed' });
       expect(release).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();

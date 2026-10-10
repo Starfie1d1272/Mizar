@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useBpSession } from '../bp/client';
+import { useBpSession, useBpWorkspace } from '../bp/client';
 import { ScenePreviewViewport, type PreviewFrame } from './ScenePreviewViewport';
-import { BpWorkspaceControls } from '../bp/BpPage';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { Button, Panel, Select } from '../ui';
 import { ToolShell } from '../patterns';
 import { openTool } from './client';
 import './preparation.css';
 
-export function ProgramPreview({ standalone = false }: { standalone?: boolean }) {
+export function ProgramPreview({
+  standalone = false,
+  allowCurrent = false,
+}: {
+  standalone?: boolean;
+  allowCurrent?: boolean;
+}) {
   const [preview, setPreview] = useState<ProgramSceneId>(() => {
     const scene = new URLSearchParams(window.location.search).get('scene');
     return PROGRAM_SCENES.find((item) => item.id === scene)?.id ?? 'waiting';
   });
+  const [source, setSource] = useState<'current' | 'sample'>(allowCurrent ? 'current' : 'sample');
   const [variant, setVariant] = useState('default');
   const [version, setVersion] = useState(0);
   const [background, setBackground] = useState('map');
@@ -22,18 +28,21 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
   const [demo, setDemo] = useState<readonly ProgramSceneId[] | null>(null);
   const [demoIndex, setDemoIndex] = useState(0);
   const { snapshot: bp } = useBpSession();
+  const { workspace } = useBpWorkspace();
   const frame = useMemo<PreviewFrame>(
     () => ({
-      key: `${preview}:${variant}:${version}:${background}:${intro}`,
+      key: `${source}:${preview}:${variant}:${version}:${background}:${intro}`,
       scene: preview,
       src:
         PROGRAM_SCENES.find((scene) => scene.id === preview)!.path +
-        (preview === 'bp'
+        (source === 'current'
           ? ''
-          : `?preview=1&variant=${variant}&background=${background}&intro=${intro}`),
+          : preview === 'bp'
+            ? '?preview=1'
+            : `?preview=1&variant=${variant}&background=${background}&intro=${intro}`),
       immediate,
     }),
-    [preview, variant, version, background, intro, immediate],
+    [source, preview, variant, version, background, intro, immediate],
   );
   const onSettled = useCallback((key: string) => setSettledKey(key), []);
   function chooseScene(scene: ProgramSceneId, cut = false) {
@@ -43,6 +52,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
     setVersion((value) => value + 1);
   }
   function startDemo() {
+    setSource('sample');
     const order: ProgramSceneId[] = ['waiting'];
     if (bp?.projection && bp.state !== 'hidden' && bp.state !== 'hiding') order.push('bp');
     order.push(
@@ -75,14 +85,18 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
     }, duration);
     return () => clearTimeout(timer);
   }, [demo, demoIndex, settledKey, frame.key, preview, intro]);
+  const PreviewContainer = standalone ? Panel : 'section';
   return (
-    <Panel className="program-preview-panel">
-      {standalone ? null : <h2>节目预览</h2>}
+    <PreviewContainer className="program-preview-panel">
+      {standalone ? null : <h2>节目画面</h2>}
+      <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
+        <ScenePreviewViewport frame={frame} onSettled={onSettled} />
+      </div>
       <div className="preparation-scenes">
         {PROGRAM_SCENES.map((scene) => (
           <Button
             key={scene.id}
-            variant={preview === scene.id ? 'primary' : 'secondary'}
+            aria-current={preview === scene.id ? 'page' : undefined}
             aria-pressed={preview === scene.id}
             onClick={() => chooseScene(scene.id)}
           >
@@ -91,6 +105,20 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
         ))}
       </div>
       <div className="program-preview-toolbar">
+        {allowCurrent ? (
+          <Select
+            label="节目预览来源"
+            value={source}
+            onChange={(event) => {
+              setDemo(null);
+              setSource(event.target.value as 'current' | 'sample');
+            }}
+          >
+            <option value="current">本场资料 / 当前观战数据</option>
+            <option value="sample">版式样例（不是本场事实）</option>
+          </Select>
+        ) : null}
+
         <div className="program-preview-playback">
           <Button onClick={demo ? () => setDemo(null) : startDemo}>
             {demo ? '停止演示' : '播放演示'}
@@ -99,13 +127,24 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
           <span role="status">
             {demo
               ? `演示 ${demoIndex + 1} / ${demo.length} · ${PROGRAM_SCENES.find((scene) => scene.id === preview)!.title}`
-              : '示例画面'}
+              : source === 'current'
+                ? '本场服务数据 · 无数据时待确认'
+                : preview === 'bp'
+                  ? workspace?.demo.active || workspace?.source === 'fixture'
+                    ? 'BP 样例只读预览 · 不切换播出'
+                    : workspace?.match
+                      ? '本场 BP 只读预览 · 不切换播出'
+                      : 'BP 来源待确认 · 只读预览'
+                  : '版式样例 · 名单与比分不是本场核实资料'}
           </span>
         </div>
+        {standalone ? null : (
+          <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>
+        )}
         {demo && (!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding') ? (
           <p>演示将跳过 BP。</p>
         ) : null}
-        {preview !== 'bp' ? (
+        {source === 'sample' && preview !== 'bp' ? (
           <div className="program-preview-options">
             <Select
               label="画面样例"
@@ -152,17 +191,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
           </div>
         ) : null}
       </div>
-      <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
-        <ScenePreviewViewport frame={frame} onSettled={onSettled} />
-        <div hidden={preview !== 'bp' || demo !== null}>
-          <p>操作将同步到 BP 播出画面。</p>
-          <BpWorkspaceControls />
-        </div>
-      </div>
-      {standalone ? null : (
-        <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>
-      )}
-    </Panel>
+    </PreviewContainer>
   );
 }
 

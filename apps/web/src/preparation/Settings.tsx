@@ -6,6 +6,7 @@ import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
+import { ObsConfidence } from '../workspace/WorkspacePage';
 import { UpdateSettings } from './UpdateSettings';
 
 export function Settings({ tab }: { tab: string }) {
@@ -15,6 +16,9 @@ export function Settings({ tab }: { tab: string }) {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [connectionOverride, setConnectionEditing] = useState<boolean | null>(null);
+  const connectionEditing = connectionOverride ?? obs?.connection !== 'connected';
+  const [messageTone, setMessageTone] = useState<'info' | 'danger'>('info');
   const [gsi, setGsi] = useState<{
     detected: boolean;
     installed: boolean;
@@ -67,9 +71,11 @@ export function Settings({ tab }: { tab: string }) {
     if (busy) return;
     setBusy(true);
     setMessage('');
+    setMessageTone('info');
     try {
       await run();
     } catch (error) {
+      setMessageTone('danger');
       setMessage(error instanceof Error ? error.message : '操作未完成。');
       if (tab === 'gsi') await refreshGsi().catch(() => {});
     } finally {
@@ -78,7 +84,12 @@ export function Settings({ tab }: { tab: string }) {
   }
   return (
     <>
-      {tab === 'rivalhub' ? (
+      {tab === 'preferences' ? (
+        <div className="settings-preferences">
+          <Cs2LaunchSettings />
+          <SteamAvatarSettings />
+        </div>
+      ) : tab === 'rivalhub' ? (
         <RivalHubPreparationPanel mode="settings" />
       ) : tab === 'advanced' ? (
         <div className="settings-grid">
@@ -122,7 +133,7 @@ export function Settings({ tab }: { tab: string }) {
           </Panel>
         </div>
       ) : tab === 'obs' ? (
-        <div className="obs-setup">
+        <div className="obs-setup" data-connected={obs?.connection === 'connected'}>
           <header className="obs-setup__heading">
             <h2>
               {new URLSearchParams(window.location.search).has('prepare')
@@ -140,97 +151,119 @@ export function Settings({ tab }: { tab: string }) {
             </StatusPill>
           </header>
           <div className="obs-setup__cards">
-            <Panel>
-              <h3>打开 OBS</h3>
-              <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() => void action(() => obsCommand('open'))}
-              >
-                打开 OBS
-              </Button>
-              {window.__TAURI_INTERNALS__ ? (
-                <details>
-                  <summary>OBS 路径</summary>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const path = await desktopInvoke<string | null>('select_obs_executable');
-                        if (path) await obsCommand('configure', { executablePath: path });
-                      })
-                    }
-                  >
-                    更改 OBS 路径
-                  </Button>
-                </details>
-              ) : null}
-            </Panel>
-            <details open={obs?.connection !== 'connected'}>
-              <summary>WebSocket 连接设置</summary>
-              <Panel>
-                <h3>连接控制</h3>
-                <p>填写 OBS 提供的端口与密码。</p>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void action(async () => {
-                      await obsCommand('configure', {
-                        port,
-                        ...(password.length > 0 ? { password } : {}),
-                      });
-                      setPassword('');
-                      await obsCommand('check');
-                      setMessage(
-                        password.length > 0
-                          ? '已保存新密码并测试连接。'
-                          : '已保存端口并测试连接，原密码保持不变。',
-                      );
-                    });
-                  }}
+            <div className="obs-setup__connection-stack">
+              <section className="obs-connection-summary" aria-label="OBS 连接摘要">
+                <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
+                <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
+                {!connectionEditing ? (
+                  <>
+                    <Button onClick={() => setConnectionEditing(true)}>编辑连接</Button>
+                    <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
+                      重新检查
+                    </Button>
+                  </>
+                ) : null}
+              </section>
+              <section className="obs-settings-section">
+                <h3>打开 OBS</h3>
+                <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void action(() => obsCommand('open'))}
                 >
-                  <Field
-                    label="WebSocket 端口"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={port}
-                    onChange={(e) => setPortOverride(Number(e.target.value))}
-                  />
-                  <Field
-                    label="WebSocket 密码"
-                    type="password"
-                    autoComplete="off"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
-                  />
-                  <Button type="submit" variant="primary" loading={busy}>
-                    保存并测试
-                  </Button>
-                </form>
-                {obs?.passwordConfigured ? (
+                  打开 OBS
+                </Button>
+                {window.__TAURI_INTERNALS__ ? (
                   <details>
-                    <summary>已保存密码</summary>
+                    <summary>OBS 路径</summary>
                     <Button
                       disabled={busy}
                       onClick={() =>
                         void action(async () => {
-                          await obsCommand('configure', { port, password: '' });
-                          await obsCommand('check');
-                          setMessage('已清除 Mizar 保存的 OBS 密码。');
+                          const path = await desktopInvoke<string | null>('select_obs_executable');
+                          if (path) await obsCommand('configure', { executablePath: path });
                         })
                       }
                     >
-                      清除已保存密码
+                      更改 OBS 路径
                     </Button>
                   </details>
                 ) : null}
-              </Panel>
-            </details>
-            <Panel>
-              <h3>检查画面</h3>
+              </section>
+              <details open={connectionEditing}>
+                <summary
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setConnectionEditing(!connectionEditing);
+                  }}
+                >
+                  WebSocket 连接设置
+                </summary>
+                <section className="obs-settings-section">
+                  <h3>连接控制</h3>
+                  <p>填写 OBS 提供的端口与密码。</p>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void action(async () => {
+                        await obsCommand('configure', {
+                          port,
+                          ...(password.length > 0 ? { password } : {}),
+                        });
+                        setPassword('');
+                        await obsCommand('check');
+                        setMessage(
+                          password.length > 0
+                            ? '已保存新密码并测试连接。'
+                            : '已保存端口并测试连接，原密码保持不变。',
+                        );
+                      });
+                    }}
+                  >
+                    <Field
+                      label="WebSocket 端口"
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={port}
+                      onChange={(e) => setPortOverride(Number(e.target.value))}
+                    />
+                    <Field
+                      label="WebSocket 密码"
+                      type="password"
+                      autoComplete="off"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
+                    />
+                    <Button type="submit" variant="primary" loading={busy}>
+                      保存并测试
+                    </Button>
+                  </form>
+                  {obs?.passwordConfigured ? (
+                    <details>
+                      <summary>已保存密码</summary>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void action(async () => {
+                            await obsCommand('configure', { port, password: '' });
+                            await obsCommand('check');
+                            setMessage('已清除 Mizar 保存的 OBS 密码。');
+                          })
+                        }
+                      >
+                        清除已保存密码
+                      </Button>
+                    </details>
+                  ) : null}
+                </section>
+              </details>
+            </div>
+            <section className="obs-settings-section">
+              <h3>实际画面与输出检查</h3>
+              <ObsConfidence showRepairAction={false} showAudioHint={false} />
               <div className="obs-setup__signals">
                 <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
                 <span>
@@ -266,10 +299,7 @@ export function Settings({ tab }: { tab: string }) {
               >
                 修复 Mizar 场景
               </Button>
-              <p>
-                修复前停止推流与录制。检查通过后，在 OBS
-                中核对游戏画面、音频电平和直播输出音轨，并录制试听。
-              </p>
+              <p>在 OBS 核对游戏画面与声音，并录制试听。</p>
               <Button
                 disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
                 onClick={() =>
@@ -292,7 +322,7 @@ export function Settings({ tab }: { tab: string }) {
                   画布 {obs.video.canvas} · 输出 {obs.video.output} · {obs.video.fps.toFixed(0)} fps
                 </small>
               ) : null}
-            </Panel>
+            </section>
           </div>
           {obs?.findings.map((finding) => (
             <StatusBanner key={finding.code} tone="warning">
@@ -457,11 +487,9 @@ export function Settings({ tab }: { tab: string }) {
               {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
             </details>
           </Panel>
-          <Cs2LaunchSettings />
-          <SteamAvatarSettings />
         </div>
       )}
-      {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
+      {message ? <StatusBanner tone={messageTone}>{message}</StatusBanner> : null}
     </>
   );
 }

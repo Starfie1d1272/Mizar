@@ -268,3 +268,42 @@ it('keeps preparation revision through commit and drops it when the context inva
   expect(scene.get().active).toBe('waiting');
   expect(scene.get().preparing).toBeUndefined();
 });
+
+it('reconfirms a manual same-scene Take without replaying BP or running scene exit', async () => {
+  const { projections } = controller(async () => {});
+  const command = vi.fn();
+  const finishSceneExit = vi.fn();
+  const bp = {
+    get: () => ({ projection: {}, state: 'hidden', revision: 'bp-1' }),
+    command,
+    finishSceneExit,
+  } as unknown as BpSession;
+  vi.spyOn(projections, 'getBpAssessment').mockReturnValue({ readiness: 'ready' } as ReturnType<
+    ProjectionCoordinator['getBpAssessment']
+  >);
+  const switchObs = vi.fn<(id: ProgramSceneId) => Promise<void>>().mockResolvedValue(undefined);
+  const scenes = new ProgramSceneController(projections, bp, switchObs);
+  scenes.forceScene('bp');
+  const revision = scenes.get().revision;
+  expect((await scenes.select('bp', revision)).ok).toBe(true);
+  expect(switchObs).toHaveBeenCalledOnce();
+  expect(command).not.toHaveBeenCalled();
+  expect(finishSceneExit).not.toHaveBeenCalled();
+  expect(scenes.get().revision).not.toBe(revision);
+});
+
+it('preserves the last Mizar confirmation but reports unknown actual output when rollback fails', async () => {
+  const switchObs = vi
+    .fn<(id: ProgramSceneId) => Promise<void>>()
+    .mockRejectedValue(new Error('readback unavailable'));
+  const { scene } = controller(switchObs);
+  scene.forceScene('gameplay');
+  const previous = scene.get();
+  const result = await scene.select('waiting', previous.revision);
+  expect(result).toMatchObject({
+    ok: false,
+    message: expect.stringContaining('实际播出场景无法确认') as unknown,
+  });
+  expect(switchObs.mock.calls.map(([id]) => id)).toEqual(['waiting', 'gameplay']);
+  expect(scene.get()).toMatchObject({ active: previous.active, revision: previous.revision });
+});

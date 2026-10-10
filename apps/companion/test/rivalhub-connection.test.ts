@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import type { BroadcastManifest } from '@mizar/rivalhub';
+import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
 import { MatchContextController, MatchManifestLkgStore } from '../src/match-context/index.js';
 import {
@@ -974,4 +975,188 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(connection.view().paired).toBe(false);
   });
+});
+
+it('new production waits for its observed lineup, stops pending claims on release and never takes over', async () => {
+  // Synthetic lineup exercises authority intent; it is not live CS2 evidence.
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-source-intent-'));
+  temporary.push(directory);
+  const manifest = JSON.parse(
+    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
+  ) as BroadcastManifest;
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'fixture-token',
+      installationId: 'fixture',
+      competitionId: manifest.match.competition!.competitionId,
+      displayName: 'Fixture',
+    }),
+  );
+  const claims: Record<string, unknown>[] = [];
+  const calls: string[] = [];
+  let anotherDevice = false;
+  let slowClaim = false;
+  let failClaims = false;
+  let finishClaim: (() => void) | undefined;
+  const connection = new RivalHubConnection(path, async (input, init) => {
+    const url = input instanceof Request ? input.url : input;
+    const operation = new URL(url).pathname.split('/').at(-1);
+    if (operation === 'claim') {
+      calls.push('claim');
+      if (typeof init?.body !== 'string') throw new Error('claim body must be JSON text');
+      claims.push(JSON.parse(init.body) as Record<string, unknown>);
+      if (failClaims) return Response.json({}, { status: 409 });
+      if (slowClaim)
+        await new Promise<void>((resolve) => {
+          finishClaim = resolve;
+        });
+      return Response.json({
+        claimed: !anotherDevice,
+        authorityRevision: 1,
+        activeDeviceName: 'Other',
+      });
+    }
+    if (operation === 'release') {
+      calls.push('release');
+      return Response.json({});
+    }
+    return Response.json(manifest);
+  });
+  await connection.load();
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'manifest.json') }),
+  });
+  await controller.selectMatch(manifest.match.matchId, {
+    kind: 'online',
+    load: () => Promise.resolve(manifest),
+  });
+  let ready = false;
+  const snapshot = liveSnapshotV1Schema.parse({
+    ...claimSnapshot,
+    matchId: manifest.match.matchId,
+    competitionId: manifest.match.competition!.competitionId,
+    capability: { ...claimSnapshot.capability, lineupComplete: true },
+    cursor: { ...claimSnapshot.cursor, liveSessionId: 'fixture-session' },
+    players: Array.from({ length: 10 }, (_, i) => ({
+      sourcePlayerId: `765611980000000${String(i).padStart(2, '0')}`,
+      canonicalPlayerId: null,
+      identityEvidence: 'observed',
+      lineupEvidence: 'current',
+      displayName: null,
+      side: i < 5 ? 'CT' : 'T',
+      lifeState: 'unknown',
+      health: null,
+      armor: null,
+      hasHelmet: null,
+      hasDefuser: null,
+      money: null,
+      equipmentValue: null,
+      activeWeapon: null,
+      stats: { kills: null, assists: null, deaths: null, liveAdr: null, completedAdr: null },
+    })),
+  });
+  const app = Fastify();
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const source = registerRivalHubConnectionRoutes(app, {
+    connection,
+    controller,
+    currentSnapshot: () => (ready ? snapshot : null),
+    originPolicy: createLocalWebOriginPolicy(),
+    canClaim: () => true,
+  });
+  await app.ready();
+  try {
+    source.beginProduction();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(claims).toHaveLength(0);
+    ready = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]).toMatchObject({ matchId: manifest.match.matchId, takeover: false });
+    expect(claims[0]!.lineupSteam64).toHaveLength(10);
+    const release = () =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/source/release',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {},
+      });
+    expect((await release()).statusCode).toBe(200);
+    ready = false;
+    await app.inject('/local/v1/rivalhub-connection');
+    await vi.advanceTimersByTimeAsync(10_000);
+    ready = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(claims).toHaveLength(1);
+    // Transient failure is bounded; polling after exhaustion cannot rearm it.
+    failClaims = true;
+    source.beginProduction();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(claims).toHaveLength(6);
+    failClaims = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(claims).toHaveLength(6);
+    // Stop waits for an already submitted claim before releasing its authority.
+    slowClaim = true;
+    source.beginProduction();
+    const stopping = release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.at(-1)).toBe('claim');
+    finishClaim!();
+    expect((await stopping).statusCode).toBe(200);
+    expect(calls.slice(-2)).toEqual(['claim', 'release']);
+    slowClaim = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(claims).toHaveLength(7);
+    // A match change while the upstream request is pending releases the old authority.
+    slowClaim = true;
+    source.beginProduction();
+    await controller.selectMatch('different-match', {
+      kind: 'online',
+      load: () =>
+        Promise.resolve({
+          ...manifest,
+          match: { ...manifest.match, matchId: 'different-match' },
+        }),
+    });
+    finishClaim!();
+    await source.stopAutomaticClaim();
+    expect(connection.view().activeSourceMatchId).toBeNull();
+    expect(calls.slice(-2)).toEqual(['claim', 'release']);
+    slowClaim = false;
+    await controller.selectMatch(manifest.match.matchId, {
+      kind: 'online',
+      load: () => Promise.resolve(manifest),
+    });
+    // A local BP override for the same match also invalidates the pending online claim.
+    slowClaim = true;
+    source.beginProduction();
+    await controller.selectMatch(manifest.match.matchId, {
+      kind: 'local',
+      load: () => Promise.resolve(manifest),
+    });
+    finishClaim!();
+    await source.stopAutomaticClaim();
+    expect(connection.view().activeSourceMatchId).toBeNull();
+    expect(calls.slice(-2)).toEqual(['claim', 'release']);
+    slowClaim = false;
+    controller.clearActive();
+    await controller.selectMatch(manifest.match.matchId, {
+      kind: 'online',
+      load: () => Promise.resolve(manifest),
+    });
+    anotherDevice = true;
+    source.beginProduction();
+    await source.stopAutomaticClaim();
+    expect(connection.view().activeDeviceName).toBe('Other');
+    source.beginProduction();
+    await source.stopAutomaticClaim();
+    expect(claims).toHaveLength(10);
+  } finally {
+    await app.close();
+    vi.useRealTimers();
+  }
 });

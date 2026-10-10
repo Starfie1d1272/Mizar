@@ -11,8 +11,14 @@ export function registerProductionRoutes(
     hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
+    beginSource?: () => void;
   },
 ) {
+  let cleanup: {
+    at: string;
+    scene: 'pending' | 'confirmed' | 'failed';
+    source: 'pending' | 'confirmed' | 'failed';
+  } | null = null;
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
   let revision = randomUUID();
   let busy = false;
@@ -21,6 +27,7 @@ export function registerProductionRoutes(
   const view = () => ({
     mode,
     revision,
+    cleanup,
     canEnter: !shuttingDown && !updatePending && options.hasContext(),
   });
   app.get('/local/v1/production', (_request, reply) =>
@@ -43,23 +50,33 @@ export function registerProductionRoutes(
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
+        const starting = mode === 'preparation';
+        if (starting) cleanup = null;
         mode = 'live';
+        if (starting) options.beginSource?.();
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
+        cleanup = { at: new Date().toISOString(), scene: 'pending', source: 'pending' };
         // Both normal exit paths use this same safe-scene/release transaction.
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
           const result = await options.scenes.select('waiting', options.scenes.get().revision);
-          if (!result.ok) return { code: 409, value: { message: result.message } };
+          if (!result.ok) {
+            cleanup.scene = 'failed';
+            return { code: 409, value: { message: result.message } };
+          }
         }
+        cleanup.scene = 'confirmed';
         await options.release();
+        cleanup.source = 'confirmed';
         mode = 'preparation';
       }
       committed = true;
       revision = randomUUID();
       return { code: 200, value: view() };
     } catch {
+      if (cleanup?.scene === 'confirmed' && cleanup.source === 'pending') cleanup.source = 'failed';
       return { code: 409, value: { message: '结束制作未完成，请检查赛事连接后重试。' } };
     } finally {
       if (shutdown && !committed) shuttingDown = false;

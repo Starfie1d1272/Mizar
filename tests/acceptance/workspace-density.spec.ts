@@ -99,11 +99,20 @@ for (const [width, height] of [
         height: Math.floor((workHeight - gameHeight) / scale),
       });
       await page.goto('/workspace/dock');
-      await expect(page.getByRole('button', { name: '停止作为数据源' })).toBeVisible();
+      await expect(page.getByRole('button', { name: '现场恢复' })).toBeVisible();
+      await expect(page.locator('.workspace-next-summary')).toContainText('预告尚未执行');
+      if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+        await page.screenshot({
+          path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/dock-${height}-${scale * 100}.png`,
+        });
       const measureDock = () =>
         page.locator('.workspace-dock').evaluate((root) => {
           const bounds = root.getBoundingClientRect();
-          const clipped = Array.from(root.querySelectorAll('button'))
+          const clipped = Array.from(
+            root.querySelectorAll(
+              'button,.workspace-next-summary,.workspace-direction > header,.workspace-obs-scene',
+            ),
+          )
             .filter((button) => {
               if (!button.getClientRects().length) return false;
               const r = button.getBoundingClientRect();
@@ -114,7 +123,8 @@ for (const [width, height] of [
                 r.top < bounds.top - 1 ||
                 r.bottom > bounds.bottom + 1 ||
                 (section !== undefined && r.bottom > section.bottom + 1) ||
-                button.scrollWidth > button.clientWidth + 1
+                (button.tagName === 'BUTTON' && button.scrollWidth > button.clientWidth + 1) ||
+                r.height < 1
               );
             })
             .map((button) => button.textContent);
@@ -136,25 +146,26 @@ for (const [width, height] of [
           };
         });
       expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
-      await page.getByRole('button', { name: '恢复布局', exact: true }).click();
-      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
-      await page.getByRole('button', { name: '复制隐藏命令', exact: true }).click();
-      await expect(page.locator('.workspace-feedback')).toBeVisible();
-      await expect(page.getByRole('alert')).toContainText('CS2 未接受窗口尺寸');
-      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
-      const feedbackOverlap = await page.locator('.workspace-feedback').evaluate((toast) => {
-        const t = toast.getBoundingClientRect();
-        return Array.from(document.querySelectorAll('.workspace-dock > section button'))
-          .filter((button) => {
-            const b = button.getBoundingClientRect();
-            return t.left < b.right && t.right > b.left && t.top < b.bottom && t.bottom > b.top;
-          })
-          .map((button) => button.textContent);
+      let finishTake: (() => void) | undefined;
+      await page.route('**/operator/program-scene', async (route) => {
+        await new Promise<void>((resolve) => {
+          finishTake = resolve;
+        });
+        await route.fulfill({ json: { ok: true } });
       });
-      expect(feedbackOverlap).toEqual([]);
-      await page.getByRole('button', { name: '查看错误详情' }).click();
-      await expect(page.getByRole('dialog')).toContainText('请使用窗口模式后重试恢复布局');
-      await page.getByRole('button', { name: '关闭详情' }).click();
+      await page.getByRole('button', { name: '赛前等待', exact: true }).click();
+      await expect(page.getByRole('button', { name: '赛前等待', exact: true })).toBeDisabled();
+      await expect(page.locator('.workspace-next-summary')).toContainText('预告尚未执行');
+      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
+      if (process.env.MIZAR_REVIEW_SCREENSHOTS)
+        await page.screenshot({
+          path: `${process.env.MIZAR_REVIEW_SCREENSHOTS}/dock-${height}-${scale * 100}-busy.png`,
+        });
+      finishTake?.();
+      await expect(page.getByRole('button', { name: '赛前等待', exact: true })).toBeEnabled();
+      await page.getByRole('button', { name: '观战 / 本机 HUD', exact: true }).click();
+      await expect(page.getByRole('button', { name: '复制隐藏命令', exact: true })).toBeVisible();
+      expect(await measureDock()).toEqual({ clipped: [], overflow: [], documentScroll: false });
       await page.setViewportSize({
         width: Math.floor((width - gameWidth) / scale),
         height: Math.floor(workHeight / scale),
@@ -215,7 +226,8 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       return route.fulfill({ json: { ok: true } });
     });
     await page.goto('/');
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.goto('/?tab=check');
+    await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
     if (connection === 'connected') {
       await expect(page).toHaveURL(/\/workspace$/);
       expect(entered).toBe(1);
@@ -247,7 +259,8 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+  await page.goto('/?tab=check');
+  await page.getByRole('button', { name: '进入制播工作区', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
   expect(entered).toBe(0);
@@ -276,7 +289,8 @@ for (const gsi of [
       route.fulfill({ json: { mode: 'preparation', revision: 'preflight', canEnter: true } }),
     );
     await page.goto('/');
-    await page.getByRole('button', { name: '启动游戏并打开工作台', exact: true }).click();
+    await page.goto('/?tab=check');
+    await page.getByRole('button', { name: '启动新制作并进入现场', exact: true }).click();
     await expect(page).toHaveURL(/settings\?tab=gsi&prepare=1$/);
   });
 }

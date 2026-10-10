@@ -64,15 +64,19 @@ export function RivalHubSyncControls() {
       {workspace?.pendingRivalhub ? (
         <Button
           disabled={busy}
-          onClick={() =>
+          onClick={() => {
+            if (
+              !window.confirm('确认将本场应用为待确认的网站比赛资料？当前未保存修改不会自动保存。')
+            )
+              return;
             void run(async () => {
               await switchToRivalhubBp(
                 workspace.contextRevision,
                 workspace.pendingRivalhub!.revision,
               );
               return '已确认加载网站比赛资料。';
-            })
-          }
+            });
+          }}
         >
           确认加载网站版本：{workspace.pendingRivalhub.entrants.a.name} vs{' '}
           {workspace.pendingRivalhub.entrants.b.name}

@@ -1018,3 +1018,110 @@
   background: var(--mizar-bg-surface);
   padding-block: var(--mizar-layout-gap);
 }
+
+/* Source, current match and formal playback controls belong to one compact task. */
+@media (min-width: 1100px) {
+  .bp-workspace-controls .bp-control-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 24px;
+  }
+  .bp-workspace-controls .bp-control-panel > h2,
+  .bp-workspace-controls .bp-workbench-status,
+  .bp-workspace-controls .bp-pending-rivalhub {
+    grid-column: 1 / -1;
+  }
+  .bp-workspace-controls .bp-current-match {
+    grid-column: 1;
+    grid-row: 3 / span 2;
+  }
+  .bp-workspace-controls .bp-control-actions {
+    grid-column: 2;
+  }
+  .bp-workspace-controls .bp-demo-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.bp-workspace-controls .bp-scene-testing {
+  margin-top: 0;
+}
+.bp-workspace-controls .bp-scene-testing:not([open]) {
+  display: block;
+  padding-block: 8px;
+}
+.bp-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--mizar-layout-padding);
+  align-items: start;
+}
+.bp-workbench-preview {
+  min-width: 0;
+}
+.bp-workbench-preview .preparation-program-preview {
+  width: 100%;
+  max-width: none;
+}
+@media (max-width: 1100px) {
+  .bp-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1400px) and (min-height: 800px) {
+  .mizar-dialog.bp-editor-dialog {
+    width: min(96vw, calc(var(--mizar-layout-target) * 52));
+    max-height: calc(100dvh - var(--mizar-layout-padding) * 2);
+  }
+  .bp-editor-dialog .bp-local-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: var(--mizar-layout-gap);
+    margin-top: 0;
+    padding: var(--mizar-layout-padding);
+  }
+  .bp-editor-dialog .bp-editor-heading,
+  .bp-editor-dialog .bp-editor-feedback,
+  .bp-editor-dialog .bp-editor-actions {
+    grid-column: 1 / -1;
+  }
+  .bp-editor-dialog .bp-editor-match-fields,
+  .bp-editor-dialog .bp-editor-teams,
+  .bp-editor-dialog .bp-map-pool {
+    grid-column: 1;
+    margin-block: 0;
+  }
+  .bp-editor-dialog .bp-editor-sequence {
+    grid-column: 2;
+    grid-row: 2 / span 4;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .bp-editor-dialog .bp-editor-rules {
+    grid-column: 1;
+  }
+  .bp-editor-dialog .bp-sequence-step {
+    padding: calc(var(--mizar-layout-compact) / 2) var(--mizar-layout-compact);
+    grid-template-columns: 28px minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 1fr);
+  }
+  .bp-editor-dialog .bp-sequence-step .bp-editor-field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .bp-editor-dialog .bp-editor-actions {
+    position: static;
+  }
+}
+
+/* Dialog owns the visible title; retain the editor's accessible region name. */
+.bp-editor-dialog #bp-local-editor-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

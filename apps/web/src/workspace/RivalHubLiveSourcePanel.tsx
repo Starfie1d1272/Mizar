@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { desktopInvoke } from './client';
 import { Button } from '../ui/primitives';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -14,9 +14,6 @@ type Connection = {
   activeDeviceName: string | null;
 };
 
-const MAX_AUTO_CLAIM_ATTEMPTS = 5;
-const MIN_AUTO_CLAIM_INTERVAL_MS = 2_000;
-
 export function RivalHubLiveSourcePanel({
   action,
   onMessage,
@@ -30,113 +27,30 @@ export function RivalHubLiveSourcePanel({
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
 
-  const autoClaimRef = useRef<{
-    matchId: string | null;
-    attempts: number;
-    lastAttemptAt: number;
-    settled: boolean;
-  }>({
-    matchId: null,
-    attempts: 0,
-    lastAttemptAt: 0,
-    settled: false,
-  });
-  const inFlightRef = useRef(false);
-  const userReleasedRef = useRef<string | null>(null);
-  const wasReadyRef = useRef(false);
-
-  const activeMatchId = connection?.activeMatchId ?? null;
-  const isSource = Boolean(activeMatchId && connection?.activeSourceMatchId === activeMatchId);
-  const hasOtherSource = Boolean(connection?.activeDeviceName);
-
   useEffect(() => {
-    if (autoClaimRef.current.matchId !== null && autoClaimRef.current.matchId !== activeMatchId) {
-      autoClaimRef.current = {
-        matchId: activeMatchId,
-        attempts: 0,
-        lastAttemptAt: 0,
-        settled: false,
-      };
-      userReleasedRef.current = null;
-    } else if (autoClaimRef.current.matchId === null && activeMatchId !== null) {
-      autoClaimRef.current.matchId = activeMatchId;
-    }
-    if (activeMatchId && (isSource || hasOtherSource)) {
-      autoClaimRef.current.settled = true;
-    }
-  }, [activeMatchId, isSource, hasOtherSource]);
-
-  useEffect(() => {
-    let cancelled = false;
-
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        const response = await fetch('/local/v1/rivalhub-connection', { cache: 'no-store' });
-        if (!response.ok || cancelled) return;
+        const response = await fetch('/local/v1/rivalhub-connection', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) throw new Error('unavailable');
         const next = (await response.json()) as Connection;
-        if (cancelled) return;
-        setConnection(next);
-        if (next.sourceReady === true && !wasReadyRef.current && !userReleasedRef.current) {
-          autoClaimRef.current.attempts = 0;
-          autoClaimRef.current.settled = false;
-        }
-        wasReadyRef.current = next.sourceReady !== false;
-
-        const targetMatchId = next.activeMatchId;
-        if (
-          !targetMatchId ||
-          next.sourceReady === false ||
-          next.activeSourceMatchId === targetMatchId ||
-          Boolean(next.activeDeviceName) ||
-          userReleasedRef.current === targetMatchId ||
-          autoClaimRef.current.settled ||
-          autoClaimRef.current.attempts >= MAX_AUTO_CLAIM_ATTEMPTS ||
-          inFlightRef.current ||
-          Date.now() - autoClaimRef.current.lastAttemptAt < MIN_AUTO_CLAIM_INTERVAL_MS
-        ) {
-          return;
-        }
-
-        inFlightRef.current = true;
-        autoClaimRef.current.attempts++;
-        autoClaimRef.current.lastAttemptAt = Date.now();
-
-        try {
-          const claimResponse = await fetch('/operator/rivalhub/source/claim', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: '{}',
-          });
-          if (!claimResponse.ok && !cancelled) {
-            const failure = (await claimResponse.json().catch(() => null)) as {
-              message?: string;
-            } | null;
-            onMessage(failure?.message ?? '自动认领数据源失败，可手动重试。');
-          }
-          if (claimResponse.ok && !cancelled) {
-            const updated = (await claimResponse.json()) as Connection;
-            if (cancelled) return;
-            setConnection({ ...next, ...updated });
-            autoClaimRef.current.settled = true;
-            if (updated.activeSourceMatchId === targetMatchId) {
-              onMessage('本机已成为本场实时数据源。');
-            }
-          }
-        } finally {
-          inFlightRef.current = false;
-        }
+        if (active) setConnection(next);
       } catch {
-        // Quiet
+        if (active) setConnection(null);
+      } finally {
+        if (active) timer = setTimeout(() => void poll(), 3000);
       }
     }
-
     void poll();
-    const timer = setInterval(() => void poll(), 3_000);
     return () => {
-      cancelled = true;
-      clearInterval(timer);
+      active = false;
+      clearTimeout(timer);
     };
-  }, [activeMatchId, onMessage]);
+  }, []);
 
   const handleClaim = () =>
     action(async () => {
@@ -152,9 +66,7 @@ export function RivalHubLiveSourcePanel({
       }
       const next = (await response.json()) as Connection;
       setConnection((old) => ({ ...old, ...next }));
-      autoClaimRef.current.settled = true;
       if (targetMatchId !== null && next.activeSourceMatchId === targetMatchId) {
-        userReleasedRef.current = null;
         onMessage('本机已成为本场实时数据源。');
       } else if (next.activeDeviceName) {
         onMessage(`当前由 ${next.activeDeviceName} 提供实时数据。`);
@@ -165,6 +77,7 @@ export function RivalHubLiveSourcePanel({
 
   const handleTakeover = () =>
     action(async () => {
+      if (!window.confirm('接管其他设备的网站数据源？节目自动 / 手动控制不会改变。')) return;
       const response = await fetch('/operator/rivalhub/source/claim', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -176,14 +89,17 @@ export function RivalHubLiveSourcePanel({
       }
       const next = (await response.json()) as Connection;
       setConnection((old) => ({ ...old, ...next }));
-      autoClaimRef.current.settled = true;
-      userReleasedRef.current = null;
-      onMessage('已接管为本场数据源。');
+      onMessage(
+        connection?.activeMatchId && next.activeSourceMatchId === connection.activeMatchId
+          ? '已接管为本场数据源。'
+          : next.activeDeviceName
+            ? `当前由 ${next.activeDeviceName} 提供实时数据。`
+            : '接管结果待确认，请重新核对数据源状态。',
+      );
     });
 
   const handleRelease = () =>
     action(async () => {
-      userReleasedRef.current = connection?.activeMatchId ?? null;
       const response = await fetch('/operator/rivalhub/source/release', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -197,10 +113,11 @@ export function RivalHubLiveSourcePanel({
       // Commands return connection state, without the active match added by polling.
       // Keep that context so release does not look like switching away from this match.
       setConnection((old) => ({ ...old, ...next }));
-      onMessage('已停止作为数据源。');
+      onMessage('已停止提供网站数据。');
     });
 
-  if (!connection?.paired) {
+  if (!connection) return <span role="status">网站数据源 · 无法确认</span>;
+  if (!connection.paired) {
     return (
       <a
         href="/settings?tab=rivalhub"
@@ -262,7 +179,7 @@ export function RivalHubLiveSourcePanel({
           title={connection.sourceReady === false ? '本机已认领，推送暂停' : '本机正在提供实时数据'}
           onClick={() => void handleRelease()}
         >
-          停止作为数据源
+          停止提供网站数据
         </Button>
       ) : connection.activeDeviceName ? (
         <Button
@@ -278,7 +195,7 @@ export function RivalHubLiveSourcePanel({
           disabled={connection.sourceReady === false || !connection.activeMatchId}
           onClick={() => void handleClaim()}
         >
-          成为本场数据源
+          恢复提供网站数据
         </Button>
       )}
     </div>

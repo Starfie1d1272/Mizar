@@ -29,7 +29,11 @@ vi.mock('../src/workspace/obs-client', () => ({
   obsCommand: mocks.obsCommand,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.invoke }));
-vi.mock('../src/preparation/client', () => ({ openTool: vi.fn(), useLocalRead: () => null }));
+vi.mock('../src/preparation/client', () => ({
+  openTool: vi.fn(),
+  useLocalRead: () => null,
+  useLocalReadWithTime: () => ({ value: null, updatedAt: null }),
+}));
 vi.mock('../src/operator/RivalHubPreparationPanel', () => ({
   RivalHubPreparationPanel: () => null,
 }));

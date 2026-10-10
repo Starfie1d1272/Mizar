@@ -3,7 +3,7 @@ import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
-import { BpPage } from './bp/BpPage';
+import { BpWorkbench, BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -64,7 +64,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'bp',
-    path: '/preview?scene=bp',
+    path: '/operator/bp',
     title: 'BP 制作',
     description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
@@ -569,7 +569,6 @@ export function DebugPage() {
       <main className="debug-shell mizar-surface" data-surface="technical">
         <header className="debug-header">
           <div>
-            <h1>运行诊断</h1>
             <p className="debug-intro">查看运行状态与恢复建议。</p>
           </div>
         </header>
@@ -603,7 +602,7 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
-  if (['/', '/operator', '/matches', '/picture', '/settings'].includes(pathname))
+  if (['/', '/operator', '/matches', '/picture', '/settings', '/resources'].includes(pathname))
     return <PreparationPage />;
   if (pathname === '/qualification')
     return (
@@ -620,7 +619,7 @@ export function App() {
               环境。
             </p>
             <p>普通制作模式不会自动开启验收记录。</p>
-            <a href="/">返回准备中心</a>
+            <a href="/">返回本场制播</a>
           </section>
         </main>
       </OperatorShell>
@@ -657,7 +656,15 @@ export function App() {
     return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp') return <LegacyBpPreviewRedirect />;
+  if (pathname === '/operator/bp')
+    return (
+      <ToolShell title="正式 BP 控制">
+        <main className="preparation">
+          <p>影响正式播出；赛前可用，无需启动 CS2 或等待 GSI。</p>
+          <BpWorkbench />
+        </main>
+      </ToolShell>
+    );
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (
@@ -665,10 +672,10 @@ export function App() {
         <main className="operator-shell">
           <header className="product-heading">
             <h1>页面不存在</h1>
-            <p>404 · 请检查地址，或返回准备中心继续操作。</p>
+            <p>404 · 请检查地址，或返回本场制播继续操作。</p>
           </header>
           <div className="dashboard-links">
-            <a href="/">返回准备中心</a>
+            <a href="/">返回本场制播</a>
           </div>
         </main>
       </OperatorShell>
@@ -677,13 +684,4 @@ export function App() {
   if (surface.id === 'program') return <ProgramRoute />;
   if (surface.id === 'hud') return <HudConsolePage />;
   return <SurfacePage surface={surface} />;
-}
-
-function LegacyBpPreviewRedirect() {
-  useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    query.set('scene', 'bp');
-    window.location.replace(`/preview?${query}`);
-  }, []);
-  return null;
 }

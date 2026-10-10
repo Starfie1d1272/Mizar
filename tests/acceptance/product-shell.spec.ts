@@ -9,12 +9,16 @@ test('qualification help uses the preparation shell and development host diagnos
   await expect(page.getByRole('heading', { name: '现场验收', exact: true })).toBeVisible();
   await expect(sidebar).toBeVisible();
   const nav = sidebar.getByRole('navigation', { name: '制作导航' });
-  await expect(nav.getByRole('link', { name: '总览' })).toHaveAttribute('href', '/');
-  await expect(nav.getByRole('link', { name: '比赛资料', exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: '本场' })).toHaveAttribute('href', '/');
+  await expect(nav.getByRole('link', { name: '比赛库', exact: true })).toHaveAttribute(
     'href',
-    '/matches',
+    '/resources',
   );
-  await expect(page.getByRole('link', { name: '返回准备中心' })).toHaveAttribute('href', '/');
+  await expect(nav.getByRole('link', { name: 'HUD', exact: true })).toHaveAttribute(
+    'href',
+    '/resources?tab=hud',
+  );
+  await expect(page.getByRole('link', { name: '返回本场制播' })).toHaveAttribute('href', '/');
 
   const response = await page.request.get('/debug/hosts');
   expect(response.ok()).toBe(true);

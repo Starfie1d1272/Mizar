@@ -5,7 +5,7 @@
   font-family: var(--mizar-type-family-body);
   display: grid;
   grid-template-columns:
-    calc(var(--mizar-layout-target) * 6 + var(--mizar-layout-padding) * 1.5)
+    calc(var(--mizar-layout-target) * 5.5)
     minmax(0, 1fr);
   font-size: var(--mizar-type-size-body);
   -webkit-font-smoothing: antialiased;
@@ -68,7 +68,6 @@
   flex: none;
 }
 .product-sidebar footer {
-  margin-top: auto;
   color: var(--mizar-fg-muted);
   font-size: var(--mizar-type-size-small);
   padding-inline: var(--mizar-layout-gap);
@@ -299,6 +298,20 @@
   font-size: var(--mizar-type-size-body);
 }
 .operator-rivalhub-candidate-info span {
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
+
+.product-obs-status {
+  margin-top: auto;
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  padding: var(--mizar-layout-gap);
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.product-obs-status span {
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }

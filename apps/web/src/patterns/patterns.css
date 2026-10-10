@@ -34,3 +34,17 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.mizar-workbench[data-layout='canvas'] {
+  min-height: 0;
+  height: 100%;
+  grid-template-columns: minmax(0, 1fr) calc(var(--mizar-layout-target) * 10);
+  align-items: stretch;
+  gap: var(--mizar-layout-padding);
+}
+@media (max-width: 1100px) {
+  .mizar-workbench[data-layout='canvas'] {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+}

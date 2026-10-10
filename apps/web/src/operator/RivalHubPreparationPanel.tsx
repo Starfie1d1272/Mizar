@@ -180,6 +180,12 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
 
   async function handleConfirmCandidate() {
     if (!bpWorkspace?.pendingRivalhub) return;
+    if (
+      !window.confirm(
+        `将本场切换为 ${bpWorkspace.pendingRivalhub.entrants.a.name} vs ${bpWorkspace.pendingRivalhub.entrants.b.name}？确认应用网站资料；当前未保存修改不会自动保存。`,
+      )
+    )
+      return;
     setConfirming(true);
     setError(null);
     setMessage(null);
