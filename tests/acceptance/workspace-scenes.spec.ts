@@ -30,7 +30,7 @@ test('Workspace preview shares the scene registry and sends a revisioned command
   await expect.poll(() => command).toEqual({ sceneId: 'matchup', expectedRevision: 'revision-1' });
 
   await page.goto('/settings?tab=obs');
-  await page.getByRole('button', { name: '编辑连接', exact: true }).click();
+  await expect(page.getByRole('button', { name: '编辑连接', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
   await expect(page.getByRole('heading', { name: '连接控制', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '保存并测试', exact: true })).toBeVisible();
