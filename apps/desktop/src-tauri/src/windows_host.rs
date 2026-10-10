@@ -227,6 +227,13 @@ impl GameTracker {
         changed || moved
     }
     fn refresh_target(&mut self) -> bool {
+        // Minimization is not a game/window replacement. Keep the measured
+        // monitor and frame lease until the same HWND is restored or destroyed.
+        if self.window.is_some_and(|window| unsafe {
+            let mut pid = 0;
+            GetWindowThreadProcessId(window.hwnd, &mut pid);
+            pid == window.pid && IsIconic(window.hwnd) != 0
+        }) { return false; }
         let found = find_cs2();
         self.observe_target(found, choose_monitor(found))
     }
@@ -262,6 +269,9 @@ impl GameTracker {
     pub fn tick(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
         let changed = self.refresh_target();
+        if self.window.is_some_and(|window| unsafe { IsIconic(window.hwnd) != 0 }) {
+            return None;
+        }
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout);
         if self.monitor == 0 || work.is_none() {
             return self.restore_layout();
@@ -295,7 +305,13 @@ impl GameTracker {
         overlay_visible(self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
     }
     pub fn restore_focus(&self) -> bool {
-        self.window.is_some_and(|window| unsafe { IsWindow(window.hwnd) != 0 && SetForegroundWindow(window.hwnd) != 0 })
+        self.window.is_some_and(|window| unsafe {
+            let mut pid = 0;
+            GetWindowThreadProcessId(window.hwnd, &mut pid);
+            pid == window.pid && IsWindow(window.hwnd) != 0
+                && SetForegroundWindow(window.hwnd) != 0
+                && GetForegroundWindow() == window.hwnd
+        })
     }
 }
 
