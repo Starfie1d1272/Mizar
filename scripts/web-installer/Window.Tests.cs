@@ -15,6 +15,8 @@ namespace Mizar.WebInstaller {
     static Task<string> Complete(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {return Task.FromResult("UI-only-not-installed");}
     internal static void Run() {
       Application.EnableVisualStyles();
+      string diagnostic=Window.DiagnosticText(new Exception("resource_path_unsafe https://example.com/file?token=secret access_token=hidden",new Exception("exit code 7 stderr source failure")));
+      Assert(diagnostic.Contains("resource_path_unsafe") && diagnostic.Contains("exit code 7") && !diagnostic.Contains("token=secret") && !diagnostic.Contains("hidden"),"Diagnostic retains cause and exit evidence while redacting credentials");
       int launches=0, installs=0;
       Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation=(bytes,stages,token)=>{installs++;return Complete(bytes,stages,token);};
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
@@ -48,6 +50,7 @@ namespace Mizar.WebInstaller {
       using(var window=new Window(UiPlan(),(bytes,stages,token)=>{starts++;return starts==1 ? stopped.Task : Complete(bytes,stages,token);},path=>launches++,true)) {
         window.Show(); var pending=window.Start(); Application.DoEvents();
         Assert(window.bar.Visible && !window.action.Enabled,"Working state shows progress and blocks duplicate Install");
+        window.ShowStage("validating-download"); Assert(window.bar.Style==ProgressBarStyle.Marquee && window.heading.Text.Contains("验证"),"Hash validation shows actual stage without invented percent");
         window.ShowStage("installing-core"); Assert(window.bar.Style==ProgressBarStyle.Marquee,"Unknown installation progress is indeterminate");
         window.Close(); Assert(!window.IsDisposed && window.heading.Text=="正在停止","X during installation waits for safe cancellation");
         Assert(!pending.IsCompleted,"Cancellation cannot pretend writer has stopped");

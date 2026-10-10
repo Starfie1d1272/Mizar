@@ -257,6 +257,8 @@ try {
   $env:MIZAR_STATE_ROOT = $plan.stateRoot
   if (!$NoLaunch) { Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot }
 } catch {
+  [Console]::Error.WriteLine($_.ToString())
+  [Console]::Error.WriteLine($_.ScriptStackTrace)
   $code = [string]$_.Exception.Message
   if ($code -notmatch '^update_[a-z_]+$') { $code = 'update_installation_failed' }
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
