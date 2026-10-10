@@ -355,8 +355,8 @@ it('normal production finish and Host shutdown keep the trial recovery marker un
   expect(
     (await h.app.inject({ method: 'POST', url: '/operator/runtime/stop', headers: host }))
       .statusCode,
-  ).toBe(202);
-  await vi.waitFor(() => expect(h.options.productRuntime.stop).toHaveBeenCalledOnce());
+  ).toBe(409);
+  expect(h.options.productRuntime.stop).not.toHaveBeenCalled();
   expect((await h.app.inject('/local/v1/demo-test')).json<DemoTestView>()).toMatchObject({
     active: true,
   });
@@ -364,6 +364,11 @@ it('normal production finish and Host shutdown keep the trial recovery marker un
   expect((await h.app.inject('/local/v1/demo-test')).json<DemoTestView>()).toMatchObject({
     active: false,
   });
+  expect(
+    (await h.app.inject({ method: 'POST', url: '/operator/runtime/stop', headers: host }))
+      .statusCode,
+  ).toBe(202);
+  await vi.waitFor(() => expect(h.options.productRuntime.stop).toHaveBeenCalledOnce());
 });
 
 it('reports only fresh spectator map data as ready and never takes a menu frame', async () => {

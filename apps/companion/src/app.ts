@@ -940,6 +940,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ) {
         return reply.code(403).send({ error: 'runtime-control-denied' });
       }
+      // Host must finish the owned game and configuration transaction while
+      // this service is still available to keep the formal boundary isolated.
+      if (demoTest.get().active)
+        return reply.code(409).send({
+          message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
+        });
       // The capability-verified CLI stop uses the same transaction as both UIs.
       const result = await production.shutdown();
       if (result.code !== 200) return reply.code(result.code).send(result.value);

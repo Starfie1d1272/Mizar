@@ -19,4 +19,6 @@ marker 在 Runtime / projection 组合之前同步探测。存在 marker 的重�
 
 公开 structured live snapshot、可靠事件和 delivery continuity 在试播期间停止生成；试播画面只使用既有本地节目投影。隔离时等待已有可靠 outbox 操作结束；已发送的正式网络请求无法撤回，新的 cloud snapshot 发送在执行时重新核对当前 session 和隔离状态。
 
+活动试播（包括 recovery）拒绝直接停止 Companion。Host 正常退出先切安全画面、清理游戏并完成配置恢复，完成 complete 后才停止服务；EXE `--stop` 复用既有 Host 退出请求通道。外部强停或服务断线仍保留 marker 与 Host journal，重新启动后恢复。
+
 自动化证据在 `apps/companion/test/demo-test.test.ts`；Windows / CS2 / OBS 实机未验证。
