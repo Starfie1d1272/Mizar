@@ -13,24 +13,40 @@ pnpm --filter @mizar/companion deploy --prod (Join-Path $bridge 'resources/app')
 if ($LASTEXITCODE) { throw 'Production dependency deployment failed' }
 node "$PSScriptRoot/prepare-bridge.mjs" $bridge
 if ($LASTEXITCODE) { throw 'Bridge deployment failed' }
-node "$PSScriptRoot/test-resource-mirror.mjs" (Join-Path $bridge 'resources/app/dist/web-installer/resource-mirror.mjs')
-if ($LASTEXITCODE) { throw 'Box resource transport failed' }
-pnpm exec vitest run scripts/web-installer/qualification-plan.test.mjs scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs scripts/web-installer/core-reuse.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
-if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
-node "$PSScriptRoot/test-pack-cache-boundary.mjs" (Join-Path $bridge 'resources/app/dist/web-installer/install-official-pack.mjs')
-if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
-& "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
-& "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
-$previous = @{}
-foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
-try {
-  $env:MIZAR_BRIDGE_NODE = (Get-Command node).Source
-  $env:MIZAR_BRIDGE_SCRIPT = Join-Path $PSScriptRoot 'test-bootstrap-boundary.mjs'
-  $env:MIZAR_BRIDGE_MODULE = Join-Path $bridge 'resources/app/dist/web-installer/complete-bootstrap.mjs'
-  $env:MIZAR_BRIDGE_PLAN = Join-Path $PSScriptRoot 'legacy-stable-plan.json'
-  & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output
-} finally {
-  foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key,$previous[$key]) }
+# These SDK checks own temporary roots and only read the deployed bridge. Native
+# UI/NSIS checks remain ordered because they share Windows installation state.
+$resourceChecks = Start-Job -ArgumentList (Get-Location).Path, $PSScriptRoot, $bridge -ScriptBlock {
+  param($repository, $scripts, $deployed)
+  $ErrorActionPreference = 'Stop'
+  Set-Location -LiteralPath $repository
+  node "$scripts/test-resource-mirror.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/resource-mirror.mjs')
+  if ($LASTEXITCODE) { throw 'Box resource transport failed' }
+  pnpm exec vitest run scripts/web-installer/qualification-plan.test.mjs scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs scripts/web-installer/core-reuse.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
+  if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
+  node "$scripts/test-pack-cache-boundary.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/install-official-pack.mjs')
+  if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
 }
+$nativeFailure = $null
+try {
+  & "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
+  & "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
+  $previous = @{}
+  foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
+  try {
+    $env:MIZAR_BRIDGE_NODE = (Get-Command node).Source
+    $env:MIZAR_BRIDGE_SCRIPT = Join-Path $PSScriptRoot 'test-bootstrap-boundary.mjs'
+    $env:MIZAR_BRIDGE_MODULE = Join-Path $bridge 'resources/app/dist/web-installer/complete-bootstrap.mjs'
+    $env:MIZAR_BRIDGE_PLAN = Join-Path $PSScriptRoot 'legacy-stable-plan.json'
+    & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output
+  } finally {
+    foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key,$previous[$key]) }
+  }
+} catch { $nativeFailure = $_ }
+# Join all checks, including after native failure; no test process outlives the gate.
+try {
+  $resourceChecks | Wait-Job | Receive-Job -ErrorAction Stop
+  if ($resourceChecks.State -ne 'Completed') { throw 'Windows resource checks did not complete' }
+} finally { Remove-Job -Job $resourceChecks }
+if ($nativeFailure) { throw $nativeFailure }
 $clock.Stop()
 [ordered]@{ schemaVersion=1; sourceSha=(& git rev-parse HEAD); wallTimeSeconds=$clock.Elapsed.TotalSeconds; nativeUi=$true; realNsisRegression=$true; productionDependencies=$true; productionCompletionEvidence=$false; missingEvidence=@('new trusted Core and official resource publication','cold-cache first installation','offline default EPL','installed desktop launch') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'verification.json') -Encoding UTF8

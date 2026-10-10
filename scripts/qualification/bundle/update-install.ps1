@@ -217,7 +217,12 @@ try {
   Assert-Payload $plan.bundleRoot $plan.previousContentDigest
   if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
   Save-Registration
-  Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse
+  $backup = Join-Path $StageRoot 'previous'
+  if (Test-Path -LiteralPath $backup) { throw 'update_recovery_conflict' }
+  # Copy the already reparse-checked tree using Windows' bounded parallel copier.
+  # Never mirror/delete, retry indefinitely, or treat partial/mismatched copies as success.
+  & (Join-Path $env:SystemRoot 'System32\robocopy.exe') $plan.bundleRoot $backup /E /COPY:DAT /DCOPY:DAT /MT:8 /R:0 /W:0 /XJ /NP /NFL /NDL /NJH /NJS | Out-Null
+  if ($LASTEXITCODE -notin @(0, 1)) { throw 'update_backup_copy_failed' }
   Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
@@ -285,3 +290,4 @@ try {
   else { Record-Result 'cancelled' $code; Recovery-Registration $false }
   exit 1
 }
+exit 0
