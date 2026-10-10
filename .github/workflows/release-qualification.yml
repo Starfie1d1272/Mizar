@@ -375,6 +375,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
+          if ($manifest.appVersion -match '^\d+\.\d+\.\d+$') {
+            $cores = @(Get-ChildItem -LiteralPath $extractRoot -Directory)
+            if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
+            ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
+            if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
+          }
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
 
@@ -386,6 +392,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/web-installer-build.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
@@ -435,6 +442,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/web-installer-build.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json

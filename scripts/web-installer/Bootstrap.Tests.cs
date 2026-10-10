@@ -41,6 +41,32 @@ namespace Mizar.WebInstaller {
       plan.publicationRequired=false;
       bool denied=false; try {Publication.ValidatePlan(plan);} catch {denied=true;} Assert(denied);
     }
+    static async Task BoxOnly() {
+      // Original v1.1 production manifest and both original signatures, unchanged.
+      // This tests Native public-state transport. SDK cryptography is covered by
+      // updates-source.test.ts; no installer is executed by this test.
+      var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
+      var plan=serializer.Deserialize<Plan>(File.ReadAllText("scripts/web-installer/legacy-stable-plan.json"));
+      plan.publicationRequired=true;plan.coreName="Mizar-v1.1.0-Windows-x64.zip";plan.coreBytes=100070763;plan.coreSha256="1d3f0c98545718784e95792ce752efc3494ceec4816c7aa2d5f4e902a4160253";plan.boxReadToken="public-read-transport-test";
+      string index=File.ReadAllText("apps/companion/test/fixtures/updates/update-index-v2.json");
+      var handler=new FixtureHandler {Reply=request=>{
+        Assert(request.RequestUri.Host=="box.nju.edu.cn"); // GitHub is unavailable.
+        if(request.RequestUri.AbsolutePath.StartsWith("/api/")) {
+          Assert(request.Headers.Contains("Authorization"));
+          string path=Uri.UnescapeDataString(request.RequestUri.Query);
+          if(request.RequestUri.AbsolutePath.EndsWith("/dir/")) return Response(System.Text.Encoding.UTF8.GetBytes(serializer.Serialize(new{repo_name="Mizar",user_perm="r",dirent_list=new[]{new{name=plan.name,size=plan.bytes,type="file"}}})));
+          return Response(System.Text.Encoding.UTF8.GetBytes(serializer.Serialize("https://box.nju.edu.cn/seafhttp/files/original/"+(path.Contains("latest.json")?"latest.json":plan.name))));
+        }
+        Assert(request.Headers.Authorization==null);
+        Assert(request.RequestUri.AbsolutePath.EndsWith("latest.json"));
+        return Response(System.Text.Encoding.UTF8.GetBytes(index));
+      }};
+      using(var client=new HttpClient(handler)) {
+        await Publication.Verify(plan,client,CancellationToken.None);
+        string url=await Mirror.Resolve(plan,client,CancellationToken.None);
+        Assert(new Uri(url).Host=="box.nju.edu.cn"&&url.EndsWith(plan.name));
+      }
+    }
     static async Task Run() {
       string root=Path.Combine(Path.GetTempPath(), "mizar-bootstrap-test-" + Guid.NewGuid());
       try {
@@ -90,6 +116,6 @@ namespace Mizar.WebInstaller {
         }
       } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
-    [STAThread] public static int Main() { try { PublicationContract(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
+    [STAThread] public static int Main() { try { PublicationContract(); BoxOnly().GetAwaiter().GetResult(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
   }
 }

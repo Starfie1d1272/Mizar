@@ -21,6 +21,7 @@ const assetSchema = z.object({
   browser_download_url: z.string(),
 });
 const releaseSchema = z.object({
+  id: z.number().int().positive().optional(),
   tag_name: z.string(),
   draft: z.boolean(),
   prerelease: z.boolean(),
@@ -102,7 +103,7 @@ export class StableSource {
   ): Promise<UpdateManifest> {
     const verifier = await createVerifier({
       certificateIssuer: 'https://token.actions.githubusercontent.com',
-      certificateIdentityURI: UPDATE_WORKFLOW,
+      certificateIdentityURI: '^' + UPDATE_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
       ctLogThreshold: 1,
       tlogThreshold: 1,
       tufCachePath: this.cachePath,
@@ -133,7 +134,8 @@ export class StableSource {
   ) {
     const verifier = await createVerifier({
       certificateIssuer: 'https://token.actions.githubusercontent.com',
-      certificateIdentityURI: PUBLICATION_WORKFLOW,
+      certificateIdentityURI:
+        '^' + PUBLICATION_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
       ctLogThreshold: 1,
       tlogThreshold: 1,
       tufCachePath: this.cachePath,
@@ -158,41 +160,48 @@ export class StableSource {
       throw new Error('update_publication_mismatch');
     return publication;
   }
+  private async authenticateIndex(indexBytes: Buffer, signal: AbortSignal) {
+    const index = z
+      .strictObject({
+        schemaVersion: z.literal('mizar.update-index.v2'),
+        manifestBase64: z
+          .string()
+          .max(90_000)
+          .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+        provenance: z.unknown(),
+        publicationBase64: z
+          .string()
+          .max(90_000)
+          .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+        publicationProvenance: z.unknown(),
+      })
+      .parse(JSON.parse(indexBytes.toString('utf8')));
+    const bytes = Buffer.from(index.manifestBase64, 'base64');
+    if (bytes.length > 64 * 1024 || bytes.toString('base64') !== index.manifestBase64)
+      throw new Error('update_metadata_corrupt');
+    const manifest = await this.verify(bytes, [index.provenance as Bundle], signal);
+    const publicationBytes = Buffer.from(index.publicationBase64, 'base64');
+    if (
+      publicationBytes.length > 64 * 1024 ||
+      publicationBytes.toString('base64') !== index.publicationBase64
+    )
+      throw new Error('update_metadata_corrupt');
+    const publication = await this.verifyPublication(
+      publicationBytes,
+      index.publicationProvenance as Bundle,
+      bytes,
+      manifest,
+      signal,
+    );
+    return { manifest, publication };
+  }
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
     this.mirrorCandidate = undefined;
     try {
       const attempt = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
       const box = new BoxSource(this.fetcher);
-      const index = z
-        .strictObject({
-          schemaVersion: z.literal('mizar.update-index.v2'),
-          manifestBase64: z
-            .string()
-            .max(90_000)
-            .regex(/^[A-Za-z0-9+/]+={0,2}$/),
-          provenance: z.unknown(),
-          publicationBase64: z
-            .string()
-            .max(90_000)
-            .regex(/^[A-Za-z0-9+/]+={0,2}$/),
-          publicationProvenance: z.unknown(),
-        })
-        .parse(JSON.parse((await box.metadata(attempt)).toString('utf8')));
-      const bytes = Buffer.from(index.manifestBase64, 'base64');
-      if (bytes.length > 64 * 1024 || bytes.toString('base64') !== index.manifestBase64)
-        throw new Error('update_metadata_corrupt');
-      const manifest = await this.verify(bytes, [index.provenance as Bundle], attempt);
-      const publicationBytes = Buffer.from(index.publicationBase64, 'base64');
-      if (
-        publicationBytes.length > 64 * 1024 ||
-        publicationBytes.toString('base64') !== index.publicationBase64
-      )
-        throw new Error('update_metadata_corrupt');
-      const publication = await this.verifyPublication(
-        publicationBytes,
-        index.publicationProvenance as Bundle,
-        bytes,
-        manifest,
+      const { manifest, publication } = await this.authenticateIndex(
+        await box.metadata(attempt),
         attempt,
       );
       if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
@@ -242,36 +251,65 @@ export class StableSource {
       signal.throwIfAborted();
       return this.mirrorCandidate.manifest;
     }
-    const metas = release.assets.filter((a) => a.name === 'update-manifest.json');
-    if (metas.length !== 1 || metas[0]!.size > 64 * 1024)
-      throw new Error('update_metadata_missing');
-    const meta = metas[0]!;
-    const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/update-manifest.json`;
-    if (meta.browser_download_url !== url) throw new Error('update_asset_invalid');
-    const bytes = await boundedBytes(await updateRequest(url, signal, this.fetcher), 64 * 1024);
-    const sha = createHash('sha256').update(bytes).digest('hex');
-    if (meta.size !== bytes.length || meta.digest !== `sha256:${sha}`)
-      throw new Error('update_metadata_corrupt');
-    const bundles = z
-      .object({
-        attestations: z
-          .array(z.object({ bundle: z.unknown() }))
-          .min(1)
-          .max(20),
-      })
-      .parse(
-        await updateJson(
-          `${api}/attestations/sha256:${sha}?per_page=20`,
-          signal,
-          this.fetcher,
-          2 * 1024 * 1024,
-        ),
+    let manifest: UpdateManifest;
+    const indices = release.assets.filter((asset) => asset.name === 'update-index.json');
+    if (indices.length) {
+      const asset = indices[0]!;
+      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/update-index.json`;
+      if (
+        indices.length !== 1 ||
+        asset.size > 2 * 1024 * 1024 ||
+        asset.browser_download_url !== url
+      )
+        throw new Error('update_asset_invalid');
+      const bytes = await boundedBytes(
+        await updateRequest(url, signal, this.fetcher),
+        2 * 1024 * 1024,
       );
-    const manifest = await this.verify(
-      bytes,
-      bundles.attestations.map((e) => e.bundle as Bundle),
-      signal,
-    );
+      if (
+        bytes.length !== asset.size ||
+        asset.digest !== `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+      )
+        throw new Error('update_metadata_corrupt');
+      const authenticated = await this.authenticateIndex(bytes, signal);
+      if (
+        authenticated.publication.releaseId !== release.id ||
+        authenticated.publication.publishedAt !== release.published_at
+      )
+        throw new Error('update_publication_mismatch');
+      manifest = authenticated.manifest;
+    } else {
+      const metas = release.assets.filter((a) => a.name === 'update-manifest.json');
+      if (metas.length !== 1 || metas[0]!.size > 64 * 1024)
+        throw new Error('update_metadata_missing');
+      const meta = metas[0]!;
+      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/update-manifest.json`;
+      if (meta.browser_download_url !== url) throw new Error('update_asset_invalid');
+      const bytes = await boundedBytes(await updateRequest(url, signal, this.fetcher), 64 * 1024);
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      if (meta.size !== bytes.length || meta.digest !== `sha256:${sha}`)
+        throw new Error('update_metadata_corrupt');
+      const bundles = z
+        .object({
+          attestations: z
+            .array(z.object({ bundle: z.unknown() }))
+            .min(1)
+            .max(20),
+        })
+        .parse(
+          await updateJson(
+            `${api}/attestations/sha256:${sha}?per_page=20`,
+            signal,
+            this.fetcher,
+            2 * 1024 * 1024,
+          ),
+        );
+      manifest = await this.verify(
+        bytes,
+        bundles.attestations.map((e) => e.bundle as Bundle),
+        signal,
+      );
+    }
     if (`v${manifest.version}` !== release.tag_name) throw new Error('update_tag_mismatch');
     const tag = z
       .object({ object: z.object({ type: z.literal('commit'), sha: z.string() }) })

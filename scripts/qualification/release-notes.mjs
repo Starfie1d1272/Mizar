@@ -100,12 +100,16 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
     throw new Error('发布说明构建身份无效');
   const repo = 'https://github.com/Starfie1d1272/Mizar';
   const tag = `v${notes.version}`;
+  const box = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/';
+  const installer = /^\d+\.\d+\.\d+$/.test(notes.version) ? 'WebInstaller' : 'Setup';
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
   return (
     `# Mizar ${notes.version}\n\n` +
-    `**[下载 Windows 安装包](${download}-Setup.exe)** · [便携包](${download}.zip) · [安装与使用手册](${repo}/blob/${sourceSha}/docs/guide/quick-start.md)\n\n` +
+    `**Windows 安装器**：[GitHub](${download}-${installer}.exe) · [Box 国内入口](${box})\n\n` +
+    `**完整离线 ZIP**：[GitHub](${download}.zip) · [Box 国内入口](${box})\n\n` +
+    `Box 同步可能稍晚，请以版本号为准。[安装与使用手册](${repo}/blob/${sourceSha}/docs/guide/quick-start.md)。\n\n` +
     `${notes.markdown}\n\n## 发行文件\n\n` +
-    `下方 Assets 提供安装包、便携包、SHA-256 校验文件与构建来源证明。\n\n` +
+    `下方 Assets 提供两种产品下载。更新与资源文件供程序校验和安装使用；验收记录保存在资格构建的 CI artifacts，NSIS 许可随对应版本保留。\n\n` +
     `安装包尚无 Windows 发布者代码签名。\n\n## 构建与校验\n\n` +
     `源码：${sourceSha}\n\n[资格构建](${repo}/actions/runs/${qualificationRunId})。发布资产沿用该构建的已验证文件。\n`
   );

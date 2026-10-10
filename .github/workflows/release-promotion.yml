@@ -129,6 +129,14 @@ jobs:
           }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" freeze "$env:RESOURCE_ROOT" product/release-manifest.json "$env:RESOURCE_FROZEN_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Resource archive/publication/catalog verification failed' }
+      - name: Preserve original signed resource publication for safe partial-upload retries
+        if: ${{ env.RESOURCE_ENABLED == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-resources-${{ inputs.tag }}-${{ inputs.qualification_run }}-${{ github.run_attempt }}
+          path: ${{ env.RESOURCE_FROZEN_ROOT }}/*
+          compression-level: 0
+          if-no-files-found: error
       - name: Checkout the qualified source (no rebuild)
         shell: pwsh
         run: |
@@ -163,6 +171,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Stable update provenance verification failed' }
             node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA --bundle product/update-provenance.json
             if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
+            $bootstrap = "product/Mizar-v$($distribution.appVersion)-Windows-x64-WebInstaller.exe"
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product > public-assets.json
+            if ($LASTEXITCODE -ne 0) { throw 'Native candidate identity failed' }
+            node scripts/qualification/release-identity.mjs attestation $bootstrap $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Original native installer provenance failed' }
+            node scripts/qualification/release-identity.mjs attestation product/web-installer-build.json $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Original native candidate metadata provenance failed' }
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
           }
@@ -174,28 +189,36 @@ jobs:
       - name: Publish exact qualified assets
         shell: pwsh
         run: |
-          if ($env:RELEASE_FOUND -eq 'true') {
-            $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
-            $ref = gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0) { throw 'Existing release tag could not be verified' }
-            $existing | ConvertTo-Json -Depth 50 | Set-Content existing-release.json -Encoding utf8
-            $ref | ConvertTo-Json -Depth 50 | Set-Content existing-ref.json -Encoding utf8
-            node scripts/qualification/update-publication.mjs verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product evidence
-            if ($LASTEXITCODE -ne 0) { throw 'Existing release is incomplete or differs; refusing overwrite' }
-            'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
-            exit 0
-          }
-          $assets = @((Get-ChildItem product -File).FullName) + @((Get-ChildItem evidence -Filter '*.zip').FullName) + @((Resolve-Path promotion-identity.json).Path) + @((Resolve-Path promotion-ci.json).Path)
+          $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
           if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -File).FullName) }
-          $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
-          node scripts/qualification/release-notes.mjs $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
-          $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets
-          if ($env:RELEASE_TAG -match '-rc\.') { $args += '--prerelease' }
-          gh @args
-          if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed; inspect before retry' }
-          gh release edit $env:RELEASE_TAG --draft=false
-          if ($LASTEXITCODE -ne 0) { throw 'Publication failed; no rebuild or overwrite attempted' }
+          if ($env:RELEASE_FOUND -eq 'true') {
+            gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
+            $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json $resources
+            if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
+            gh release edit $env:RELEASE_TAG --draft=false
+            if ($LASTEXITCODE -ne 0) { throw 'Draft completion failed' }
+            gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > existing-release.json
+            if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
+            $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
+            if (@($existing.assets | Where-Object name -eq 'update-index.json').Count) {
+              node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product
+              if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
+              'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
+            }
+          } else {
+            $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
+            $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets
+            if ($env:RELEASE_TAG -match '-rc\.') { $args += '--prerelease' }
+            gh @args
+            if ($LASTEXITCODE -ne 0) { throw 'Draft upload incomplete; retry verifies original bytes and adds missing assets' }
+            gh release edit $env:RELEASE_TAG --draft=false
+            if ($LASTEXITCODE -ne 0) { throw 'Publication failed; retry retains original assets' }
+          }
       - name: Verify actual public resource assets before downstream authorization
         if: ${{ env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
@@ -212,7 +235,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed' }
           gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
           if ($LASTEXITCODE -ne 0) { throw 'Published tag lookup failed' }
-          node scripts/qualification/update-publication.mjs create published-release.json published-ref.json $env:RELEASE_TAG product evidence update-publication.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" create published-release.json published-ref.json $env:RELEASE_TAG product update-publication.json
           if ($LASTEXITCODE -ne 0) { throw 'Published Stable authorization preparation failed' }
       - name: Attest the actual Stable publication
         if: ${{ !contains(inputs.tag, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
@@ -229,9 +252,24 @@ jobs:
           Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination update-publication-provenance.json
           gh attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }
-          gh release upload $env:RELEASE_TAG update-publication.json update-publication-provenance.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-index.mjs" product/update-manifest.json product/update-provenance.json update-publication.json update-publication-provenance.json update-index.json
+          if ($LASTEXITCODE -ne 0) { throw 'Original dual-signature envelope preparation failed' }
+          gh release upload $env:RELEASE_TAG update-index.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
-          node scripts/qualification/update-publication.mjs verify-existing published-release.json published-ref.json $env:RELEASE_TAG product evidence
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
+
+      - name: Preserve maintainer promotion records in CI only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-records-${{ github.run_attempt }}
+          path: |
+            promotion-identity.json
+            promotion-ci.json
+            update-publication.json
+            update-publication-provenance.json
+            update-index.json
+          if-no-files-found: warn

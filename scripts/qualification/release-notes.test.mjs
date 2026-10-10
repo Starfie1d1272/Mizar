@@ -76,11 +76,15 @@ it('builds fixed GitHub framing from the same release with exact asset and evide
     sourceSha: 'a'.repeat(40),
     qualificationRunId: '12345',
   });
-  expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64-Setup.exe');
+  expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64-WebInstaller.exe');
   expect(body).toContain('/releases/download/v2.3.0/Mizar-v2.3.0-Windows-x64.zip');
   expect(body).toContain(`/blob/${'a'.repeat(40)}/docs/guide/quick-start.md`);
   expect(body).toContain('**更新日志**');
   expect(body).toContain('## 发行文件');
+  expect(body.match(/https:\/\/box\.nju\.edu\.cn\/d\/91dec4c27e5d47f38fcf\//g)).toHaveLength(2);
+  expect(body).toContain('Box 同步可能稍晚，请以版本号为准');
+  expect(body).toContain('完整离线 ZIP');
+  expect(body).not.toMatch(/Box 已|已同步|云盘已/);
   expect(body).toContain('/actions/runs/12345');
   expect(body).not.toContain('尚未发布');
   expect(() =>

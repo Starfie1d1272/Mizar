@@ -8,6 +8,7 @@ for (const name of [
   'install-official-pack.mjs',
   'complete-bootstrap.mjs',
   'published-bootstrap.mjs',
+  'resource-mirror.mjs',
   'installed-entry.mjs',
   'cancel-control.mjs',
 ])

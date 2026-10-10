@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -253,13 +253,15 @@ export async function freezePublishedResources(folder, manifest, destination) {
     return candidate;
   });
 }
-function publishedResourceMetadata(release, catalog, expected) {
+function publishedResourceMetadata(release, catalog, expected, partial = false) {
   requireValue(
-    release.tag_name === `v${catalog.core.appVersion}` && !release.draft && release.published_at,
+    release.tag_name === `v${catalog.core.appVersion}` &&
+      (partial ? typeof release.draft === 'boolean' : !release.draft && release.published_at),
     '资源必须来自已公开的同版本发行，拒绝覆盖未完成草稿',
   );
   for (const asset of expected) {
     const found = release.assets.filter((item) => item.name === asset.name);
+    if (partial && !found.length) continue;
     requireValue(
       found.length === 1 &&
         found[0].size === asset.size &&
@@ -294,29 +296,85 @@ async function resolvePublishedResourceFiles(folder, manifest) {
   const tag = `v${manifest.appVersion}`;
   const release = lookupGithubObject(`releases/tags/${tag}`);
   if (release === null) return false;
-  // First bind the existing immutable qualified files before downloading proofs.
   const qualified = await resourceAssetInventory(folder, manifest);
-  publishedResourceMetadata(release, candidate.descriptor, qualified);
-  for (const name of [
+  publishedResourceMetadata(release, candidate.descriptor, qualified, true);
+  const authorizationNames = [
     names.catalog,
     names.publication,
     names.publicationPromotion,
     names.catalogPromotion,
-  ]) {
-    const matches = release.assets.filter((asset) => asset.name === name);
-    requireValue(
-      matches.length === 1 &&
-        matches[0].size > 0 &&
-        matches[0].size <= ([names.publication, names.catalog].includes(name) ? 65536 : 2097152),
-      `已有发行缺少唯一资源授权：${name}`,
-    );
-    execFileSync(
-      'gh',
-      ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', folder],
-      { stdio: 'pipe', timeout: 60000 },
-    );
+  ];
+  const present = authorizationNames.filter((name) =>
+    release.assets.some((asset) => asset.name === name),
+  );
+  if (!present.length) return false;
+  if (present.length === authorizationNames.length) {
+    for (const name of authorizationNames) {
+      const found = release.assets.filter((asset) => asset.name === name);
+      requireValue(
+        found.length === 1 &&
+          found[0].size > 0 &&
+          found[0].size <= ([names.catalog, names.publication].includes(name) ? 65536 : 2097152),
+        '已有资源授权不唯一或超限',
+      );
+      execFileSync(
+        'gh',
+        ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', folder],
+        { stdio: 'pipe', timeout: 60000 },
+      );
+    }
+  } else {
+    requireValue(/^\d+$/.test(process.env.RUN_ID ?? ''), '恢复必须绑定原资格任务');
+    const prefix = `promotion-resources-${tag}-${process.env.RUN_ID}-`;
+    let artifacts = [];
+    for (let page = 1; page <= 5; page++) {
+      const response = lookupGithubObject(`actions/artifacts?per_page=100&page=${page}`);
+      requireValue(response?.artifacts, '无法查询原签名 CI 快照');
+      artifacts.push(
+        ...response.artifacts.filter(
+          (item) =>
+            !item.expired &&
+            item.name.startsWith(prefix) &&
+            /^\d+$/.test(item.name.slice(prefix.length)),
+        ),
+      );
+      if (response.artifacts.length < 100) break;
+    }
+    artifacts.sort((x, y) => y.id - x.id);
+    const original = artifacts[0];
+    requireValue(original?.workflow_run?.id, '部分公开资源缺少原签名 CI 快照；拒绝覆盖或重新签发');
+    const recovery = await mkdtemp(join(tmpdir(), 'mizar-original-publication-'));
+    try {
+      execFileSync(
+        'gh',
+        [
+          'run',
+          'download',
+          String(original.workflow_run.id),
+          '--repo',
+          repository,
+          '--name',
+          original.name,
+          '--dir',
+          recovery,
+        ],
+        { stdio: 'pipe', timeout: 600000 },
+      );
+      await resourceAssetInventory(recovery, manifest, true);
+      for (const name of authorizationNames)
+        await writeFile(join(folder, name), await readFile(join(recovery, name)), { flag: 'wx' });
+    } finally {
+      await rm(recovery, { recursive: true, force: true });
+    }
   }
-  await verifyPublishedResourceMetadata(folder, manifest, release);
+  const { catalog } = await verifyPublishedResources(folder, manifest);
+  publishedResourceMetadata(
+    release,
+    catalog,
+    await resourceAssetInventory(folder, manifest, true),
+    true,
+  );
+
   return true;
 }
 

@@ -137,7 +137,7 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 常规 Windows CI 使用继承 release 断言语义的专用 `ci` 配置执行 Rust/Tauri 原生编译与测试，不构建完整 ZIP / NSIS。Cargo 缓存仅由 main 工作流写入，PR 只读；下载依赖与编译产物分开保存，编译产物按实际 Rust 工具链、依赖和配置建立稳定基线，不按提交 SHA 保存整份 target。缓存命中与恢复键写入 Actions 摘要。正式 RC 继续使用 `release` 配置，由 Release Qualification 执行真实打包、GUI、安装、恢复与身份检查；`--allow-dirty` 或 `--skip-node-runtime` 产物不能作为正式实机验收包。
 
-参数研究可在同一 `ci.yml` 手动输入 `benchmark_release=true`；它只读下载依赖缓存，每个方案清空 release target，保存 `promotable=false` 的测量和原生验收报告，不上传实验 EXE / ZIP、不签发、不发布或回写 Actions Cargo 缓存。日常 PR / main CI 不运行该研究 job。正式 ZIP 与 Setup 已压缩，资格产品上传不再做外层压缩；上传容器的设置不改变原始产品字节或身份。
+[#226 的参数对照](https://github.com/Starfie1d1272/Mizar/pull/226)显示编译耗时与产物体积存在取舍；单轮、固定顺序以及缺少真实下载和冻结 RC 验收，不足以改变正式 Cargo/NSIS 参数。一次性研究入口、脚本与原始输出已归档于该 PR 和 Git 历史，不作为常规 CI。正式 ZIP 与 Setup 已压缩，资格产品上传保持外层压缩关闭，原始产品字节与身份不变。
 
 使用 `node scripts/ci/measure-run.mjs owner/repository run-id` 记录终态 CI 的 `created_at → ci-gate.completed_at` wall time、初始排队与各 job/step 时长；缓存冷热根据当次 Actions cache 输出分别报告；浏览器容器拉取与初始化也计入 job 和总 wall time。等待、下载和后置门禁均属于 wall time，超标如实记录。
 

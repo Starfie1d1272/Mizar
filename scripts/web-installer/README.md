@@ -1,39 +1,31 @@
-# Core 构建与 Windows 在线安装器
+# Windows 轻量安装器
 
-默认正式构建仍 Full。显式 `node scripts/qualification/build.mjs --resource-mode core-only` 移除 EPL 回放、视频和样例头像，保留地图、武器、品牌、字体、HUD 与节目代码；Core-only 仍标记 developmentOnly，尚不能晋级。
+正式分发提供一个推荐轻量 EXE 和一个完整离线 ZIP。轻量 EXE 是下载引导器；原 NSIS Setup 负责安装、卸载和更新，Companion 的同一 Resource Store 负责官方素材。正式产品仍使用 Full；Core-only 保持 developmentOnly，不能晋级。
 
-## 候选构建接口（正式推荐仍阻塞）
+## 构建与晋级
 
-在既有 main Release Qualification 内，完成唯一一次 Core 和原 NSIS 构建后运行：
-
-```powershell
-./scripts/web-installer/build.ps1 -ProductDirectory <资格产物目录> -CoreDirectory <已核验解压Core目录> -OutputDirectory <独立输出目录> -Qualification
-```
-
-构建入口复用 `assertQualificationIdentity`、`qualifiedUpdateManifest` 与 `verifyPayload`，要求 main 工作流、请求 SHA、checkout 与产物 SHA 一致，核对原 ZIP/NSIS 的实际字节、Core 全部清单及内置 `installed-entry.mjs`。不接受调用者提供的散列计划，也不重新构建 Core。输出 `Mizar-v<version>-Windows-x64-WebInstaller.exe`、`web-installer-plan.json` 和 `web-installer-build.json`；重复输出拒绝覆盖。build manifest 明确 `published=false`、`publicationRequired=true`、`productionReady=false`、`domesticMirrorReady=false` 和 `productionCompletionEvidence=false`。assemble 将 Core 解压到独立 `final candidate` 目录，调用者必须显式传入该目录下的 Core 根；不能假定 product 目录包含解压树。
-
-候选 EXE 仅包含生产入口、透明双星品牌 PNG 和窗口 ICO；标题为「Mizar 安装」。没有许可下载预览或演示命令。发布负责人须把此候选纳入原 Qualification 证明及 Promotion 原资产核验，不能据构建 manifest 推断已发布。当前 PR 不修改发布 workflow、Box 或公开附件。
-
-执行安装前只读请求官方 GitHub 固定版本 API，拒绝草稿、预发布、未公开、错版本、缺失／重复资产、大小／摘要／规范 URL 不符。此检查只确认已由 Qualification 固定的 ZIP/NSIS 资产公开可用，不生成新信任授权；资源 publisher 认证仍由唯一 SDK 的 signer@main、源码 OID 和 Sigstore 完成。请求无凭据／cookie／重定向，响应限 2 MiB、45 秒，可取消。尚未发布的候选不能开始安装。
-
-此候选当前仅具备 GitHub 路径，不能作为面向国内用户的正式推荐入口。既定产品要求是 Box 优先、GitHub 兜底；强制 GitHub API 前置尚未解决该要求。现有 `StableSource.latest/authenticate` 已验证 Box update index 的原 Qualification manifest 与 Promotion publication 双证明，但 Native 在 NSIS 前没有可信 Node/SDK，不能复制一套 Sigstore verifier。安装后 `published-bootstrap.mjs` 也仍按固定 GitHub 获取八项资源。最小后续集成为：由发行／信任负责人提供可复用的已验证 Box 发布 envelope 与固定身份镜像接口；在同一 SDK 中认证并绑定 Core、资源目录及镜像来源，Native 复用同一授权结果选择实际 Box 下载候选，失败才走 GitHub。必须有 Box 可用／GitHub 不可用的实际安装验证；不能仅去掉发布核对或把备用来源写在文档。此接口接通前 `productionReady` 必须保持 false，不推荐、发布此候选。
-
-## 安装与资源接口
-
-原 Downloader 在固定 HTTPS 来源内校验大小与 SHA-256，持久缓存复验后复用；网络临时故障仅在原锁和五分钟预算内重试一次。原 NSIS 继续负责系统安装、卸载、取消等待、回滚与用户数据保留，不能删除作为后端的 Setup 资产。
-
-Native 先核对已有目录的精确身份或在全新目录安装，锁定 Core 中 Node、入口与静态依赖，再运行该 Core 内 `installed-entry.mjs`。入口复用 `verifyPayload` 并动态导入实际 App，同一 App 的唯一持久 Store、默认用户资源目录与 updates/trust 负责资源，不建第二 Store 或信任验证器。`authenticatePublishedBootstrap` 复用既有 StableSource 与 SDK 双证明，输出不可伪造授权句柄；`completeBootstrap` 只在 Core 与默认官方资源同时就绪后返回完成。离线复用原 receipt 的 SDK 双证明；原字节、固定八文件地址和内容身份持续绑定。旧 v1.1 没有入口，执行 Node 前即拒绝，不注入外部替代脚本。
-
-同一 WinForms 窗口自动完成下载、安装和资源准备；下载显示真实字节，未知阶段使用不定进度。真正完成后默认勾选「启动 Mizar」，点击「完成」才启动；取消勾选或关闭 X 不启动，启动失败仅重试启动。错误提供重试、权限检查或原安装器修复操作，技术信息放详情。取消等待实际写入进程安全停止。
-
-## 常规验证与证据边界
+在 main Release Qualification 内消费原 ZIP、NSIS 和已核验的解压 Core：
 
 ```powershell
-./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer
+./scripts/web-installer/build.ps1 -ProductDirectory <产品目录> -CoreDirectory <解压Core目录> -OutputDirectory <产物目录> -Qualification
 ```
 
-常规单 CI 的 `installer_windows` 由同一风险路由选中，并由 `ci-gate` 要求成功。它构建实际 Companion 生产依赖，运行 SDK 目录、Windows Store FS、App 集成与真实 Node stdin 取消边界；编译生产 Native 源码，测试真实 WinForms 控件／有界下载和公开资产状态拒绝；只读下载已认证历史 NSIS，在 runner 临时目录真实安装、拒绝覆盖、取消并卸载。`legacy-stable-plan.json` 仅供该原安装器回归，不是新发行身份。
+入口复用既有 Qualification 身份检查、更新清单和完整载荷验证，拒绝其它工作流、源码不一致、缺少安装桥和改变的原资产。它只编译原生引导器，不重建 Core。Qualification 同时证明原 EXE 和构建身份；Promotion 验证这些原字节后发布，拒绝同名不同内容。构建报告保持未发布、未取得生产安装证据的状态，不能把已有自动化当成新版本实机验收。
 
-`test-native.ps1` 的注入 UI 操作与独立 `ui-state-demo.exe` 仅负责 UI 行为。`capture-ui.ps1` 截取实际原生演示控件，标题与正文明确「界面演示：未执行安装」，证据标记 `productionCompletionEvidence=false`；演示 EXE 不进入正式安装器或 CI 上传产物。`verification.json` 记录 source SHA 和真实 wall-time。独立 POC workflow、旧许可下载预览及开发安装器构建已移除。
+## 下载与验证
 
-尚缺新受信任 Core/NSIS 与官方八文件资源双证明的实际公开发行，不能声称冷缓存首次安装、持久 receipt 断网 EPL 或已安装桌面启动成功。当前新构建入口会拒绝 developmentOnly Core-only。发布负责人接入候选原资产证明后，仍须用实际新版本完成上述端到端验证，再协调切换默认 Core-only；不会重发 v1.1。Windows runner 的 UI/回归证据不代替 Windows 10/11、DPI 和真实产品启动验收，Quick ≤60 秒、Full ≤180 秒、Release 含 Box ≤600 秒均以实际 workflow wall-time判定，超标不能削弱门禁。
+Native 先读取 Box 的只读 Mizar 资料库、原 v2 更新信封及精确 Setup 文件，核对 Qualification 内嵌的版本、源码、大小和摘要；Box 不可用或不匹配时回退 GitHub 固定版本。此步骤核对公开状态，不能替代来源签名。下载的原 NSIS 全部字节必须符合固定资格身份，执行前再验证。只读 Token 只发往指定 Box API，不随临时文件链接或 GitHub 请求发送。
+
+安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 验证原更新清单与正式发布确认的双签名；资源从 Box `/Resources/v<应用版本>/` 优先读取原字节，失败回退原 GitHub 地址。目录、资格和晋级证明、资源归档仍由同一 SDK 验证，不新增信任根。Native 的 NSIS、Core ZIP 与 SDK 的发布身份必须一致。只有 Core 和同一 Store 的官方资源都通过验证才显示完成；持久缓存启动时从原 receipt 离线复验。
+
+Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 ZIP 和八份资源文件，回读全部原字节并完成历史归档，最后更新 `Updates/latest.json`。资源版本目录只补缺，不覆盖异内容。公开分享使用既有根地址，实际同步状态以版本号和回读结果为准。
+
+## 界面与取消
+
+安装前没有进度条或内部 Core/EPL 术语。下载显示真实字节进度；安装和资源准备的未知阶段显示不定进度。完成后默认勾选启动，只在点击完成时启动，取消勾选或关闭 X 不启动。取消等待实际写入进程安全停止；错误按安装、权限、恢复或资源阶段准确报告。
+
+## 验证边界
+
+常规 CI 的 `installer / Windows` 进入 ci-gate 和发行源码门禁，复用真实 Native 控件、下载、SDK、Store、App 与受控历史 NSIS 回归。`verify.ps1` 在 runner 独立目录执行；测试与截图保存在 CI artifacts，不进入 Release 附件。
+
+`test-native.ps1` 的 UI 注入和 `capture-ui.ps1` 的演示截图只证明控件行为；真实 v1.1 双签名回归只证明既有来源链。新可信 Core/官方资源正式发布后的冷缓存首次安装、持久缓存断网启动与已安装桌面启动仍必须另行实测，不能用 fixture、旧版证明或构建报告代替。旧 v1.1 缺少新安装桥，不能作为新安装完成证据，也不重新发布旧资产。

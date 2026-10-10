@@ -12,6 +12,7 @@ import {
   UPDATE_WORKFLOW,
   PUBLICATION_WORKFLOW,
   updateManifestSchema,
+  updatePublicationSchema,
 } from '../src/updates/contract.js';
 import { allowedUpdateUrl, boundedBytes, updateRequest } from '../src/updates/network.js';
 import { StableSource, verifyAttestation } from '../src/updates/source.js';
@@ -180,11 +181,15 @@ it('accepts Box only with a separately signed publication bound to the qualified
   expect(await source.authenticate(release!, signal)).toEqual(manifest);
   expect(githubRequests).toEqual([]);
   expect(createVerifier).toHaveBeenCalledWith(
-    expect.objectContaining({ certificateIdentityURI: UPDATE_WORKFLOW }),
+    expect.objectContaining({
+      certificateIdentityURI:
+        '^https://github\\.com/Starfie1d1272/Mizar/\\.github/workflows/release-qualification\\.yml@refs/heads/main$',
+    }),
   );
   expect(createVerifier).toHaveBeenCalledWith(
     expect.objectContaining({
-      certificateIdentityURI: PUBLICATION_WORKFLOW,
+      certificateIdentityURI:
+        '^https://github\\.com/Starfie1d1272/Mizar/\\.github/workflows/release-promotion\\.yml@refs/heads/main$',
       ctLogThreshold: 1,
       tlogThreshold: 1,
     }),
@@ -421,7 +426,7 @@ it('binds production authentication to fixed verifier policy, signed source, tag
     expect.objectContaining({
       certificateIssuer: 'https://token.actions.githubusercontent.com',
       certificateIdentityURI:
-        'https://github.com/Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main',
+        '^https://github\\.com/Starfie1d1272/Mizar/\\.github/workflows/release-qualification\\.yml@refs/heads/main$',
       ctLogThreshold: 1,
       tlogThreshold: 1,
     }),
@@ -436,4 +441,122 @@ it('binds production authentication to fixed verifier policy, signed source, tag
     throw new Error('untrusted signer');
   });
   await expect(source.authenticate(release, signal)).rejects.toThrow('update_provenance_failed');
+});
+
+it('authenticates the real v1.1 dual signatures transported in the GitHub envelope', async () => {
+  const indexBytes = await readFile(new URL('update-index-v2.json', fixture));
+  const index = JSON.parse(indexBytes.toString()) as {
+    schemaVersion: string;
+    manifestBase64: string;
+    publicationBase64: string;
+    provenance: Bundle;
+    publicationProvenance: Bundle;
+  };
+  const manifest = updateManifestSchema.parse(
+    JSON.parse(Buffer.from(index.manifestBase64, 'base64').toString()),
+  );
+  const publication = updatePublicationSchema.parse(
+    JSON.parse(Buffer.from(index.publicationBase64, 'base64').toString()),
+  );
+  const root = TrustedRoot.fromJSON(
+    JSON.parse(await readFile(new URL('trusted_root.json', fixture), 'utf8')),
+  );
+  const engine = new Verifier(toTrustMaterial(root), { tlogThreshold: 1, ctlogThreshold: 1 });
+  vi.mocked(createVerifier).mockImplementation((options) =>
+    Promise.resolve({
+      verify(bundle, data) {
+        const promotion = options?.certificateIdentityURI?.includes('release-promotion');
+        return engine.verify(toSignedEntity(bundleFromJSON(bundle), data), {
+          subjectAlternativeName: promotion ? PUBLICATION_WORKFLOW : UPDATE_WORKFLOW,
+          extensions: { issuer: 'https://token.actions.githubusercontent.com' },
+        });
+      },
+    }),
+  );
+  let carrier = Buffer.from(indexBytes);
+  const releaseId = publication.releaseId;
+  const release = {
+    id: releaseId,
+    tag_name: `v${manifest.version}`,
+    draft: false,
+    prerelease: false,
+    published_at: publication.publishedAt,
+    assets: [
+      {
+        name: 'update-index.json',
+        size: carrier.length,
+        digest: `sha256:${createHash('sha256').update(carrier).digest('hex')}`,
+        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v${manifest.version}/update-index.json`,
+      },
+      {
+        name: manifest.installer.name,
+        size: manifest.installer.bytes,
+        digest: `sha256:${manifest.installer.sha256}`,
+        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v${manifest.version}/${manifest.installer.name}`,
+      },
+    ],
+  };
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = fetchUrl(input);
+    if (url.endsWith('/update-index.json')) return Promise.resolve(new Response(carrier));
+    if (url.endsWith(`/git/ref/tags/v${manifest.version}`))
+      return Promise.resolve(Response.json({ object: { type: 'commit', sha: manifest.gitSha } }));
+    throw new Error(`unexpected request: ${url}`);
+  });
+  const source = new StableSource('/unused', fetcher),
+    signal = new AbortController().signal;
+  expect(await source.authenticate(release, signal)).toEqual(manifest);
+  // Same original production signatures, with GitHub explicitly unreachable.
+  const boxFetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = new URL(fetchUrl(input));
+    if (url.hostname !== 'box.nju.edu.cn') throw new Error('github_unreachable');
+    if (url.pathname.endsWith('/dir/'))
+      return Promise.resolve(Response.json({ repo_name: 'Mizar', user_perm: 'r' }));
+    if (url.pathname.endsWith('/download-link/')) {
+      expect(new Headers(init?.headers).get('Authorization')).toMatch(/^Token /);
+      return Promise.resolve(
+        Response.json('https://box.nju.edu.cn/seafhttp/files/original/latest.json'),
+      );
+    }
+    expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+    return Promise.resolve(new Response(carrier));
+  });
+  const domestic = new StableSource('/unused', boxFetcher);
+  const mirrored = await domestic.latest(signal, manifest.version);
+  expect(mirrored?.tag_name).toBe(release.tag_name);
+  expect(await domestic.authenticate(mirrored!, signal)).toEqual(manifest);
+  expect(
+    boxFetcher.mock.calls.every(
+      ([input]) => new URL(fetchUrl(input)).hostname === 'box.nju.edu.cn',
+    ),
+  ).toBe(true);
+  for (const mutate of [
+    (value: typeof index) => {
+      value.manifestBase64 = Buffer.from('{}').toString('base64');
+    },
+    (value: typeof index) => {
+      value.publicationBase64 = Buffer.from('{}').toString('base64');
+    },
+    (value: typeof index) => {
+      value.publicationProvenance = value.provenance;
+    },
+    (value: typeof index) => {
+      value.provenance = value.publicationProvenance;
+    },
+  ]) {
+    const changed = structuredClone(index);
+    mutate(changed);
+    carrier = Buffer.from(JSON.stringify(changed));
+    release.assets[0]!.size = carrier.length;
+    release.assets[0]!.digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
+    await expect(source.authenticate(release, signal)).rejects.toThrow();
+  }
+  carrier = Buffer.from(indexBytes);
+  release.assets[0]!.size = carrier.length;
+  release.assets[0]!.digest = `sha256:${createHash('sha256').update(carrier).digest('hex')}`;
+  release.id = releaseId + 1;
+  await expect(source.authenticate(release, signal)).rejects.toThrow('update_publication_mismatch');
+  release.id = releaseId;
+  release.published_at = '2026-10-10T00:00:00Z';
+  await expect(source.authenticate(release, signal)).rejects.toThrow('update_publication_mismatch');
 });

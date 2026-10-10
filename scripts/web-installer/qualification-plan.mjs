@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertQualificationIdentity } from '../qualification/release-identity.mjs';
 import { qualifiedUpdateManifest } from '../qualification/update-manifest.mjs';
 import { verifyPayload } from '../qualification/product-runtime.mjs';
@@ -43,11 +43,19 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
     'complete-bootstrap',
     'install-official-pack',
     'published-bootstrap',
+    'resource-mirror',
     'cancel-control',
   ]) {
     if (!checksummedPaths.has(`resources/app/dist/web-installer/${name}.mjs`))
       throw new Error('Required installed bridge is absent from the verified Core inventory');
   }
+  if (!checksummedPaths.has('resources/app/dist/updates/contract.js'))
+    throw new Error('Core update contract is absent from its verified inventory');
+  const { BOX_READ_TOKEN } = await import(
+    pathToFileURL(join(coreRoot, 'resources/app/dist/updates/contract.js')).href
+  );
+  if (typeof BOX_READ_TOKEN !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(BOX_READ_TOKEN))
+    throw new Error('Existing public Box read contract is invalid');
   const core = await identity(join(product, coreName));
   const installer = await identity(join(product, manifest.installer.name));
   if (
@@ -73,6 +81,7 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
     coreSha256: core.sha256,
     allowExecute: true,
     publicationRequired: true,
+    boxReadToken: BOX_READ_TOKEN,
   };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
