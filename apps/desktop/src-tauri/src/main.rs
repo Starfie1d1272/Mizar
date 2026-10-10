@@ -358,6 +358,7 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
 fn restore_cs2_focus(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> bool {
     if !state.visible.load(Ordering::Acquire)
         || app.state::<production_exit::ExitGate>().check().is_err()
+        || app.state::<cs2_activity::Activity>().phase() != "idle"
     {
         return false;
     }
@@ -1375,6 +1376,7 @@ fn run_desktop(
                             && worker_visible.load(Ordering::Acquire)
                             && !exit_signal.requested()
                             && host.state::<production_exit::ExitGate>().check().is_ok()
+                            && host.state::<cs2_activity::Activity>().phase() == "idle"
                     };
                     let process = if allowed() {
                         host.state::<Mutex<managed_cs2::ManagedCs2>>()
