@@ -100,6 +100,7 @@ export class DemoTestController {
   private dropFormalGsi = false;
   private takePending = false;
   private taken = false;
+  private nextTakeAttemptAt = 0;
   private restored = false;
   private waitingConfirmed = false;
   private completedRequestId: string | undefined;
@@ -210,6 +211,7 @@ export class DemoTestController {
           this.options.refresh();
           this.phase = 'starting';
           this.taken = false;
+          this.nextTakeAttemptAt = 0;
           this.restored = false;
           this.waitingConfirmed = false;
         });
@@ -274,18 +276,33 @@ export class DemoTestController {
     this.options.refresh();
   }
   observationAccepted(): void {
-    if (this.phase !== 'playing' || !this.options.dataReady() || this.taken || this.takePending)
+    if (
+      this.phase !== 'playing' ||
+      !this.options.dataReady() ||
+      this.taken ||
+      this.takePending ||
+      performance.now() < this.nextTakeAttemptAt
+    )
       return;
     this.takePending = true;
     void this.options.scenes
       .select('gameplay', this.options.scenes.get().revision)
       .then((result) => {
-        if (this.phase === 'playing' && result.ok) this.taken = true;
+        if (this.phase !== 'playing') return;
+        if (result.ok) this.taken = true;
+        else this.takeFailed(new Error(result.message));
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => this.takeFailed(error))
       .finally(() => {
         this.takePending = false;
       });
+  }
+
+  private takeFailed(error: unknown): void {
+    // Each failed attempt has evidence; telemetry frames cannot retry or log
+    // again until the cooldown ends. Manual scene controls remain available.
+    this.nextTakeAttemptAt = performance.now() + 5000;
+    this.options.diagnostic('initial_gameplay_take', errorEvidence(error));
   }
 }
 

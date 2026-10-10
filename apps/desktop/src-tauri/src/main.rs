@@ -577,7 +577,9 @@ async fn select_demo_file(
         let path = file.into_path().map_err(|_| "无法读取所选 Demo 路径。")?;
         let selection = app.state::<Mutex<demo_test::Selection>>();
         let mut selection = selection.lock().map_err(|_| "Demo 选择状态不可用。")?;
-        selection.select(&path).map(Some)
+        selection
+            .select(&path, &app.state::<DesktopLog>())
+            .map(Some)
     })
     .await
     .map_err(|_| "Demo 文件选择未完成。".to_string())?
@@ -604,10 +606,10 @@ async fn start_demo_test(
             .state::<Mutex<demo_test::Selection>>()
             .lock()
             .map_err(|_| "Demo 选择状态不可用。")?
-            .resolve(&token)?;
+            .resolve(&token, &app.state::<DesktopLog>())?;
         cs2.ensure_demo_available()?;
-        let id = demo_test::request_id()?;
         let log = app.state::<DesktopLog>();
+        let id = demo_test::new_request_id(&log)?;
         let starting = demo_test::request(&log, "begin", &id, Some((&team_a_name, &team_b_name)))?;
         match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
             Ok(true) => {

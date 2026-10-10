@@ -92,7 +92,6 @@ export function DemoTestPanel() {
   return (
     <Panel className="preparation-demo-test">
       <h2>Demo 试播</h2>
-      <p>开播前，用本地 Demo 检查 HUD、游戏画面和 OBS 音画。</p>
       {!shown ? (
         <Button disabled={!desktop} onClick={() => setExpanded(true)}>
           准备 Demo 试播
@@ -113,10 +112,13 @@ export function DemoTestPanel() {
                   : '游戏已运行，等待有效观战数据。'
                 : '试播数据已隔离，等待关闭游戏并恢复配置。'}
           </p>
-          <p>
-            游戏运行不代表所选 Demo
-            已加载。收到有效观战数据后，可手动检查现有场景；试播保持手动编排。
-          </p>
+          {trial.phase === 'starting' || (trial.phase === 'playing' && !trial.dataReady) ? (
+            <p>游戏运行不代表 Demo 已加载，请在 CS2 检查播放画面。</p>
+          ) : trial.phase === 'playing' ? (
+            <p>试播保持手动编排，可检查 HUD、场景与 OBS 音画。</p>
+          ) : (
+            <p>恢复完成后才能开始正式制作；请退出 CS2 后重试。</p>
+          )}
           {trial.phase === 'playing' || (trial.phase === 'starting' && game?.running) ? (
             <Button
               disabled={busy || !desktop}
@@ -162,7 +164,7 @@ export function DemoTestPanel() {
             disabled={busy}
             onChange={(event) => setTeamBName(event.target.value)}
           />
-          <p>默认 BO1，无需赛事、名单或 BP。试播不会保存到比赛库。</p>
+          <p>BO1 · 试播资料不入比赛库</p>
           <Select
             label="试播 HUD"
             value={activePreset}
@@ -175,7 +177,6 @@ export function DemoTestPanel() {
               </option>
             ))}
           </Select>
-          <p>开始时启用所选 HUD；结束试播后保留这一选择。</p>
           <Button
             disabled={busy || !desktop}
             onClick={() =>
@@ -188,7 +189,11 @@ export function DemoTestPanel() {
             选择本地 Demo
           </Button>
           <p>{selected?.name ?? '尚未选择 .dem 文件'}</p>
-          <p>请先在 OBS 停止推流。已打开的外部 CS2 请自行退出；本次受管游戏请先结束并恢复设置。</p>
+          {game?.running || game?.pending ? (
+            <p>请先退出当前 CS2 并恢复设置，再开始试播。</p>
+          ) : (
+            <p>请先停止 OBS 推流；所选 HUD 在试播后保留。</p>
+          )}
           <Button type="submit" variant="primary" disabled={startDisabled}>
             启动 Demo 试播
           </Button>

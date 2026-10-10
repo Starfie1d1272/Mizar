@@ -475,7 +475,7 @@ impl ManagedCs2 {
         preserve: bool,
     ) -> Result<bool, String> {
         self.ensure_demo_available()?;
-        let argument = crate::demo_test::playdemo_argument(path)?;
+        let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
         self.start_internal(preserve, Some((&argument, request_id)))
     }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {

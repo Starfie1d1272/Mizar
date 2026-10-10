@@ -12,6 +12,7 @@ import { buildApp } from '../src/app.js';
 import { ObsAdapter, type ObsStatus } from '../src/obs/adapter.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { JsonSeriesProgressCheckpointStore } from '../src/series-progress/checkpoint-store.js';
+import { ProgramSceneController } from '../src/program-scenes/controller.js';
 
 const browser = { origin: 'http://127.0.0.1:3000' };
 const host = { 'x-runtime-token': 'host-secret' };
@@ -115,6 +116,17 @@ it('isolates real demo observations, preserves formal storage/checkpoint, and re
   const formal = (await h.app.inject('/local/v1/match-document')).json<
     ContextEnvelope<MatchDocumentV1>
   >();
+  const exitRequest = (payload: Record<string, unknown>) =>
+    h.app.inject({
+      method: 'POST',
+      url: '/operator/runtime/local-match-exit',
+      headers: host,
+      payload,
+    });
+  const qualification = (await exitRequest({ action: 'prepare' })).json<{
+    qualification: unknown;
+  }>().qualification;
+  expect((await exitRequest({ action: 'confirm', qualification })).statusCode).toBe(200);
   await h.runtime.flushSeriesProgressCheckpoint();
   const storage = await readFile(join(h.root, 'local.json'), 'utf8');
   const saved = await readFile(join(h.root, 'series.json'), 'utf8');
@@ -130,6 +142,11 @@ it('isolates real demo observations, preserves formal storage/checkpoint, and re
     dataReady: false,
   });
   expect(h.runtime.getCurrentState().liveSession).not.toEqual(priorSession);
+  expect((await exitRequest({ action: 'prepare' })).statusCode).toBe(409);
+  expect((await h.app.inject('/local/v1/tournament')).json()).toMatchObject({
+    canConfirmLocalExit: false,
+    canReleaseLocalSelection: false,
+  });
   const trial = (await h.app.inject('/local/v1/match-document')).json<
     ContextEnvelope<MatchDocumentV1>
   >();
@@ -226,6 +243,10 @@ it('isolates real demo observations, preserves formal storage/checkpoint, and re
       .document.matchId,
   ).toBe(trial.document.matchId);
   expect((await h.command('complete')).json()).toMatchObject({ active: false, phase: 'idle' });
+  expect((await h.app.inject('/local/v1/tournament')).json()).toMatchObject({
+    canReleaseLocalSelection: false,
+  });
+  expect((await exitRequest({ action: 'confirm', qualification })).statusCode).toBe(409);
   expect((await h.command('complete')).statusCode).toBe(200);
   expect(
     (await h.app.inject('/local/v1/match-document')).json<ContextEnvelope<MatchDocumentV1>>()
@@ -248,6 +269,36 @@ it('isolates real demo observations, preserves formal storage/checkpoint, and re
   ).toBe(200);
   await h.frame();
   expect(h.runtime.getCurrentState().programTelemetry).toBeDefined();
+});
+
+it('keeps failed initial gameplay takes actionable, preserves safe output, and bounds automatic retries', async () => {
+  const h = await setup();
+  const log = vi.spyOn(h.app.log, 'error');
+  expect((await h.command('begin')).statusCode).toBe(200);
+  expect((await h.command('playing')).statusCode).toBe(200);
+  const cause = Object.assign(new Error('WebSocket connection reset'), { code: 'ECONNRESET' });
+  const select = vi
+    .spyOn(ProgramSceneController.prototype, 'select')
+    .mockRejectedValueOnce(new Error('OBS request failed', { cause }));
+  await h.frame();
+  await vi.waitFor(() => expect(log).toHaveBeenCalledOnce());
+  const evidence = JSON.stringify(log.mock.calls);
+  expect(evidence).toContain('initial_gameplay_take');
+  expect(evidence).toContain('ECONNRESET');
+  expect(evidence).toContain('WebSocket connection reset');
+  expect((await h.app.inject('/local/v1/program-scenes')).json<ProgramSceneState>().active).toBe(
+    'waiting',
+  );
+  for (let i = 0; i < 4; i++) await h.frame();
+  expect(select).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledOnce();
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 5001);
+  await h.frame();
+  await vi.waitFor(() => expect(h.switchObs).toHaveBeenCalledWith('gameplay', expect.anything()));
+  clock.mockRestore();
+  expect((await h.app.inject('/local/v1/program-scenes')).json<ProgramSceneState>().active).toBe(
+    'gameplay',
+  );
 });
 
 it('requires the private Host capability and preparation with connected non-streaming OBS', async () => {

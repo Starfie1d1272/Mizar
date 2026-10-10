@@ -13,6 +13,8 @@ begin 只在原制作生命周期 preparation、无升级、无素材激活、�
 
 starting 丢弃 GSI；Host 确认受管 CS2 正在运行且本次播放请求已提交后调用 playing，原 production owner 进入 live。只有新鲜地图且存在 spectator allplayers coverage 的真实 GSI 才令 dataReady 为真，并自动执行一次成功的手动 Gameplay Take。试播保持 Director manual；允许现有手动场景操作（等待可随时切换，其余需 playing 和数据就绪），自动恢复操作被拒绝。空名单不伪造选手或比赛归属；没有自动名单采集承诺。
 
+初次 Gameplay Take 的异常与失败结果记录 `initial_gameplay_take` 阶段和脱敏原因；失败后的自动尝试至少间隔 5 秒，避免随 GSI 帧重复切场和刷日志，手动场景操作仍可使用。试播临时绑定不能取得本地比赛退出资格；结束后旧正式凭证因上下文修订与 source generation 改变失效，持久恢复仍要求 Host 重新确认。
+
 finish 在等待 OBS 之前进入 stopping 并停止 GSI；等待画面成功后清空 Core 与投影动态状态并令 production 回到 preparation。OBS 失败仍保留 stopping、正式 binding 隔离及 marker，重试 finish；等待成功前 complete 被拒绝。Host 确认受管 CS2 已退出且视频配置已恢复后调用 complete，才恢复之前正式 binding 并删除 marker。complete 后继续丢弃 GSI，下一次正常 production enter 才建立新的正式输入边界；不会自动恢复 live。cancel 仅允许未开始的 starting。正常 production finish 和 Host shutdown 也切安全画面，但保留 marker，不能替 Host 声明游戏已退出。
 
 marker 在 Runtime / projection 组合之前同步探测。存在 marker 的重启不自动载入正式资料，不接收 GSI，phase 为 recovery。Host 先按自己的 journal 清理已知受管游戏与视频配置，再使用 GET 返回的 requestId complete。完整 marker 沿用原 ID；损坏或不可读 marker 采用本次 Companion 新 UUID 并继续隔离，Host 必须重新 GET，不能依赖旧 journal ID。recovery 的 complete 不需要 OBS 场景重试，但仍由 Host 保证游戏退出和恢复。正式状态恢复或 marker 删除失败均保留输出及输入隔离，允许重试。
