@@ -6,6 +6,7 @@ mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
 mod cs2_video;
+mod demo_test;
 mod desktop_worker;
 mod geometry;
 mod managed_cs2;
@@ -523,6 +524,148 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
 }
 
+fn demo_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在制作中心操作 Demo 试播。".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn select_demo_file(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Option<serde_json::Value>, String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let Some(file) = app
+            .dialog()
+            .file()
+            .add_filter("CS2 Demo", &["dem"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = file.into_path().map_err(|_| "无法读取所选 Demo 路径。")?;
+        let selection = app.state::<Mutex<demo_test::Selection>>();
+        let mut selection = selection.lock().map_err(|_| "Demo 选择状态不可用。")?;
+        selection.select(&path).map(Some)
+    })
+    .await
+    .map_err(|_| "Demo 文件选择未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn start_demo_test(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    token: String,
+    team_a_name: String,
+    team_b_name: String,
+    preserve_settings: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(1);
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let path = app
+            .state::<Mutex<demo_test::Selection>>()
+            .lock()
+            .map_err(|_| "Demo 选择状态不可用。")?
+            .resolve(&token)?;
+        cs2.ensure_demo_available()?;
+        let id = demo_test::request_id()?;
+        let log = app.state::<DesktopLog>();
+        let starting = demo_test::request(&log, "begin", &id, Some((&team_a_name, &team_b_name)))?;
+        match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
+            Ok(true) => {
+                if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+                    tracker.preserve_settings = cs2.preserve_settings();
+                }
+                Ok(starting)
+            }
+            Ok(false) => Err("Demo 启动请求未提交，请结束试播后重试。".into()),
+            Err(error) => {
+                // A durable attempted launch can still arrive late through
+                // Steam. Only a proven pre-launch failure permits cancel.
+                if !cs2.demo_launch_attempted()? {
+                    demo_test::request(&log, "cancel", &id, None)?;
+                    cs2.recover(false)?;
+                }
+                Err(error)
+            }
+        }
+    })
+    .await
+    .map_err(|_| "Demo 试播启动未完成。".to_string())?
+}
+
+#[tauri::command]
+async fn enter_demo_test(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request_id: String,
+) -> Result<(), String> {
+    demo_main_window(&window)?;
+    let host = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        host.state::<production_exit::ExitGate>().check()?;
+        host.state::<updates::PendingUpdate>().check()?;
+        cs2.validate_demo_running(&request_id)?;
+        demo_test::request(&host.state::<DesktopLog>(), "playing", &request_id, None)?;
+        present_production_inner(&host, true)
+    })
+    .await
+    .map_err(|_| "Demo 工作台未能打开。".to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+async fn finish_demo_test(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request_id: Option<String>,
+) -> Result<(), String> {
+    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
+        return Err("请在制作中心或试播工作台结束 Demo 试播。".into());
+    }
+    let host = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = host.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(2);
+        let state = demo_test::status(&host.state::<DesktopLog>())?;
+        if state["active"] != true && !cs2.has_demo_journal()? {
+            // A retry after completion must not finish a later normal game.
+            return Ok(());
+        }
+        // Recovery may replace a corrupt marker's UUID. The fresh Companion
+        // identity controls completion; native process ownership controls exit.
+        if state["active"] == true
+            && state["phase"] != "recovery"
+            && request_id
+                .as_deref()
+                .is_some_and(|id| state["requestId"].as_str() != Some(id))
+        {
+            return Err("Demo 试播状态已变化，请刷新后重试。".into());
+        }
+        cs2.finish()?;
+        present_production_inner(&host, false)
+    })
+    .await
+    .map_err(|_| "Demo 试播恢复未完成。".to_string())??;
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_cs2_preferences(
     app: tauri::AppHandle,
@@ -650,6 +793,10 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
 
 #[tauri::command]
 async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), String> {
+    present_production_inner(&app, live)
+}
+
+fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
@@ -1220,6 +1367,7 @@ fn run_desktop(
         .manage(state)
         .manage(log.clone())
         .manage(Mutex::new(managed))
+        .manage(Mutex::new(demo_test::Selection::default()))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
         .manage(production_exit::VerifiedStop::default())
@@ -1234,6 +1382,10 @@ fn run_desktop(
             cs2_config_status,
             start_managed_cs2,
             finish_managed_cs2,
+            select_demo_file,
+            start_demo_test,
+            enter_demo_test,
+            finish_demo_test,
             restore_cs2_backup,
             open_cs2_backup,
             set_cs2_preferences,

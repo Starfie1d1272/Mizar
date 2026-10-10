@@ -1,0 +1,7 @@
+{
+  "identifier": "demo-test-workspace",
+  "description": "The production workspace may safely finish an active Demo trial.",
+  "windows": ["workspace-left", "workspace-dock"],
+  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
+  "permissions": ["allow-finish-demo-test"]
+}

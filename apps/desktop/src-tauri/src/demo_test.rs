@@ -150,6 +150,52 @@ pub fn status(log: &DesktopLog) -> Result<Value, String> {
     rpc(log, None)
 }
 
+pub fn requires_recovery(log: &DesktopLog, journal: Option<&Value>) -> bool {
+    if journal.is_some_and(|value| value.get("demoTestRequestId").is_some()) {
+        return true;
+    }
+    // Presence is only a fail-closed recovery hint, never a second source of
+    // lifecycle state. All actions and UUIDs still come from Companion RPC.
+    match std::fs::symlink_metadata(log.state_root.join("data/demo-test.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        _ => true,
+    }
+}
+
+pub fn quarantine_if_needed(
+    log: &DesktopLog,
+    journal: Option<&Value>,
+) -> Result<Option<String>, String> {
+    if requires_recovery(log, journal) {
+        quarantine(log)
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn quarantine(log: &DesktopLog) -> Result<Option<String>, String> {
+    let state = status(log)?;
+    if state["active"] != true {
+        return Ok(None);
+    }
+    let id = state["requestId"]
+        .as_str()
+        .ok_or("Demo 试播恢复身份无效。")?;
+    // Restart recovery already drops all GSI. It can recover while OBS is
+    // unavailable; finish would replace that recovery phase with stopping.
+    if state["phase"] != "recovery" {
+        request(log, "finish", id, None)?;
+    }
+    Ok(Some(id.into()))
+}
+
+pub fn complete(log: &DesktopLog, request_id: Option<&str>) -> Result<(), String> {
+    if let Some(id) = request_id {
+        request(log, "complete", id, None)?;
+    }
+    Ok(())
+}
+
 pub fn request(
     log: &DesktopLog,
     action: &str,
@@ -221,12 +267,39 @@ fn rpc(log: &DesktopLog, body: Option<Value>) -> Result<Value, String> {
                 return Err("Demo 测试响应超出限制。".into());
             }
         }
-        parse_response(&response)
+        validate_state(parse_response(&response)?)
     })();
     if result.is_err() {
         log.event("demo_test", "failure", Some("phase=companion_request"));
     }
     result
+}
+
+fn validate_state(value: Value) -> Result<Value, String> {
+    let active = value["active"].as_bool().ok_or("Demo 试播状态无效。")?;
+    let phase = value["phase"].as_str().ok_or("Demo 试播阶段无效。")?;
+    let valid_id = value["requestId"].as_str().is_some_and(|id| {
+        id.len() == 36
+            && id.bytes().enumerate().all(|(index, byte)| {
+                if [8, 13, 18, 23].contains(&index) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+    });
+    if !matches!(
+        phase,
+        "idle" | "starting" | "playing" | "stopping" | "recovery"
+    ) || (active && (phase == "idle" || !valid_id))
+        || (!active && (phase != "idle" || !value["requestId"].is_null()))
+        || value["teamAName"].as_str().is_none()
+        || value["teamBName"].as_str().is_none()
+        || value["dataReady"].as_bool().is_none()
+    {
+        return Err("Demo 试播状态无效。".into());
+    }
+    Ok(value)
 }
 
 fn parse_response(bytes: &[u8]) -> Result<Value, String> {
@@ -329,6 +402,12 @@ mod tests {
         assert_eq!(first.len(), 36);
         assert_eq!(&first[14..15], "4");
         assert_ne!(first, request_id().unwrap());
+        assert!(validate_state(json!({})).is_err());
+        let mut state = json!({"active":true,"phase":"recovery","requestId":first,
+            "teamAName":"A","teamBName":"B","dataReady":false});
+        assert!(validate_state(state.clone()).is_ok());
+        state["requestId"] = Value::Null;
+        assert!(validate_state(state).is_err());
     }
 
     #[test]
@@ -343,5 +422,25 @@ mod tests {
         );
         assert!(engine_path(r"\\?\Volume{123}\demo.dem").is_err());
         assert!(engine_path(r"\\?\UNC\server\").is_err());
+    }
+
+    #[test]
+    fn normal_recovery_is_offline_but_demo_evidence_requires_companion() {
+        let root = std::env::temp_dir().join(request_id().unwrap());
+        let log = DesktopLog::new(&root, None).unwrap();
+        std::fs::create_dir_all(log.state_root.join("data")).unwrap();
+        assert!(!requires_recovery(
+            &log,
+            Some(&json!({"launchAttempted":true}))
+        ));
+        assert!(requires_recovery(
+            &log,
+            Some(&json!({"demoTestRequestId":"invalid"}))
+        ));
+        std::fs::write(log.state_root.join("data/demo-test.json"), b"corrupt").unwrap();
+        assert!(requires_recovery(&log, None));
+        std::fs::remove_file(log.state_root.join("data/demo-test.json")).unwrap();
+        assert!(!requires_recovery(&log, None));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

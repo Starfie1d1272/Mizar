@@ -9,7 +9,7 @@
   "app": {
     "windows": [],
     "security": {
-      "capabilities": ["workspace"]
+      "capabilities": ["workspace", "demo-test", "demo-test-workspace"]
     }
   },
   "bundle": {
