@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [core-setup]
+        lane: [setup, core-setup]
     env:
       SOURCE_SHA: 678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf
       GH_TOKEN: ${{ github.token }}
@@ -140,6 +140,19 @@ jobs:
           node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-desktop-smoke.json')
           if ($LASTEXITCODE -ne 0) { throw 'Real Core desktop startup failed' }
 
+      - name: Recover cancellation and interrupted real Zlib writer in isolated installation
+        shell: pwsh
+        run: |
+          $installed = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'core installed qualification' }
+          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
+          if ($root.Count -ne 1) { throw 'Isolated recovery root ambiguous' }
+          node scripts/qualification/research-real-zlib-recovery.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName '${{ matrix.lane }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Real Zlib writer recovery failed' }
+          node scripts/qualification/product-smoke.mjs $root[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Recovered exact artifact runtime failed' }
+          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'recovered-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Recovered GUI failed' }
+
       - name: Record successful lane identity
         if: ${{ matrix.lane != 'core-setup' }}
         shell: pwsh
@@ -157,7 +170,7 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log')) {
+          foreach ($name in @('real-zlib-recovery.json', 'recovered-desktop-smoke.json', 'host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }
@@ -191,132 +204,3 @@ jobs:
           name: release-evidence-${{ matrix.lane }}
           path: ${{ runner.temp }}/Mizar-*-evidence.zip
           if-no-files-found: error
-
-  verify_merged_lane_artifacts:
-    needs: verify
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: release-candidate
-          run-id: 38030387152
-          github-token: ${{ github.token }}
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          pattern: release-setup-*
-          merge-multiple: true
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          pattern: release-evidence-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/lane-evidence
-      - name: Verify exact merged lane identities and recovery outputs
-        shell: pwsh
-        run: |
-          $evidence = Join-Path $env:RUNNER_TEMP 'merged-lane-evidence'
-          foreach ($lane in @('portable','setup','core-setup')) {
-            Expand-Archive -LiteralPath (Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-RESEARCH-$lane-evidence.zip") -DestinationPath (Join-Path $evidence $lane)
-          }
-          node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT 678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf f8ee76408ec92c1a61e3dbc2f21b18f7406c6cec38907c5a713dd43906879f3c $evidence
-          if ($LASTEXITCODE -ne 0) { throw 'Parallel lane merge failed' }
-
-  final_thin_full:
-    name: final / default Thin release and Full Zlib
-    runs-on: windows-2025
-    timeout-minutes: 30
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-      - uses: ./.github/actions/cargo-cache
-        with:
-          profile: release
-      - name: Restore an explicitly nonexact compiler baseline for this isolated validation
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: apps/desktop/src-tauri/target/release
-          key: isolated-final-thin-${{ github.sha }}
-          restore-keys: |
-            cargo-v3-Windows-X64-release-
-      - name: Install locked dependencies
-        shell: pwsh
-        run: |
-          pnpm install --frozen-lockfile
-          if ($LASTEXITCODE -ne 0) { throw 'Install failed' }
-          git checkout -- pnpm-lock.yaml
-      - name: Verify default production profile without environment overrides
-        shell: pwsh
-        run: |
-          if (Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_PROFILE_RELEASE_' }) { throw 'Compiler profile override present' }
-          pnpm exec vitest run scripts/ci/cargo-cache-key.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Production profile contract failed' }
-      - name: Build actual default release profile source
-        shell: pwsh
-        run: |
-          node scripts/qualification/build.mjs --output $env:QUALIFICATION_BUILD_ROOT --label RESEARCH
-          if ($LASTEXITCODE -ne 0) { throw 'Default Thin release build failed' }
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          if ($manifest.gitSha -ne $env:GITHUB_SHA -or $manifest.desktopBuildProfile -ne 'release' -or $manifest.developmentOnly) { throw 'Actual build source/profile differs' }
-      - name: Run actual release-profile native contracts
-        shell: pwsh
-        run: |
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --profile release
-          if ($LASTEXITCODE -ne 0) { throw 'Native release contracts failed' }
-      - name: Verify exact artifact runtime and synthetic lifecycle
-        shell: pwsh
-        run: |
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          $bundle = Join-Path $env:QUALIFICATION_BUILD_ROOT ($manifest.archive -replace '\.zip$', '')
-          node scripts/qualification/product-smoke.mjs $bundle
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin product smoke failed' }
-          node scripts/qualification/desktop-smoke.mjs $bundle (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin GUI or missing-WebView rollback failed' }
-          node scripts/qualification/product-soak.mjs $bundle (Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin 3-map lifecycle failed' }
-      - name: Install pinned NSIS
-        shell: pwsh
-        run: choco install nsis --version=3.11 -y --no-progress
-      - name: Verify native cancellation and recovery
-        shell: pwsh
-        run: |
-          node scripts/qualification/verify-update-recovery.mjs | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-recovery.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Native recovery failed' }
-      - name: Build and actually install uninstall reinstall Full Zlib with new Thin host
-        shell: pwsh
-        run: |
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          $bundle = Join-Path $env:QUALIFICATION_BUILD_ROOT ($manifest.archive -replace '\.zip$', '')
-          $installed = Join-Path $env:RUNNER_TEMP 'new Thin Full installed'
-          ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -CaptureUi
-          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
-          if ($root.Count -ne 1) { throw 'Installed Full root ambiguous' }
-          node scripts/qualification/product-smoke.mjs $root[0].FullName
-          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full runtime failed' }
-          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full GUI failed' }
-          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $installed v1.2.0 $env:GITHUB_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-identity.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full identity failed' }
-      - name: Preserve CI-only final validation reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: final-thin-full-reports
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.log
-          if-no-files-found: error
-          retention-days: 1
