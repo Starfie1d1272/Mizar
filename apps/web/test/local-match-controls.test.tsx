@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   view: {
     teams: [],
     activeLocalMatchId: 'current',
-    inUseMatchId: 'current',
+    inUseMatchId: ((): string | null => 'current')(),
     matches: [
       {
         matchId: 'current',
@@ -115,7 +115,28 @@ it('protects current matches, cancels without mutation and confirms recovery act
       confirmed: true,
     });
     expect(container.textContent).toContain('比赛已恢复，请按需选择比赛');
+    mocks.view.inUseMatchId = null;
+    await act(async () => {
+      root.render(<LocalMatchControls action={action} />);
+      await Promise.resolve();
+    });
+    expect(deletes[0]!.disabled).toBe(false);
+    await act(async () => {
+      deletes[0]!.click();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('dialog')!.textContent).toContain('同时解除当前本地比赛选择');
+    await act(async () => {
+      button('移入回收站').click();
+      await Promise.resolve();
+    });
+    expect(mocks.command).toHaveBeenLastCalledWith('/operator/local-match/trash', {
+      matchId: 'current',
+      confirmed: true,
+      releaseCurrent: true,
+    });
   } finally {
+    mocks.view.inUseMatchId = 'current';
     act(() => root.unmount());
     container.remove();
     if (originalShow) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', originalShow);

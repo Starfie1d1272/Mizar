@@ -604,18 +604,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  if (localTournamentStore !== null && matchContextController !== null) {
-    registerLocalTournamentRoutes(app, {
-      store: localTournamentStore,
-      projections: projectionCoordinator,
-      controller: matchContextController,
-      originPolicy: localWebTransport.getOriginPolicy(),
-    });
-    registerLocalAssetRoutes(app, {
-      directory: join(dirname(options.localTournamentPath!), 'local-assets'),
-      originPolicy: localWebTransport.getOriginPolicy(),
-    });
-  }
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
@@ -626,6 +614,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  if (localTournamentStore !== null && matchContextController !== null) {
+    registerLocalTournamentRoutes(app, {
+      store: localTournamentStore,
+      projections: projectionCoordinator,
+      controller: matchContextController,
+      canReleaseLocalSelection: () =>
+        production.get().mode === 'preparation' &&
+        sceneController.get().active === 'waiting' &&
+        sceneController.get().preparing === undefined &&
+        programRuntime.getSnapshot().current.programSource.lastAccepted === undefined,
+      // The existing production owner serializes preparation mutations with enter/finish/update.
+      withLocalSelectionRelease: (commit) => production.withResourceActivation(commit),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+    registerLocalAssetRoutes(app, {
+      directory: join(dirname(options.localTournamentPath!), 'local-assets'),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+  }
   if (options.resources) {
     app.decorate('getResourceStore', () => resources);
     registerResourceRoutes(app, () => resources);

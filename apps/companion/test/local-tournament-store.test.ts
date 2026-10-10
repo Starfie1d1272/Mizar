@@ -340,3 +340,37 @@ it('preserves schedule order when multiple recycled matches are restored in eith
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('rejects a full recycle bin explicitly without removing another match', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-trash-full-'));
+  try {
+    const file = join(directory, 'local.json');
+    const store = new LocalTournamentStore(file);
+    const document = await store.createMatch({
+      teamA: 'A',
+      teamB: 'B',
+      format: 'bo1',
+      mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+    });
+    await writeFile(
+      file,
+      JSON.stringify({
+        ...store.getSnapshot(),
+        trashedMatches: Array.from({ length: 256 }, (_, index) => ({
+          document: { ...document, matchId: `trash-${index}` },
+          deletedAt: '2026-10-10T12:00:00.000Z',
+          scheduleIndex: 0,
+          scheduleMatchIds: [],
+        })),
+      }),
+    );
+    await store.load();
+    const before = store.getSnapshot();
+    await expect(store.trashMatch(document.matchId, () => true)).rejects.toThrow(
+      'local_trash_full',
+    );
+    expect(store.getSnapshot()).toEqual(before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

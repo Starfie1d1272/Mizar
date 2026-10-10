@@ -309,6 +309,7 @@ export class LocalTournamentStore {
         if (this.state.trashedMatches.some((item) => item.document.matchId === matchId)) return;
         throw new Error('local_match_not_found');
       }
+      if (this.state.trashedMatches.length >= 256) throw new Error('local_trash_full');
       const event = this.state.events.find((item) => item.matchIds.includes(matchId));
       const scheduleMatchIds = [...(event?.matchIds ?? [])];
       for (const previous of this.state.trashedMatches) {
@@ -353,6 +354,7 @@ export class LocalTournamentStore {
         if (this.state.matches.some((match) => match.matchId === matchId)) return;
         throw new Error('local_match_not_found');
       }
+      if (this.state.matches.length >= 256) throw new Error('local_matches_full');
       const event = this.state.events.find(
         (entry) => entry.eventId === item.document.competition?.competitionId,
       );

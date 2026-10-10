@@ -19,7 +19,13 @@ export function LocalMatchControls({
     setBusy(true);
     setMessage('');
     try {
-      await command(`/operator/local-match/${operation}`, { matchId, confirmed: true });
+      await command(`/operator/local-match/${operation}`, {
+        matchId,
+        confirmed: true,
+        ...(operation === 'trash' && matchId === view?.activeLocalMatchId
+          ? { releaseCurrent: true }
+          : {}),
+      });
       setConfirmation(null);
       await refresh();
       setMessage(
@@ -39,6 +45,9 @@ export function LocalMatchControls({
         canClose={() => !busy}
       >
         <p>{confirmation?.name}</p>
+        {confirmation?.matchId === view?.activeLocalMatchId ? (
+          <p>同时解除当前本地比赛选择。</p>
+        ) : null}
         <p>
           比赛将移入回收站，并从本地赛程移除。可恢复比赛资料、名单、地图与
           BP；共享队伍、HUD、网站比赛及其他比赛保留。
@@ -128,7 +137,9 @@ export function LocalMatchControls({
       </form>
       <details>
         <summary>管理本地比赛</summary>
-        <p>当前比赛需先切换到其他比赛，才可移入回收站。</p>
+        <p>
+          正在使用的比赛需先结束制作并切换比赛。尚未使用游戏数据的准备比赛可确认后解除选择并回收。
+        </p>
         {view?.matches.map((match) => (
           <div key={match.matchId}>
             <span>
