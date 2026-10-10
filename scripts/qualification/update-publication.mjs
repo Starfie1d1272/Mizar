@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { releaseAttestationArgs } from './release-identity.mjs';
 import { publicProductAssets, assetInventory } from './release-assets.mjs';
+import { makeUpdateIndex } from './update-index.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -125,7 +126,6 @@ async function verifyExistingPublication(release, identity, product) {
         manifestBytes.equals(await readFile(join(product, 'update-manifest.json'))),
         '原更新清单字节不一致',
       );
-      const { makeUpdateIndex } = await import('./update-index.mjs');
       const provenance = Buffer.from(JSON.stringify(index.provenance)),
         publicationProof = Buffer.from(JSON.stringify(index.publicationProvenance));
       requireValue(
