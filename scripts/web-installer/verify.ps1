@@ -13,7 +13,7 @@ pnpm --filter @mizar/companion deploy --prod (Join-Path $bridge 'resources/app')
 if ($LASTEXITCODE) { throw 'Production dependency deployment failed' }
 node "$PSScriptRoot/prepare-bridge.mjs" $bridge
 if ($LASTEXITCODE) { throw 'Bridge deployment failed' }
-pnpm exec vitest run scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
+pnpm exec vitest run scripts/web-installer/qualification-plan.test.mjs scripts/web-installer/cancel-control.test.mjs packages/resource-pack-contract/catalog.test.mjs apps/companion/test/resource-store/store.test.ts apps/companion/test/resource-store/app-integration.test.ts
 if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
 node "$PSScriptRoot/test-pack-cache-boundary.mjs" (Join-Path $bridge 'resources/app/dist/web-installer/install-official-pack.mjs')
 if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
