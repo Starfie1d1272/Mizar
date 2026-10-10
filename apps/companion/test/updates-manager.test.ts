@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UpdateManager, type UpdateSource } from '../src/updates/manager.js';
+import {
+  UpdateManager,
+  safeCode,
+  updateFailure,
+  type UpdateSource,
+} from '../src/updates/manager.js';
 import type { UpdateManifest } from '../src/updates/contract.js';
 
 const bytes = Buffer.from('independent qualified installer fixture');
@@ -78,6 +83,25 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 describe('controlled update lifecycle', () => {
+  it('distinguishes trust metadata refresh, exhausted API quota and unknown failure without declaring bad signatures', () => {
+    const trust = new Error('update_trust_metadata_failed', {
+      cause: Object.assign(new Error('metadata refresh timeout'), {
+        code: 'TUF_REFRESH_METADATA_ERROR',
+      }),
+    });
+    expect(updateFailure('box_metadata_fallback', trust, 'one').summary).toContain(
+      '尚未完成来源认证',
+    );
+    const quota = Object.assign(new Error('update_network_failed'), {
+      status: 403,
+      rateLimited: true,
+    });
+    expect(updateFailure('check', quota, 'one').summary).toContain('访问额度已耗尽');
+    expect(safeCode(new Error('unknown original cause'))).toBe('update_operation_failed');
+    expect(updateFailure('check', new Error('unknown original cause'), 'one').summary).toContain(
+      '原因未知',
+    );
+  });
   it('retains both source failures with HTTP status and a shared correlation ID outside UI', async () => {
     const log =
       vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();

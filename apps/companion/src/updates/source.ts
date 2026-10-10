@@ -118,6 +118,8 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     let verifiedCommit: string | undefined;
@@ -128,6 +130,7 @@ export class StableSource {
         break;
       } catch (error) {
         failures.push(error);
+        this.diagnostic?.('qualification_proof_rejected', error);
         /* No alternative signer or trust root is accepted. */
       }
     }
@@ -169,6 +172,8 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     return selectQualifiedCore(carrier, manifest, verifier);
@@ -189,6 +194,8 @@ export class StableSource {
       tufCachePath: this.cachePath,
       retry: 0,
       timeout: 5000,
+    }).catch((cause: unknown) => {
+      throw new Error('update_trust_metadata_failed', { cause });
     });
     signal.throwIfAborted();
     const promotionSha = verifyAttestation(

@@ -14,6 +14,7 @@ function setup(
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
+  gameStates: { running: boolean; pending: boolean }[] = [],
 ) {
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
@@ -28,7 +29,11 @@ function setup(
       command === 'gsi_status'
         ? { installed: true, conflict: false }
         : command === 'cs2_config_status'
-          ? { running, pending: true, phase: running ? 'running' : 'uncertain' }
+          ? (gameStates.shift() ?? {
+              running,
+              pending: true,
+              phase: running ? 'running' : 'uncertain',
+            })
           : command === 'start_managed_cs2'
             ? newlyStarted
             : undefined,
@@ -71,15 +76,28 @@ describe('managed CS2 production entry and cleanup', () => {
     ]);
   });
   it('keeps preparation and the pending game request while Steam is still starting', async () => {
-    const calls = setup(undefined, 'preparation', true, false);
+    const calls = setup(undefined, 'preparation', true, false, [
+      { running: false, pending: true },
+      { running: false, pending: false },
+    ]);
     await expect(productionAction('enter', preparation)).resolves.toBeUndefined();
     expect(calls).toEqual([
       'gsi_status',
       '/local/v1/obs',
       'start_managed_cs2',
       'cs2_config_status',
+      'cs2_config_status',
     ]);
     expect(calls).not.toContain('finish_managed_cs2');
+  });
+  it('continues the original entry intent after the late game is confirmed without launching again', async () => {
+    const calls = setup(undefined, 'preparation', true, false, [
+      { running: false, pending: true },
+      { running: true, pending: true },
+    ]);
+    await productionAction('enter', preparation);
+    expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
+    expect(calls.slice(-2)).toEqual(['/operator/production', 'present_production']);
   });
   it('does not enter production when the game cannot start', async () => {
     const calls = setup('launch');

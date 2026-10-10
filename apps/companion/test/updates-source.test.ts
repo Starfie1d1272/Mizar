@@ -742,7 +742,7 @@ it('binds the modern Core to four subjects of one Qualification and the authenti
   expect(() => selectQualifiedCore(carrier(), full, verifier)).toThrow('invalid_signature');
 });
 
-it('keeps nested transport codes while redacting credentials, signed URLs and schema input', () => {
+it('keeps nested transport codes and arbitrary messages while redacting credentials and signed URLs', () => {
   const underlying = Object.assign(
     new Error(
       'connect ECONNRESET https://release-assets.githubusercontent.com/asset?signature=private-signature',
@@ -753,7 +753,7 @@ it('keeps nested transport codes while redacting credentials, signed URLs and sc
     [
       new Error('Authorization: Bearer private-token'),
       underlying,
-      Object.assign(new Error('private-match-data'), { name: 'ZodError' }),
+      Object.assign(new Error('schema failure'), { name: 'ZodError' }),
     ],
     'update_provenance_failed',
   );
@@ -762,8 +762,32 @@ it('keeps nested transport codes while redacting credentials, signed URLs and sc
     cause: { errors: [expect.anything(), { code: 'ECONNRESET' }, { name: 'ZodError' }] },
   });
   const text = JSON.stringify(evidence);
-  for (const sensitive of ['private-token', 'private-signature', 'private-match-data'])
+  for (const sensitive of ['private-token', 'private-signature'])
     expect(text).not.toContain(sensitive);
   underlying.cause = underlying;
   expect(JSON.stringify(errorEvidence(underlying))).toContain('truncated');
+});
+
+it('retains string exceptions, stack and bounded schema issue metadata without schema input', () => {
+  expect(errorEvidence('unusual original failure')).toMatchObject({
+    message: 'unusual original failure',
+  });
+  const schema = Object.assign(new Error('schema validation failed'), {
+    name: 'ZodError',
+    issues: [
+      {
+        code: 'invalid_type',
+        path: ['installer', 'bytes'],
+        expected: 'number',
+        input: 'private-input',
+      },
+    ],
+  });
+  const evidence = errorEvidence(schema);
+  expect(evidence).toMatchObject({
+    issues: [{ code: 'invalid_type', path: ['installer', 'bytes'], expected: 'number' }],
+  });
+  expect((evidence as { stack?: unknown }).stack).toContain('schema validation failed');
+  expect(JSON.stringify(evidence)).not.toContain('private-input');
+  expect(JSON.stringify(errorEvidence(new Error('x'.repeat(10_000))))).toContain('truncated');
 });

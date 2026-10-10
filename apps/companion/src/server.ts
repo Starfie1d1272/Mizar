@@ -200,7 +200,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
       currentContentDigest: productArtifact!,
       installed: process.env.MIZAR_DISTRIBUTION === 'installed',
       log: (stage, code, version, diagnostic) =>
-        console.info(JSON.stringify({ event: 'update', stage, code, version, diagnostic })),
+        console.info(
+          JSON.stringify({ event: 'update', time: Date.now(), stage, code, version, diagnostic }),
+        ),
     });
     await updates.load();
   }

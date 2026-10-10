@@ -55,7 +55,10 @@ export async function updateRequest(
     }
     if (!response.ok || !response.body) {
       await response.body?.cancel();
-      throw new UpdateRequestError('update_network_failed', url.hostname, response.status);
+      const error = new UpdateRequestError('update_network_failed', url.hostname, response.status);
+      error.rateLimited =
+        url.hostname === 'api.github.com' && response.headers.get('x-ratelimit-remaining') === '0';
+      throw error;
     }
     if (
       response.headers.get('content-encoding') &&

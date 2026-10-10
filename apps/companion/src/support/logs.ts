@@ -1,3 +1,4 @@
+import { errorEvidence, redactDiagnosticText } from '../updates/diagnostics.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
@@ -103,6 +104,7 @@ function parse(line: string): Record<string, unknown> {
 }
 
 const updateStages = new Set([
+  'qualification_proof_rejected',
   'check',
   'download',
   'operator_action',
@@ -174,6 +176,17 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
               ? diagnostic.operationId
               : null,
           causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
+        }
+      : {}),
+    ...(update && diagnostic.error !== undefined
+      ? { localDiagnostic: errorEvidence(diagnostic.error) }
+      : {}),
+    ...(['powershell', 'cs2_launch'].includes(stage ?? '') &&
+    (typeof entry.error === 'string' || typeof entry.detail === 'string')
+      ? {
+          localDiagnostic: redactDiagnosticText(
+            typeof entry.error === 'string' ? entry.error : String(entry.detail),
+          ),
         }
       : {}),
     timestamp: timestamp(entry.time ?? entry.timestamp),

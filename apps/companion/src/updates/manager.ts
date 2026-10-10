@@ -71,6 +71,7 @@ export class UpdateManager {
   private settingsInvalid = false;
   private lastResult: string | null = null;
   private operationId = randomUUID();
+  private failureDetails: ReturnType<typeof updateFailure>[] = [];
   private readonly root: string;
   private readonly source: UpdateSource;
   constructor(
@@ -100,6 +101,8 @@ export class UpdateManager {
     this.options.log?.(stage, code, this.candidate?.version, { operationId: this.operationId });
   }
   failure(stage: string, error: unknown) {
+    this.failureDetails.push(updateFailure(stage, error, this.operationId));
+    this.failureDetails = this.failureDetails.slice(-6);
     this.options.log?.(stage, safeCode(error), this.candidate?.version, {
       operationId: this.operationId,
       error: errorEvidence(error),
@@ -206,6 +209,7 @@ export class UpdateManager {
     return {
       phase: this.phase,
       error: this.error,
+      failureDetails: this.failureDetails,
       currentVersion: this.options.version,
       distribution: this.options.installed ? 'installed' : 'portable',
       automatic: this.config.automatic,
@@ -241,6 +245,7 @@ export class UpdateManager {
   }
   private async doCheck(signal: AbortSignal) {
     this.operationId = randomUUID();
+    this.failureDetails = [];
     try {
       await this.saveConfig();
       const release = await this.source.latest(
@@ -347,6 +352,7 @@ export class UpdateManager {
   }
   private async doDownload(manifest: UpdateManifest, signal: AbortSignal) {
     this.operationId = randomUUID();
+    this.failureDetails = [];
     let directory: string | undefined;
     try {
       await this.discard();
@@ -487,6 +493,67 @@ export class UpdateManager {
   }
 }
 export function safeCode(error: unknown): string {
-  const value = error instanceof Error ? error.message : '';
-  return /^update_[a-z_]{1,50}$/.test(value) ? value : 'update_verification_failed';
+  const value = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /^update_[a-z_]{1,50}$/.test(value) ? value : 'update_operation_failed';
+}
+
+export function updateFailure(stage: string, error: unknown, operationId: string) {
+  const code = safeCode(error);
+  const status = error instanceof Error ? (error as Error & { status?: number }).status : undefined;
+  const rateLimited =
+    error instanceof Error && (error as Error & { rateLimited?: boolean }).rateLimited;
+  const reasons: Record<string, string> = {
+    update_identity_changed: '同版本发行内容发生变化，已拒绝安装。',
+    update_rollback_rejected: '发现版本回退，已拒绝安装。',
+    update_subject_mismatch: '文件摘要与发布证明不一致。',
+    update_source_mismatch: '发行源码身份与发布证明不一致。',
+    update_asset_mismatch: '安装包身份与已认证清单不一致。',
+    update_asset_invalid: '发行文件信息不符合安全要求。',
+    update_metadata_corrupt: '更新元数据损坏或不完整。',
+    update_metadata_missing: '发行版本缺少可验证的更新元数据。',
+    update_directory_invalid: '更新暂存目录不符合安全要求。',
+    update_url_forbidden: '下载地址不符合允许的安全来源。',
+    update_settings_invalid: '更新记录无法读取或保存。',
+    update_publication_mismatch: '正式发布确认与已认证版本不一致。',
+    update_cleanup_failed: '下载失败后清理暂存文件也未完成。',
+  };
+  const summary =
+    code === 'update_trust_metadata_failed'
+      ? 'Sigstore 信任元数据未能刷新，尚未完成来源认证。'
+      : code === 'update_network_failed'
+        ? status === 403
+          ? rateLimited
+            ? 'GitHub API 访问额度已耗尽（HTTP 403）。'
+            : '更新来源拒绝访问（HTTP 403），具体限制原因未知。'
+          : status
+            ? `更新来源返回 HTTP ${status}。`
+            : '网络请求失败，具体原因请查看诊断。'
+        : code === 'update_provenance_failed'
+          ? '更新来源认证未通过。'
+          : code === 'update_download_corrupt'
+            ? '下载内容与已认证清单不一致。'
+            : code === 'update_operation_failed'
+              ? '操作未完成，原因未知。'
+              : (reasons[code] ?? '更新未完成，具体原因未知。');
+  const security =
+    /provenance|identity|rollback|subject|source_mismatch|asset_mismatch|publication|metadata_corrupt|directory_invalid/.test(
+      code,
+    );
+  const nextStep = security
+    ? '保留现有版本，请导出诊断并从正式发布页核对安装包。'
+    : code === 'update_trust_metadata_failed'
+      ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
+      : '请导出诊断定位原因；网络恢复后可重新检查，或从正式发布页下载完整包。';
+  const stageLabel = stage.includes('download')
+    ? '下载安装包'
+    : stage === 'install_plan'
+      ? '准备安装'
+      : stage.includes('load')
+        ? '读取更新记录'
+        : stage === 'operator_action'
+          ? '执行更新操作'
+          : stage === 'qualification_proof_rejected'
+            ? '验证更新来源'
+            : '检查更新来源';
+  return { code, stage, stageLabel, summary, nextStep, operationId };
 }

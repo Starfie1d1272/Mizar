@@ -78,7 +78,9 @@ export function registerUpdateRoutes(
       return await publicView();
     } catch (e) {
       manager.failure('operator_action', e);
-      return reply.code(409).send({ error: safeCode(e) });
+      return reply
+        .code(409)
+        .send({ error: safeCode(e), failureDetails: manager.status().failureDetails });
     }
   });
   // Only the Host holds the per-launch capability. Renderer-supplied paths,

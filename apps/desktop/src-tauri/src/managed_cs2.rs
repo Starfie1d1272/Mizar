@@ -568,7 +568,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mizar-waiting-{}", std::process::id()));
         let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
         let mut managed = ManagedCs2::new(log);
-        let video = root.join("video.txt");
+        let video = root.join("cs2_video.txt");
         let original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
         std::fs::write(&video, original).unwrap();
         let mut journal = managed
