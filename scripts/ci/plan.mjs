@@ -204,6 +204,8 @@ function isInstallerPath(path) {
       'scripts/web-installer/',
       'packages/resource-pack-contract/',
       'apps/companion/src/resource-store/',
+      'apps/companion/test/resource-store/',
+      'scripts/qualification/installer-assets/',
     ].some((prefix) => path.startsWith(prefix)) ||
       [
         'apps/companion/src/app.ts',

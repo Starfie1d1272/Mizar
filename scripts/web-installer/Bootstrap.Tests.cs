@@ -36,6 +36,8 @@ namespace Mizar.WebInstaller {
       foreach(string bad in new[]{json.Replace("\"draft\":false","\"draft\":true"),json.Replace("\"prerelease\":false","\"prerelease\":true"),json.Replace("2020-01-01","2999-01-01"),json.Replace("\"tag_name\":\"v9.0.0\"","\"tag_name\":\"v8.0.0\""),json.Replace("\"size\":4","\"size\":5"),json.Replace("sha256:"+plan.sha256,"sha256:"+new string('e',64)),json.Replace("sha256:"+plan.coreSha256,"sha256:"+new string('e',64)),json.Replace("github.com/Starfie1d1272/Mizar/releases/download","evil.invalid/download"),json.Replace("\"assets\":[","\"assets\":[] ,\"ignored\":[")}) {
         bool rejected=false; try {Publication.Check(bad,plan);} catch {rejected=true;} Assert(rejected);
       }
+      string firstAsset=json.Substring(json.IndexOf("[{",StringComparison.Ordinal)+1,json.IndexOf("},{",StringComparison.Ordinal)-json.IndexOf("[{",StringComparison.Ordinal));
+      bool duplicateDenied=false; try {Publication.Check(json.Replace("[{","["+firstAsset+",{"),plan);} catch {duplicateDenied=true;} Assert(duplicateDenied);
       plan.publicationRequired=false;
       bool denied=false; try {Publication.ValidatePlan(plan);} catch {denied=true;} Assert(denied);
     }

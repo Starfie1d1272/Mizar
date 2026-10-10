@@ -2,19 +2,21 @@
 
 默认正式构建仍 Full。显式 `node scripts/qualification/build.mjs --resource-mode core-only` 移除 EPL 回放、视频和样例头像，保留地图、武器、品牌、字体、HUD 与节目代码；Core-only 仍标记 developmentOnly，尚不能晋级。
 
-## 构建接口
+## 候选构建接口（正式推荐仍阻塞）
 
 在既有 main Release Qualification 内，完成唯一一次 Core 和原 NSIS 构建后运行：
 
 ```powershell
-./scripts/web-installer/build.ps1 -ProductDirectory <资格产物目录> -OutputDirectory <独立输出目录> -Qualification
+./scripts/web-installer/build.ps1 -ProductDirectory <资格产物目录> -CoreDirectory <已核验解压Core目录> -OutputDirectory <独立输出目录> -Qualification
 ```
 
-构建入口复用 `assertQualificationIdentity`、`qualifiedUpdateManifest` 与 `verifyPayload`，要求 main 工作流、请求 SHA、checkout 与产物 SHA 一致，核对原 ZIP/NSIS 的实际字节、Core 全部清单及内置 `installed-entry.mjs`。不接受调用者提供的散列计划，也不重新构建 Core。输出 `Mizar-v<version>-Windows-x64-WebInstaller.exe`、`web-installer-plan.json` 和 `web-installer-build.json`；重复输出拒绝覆盖。build manifest 明确 `published=false`、`publicationRequired=true`、`productionCompletionEvidence=false`。
+构建入口复用 `assertQualificationIdentity`、`qualifiedUpdateManifest` 与 `verifyPayload`，要求 main 工作流、请求 SHA、checkout 与产物 SHA 一致，核对原 ZIP/NSIS 的实际字节、Core 全部清单及内置 `installed-entry.mjs`。不接受调用者提供的散列计划，也不重新构建 Core。输出 `Mizar-v<version>-Windows-x64-WebInstaller.exe`、`web-installer-plan.json` 和 `web-installer-build.json`；重复输出拒绝覆盖。build manifest 明确 `published=false`、`publicationRequired=true`、`productionReady=false`、`domesticMirrorReady=false` 和 `productionCompletionEvidence=false`。assemble 将 Core 解压到独立 `final candidate` 目录，调用者必须显式传入该目录下的 Core 根；不能假定 product 目录包含解压树。
 
-正式 EXE 仅包含生产入口、透明双星品牌 PNG 和窗口 ICO；标题为「Mizar 安装」。没有许可下载预览或演示命令。发布负责人须把此候选纳入原 Qualification 证明及 Promotion 原资产核验，不能据构建 manifest 推断已发布。当前 PR 不修改发布 workflow、Box 或公开附件。
+候选 EXE 仅包含生产入口、透明双星品牌 PNG 和窗口 ICO；标题为「Mizar 安装」。没有许可下载预览或演示命令。发布负责人须把此候选纳入原 Qualification 证明及 Promotion 原资产核验，不能据构建 manifest 推断已发布。当前 PR 不修改发布 workflow、Box 或公开附件。
 
 执行安装前只读请求官方 GitHub 固定版本 API，拒绝草稿、预发布、未公开、错版本、缺失／重复资产、大小／摘要／规范 URL 不符。此检查只确认已由 Qualification 固定的 ZIP/NSIS 资产公开可用，不生成新信任授权；资源 publisher 认证仍由唯一 SDK 的 signer@main、源码 OID 和 Sigstore 完成。请求无凭据／cookie／重定向，响应限 2 MiB、45 秒，可取消。尚未发布的候选不能开始安装。
+
+此候选当前仅具备 GitHub 路径，不能作为面向国内用户的正式推荐入口。既定产品要求是 Box 优先、GitHub 兜底；强制 GitHub API 前置尚未解决该要求。现有 `StableSource.latest/authenticate` 已验证 Box update index 的原 Qualification manifest 与 Promotion publication 双证明，但 Native 在 NSIS 前没有可信 Node/SDK，不能复制一套 Sigstore verifier。安装后 `published-bootstrap.mjs` 也仍按固定 GitHub 获取八项资源。最小后续集成为：由发行／信任负责人提供可复用的已验证 Box 发布 envelope 与固定身份镜像接口；在同一 SDK 中认证并绑定 Core、资源目录及镜像来源，Native 复用同一授权结果选择实际 Box 下载候选，失败才走 GitHub。必须有 Box 可用／GitHub 不可用的实际安装验证；不能仅去掉发布核对或把备用来源写在文档。此接口接通前 `productionReady` 必须保持 false，不推荐、发布此候选。
 
 ## 安装与资源接口
 

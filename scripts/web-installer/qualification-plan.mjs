@@ -15,14 +15,13 @@ async function identity(path) {
 }
 // Only the existing main Qualification producer can authorize embedded executable pins.
 // No mirror hashes, caller-supplied plan, development Core or second trust verifier.
-export async function qualificationPlan(product, context, checkedOutSha, requestedSha) {
+export async function qualificationPlan(product, coreRoot, context, checkedOutSha, requestedSha) {
   const release = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
   assertQualificationIdentity(context, checkedOutSha, requestedSha, release.gitSha);
   const manifest = await qualifiedUpdateManifest(product);
   if (!manifest) throw new Error('A stable qualified update manifest is required');
   const coreName = `Mizar-v${manifest.version}-Windows-x64.zip`;
   if (release.archive !== coreName) throw new Error('Noncanonical Core archive');
-  const coreRoot = join(product, coreName.slice(0, -4));
   const artifact = await verifyPayload(coreRoot);
   if (
     artifact.appVersion !== manifest.version ||
@@ -32,7 +31,23 @@ export async function qualificationPlan(product, context, checkedOutSha, request
   )
     throw new Error('Actual Core does not match the qualification identity');
   // Required by the actual native bridge; an old published Core cannot become a new installer.
-  await stat(join(coreRoot, 'resources/app/dist/web-installer/installed-entry.mjs'));
+  const sums = await readFile(join(coreRoot, 'resources/metadata/SHA256SUMS'), 'utf8');
+  const checksummedPaths = new Set(
+    sums
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.slice(66)),
+  );
+  for (const name of [
+    'installed-entry',
+    'complete-bootstrap',
+    'install-official-pack',
+    'published-bootstrap',
+    'cancel-control',
+  ]) {
+    if (!checksummedPaths.has(`resources/app/dist/web-installer/${name}.mjs`))
+      throw new Error('Required installed bridge is absent from the verified Core inventory');
+  }
   const core = await identity(join(product, coreName));
   const installer = await identity(join(product, manifest.installer.name));
   if (
@@ -61,9 +76,11 @@ export async function qualificationPlan(product, context, checkedOutSha, request
   };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 4) throw new Error('Usage: qualification-plan.mjs PRODUCT OUTPUT');
+  if (process.argv.length !== 5)
+    throw new Error('Usage: qualification-plan.mjs PRODUCT CORE OUTPUT');
   const plan = await qualificationPlan(
     resolve(process.argv[2]),
+    resolve(process.argv[3]),
     {
       repository: process.env.GITHUB_REPOSITORY,
       ref: process.env.GITHUB_REF,
@@ -74,8 +91,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     process.env.QUALIFICATION_SOURCE_INPUT,
   );
-  await mkdir(dirname(resolve(process.argv[3])), { recursive: true });
-  await writeFile(process.argv[3], `${JSON.stringify(plan, null, 2)}\n`, {
+  await mkdir(dirname(resolve(process.argv[4])), { recursive: true });
+  await writeFile(process.argv[4], `${JSON.stringify(plan, null, 2)}\n`, {
     flag: 'wx',
     mode: 0o600,
   });

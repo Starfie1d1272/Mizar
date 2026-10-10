@@ -386,6 +386,8 @@ describe('changed-surface CI planner', () => {
     'scripts/web-installer/Window.Tests.cs',
     'packages/resource-pack-contract/catalog.mjs',
     'apps/companion/src/resource-store/store.ts',
+    'apps/companion/test/resource-store/app-integration.test.ts',
+    'scripts/qualification/installer-assets/header.bmp',
   ])('requires real installer integration after changing %s', (path) => {
     const plan = createCiPlan({ changedFiles: [{ path, status: 'D' }] });
     expect(plan.runInstaller).toBe(true);
