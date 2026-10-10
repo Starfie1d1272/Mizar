@@ -20,6 +20,7 @@ if ($LASTEXITCODE) { throw 'Windows resource integration tests failed' }
 node "$PSScriptRoot/test-pack-cache-boundary.mjs" (Join-Path $bridge 'resources/app/dist/web-installer/install-official-pack.mjs')
 if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
 & "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
+& "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
 $previous = @{}
 foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
 try {
