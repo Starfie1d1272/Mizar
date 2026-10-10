@@ -77,6 +77,6 @@ namespace Mizar.WebInstaller {
         }
       } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
-    public static int Main() { try { Run().GetAwaiter().GetResult(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
+    [STAThread] public static int Main() { try { Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
   }
 }

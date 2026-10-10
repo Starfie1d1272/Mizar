@@ -19,11 +19,15 @@ namespace Mizar.WebInstaller {
     public readonly string InstallDirectory;
     public InstallerRecoveryRequired(string directory, string reason) : base(reason) { InstallDirectory = directory; }
   }
+  public sealed class InstallerActionRequired : IOException {
+    public readonly bool CanRetry;
+    public InstallerActionRequired(string message,bool canRetry=false,Exception cause=null) : base(message,cause) { CanRetry=canRetry; }
+  }
   public static class Nsis {
     static string PendingPath() {
       return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar", "bootstrap-cache", "fresh-install.pending");
     }
-    static void ValidateDestination(string directory) {
+    internal static void ValidateDestination(string directory) {
       string target = Path.GetFullPath(directory);
       string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs") + Path.DirectorySeparatorChar;
       string qualification = Path.Combine(Path.GetTempPath(), "Mizar-WebInstaller-Qualification") + Path.DirectorySeparatorChar;
@@ -32,16 +36,16 @@ namespace Mizar.WebInstaller {
         throw new IOException("安装位置不受允许。");
       Downloader.NoReparse(target);
       string pending = PendingPath(); Downloader.NoReparse(pending);
-      if (File.Exists(pending)) throw new IOException("前一次安装尚未确认停止，请先使用原安装器恢复；禁止并发重试。");
-      if (Directory.Exists(target) || File.Exists(target)) throw new IOException("安装位置已存在，请使用既有更新或修复入口。");
+      if (File.Exists(pending)) throw new InstallerRecoveryRequired(target,"前一次安装尚未确认停止，请使用原安装器恢复。");
+      if (Directory.Exists(target) || File.Exists(target)) throw new InstallerActionRequired("安装位置已有文件。请使用既有更新或修复入口。");
       using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
-        if (key != null) throw new IOException("检测到已有 Mizar，请使用应用内更新。");
+        if (key != null) throw new InstallerActionRequired("检测到已有 Mizar，请使用应用内更新。");
       using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar"))
-        if (key != null) throw new IOException("检测到已有 Mizar 安装登记。");
+        if (key != null) throw new InstallerActionRequired("检测到已有安装登记。请使用原安装器修复。");
       if (Directory.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", "Mizar")) ||
           File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Mizar.lnk")))
-        throw new IOException("检测到已有 Mizar 快捷方式，请先使用原安装器修复。");
-      if (Process.GetProcessesByName("Mizar").Length != 0) throw new IOException("请正常退出 Mizar 后再安装。");
+        throw new InstallerActionRequired("检测到已有 Mizar 快捷方式，请先使用原安装器修复。");
+      if (Process.GetProcessesByName("Mizar").Length != 0) throw new InstallerActionRequired("请正常退出 Mizar 后再安装。",true);
     }
     static async Task<int> Wait(Process child, TimeSpan deadline, IProgress<string> progress, CancellationToken token) {
       var clock = Stopwatch.StartNew(); bool notified = false;
@@ -157,8 +161,7 @@ namespace Mizar.WebInstaller {
     }
     internal static async Task RunResourceBridge(Plan plan,string target,CancellationToken token,IProgress<string> progress=null) {
       token.ThrowIfCancellationRequested();
-      if(Process.GetProcessesByName("Mizar").Length!=0) throw new IOException("请正常退出 Mizar 后再准备素材。");
-      var expected=VerifiedRuntime(plan,target);
+      var expected=VerifyInstalledCore(plan,target);
       string entry=Path.Combine(target,"resources","app","dist","web-installer","installed-entry.mjs"), node=Path.Combine(target,"resources","runtime","node.exe");
       if(progress!=null) progress.Report("installing-resources");
       using(var nodeLock=new FileStream(node,FileMode.Open,FileAccess.Read,FileShare.Read))
@@ -191,6 +194,13 @@ namespace Mizar.WebInstaller {
         if(Convert.ToString(result["schemaVersion"])!="mizar.bootstrap-result.v1" || !Object.Equals(result["coreInstalled"],true) || !Object.Equals(result["resourcesReady"],true) || core==null || Convert.ToString(core["version"])!=plan.version || Convert.ToString(core["gitSha"])!=plan.gitSha || Convert.ToString(core["contentDigest"])!=plan.contentDigest) throw new IOException("核心与素材完成身份不一致。");
         }
       }
+    }
+    internal static System.Collections.Generic.SortedDictionary<string,string> VerifyInstalledCore(Plan plan,string target) {
+      string pending=PendingPath(); Downloader.NoReparse(pending);
+      if(File.Exists(pending)) throw new InstallerRecoveryRequired(target,"前一次安装尚未确认停止，请使用原安装器恢复。");
+      if(Process.GetProcessesByName("Mizar").Length!=0) throw new InstallerActionRequired("请正常退出 Mizar 后重试。",true);
+      try {return VerifiedRuntime(plan,target);}
+      catch(IOException error) {throw new InstallerActionRequired("已有安装无法安全继续。请使用完整离线安装包或原安装器修复。",false,error);}
     }
     static void AssertLocked(FileStream file,string expected) {
       file.Position=0;

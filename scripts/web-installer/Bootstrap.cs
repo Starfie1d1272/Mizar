@@ -161,83 +161,136 @@ namespace Mizar.WebInstaller {
   }
   sealed class Window : Form {
     readonly Plan plan;
-    readonly Label heading = new Label(), detail = new Label(), amount = new Label();
-    readonly ProgressBar bar = new ProgressBar();
-    readonly Button action = new Button(), cancel = new Button();
+    readonly Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> install;
+    readonly Action<string> launch;
+    internal readonly Label heading = new Label(), detail = new Label(), amount = new Label();
+    internal readonly ProgressBar bar = new ProgressBar();
+    internal readonly Button action = new Button(), cancel = new Button();
+    internal readonly CheckBox launchChoice = new CheckBox();
+    readonly LinkLabel details = new LinkLabel();
     CancellationTokenSource cancellation;
-    string installedCore;
-    bool finished, recoveryRequired;
-    public Window(Plan value) {
-      plan = value; Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); Text = plan.allowExecute ? "Mizar 安装 · 开发版" : "Mizar 在线安装 · 验证预览"; AutoScaleMode = AutoScaleMode.Dpi;
-      ClientSize = new Size(590, 380); MinimumSize = Size; MaximizeBox = false;
-      StartPosition = FormStartPosition.CenterScreen; Font = new Font("Microsoft YaHei UI", 9F);
-      BackColor = Color.White;
-      var banner = new Panel { Dock = DockStyle.Top, Height = 88, BackColor = Color.FromArgb(14, 24, 41) };
-      var brand = new Label { Text = "Mizar", ForeColor = Color.White, Font = new Font("Segoe UI", 24F), AutoSize = true, Location = new Point(32, 20) };
-      banner.Controls.Add(brand);
-      using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("header.bmp")) {
-        if (stream != null) {
-          using (var original = new Bitmap(stream)) {
-          var picture = new PictureBox { Image = new Bitmap(original), SizeMode = PictureBoxSizeMode.Zoom, Location = new Point(400, 8), Size = new Size(160, 72) };
-          banner.Controls.Add(picture);
-          }
+    string installedCore, technicalDetails;
+    bool finished, recoveryRequired, downloading, launchFailed;
+    public Window(Plan value) : this(value,null,null,false) { }
+    internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
+      plan=value; install=operation ?? Install; launch=start ?? (path=>Nsis.StartVerifiedProduct(plan,path));
+      Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+      Text=demonstration ? "Mizar 安装 · 界面演示（未执行安装）" : plan.allowExecute ? "Mizar 安装 · 开发版" : "Mizar 在线安装 · 验证预览";
+      AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(590,330); MinimumSize=Size; MaximizeBox=false;
+      StartPosition=FormStartPosition.CenterScreen; Font=new Font("Microsoft YaHei UI",9F); BackColor=Color.White;
+      var banner=new Panel {Dock=DockStyle.Top,Height=80,BackColor=Color.FromArgb(14,24,41)};
+      banner.Controls.Add(new PictureBox {Image=Icon.ToBitmap(),SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(32,16),Size=new Size(48,48)});
+      banner.Controls.Add(new Label {Text="Mizar",ForeColor=Color.White,Font=new Font("Segoe UI",24F),AutoSize=true,Location=new Point(96,17)});
+      Controls.Add(banner);
+      heading.SetBounds(32,104,526,32); heading.Font=new Font(Font.FontFamily,15F);
+      heading.Text=plan.allowExecute ? "安装 Mizar" : "下载验证预览";
+      detail.SetBounds(32,148,526,48);
+      detail.Text=plan.allowExecute ? "安装时需要连接网络。" : "下载公开许可文件并查看验证结果。";
+      bar.SetBounds(32,212,526,10); bar.Visible=false;
+      amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
+      launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
+      launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
+      action.SetBounds(347,270,100,32); action.Text=plan.allowExecute ? "安装" : "开始验证";
+      action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
+      cancel.SetBounds(458,270,100,32); cancel.Text="关闭";
+      cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
+      details.SetBounds(32,278,120,24); details.Text="详情";
+      technicalDetails="安装文件与必要数据来自官方发布源，并在使用前验证。";
+      details.LinkClicked += (s,e)=>MessageBox.Show(this,technicalDetails,"安装详情",MessageBoxButtons.OK,MessageBoxIcon.Information);
+      Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details});
+      if(demonstration) {
+        var marker=new Label {Text="界面演示：未执行安装",ForeColor=Color.DarkRed,BackColor=Color.White,AutoSize=true,Location=new Point(32,83)};
+        Controls.Add(marker); marker.BringToFront();
+      }
+      AcceptButton=action; CancelButton=cancel;
+      FormClosing += (s,e)=>{if(cancellation!=null){RequestCancel();e.Cancel=true;}};
+    }
+    async Task<string> Install(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {
+      string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
+      if(installedCore==null && (Directory.Exists(target) || File.Exists(target))) {
+        Nsis.VerifyInstalledCore(plan,target); // A directory alone never proves a resumable installation.
+        installedCore=target;
+      }
+      if(installedCore==null) {
+        Nsis.ValidateDestination(target);
+        string installer;
+        using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
+        using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
+          installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token);
+        var core=await Nsis.Install(plan,installer,target,token,stages);
+        installedCore=core.Directory;
+      }
+      await Nsis.RunResourceBridge(plan,installedCore,token,stages);
+      token.ThrowIfCancellationRequested(); return installedCore;
+    }
+    internal void ShowStage(string phase) {
+      downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
+      heading.Text=phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
+      detail.Text=phase=="waiting-for-installer" ? "正在等待安装操作安全结束。" : "请稍候。";
+    }
+    internal void ShowCompleted(string path) {
+      installedCore=path; finished=true; bar.Visible=false; amount.Text="";
+      heading.Text="安装完成"; detail.Text="Mizar 已安装。";
+      launchChoice.Visible=true; action.Text="完成"; action.Enabled=true; cancel.Text="关闭";
+    }
+    internal void Finish() {
+      if(!finished || cancellation!=null) return;
+      if(launchChoice.Checked) {
+        try {launch(installedCore);}
+        catch(Exception error) {
+          launchFailed=true;
+          heading.Text="Mizar 未能启动"; detail.Text="安装已完成。可以重试启动，或取消勾选后结束。";
+          technicalDetails=error.Message; action.Text="重试启动"; return;
         }
       }
-      Controls.Add(banner);
-      heading.SetBounds(32, 112, 526, 32); heading.Font = new Font(Font.FontFamily, 15F);
-      heading.Text = plan.allowExecute ? "安装 Mizar" : "下载验证预览";
-      detail.SetBounds(32, 157, 526, 55);
-      detail.Text = plan.allowExecute ? "安装 Mizar 并准备默认 EPL 素材。\n完成后自动启动。" : "下载公开许可文件并查看验证结果。";
-      bar.SetBounds(32, 231, 526, 10); bar.Style = ProgressBarStyle.Continuous;
-      amount.SetBounds(32, 250, 526, 28); amount.ForeColor = Color.FromArgb(80, 92, 110);
-      action.SetBounds(347, 321, 100, 32); action.Text = plan.allowExecute ? "安装" : "开始验证"; action.Click += async (s,e) => await Start();
-      cancel.SetBounds(458, 321, 100, 32); cancel.Text = "关闭";
-      cancel.Click += (s,e) => { if (cancellation != null) cancellation.Cancel(); else Close(); };
-      Controls.AddRange(new Control[] { heading, detail, bar, amount, action, cancel });
-      AcceptButton = action; CancelButton = cancel;
-      FormClosing += (s,e) => { if (cancellation != null) { cancellation.Cancel(); e.Cancel = true; } };
+      Close();
     }
-    async Task Start() {
-      cancellation = new CancellationTokenSource(); action.Enabled = false; cancel.Text = "取消";
-      heading.Text = plan.allowExecute ? "正在下载 Mizar" : "正在下载"; detail.Text = plan.allowExecute ? "下载完成后自动安装。" : "下载完成后显示验证结果。";
-      bar.Style=ProgressBarStyle.Continuous; bar.Value = 0;
+    internal void RequestCancel() {
+      if(cancellation==null) return;
+      ShowStage("waiting-for-installer"); cancellation.Cancel(); cancel.Enabled=false;
+    }
+    internal async Task Start() {
+      if(cancellation!=null || finished || recoveryRequired) return;
+      cancellation=new CancellationTokenSource(); var current=cancellation;
+      action.Enabled=false; cancel.Text="取消"; launchChoice.Visible=false;
+      downloading=true; bar.Visible=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=0; amount.Text="";
+      heading.Text=plan.allowExecute ? "正在下载 Mizar" : "正在下载"; detail.Text="请稍候。";
       try {
-        var progress = new Progress<long>(n => { bar.Value = (int)Math.Min(100, n * 100 / plan.bytes); amount.Text = String.Format("{0:N0} / {1:N0} 字节", n, plan.bytes); });
+        var progress=new Progress<long>(n=>{
+          if(cancellation!=current || !downloading || current.IsCancellationRequested || finished) return;
+          bar.Value=(int)Math.Min(100,n*100/plan.bytes); amount.Text=String.Format("{0:N0} / {1:N0} 字节",n,plan.bytes);
+        });
+        var stages=new Progress<string>(phase=>{
+          if(cancellation==current && !finished && !current.IsCancellationRequested) ShowStage(phase);
+        });
         if(plan.allowExecute) {
-          string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
-          if(installedCore==null && Directory.Exists(target)) installedCore=target;
-          var stages=new Progress<string>(phase=>{
-            if(finished) return;
-            bar.Style=ProgressBarStyle.Marquee; amount.Text=phase=="installing-resources" ? "正在验证与缓存素材" : "等待安装操作安全结束";
-            heading.Text=phase=="installing-resources" ? "正在准备素材" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
-            detail.Text=phase=="installing-resources" ? "准备完成后自动启动 Mizar。" : phase=="waiting-for-installer" ? "安全停止后可以继续。" : "安装完成后自动准备默认 EPL 素材。";
-          });
-          if(installedCore==null) {
-            string installer;
-            using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
-            using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
-              installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),progress,cancellation.Token);
-            var core=await Nsis.Install(plan,installer,target,cancellation.Token,stages);
-            installedCore=core.Directory;
-          }
-          await Nsis.RunResourceBridge(plan,installedCore,cancellation.Token,stages);
-          cancellation.Token.ThrowIfCancellationRequested();
-          Nsis.StartVerifiedProduct(plan,installedCore);
-          heading.Text="安装完成"; detail.Text="默认 EPL 素材已就绪，Mizar 已启动。";
-          finished=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=100; amount.Text="核心与默认素材已就绪"; action.Text="已启动";
+          string path=await install(progress,stages,current.Token);
+          current.Token.ThrowIfCancellationRequested(); ShowCompleted(path);
         } else {
           using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
           using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
-            await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),progress,cancellation.Token);
+            await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),progress,current.Token);
           heading.Text="下载验证完成"; detail.Text="公开许可文件验证完成。"; action.Text="再次验证";
         }
-      } catch (OperationCanceledException) {
-        heading.Text = "已取消"; detail.Text = installedCore==null ? "可以重新开始安装。" : "已保留 Mizar，可以继续准备素材。"; action.Text = "重新开始";
-      } catch (InstallerRecoveryRequired) {
-        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请使用原安装器恢复后继续。";
-      } catch {
-        heading.Text = plan.allowExecute ? "安装未完成" : "下载未完成"; detail.Text = installedCore==null ? "请检查网络后重试，或使用完整离线安装包。" : "现有文件已保留。请重试素材准备，或使用完整离线安装包。"; action.Text = "重试";
-      } finally { if(plan.allowExecute && !finished) {bar.Style=ProgressBarStyle.Continuous; bar.Value=0;} cancellation.Dispose(); cancellation = null; action.Enabled = !finished && !recoveryRequired; cancel.Text = "关闭"; }
+      } catch(OperationCanceledException) {
+        heading.Text=current.IsCancellationRequested ? "已取消" : "下载超时";
+        detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : "请检查网络后重试，或使用完整离线安装包。"; action.Text="重新开始";
+      } catch(InstallerRecoveryRequired error) {
+        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请使用原安装器恢复。"; technicalDetails=error.Message;
+      } catch(InstallerActionRequired error) {
+        recoveryRequired=!error.CanRetry; heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=error.ToString(); action.Text="重试";
+      } catch(UnauthorizedAccessException error) {
+        heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=error.Message; action.Text="重试";
+      } catch(Exception error) {
+        heading.Text=plan.allowExecute ? "安装未完成" : "下载未完成";
+        bool network=false, invalid=false;
+        for(Exception cause=error;cause!=null;cause=cause.InnerException) {if(cause is HttpRequestException || cause is OperationCanceledException) network=true; if(cause is InvalidDataException) invalid=true;}
+        detail.Text=invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试，或使用完整离线安装包。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
+        technicalDetails=error.Message; action.Text="重试";
+      } finally {
+        downloading=false; if(!finished) {bar.Visible=false;amount.Text="";}
+        current.Dispose(); cancellation=null; action.Enabled=!recoveryRequired; cancel.Enabled=true; cancel.Text="关闭";
+      }
     }
   }
   static class Program {

@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory, [switch]$CoreBootstrapReady)
+﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory, [switch]$CoreBootstrapReady, [switch]$UiStateDemo)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -25,6 +25,18 @@ function Save-Window($process, $name) {
     $graphics.CopyFromScreen($rect.Left,$rect.Top,0,0,$bitmap.Size)
     $bitmap.Save((Join-Path $output $name), [Drawing.Imaging.ImageFormat]::Png)
   } finally { $graphics.Dispose(); $bitmap.Dispose() }
+}
+if ($UiStateDemo) {
+  foreach ($state in @('installing','completed','start-failed')) {
+    $demo = Start-Process -FilePath (Join-Path $output 'ui-state-demo.exe') -ArgumentList $state -PassThru
+    try {
+      if (!$demo.WaitForInputIdle(15000)) { throw 'UI demonstration did not become ready' }
+      Start-Sleep -Milliseconds 500
+      Save-Window $demo "native-ui-demo-$state.png"
+    } finally { if (!$demo.HasExited) { $demo.CloseMainWindow() | Out-Null; if (!$demo.WaitForExit(5000)) { $demo.Kill() } } }
+  }
+  [ordered]@{ native=$true; uiStateFixture=$true; installationExecuted=$false; productionCompletionEvidence=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'native-ui-demo-evidence.json') -Encoding UTF8
+  exit 0
 }
 $process = Start-Process -FilePath $exe -PassThru
 try {

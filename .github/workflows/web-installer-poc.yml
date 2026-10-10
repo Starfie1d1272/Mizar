@@ -58,6 +58,9 @@ jobs:
       - name: Capture actual Core installation entry without changing an installation
         shell: powershell
         run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer -CoreBootstrapReady
+      - name: Capture explicitly labeled Native UI state demonstrations
+        shell: powershell
+        run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer -UiStateDemo
       - name: Verify public HTTPS download and capture actual native UI
         shell: powershell
         run: ./scripts/web-installer/capture-poc.ps1 -OutputDirectory .agent-tmp/web-installer
