@@ -416,7 +416,12 @@ test('task workspaces use real local data and keep candidate browsing separate f
     }
     await editor.close();
     await page.goto('/?tab=picture');
-    await expect(page.locator('.picture-presets h3')).toContainText('所选已启用');
+    await expect(
+      page.getByRole('heading', {
+        name: '正式播出 · 校园联赛预设 · 所选已启用',
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(
       page.frameLocator('iframe[title="节目预览"]').locator('.program-scene--waiting'),
     ).toBeVisible();
