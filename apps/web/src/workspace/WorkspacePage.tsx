@@ -23,6 +23,7 @@ import { ProductionStatus } from './ProductionStatus';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
+import { useCs2Status } from '../preparation/cs2-status';
 import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import './workspace.css';
 
@@ -201,6 +202,7 @@ export function WorkspaceDock() {
     return () => clearTimeout(timer);
   }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
+  const { status: cs2 } = useCs2Status();
   useEffect(() => {
     const hide = () => {
       void fetch('/local/v1/production', { cache: 'no-store' })
@@ -379,7 +381,9 @@ export function WorkspaceDock() {
         ) : null}
         <div className="workspace-footer-actions">
           <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-          <small className="workspace-exit-help">关闭游戏并恢复配置</small>
+          <small className="workspace-exit-help">
+            {cs2?.preserveSettings ? '关闭本次游戏，保留游戏设置' : '关闭游戏并恢复配置'}
+          </small>
           <Button
             className="workspace-exit"
             disabled={!production || busy}

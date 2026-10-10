@@ -9,7 +9,7 @@ import { makePublication } from './create.mjs';
 import { verifyResourcePublicationBytes } from '../../../packages/resource-pack-contract/runtime.mjs';
 import { verifyResourcePublication } from './verify.mjs';
 import { buildOfficialPack, jsonBytes } from '../../asset-packs/pack.mjs';
-import { releaseAttestationArgs } from '../release-identity.mjs';
+import { releaseAttestationArgs, verifyReleaseAttestations } from '../release-identity.mjs';
 
 const sourceSha = 'a'.repeat(40),
   promotionSha = 'b'.repeat(40);
@@ -47,6 +47,94 @@ const declaration = {
   expiresAt: '2026-11-09T19:00:00Z',
 };
 describe('发行授权策略', () => {
+  it('bounds concurrent independent verifiers while retaining each exact main policy', async () => {
+    let release, started;
+    const blocked = new Promise((resolve) => {
+      release = resolve;
+    });
+    const running = new Promise((resolve) => {
+      started = resolve;
+    });
+    const calls = [];
+    const subjects = Array.from({ length: 6 }, (_, index) => ({
+      file: `subject-${index}.json`,
+      sourceSha,
+    }));
+    const task = verifyReleaseAttestations(subjects, async (command, args) => {
+      calls.push({ command, args });
+      if (calls.length === 4) started();
+      await blocked;
+    });
+    await running;
+    expect(calls).toHaveLength(4);
+    release();
+    await task;
+    expect(calls).toHaveLength(6);
+    for (const [index, call] of calls.entries())
+      expect(call).toEqual({
+        command: 'gh',
+        args: [
+          'attestation',
+          'verify',
+          `subject-${index}.json`,
+          '--repo',
+          'Starfie1d1272/Mizar',
+          '--signer-workflow',
+          'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main',
+          '--source-ref',
+          'refs/heads/main',
+          '--source-digest',
+          sourceSha,
+        ],
+      });
+  });
+  it('validates every source before starting verification and rejects an empty batch', async () => {
+    let calls = 0;
+    const execute = async () => {
+      calls++;
+    };
+    await expect(
+      verifyReleaseAttestations(
+        [
+          { file: 'valid', sourceSha },
+          { file: 'invalid', sourceSha: 'bad' },
+        ],
+        execute,
+      ),
+    ).rejects.toThrow('源码 SHA');
+    await expect(verifyReleaseAttestations([], execute)).rejects.toThrow('缺少');
+    expect(calls).toBe(0);
+  });
+  it('waits for an active verifier when another subject fails, and preserves the failure', async () => {
+    let release;
+    const blocked = new Promise((resolve) => {
+      release = resolve;
+    });
+    const failure = new Error('original signature failure');
+    let settled = false;
+    const task = verifyReleaseAttestations(
+      [
+        { file: 'failing', sourceSha },
+        { file: 'active', sourceSha },
+      ],
+      async (_command, args) => {
+        if (args[2] === 'failing') throw failure;
+        await blocked;
+      },
+    );
+    task.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((resolve) => globalThis.setImmediate(resolve));
+    expect(settled).toBe(false);
+    release();
+    await expect(task).rejects.toBe(failure);
+  });
   it('接受独立资源版本的结构；结构验证本身不签发可信结果', () => {
     expect(parsePublication(declaration, policy)).toBe(declaration);
   });

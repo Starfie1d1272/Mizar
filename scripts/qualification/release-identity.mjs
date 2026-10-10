@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { appendFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +62,24 @@ export function releaseAttestationArgs(file, sourceSha, bundle, workflow = 'qual
   ];
 }
 
+// Independent subjects share the same fixed main identity policy; failure waits for all active verifiers.
+export async function verifyReleaseAttestations(subjects, execute = promisify(execFile)) {
+  if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('缺少待验证原始资产');
+  const argumentsBySubject = subjects.map(({ file, sourceSha, bundle, workflow }) =>
+    releaseAttestationArgs(file, sourceSha, bundle, workflow),
+  );
+  let next = 0;
+  const workers = Array.from({ length: Math.min(4, subjects.length) }, async () => {
+    while (next < argumentsBySubject.length) {
+      const args = argumentsBySubject[next++];
+      await execute('gh', args, { timeout: 60000, maxBuffer: 2 * 1024 * 1024, windowsHide: true });
+    }
+  });
+  const results = await Promise.allSettled(workers);
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed) throw failed.reason;
+}
+
 const readJson = async (path) => JSON.parse(await readFile(path, 'utf8'));
 function workflowContext() {
   return {
@@ -93,8 +112,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } else if (mode === 'attestation' && (args.length === 2 || args.length === 4)) {
     if (args.length === 4 && args[2] !== '--bundle') throw new Error('非法证明参数');
     execFileSync('gh', releaseAttestationArgs(args[0], args[1], args[3]), { stdio: 'inherit' });
+  } else if (mode === 'attestations' && args.length >= 2) {
+    await verifyReleaseAttestations(args.slice(1).map((file) => ({ file, sourceSha: args[0] })));
   } else
     throw new Error(
-      '用法：release-identity.mjs qualification [manifest] | promotion run manifest | attestation file SHA [--bundle file]',
+      '用法：release-identity.mjs qualification [manifest] | promotion run manifest | attestation file SHA [--bundle file] | attestations SHA file...',
     );
 }

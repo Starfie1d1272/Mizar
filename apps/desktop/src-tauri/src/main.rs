@@ -485,7 +485,10 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 }
 
 #[tauri::command]
-async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
+async fn start_managed_cs2(
+    app: tauri::AppHandle,
+    preserve_settings: Option<bool>,
+) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
@@ -493,7 +496,15 @@ async fn start_managed_cs2(app: tauri::AppHandle) -> Result<bool, String> {
         let _activity = activity.begin(1);
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        cs2.start()
+        let result = if preserve_settings.unwrap_or(false) {
+            cs2.start_with_settings(true)
+        } else {
+            cs2.start()
+        };
+        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+            tracker.preserve_settings = cs2.preserve_settings();
+        }
+        result
     })
     .await
     .map_err(|_| "CS2 启动未完成。".to_string())?
@@ -1184,8 +1195,10 @@ fn run_desktop(
     );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
+    let managed = managed_cs2::ManagedCs2::new(log.clone());
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
+    tracker.preserve_settings = managed.preserve_settings();
     let running = Arc::new(AtomicBool::new(true));
     let worker = Arc::new(Mutex::new(None::<thread::JoinHandle<()>>));
     let setup_worker = worker.clone();
@@ -1206,7 +1219,7 @@ fn run_desktop(
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(log.clone())
-        .manage(Mutex::new(managed_cs2::ManagedCs2::new(log.clone())))
+        .manage(Mutex::new(managed))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
         .manage(production_exit::VerifiedStop::default())
@@ -1338,6 +1351,9 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            if let Ok(mut tracker) = worker_tracker.lock() {
+                                tracker.preserve_settings = cs2.preserve_settings();
+                            }
                         }
                         cs2_check = Instant::now();
                     }

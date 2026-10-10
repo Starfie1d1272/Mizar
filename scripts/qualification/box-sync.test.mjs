@@ -98,6 +98,11 @@ function fakeBox(files = {}) {
       stored.set(`${to === '/' ? '' : to}/${name}`, stored.get(`${from}/${name}`));
       stored.delete(`${from}/${name}`);
     },
+    async copy(from, to, name) {
+      this.operations.push('copy');
+      if (stored.has(`${to}/${name}`)) throw Error('copy destination exists');
+      stored.set(`${to}/${name}`, stored.get(`${from}/${name}`));
+    },
     async remove(path) {
       this.operations.push('remove');
       stored.delete(path);
@@ -596,6 +601,259 @@ it('mirrors immutable resource transport bytes before pointer publication and re
   await expect(syncResourceFiles({ box, version: '1.0.1', files })).rejects.toThrow();
   expect(box.operations).toEqual([]);
 });
+describe('unchanged official resource bytes across compatible Core releases', () => {
+  const bytes = Buffer.from('transport-only original resource ZIP fixture');
+  const file = {
+    name: 'Mizar-official-epl-default-1.0.0.zip',
+    bytes,
+    size: bytes.length,
+    sha256: digest(bytes),
+  };
+  const source = '/Resources/v1.0.0/' + file.name;
+  const target = '/Resources/v1.0.1/' + file.name;
+  const sync = (box) =>
+    syncResourceFiles({
+      box,
+      version: '1.0.1',
+      files: [file],
+      metadataInRuntime: true,
+      reuseVersion: '1.0.0',
+    });
+  it('copies verified server bytes with zero resource upload and preserves the original client path', async () => {
+    const box = fakeBox({ [source]: bytes });
+    await sync(box);
+    expect(box.operations.filter((operation) => operation === 'upload')).toEqual([]);
+    expect(box.operations.filter((operation) => operation === 'copy')).toEqual(['copy']);
+    expect(box.stored.get(source)).toEqual(bytes);
+    expect(box.stored.get(target)).toEqual(bytes);
+    box.operations.length = 0;
+    await sync(box);
+    expect(box.operations).toEqual([]);
+  });
+  it('rejects corrupt source and destination bytes without copying or uploading over them', async () => {
+    for (const path of [source, target]) {
+      const box = fakeBox({ [source]: bytes, [path]: Buffer.from('unrelated bytes') });
+      await expect(sync(box)).rejects.toThrow('内容冲突');
+      expect(box.operations.filter((operation) => ['copy', 'upload'].includes(operation))).toEqual(
+        [],
+      );
+      expect(box.stored.get(path)).toEqual(Buffer.from('unrelated bytes'));
+    }
+  });
+  it.each([405, 501])(
+    'falls back to original upload only for unsupported copy status %s',
+    async (httpStatus) => {
+      const box = fakeBox({ [source]: bytes });
+      box.copy = async () => {
+        throw Object.assign(new Error('unsupported'), { httpStatus });
+      };
+      await sync(box);
+      expect(box.operations.filter((operation) => operation === 'upload')).toEqual(['upload']);
+      expect(box.stored.get(source)).toEqual(bytes);
+      expect(box.stored.get(target)).toEqual(bytes);
+    },
+  );
+  it('does not interpret a missing source or endpoint as permission to upload', async () => {
+    const box = fakeBox({ [source]: bytes });
+    box.copy = async () => {
+      box.stored.delete(source);
+      throw Object.assign(new Error('not found'), { httpStatus: 404 });
+    };
+    await expect(sync(box)).rejects.toThrow('not found');
+    expect(box.operations.filter((operation) => operation === 'upload')).toEqual([]);
+    expect(box.stored.has(target)).toBe(false);
+  });
+  it.each([bytes, Buffer.from('unknown destination')])(
+    'rechecks a destination created during rejected copy before fallback',
+    async (destination) => {
+      const box = fakeBox({ [source]: bytes });
+      box.copy = async () => {
+        box.stored.set(target, destination);
+        throw Object.assign(new Error('unsupported'), { httpStatus: 405 });
+      };
+      if (destination.equals(bytes)) await sync(box);
+      else await expect(sync(box)).rejects.toThrow('内容冲突');
+      expect(box.operations.filter((operation) => operation === 'upload')).toEqual([]);
+      expect(box.stored.get(target)).toEqual(destination);
+    },
+  );
+  it('retains an uncertain completed copy for verified recovery instead of starting another upload', async () => {
+    const box = fakeBox({ [source]: bytes });
+    const copy = box.copy;
+    box.copy = async (...args) => {
+      await copy.apply(box, args);
+      throw Error('response lost');
+    };
+    await expect(sync(box)).rejects.toThrow('response lost');
+    expect(box.operations.filter((operation) => operation === 'upload')).toEqual([]);
+    box.operations.length = 0;
+    await sync(box);
+    expect(box.operations).toEqual([]);
+  });
+});
+
+describe('independent mirror transports before one final publication boundary', () => {
+  function transports(box) {
+    const carrier = makeMachineMetadata(new Map([['release-manifest.json', Buffer.from('{}')]]));
+    const file = (name, bytes) => ({ name, bytes, size: bytes.length, sha256: digest(bytes) });
+    return {
+      box,
+      identity: next,
+      bytes: next.bytes,
+      resolveIdentity: async () => previous,
+      offline: {
+        identity: offlineNext,
+        bytes: offlineNext.bytes,
+        resolveIdentity: async () => offlinePrevious,
+      },
+      runtime: [
+        file('machine-metadata.json', carrier),
+        file('Mizar-v1.0.1-Windows-x64-Core-Setup.exe', Buffer.from('Core transport fixture')),
+      ],
+      resources: [
+        file('Mizar-official-epl-default-1.0.0.zip', Buffer.from('resource transport fixture')),
+      ],
+      updateIndex: Buffer.from('already authenticated new pointer fixture'),
+    };
+  }
+  it('archives distinct package kinds safely after concurrent Archive snapshots without creating the shared directory', async () => {
+    const oldBootstrap = { ...previous, name: 'Mizar-v1.0.0-Windows-x64-WebInstaller.exe' };
+    const bootstrap = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+    const backup = Buffer.from('operator archive');
+    const box = fakeBox({
+      ['/Stable/' + previous.name]: previous.bytes,
+      ['/Stable/Downloads/' + oldBootstrap.name]: oldBootstrap.bytes,
+      ['/Offline/' + offlinePrevious.name]: offlinePrevious.bytes,
+      '/Archive/manual-keep.zip': backup,
+    });
+    const list = box.list,
+      api = box.api;
+    let releaseSnapshots;
+    const snapshots = new Promise((resolve) => {
+      releaseSnapshots = resolve;
+    });
+    let archiveLists = 0;
+    box.list = async (folder) => {
+      const entries = await list.call(box, folder);
+      if (folder === '/Archive' && ++archiveLists <= 2) {
+        if (archiveLists === 2) releaseSnapshots();
+        await snapshots;
+      }
+      return entries;
+    };
+    box.api = async (endpoint, path, ...args) => {
+      if (endpoint === 'dir' && args[0] === 'POST') {
+        expect(path).not.toBe('/Archive');
+        expect((await list.call(box, path)).length).toBe(0);
+      }
+      return api.call(box, endpoint, path, ...args);
+    };
+    await Promise.all([
+      syncStable({ box, identity: next, bytes: next.bytes, resolveIdentity: async () => previous }),
+      syncBootstrap({
+        box,
+        identity: bootstrap,
+        bytes: bootstrap.bytes,
+        resolveIdentity: async () => oldBootstrap,
+      }),
+      syncOffline({
+        box,
+        identity: offlineNext,
+        bytes: offlineNext.bytes,
+        resolveIdentity: async () => offlinePrevious,
+      }),
+    ]);
+    for (const identity of [previous, oldBootstrap, offlinePrevious])
+      expect(box.stored.get('/Archive/' + identity.name)).toEqual(identity.bytes);
+    expect(box.stored.get('/Archive/manual-keep.zip')).toEqual(backup);
+    expect(archiveLists).toBeGreaterThanOrEqual(3);
+  });
+  it('starts Runtime, Resources and distributions concurrently and performs the final full readbacks', async () => {
+    const oldIndex = Buffer.from('old pointer');
+    const box = fakeBox({ '/Updates/latest.json': oldIndex });
+    const upload = box.upload;
+    let unblock, allStarted;
+    const blocked = new Promise((resolve) => {
+      unblock = resolve;
+    });
+    const started = new Promise((resolve) => {
+      allStarted = resolve;
+    });
+    const categories = new Set();
+    box.upload = async (folder, ...args) => {
+      if (folder !== '/Updates') {
+        categories.add(folder.split('/')[1]);
+        if (['Runtime', 'Resources', 'Offline'].every((category) => categories.has(category)))
+          allStarted();
+        await blocked;
+      }
+      return upload.call(box, folder, ...args);
+    };
+    const readback = vi.spyOn(box, 'hash');
+    const options = transports(box);
+    const task = syncStableRelease(options);
+    await started;
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    unblock();
+    await task;
+    expect(box.stored.get('/Updates/latest.json')).toEqual(options.updateIndex);
+    for (const path of [
+      '/Stable/' + next.name,
+      '/Offline/' + offlineNext.name,
+      '/Runtime/v1.0.1/' + options.runtime[1].name,
+      '/Resources/v1.0.1/' + options.resources[0].name,
+    ])
+      expect(readback.mock.calls.filter((call) => call[0] === path)).toHaveLength(2);
+  });
+  it('waits for an active sibling writer after failure and keeps the original update pointer', async () => {
+    const oldIndex = Buffer.from('old pointer');
+    const box = fakeBox({ '/Updates/latest.json': oldIndex });
+    const upload = box.upload,
+      hash = box.hash;
+    let unblock, runtimeStarted, failedReadback;
+    const blocked = new Promise((resolve) => {
+      unblock = resolve;
+    });
+    const started = new Promise((resolve) => {
+      runtimeStarted = resolve;
+    });
+    const failed = new Promise((resolve) => {
+      failedReadback = resolve;
+    });
+    box.upload = async (folder, ...args) => {
+      if (folder.startsWith('/Runtime/')) {
+        runtimeStarted();
+        await blocked;
+      }
+      return upload.call(box, folder, ...args);
+    };
+    box.hash = async (path) => {
+      if (path.startsWith('/Offline/')) {
+        failedReadback();
+        throw Error('offline readback failed');
+      }
+      return hash.call(box, path);
+    };
+    let settled = false;
+    const task = syncStableRelease(transports(box));
+    task.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.all([started, failed]);
+    await new Promise((resolve) => globalThis.setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    unblock();
+    await expect(task).rejects.toThrow('offline readback failed');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+  });
+});
+
 it('keeps the legacy machine backend while placing the lightweight EXE in user Downloads', async () => {
   const bootstrap = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
   const box = fakeBox({ ['/Stable/' + next.name]: next.bytes });

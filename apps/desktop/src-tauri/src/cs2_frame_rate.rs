@@ -148,13 +148,24 @@ fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String> {
     Ok(found)
 }
 
+// Validate the game's scalar without normalizing the saved token. Target choices
+// remain integers; original decimal spelling, whitespace and quotes survive.
+fn fps_number(value: &str) -> Result<f64, String> {
+    let value = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "cs2_machine_convars.vcfg / fps_max：不是有效数值，未修改配置。")?;
+    if !value.is_finite() || value < 0.0 || value > f64::from(f32::MAX) {
+        return Err("cs2_machine_convars.vcfg / fps_max：数值超出有效范围，未修改配置。".into());
+    }
+    Ok(value)
+}
+
 fn fps_field(text: &str) -> Result<Token, String> {
-    let token = field(text, &["config", "convars", "fps_max"])?
+    let token = field(text, &["config", "convars", "fps_max"])
+        .map_err(|error| format!("cs2_machine_convars.vcfg / fps_max：{error}"))?
         .ok_or("缺少 CS2 帧率配置，请先运行一次游戏。")?;
-    token
-        .value
-        .parse::<u32>()
-        .map_err(|_| "CS2 原帧率配置不是有效整数。")?;
+    fps_number(&token.value)?;
     Ok(token)
 }
 fn patch_convars(text: &str, limit: u16) -> Result<String, String> {
@@ -183,7 +194,7 @@ fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
         commands.insert(command[0].value.to_ascii_lowercase());
         match command[0].value.to_ascii_lowercase().as_str() {
             "fps_max" => {
-                if command.len() != 2 || command[1].value.parse::<u32>().is_err() {
+                if command.len() != 2 || fps_number(&command[1].value).is_err() {
                     return Err("启动配置包含无法可靠修改的 fps_max 命令，请改为直接赋值。".into());
                 }
                 edits.push((
@@ -358,8 +369,8 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
                 if token.value.eq_ignore_ascii_case("+fps_max") {
                     if tokens
                         .get(index + 1)
-                        .and_then(|t| t.value.parse::<u16>().ok())
-                        != Some(limit)
+                        .and_then(|t| fps_number(&t.value).ok())
+                        != Some(f64::from(limit))
                     {
                         return Err(
                             "Steam 启动项中的 +fps_max 与本次帧率上限冲突，请先移除该启动项。"
@@ -484,6 +495,31 @@ mod tests {
             restored(&record, &current).unwrap(),
             CONVARS.replace("\"old\"", "\"new\"")
         );
+    }
+    #[test]
+    fn decimal_originals_validate_and_restore_without_rounding() {
+        for value in ["100.5", " 100.500 ", "0.0", "6e1"] {
+            let original = CONVARS.replace("\"0\"", &format!("\"{value}\""));
+            let applied = patch_convars(&original, 60).unwrap();
+            let video = std::env::temp_dir().join("cs2_video.txt");
+            let record = json!({"kind":"convars", "path":video.parent().unwrap().join("cs2_machine_convars.vcfg"),
+                "original":original,"applied":applied});
+            validated(&record, &video, Path::new("unused"), 60).unwrap();
+            assert_eq!(restored(&record, &applied).unwrap(), original);
+            assert_eq!(
+                restored(&record, &applied.replace("\"old\"", "\"new\"")).unwrap(),
+                original.replace("\"old\"", "\"new\"")
+            );
+            assert_eq!(
+                patch_script(&format!("fps_max \"{value}\""), 30)
+                    .unwrap()
+                    .applied,
+                "fps_max \"30\""
+            );
+        }
+        for value in ["", "NaN", "inf", "-1", "1e100", "100.5oops"] {
+            assert!(fps_number(value).is_err());
+        }
     }
     #[test]
     fn startup_commands_preserve_comments_bindings_and_nested_exec() {
