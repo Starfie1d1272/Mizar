@@ -316,6 +316,9 @@ namespace Mizar.WebInstaller {
     internal readonly Button action = new Button(), cancel = new Button();
     internal readonly CheckBox launchChoice = new CheckBox();
     readonly LinkLabel details = new LinkLabel();
+    internal readonly LinkLabel offlineDownload = new LinkLabel();
+    const string OfflineDownloads = "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads";
+    const string OfflineHint = "也可点击“下载完整离线包”，在南大云盘选择 Offline。";
     internal readonly TextBox destination = new TextBox();
     internal readonly Button browse = new Button(), openLocation = new Button();
     readonly Label destinationLabel = new Label();
@@ -346,7 +349,7 @@ namespace Mizar.WebInstaller {
       destinationLabel.SetBounds(32,184,526,20);destinationLabel.Text="安装位置";
       destination.SetBounds(32,207,416,24);destination.ReadOnly=!(Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag")));destination.TabStop=!destination.ReadOnly;destination.TabIndex=0;destination.Text=selectedTarget;destination.AccessibleName="安装位置";
       browse.SetBounds(458,204,100,30);browse.Text="更改";browse.Enabled=Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));browse.TabIndex=1;
-      browse.Click+=(s,e)=>{using(var dialog=new FolderBrowserDialog {Description="选择 Mizar 安装目录",SelectedPath=selectedTarget}) {if(dialog.ShowDialog(this)==DialogResult.OK) {try {selectedTarget=Nsis.SelectDestination(dialog.SelectedPath);destination.Text=selectedTarget;} catch(Exception error) {detail.Text=error.Message;technicalDetails=ErrorDetails(error);}}}};
+      browse.Click+=(s,e)=>{using(var dialog=new FolderBrowserDialog {Description="选择 Mizar 安装目录",SelectedPath=selectedTarget}) {if(dialog.ShowDialog(this)==DialogResult.OK) {try {selectedTarget=Nsis.SelectDestination(dialog.SelectedPath);destination.Text=selectedTarget;} catch(Exception error) {offlineDownload.Visible=false;detail.Text=error.Message;technicalDetails=ErrorDetails(error);}}}};
       openLocation.SetBounds(428,198,130,30);openLocation.Text="打开安装位置";openLocation.Visible=false;
       openLocation.Click+=(s,e)=>{try {Downloader.NoReparse(installedCore);if(!Directory.Exists(installedCore)) throw new IOException("安装目录已移动。");System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=installedCore,UseShellExecute=true});} catch(Exception error) {detail.Text="无法打开安装位置，请查看诊断。";technicalDetails=ErrorDetails(error);}};
       bar.SetBounds(32,212,526,10); bar.Visible=false;
@@ -360,7 +363,10 @@ namespace Mizar.WebInstaller {
       details.SetBounds(32,278,120,24); details.Text="详情";details.TabIndex=4;
       technicalDetails="安装文件与必要数据来自官方发布源，并在使用前验证。";
       details.LinkClicked += (s,e)=>ShowDetails();
-      Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details,destinationLabel,destination,browse,openLocation});
+      offlineDownload.SetBounds(166,278,160,24);offlineDownload.Text="下载完整离线包";offlineDownload.Visible=false;offlineDownload.TabIndex=5;
+      offlineDownload.Links.Add(0,offlineDownload.Text.Length,OfflineDownloads);
+      offlineDownload.LinkClicked += (s,e)=>{try {System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=OfflineDownloads,UseShellExecute=true});} catch(Exception error) {detail.Text="下载页面未能打开，请查看详情中的下载地址。";technicalDetails+="\r\n完整离线包："+OfflineDownloads+"\r\n"+DiagnosticText(error);}};
+      Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details,offlineDownload,destinationLabel,destination,browse,openLocation});
       if(demonstration) {
         var marker=new Label {Text="界面演示：未执行安装",ForeColor=Color.DarkRed,BackColor=Color.White,AutoSize=true,Location=new Point(32,83)};
         Controls.Add(marker); marker.BringToFront();
@@ -449,6 +455,7 @@ namespace Mizar.WebInstaller {
     }
     internal async Task Start() {
       if(cancellation!=null || finished || recoveryRequired) return;
+      offlineDownload.Visible=false;
       if(!destination.ReadOnly) {
         activePhase="checking-installation";
         try {selectedTarget=Nsis.SelectDestination(destination.Text);destination.Text=selectedTarget;}
@@ -474,6 +481,7 @@ namespace Mizar.WebInstaller {
         technicalDetails=ErrorDetails(error);
         heading.Text=current.IsCancellationRequested ? "已取消" : "操作超时";
         detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : (activePhase=="checking-release" ? "发布验证超时，请检查网络后重试。" : activePhase=="downloading-core" || activePhase=="connecting-download" ? "下载超时，请检查网络后重试。" : "当前操作超时，请查看诊断后重试。"); action.Text="重新开始";
+        if(!current.IsCancellationRequested && (activePhase=="downloading-core" || activePhase=="connecting-download")) {offlineDownload.Visible=true;detail.Text+=OfflineHint;}
       } catch(InstallerRecoveryRequired error) {
         recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=ErrorDetails(error);
       } catch(InstallerActionRequired error) {
@@ -482,9 +490,20 @@ namespace Mizar.WebInstaller {
         heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=ErrorDetails(error); action.Text="重试";
       } catch(Exception error) {
         heading.Text="安装未完成";
-        bool network=false, invalid=false;
-        for(Exception cause=error;cause!=null;cause=cause.InnerException) {if(cause is HttpRequestException || cause is OperationCanceledException) network=true; if(cause is InvalidDataException) invalid=true;}
-        detail.Text=invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试，或使用完整离线安装包。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
+        bool network=false, invalid=false, permission=false;
+        var causes=new System.Collections.Generic.Stack<Exception>();causes.Push(error);
+        while(causes.Count>0) {
+          Exception cause=causes.Pop();
+          if(cause is HttpRequestException || ((activePhase=="downloading-core" || activePhase=="connecting-download") && cause is OperationCanceledException)) network=true;
+          if(cause is InvalidDataException) invalid=true;
+          if(cause is UnauthorizedAccessException) permission=true;
+          var aggregate=cause as AggregateException;
+          if(aggregate!=null) foreach(var inner in aggregate.InnerExceptions) causes.Push(inner);
+          else if(cause.InnerException!=null) causes.Push(cause.InnerException);
+        }
+        if(permission) heading.Text="无法写入安装文件";
+        detail.Text=permission ? "请检查安装位置的访问权限后重试。" : invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
+        if(network && !invalid && !permission) {offlineDownload.Visible=true;detail.Text+=OfflineHint;}
         technicalDetails=ErrorDetails(error); action.Text="重试";
       } finally {
         downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));destination.ReadOnly=!browse.Enabled;destination.TabStop=browse.Enabled;}

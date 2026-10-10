@@ -27,6 +27,7 @@ namespace Mizar.WebInstaller {
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
         window.Show(); Application.DoEvents();
         Assert(!window.detail.Text.Contains("网络"),"Welcome does not preemptively warn about network");
+        Assert(!window.offlineDownload.Visible,"Offline guidance is only exposed after a network failure");
         Assert(window.destination.Visible && window.destination.Text.EndsWith("Mizar") && window.browse.Visible,"Welcome exposes the default destination without another page");
         Assert(!window.bar.Visible && !window.launchChoice.Visible,"Initial window must hide progress and launch choice");
         Assert(!window.destination.ReadOnly && window.destination.TabStop,"Fresh destination accepts keyboard editing and paste");
@@ -67,14 +68,27 @@ namespace Mizar.WebInstaller {
         window.Close(); Assert(!window.IsDisposed && window.heading.Text=="正在停止","X during installation waits for safe cancellation");
         Assert(!pending.IsCompleted,"Cancellation cannot pretend writer has stopped");
         stopped.SetCanceled(); Pump(pending);
-        Assert(window.heading.Text=="已取消" && window.action.Enabled && !window.bar.Visible,"Cancelled state can retry after writer stops");
+        Assert(window.heading.Text=="已取消" && window.action.Enabled && !window.bar.Visible && !window.offlineDownload.Visible,"Cancelled state can retry after writer stops without network advice");
         Pump(window.Start()); Assert(starts==2,"Retry re-enters the operation after safe stop");
       }
       using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new InstallerActionRequired("请使用原安装器修复。");},path=>launches++,true)) {
-        window.Show(); Pump(window.Start()); Assert(window.detail.Text=="请使用原安装器修复。" && !window.action.Enabled,"Existing installation error gives repair, not network advice");
+        window.Show(); Pump(window.Start()); Assert(window.detail.Text=="请使用原安装器修复。" && !window.action.Enabled && !window.offlineDownload.Visible,"Existing installation error gives repair, not network advice");
       }
       using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new OperationCanceledException("trust metadata deadline");},path=>launches++,true)) {
-        window.Show();Pump(window.Start());Assert(window.heading.Text=="操作超时" && window.detail.Text.Contains("发布验证"),"Trust verification timeout must not be described as package download");
+        window.Show();Pump(window.Start());Assert(window.heading.Text=="操作超时" && window.detail.Text.Contains("发布验证") && !window.offlineDownload.Visible,"Trust verification timeout must not be described as package download");
+      }
+      using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new System.IO.IOException("download sources exhausted",new AggregateException(new System.Net.Http.HttpRequestException("offline")));},path=>launches++,true)) {
+        window.Show();Pump(window.Start());Assert(window.offlineDownload.Visible && window.detail.Text.Contains("南大云盘") && window.detail.Text.Contains("Offline"),"Network failure gives a concrete complete-package entry and folder");
+        Assert(TextRenderer.MeasureText(window.detail.Text,window.detail.Font,new System.Drawing.Size(window.detail.Width,Int32.MaxValue),TextFormatFlags.WordBreak).Height<=window.detail.Height,"Offline guidance remains readable in the existing summary space");
+        Assert((string)window.offlineDownload.Links[0].LinkData=="https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads","Offline navigation uses the existing trusted entry, never an error-supplied URL");
+      }
+      using(var window=new Window(UiPlan(),async (bytes,stages,token)=>{stages.Report("connecting-download");await Task.Yield();throw new OperationCanceledException("download deadline");},path=>launches++,true)) {
+        window.Show();Pump(window.Start());Assert(window.detail.Text.Contains("下载超时") && window.offlineDownload.Visible,"Download timeout offers the same complete-package guidance");
+      }
+      foreach(var nonNetwork in new Exception[]{new System.IO.InvalidDataException("bad signature"),new UnauthorizedAccessException("access denied")}) {
+        using(var window=new Window(UiPlan(),(bytes,stages,token)=>{throw new System.IO.IOException("multiple source failures",new AggregateException(new System.Net.Http.HttpRequestException("offline"),nonNetwork));},path=>launches++,true)) {
+          window.Show();Pump(window.Start());Assert(!window.offlineDownload.Visible && !window.detail.Text.Contains("网络"),"A validation or permission cause cannot be obscured by another source's network error");
+        }
       }
       Console.WriteLine("PASS: real Native UI initial/progress/Finish choice/X/start retry/safe cancellation and repair behavior (UI fixtures only)");
     }
