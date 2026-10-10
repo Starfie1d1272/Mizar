@@ -1,7 +1,7 @@
 use crate::startup_log::DesktopLog;
 use serde_json::{json, Value};
 use std::{
-    fs::File,
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -245,6 +245,93 @@ pub fn playdemo_argument(path: &Path, log: &DesktopLog) -> Result<String, String
         )
     })?;
     Ok(format!("\"{engine}\""))
+}
+
+// CS2 14190 leaves startup +playdemo in DELAYED COMMAND without starting it.
+// Execute the validated path from a per-session CFG, after the input service
+// has initialized. The journal reserves its identity before any file is created.
+pub fn playback_cfg_plan(request_id: &str, argument: &str) -> Result<Value, String> {
+    let id = json!(request_id);
+    if safe_uuid(Some(&id)).filter(|id| *id != "[invalid UUID redacted]") != Some(request_id) {
+        return Err("Demo 启动标识无效。".into());
+    }
+    if argument.len() < 2
+        || argument.len() > 32_768
+        || !argument.starts_with('"')
+        || !argument.ends_with('"')
+        || argument[1..argument.len() - 1]
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '"' | ';'))
+    {
+        return Err("Demo 播放路径无效。".into());
+    }
+    Ok(json!({"name":format!("mizar_demo_{request_id}.cfg"),
+        "content":format!("playdemo {}\n", argument.replace('\\', "/"))}))
+}
+
+fn playback_cfg_file(journal: &Value) -> Result<(PathBuf, &str), String> {
+    let id = safe_uuid(journal.get("demoTestRequestId"))
+        .filter(|id| *id != "[invalid UUID redacted]")
+        .ok_or("Demo 启动记录无效。")?;
+    let record = &journal["demoPlaybackCfg"];
+    let expected = format!("mizar_demo_{id}.cfg");
+    if record["name"].as_str() != Some(expected.as_str()) {
+        return Err("Demo 播放 CFG 记录无效。".into());
+    }
+    let executable = Path::new(journal["executable"].as_str().ok_or("游戏安装记录缺失。")?);
+    if !executable.is_absolute() {
+        return Err("游戏安装记录无效。".into());
+    }
+    let directory = crate::cs2_spectator::cfg_path(executable)?;
+    let content = record["content"]
+        .as_str()
+        .filter(|s| s.len() <= 32_800)
+        .ok_or("Demo 播放 CFG 内容记录无效。")?;
+    Ok((directory.with_file_name(expected), content))
+}
+
+pub fn install_playback_cfg(journal: &Value) -> Result<(), (String, bool)> {
+    let (path, content) = playback_cfg_file(journal).map_err(|e| (e, false))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| {
+            (
+                crate::cs2_session::io_error("Demo 播放 CFG 无法创建，已有文件保持原样。", &e),
+                false,
+            )
+        })?;
+    file.write_all(content.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|e| {
+            (
+                crate::cs2_session::io_error("Demo 播放 CFG 未能完整保存。", &e),
+                true,
+            )
+        })?;
+    Ok(())
+}
+
+pub fn cleanup_playback_cfg(journal: &Value) -> Result<(), String> {
+    if journal.get("demoPlaybackCfg").is_none() {
+        return Ok(());
+    }
+    let (path, content) = playback_cfg_file(journal)?;
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(crate::cs2_session::io_error("Demo 播放 CFG 无法核实。", &e)),
+        Ok(m) if !m.is_file() || m.file_type().is_symlink() || m.len() != content.len() as u64 => {
+            return Err("Demo 播放 CFG 已变化，原文件和恢复记录仍保留。".into())
+        }
+        _ => (),
+    }
+    if fs::read(&path).map_err(|e| crate::cs2_session::io_error("Demo 播放 CFG 无法读回。", &e))?
+        != content.as_bytes()
+    {
+        return Err("Demo 播放 CFG 已变化，原文件和恢复记录仍保留。".into());
+    }
+    fs::remove_file(path).map_err(|e| crate::cs2_session::io_error("Demo 播放 CFG 尚未清理。", &e))
 }
 
 fn engine_path(text: &str) -> Result<String, String> {
@@ -713,6 +800,33 @@ fn safe_uuid(value: Option<&Value>) -> Option<&str> {
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn playback_cfg_is_owned_and_recovered_without_overwriting_collisions() {
+        let root = std::env::temp_dir().join(request_id().unwrap());
+        let executable = root.join("game/bin/win64/cs2.exe");
+        let cfg = root.join("game/csgo/cfg");
+        fs::create_dir_all(&cfg).unwrap();
+        let id = request_id().unwrap();
+        let record = playback_cfg_plan(&id, "\"D:\\校园 对阵.dem\"").unwrap();
+        assert_eq!(record["content"], "playdemo \"D:/校园 对阵.dem\"\n");
+        let journal =
+            json!({"executable":executable,"demoTestRequestId":id,"demoPlaybackCfg":record});
+        let (path, _) = playback_cfg_file(&journal).unwrap();
+        fs::write(&path, b"user config").unwrap();
+        assert!(install_playback_cfg(&journal).is_err());
+        assert!(cleanup_playback_cfg(&journal).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"user config");
+        fs::remove_file(&path).unwrap();
+        install_playback_cfg(&journal).unwrap();
+        cleanup_playback_cfg(&journal).unwrap();
+        cleanup_playback_cfg(&journal).unwrap();
+        assert!(!path.exists());
+        assert!(playback_cfg_plan("../unsafe", "\"D:/demo.dem\"").is_err());
+        assert!(playback_cfg_plan("[invalid UUID redacted]", "\"D:/demo.dem\"").is_err());
+        assert!(playback_cfg_plan(&id, "\"").is_err());
+        assert!(playback_cfg_plan(&id, "\"D:/demo.dem\";+quit").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn selected_file_stays_native_and_is_revalidated() {
         let root = std::env::temp_dir().join(request_id().unwrap());

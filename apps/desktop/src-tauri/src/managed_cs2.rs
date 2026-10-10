@@ -431,6 +431,7 @@ impl ManagedCs2 {
         }
         // Preserve Demo quarantine until all core cleanup has completed.
         let had_spectator = self.store.spectator_pending();
+        crate::demo_test::cleanup_playback_cfg(&value)?;
         let spectator_error = self.store.restore()?;
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
@@ -603,8 +604,21 @@ impl ManagedCs2 {
                 ),
             );
         }
-        if let Some((_, request_id)) = demo {
+        if let Some((argument, request_id)) = demo {
             journal["demoTestRequestId"] = json!(request_id);
+            journal["demoPlaybackCfg"] = crate::demo_test::playback_cfg_plan(request_id, argument)?;
+            self.store.save(&journal)?;
+            if let Err((error, created)) = crate::demo_test::install_playback_cfg(&journal) {
+                // A create_new collision never grants ownership of an existing file.
+                // Keep core configuration recovery available after a refused install.
+                if !created {
+                    if let Some(object) = journal.as_object_mut() {
+                        object.remove("demoPlaybackCfg");
+                    }
+                }
+                self.store.save(&journal)?;
+                return Err(error);
+            }
         }
         // Durable ambiguous-launch marker: a crash between spawn and identity save
         // must never restore settings while an unconfirmed game is running.
@@ -637,8 +651,13 @@ impl ManagedCs2 {
             } else {
                 command.args(["-applaunch", "730"]);
             }
-            if let Some((argument, _)) = demo {
-                command.args(["+playdemo", argument]);
+            if demo.is_some() {
+                command.args([
+                    "+exec",
+                    journal["demoPlaybackCfg"]["name"]
+                        .as_str()
+                        .ok_or("Demo 播放 CFG 名称缺失。")?,
+                ]);
             }
             command
                 .creation_flags(0x08000000)

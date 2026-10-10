@@ -26,3 +26,5 @@ marker 在 Runtime / projection 组合之前同步探测。存在 marker 的重�
 用户诊断包保留 Native `demo_test` 的实际 phase、OS / JSON / HTTP 证据，以及 Companion 各试播阶段的异常链、operationId 和 requestId；未知合法机器码与阶段仍可导出。重复 Native 请求的聚合不把每次新的 operationId 视为新事故。
 
 自动化证据在 `apps/companion/test/demo-test.test.ts` 与 `apps/companion/test/support-export.test.ts`，覆盖实际用户诊断包导出；Windows / CS2 / OBS 实机未验证。
+
+Host 播放通过会话专用的 `mizar_demo_<requestId>.cfg` 执行：先持久化恢复记录，再以 `create_new` 创建已验证路径的 `playdemo` 命令，启动 Steam 时只传 `+exec` 和固定 UUID 文件名。CS2 14190 的启动 `+playdemo` 在实机停留于 `DELAYED COMMAND`；同一样本通过 CFG 可以进入播放并提供地图及 10 名选手的 GSI。每次会话文件不覆盖已有 CFG；游戏退出后只清理与记录字节完全一致的文件，发生外部修改时保留文件及恢复记录。原观战 CFG、个人键位和 Demo 隔离边界不变。
