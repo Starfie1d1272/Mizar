@@ -19,6 +19,7 @@ namespace Mizar.WebInstaller {
       Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation=(bytes,stages,token)=>{installs++;return Complete(bytes,stages,token);};
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
         window.Show(); Application.DoEvents();
+        Assert(!window.detail.Text.Contains("网络"),"Welcome does not preemptively warn about network");
         Assert(!window.bar.Visible && !window.launchChoice.Visible,"Initial window must hide progress and launch choice");
         Pump(window.Start());
         Assert(window.heading.Text=="安装完成" && window.launchChoice.Visible && window.launchChoice.Checked,"Completion has checked launch choice");

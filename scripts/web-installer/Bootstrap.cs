@@ -240,7 +240,8 @@ namespace Mizar.WebInstaller {
       }
       throw new IOException("下载重定向次数超限。");
     }
-    public async Task<string> Download(Plan plan, string cache, IProgress<long> progress, CancellationToken token) {
+    public async Task<string> Download(Plan plan, string cache, IProgress<long> progress, CancellationToken token, IProgress<string> stages=null) {
+      if(stages!=null) stages.Report("checking-cache");
       plan.Validate(); token.ThrowIfCancellationRequested();
       cache = Path.GetFullPath(cache); NoReparse(cache);
       Directory.CreateDirectory(cache); NoReparse(cache);
@@ -263,11 +264,13 @@ namespace Mizar.WebInstaller {
             for(int attempt=0;attempt<2;attempt++) {
             bool retry=false;
             try {
+              if(stages!=null) stages.Report("connecting-download");
               using (var response = await Request(url, deadline.Token)) {
                 if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != plan.bytes)
                   throw new InvalidDataException("下载文件大小不匹配。");
                 using (var input = await response.Content.ReadAsStreamAsync())
                 using (var output = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true)) {
+                  if(stages!=null) stages.Report("downloading-core");
                   var buffer = new byte[65536]; long total = 0;
                   for (;;) {
                     int count = await input.ReadAsync(buffer, 0, buffer.Length, deadline.Token);
@@ -282,6 +285,7 @@ namespace Mizar.WebInstaller {
                 }
               }
               deadline.Token.ThrowIfCancellationRequested();
+              if(stages!=null) stages.Report("validating-download");
               if (!await MatchesAsync(staging, plan, deadline.Token)) throw new InvalidDataException("文件校验失败。");
               token.ThrowIfCancellationRequested();
               NoReparse(target);
@@ -317,7 +321,7 @@ namespace Mizar.WebInstaller {
     bool finished, recoveryRequired, downloading, launchFailed;
     public Window(Plan value) : this(value,null,null,false) { }
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
-      plan=value; install=operation ?? Install; launch=start ?? (path=>Nsis.StartVerifiedProduct(plan,path));
+      plan=value; install=operation ?? ((bytes,stages,token)=>Task.Run(()=>Install(bytes,stages,token))); launch=start ?? (path=>Nsis.StartVerifiedProduct(plan,path));
       Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
       Text=demonstration ? "Mizar 安装 · 界面演示（未执行安装）" : "Mizar 安装";
       AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(590,330); MinimumSize=Size; MaximizeBox=false;
@@ -334,7 +338,7 @@ namespace Mizar.WebInstaller {
       heading.SetBounds(32,104,526,32); heading.Font=new Font(Font.FontFamily,15F);
       heading.Text="安装 Mizar";
       detail.SetBounds(32,148,526,48);
-      detail.Text="安装时需要连接网络。";
+      detail.Text="欢迎使用 Mizar，安装或更新后开始准备你的比赛。";
       bar.SetBounds(32,212,526,10); bar.Visible=false;
       amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
       launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
@@ -345,7 +349,7 @@ namespace Mizar.WebInstaller {
       cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
       details.SetBounds(32,278,120,24); details.Text="详情";
       technicalDetails="安装文件与必要数据来自官方发布源，并在使用前验证。";
-      details.LinkClicked += (s,e)=>MessageBox.Show(this,technicalDetails,"安装详情",MessageBoxButtons.OK,MessageBoxIcon.Information);
+      details.LinkClicked += (s,e)=>ShowDetails();
       Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details});
       if(demonstration) {
         var marker=new Label {Text="界面演示：未执行安装",ForeColor=Color.DarkRed,BackColor=Color.White,AutoSize=true,Location=new Point(32,83)};
@@ -357,25 +361,25 @@ namespace Mizar.WebInstaller {
     async Task<string> Install(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {
       stages.Report("checking-release");
       await Publication.Verify(plan,token);
-      string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
-      if(installedCore==null && !Nsis.HasPending() && (Directory.Exists(target) || File.Exists(target))) {
-        Nsis.VerifyInstalledCore(plan,target); // A directory alone never proves a resumable installation.
-        installedCore=target;
-      }
+      stages.Report("checking-installation");
+      string target=Nsis.ResolveDestination();
       if(installedCore==null) {
-        if(!Nsis.HasPending()) Nsis.ValidateDestination(target);
+        if(!Nsis.HasPending() && !Directory.Exists(target)) Nsis.ValidateDestination(target);
         stages.Report("downloading-core");
         string installer;
         using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
         using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
-          installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token);
+          installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token,stages);
         var core=await Nsis.Install(plan,installer,target,token,stages);
         installedCore=core.Directory;
+        if(core.ResourcesReady) return installedCore;
       }
       await Nsis.RunResourceBridge(plan,installedCore,token,stages);
       token.ThrowIfCancellationRequested(); return installedCore;
     }
     internal void ShowStage(string phase) {
+      if(phase=="checking-cache" || phase=="connecting-download" || phase=="validating-download") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-cache" ? "正在检查已有下载" : phase=="validating-download" ? "正在验证下载文件" : "正在连接下载源";detail.Text="请稍候。";return;}
+      if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在备份原程序";detail.Text="请稍候。";return;}
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
       heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
@@ -393,10 +397,33 @@ namespace Mizar.WebInstaller {
         catch(Exception error) {
           launchFailed=true;
           heading.Text="Mizar 未能启动"; detail.Text="安装已完成。可以重试启动，或取消勾选后结束。";
-          technicalDetails=error.Message; action.Text="重试启动"; return;
+          technicalDetails=ErrorDetails(error); action.Text="重试启动"; return;
         }
       }
       Close();
+    }
+    internal static string DiagnosticText(Exception error) {
+      string text=error.ToString();
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"(https?://[^\s?]+)\?[^\s]+","$1?[redacted]",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+      return System.Text.RegularExpressions.Regex.Replace(text,@"((?:authorization|access_token|refresh_token|password|secret)\s*[:=]\s*)[^\s]+","$1[redacted]",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+    void ShowDetails() {
+      using(var dialog=new Form {Text="安装诊断",Width=720,Height=440,StartPosition=FormStartPosition.CenterParent}) {
+        var content=new TextBox {Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,Dock=DockStyle.Fill,Text=technicalDetails};
+        var buttons=new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=40};
+        var copy=new Button {Text="复制诊断"};copy.Click+=(s,e)=>Clipboard.SetText(content.Text);
+        var export=new Button {Text="导出诊断"};export.Click+=(s,e)=>{using(var save=new SaveFileDialog {FileName="Mizar-install-diagnostic.txt",Filter="文本文件|*.txt"}) {if(save.ShowDialog(dialog)==DialogResult.OK) File.WriteAllText(save.FileName,content.Text,new System.Text.UTF8Encoding(false));}};
+        buttons.Controls.AddRange(new Control[]{copy,export});dialog.Controls.Add(content);dialog.Controls.Add(buttons);dialog.ShowDialog(this);
+      }
+    }
+    string ErrorDetails(Exception error) {return DiagnosticText(error)+"\r\n诊断日志："+SaveDiagnostic(error);}
+    internal static string SaveDiagnostic(Exception error) {
+      try {
+        string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","logs");
+        Downloader.NoReparse(directory);Directory.CreateDirectory(directory);
+        string path=Path.Combine(directory,"web-installer-"+DateTime.UtcNow.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N")+".log");
+        File.WriteAllText(path,DiagnosticText(error),new System.Text.UTF8Encoding(false));return path;
+      } catch {return "无法保存，请复制当前提示。";}
     }
     internal void RequestCancel() {
       if(cancellation==null) return;
@@ -407,7 +434,7 @@ namespace Mizar.WebInstaller {
       cancellation=new CancellationTokenSource(); var current=cancellation;
       action.Enabled=false; cancel.Text="取消"; launchChoice.Visible=false;
       downloading=true; bar.Visible=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=0; amount.Text="";
-      heading.Text="正在下载 Mizar"; detail.Text="请稍候。";
+      heading.Text="正在准备安装"; detail.Text="请稍候。"; bar.Style=ProgressBarStyle.Marquee;
       try {
         var progress=new Progress<long>(n=>{
           if(cancellation!=current || !downloading || current.IsCancellationRequested || finished) return;
@@ -422,17 +449,17 @@ namespace Mizar.WebInstaller {
         heading.Text=current.IsCancellationRequested ? "已取消" : "下载超时";
         detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : "请检查网络后重试，或使用完整离线安装包。"; action.Text="重新开始";
       } catch(InstallerRecoveryRequired error) {
-        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=error.Message;
+        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=ErrorDetails(error);
       } catch(InstallerActionRequired error) {
-        recoveryRequired=!error.CanRetry; heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=error.ToString(); action.Text="重试";
+        recoveryRequired=!error.CanRetry; heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=ErrorDetails(error); action.Text="重试";
       } catch(UnauthorizedAccessException error) {
-        heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=error.Message; action.Text="重试";
+        heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=ErrorDetails(error); action.Text="重试";
       } catch(Exception error) {
         heading.Text="安装未完成";
         bool network=false, invalid=false;
         for(Exception cause=error;cause!=null;cause=cause.InnerException) {if(cause is HttpRequestException || cause is OperationCanceledException) network=true; if(cause is InvalidDataException) invalid=true;}
         detail.Text=invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试，或使用完整离线安装包。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
-        technicalDetails=error.Message; action.Text="重试";
+        technicalDetails=ErrorDetails(error); action.Text="重试";
       } finally {
         downloading=false; if(!finished) {bar.Visible=false;amount.Text="";}
         current.Dispose(); cancellation=null; action.Enabled=!recoveryRequired; cancel.Enabled=true; cancel.Text="关闭";

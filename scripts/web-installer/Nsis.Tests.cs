@@ -55,6 +55,17 @@ namespace Mizar.WebInstaller {
         Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
+        // Re-enter the same lightweight installer against an already owned installation.
+        string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","upgrade-sentinel.txt");
+        if(File.Exists(data)) throw new IOException("Refusing to replace existing user sentinel");
+        Directory.CreateDirectory(Path.GetDirectoryName(data));File.WriteAllText(data,"preserve user data");
+        try {
+          var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
+          Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");
+          await updated.RollbackAsync();
+          Assert(File.Exists(Path.Combine(target,"Mizar.exe")) && File.ReadAllText(data)=="preserve user data");
+          Console.WriteLine("PASS: real lightweight same-version repair/upgrade and rollback preserve the existing path and user data");
+        } finally {File.Delete(data);}
         // Exercise the real native production call: historical Core cannot supply
         // a new executable entry from an external qualification directory.
         bool missingEntry=false;
@@ -84,8 +95,9 @@ namespace Mizar.WebInstaller {
           Console.WriteLine("PASS: real NSIS-installed Core and deployed App bridge deny incomplete official resource installation");
         }
         // A second fresh attempt must not overwrite this installation or user registration.
+        string unknown=Path.Combine(target,"unknown-user-file.txt");File.WriteAllText(unknown,"keep");
         bool refused=false; try { await Nsis.Install(plan,installer,target,CancellationToken.None); } catch(IOException) { refused=true; }
-        Assert(refused);
+        Assert(refused && File.ReadAllText(unknown)=="keep");File.Delete(unknown);
         var completed=Nsis.NewPending(plan,target,installer);
         completed.token=File.ReadAllText(Path.Combine(target,".mizar-bootstrap-owner"));
         completed.ownerPid=prepared.ownerPid;completed.ownerStarted=prepared.ownerStarted;

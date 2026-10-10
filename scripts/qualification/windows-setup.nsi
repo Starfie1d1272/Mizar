@@ -127,6 +127,7 @@ Function un.onInit
 FunctionEnd
 Section "Uninstall"
   !include "${REMOVE_FILES}"
+  Delete "$INSTDIR\.mizar-bootstrap-owner"
   Delete "$INSTDIR\installed.flag"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
