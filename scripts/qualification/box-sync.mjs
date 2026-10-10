@@ -148,13 +148,54 @@ export function validateOfflineRelease(release, manifest, tag, tagSha) {
   };
 }
 
+const networkCodes = new Set([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+]);
+function safeNetworkCode(error) {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
+  const code = error?.cause?.code || error?.code;
+  return networkCodes.has(code) ? code : 'network';
+}
+function directoryCategory(path) {
+  const category = path?.split('/')[1];
+  return ['Stable', 'Offline', 'Runtime', 'Resources', 'Updates', 'Archive'].includes(category)
+    ? category
+    : 'root';
+}
+async function boxStage(stage, action) {
+  const started = globalThis.performance.now();
+  console.log(`Box ${stage} 开始`);
+  try {
+    const result = await action();
+    console.log(`Box ${stage} 完成（${Math.round(globalThis.performance.now() - started)}ms）`);
+    return result;
+  } catch (error) {
+    const elapsed = Math.round(globalThis.performance.now() - started);
+    console.log(`Box ${stage} 失败（${elapsed}ms）`);
+    if (error instanceof MirrorError)
+      throw new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`);
+    const code = safeNetworkCode(error);
+    if (code !== 'network')
+      throw new MirrorError(`Box ${stage}（${elapsed}ms）：网络请求失败（${code}）；保留现有文件`);
+    throw error;
+  }
+}
 async function checkedFetch(url, options = {}, timeout = 120000) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   let response;
   try {
     response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
-  } catch {
-    throw new MirrorError('网络请求失败或超时；保留现有文件，可重试同一版本');
+  } catch (error) {
+    throw new MirrorError(
+      `网络请求失败或超时（${safeNetworkCode(error)}，请求上限${timeout}ms）；保留现有文件，可重试同一版本`,
+    );
   }
   requireValue(response.ok, `远端请求失败（HTTP ${response.status}）；保留现有文件`);
   return response;
@@ -166,18 +207,30 @@ export class BoxClient {
     this.token = token;
   }
   async api(endpoint, path, method = 'GET', body) {
-    const url = new URL(`/api/v2.1/via-repo-token/${endpoint}/`, origin);
-    if (path !== undefined) url.searchParams.set('path', path);
-    const headers = { Authorization: `Token ${this.token}`, Accept: 'application/json' };
-    if (body) headers['Content-Type'] = 'application/json';
-    return (
-      await checkedFetch(url, {
-        method,
-        headers,
-        redirect: 'error',
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      })
-    ).json();
+    const safeEndpoint = [
+      'repo-info',
+      'dir',
+      'download-link',
+      'upload-link',
+      'sync-batch-move-item',
+      'file',
+    ].includes(endpoint)
+      ? endpoint
+      : 'other';
+    return boxStage(`接口/${safeEndpoint}/${directoryCategory(path)}`, async () => {
+      const url = new URL(`/api/v2.1/via-repo-token/${endpoint}/`, origin);
+      if (path !== undefined) url.searchParams.set('path', path);
+      const headers = { Authorization: `Token ${this.token}`, Accept: 'application/json' };
+      if (body) headers['Content-Type'] = 'application/json';
+      return (
+        await checkedFetch(url, {
+          method,
+          headers,
+          redirect: 'error',
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        })
+      ).json();
+    });
   }
   async list(path) {
     const result = await this.api('dir', path);
@@ -206,30 +259,34 @@ export class BoxClient {
     return url;
   }
   async hash(path) {
-    const url = this.temporaryUrl(await this.api('download-link', path));
-    const response = await checkedFetch(url, { redirect: 'error' }, 600000);
-    const hash = createHash('sha256');
-    let size = 0;
-    for await (const chunk of response.body) {
-      hash.update(chunk);
-      size += chunk.length;
-    }
-    return { sha256: hash.digest('hex'), size };
+    return boxStage(`回读/${directoryCategory(path)}`, async () => {
+      const url = this.temporaryUrl(await this.api('download-link', path));
+      const response = await checkedFetch(url, { redirect: 'error' }, 600000);
+      const hash = createHash('sha256');
+      let size = 0;
+      for await (const chunk of response.body) {
+        hash.update(chunk);
+        size += chunk.length;
+      }
+      return { sha256: hash.digest('hex'), size };
+    });
   }
   async upload(path, name, bytes, replace = false) {
-    const url = this.temporaryUrl(await this.api('upload-link', path));
-    url.searchParams.set('ret-json', '1');
-    const form = new FormData();
-    form.set('parent_dir', path);
-    form.set('replace', replace ? '1' : '0');
-    form.set('file', new Blob([bytes]), name);
-    const result = await (
-      await checkedFetch(url, { method: 'POST', body: form, redirect: 'error' }, 600000)
-    ).json();
-    requireValue(
-      Array.isArray(result) && result.length === 1 && result[0].name === name,
-      '上传回执不一致；检查目录后重试',
-    );
+    return boxStage(`上传/${directoryCategory(path)}`, async () => {
+      const url = this.temporaryUrl(await this.api('upload-link', path));
+      url.searchParams.set('ret-json', '1');
+      const form = new FormData();
+      form.set('parent_dir', path);
+      form.set('replace', replace ? '1' : '0');
+      form.set('file', new Blob([bytes]), name);
+      const result = await (
+        await checkedFetch(url, { method: 'POST', body: form, redirect: 'error' }, 600000)
+      ).json();
+      requireValue(
+        Array.isArray(result) && result.length === 1 && result[0].name === name,
+        '上传回执不一致；检查目录后重试',
+      );
+    });
   }
   async move(from, to, name) {
     await this.api('sync-batch-move-item', undefined, 'POST', {

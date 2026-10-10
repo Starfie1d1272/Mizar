@@ -1,5 +1,5 @@
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Buffer } from 'node:buffer';
 import {
   digest,
@@ -15,6 +15,8 @@ import {
   probe,
   promotionTag,
 } from './box-sync.mjs';
+
+const { URL, Response, ReadableStream, DOMException } = globalThis;
 
 describe('成功发布任务的版本标签', () => {
   const run = { id: 42, display_title: 'Release Promotion' };
@@ -210,6 +212,65 @@ describe('云盘稳定版同步', () => {
       box.temporaryUrl('https://user:secret@box.nju.edu.cn/seafhttp/upload-api/a'),
     ).toThrow('允许范围');
   });
+  it.each(['timeout', 'http', 'body'])(
+    '定位 %s 失败且不泄漏凭据、地址或服务器正文',
+    async (failure) => {
+      const token = 'private-token-fixture',
+        secret = 'private-signed-url-fixture';
+      const logs = [];
+      const output = vi.spyOn(console, 'log').mockImplementation((value) => logs.push(value));
+      vi.stubGlobal('fetch', async (url) => {
+        if (/\/(?:upload|download)-link\//.test(new URL(url).pathname))
+          return new Response(
+            JSON.stringify(`https://box.nju.edu.cn/seafhttp/upload-api/${secret}`),
+          );
+        if (failure === 'http') return new Response(token + secret, { status: 503 });
+        if (failure === 'body')
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new DOMException(token + secret, 'AbortError'));
+              },
+            }),
+          );
+        throw new TypeError(token + secret, { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+      });
+      try {
+        // Production captures fetch at import. Import after the transport fixture,
+        // keeping the test off the real mirror and leaving production unchanged.
+        vi.resetModules();
+        const { BoxClient: TransportClient } = await import('./box-sync.mjs');
+        const stage = failure === 'body' ? '回读/Offline' : '上传/Offline';
+        let message;
+        try {
+          const client = new TransportClient(token);
+          if (failure === 'body') await client.hash('/Offline/release.zip');
+          else await client.upload('/Offline', 'release.zip', Buffer.from('original'));
+        } catch (error) {
+          message = error.message;
+        }
+        expect(message).toContain(stage);
+        expect(message).toContain(
+          failure === 'http'
+            ? 'HTTP 503'
+            : failure === 'body'
+              ? 'timeout'
+              : 'UND_ERR_CONNECT_TIMEOUT',
+        );
+        if (failure === 'timeout') expect(message).toContain('600000ms');
+        const reported = logs.join('\n') + message;
+        expect(reported).toContain(`Box ${stage} 失败`);
+        expect(reported).toMatch(/失败（\d+ms）/);
+        expect(reported).not.toContain(token);
+        expect(reported).not.toContain(secret);
+        expect(reported).not.toContain('https://');
+      } finally {
+        output.mockRestore();
+        vi.unstubAllGlobals();
+        vi.resetModules();
+      }
+    },
+  );
 });
 
 describe('已发布安装包身份', () => {
