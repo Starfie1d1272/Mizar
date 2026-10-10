@@ -90,8 +90,18 @@ export class UpdateManager {
     this.root = join(options.stateRoot, 'updates');
     this.source =
       options.source ??
-      new StableSource(join(this.root, 'trust'), options.fetcher, 'auto', (stage, error) =>
-        this.failure(stage, error),
+      new StableSource(
+        join(this.root, 'trust'),
+        options.fetcher,
+        'auto',
+        (stage, error, durationMs) => {
+          if (error === undefined)
+            this.options.log?.(stage, 'update_phase_completed', this.candidate?.version, {
+              operationId: this.operationId,
+              durationMs,
+            });
+          else this.failure(stage, error, durationMs);
+        },
       );
   }
   private now() {
@@ -100,12 +110,13 @@ export class UpdateManager {
   private event(stage: string, code: string) {
     this.options.log?.(stage, code, this.candidate?.version, { operationId: this.operationId });
   }
-  failure(stage: string, error: unknown) {
+  failure(stage: string, error: unknown, durationMs?: number) {
     this.failureDetails.push(updateFailure(stage, error, this.operationId));
     this.failureDetails = this.failureDetails.slice(-6);
     this.options.log?.(stage, safeCode(error), this.candidate?.version, {
       operationId: this.operationId,
       error: errorEvidence(error),
+      ...(durationMs === undefined ? {} : { durationMs }),
     });
   }
   private async saveConfig() {
@@ -553,17 +564,24 @@ export function updateFailure(stage: string, error: unknown, operationId: string
     ? '保留现有版本，请导出诊断并从正式发布页核对安装包。'
     : code === 'update_trust_metadata_failed'
       ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
-      : '请导出诊断定位原因；网络恢复后可重新检查，或从正式发布页下载完整包。';
-  const stageLabel = stage.includes('download')
-    ? '下载安装包'
-    : stage === 'install_plan'
-      ? '准备安装'
-      : stage.includes('load')
-        ? '读取更新记录'
-        : stage === 'operator_action'
-          ? '执行更新操作'
-          : stage === 'qualification_proof_rejected'
-            ? '验证更新来源'
-            : '检查更新来源';
+      : rateLimited
+        ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
+        : status === 403
+          ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
+          : '请导出诊断定位原因；网络恢复后可重新检查，或从正式发布页下载完整包。';
+  const stageLabel =
+    stage === 'trust_metadata'
+      ? '刷新信任元数据'
+      : stage.includes('download')
+        ? '下载安装包'
+        : stage === 'install_plan'
+          ? '准备安装'
+          : stage.includes('load')
+            ? '读取更新记录'
+            : stage === 'operator_action'
+              ? '执行更新操作'
+              : stage === 'qualification_proof_rejected'
+                ? '验证更新来源'
+                : '检查更新来源';
   return { code, stage, stageLabel, summary, nextStep, operationId };
 }

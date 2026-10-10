@@ -31,7 +31,7 @@ if ($Automatic) {
     } elseif (Test-Path -LiteralPath $safePath) { Stop-Cs2Discovery 'gsi-file-changed' }
 }
 if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
-    try { $existing = Read-InstallState } catch { Stop-Cs2Discovery 'record-unreadable' }
+    try { $existing = Read-InstallState } catch { Stop-Cs2Discovery 'record-unreadable' -Cause $_.Exception }
     $existingCfgPath = [string]$existing.cfgPath
     $existingCfgName = Split-Path -Leaf $existingCfgPath
     if ($existingCfgName -ieq $LEGACY_GSI_CFG_NAME) {

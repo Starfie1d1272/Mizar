@@ -1,3 +1,4 @@
+import { errorEvidence } from './updates/diagnostics.js';
 import { BilibiliStatus } from './platform/bilibili.js';
 import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avatars.js';
 import { ProductionGuidanceStore } from './program-scenes/guidance.js';
@@ -652,6 +653,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       try {
         resources = await ResourceStore.open({
           root: options.resources!.root,
+          diagnostic: (packId, error) =>
+            app.log.warn(
+              {
+                event: 'resource',
+                stage: 'resource_cache_verify',
+                result: 'failure',
+                packId,
+                diagnostic: { error: errorEvidence(error) },
+              },
+              '官方素材缓存验证失败。',
+            ),
           verifyTrustedPack: createRuntimeVerifier(
             options.resources!.policy,
             options.resources!.cacheHistory,
@@ -664,8 +676,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
         });
-      } catch {
-        app.log.warn('官方素材缓存不可用；保留原 Full 资源路径。');
+      } catch (error) {
+        app.log.warn(
+          {
+            event: 'resource',
+            stage: 'resource_store_open',
+            result: 'failure',
+            diagnostic: { error: errorEvidence(error) },
+          },
+          '官方素材缓存不可用；保留原 Full 资源路径。',
+        );
       }
     });
     app.addHook('onClose', async () => {

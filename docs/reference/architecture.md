@@ -165,3 +165,5 @@ Desktop 的 CS2 启动、临时配置与恢复遵循 [ADR-0026](https://github.c
 可选 Steam 头像由 Companion 的本机媒体缓存提供，赛事头像优先；不修改身份或比赛文档。密钥与缓存独立于采集、预设和支持包，见 [ADR-0034](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0034-local-steam-avatar-fallback.md)。
 
 安装版的数据目录与自动准备所有权边界见 [ADR-0048](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0048-installed-state-and-safe-preparation.md)：安装版使用当前用户数据目录，便携模式保持原路径；自动 GSI 不取得未知文件所有权，OBS 重连不覆盖手动配置。
+
+本机支持包按有限尾部读取桌面、监督器和服务日志，并读取宿主实际轮转的 `desktop.<序号>.ndjson`；兼容旧尾缀命名。窗口加载成功在宿主按累计次数的二次幂采样，在导出时按启动会话聚合；失败和告警优先占用有限事件窗口，保留已知阶段的脱敏原始原因。日志尾部之外的历史仍受读取上限约束，聚合不保证无限保留。素材缓存打开与复验证失败写入既有服务日志，不改变 Full 回退或资源激活规则。

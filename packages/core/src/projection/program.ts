@@ -3,7 +3,7 @@ import {
   type BombDamageProjection,
   type BombDamageResource,
 } from './bomb-damage.js';
-import { observedPlayerDisplayName } from './player-display-name.js';
+import { livePlayerDisplayName } from './player-display-name.js';
 import {
   type ActiveLineupPlayer,
   type ActiveLineupResolution,
@@ -452,6 +452,7 @@ function projectPlayer(
   playerStats: ProgramSafeRuntimeView['playerStats'],
   context: MatchContext | undefined,
   observedTeamName: string | undefined,
+  liveNameIsCurrent: boolean,
 ): ProgramPlayerProjection {
   const player = lineupPlayer.observed;
   const canonical = canonicalPlayerFor(lineupPlayer.sourcePlayerId, identity, identityIsCurrent);
@@ -461,15 +462,11 @@ function projectPlayer(
     canonical === undefined || context === undefined
       ? undefined
       : [context.entrants.a, context.entrants.b].find((item) => item.entryId === canonical.entryId);
-  const displayName =
-    canonicalDisplayName ??
-    observedPlayerDisplayName(observedDisplayName, [entrant?.name, observedTeamName]);
-  const displayNameSource =
-    canonicalDisplayName !== null
-      ? 'canonical'
-      : observedDisplayName !== null
-        ? 'observed'
-        : 'unavailable';
+  const { displayName, displayNameSource } = livePlayerDisplayName(
+    liveNameIsCurrent ? observedDisplayName : null,
+    canonicalDisplayName,
+    [entrant?.name, observedTeamName],
+  );
 
   const state =
     player === null || player.state === undefined
@@ -763,6 +760,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
             ? map?.sides?.ct?.name
             : map?.sides?.t?.name
           : undefined,
+        telemetryFreshness === 'fresh' && telemetry?.coverage.allPlayers === 'present',
       ),
     ),
     bomb: projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy),
