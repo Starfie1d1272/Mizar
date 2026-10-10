@@ -116,6 +116,7 @@ describe('original Qualification descriptor and Promotion catalog client boundar
         sourceSha,
         publication: {
           promotionSha: sourceSha,
+          releaseVersion: core.appVersion,
           sha256: originalPublication.sha256,
           sequence: 7,
           issuedAt: originalPublication.issuedAt,

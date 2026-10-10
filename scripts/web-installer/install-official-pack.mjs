@@ -29,7 +29,15 @@ export async function installOfficialPack({
   signal.throwIfAborted();
   const identity = getResourceAuthorization(authorization);
   const pinnedPolicy = { ...identity.policy, manifestSha256: identity.manifestSha256 };
-  const verifyActive = createActivePolicyVerifier(pinnedPolicy, authorization);
+  const verifyCurrent = createActivePolicyVerifier(pinnedPolicy, authorization);
+  let renewedReceipt;
+  const verifyActive = async (input) => {
+    const verified = await verifyCurrent(input);
+    // Retain authenticated old Core authorization even when actual cache files
+    // need repair. The replacement ZIP is independently verified below.
+    renewedReceipt = verified.receipt;
+    return verified;
+  };
   let cached;
   try {
     cached = await store.reuseActive(PACK_ID, verifyActive, { signal });
@@ -91,7 +99,7 @@ export async function installOfficialPack({
         onProgress(bytes);
       }
       preparationSignal.throwIfAborted();
-      return verified.receipt;
+      return renewedReceipt ?? verified.receipt;
     },
     { packVersion: verified.manifest.packVersion, signal, force: true },
   );

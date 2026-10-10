@@ -96,12 +96,14 @@ export interface ResourceCatalogIdentity {
     sourceSha: string;
     publication?: {
       promotionSha: string;
+      releaseVersion: string;
       sha256: string;
       sequence: number;
       issuedAt: string;
       expiresAt: string;
     };
   };
+  originAssets?: Readonly<Record<string, string>>;
   authorization?: { sequence: number; issuedAt: string; expiresAt: string };
 }
 export function getResourceAuthorization(

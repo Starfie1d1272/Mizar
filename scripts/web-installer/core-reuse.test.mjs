@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { generateKeyPairSync, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile, chmod, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, chmod, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
@@ -125,7 +125,7 @@ async function authorize(core, origin, clock = now) {
     packVersion: pack.manifest.packVersion,
     archive: statement.archive,
     manifestSha256: pack.manifestSha256,
-    sequence: origin ? 8 : 7,
+    sequence: origin?.publication ? 8 : statement.sequence,
     issuedAt: instant(clock - 1000),
     expiresAt: instant(clock + 86400000),
     ...(origin ? { origin } : {}),
@@ -153,6 +153,7 @@ const origin = () => ({
   sourceSha,
   publication: {
     promotionSha: oldPromotion,
+    releaseVersion: oldCore.appVersion,
     sha256: sha256(statementBytes),
     sequence: statement.sequence,
     issuedAt: statement.issuedAt,
@@ -171,7 +172,7 @@ async function open(core) {
   return store;
 }
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'mizar-signed-reuse-'));
+  root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-signed-reuse-'));
   pack = await buildOfficialPack(process.cwd(), { packVersion: '1.0.0', sourceSha });
   statement = makePublication(pack, {
     promotionSha: oldPromotion,
@@ -232,6 +233,9 @@ describe('signed content retained across compatible Core authorization', () => {
     expect(result.sourceSha).toBe(sourceSha);
     expect(result.promotionSha).toBe(oldPromotion);
     expect(getResourceAuthorization(authorization).core.gitSha).toBe(newCore.gitSha);
+    expect(getResourceAuthorization(authorization).originAssets['resource-publication.json']).toBe(
+      'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-publication.json',
+    );
     await store.close();
     const oldStore = await open(oldCore);
     expect(oldStore.getStatus('official:epl-default').phase).toBe('ready');
@@ -303,5 +307,77 @@ describe('signed content retained across compatible Core authorization', () => {
     await expect(
       installOfficialPack({ store: current, authorization: incompatible }),
     ).rejects.toThrow();
+    const repairZip = vi.fn(async () => ({
+      statementBytes,
+      publicationBundleBytes: proof(
+        statementBytes,
+        'resource-publication.json',
+        'promotion',
+        oldPromotion,
+      ),
+      archiveBytes: pack.archiveBytes,
+      archiveBundleBytes: proof(
+        pack.archiveBytes,
+        statement.archive.name,
+        'qualification',
+        sourceSha,
+      ),
+    }));
+    const repaired = await installOfficialPack({
+      store: current,
+      authorization,
+      loadInputs: repairZip,
+      tufCachePath: join(root, 'trust'),
+    });
+    expect(repairZip).toHaveBeenCalledTimes(1);
+    expect(repaired.resourcesReady).toBe(true);
+    expect(current.getStatus('official:epl-default').phase).toBe('ready');
+  }, 30000);
+  it('downloads a changed Pack and preserves the prior healthy resource generation for old Core rollback', async () => {
+    await store?.close();
+    const current = await open(newCore);
+    pack = await buildOfficialPack(process.cwd(), { packVersion: '1.0.1', sourceSha });
+    statement = makePublication(pack, {
+      promotionSha: newPromotion,
+      sequence: 9,
+      issuedAt: instant(now - 1000),
+      expiresAt: instant(now + 86400000),
+    });
+    statementBytes = jsonBytes(statement);
+    const authorization = await authorize(newCore, { sourceSha });
+    const changedZip = vi.fn(async () => ({
+      statementBytes,
+      publicationBundleBytes: proof(
+        statementBytes,
+        'resource-publication.json',
+        'promotion',
+        newPromotion,
+      ),
+      archiveBytes: pack.archiveBytes,
+      archiveBundleBytes: proof(
+        pack.archiveBytes,
+        statement.archive.name,
+        'qualification',
+        sourceSha,
+      ),
+    }));
+    await installOfficialPack({
+      store: current,
+      authorization,
+      loadInputs: changedZip,
+      tufCachePath: join(root, 'trust'),
+    });
+    expect(changedZip).toHaveBeenCalledTimes(1);
+    expect(current.getStatus('official:epl-default').activeVersion).toBe('1.0.1');
+    await current.close();
+    const previous = await open(oldCore);
+    expect(previous.getStatus('official:epl-default').activeVersion).toBe('1.0.0');
+    expect(
+      await previous.read(
+        'official:epl-default',
+        'fixtures/epl-inferno-video/replay/background.mp4',
+        'bytes=0-31',
+      ),
+    ).toBeDefined();
   }, 30000);
 });

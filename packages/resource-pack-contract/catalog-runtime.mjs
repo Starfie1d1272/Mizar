@@ -84,7 +84,20 @@ function authorize(parsed, receipt) {
     assets: parsed.entry.assets,
     descriptorSha256: parsed.catalog.descriptorSha256,
     ...(parsed.catalog.origin
-      ? { origin: parsed.catalog.origin, authorization: parsed.catalog.authorization }
+      ? {
+          origin: parsed.catalog.origin,
+          authorization: parsed.catalog.authorization,
+          ...(parsed.catalog.origin.publication
+            ? {
+                originAssets: Object.fromEntries(
+                  Object.keys(parsed.entry.assets).map((name) => [
+                    name,
+                    `https://github.com/Starfie1d1272/Mizar/releases/download/v${parsed.catalog.origin.publication.releaseVersion}/${name}`,
+                  ]),
+                ),
+              }
+            : {}),
+        }
       : {}),
   });
   const handle = Object.freeze({ schemaVersion: 'mizar.authenticated-resource-catalog.v1' });

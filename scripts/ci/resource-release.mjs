@@ -141,6 +141,10 @@ export async function reuseResourceCandidate(
     resourceMode: 'core',
   };
   const published = (await readdir(source)).includes(names.catalog);
+  requireValue(
+    published || original.origin?.publication,
+    '复用来源必须保留原 Qualification 和 Promotion 证明；未发布候选不能代替原发行授权',
+  );
   return withVerifiedSnapshot(
     source,
     originalCore,
@@ -161,6 +165,9 @@ export async function reuseResourceCandidate(
           promotionSha:
             candidate.entry.policy.promotionSha ??
             candidate.descriptor.origin.publication.promotionSha,
+          releaseVersion:
+            candidate.descriptor.origin?.publication?.releaseVersion ??
+            candidate.descriptor.core.appVersion,
           sha256: publication.sha256 ?? candidate.descriptor.origin.publication.sha256,
           sequence: publication.sequence,
           issuedAt: publication.issuedAt,

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, URL } from 'node:url';
 import {
   prepareResourceCandidate,
+  reuseResourceCandidate,
   readResourceCandidate,
   makePublishedCatalog,
   verifyQualifiedResources,
@@ -53,6 +54,11 @@ describe('Release resource integration with the real official Pack', () => {
     expect(candidate.entry.assets['resource-catalog.json']).toBe(
       'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-catalog.json',
     );
+  });
+  it('does not reuse a merely qualified candidate as an originally published resource', async () => {
+    await expect(
+      reuseResourceCandidate(folder, join(directory, 'without-publication'), manifest, '1.0.0', 8),
+    ).rejects.toThrow('Promotion');
   });
   it('allows a later main promoter without relabeling the original qualified resource source', () => {
     const catalog = makePublishedCatalog(candidate, 'b'.repeat(40));

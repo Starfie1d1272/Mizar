@@ -65,6 +65,7 @@ export function createResourceDescriptor({
       const publication = origin.publication;
       requireValue(
         isSourceSha(publication.promotionSha) &&
+          /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(publication.releaseVersion) &&
           isSha256(publication.sha256) &&
           Number.isSafeInteger(publication.sequence) &&
           publication.sequence > 0 &&
@@ -80,6 +81,7 @@ export function createResourceDescriptor({
             sourceSha: origin.sourceSha,
             publication: {
               promotionSha: publication.promotionSha,
+              releaseVersion: publication.releaseVersion,
               sha256: publication.sha256,
               sequence: publication.sequence,
               issuedAt: publication.issuedAt,
