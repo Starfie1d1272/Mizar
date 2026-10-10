@@ -226,9 +226,10 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       : {}),
     ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
       ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-      : !update && typeof entry.error === 'string'
+      : !update && !live && typeof entry.error === 'string'
         ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
         : !update &&
+            !live &&
             [
               'powershell',
               'cs2_launch',
@@ -240,7 +241,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
             ].includes(stage ?? '') &&
             typeof entry.detail === 'string'
           ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-          : !update && typeof record(entry.err).message === 'string'
+          : !update && !live && typeof record(entry.err).message === 'string'
             ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
             : {}),
     durationMs: count(diagnostic.durationMs),

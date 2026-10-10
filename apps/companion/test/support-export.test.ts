@@ -488,8 +488,8 @@ it('exports actual LIVE diagnostic logs with stage and safe network causes throu
       : Promise.reject(
           new TypeError('https://private.example/?token=private-token', {
             cause: Object.assign(new Error('Bearer private-token'), {
-              name: 'ConnectTimeoutError',
-              code: 'UND_ERR_CONNECT_TIMEOUT',
+              name: 'FutureTransportError',
+              code: 'NEW_NETWORK_CODE',
             }),
           }),
         );
@@ -550,7 +550,7 @@ it('exports actual LIVE diagnostic logs with stage and safe network causes throu
       result: 'failure',
       localDiagnostic: {
         name: 'TypeError',
-        cause: { name: 'ConnectTimeoutError', code: 'UND_ERR_CONNECT_TIMEOUT' },
+        cause: { name: 'FutureTransportError', code: 'NEW_NETWORK_CODE' },
       },
     });
     expect(events[1]).toMatchObject({ stage: 'accepted', result: 'success' });
