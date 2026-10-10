@@ -150,6 +150,7 @@ it.each(['live', 'hidden'] as const)(
       return Promise.resolve();
     });
     const app = Fastify();
+    const logged = vi.spyOn(app.log, 'error');
     const lifecycle = registerProductionRoutes(app, {
       originPolicy: createLocalWebOriginPolicy(),
       hasContext: () => true,
@@ -180,6 +181,13 @@ it.each(['live', 'hidden'] as const)(
       calls.length = 0;
       expect((await send('finish')).statusCode).toBe(409);
       expect(calls).toEqual(['waiting', 'release']);
+      const evidence: unknown = logged.mock.calls.at(-1)?.[0];
+      expect(evidence).toMatchObject({
+        stage: 'production_release',
+        diagnostic: {
+          error: { message: 'RivalHub unavailable' },
+        },
+      });
       expect(scenes.get().active).toBe('waiting');
       expect(lifecycle.get()).toEqual(before);
       expect((await send('finish')).statusCode).toBe(200);

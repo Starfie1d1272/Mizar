@@ -12,6 +12,8 @@ const stages = new Set([
   'process_start',
   'powershell',
   'cs2_launch',
+  'update_install',
+  'production_finish',
   'webview2_recheck',
   'webview2_recovery_action',
   'bundle_root_resolved',
@@ -119,6 +121,9 @@ const updateStages = new Set([
   'settings_load',
   'ready_load',
   'download_cleanup',
+  'production_context',
+  'production_safe_scene',
+  'production_release',
 ]);
 
 function updateCauses(value: unknown, depth = 0): unknown[] {
@@ -156,7 +161,9 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
-    entry.event === 'update' && typeof entry.stage === 'string' && updateStages.has(entry.stage);
+    ['update', 'production'].includes(String(entry.event)) &&
+    typeof entry.stage === 'string' &&
+    updateStages.has(entry.stage);
   const stage =
     typeof entry.stage === 'string' && (stages.has(entry.stage) || update) ? entry.stage : null;
   const diagnostic = record(entry.diagnostic);
@@ -186,6 +193,8 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ...([
       'powershell',
       'cs2_launch',
+      'update_install',
+      'production_finish',
       'webview2_preflight',
       'webview2_recheck',
       'webview2_recovery_action',

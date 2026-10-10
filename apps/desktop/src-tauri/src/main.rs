@@ -1547,7 +1547,9 @@ fn run_desktop(
                             {
                                 Ok(())
                             } else {
-                                production_exit::finish_companion()
+                                production_exit::finish_companion(
+                                    &cleanup_host.state::<DesktopLog>(),
+                                )
                             }
                         },
                         || cs2.finish(),

@@ -1,3 +1,4 @@
+import { errorEvidence } from '../updates/diagnostics.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { ProgramSceneController } from './controller.js';
@@ -40,6 +41,8 @@ export function registerProductionRoutes(
     const shutdown = body?.action === 'shutdown';
     if (shutdown) shuttingDown = true;
     let committed = false;
+    let stage = 'production_context';
+    const operationId = randomUUID();
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
@@ -50,17 +53,35 @@ export function registerProductionRoutes(
         // Both normal exit paths use this same safe-scene/release transaction.
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
+          stage = 'production_safe_scene';
           const result = await options.scenes.select('waiting', options.scenes.get().revision);
           if (!result.ok) return { code: 409, value: { message: result.message } };
         }
+        stage = 'production_release';
         await options.release();
         mode = 'preparation';
       }
       committed = true;
       revision = randomUUID();
       return { code: 200, value: view() };
-    } catch {
-      return { code: 409, value: { message: '结束制作未完成，请检查赛事连接后重试。' } };
+    } catch (error) {
+      app.log.error(
+        {
+          event: 'production',
+          stage,
+          result: 'failure',
+          action: body?.action,
+          diagnostic: { operationId, error: errorEvidence(error) },
+        },
+        'Production operation failed',
+      );
+      const message =
+        stage === 'production_release'
+          ? '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
+          : stage === 'production_safe_scene'
+            ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
+            : '比赛状态检查失败，尚未进入制作；具体原因未确认。请复制诊断信息后排查。';
+      return { code: 409, value: { message } };
     } finally {
       if (shutdown && !committed) shuttingDown = false;
       busy = false;
