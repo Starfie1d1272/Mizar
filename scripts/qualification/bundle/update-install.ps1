@@ -14,6 +14,23 @@ function Write-JsonAtomic($path, $value) {
   [IO.File]::WriteAllText($temp, ($value | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
   Move-Item -LiteralPath $temp -Destination $path -Force
 }
+# Optional qualification timing never changes the transaction's decision or order.
+function Measure-UpdatePhase([string]$Name, [scriptblock]$Operation) {
+  if ($env:MIZAR_MEASURE_UPDATE -ne '1') { & $Operation; return }
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $status = 'failure'
+  try { & $Operation; $status = 'success' }
+  finally {
+    $script:updatePhases.Add(@{ phase = $Name; durationMs = $clock.ElapsedMilliseconds; status = $status })
+    Write-JsonAtomic (Join-Path $StageRoot ($Mode.ToLowerInvariant() + '-timings.json')) @{
+      mode = $Mode; version = $plan.version; gitSha = $plan.gitSha
+      previousContentDigest = $plan.previousContentDigest; contentDigest = $plan.contentDigest
+      phases = @($script:updatePhases.ToArray())
+    }
+  }
+}
+if ($env:MIZAR_MEASURE_UPDATE -eq '1') { $script:updatePhases = [Collections.Generic.List[object]]::new() }
+
 function Assert-PlainPath([string]$path) {
   if (![IO.Path]::IsPathRooted($path) -or $path -match '["\r\n]') { throw 'update_path_invalid' }
   $cursor = [IO.Path]::GetFullPath($path)
@@ -212,27 +229,35 @@ try {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'update_host_exit_timeout' }
     Start-Sleep -Milliseconds 200
   }
-  Assert-Stopped
-  Assert-Installer $plan (Join-Path $StageRoot 'Installer.exe')
-  Assert-Payload $plan.bundleRoot $plan.previousContentDigest
-  if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
-  Save-Registration
-  Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse
-  Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest
+  Measure-UpdatePhase 'stopped-and-installer' {
+    Assert-Stopped
+    Assert-Installer $plan (Join-Path $StageRoot 'Installer.exe')
+  }
+  Measure-UpdatePhase 'previous-payload' { Assert-Payload $plan.bundleRoot $plan.previousContentDigest }
+  Measure-UpdatePhase 'reparse-and-registration' {
+    if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
+    Save-Registration
+  }
+  Measure-UpdatePhase 'backup-copy' { Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse }
+  Measure-UpdatePhase 'backup-payload' { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest }
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
   # Remove only the verified previous product files; preserve state and every untracked file.
-  foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
-    $name = $line.Substring(66)
-    if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
-    $file = Join-Path $plan.bundleRoot $name
-    Assert-PlainPath $file
-    Remove-Item -LiteralPath $file -Force
+  Measure-UpdatePhase 'remove-previous-files' {
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
+      $name = $line.Substring(66)
+      if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
+      $file = Join-Path $plan.bundleRoot $name
+      Assert-PlainPath $file
+      Remove-Item -LiteralPath $file -Force
+    }
   }
-  $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
-  $installer.WaitForExit()
-  if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
-  Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+  Measure-UpdatePhase 'nsis-install' {
+    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
+    $installer.WaitForExit()
+    if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
+  }
+  Measure-UpdatePhase 'installed-payload' { Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha }
   if ($plan.coreArchiveSha256) {
     # Complete resources through the verified deployed App/SDK before committing.
     # Failure retains the existing program backup and enters the normal rollback.

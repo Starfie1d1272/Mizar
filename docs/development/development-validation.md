@@ -178,4 +178,6 @@ Windows 安装器验证中的资源 / SDK 检查仅使用独立临时目录并�
 
 常规 CI 的 pnpm store 随 runner 丢弃，不为每个分片与 run 保存重复大缓存；锁文件与供应链校验仍由原 pnpm 执行，qualification 的依赖及 Cargo profile 缓存继续保留。冷热下载影响按整轮 CI 实测，不以缓存配置直接宣称达标。
 
+原生更新分段计时只在资格工具设置 `MIZAR_MEASURE_UPDATE=1` 时启用，按原顺序记录停进程与安装器核验、原内容核验、路径与登记核验、备份复制与独立备份核验、旧文件移除、NSIS 和新内容核验；报告写入原受控事务目录，资格工具将其复制到 CI 证据。计时不替代核验、不改变恢复与回滚判定，正常产品执行不生成该报告。
+
 安装器 CI 使用两台独立 Windows runner：update 保留首次安装、同版更新和恢复的依赖链，只使用系统 .NET / PowerShell；faults 复用自身残留续装产生的安装执行 App 边界、完整 pending 恢复、错误身份与取消检查，同时负责原生 UI 和 SDK。faults 在准备 App 时通过原 Downloader 提前下载固定安装器，正式用例重新校验缓存后使用；下载只写自己的 cache，失败必须在 NSIS 前拒绝，退出前等待全部后台检查。planner 和 gate 仅检出 CI 脚本，update 仅检出安装器与嵌入的更新脚本，仍绑定完整 Git commit/tree 并保留全仓 diff 规划。两组没有共享目录、登记或 pending 状态；聚合门禁核验 15 个原 NSIS case identity 全集，source-CI 必须拥有两个明确命名的成功 job。
