@@ -61,11 +61,11 @@ fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summar
     summary.into()
 }
 fn release_plan(log: &DesktopLog) {
-    if let Err(error) = request(log, "release") {
+    if request(log, "release").is_err() {
         log.event(
             "update_install",
             "failure",
-            Some(&format!("phase=release_after_failure; cause={error}")),
+            Some("phase=release_after_failure; failed; see preceding request phase and cause"),
         );
     }
 }
@@ -113,7 +113,14 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
     let token = state["controlToken"]
         .as_str()
         .filter(|v| v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit()))
-        .ok_or("本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。")?;
+        .ok_or_else(|| {
+            log.event(
+                "update_install",
+                "failure",
+                Some("phase=runtime_identity; control_token_shape_invalid"),
+            );
+            "本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。"
+        })?;
     let deadline = Instant::now() + Duration::from_secs(75);
     let address: SocketAddr = "127.0.0.1:3000".parse().unwrap();
     let mut stream =
@@ -148,6 +155,11 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
         }
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.len() > 64 * 1024 {
+            log.event(
+                "update_install",
+                "failure",
+                Some("phase=response_read; size_limit_exceeded"),
+            );
             return Err("更新响应超出限制。".into());
         }
     }
@@ -159,8 +171,20 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
         );
         "更新响应无效。"
     })?;
-    let (headers, body) = text.split_once("\r\n\r\n").ok_or("更新响应无效。")?;
+    let (headers, body) = text.split_once("\r\n\r\n").ok_or_else(|| {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=response_framing; missing_header_separator"),
+        );
+        "更新响应格式无效，升级未启动。请查看诊断或从正式发布页下载。"
+    })?;
     if headers.to_ascii_lowercase().contains("transfer-encoding:") {
+        log.event(
+            "update_install",
+            "failure",
+            Some("phase=response_framing; unsupported_transfer_encoding"),
+        );
         return Err("更新响应格式不支持。".into());
     }
     let value: Value = serde_json::from_str(body)

@@ -80,7 +80,7 @@ export function registerProductionRoutes(
           ? '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
           : stage === 'production_safe_scene'
             ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
-            : '比赛状态检查失败，尚未进入制作；具体原因未确认。请复制诊断信息后排查。';
+            : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';
       return { code: 409, value: { message } };
     } finally {
       if (shutdown && !committed) shuttingDown = false;
