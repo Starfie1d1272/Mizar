@@ -632,7 +632,13 @@ describe('the public download pair and legacy compatibility boundary', () => {
       '/Archive/manual-keep.zip': Buffer.from('operator backup'),
     });
   const sync = (box) =>
-    syncUserDownloads({ box, bootstrap, offline, resolveIdentity: async () => undefined });
+    syncUserDownloads({
+      box,
+      bootstrap,
+      offline,
+      resolveIdentity: async () => undefined,
+      accept: async () => 'fixture acceptance',
+    });
   it('moves only the verified legacy lightweight entry, leaves the Full path intact and repeats without uploads', async () => {
     const box = legacy();
     await sync(box);
@@ -643,7 +649,8 @@ describe('the public download pair and legacy compatibility boundary', () => {
     expect(box.stored.has('/Stable/' + bootstrapIdentity.name)).toBe(false);
     expect(box.stored.get('/Archive/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
     expect(box.stored.get('/Archive/manual-keep.zip')).toEqual(Buffer.from('operator backup'));
-    expect(box.stored.get('/Offline/' + offlineIdentity.name)).toEqual(offlineIdentity.bytes);
+    expect(box.stored.has('/Offline/' + offlineIdentity.name)).toBe(false);
+    expect(box.operations.filter((op) => op === 'upload').length).toBe(1); // Only the tiny EXE; the ZIP was moved.
     box.operations.length = 0;
     await sync(box);
     expect(box.operations).toEqual([]);
@@ -674,7 +681,10 @@ describe('the public download pair and legacy compatibility boundary', () => {
     await sync(box);
     await rollbackDownloads({ box, identity: next, offline, bootstrap });
     expect(box.stored.get('/Stable/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
-    expect((await box.list('/Stable/Downloads')).length).toBe(2);
+    expect(box.stored.get('/Offline/' + offlineIdentity.name)).toEqual(offlineIdentity.bytes);
+    expect((await box.list('/Stable/Downloads')).map((e) => e.name)).toEqual([
+      bootstrapIdentity.name,
+    ]);
     expect(box.stored.get('/Archive/' + bootstrapIdentity.name)).toEqual(bootstrapIdentity.bytes);
     box.operations.length = 0;
     await rollbackDownloads({ box, identity: next, offline, bootstrap });
@@ -754,7 +764,50 @@ it('keeps the existing update pointer when the newly migrated user route fails a
     ).rejects.toThrow('HTTP 404');
     expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
     expect(box.stored.get('/Stable/' + next.name)).toEqual(next.bytes);
-    expect(box.stored.get('/Archive/' + lightweight.name)).toEqual(lightweight.bytes);
+    expect(box.stored.get('/Stable/' + lightweight.name)).toEqual(lightweight.bytes);
+    expect(box.stored.has('/Archive/' + lightweight.name)).toBe(false);
+    expect(box.stored.get('/Offline/' + zip.name)).toEqual(zip.bytes);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
+});
+
+it('bounds routine anonymous ZIP acceptance to a range probe instead of another full ZIP download', async () => {
+  const zip = { ...next, name: 'Mizar-v1.0.1-Windows-x64.zip' };
+  const lightweight = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+  const transport = vi.fn(async (url, options) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes('dirents'))
+      return new Response(
+        JSON.stringify({
+          dir_path: '/Stable/Downloads/',
+          dirent_list: [zip, lightweight].map((f) => ({
+            file_name: f.name,
+            file_path: '/Downloads/' + f.name,
+            size: f.size,
+            is_dir: false,
+          })),
+        }),
+      );
+    if (parsed.searchParams.get('p').endsWith('.zip')) {
+      expect(options.headers).toEqual({ Range: 'bytes=0-0' });
+      return new Response(zip.bytes.subarray(0, 1), {
+        status: 206,
+        headers: { 'content-range': `bytes 0-0/${zip.size}` },
+      });
+    }
+    expect(options.headers).toBeUndefined();
+    return new Response(lightweight.bytes);
+  });
+  vi.stubGlobal('fetch', transport);
+  try {
+    vi.resetModules();
+    const { verifyPublicDownloads: accept } = await import('./box-sync.mjs');
+    await expect(
+      accept({ offline: { identity: zip }, bootstrap: { identity: lightweight }, full: false }),
+    ).resolves.toContain('ZIP 原字节由同步校验');
+    expect(transport).toHaveBeenCalledTimes(3);
   } finally {
     vi.unstubAllGlobals();
     vi.resetModules();

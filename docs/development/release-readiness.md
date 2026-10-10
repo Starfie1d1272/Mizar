@@ -52,7 +52,7 @@ Cargo 或 NSIS 参数实验使用不可晋级的独立产物，同一源码、�
 
 ## 分发、镜像与应用内更新
 
-GitHub Releases 是完整正式资产、版本历史和溯源信息的公开入口。国内镜像可以提供更便捷的稳定版安装包，但必须与已经通过资格验收的原始资产**字节一致**，并在可验证后替换 Stable 入口；历史回滚文件与公开分享权限独立管理。国内下载入口见[快速开始](../guide/quick-start.md)。首次迁移仅在现有原正式版本上执行 Box Sync 的 `sync`，不创建新 Release；`verify-downloads` 只读核验匿名目录及两份下载的完整原字节。需要恢复旧目录入口时对同一 tag 执行 `rollback-downloads`，先验证 Stable Full 与 Offline ZIP，再恢复原轻量 EXE；不删除 Downloads 或 Archive、不改更新指针。旧书签和已发客户端的裸分享地址继续打开 Stable，迁移后可进入 Downloads；下一版本客户端与新公开指引直接打开用户子目录。迁移前匿名 Downloads 返回 404，不能宣称已上线。
+GitHub Releases 是完整正式资产、版本历史和溯源信息的公开入口。国内镜像可以提供更便捷的稳定版安装包，但必须与已经通过资格验收的原始资产**字节一致**，并在可验证后替换 Stable 入口；历史回滚文件与公开分享权限独立管理。国内下载入口见[快速开始](../guide/quick-start.md)。首次迁移仅在现有原正式版本上执行 Box Sync 的 `sync`，不创建新 Release；`verify-downloads` 只读核验匿名目录及两份下载的完整原字节。需要恢复旧目录入口时对同一 tag 执行 `rollback-downloads`，先验证 Stable Full 与原完整 ZIP，再恢复原轻量 EXE，必要时将同版 ZIP 移回 Offline；不清除 Downloads 目录或 Archive、不改更新指针。旧书签和已发客户端的裸分享地址继续打开 Stable，迁移后可进入 Downloads；下一版本客户端与新公开指引直接打开用户子目录。迁移前匿名 Downloads 返回 404，不能宣称已上线。首次迁移或尚无已发布指针时匿名下载两个完整原文件；常规发布只匿名完整下载轻量 EXE，ZIP 验证匿名目录身份与 Range 可达性，其完整摘要仍在同步与最终发布边界核对。每个新 ZIP 仅上传一次、可信回读两次，不新增 Offline 副本；同版重试不上传大包，首次迁移复用已验证服务端移动。`verify-downloads` 始终执行完整匿名下载，用于正式验收，不把关键路径预算估算当作 ≤600 秒结果。
 
 如果产品提供应用内更新，必须先验证更新元数据与来源身份，再核验安装包；**从同一不受信任来源同时获取文件和 SHA-256 并不足以证明发布者身份**。更新应明确区分安装版与便携版，正常退出后安装，不得在 Live 播出时擅自终止程序；网络、校验、安装或恢复失败时保持已安装版本可用。
 
@@ -67,7 +67,7 @@ Stable 资格构建从原分发清单生成并证明 `update-manifest.json`，�
 版本、源码和资格任务链接由实际构建身份自动填入，固定发布者签名说明随分发政策变化维护。更新清单在资格构建时包含转换后的纯文本并签发来源证明；正文变更必须重新资格构建，不能在晋级时替换已签清单。生成 GitHub 正文供审阅可运行 `node scripts/qualification/release-notes.mjs <版本> <精确源码SHA> <资格任务ID> <输出文件>`；生成文件不代表已经发布。
 
 镜像上传凭据只用于发布工作流，不进入客户端、公开文档或可下载产物。正式版本号、签名状态、自动更新能力与安装说明以对应 Release 和当前用户手册为准，不在本长期规范中维护每次发布的临时状态。
-Box 的 Stable 保留旧客户端必需的最新 Full Setup；Stable/Downloads 是用户入口，只保留一个同源同版轻量 WebInstaller EXE 和完整离线 ZIP。Offline 保留完整 ZIP 的原字节回退副本，Runtime 存放现代客户端后端；Archive 归档历史分发文件，Updates 存放应用读取的签名清单信封。当前分享绑定 Stable，用户入口使用同一分享的 `?p=/Downloads` 子目录参数。必须完成原字节校验、历史归档和真实匿名下载验收后，最后发布 Updates 的最新清单。客户端专用只读 Token 仅访问公开发行资料，与发布上传凭据分开管理；具体信任和回退规则以更新契约为准。
+Box 的 Stable 保留旧客户端必需的最新 Full Setup；Stable/Downloads 是用户入口，只保留一个同源同版轻量 WebInstaller EXE 和完整离线 ZIP。首次迁移将 Offline 同版 ZIP 原字节移到 Downloads，后续 ZIP 直接同步到 Downloads；Offline 历史内容保留，Runtime 存放现代客户端后端；Archive 归档历史分发文件，Updates 存放应用读取的签名清单信封。当前分享绑定 Stable，用户入口使用同一分享的 `?p=/Downloads` 子目录参数。必须完成原字节校验、历史归档和真实匿名下载验收后，最后发布 Updates 的最新清单。客户端专用只读 Token 仅访问公开发行资料，与发布上传凭据分开管理；具体信任和回退规则以更新契约为准。
 
 ## 发行消费者与运行时依赖
 

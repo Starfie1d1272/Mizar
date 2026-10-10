@@ -322,6 +322,14 @@ async function verifyRemote(box, path, identity) {
 }
 
 // Upload and verify before removing anything from Stable. Archive is never pruned here.
+async function ensureDownloads(box) {
+  const directories = (await box.list('/Stable')).filter((e) => e.name === 'Downloads');
+  requireValue(
+    directories.length <= 1 && (!directories.length || directories[0].type === 'dir'),
+    'Downloads 必须是独立目录',
+  );
+  if (!directories.length) await box.api('dir', downloadsFolder, 'POST', { operation: 'mkdir' });
+}
 async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pattern) {
   requireValue(
     bytes.length === identity.size && digest(bytes) === identity.sha256,
@@ -337,14 +345,7 @@ async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pa
     );
     if (!matches.length) await box.api('dir', '/Offline', 'POST', { operation: 'mkdir' });
   }
-  if (folder === downloadsFolder) {
-    const directories = (await box.list('/Stable')).filter((e) => e.name === 'Downloads');
-    requireValue(
-      directories.length <= 1 && (!directories.length || directories[0].type === 'dir'),
-      'Downloads 必须是独立目录',
-    );
-    if (!directories.length) await box.api('dir', downloadsFolder, 'POST', { operation: 'mkdir' });
-  }
+  if (folder === downloadsFolder) await ensureDownloads(box);
   const current = await box.list(folder);
   requireValue(
     new Set(current.map((e) => e.name)).size === current.length &&
@@ -417,7 +418,13 @@ export async function syncBootstrap(options) {
   return syncPackage(options, downloadsFolder, bootstrapPattern);
 }
 // Only published identities may leave the legacy public root. Keep every rollback byte in Archive.
-export async function syncUserDownloads({ box, offline, bootstrap, resolveIdentity }) {
+export async function syncUserDownloads({
+  box,
+  offline,
+  bootstrap,
+  resolveIdentity,
+  accept = verifyPublicDownloads,
+}) {
   requireValue(
     bootstrap?.identity &&
       offline?.identity &&
@@ -426,7 +433,13 @@ export async function syncUserDownloads({ box, offline, bootstrap, resolveIdenti
       bootstrap.identity.releaseId === offline.identity.releaseId,
     '用户下载必须同源同版',
   );
-  const legacy = (await box.list('/Stable')).filter((e) => bootstrapPattern.test(e.name));
+  const stable = await box.list('/Stable');
+  const legacy = stable.filter((e) => bootstrapPattern.test(e.name));
+  const root = await box.list('/');
+  const hasPointer =
+    root.some((e) => e.name === 'Updates' && e.type === 'dir') &&
+    (await box.list('/Updates')).some((e) => e.name === 'latest.json' && e.type === 'file');
+  const full = legacy.length > 0 || !stable.some((e) => e.name === 'Downloads') || !hasPointer;
   const archive = await box.list('/Archive');
   const verified = [];
   for (const entry of legacy) {
@@ -446,6 +459,33 @@ export async function syncUserDownloads({ box, offline, bootstrap, resolveIdenti
       await verifyRemote(box, '/Archive/' + entry.name, identity);
     verified.push(identity);
   }
+  await ensureDownloads(box);
+  const before = await box.list(downloadsFolder);
+  requireValue(
+    new Set(before.map((e) => e.name)).size === before.length &&
+      before.every((e) => {
+        const version = (bootstrapPattern.exec(e.name) || offlinePattern.exec(e.name))?.[1];
+        return (
+          e.type === 'file' &&
+          version &&
+          (version === bootstrap.identity.version || older(version, bootstrap.identity.version))
+        );
+      }),
+    '用户下载目录存在未知文件或更新版本',
+  );
+  // One-time relocation uses the already supported atomic move, not an assumed copy API.
+  const hasLegacyZip =
+    root.some((e) => e.name === 'Offline' && e.type === 'dir') &&
+    (await box.list('/Offline')).some((e) => e.name === offline.identity.name && e.type === 'file');
+  let relocated = false;
+  if (
+    hasLegacyZip &&
+    !(await box.list(downloadsFolder)).some((e) => e.name === offline.identity.name)
+  ) {
+    await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
+    await box.move('/Offline', downloadsFolder, offline.identity.name);
+    relocated = true;
+  }
   await syncBootstrap({ box, ...bootstrap });
   await syncPackage({ box, ...offline }, downloadsFolder, offlinePattern);
   const entries = await box.list(downloadsFolder);
@@ -457,9 +497,18 @@ export async function syncUserDownloads({ box, offline, bootstrap, resolveIdenti
       ),
     '用户下载入口必须只有轻量 EXE 和完整 ZIP',
   );
+  try {
+    await accept({ offline, bootstrap, full });
+  } catch (error) {
+    // Restore a relocated original on failed anonymous acceptance. Never replace an unknown destination.
+    if (relocated && !(await box.list('/Offline')).some((e) => e.name === offline.identity.name)) {
+      await verifyRemote(box, downloadsFolder + '/' + offline.identity.name, offline.identity);
+      await box.move(downloadsFolder, '/Offline', offline.identity.name);
+      await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
+    }
+    throw error;
+  }
   for (const previous of verified) {
-    await verifyRemote(box, downloadsFolder + '/' + bootstrap.identity.name, bootstrap.identity);
-    await verifyRemote(box, downloadsFolder + '/' + offline.identity.name, offline.identity);
     if (archive.some((e) => e.name === previous.name)) {
       await verifyRemote(box, '/Archive/' + previous.name, previous);
       await box.remove('/Stable/' + previous.name);
@@ -471,7 +520,7 @@ export async function syncUserDownloads({ box, offline, bootstrap, resolveIdenti
 }
 
 // Anonymous access is a separate acceptance boundary, never inferred from the upload token.
-export async function verifyPublicDownloads({ offline, bootstrap }) {
+export async function verifyPublicDownloads({ offline, bootstrap, full = true }) {
   requireValue(offline?.identity && bootstrap?.identity, '匿名验收缺少原文件身份');
   const listing = await (
     await checkedFetch(
@@ -511,7 +560,11 @@ export async function verifyPublicDownloads({ offline, bootstrap }) {
         '匿名下载地址超出允许范围',
       );
       // A redirect is expected from the shared file page; do not forward credentials.
-      response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(600000) });
+      response = await fetch(url, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(600000),
+        ...(!full && identity === offline.identity ? { headers: { Range: 'bytes=0-0' } } : {}),
+      });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
         await response.body?.cancel();
@@ -522,6 +575,22 @@ export async function verifyPublicDownloads({ offline, bootstrap }) {
       break;
     }
     requireValue(response?.ok && response.body, '匿名下载未完成');
+    if (!full && identity === offline.identity) {
+      requireValue(
+        (response.status === 206 &&
+          response.headers.get('content-range') === `bytes 0-0/${identity.size}`) ||
+          (response.status === 200 &&
+            Number(response.headers.get('content-length')) === identity.size),
+        '匿名 ZIP 下载响应无效',
+      );
+      const reader = response.body.getReader();
+      try {
+        requireValue(!(await reader.read()).done, '匿名 ZIP 下载为空');
+      } finally {
+        await reader.cancel();
+      }
+      continue;
+    }
     const hash = createHash('sha256');
     let size = 0;
     for await (const chunk of response.body) {
@@ -534,7 +603,9 @@ export async function verifyPublicDownloads({ offline, bootstrap }) {
       '匿名下载原字节不一致',
     );
   }
-  return '匿名验收成功：用户入口只有轻量 EXE 和完整离线 ZIP，下载原字节一致。';
+  return full
+    ? '匿名验收成功：用户入口只有轻量 EXE 和完整离线 ZIP，下载原字节一致。'
+    : '匿名验收成功：目录及下载入口可达，轻量 EXE 原字节一致；ZIP 原字节由同步校验确认。';
 }
 
 export async function rollbackDownloads({ box, identity, offline, bootstrap }) {
@@ -554,6 +625,13 @@ export async function rollbackDownloads({ box, identity, offline, bootstrap }) {
   );
   await box.initialize();
   await verifyRemote(box, '/Stable/' + identity.name, identity);
+  const root = await box.list('/');
+  const hasOffline = root.some((e) => e.name === 'Offline' && e.type === 'dir');
+  if (!hasOffline) await box.api('dir', '/Offline', 'POST', { operation: 'mkdir' });
+  if (!(await box.list('/Offline')).some((e) => e.name === offline.identity.name)) {
+    await verifyRemote(box, downloadsFolder + '/' + offline.identity.name, offline.identity);
+    await box.move(downloadsFolder, '/Offline', offline.identity.name);
+  }
   await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
   const entries = await box.list('/Stable');
   requireValue(
@@ -567,7 +645,7 @@ export async function rollbackDownloads({ box, identity, offline, bootstrap }) {
   if (!entries.some((e) => e.name === bootstrap.identity.name))
     await box.upload('/Stable', bootstrap.identity.name, bootstrap.bytes);
   await verifyRemote(box, '/Stable/' + bootstrap.identity.name, bootstrap.identity);
-  return '旧公开入口已恢复原轻量 EXE；Full 兼容后端、Offline ZIP、Downloads 和 Archive 均保留，更新指针不变。';
+  return '旧公开入口已恢复原轻量 EXE；Full 兼容后端与 Offline ZIP 已核验；Downloads 目录及 Archive 保留，更新指针不变。';
 }
 
 export async function syncResourceFiles({ box, version, files, metadataInRuntime = false }) {
@@ -693,17 +771,20 @@ export async function syncStableRelease({
       files: resources,
       metadataInRuntime: Boolean(runtime),
     });
-  await syncOffline({ box, ...offline });
+  if (!bootstrap) await syncOffline({ box, ...offline });
   const result = await syncStable({ box, identity, bytes, resolveIdentity });
   if (bootstrap) {
     await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
-    await verifyPublicDownloads({ offline, bootstrap });
   }
   if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
   await verifyRemote(box, `/Stable/${identity.name}`, identity);
-  await verifyRemote(box, `/Offline/${offline.identity.name}`, offline.identity);
+  await verifyRemote(
+    box,
+    `${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`,
+    offline.identity,
+  );
   if (bootstrap)
     await verifyRemote(box, `${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity);
   if (resources)

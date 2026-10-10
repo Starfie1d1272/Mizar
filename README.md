@@ -21,7 +21,7 @@
 
 **[下载 Windows 安装包（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads)** · [GitHub 完整下载与发布说明](https://github.com/Starfie1d1272/Mizar/releases)
 
-首次使用请选择名称以 `-Setup.exe` 结尾的 Windows x64 中文安装包，按向导完成安装。便携 ZIP 供解压后运行、自行管理程序目录使用；历史版本和校验文件见 GitHub Releases。安装与升级步骤见[快速开始](docs/guide/quick-start.md)。
+首次使用请选择名称以 `-WebInstaller.exe` 结尾的 Windows x64 轻量安装器，按向导完成安装。便携 ZIP 供解压后运行、自行管理程序目录使用；历史版本和校验文件见 GitHub Releases。安装与升级步骤见[快速开始](docs/guide/quick-start.md)。
 
 Mizar 是为校园与社区 CS2 赛事打造的开源制播系统。从赛前介绍到赛后定格，让比赛拥有连贯的节目流程、统一的视觉包装，以及解说和导播随手可用的现场工具。
 
