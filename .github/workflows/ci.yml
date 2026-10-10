@@ -1,453 +1,322 @@
 name: CI
-
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
-  schedule:
-    - cron: '0 10 * * *'
   workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
   actions: read
-  checks: read
-  pull-requests: read
-
+env:
+  QUALIFICATION_BUILD_ROOT: ${{ github.workspace }}/.agent-tmp/release-lane-verification
+  RELEASE_LABEL: RESEARCH
 jobs:
-  plan:
-    name: plan
-    runs-on: ubuntu-24.04
-    outputs:
-      run_quality: ${{ steps.plan.outputs.run_quality }}
-      run_design: ${{ steps.plan.outputs.run_design }}
-      run_acceptance: ${{ steps.plan.outputs.run_acceptance }}
-      run_platform: ${{ steps.plan.outputs.run_platform }}
-      run_qualification: ${{ steps.plan.outputs.run_qualification }}
-      run_installer: ${{ steps.plan.outputs.run_installer }}
-      run_offline_qualification: ${{ steps.plan.outputs.run_offline_qualification }}
-      required_jobs: ${{ steps.plan.outputs.required_jobs }}
-      reason: ${{ steps.plan.outputs.reason }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 2
-
-      - name: Record GitHub simulation identity before executing repository code
-        shell: bash
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { execFileSync } from 'node:child_process';
-          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-          const identity = { repository: process.env.GITHUB_REPOSITORY, event: process.env.GITHUB_EVENT_NAME,
-            runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            pr: process.env.PR_NUMBER, base: process.env.PR_BASE, head: process.env.PR_HEAD,
-            commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}') };
-          if (identity.commit !== process.env.GITHUB_SHA) throw new Error('checkout differs from GitHub tested commit');
-          console.log('CI_SOURCE_IDENTITY=' + JSON.stringify(identity));
-          NODE
-
-      - name: Plan changed-surface evidence
-        id: plan
-        run: node scripts/ci/plan.mjs
-        env:
-          PLAN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GH_TOKEN: ${{ github.token }}
-          BEFORE_SHA: ${{ github.event.before }}
-          # Remains off until a trusted-main PR proves live merge-tree reuse.
-          CI_MERGE_REUSE_ENABLED: 'false'
-
-  quality:
-    name: quality / ${{ matrix.lane }}
-    if: ${{ needs.plan.outputs.run_quality == 'true' }}
-    needs: [plan]
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        lane: [static, unit, fixtures, build]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Static checks
-        if: ${{ matrix.lane == 'static' }}
-        run: |
-          pnpm format:check
-          pnpm lint
-          pnpm architecture:check
-
-      - name: Unit and contract tests
-        if: ${{ matrix.lane == 'unit' }}
-        run: pnpm test
-
-      - name: Verify generated assets and real-derived fixtures
-        if: ${{ matrix.lane == 'fixtures' }}
-        run: |
-          pnpm cs2-assets:verify
-          pnpm fixtures:program:verify
-          pnpm fixtures:epl:verify
-          pnpm fixtures:epl-rehearsal:verify
-          pnpm fixtures:radar:verify
-          pnpm fixtures:replay:verify
-
-      - name: Typecheck and build
-        if: ${{ matrix.lane == 'build' }}
-        run: |
-          pnpm typecheck
-          pnpm build
-
-      - name: Verify Radar release guards and standalone consumer
-        if: ${{ matrix.lane == 'build' }}
-        run: |
-          pnpm exec vitest run scripts/radar-view/release.test.mjs
-          node scripts/radar-view/consumer-smoke.mjs
-
-      - name: Upload verified Radar npm artifact
-        if: ${{ matrix.lane == 'build' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: radar-view-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: .agent-tmp/radar-package/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Production Web host smoke
-        if: ${{ matrix.lane == 'build' }}
-        timeout-minutes: 2
-        run: pnpm local-web:production-smoke
-
-  design:
-    name: design
-    if: ${{ needs.plan.outputs.run_design == 'true' }}
-    needs: [plan]
-    runs-on: ubuntu-24.04
-    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
-    container:
-      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify design tokens
-        run: |
-          pnpm design:tokens:verify
-
-      - name: Architecture and contracts when quality is not selected
-        if: ${{ needs.plan.outputs.run_quality != 'true' }}
-        run: |
-          pnpm architecture:check
-          pnpm design:contracts:test
-
-      - name: Verify locked Playwright version matches the native image
-        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
-
-      - name: Build canonical component catalog
-        run: pnpm design:catalog:build
-
-      - name: Validate component interaction and accessibility
-        run: pnpm design:components:test
-
-  acceptance:
-    name: acceptance / ${{ matrix.shard }} of 8
-    if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
-    needs: [plan]
-    runs-on: ubuntu-24.04
-    # Official v1.63.0-noble, amd64: same locked browser with all native/fonts dependencies.
-    container:
-      image: mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify locked Playwright version matches the native image
-        run: node -e "if (require('@playwright/test/package.json').version !== '1.63.0') throw new Error('Update the pinned native browser image with Playwright')"
-
-      - name: Run HUD Replay browser acceptance
-        run: pnpm acceptance:ci --shard=${{ matrix.shard }}/8
-        env:
-          MIZAR_BROWSER_SHARDING: balanced
-
-      - name: Build and run production Companion to Chromium closure
-        if: ${{ matrix.shard == 8 }}
-        timeout-minutes: 2
-        run: |
-          pnpm --filter @mizar/companion... --filter @mizar/web... --fail-if-no-match run build
-          pnpm local-web:production-browser-smoke
-
-      - name: Preserve browser test identities and production evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: browser-evidence-${{ github.run_attempt }}-${{ matrix.shard }}
-          include-hidden-files: true
-          path: |
-            .agent-tmp/test-evidence/**
-            .agent-tmp/production-browser-smoke/**
-          if-no-files-found: error
-
-      - name: Upload browser acceptance diagnostics
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-acceptance-diagnostics-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: |
-            playwright-acceptance-report/**
-            test-results/**
-          if-no-files-found: warn
-
-  platform:
-    name: platform / ${{ matrix.name }}
-    if: ${{ needs.plan.outputs.run_platform == 'true' }}
-    needs: [plan]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Offline already owns the same macOS build/type/consumer contracts.
-        include: ${{ fromJSON(needs.plan.outputs.run_offline_qualification == 'true' && '[{"name":"Windows","runner":"windows-2025"}]' || '[{"name":"macOS","runner":"macos-15"},{"name":"Windows","runner":"windows-2025"}]') }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Check platform types and build production packages
-        run: |
-          pnpm typecheck
-          pnpm build
-
-      - name: Test OS-sensitive filesystem, process and transport behavior
-        run: node scripts/ci/platform-contracts.mjs
-
-      - name: Preserve platform consumer evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: platform-evidence-${{ matrix.name }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: .agent-tmp/platform-evidence/**
-          if-no-files-found: error
-
-      - name: Production Web host smoke
-        timeout-minutes: 2
-        run: pnpm local-web:production-smoke
-
-  qualification_windows:
-    name: native / Windows
-    if: ${{ needs.plan.outputs.run_qualification == 'true' }}
-    needs: [plan]
+  verify:
+    name: verify / ${{ matrix.lane }}
     runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [core-setup]
+    env:
+      SOURCE_SHA: 678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf
+      GH_TOKEN: ${{ github.token }}
+      ARCHIVE_SHA256: f8ee76408ec92c1a61e3dbc2f21b18f7406c6cec38907c5a713dd43906879f3c
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          runtime: node@24
-          install: false
-
-      - name: Restore Cargo dependency and profile caches
-        id: cargo-cache
-        uses: ./.github/actions/cargo-cache
-        with:
-          profile: ci
-
-      - name: Compile and test the actual Windows host
+          name: release-candidate
+          run-id: 38030387152
+          github-token: ${{ github.token }}
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - name: Verify original qualification provenance
         shell: pwsh
-        run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
-
-      - name: Verify native update cancellation and recovery
+        run: |
+          foreach ($name in @('release-manifest.json','core-release-manifest.json','Mizar-v1.2.0-Windows-x64.zip','Mizar-v1.2.0-Windows-x64-Core.zip')) {
+            gh attestation verify (Join-Path $env:QUALIFICATION_BUILD_ROOT $name) --repo $env:GITHUB_REPOSITORY --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/release-qualification.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Original qualified candidate proof failed' }
+          }
+      - name: Verify candidate transfer before extraction
+        run: node scripts/qualification/verify-candidate.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:SOURCE_SHA" "$env:ARCHIVE_SHA256"
+      - name: Extract portable bundle and smoke test
+        if: ${{ matrix.lane == 'portable' }}
         shell: pwsh
         timeout-minutes: 5
-        run: node scripts/qualification/verify-update-recovery.mjs
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $archive = Get-Item -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive)
+          if ($null -eq $archive) { throw '未生成 qualification ZIP' }
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
+          if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive $archive.FullName -Destination $extractRoot
+          $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+          if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
+          Push-Location $bundleRoot.FullName
+          try {
+            foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+              if (!(Test-Path -LiteralPath (Join-Path $bundleRoot.FullName $name))) { throw "缺少许可文件：$name" }
+            }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
+            if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-smoke.log')
+            if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
+            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
+          } finally {
+            Pop-Location
+          }
 
-      - name: Save reusable main Cargo caches
-        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-        uses: ./.github/actions/save-cargo-cache
-        with:
-          profile: ci
-          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
-          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
-          target-key: ${{ steps.cargo-cache.outputs.target-key }}
-          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
+      - name: Measure installed C4 worker responsiveness
+        if: ${{ matrix.lane == 'portable' }}
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
+          & (Join-Path $bundle.FullName 'resources/runtime/node.exe') scripts/qualification/c4-worker-benchmark.mjs (Join-Path $bundle.FullName 'resources/app') (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-worker-benchmark.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed C4 worker probe failed' }
 
-  installer_windows:
-    name: installer / Windows
-    if: ${{ needs.plan.outputs.run_installer == 'true' }}
-    needs: [plan]
-    runs-on: windows-2025
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
-      - name: Verify native UI, bounded download, real NSIS and actual SDK / Store / App
-        shell: powershell
-        run: ./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: web-installer-native-${{ github.run_attempt }}
-          path: |
-            .agent-tmp/web-installer/*.json
-            .agent-tmp/web-installer/*.png
+      - name: Run 3-map exact-artifact synthetic lifecycle soak
+        if: ${{ matrix.lane == 'portable' }}
+        shell: pwsh
+        run: |
+          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
+          $bundleRoot = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
+          if ($null -eq $bundleRoot) { throw '未找到解压后的便携产品包' }
+          $reportPath = Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json'
+          node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
+          if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
 
-  qualification_offline:
-    name: qualification / offline / ${{ matrix.name }}
-    if: ${{ needs.plan.outputs.run_offline_qualification == 'true' }}
-    needs: [plan]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux
-            runner: ubuntu-24.04
-          - name: macOS
-            runner: macos-15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
+      - name: Extract pristine candidate for Setup
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
+      - name: Install pinned NSIS
+        if: ${{ matrix.lane != 'portable' }}
+        shell: pwsh
+        run: choco install nsis --version=3.11 -y --no-progress
 
-      - name: Set up Node.js 24 and pnpm 12
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          cache: true
-          cache-dependency-path: pnpm-lock.yaml
-          require-lockfile: true
-          install: false
+      - name: Verify native update cancellation and recovery
+        if: ${{ matrix.lane != 'portable' }}
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          node scripts/qualification/verify-update-recovery.mjs | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-recovery.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Native update recovery failed' }
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Build and verify same-content NSIS installer
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot -CaptureUi
+          $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+          node scripts/qualification/product-smoke.mjs $extracted.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Setup portable smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
 
-      - name: Run offline qualification
-        run: >-
-          node scripts/qualification/offline.mjs
-          ${{ needs.plan.outputs.run_quality == 'true' && '--platform-only --quality-owned-static-checks' || '' }}
+      - name: Qualify distinct Core payload and real NSIS installation
+        if: ${{ matrix.lane == 'core-setup' }}
+        shell: pwsh
+        run: |
+          $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
+          $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
+          ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
+          $payload = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
+          if ($payload.Count -ne 1) { throw 'Core extraction is ambiguous' }
+          $installed = Join-Path $env:RUNNER_TEMP 'core installed qualification'
+          ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $payload[0].FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -ManifestName core-release-manifest.json -DistributionName core-distribution-manifest.json
+          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
+          if ($root.Count -ne 1) { throw 'Core installation is ambiguous' }
+          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "core-setup-identity.json")
+          if ($LASTEXITCODE -ne 0) { throw 'Core identity or resource boundary failed' }
+          node scripts/qualification/product-smoke.mjs $root[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Real installed Core startup failed' }
+          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Real Core desktop startup failed' }
 
-      - name: Production Web host smoke
-        timeout-minutes: 2
-        run: pnpm local-web:production-smoke
+      - name: Record successful lane identity
+        if: ${{ matrix.lane != 'core-setup' }}
+        shell: pwsh
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          $extractRoot = if ($env:LANE -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "$env:LANE-identity.json")
+          if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
 
-      - name: Preserve offline phase measurements
+      - name: Collect qualification evidence
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
+          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log')) {
+            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
+            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
+          }
+          $extractedRoot = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } elseif ('${{ matrix.lane }}' -eq 'core-setup') { Join-Path $env:RUNNER_TEMP 'core installed qualification' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
+          if (Test-Path -LiteralPath $extractedRoot) {
+            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
+            if ($null -ne $bundle) {
+              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
+              $statePath = Join-Path $bundle.FullName 'state'
+              if (Test-Path -LiteralPath $statePath) {
+                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
+                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
+                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
+                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+                  Copy-Item -LiteralPath $_.FullName -Destination $target
+                }
+              }
+            }
+          }
+          if ('${{ matrix.lane }}' -eq 'setup') {
+            $installerUi = Join-Path (Split-Path $env:QUALIFICATION_BUILD_ROOT -Parent) 'installer-ui'
+            if (Test-Path -LiteralPath $installerUi) { Copy-Item -LiteralPath $installerUi -Destination (Join-Path $evidenceRoot 'installer-ui') -Recurse }
+          }
+          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-${{ matrix.lane }}-evidence.zip'
+          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
+
+      - name: Upload release qualification evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: offline-evidence-${{ matrix.name }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: .agent-tmp/offline-evidence/**
+          name: release-evidence-${{ matrix.lane }}
+          path: ${{ runner.temp }}/Mizar-*-evidence.zip
           if-no-files-found: error
 
-  ci-gate:
-    name: ci-gate
-    if: always()
-    needs:
-      [plan, quality, design, acceptance, platform, qualification_offline, qualification_windows, installer_windows]
-    runs-on: ubuntu-24.04
+  verify_merged_lane_artifacts:
+    needs: verify
+    runs-on: windows-2025
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-
-      - name: Download browser identity evidence
-        if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: browser-evidence-${{ github.run_attempt }}-*
-          path: .agent-tmp/browser-shards
+          name: release-candidate
+          run-id: 38030387152
+          github-token: ${{ github.token }}
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: release-setup-*
+          merge-multiple: true
+          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: release-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/lane-evidence
+      - name: Verify exact merged lane identities and recovery outputs
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'merged-lane-evidence'
+          foreach ($lane in @('portable','setup','core-setup')) {
+            Expand-Archive -LiteralPath (Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-RESEARCH-$lane-evidence.zip") -DestinationPath (Join-Path $evidence $lane)
+          }
+          node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT 678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf f8ee76408ec92c1a61e3dbc2f21b18f7406c6cec38907c5a713dd43906879f3c $evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Parallel lane merge failed' }
 
-      - name: Verify all browser shards cover FULL exactly once
-        if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
-        run: node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 8 ${{ github.run_attempt }}
-
-      - name: Validate planner-selected jobs
-        run: node scripts/ci/plan.mjs --gate
-        env:
-          PLAN_RESULT: ${{ needs.plan.result }}
-          REQUIRED_JOBS: ${{ needs.plan.outputs.required_jobs }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          DESIGN_RESULT: ${{ needs.design.result }}
-          ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
-          PLATFORM_RESULT: ${{ needs.platform.result }}
-          QUALIFICATION_OFFLINE_RESULT: ${{ needs.qualification_offline.result }}
-          QUALIFICATION_WINDOWS_RESULT: ${{ needs.qualification_windows.result }}
-          INSTALLER_WINDOWS_RESULT: ${{ needs.installer_windows.result }}
+  final_thin_full:
+    name: final / default Thin release and Full Zlib
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024
+        with:
+          runtime: node@24
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          require-lockfile: true
+          install: false
+      - uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+      - name: Restore an explicitly nonexact compiler baseline for this isolated validation
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: apps/desktop/src-tauri/target/release
+          key: isolated-final-thin-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-Windows-X64-release-
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Install failed' }
+          git checkout -- pnpm-lock.yaml
+      - name: Verify default production profile without environment overrides
+        shell: pwsh
+        run: |
+          if (Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_PROFILE_RELEASE_' }) { throw 'Compiler profile override present' }
+          pnpm exec vitest run scripts/ci/cargo-cache-key.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Production profile contract failed' }
+      - name: Build actual default release profile source
+        shell: pwsh
+        run: |
+          node scripts/qualification/build.mjs --output $env:QUALIFICATION_BUILD_ROOT --label RESEARCH
+          if ($LASTEXITCODE -ne 0) { throw 'Default Thin release build failed' }
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.gitSha -ne $env:GITHUB_SHA -or $manifest.desktopBuildProfile -ne 'release' -or $manifest.developmentOnly) { throw 'Actual build source/profile differs' }
+      - name: Run actual release-profile native contracts
+        shell: pwsh
+        run: |
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --profile release
+          if ($LASTEXITCODE -ne 0) { throw 'Native release contracts failed' }
+      - name: Verify exact artifact runtime and synthetic lifecycle
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $bundle = Join-Path $env:QUALIFICATION_BUILD_ROOT ($manifest.archive -replace '\.zip$', '')
+          node scripts/qualification/product-smoke.mjs $bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin product smoke failed' }
+          node scripts/qualification/desktop-smoke.mjs $bundle (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin GUI or missing-WebView rollback failed' }
+          node scripts/qualification/product-soak.mjs $bundle (Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Thin 3-map lifecycle failed' }
+      - name: Install pinned NSIS
+        shell: pwsh
+        run: choco install nsis --version=3.11 -y --no-progress
+      - name: Verify native cancellation and recovery
+        shell: pwsh
+        run: |
+          node scripts/qualification/verify-update-recovery.mjs | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-recovery.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Native recovery failed' }
+      - name: Build and actually install uninstall reinstall Full Zlib with new Thin host
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
+          $bundle = Join-Path $env:QUALIFICATION_BUILD_ROOT ($manifest.archive -replace '\.zip$', '')
+          $installed = Join-Path $env:RUNNER_TEMP 'new Thin Full installed'
+          ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -CaptureUi
+          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
+          if ($root.Count -ne 1) { throw 'Installed Full root ambiguous' }
+          node scripts/qualification/product-smoke.mjs $root[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full runtime failed' }
+          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full GUI failed' }
+          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $installed v1.2.0 $env:GITHUB_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-identity.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Thin Full identity failed' }
+      - name: Preserve CI-only final validation reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: final-thin-full-reports
+          path: |
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.log
+          if-no-files-found: error
+          retention-days: 1
