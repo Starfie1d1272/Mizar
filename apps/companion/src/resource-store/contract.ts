@@ -46,6 +46,7 @@ export interface ActivePackVerification<Identity> {
 
 export interface StoreOptions {
   root: string;
+  diagnostic?: (packId: string, error: unknown) => void;
   packs?: readonly { packId: string; optional?: boolean }[];
   /** Must verify authorization and compatibility offline from the persisted receipt on cache hits. */
   verifyTrustedPack: (input: {

@@ -254,6 +254,7 @@ export class ResourceStore {
   }
 
   private failed(entry: Entry, error: unknown): void {
+    this.options.diagnostic?.(entry.status.packId, error);
     entry.status.phase =
       error instanceof ResourceStoreError && error.code === 'resource_incompatible'
         ? 'incompatible'

@@ -25,6 +25,7 @@ import { registerResourceRoutes } from './resource-store/routes.js';
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
+import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
 import { dirname, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
@@ -628,18 +629,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  if (localTournamentStore !== null && matchContextController !== null) {
-    registerLocalTournamentRoutes(app, {
-      store: localTournamentStore,
-      projections: projectionCoordinator,
-      controller: matchContextController,
-      originPolicy: localWebTransport.getOriginPolicy(),
-    });
-    registerLocalAssetRoutes(app, {
-      directory: join(dirname(options.localTournamentPath!), 'local-assets'),
-      originPolicy: localWebTransport.getOriginPolicy(),
-    });
-  }
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
@@ -654,6 +643,38 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await options.rivalhubConnection?.release();
     },
   });
+  const localMatchExit =
+    matchContextController === null
+      ? undefined
+      : registerLocalMatchExitRoutes(app, {
+          controlToken: options.productRuntime?.controlToken,
+          loopback: localWebTransport.getOriginPolicy().mode === 'loopback',
+          controller: matchContextController,
+          runtime: programRuntime,
+          isPreparationWaiting: () =>
+            !production.isTrialPending() &&
+            !matchContextController.isTemporary() &&
+            production.get().mode === 'preparation' &&
+            sceneController.get().active === 'waiting' &&
+            sceneController.get().preparing === undefined,
+          productionRevision: () => production.get().revision,
+        });
+  if (localTournamentStore !== null && matchContextController !== null) {
+    registerLocalTournamentRoutes(app, {
+      store: localTournamentStore,
+      projections: projectionCoordinator,
+      controller: matchContextController,
+      canReleaseLocalSelection: () => localMatchExit?.canReleaseLocalSelection() ?? false,
+      canConfirmLocalExit: () => localMatchExit?.canConfirmLocalExit() ?? false,
+      // The existing production owner serializes preparation mutations with enter/finish/update.
+      withLocalSelectionRelease: (commit) => production.withResourceActivation(commit),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+    registerLocalAssetRoutes(app, {
+      directory: join(dirname(options.localTournamentPath!), 'local-assets'),
+      originPolicy: localWebTransport.getOriginPolicy(),
+    });
+  }
   if (options.resources) {
     app.decorate('getResourceStore', () => resources);
     registerResourceRoutes(app, () => resources);
@@ -661,6 +682,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       try {
         resources = await ResourceStore.open({
           root: options.resources!.root,
+          diagnostic: (packId, error) =>
+            app.log.warn(
+              {
+                event: 'resource',
+                stage: 'resource_cache_verify',
+                result: 'failure',
+                packId,
+                diagnostic: { error: errorEvidence(error) },
+              },
+              '官方素材缓存验证失败。',
+            ),
           verifyTrustedPack: createRuntimeVerifier(
             options.resources!.policy,
             options.resources!.cacheHistory,
@@ -673,8 +705,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
         });
-      } catch {
-        app.log.warn('官方素材缓存不可用；保留原 Full 资源路径。');
+      } catch (error) {
+        app.log.warn(
+          {
+            event: 'resource',
+            stage: 'resource_store_open',
+            result: 'failure',
+            diagnostic: { error: errorEvidence(error) },
+          },
+          '官方素材缓存不可用；保留原 Full 资源路径。',
+        );
       }
     });
     app.addHook('onClose', async () => {
@@ -782,12 +822,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       selected !== undefined &&
       (restored === undefined || isStandaloneLocalMatch(restored) || localWasSelectedLast)
     ) {
+      if (!trial) localMatchExit?.requireHostConfirmation();
       if (trial) matchContextController.restoreTemporaryLocalDocument(selected);
       else matchContextController.activateLocalDocument(selected);
     } else if (restored !== undefined && isStandaloneLocalMatch(restored)) {
       const migrated = await localTournamentStore.importLegacyMatch(
         toMatchDocumentV1(restored.manifest),
       );
+      if (!trial) localMatchExit?.requireHostConfirmation();
       if (trial) matchContextController.restoreTemporaryLocalDocument(migrated);
       else matchContextController.activateLocalDocument(migrated);
     }

@@ -16,6 +16,12 @@ export interface LocalTournamentView {
     readonly matchIds: readonly string[];
   }[];
   readonly matches: readonly MatchDocumentV1[];
+  readonly trashedMatches?: readonly {
+    readonly document: MatchDocumentV1;
+    readonly deletedAt: string | null;
+  }[];
+  readonly inUseMatchId?: string | null;
+  readonly canConfirmLocalExit?: boolean;
   readonly selectedMatchId: string | null;
   readonly activeLocalMatchId: string | null;
   readonly contextRevision: string;

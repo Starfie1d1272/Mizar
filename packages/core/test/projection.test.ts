@@ -209,6 +209,9 @@ describe('Program-safe projections', () => {
     ['The Beasts TomatoDebu', ['The Beast'], 'The Beasts TomatoDebu'],
     ['The BeastTomatoDebu', ['The Beast'], 'The BeastTomatoDebu'],
     ['TB | TomatoDebu', ['The Beast'], 'TB | TomatoDebu'],
+    ['[The Beast] | 小 明🎮', ['The Beast'], '小 明🎮'],
+    ['【The Beast】｜小 明', ['The Beast'], '小 明'],
+    ['Nickname The Beast | End', ['The Beast'], 'Nickname The Beast | End'],
     ['Player With Spaces', ['The Beast'], 'Player With Spaces'],
     ['The Beast', ['The Beast'], 'The Beast'],
     ['The Beast | ', ['The Beast'], 'The Beast | '],
@@ -286,7 +289,7 @@ describe('Program-safe projections', () => {
     ).toBe('The Beast TomatoDebu');
   });
 
-  it('preserves canonical nicknames and uses mapped entrant names only for observed fallback', () => {
+  it('prefers current game nicknames with mapped team prefixes and falls back without reliable names', () => {
     const base = contextFixture();
     const context: MatchContext = {
       ...base,
@@ -330,14 +333,66 @@ describe('Program-safe projections', () => {
       canonicalPlayerId: 'a-player-1',
     });
     expect(projectProgram(input).players[1]).toMatchObject({
-      displayName: 'The Beast Official Name',
-      displayNameSource: 'canonical',
+      displayName: 'TomatoDebu',
+      displayNameSource: 'observed',
     });
     expect(
       projectProgram({ ...input, identity: { ...identity, mapEpoch: identity.mapEpoch + 1 } })
         .players[0]?.displayName,
     ).toBe('The Beast TomatoDebu');
     expect(identity.players[0]?.observedDisplayName).toBe('The Beast TomatoDebu');
+    expect(identity.players[1]?.displayName).toBe('The Beast Official Name');
+    expect(projectProgram(input).players[1]?.sourcePlayerId).toBe(steam64(2));
+    expect(projectProgram({ ...input, nowMonotonicMs: 108 }).players[1]).toMatchObject({
+      displayName: 'The Beast Official Name',
+      displayNameSource: 'canonical',
+    });
+    for (const name of [undefined, '', '   ', 'The Beast New 🎮 Name']) {
+      const nextFrame: TelemetryObservation = {
+        ...frame,
+        telemetry: {
+          ...frame.telemetry,
+          allPlayers: frame.telemetry.allPlayers!.map((item, index) => {
+            if (index !== 1) return item;
+            const rest = { ...item };
+            delete rest.displayName;
+            return name === undefined ? rest : { ...rest, displayName: name };
+          }),
+        },
+      };
+      const nextState = acceptedState(nextFrame);
+      const result = projectProgram({
+        ...input,
+        runtime: selectProgramSafeRuntimeView(nextState),
+        activeLineup: resolvedLineup(nextState, nextFrame, identity, context),
+      });
+      expect(result.players[1]).toMatchObject({
+        sourcePlayerId: steam64(2),
+        canonicalPlayerId: 'a-player-2',
+        displayName: name?.trim() ? 'New 🎮 Name' : 'The Beast Official Name',
+        displayNameSource: name?.trim() ? 'observed' : 'canonical',
+      });
+    }
+    const missing = {
+      ...input.activeLineup,
+      ct: input.activeLineup.ct.map((item, index) =>
+        index === 1 ? { ...item, observed: null } : item,
+      ),
+    };
+    expect(projectProgram({ ...input, activeLineup: missing }).players[1]?.displayName).toBe(
+      'The Beast Official Name',
+    );
+    const degraded = {
+      ...state,
+      programTelemetry: {
+        ...state.programTelemetry!,
+        coverage: { ...frame.coverage, allPlayers: 'degraded' as const },
+      },
+    };
+    expect(
+      projectProgram({ ...input, runtime: selectProgramSafeRuntimeView(degraded) }).players[1]
+        ?.displayName,
+    ).toBe('The Beast Official Name');
   });
 
   it('keeps selected match facts for control while projecting neutral unbound demo branding', () => {

@@ -314,7 +314,7 @@ export class ObsAdapter {
         child.unref();
         resolve();
       });
-      child.once('error', () => reject(new Error('OBS 程序未能打开。')));
+      child.once('error', (cause) => reject(new Error('OBS 程序未能打开。', { cause })));
     });
   }
 }

@@ -317,6 +317,7 @@ export class ProjectionCoordinator {
           .map((player) => player.sourcePlayerId),
       );
       const radar = projectRadarFrame({
+        ...(context === undefined ? {} : { context }),
         runtime: runtimeView,
         identity,
         nowMonotonicMs,

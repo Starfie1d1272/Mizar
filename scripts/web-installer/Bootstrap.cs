@@ -344,8 +344,8 @@ namespace Mizar.WebInstaller {
       detail.SetBounds(32,148,526,32);
       detail.Text="欢迎使用 Mizar，安装或更新后开始准备你的比赛。";
       destinationLabel.SetBounds(32,184,526,20);destinationLabel.Text="安装位置";
-      destination.SetBounds(32,207,416,24);destination.ReadOnly=true;destination.TabStop=false;destination.Text=selectedTarget;destination.AccessibleName="安装位置";
-      browse.SetBounds(458,204,100,30);browse.Text="更改";browse.Enabled=Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));browse.TabIndex=0;
+      destination.SetBounds(32,207,416,24);destination.ReadOnly=!(Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag")));destination.TabStop=!destination.ReadOnly;destination.TabIndex=0;destination.Text=selectedTarget;destination.AccessibleName="安装位置";
+      browse.SetBounds(458,204,100,30);browse.Text="更改";browse.Enabled=Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));browse.TabIndex=1;
       browse.Click+=(s,e)=>{using(var dialog=new FolderBrowserDialog {Description="选择 Mizar 安装目录",SelectedPath=selectedTarget}) {if(dialog.ShowDialog(this)==DialogResult.OK) {try {selectedTarget=Nsis.SelectDestination(dialog.SelectedPath);destination.Text=selectedTarget;} catch(Exception error) {detail.Text=error.Message;technicalDetails=ErrorDetails(error);}}}};
       openLocation.SetBounds(428,198,130,30);openLocation.Text="打开安装位置";openLocation.Visible=false;
       openLocation.Click+=(s,e)=>{try {Downloader.NoReparse(installedCore);if(!Directory.Exists(installedCore)) throw new IOException("安装目录已移动。");System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=installedCore,UseShellExecute=true});} catch(Exception error) {detail.Text="无法打开安装位置，请查看诊断。";technicalDetails=ErrorDetails(error);}};
@@ -353,11 +353,11 @@ namespace Mizar.WebInstaller {
       amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
       launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
       launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
-      action.SetBounds(347,270,100,32); action.Text=Nsis.HasPending() ? "恢复安装" : "安装";
+      action.SetBounds(347,270,100,32); action.Text=Nsis.HasPending() ? "恢复安装" : "安装";action.TabIndex=2;
       action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
-      cancel.SetBounds(458,270,100,32); cancel.Text="关闭";
+      cancel.SetBounds(458,270,100,32); cancel.Text="关闭";cancel.TabIndex=3;
       cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
-      details.SetBounds(32,278,120,24); details.Text="详情";
+      details.SetBounds(32,278,120,24); details.Text="详情";details.TabIndex=4;
       technicalDetails="安装文件与必要数据来自官方发布源，并在使用前验证。";
       details.LinkClicked += (s,e)=>ShowDetails();
       Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details,destinationLabel,destination,browse,openLocation});
@@ -449,6 +449,13 @@ namespace Mizar.WebInstaller {
     }
     internal async Task Start() {
       if(cancellation!=null || finished || recoveryRequired) return;
+      if(!destination.ReadOnly) {
+        activePhase="checking-installation";
+        try {selectedTarget=Nsis.SelectDestination(destination.Text);destination.Text=selectedTarget;}
+        catch(Exception error) {heading.Text="请修改安装位置";detail.Text=error.Message;technicalDetails=ErrorDetails(error);destination.Focus();return;}
+      }
+      destination.ReadOnly=true;
+      activePhase="checking-release";
       cancellation=new CancellationTokenSource(); var current=cancellation;
       action.Enabled=false; cancel.Text="取消"; launchChoice.Visible=false;destinationLabel.Visible=false;destination.Visible=false;browse.Visible=false;
       downloading=true; bar.Visible=true; bar.Style=ProgressBarStyle.Continuous; bar.Value=0; amount.Text="";
@@ -480,7 +487,7 @@ namespace Mizar.WebInstaller {
         detail.Text=invalid ? "文件验证未通过。请重新下载或使用完整离线安装包。" : network ? "请检查网络后重试，或使用完整离线安装包。" : installedCore!=null ? "可以重试完成准备，或使用完整离线安装包。" : "请查看详情后重试，或使用原安装器修复。";
         technicalDetails=ErrorDetails(error); action.Text="重试";
       } finally {
-        downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));}
+        downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));destination.ReadOnly=!browse.Enabled;destination.TabStop=browse.Enabled;}
         current.Dispose(); cancellation=null; action.Enabled=!recoveryRequired; cancel.Enabled=true; cancel.Text="关闭";
       }
     }

@@ -969,3 +969,13 @@
 .settings-conflict-files {
   overflow-wrap: anywhere;
 }
+
+.local-match-trash-confirm.mizar-button {
+  color: var(--mizar-fg-on-accent);
+  background: var(--mizar-action-danger);
+  border-color: var(--mizar-action-danger);
+}
+.local-match-trash-confirm.mizar-button:hover:not(:disabled) {
+  background: var(--mizar-action-danger-hover);
+  border-color: var(--mizar-action-danger-hover);
+}

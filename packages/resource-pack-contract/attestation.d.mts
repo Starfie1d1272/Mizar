@@ -1,5 +1,9 @@
 import type { Buffer } from 'node:buffer';
-import type { Bundle, BundleVerifier } from 'sigstore';
+import type { Bundle, BundleVerifier, VerifyOptions } from 'sigstore';
+export function createTufVerifier(
+  options: VerifyOptions,
+  signal?: AbortSignal,
+): Promise<BundleVerifier>;
 export type MizarSignerRole = 'qualification' | 'promotion';
 export function signerIdentity(workflow: MizarSignerRole): string;
 export function createMizarVerifier(

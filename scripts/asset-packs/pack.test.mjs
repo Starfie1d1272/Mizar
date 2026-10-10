@@ -28,7 +28,7 @@ function mutate(edit) {
 describe('官方 EPL 原子资源', () => {
   it('保留现有完整默认素材且相同输入得到相同 ZIP 字节', () => {
     expect(pack.manifest.files).toHaveLength(43);
-    expect(pack.manifest.totalBytes).toBe(85680266);
+    expect(pack.manifest.totalBytes).toBe(85664276);
     expect(pack.entries.get('fixtures/epl-inferno-video/replay/background.mp4').length).toBe(
       33440429,
     );
