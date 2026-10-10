@@ -36,12 +36,15 @@ export function registerUpdateRoutes(
   };
   const publicView = async () => {
     const status = manager.status();
-    const installBlockedReason = status.phase === 'ready' ? await assess() : null;
+    const reminderPhase = ['available', 'manual', 'ready'].includes(status.phase);
+    const blocked = status.phase === 'ready' || reminderPhase ? await assess() : null;
+    const installBlockedReason = status.phase === 'ready' ? blocked : null;
     const scene = scenes.get();
     return {
       ...status,
       productionRevision: production.get().revision,
       installBlockedReason,
+      notificationSafe: status.automatic && reminderPhase && blocked === null,
       canResumeAutomatic:
         production.get().mode === 'preparation' &&
         scene.active === 'waiting' &&
@@ -58,14 +61,18 @@ export function registerUpdateRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    const body = request.body as { action?: unknown; enabled?: unknown } | null;
+    const body = request.body as { action?: unknown; enabled?: unknown; version?: unknown } | null;
     try {
       if (body?.action === 'check') await manager.check();
       else if (body?.action === 'download') await manager.download();
       else if (body?.action === 'cancel') await manager.cancel();
       else if (body?.action === 'automatic' && typeof body.enabled === 'boolean')
         await manager.setAutomatic(body.enabled);
-      else if (body?.action === 'resume') {
+      else if (body?.action === 'notify' && typeof body.version === 'string') {
+        const notification =
+          (await assess()) === null ? manager.claimNotification(body.version) : null;
+        return { ...(await publicView()), notification };
+      } else if (body?.action === 'resume') {
         const scene = scenes.get();
         if (
           production.get().mode !== 'preparation' ||
@@ -96,7 +103,14 @@ export function registerUpdateRoutes(
       !timingSafeEqual(expected, supplied)
     )
       return reply.code(403).send({ error: 'update_host_required' });
-    const action = (request.body as { action?: unknown } | null)?.action;
+    const body = request.body as { action?: unknown; sessionId?: unknown } | null;
+    const action = body?.action;
+    if (action === 'startup') {
+      if (typeof body?.sessionId !== 'string' || !/^[a-f0-9]{32}-[a-f0-9]{8}$/.test(body.sessionId))
+        return reply.code(400).send({ error: 'update_action_invalid' });
+      manager.desktopStartup(body.sessionId);
+      return { accepted: true };
+    }
     if (action === 'release') {
       manager.release();
       production.releaseUpdate();

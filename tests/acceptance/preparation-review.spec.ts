@@ -15,6 +15,8 @@ async function updateFixture(page: import('@playwright/test').Page) {
     phase: 'available',
     productionRevision: 'preparation-1',
     automatic: false,
+    notificationPending: false,
+    notificationSafe: false,
     currentVersion: '1.0.0',
     distribution: 'installed',
     error: null as string | null,
@@ -37,6 +39,15 @@ async function updateFixture(page: import('@playwright/test').Page) {
     const body = route.request().postDataJSON() as { action: string; enabled?: boolean };
     actions.push(body.action);
     if (body.action === 'automatic') status.automatic = body.enabled ?? false;
+    if (body.action === 'notify') {
+      const notification =
+        status.notificationPending && status.notificationSafe
+          ? { version: status.candidate.version, notes: status.candidate.notes }
+          : null;
+      if (notification) status.notificationPending = false;
+      await route.fulfill({ json: { ...status, notification } });
+      return;
+    }
     if (body.action === 'download') {
       status.phase = completeDownload ? 'ready' : 'downloading';
       status.downloadedBytes = completeDownload ? 100 : 40;
@@ -72,6 +83,39 @@ async function updateFixture(page: import('@playwright/test').Page) {
     commands: () => page.evaluate(() => Reflect.get(window, 'updateCommands') as string[]),
   };
 }
+
+test('desktop update reminders wait for safe idle, dismiss once and open the existing update settings', async ({
+  page,
+}) => {
+  const { status, actions, commands } = await updateFixture(page);
+  status.automatic = true;
+  status.notificationPending = true;
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '总览', exact: true })).toBeVisible();
+  const dialog = page.getByRole('dialog', { name: '发现新版 v1.1.0' });
+  await expect(dialog).not.toBeVisible();
+  expect(actions).toEqual([]);
+  status.notificationSafe = true;
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(status.candidate.notes, { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('update-notification.png') });
+  await dialog.getByRole('button', { name: '稍后', exact: true }).focus();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '总览', exact: true })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  expect(actions).toEqual(['notify']);
+  status.candidate.version = '1.2.0';
+  status.notificationPending = true;
+  const newer = page.getByRole('dialog', { name: '发现新版 v1.2.0' });
+  await expect(newer).toBeVisible();
+  await newer.getByRole('button', { name: '查看更新', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\?tab=advanced$/);
+  await expect(page.getByRole('heading', { name: '应用更新', exact: true })).toBeVisible();
+  expect(actions).toEqual(['notify', 'notify']);
+  expect(await commands()).toEqual([]);
+});
 
 test('update cancellation and postponement preserve the download choice without installing later', async ({
   page,

@@ -279,8 +279,12 @@ it('idle Host shutdown needs no OBS scene and failed safety keeps live cleanup r
 it('requires the private Host and idle production, then prevents entry until upgrade preparation is released', async () => {
   // Trust and download lifecycle have their own owner; this seam exercises the control boundary only.
   const prepare = vi.fn(() => Promise.resolve({ schemaVersion: 1 }));
+  const desktopStartup = vi.fn();
+  const claimNotification = vi.fn(() => ({ version: '1.1.0', notes: '可信更新' }));
   const manager = {
-    status: () => ({ phase: 'ready' }),
+    status: () => ({ phase: 'ready', automatic: true, notificationPending: true }),
+    desktopStartup,
+    claimNotification,
     failure: vi.fn(),
     prepare,
     release: vi.fn(),
@@ -326,7 +330,28 @@ it('requires the private Host and idle production, then prevents entry until upg
       headers: { origin: 'http://127.0.0.1:3000' },
       payload: { action: 'enter', expectedRevision: production.get().revision },
     });
+  const notify = () =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/updates',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'notify', version: '1.1.0' },
+    });
   try {
+    const startup = (headers: Record<string, string>) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/updates/install-plan',
+        headers,
+        payload: { action: 'startup', sessionId: `${'a'.repeat(32)}-${'b'.repeat(8)}` },
+      });
+    expect((await startup({})).statusCode).toBe(403);
+    expect(
+      (await startup({ origin: 'http://127.0.0.1:3000', 'x-runtime-token': 'private-test-token' }))
+        .statusCode,
+    ).toBe(403);
+    expect((await startup({ 'x-runtime-token': 'private-test-token' })).statusCode).toBe(200);
+    expect(desktopStartup).toHaveBeenCalledTimes(1);
     expect((await host('prepare', { 'x-runtime-token': '' })).statusCode).toBe(403);
     expect(
       (
@@ -344,6 +369,8 @@ it('requires the private Host and idle production, then prevents entry until upg
     }>().productionRevision;
     expect(initialRevision).toBe(production.get().revision);
     await enter();
+    expect((await notify()).json<{ notification: unknown }>().notification).toBeNull();
+    expect(claimNotification).not.toHaveBeenCalled();
     expect((await host('prepare')).statusCode).toBe(409);
     await app.inject({
       method: 'POST',
@@ -368,6 +395,7 @@ it('requires the private Host and idle production, then prevents entry until upg
       { connection: 'connected', streaming: false, recording: true },
     ]) {
       obs = state as ObsStatus;
+      expect((await notify()).json<{ notification: unknown }>().notification).toBeNull();
       expect((await host('prepare')).statusCode).toBe(409);
       expect(
         (await app.inject('/local/v1/updates')).json<{ installBlockedReason: string | null }>()
@@ -375,6 +403,10 @@ it('requires the private Host and idle production, then prevents entry until upg
       ).toBeTruthy();
     }
     obs = { connection: 'connected', streaming: false, recording: false } as ObsStatus;
+    expect((await notify()).json<{ notification: unknown }>().notification).toEqual({
+      version: '1.1.0',
+      notes: '可信更新',
+    });
     expect((await host('prepare')).statusCode).toBe(200);
     expect(production.get().canEnter).toBe(false);
     expect((await enter()).statusCode).toBe(409);

@@ -25,9 +25,9 @@ import { updateRequest, type UpdateFetch } from './network.js';
 import { installerUrl, StableSource } from './source.js';
 import { BoxSource } from './box.js';
 
-const DAY = 24 * 60 * 60 * 1000;
+const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 const configSchema = z.strictObject({
-  automatic: z.boolean(),
+  automatic: z.boolean().default(true),
   lastAttempt: z.number().nonnegative(),
   highestVersion: z.string().nullable(),
   highestIdentity: z.string().nullable(),
@@ -52,7 +52,7 @@ export type UpdatePhase =
   | 'error';
 export class UpdateManager {
   private config = {
-    automatic: false,
+    automatic: true,
     lastAttempt: 0,
     highestVersion: null as string | null,
     highestIdentity: null as string | null,
@@ -65,6 +65,10 @@ export class UpdateManager {
   private abort: AbortController | undefined;
   private task: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private started = false;
+  private startupSession: string | undefined;
+  private startupPending = false;
+  private notifiedVersion: string | null = null;
   private closed = false;
   private prepared = false;
   private planning = false;
@@ -200,21 +204,51 @@ export class UpdateManager {
     }
   }
   start() {
+    if (this.started || this.closed) return;
+    this.started = true;
     const tick = async () => {
       if (this.closed) return;
-      if (
-        this.config.automatic &&
-        this.now() - this.config.lastAttempt >= DAY &&
-        !this.task &&
-        !this.prepared
-      )
-        await this.check().catch(() => undefined);
+      if (this.startupPending || this.now() - this.config.lastAttempt >= CHECK_INTERVAL)
+        await this.automaticCheck(this.startupPending ? 'startup' : 'periodic');
       if (!this.closed) {
         this.timer = setTimeout(() => void tick(), 60_000);
         this.timer.unref();
       }
     };
-    void tick();
+    // The Host reports a real launch separately, including when Companion is reused.
+    this.timer = setTimeout(() => void tick(), 60_000);
+    this.timer.unref();
+  }
+  desktopStartup(session: string) {
+    if (this.startupSession === session || this.closed) return;
+    this.startupSession = session;
+    this.notifiedVersion = null;
+    this.startupPending = true;
+    if (this.task || this.prepared || this.planning)
+      this.event(
+        'check',
+        this.phase === 'checking' ? 'update_check_startup_shared' : 'update_check_startup_deferred',
+      );
+    void this.automaticCheck('startup');
+  }
+  private async automaticCheck(reason: 'startup' | 'periodic') {
+    if (!this.config.automatic || this.settingsInvalid || this.closed) {
+      if (this.startupPending) this.event('check', 'update_check_startup_disabled');
+      this.startupPending = false;
+      return;
+    }
+    if (this.task || this.prepared || this.planning) {
+      if (this.phase === 'checking') this.startupPending = false;
+      return;
+    }
+    this.startupPending = false;
+    await this.check(false, reason).catch((error: unknown) => this.failure('check', error));
+  }
+  claimNotification(version: string) {
+    if (!this.status().notificationPending || this.candidate?.version !== version) return null;
+    this.notifiedVersion = version;
+    this.event('check', 'update_notification_claimed');
+    return { version, notes: this.candidate.notes };
   }
   status() {
     return {
@@ -227,6 +261,13 @@ export class UpdateManager {
       lastCheckedAt: this.config.lastAttempt || null,
       downloadedBytes: this.downloaded,
       candidate: this.candidate,
+      notificationPending:
+        this.config.automatic &&
+        !this.prepared &&
+        !this.planning &&
+        ['available', 'manual', 'ready'].includes(this.phase) &&
+        this.candidate !== null &&
+        this.notifiedVersion !== this.candidate.version,
       releaseUrl: this.candidate ? `${RELEASES_URL}/tag/v${this.candidate.version}` : RELEASES_URL,
       lastResult: this.lastResult,
     };
@@ -237,8 +278,10 @@ export class UpdateManager {
     this.config.automatic = automatic;
     await this.saveConfig();
   }
-  async check(internal = false) {
+  async check(internal = false, reason: 'manual' | 'startup' | 'periodic' = 'manual') {
     if (this.settingsInvalid) throw new Error('update_settings_invalid');
+    if (this.task && this.phase === 'checking' && !this.prepared && !this.planning)
+      return this.task;
     if (this.task || this.prepared || this.closed || (this.planning && !internal))
       throw new Error('update_busy');
     this.phase = 'checking';
@@ -246,7 +289,7 @@ export class UpdateManager {
     this.config.lastAttempt = this.now();
     const abort = new AbortController();
     this.abort = abort;
-    this.task = this.doCheck(AbortSignal.any([abort.signal, AbortSignal.timeout(60_000)]));
+    this.task = this.doCheck(AbortSignal.any([abort.signal, AbortSignal.timeout(60_000)]), reason);
     try {
       await this.task;
     } finally {
@@ -254,9 +297,10 @@ export class UpdateManager {
       this.task = undefined;
     }
   }
-  private async doCheck(signal: AbortSignal) {
+  private async doCheck(signal: AbortSignal, reason: 'manual' | 'startup' | 'periodic') {
     this.operationId = randomUUID();
     this.failureDetails = [];
+    this.event('check', `update_check_${reason}`);
     try {
       await this.saveConfig();
       const release = await this.source.latest(

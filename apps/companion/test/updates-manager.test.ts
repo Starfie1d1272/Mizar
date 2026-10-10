@@ -39,12 +39,14 @@ async function setup({
   fetcher,
   now,
   log,
+  settingsAutomatic,
 }: {
   installed?: boolean;
   source?: UpdateSource;
   fetcher?: typeof fetch;
   now?: () => number;
   log?: (stage: string, code: string, version?: string, diagnostic?: unknown) => void;
+  settingsAutomatic?: boolean | null | undefined;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'mizar-update-'));
   directories.push(root);
@@ -71,6 +73,18 @@ async function setup({
     ...(log ? { log } : {}),
   });
   managers.push(manager);
+  if (settingsAutomatic !== undefined) {
+    await mkdir(join(root, 'updates'));
+    await writeFile(
+      join(root, 'updates/settings.json'),
+      JSON.stringify({
+        ...(settingsAutomatic === null ? {} : { automatic: settingsAutomatic }),
+        lastAttempt: 0,
+        highestVersion: null,
+        highestIdentity: null,
+      }),
+    );
+  }
   await manager.load();
   return { manager, root, source: authority };
 }
@@ -336,25 +350,99 @@ describe('controlled update lifecycle', () => {
     await incompatible.check();
     expect(incompatible.status().phase).toBe('manual');
   });
-  it('keeps automatic checks opt-in and counts failed attempts against the daily limit', async () => {
+  it.each([undefined, null, false, true])(
+    'keeps stored preference %s and defaults only missing preferences on',
+    async (settingsAutomatic) => {
+      const { manager } = await setup({ settingsAutomatic });
+      expect(manager.status().automatic).toBe(settingsAutomatic !== false);
+    },
+  );
+  it('checks each real launch once, shares manual work and counts failures against six-hour polling', async () => {
     let clock = 5 * 86_400_000;
     const latest = vi.fn(() => Promise.reject(new Error('offline')));
+    const log =
+      vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
     const { manager } = await setup({
       source: { latest, authenticate: () => Promise.resolve(manifest) },
       now: () => clock,
+      log,
     });
     vi.useFakeTimers();
     manager.start();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(latest).not.toHaveBeenCalled();
-    await manager.setAutomatic(true);
-    await vi.advanceTimersByTimeAsync(60_000);
+    manager.start();
+    manager.desktopStartup('launch-one');
+    await manager.check();
     await vi.waitFor(() => expect(latest).toHaveBeenCalledTimes(1));
+    manager.desktopStartup('launch-one');
     await vi.advanceTimersByTimeAsync(60_000);
     expect(latest).toHaveBeenCalledTimes(1);
-    clock += 86_400_000;
+    clock += 6 * 60 * 60 * 1000;
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.waitFor(() => expect(latest).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(manager.status().phase).toBe('error'));
+    clock += 1;
+    manager.desktopStartup('launch-two');
+    await manager.check();
+    expect(latest).toHaveBeenCalledTimes(3);
+    clock += 3 * 6 * 60 * 60 * 1000;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(latest).toHaveBeenCalledTimes(4));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(latest).toHaveBeenCalledTimes(4);
+    expect(manager.status().notificationPending).toBe(false);
+    expect(log.mock.calls.map((call) => call[1])).toEqual(
+      expect.arrayContaining(['update_check_startup', 'update_check_periodic']),
+    );
+  });
+  it('preserves disabled startup checks and deduplicates reminders until the next real launch', async () => {
+    const latest = vi.fn(() => Promise.resolve({ tag_name: 'v1.1.0' }));
+    const { manager } = await setup({
+      settingsAutomatic: false,
+      source: { latest, authenticate: () => Promise.resolve(manifest) },
+    });
+    manager.desktopStartup('one');
+    expect(latest).not.toHaveBeenCalled();
+    await manager.check();
+    expect(manager.claimNotification('1.1.0')).toBeNull();
+    await manager.setAutomatic(true);
+    expect(manager.claimNotification('wrong-version')).toBeNull();
+    expect(manager.claimNotification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+    await manager.check();
+    expect(manager.claimNotification('1.1.0')).toBeNull();
+    manager.desktopStartup('one');
+    expect(manager.claimNotification('1.1.0')).toBeNull();
+    manager.desktopStartup('two');
+    await manager.check();
+    expect(manager.claimNotification('1.1.0')).toEqual({ version: '1.1.0', notes: manifest.notes });
+  });
+  it('defers startup checks while a download owns the task', async () => {
+    const source = {
+      latest: vi.fn(() => Promise.resolve({ tag_name: 'v1.1.0' })),
+      authenticate: () => Promise.resolve(manifest),
+    };
+    const { manager } = await setup({
+      source,
+      fetcher: (_input, options) =>
+        new Promise((_resolve, reject) => {
+          if (options?.signal?.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+            once: true,
+          });
+        }),
+    });
+    await manager.check();
+    await manager.download();
+    manager.desktopStartup('one');
+    expect(source.latest).toHaveBeenCalledTimes(1);
+    expect(manager.claimNotification('1.1.0')).toBeNull();
+    await manager.cancel();
+    vi.useFakeTimers();
+    manager.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(source.latest).toHaveBeenCalledTimes(2));
   });
   it('detects post-download tampering on installation recheck', async () => {
     const { manager, root } = await setup();
