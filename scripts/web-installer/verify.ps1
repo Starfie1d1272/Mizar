@@ -1,8 +1,13 @@
-param([Parameter(Mandatory=$true)][string]$OutputDirectory)
+param([Parameter(Mandatory=$true)][string]$OutputDirectory, [ValidateSet('all','update','faults')][string]$CaseGroup = 'all')
 $ErrorActionPreference = 'Stop'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
+# Update owns its complete installation chain and needs no Node/App deployment.
+if ($CaseGroup -eq 'update') {
+  & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup
+  exit 0
+}
 # Production dependencies, the existing App and its sole persistent Store.
 pnpm install --frozen-lockfile
 if ($LASTEXITCODE) { throw 'Dependency installation failed' }
@@ -43,7 +48,7 @@ try {
     $env:MIZAR_BRIDGE_SCRIPT = Join-Path $PSScriptRoot 'test-bootstrap-boundary.mjs'
     $env:MIZAR_BRIDGE_MODULE = Join-Path $bridge 'resources/app/dist/web-installer/complete-bootstrap.mjs'
     $env:MIZAR_BRIDGE_PLAN = Join-Path $PSScriptRoot 'legacy-stable-plan.json'
-    & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output
+    & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup
   } finally {
     foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key,$previous[$key]) }
   }
@@ -57,4 +62,4 @@ try {
 } finally { Remove-Job -Job $resourceChecks }
 if ($nativeFailure) { throw $nativeFailure }
 $clock.Stop()
-[ordered]@{ schemaVersion=1; sourceSha=(& git rev-parse HEAD); wallTimeSeconds=$clock.Elapsed.TotalSeconds; nativeUi=$true; realNsisRegression=$true; productionDependencies=$true; productionCompletionEvidence=$false; missingEvidence=@('new trusted Core and official resource publication','cold-cache first installation','offline default EPL','installed desktop launch') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'verification.json') -Encoding UTF8
+[ordered]@{ schemaVersion=1; sourceSha=(& git rev-parse HEAD); wallTimeSeconds=$clock.Elapsed.TotalSeconds; nativeUi=$true; realNsisRegression=($CaseGroup -eq 'all'); nsisGroup=$CaseGroup; productionDependencies=$true; productionCompletionEvidence=$false; missingEvidence=@('new trusted Core and official resource publication','cold-cache first installation','offline default EPL','installed desktop launch') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'verification.json') -Encoding UTF8

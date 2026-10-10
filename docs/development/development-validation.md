@@ -173,3 +173,5 @@ Release Qualification 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，�
 目标计时的独立数值精度与生命周期判定见[专项验收](../validation/objective-timing.md)。整场验收范围只由 #35 维护，不在这里复制现场清单。
 
 Windows 安装器验证中的资源 / SDK 检查仅使用独立临时目录并只读已部署桥接，可与原生检查并行；原生 UI、截图和真实 NSIS 生命周期仍顺序执行，结束前等待全部检查，任何检查失败都不能生成通过记录。
+
+安装器 CI 使用两台独立 Windows runner：update 保留首次安装、同版更新和恢复的依赖链，只使用系统 .NET / PowerShell；faults 复用自身残留续装产生的安装执行 App 边界、完整 pending 恢复、错误身份与取消检查，同时负责原生 UI 和 SDK。两组没有共享目录、登记或 pending 状态；聚合门禁核验 15 个原 NSIS case identity 全集，source-CI 必须拥有两个明确命名的成功 job。

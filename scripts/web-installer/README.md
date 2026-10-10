@@ -30,6 +30,6 @@ Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 
 
 ## 验证边界
 
-常规 CI 的 `installer / Windows` 进入 ci-gate 和发行源码门禁，复用真实 Native 控件、下载、SDK、Store、App 与受控历史 NSIS 回归。`verify.ps1` 在 runner 独立目录执行；测试与截图保存在 CI artifacts，不进入 Release 附件。
+常规 CI 的 `installer / Windows / update` 与 `installer / Windows / faults` 在两台隔离 runner 分别执行安装/更新恢复链和独立失败生命周期；两组共同进入 ci-gate 和发行源码门禁，复用真实 Native 控件、下载、SDK、Store、App 与受控历史 NSIS 回归。`verify.ps1` 在 runner 独立目录执行；测试与截图保存在 CI artifacts，不进入 Release 附件。原 NSIS 用例全集按 case identity 核验，两组必须都成功且覆盖完整；证据绑定同 run、精确源码与各自最新 attempt，最新损坏记录不能回退旧结果。
 
 `test-native.ps1` 的 UI 注入和 `capture-ui.ps1` 的演示截图只证明控件行为；真实 v1.1 双签名回归只证明既有来源链。新候选发版前须用 Qualification 的真实签名产物验证 Core 资格链，并在隔离环境验证冷缓存首次安装、持久缓存断网启动与已安装桌面启动；生产目录/声明的 Promotion 授权及未上线网络入口要单独记录剩余验证范围，不能用 fixture、旧版证明或构建报告代替。旧 v1.1 缺少新安装桥，不能作为新安装完成证据，也不重新发布旧资产。

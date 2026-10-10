@@ -1,3 +1,4 @@
+import { verifyInstallerShards } from './verify-installer-shards.mjs';
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -163,6 +164,101 @@ describe('same-source browser evidence across partial workflow reruns', () => {
       expect(() => readBrowserShards(root, 2, context)).toThrow('missing browser shard');
       save(2, 3);
       expect(() => readBrowserShards(root, 2, context)).toThrow('unexpected attempt');
+    });
+  });
+});
+
+describe('isolated installer group evidence', () => {
+  const context = { attempt: 2, runId: '42', sourceSha: 'a'.repeat(40) };
+  const cases = {
+    update: [
+      'pending-marker',
+      'prepared-install',
+      'destination-selection',
+      'same-version-update',
+      'ambiguous-launch',
+      'prepared-recovery',
+      'update-rollback',
+    ],
+    faults: [
+      'historical-bridge',
+      'app-resource-boundary',
+      'unknown-existing-files',
+      'completed-pending',
+      'owned-residue',
+      'post-install-identity',
+      'cancelled-install',
+      'invalid-installer',
+    ],
+  };
+  function fixture(action) {
+    const root = mkdtempSync(join(tmpdir(), 'mizar-installer-evidence-'));
+    const save = (group, attempt = 1, changes = {}) => {
+      const folder = join(root, `installer-evidence-${attempt}-${group}`);
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(
+        join(folder, 'nsis-evidence.json'),
+        JSON.stringify({
+          ...context,
+          attempt: String(attempt),
+          group,
+          cases: cases[group],
+          ...changes,
+        }),
+      );
+    };
+    try {
+      action(root, save);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  it('requires the original case union and supports a single-group or gate-only rerun', () => {
+    fixture((root, save) => {
+      save('update');
+      save('faults');
+      expect(verifyInstallerShards(root, context)).toEqual({ groups: 2, passed: 15 });
+      save('faults', 2);
+      expect(verifyInstallerShards(root, context)).toEqual({ groups: 2, passed: 15 });
+    });
+  });
+  it.each(['update', 'faults'])(
+    'rejects missing or incomplete newest %s evidence without fallback',
+    (group) => {
+      fixture((root, save) => {
+        save(group === 'update' ? 'faults' : 'update');
+        expect(() => verifyInstallerShards(root, context)).toThrow('missing installer');
+        save(group);
+        save(group, 2, { cases: cases[group].slice(1) });
+        expect(() => verifyInstallerShards(root, context)).toThrow('case coverage');
+      });
+    },
+  );
+  it.each([
+    { sourceSha: 'b'.repeat(40) },
+    { runId: '43' },
+    { attempt: '1' },
+    { group: 'update' },
+    { cases: Array(8).fill('cancelled-install') },
+  ])('rejects wrong identities or duplicated cases: %j', (change) => {
+    fixture((root, save) => {
+      save('update');
+      save('faults');
+      save('faults', 2, change);
+      expect(() => verifyInstallerShards(root, context)).toThrow();
+    });
+  });
+  it('rejects a future attempt and an undeclared group', () => {
+    fixture((root, save) => {
+      save('update');
+      save('faults', 3);
+      expect(() => verifyInstallerShards(root, context)).toThrow('future');
+    });
+    fixture((root, save) => {
+      save('update');
+      save('faults');
+      save('other');
+      expect(() => verifyInstallerShards(root, context)).toThrow('unknown');
     });
   });
 });

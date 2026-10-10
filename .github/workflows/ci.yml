@@ -358,16 +358,21 @@ jobs:
           target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
 
   installer_windows:
-    name: installer / Windows
+    name: installer / Windows / ${{ matrix.group }}
     if: ${{ needs.plan.outputs.run_installer == 'true' }}
     needs: [plan]
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [update, faults]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - if: ${{ matrix.group == 'faults' }}
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
           cache: true
@@ -376,11 +381,11 @@ jobs:
           install: false
       - name: Verify native UI, bounded download, real NSIS and actual SDK / Store / App
         shell: powershell
-        run: ./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer
+        run: ./scripts/web-installer/verify.ps1 -OutputDirectory .agent-tmp/web-installer -CaseGroup ${{ matrix.group }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: web-installer-native-${{ github.run_attempt }}
+          name: installer-evidence-${{ github.run_attempt }}-${{ matrix.group }}
           path: |
             .agent-tmp/web-installer/*.json
             .agent-tmp/web-installer/*.png
@@ -463,6 +468,17 @@ jobs:
       - name: Verify all browser shards cover FULL exactly once
         if: ${{ needs.plan.outputs.run_acceptance == 'true' }}
         run: node scripts/ci/verify-browser-shards.mjs .agent-tmp/browser-shards 8 ${{ github.run_attempt }}
+
+      - name: Download installer case identities
+        if: ${{ needs.plan.outputs.run_installer == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: installer-evidence-*
+          path: .agent-tmp/installer-shards
+
+      - name: Verify both isolated installer groups cover every case
+        if: ${{ needs.plan.outputs.run_installer == 'true' }}
+        run: node scripts/ci/verify-installer-shards.mjs .agent-tmp/installer-shards ${{ github.run_attempt }}
 
       - name: Validate planner-selected jobs
         run: node scripts/ci/plan.mjs --gate
