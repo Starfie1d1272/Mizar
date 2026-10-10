@@ -44,7 +44,9 @@ try {
 } catch { $nativeFailure = $_ }
 # Join all checks, including after native failure; no test process outlives the gate.
 try {
-  $resourceChecks | Wait-Job | Receive-Job -ErrorAction Stop
+  # Expected native stderr (for example mirror fallback) is diagnostic output.
+  # Every native exit code is checked in the job; terminating failures leave it Failed.
+  $resourceChecks | Wait-Job | Receive-Job -ErrorAction Continue
   if ($resourceChecks.State -ne 'Completed') { throw 'Windows resource checks did not complete' }
 } finally { Remove-Job -Job $resourceChecks }
 if ($nativeFailure) { throw $nativeFailure }
