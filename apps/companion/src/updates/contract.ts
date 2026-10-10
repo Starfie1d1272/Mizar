@@ -8,7 +8,7 @@ export const MIRROR_SHARE = '91dec4c27e5d47f38fcf';
 // Public distribution credential: the Mizar library contains public releases only,
 // and the server grants this dedicated token read permission (r). It is not a signing key.
 export const BOX_READ_TOKEN = 'b88f62e59ca365d27ccb48f55dfef3a78965341f';
-export const MIRROR_URL = `https://box.nju.edu.cn/d/${MIRROR_SHARE}/`;
+export const MIRROR_URL = `https://box.nju.edu.cn/d/${MIRROR_SHARE}/?p=/Downloads`;
 export const UPDATE_MAX_BYTES = 512 * 1024 * 1024;
 const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export function versionParts(version: string): number[] {

@@ -9,10 +9,10 @@ on:
         description: 正式版本标签（同步时必填，例如 v1.0.0）
         type: string
       mode:
-        description: 同步正式安装包，或在私有路径探测接口
+        description: 同步正式分发、只读验收用户入口，或恢复旧入口
         type: choice
         default: sync
-        options: [sync, probe]
+        options: [sync, probe, verify-downloads, rollback-downloads]
 permissions:
   contents: read
   actions: read
