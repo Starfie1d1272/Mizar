@@ -1,7 +1,7 @@
 import { readMachineFile } from '@mizar/resource-pack-contract/transport';
 import { z } from 'zod';
 import type { Bundle, BundleVerifier } from 'sigstore';
-import { UPDATE_MAX_BYTES, type UpdateManifest } from './contract.js';
+import { UPDATE_MAX_BYTES, updateManifestSchema, type UpdateManifest } from './contract.js';
 import { verifyAttestation } from './source.js';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -81,7 +81,7 @@ export function selectQualifiedCore(
     setup.contentDigest !== core.contentDigest
   )
     throw new Error('update_core_identity_mismatch');
-  return {
+  return updateManifestSchema.parse({
     ...full,
     coreArchiveSha256: core.archiveSha256,
     installer: {
@@ -92,5 +92,5 @@ export function selectQualifiedCore(
       sha256: setup.archiveSha256,
       contentDigest: setup.contentDigest,
     },
-  };
+  });
 }

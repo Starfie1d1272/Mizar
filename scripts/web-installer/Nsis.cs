@@ -24,6 +24,11 @@ namespace Mizar.WebInstaller {
     public readonly bool CanRetry;
     public InstallerActionRequired(string message,bool canRetry=false,Exception cause=null) : base(message,cause) { CanRetry=canRetry; }
   }
+  [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("000214F9-0000-0000-C000-000000000046"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface ShellLinkPath {
+    [System.Runtime.InteropServices.PreserveSig]
+    int GetPath([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] System.Text.StringBuilder path, int capacity, IntPtr data, uint flags);
+  }
   internal sealed class PendingInstall {
     public string schemaVersion, target, token, planSha256, bootstrapSha256, installer, stage;
     public int ownerPid, writerPid;
@@ -174,16 +179,18 @@ namespace Mizar.WebInstaller {
       var paths=new [] {Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Mizar.lnk"),Path.Combine(menu,"Mizar.lnk"),Path.Combine(menu,"卸载 Mizar.lnk")};
       foreach(string path in paths) {
         Downloader.NoReparse(path); if(!File.Exists(path)) continue;
-        object shell=null, shortcut=null;
+        object shortcut=null;
         try {
-          shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell",true));
-          shortcut=shell.GetType().InvokeMember("CreateShortcut",System.Reflection.BindingFlags.InvokeMethod,null,shell,new object[]{path});
-          string destination=Convert.ToString(shortcut.GetType().InvokeMember("TargetPath",System.Reflection.BindingFlags.GetProperty,null,shortcut,null));
+          shortcut=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"),true));
+          ((System.Runtime.InteropServices.ComTypes.IPersistFile)shortcut).Load(path,0);
+          var raw=new System.Text.StringBuilder(32768);
+          // Read the persisted target without Shell resolution, tracking or mutation.
+          if(((ShellLinkPath)shortcut).GetPath(raw,raw.Capacity,IntPtr.Zero,4)!=0 || raw.Length==0) throw new IOException("无法核对原快捷方式目标，保留现场："+path);
+          string destination=Environment.ExpandEnvironmentVariables(raw.ToString());
           string expected=Path.Combine(target,Path.GetFileName(path)=="卸载 Mizar.lnk" ? "Uninstall.exe" : "Mizar.exe");
-          if(!String.Equals(Path.GetFullPath(destination),expected,StringComparison.OrdinalIgnoreCase)) throw new IOException("快捷方式已被其他安装更改，保留现场。");
+          if(!Path.IsPathRooted(destination) || !String.Equals(Path.GetFullPath(destination),expected,StringComparison.OrdinalIgnoreCase)) throw new IOException("快捷方式已被其他安装更改，保留现场。");
         } finally {
           if(shortcut!=null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);
-          if(shell!=null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
         }
       }
     }
