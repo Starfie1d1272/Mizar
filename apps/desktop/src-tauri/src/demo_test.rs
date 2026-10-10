@@ -291,6 +291,15 @@ fn playback_cfg_file(journal: &Value) -> Result<(PathBuf, &str), String> {
 }
 
 pub fn install_playback_cfg(journal: &Value) -> Result<(), (String, bool)> {
+    install_playback_cfg_with(journal, |file, bytes| {
+        file.write_all(bytes).and_then(|_| file.sync_all())
+    })
+}
+
+pub(crate) fn install_playback_cfg_with(
+    journal: &Value,
+    write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+) -> Result<(), (String, bool)> {
     let (path, content) = playback_cfg_file(journal).map_err(|e| (e, false))?;
     let mut file = OpenOptions::new()
         .write(true)
@@ -302,15 +311,19 @@ pub fn install_playback_cfg(journal: &Value) -> Result<(), (String, bool)> {
                 false,
             )
         })?;
-    file.write_all(content.as_bytes())
-        .and_then(|_| file.sync_all())
-        .map_err(|e| {
-            (
-                crate::cs2_session::io_error("Demo 播放 CFG 未能完整保存。", &e),
-                true,
-            )
-        })?;
-    Ok(())
+    write(&mut file, content.as_bytes()).map_err(|e| {
+        (
+            crate::cs2_session::io_error("Demo 播放 CFG 未能完整保存。", &e),
+            true,
+        )
+    })
+}
+
+pub(crate) fn playback_cleanup_id(journal: &Value) -> Result<&str, String> {
+    playback_cfg_file(journal)?;
+    journal["demoTestRequestId"]
+        .as_str()
+        .ok_or("Demo 清理标识缺失。".into())
 }
 
 pub fn cleanup_playback_cfg(journal: &Value) -> Result<(), String> {
