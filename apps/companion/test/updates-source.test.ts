@@ -791,3 +791,26 @@ it('retains string exceptions, stack and bounded schema issue metadata without s
   expect(JSON.stringify(evidence)).not.toContain('private-input');
   expect(JSON.stringify(errorEvidence(new Error('x'.repeat(10_000))))).toContain('truncated');
 });
+
+it('preserves HTTP quota evidence when cancelling the failed response also fails', async () => {
+  const response = new Response(
+    new ReadableStream({
+      cancel() {
+        throw new Error('independent response cleanup failure');
+      },
+    }),
+    { status: 403, headers: { 'x-ratelimit-remaining': '0' } },
+  );
+  const result = updateRequest(
+    'https://api.github.com/repos/Starfie1d1272/Mizar/releases',
+    new AbortController().signal,
+    () => Promise.resolve(response),
+  );
+  await expect(result).rejects.toMatchObject({
+    message: 'update_network_failed',
+    status: 403,
+    source: 'api.github.com',
+    rateLimited: true,
+    cause: { message: 'independent response cleanup failure' },
+  });
+});

@@ -382,6 +382,7 @@ export class UpdateManager {
           const file = await open(path, 'wx', 0o600);
           const reader = response.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>,
             hash = createHash('sha256');
+          let transferError: unknown;
           try {
             for (;;) {
               attempt.throwIfAborted();
@@ -399,9 +400,18 @@ export class UpdateManager {
             )
               throw new Error('update_download_corrupt');
             await file.sync();
+          } catch (error) {
+            transferError = error;
+            throw error;
           } finally {
-            await reader.cancel().catch(() => undefined);
-            await file.close();
+            await reader
+              .cancel()
+              .catch((error: unknown) => this.failure('download_cleanup', error));
+            await file.close().catch((error: unknown) => {
+              throw transferError === undefined
+                ? error
+                : new AggregateError([transferError, error], 'update_download_failed');
+            });
           }
           this.event('download', i === 0 ? 'mirror_verified' : 'github_verified');
           break;
