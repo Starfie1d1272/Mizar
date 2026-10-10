@@ -84,7 +84,10 @@ export function DemoTestPanel() {
                   : '游戏已运行，等待有效观战数据。'
                 : '试播数据已隔离，等待关闭游戏并恢复配置。'}
           </p>
-          <p>游戏运行不代表所选 Demo 已加载。名单与地图确认后，才可恢复自动编排。</p>
+          <p>
+            游戏运行不代表所选 Demo
+            已加载。收到有效观战数据后，可手动检查现有场景；试播保持手动编排。
+          </p>
           {trial.phase === 'playing' || (trial.phase === 'starting' && game?.running) ? (
             <Button
               disabled={busy || !desktop}
