@@ -18,6 +18,7 @@ $nsisSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Nsis.cs')).Pa
 $compilerArgs = @(
   '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu',
   "/out:$exe", "/win32icon:$icon", "/resource:$planPath,plan.json", "/resource:$brand,brand.png",
+  "/resource:$PSScriptRoot\..\qualification\bundle\update-install.ps1,update-install.ps1",
   '/r:System.Net.Http.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll',
   $bootstrapSource, $nsisSource
 )

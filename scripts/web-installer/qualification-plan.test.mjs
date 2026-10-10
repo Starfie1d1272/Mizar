@@ -193,6 +193,7 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
       ],
       {
         timeout: 10000,
+        stdio: 'inherit',
         env: {
           ...process.env,
           GITHUB_REPOSITORY: context.repository,
