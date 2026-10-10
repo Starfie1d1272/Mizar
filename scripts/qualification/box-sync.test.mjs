@@ -274,6 +274,7 @@ describe('云盘稳定版同步', () => {
   it.each(['recover', 'exhausted', 'write', 'http', 'abort'])(
     '只读连接重试边界：%s',
     async (failure) => {
+      vi.useFakeTimers();
       const output = vi.spyOn(console, 'log').mockImplementation(() => {});
       const signals = [];
       const transport = vi.fn(async (_url, options) => {
@@ -292,16 +293,24 @@ describe('云盘稳定版同步', () => {
           '/Archive',
           failure === 'write' ? 'POST' : 'GET',
         );
-        if (failure === 'recover') await expect(request).resolves.toEqual([]);
-        else await expect(request).rejects.toThrow();
+        const assertion =
+          failure === 'recover'
+            ? expect(request).resolves.toEqual([])
+            : expect(request).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(3000);
+        await assertion;
         expect(transport).toHaveBeenCalledTimes(
           failure === 'recover' ? 2 : failure === 'exhausted' ? 3 : 1,
         );
-        expect(signals.every((signal) => signal === signals[0])).toBe(true);
+        expect(new Set(signals).size).toBe(signals.length);
+        const logs = output.mock.calls.flat().join('\n');
+        if (failure === 'recover') expect(logs).toContain('1s 后重试 1/2');
+        if (failure === 'exhausted') expect(logs).toContain('2s 后重试 2/2');
       } finally {
         output.mockRestore();
         vi.unstubAllGlobals();
         vi.resetModules();
+        vi.useRealTimers();
       }
     },
   );

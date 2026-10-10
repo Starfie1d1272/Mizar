@@ -190,16 +190,17 @@ async function boxStage(stage, action) {
 async function checkedFetch(url, options = {}, timeout = 120000) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   let response;
-  const signal = AbortSignal.timeout(timeout);
   const readOnlyBox = (options.method ?? 'GET') === 'GET' && new URL(url).origin === origin;
   for (let attempt = 0; ; attempt++) {
+    const signal = AbortSignal.timeout(timeout);
     try {
       response = await fetch(url, { ...options, signal });
       break;
     } catch (error) {
       const code = safeNetworkCode(error);
       if (readOnlyBox && code === 'UND_ERR_CONNECT_TIMEOUT' && !signal.aborted && attempt < 2) {
-        console.log(`Box 只读连接超时，重试 ${attempt + 1}/2（共用原请求期限）`);
+        console.log(`Box 只读连接超时，${attempt + 1}s 后重试 ${attempt + 1}/2`);
+        await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
         continue;
       }
       throw new MirrorError(
