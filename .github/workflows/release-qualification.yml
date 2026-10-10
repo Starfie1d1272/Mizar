@@ -252,15 +252,15 @@ jobs:
           node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
           if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
 
-      - name: Extract pristine candidate for Setup
+      - name: Prepare Full Setup tools and pristine candidate concurrently
         if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
         run: |
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
+          & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
       - name: Install pinned NSIS
-        if: ${{ matrix.lane != 'portable' }}
+        if: ${{ matrix.lane == 'core-setup' }}
         shell: pwsh
         run: choco install nsis --version=3.11 -y --no-progress
 
@@ -281,10 +281,14 @@ jobs:
           $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
           & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot -CaptureUi
           $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+          $timer = [Diagnostics.Stopwatch]::StartNew()
           node scripts/qualification/product-smoke.mjs $extracted.FullName
           if ($LASTEXITCODE -ne 0) { throw 'Setup portable smoke failed' }
+          Write-Host "SETUP_TIMING product-smoke: $($timer.ElapsedMilliseconds) ms (success)"
+          $timer.Restart()
           node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
           if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
+          Write-Host "SETUP_TIMING desktop-smoke: $($timer.ElapsedMilliseconds) ms (success)"
 
       - name: Qualify distinct Core payload and real NSIS installation
         if: ${{ matrix.lane == 'core-setup' }}
@@ -349,7 +353,7 @@ jobs:
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
           New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log')) {
+          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log', 'setup-timings.json', 'core-setup-timings.json')) {
             $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
           }

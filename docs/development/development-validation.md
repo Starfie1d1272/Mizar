@@ -162,6 +162,8 @@ pnpm qualification:verify <evidence-dir-or-zip>
 
 ## 证据与结果
 
+Full Setup 资格准备并行安装固定 NSIS 3.11 与解压已核验候选 ZIP，进入真实安装前等待两者结束；任何一项失败仍拒绝，解压失败也必须等待工具写入结束。Core 的工具准备保持原路径。Setup 构建按编译、首次安装及内容核验、交互安装与启动、覆盖安装、卸载与用户数据保留、重装及内容复核记录分段耗时和原始失败状态，随各自资格证据保留 `setup-timings.json` / `core-setup-timings.json`；静默、交互、卸载与重装检查均保留。历史耗时和理论重叠时间不替代新源码整轮 Qualification 或完整发布链的达标证据。
+
 Release Qualification 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，实际操作中文向导、选择桌面快捷方式、完成后启动 Mizar 并正常停止，保存欢迎、目录、快捷方式、进度和完成页截图，以及安装包摘要、系统版本和实际 DPI。截图在 Setup 资格证据包的 `installer-ui` 中供维护者签收；截图与自动化通过不代替审美判断。125% / 150% 缩放必须在对应实际 DPI 下复核中文和控件边界；报告未覆盖的缩放仍待实机验收。验收者可在对应 Windows 显示缩放下运行 `scripts/qualification/capture-setup-ui.ps1`，指定同一安装包、全新安装目录和证据目录。
 
 安装器素材清单记录原标志来源、许可、SVG 与 BMP 的大小和 SHA-256。Setup 构建先核对清单与原标志，再将素材清单、图标和素材摘要记录到 `distribution-manifest.json`；这些是安装器构建输入，不进入被安装内容的身份。正式构建缺少素材或摘要不符时停止；直接编译 NSIS 脚本未指定素材目录时可使用 MUI2 默认画面。
