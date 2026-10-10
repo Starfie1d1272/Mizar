@@ -154,12 +154,22 @@ impl SessionStore {
         ));
         fs::create_dir_all(&self.root).map_err(|_| "无法创建原始配置备份目录。")?;
         fs::create_dir(&snapshot).map_err(|_| "无法创建独立的原始配置备份。")?;
+        let mut absent = Vec::new();
         for (path, limit) in [(video, 128 * 1024), (convars.as_path(), 256 * 1024)] {
-            if fs::metadata(path)
-                .map_err(|_| "无法读取原始配置大小。")?
-                .len()
-                > limit as u64
-            {
+            let metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error)
+                    if path == convars
+                        && error.kind() == std::io::ErrorKind::NotFound
+                        && fs::symlink_metadata(path)
+                            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    absent.push("cs2_machine_convars.vcfg");
+                    continue;
+                }
+                Err(_) => return Err("无法读取原始配置大小或权限，未修改设置。".into()),
+            };
+            if metadata.len() > limit as u64 {
                 return Err("原始游戏配置超过备份上限，未修改设置。".into());
             }
             let bytes = fs::read(path).map_err(|_| "无法备份原始游戏配置，未修改设置。")?;
@@ -171,6 +181,10 @@ impl SessionStore {
                 &bytes,
             )?;
         }
+        atomic_write(
+            &snapshot.join("absent.json"),
+            &serde_json::to_vec(&absent).map_err(|_| "无法记录原始配置缺失状态。")?,
+        )?;
         Ok(())
     }
     pub fn prepare_preserved(&self, video: &Path, executable: &Path) -> Result<Value, String> {
@@ -507,6 +521,44 @@ mod tests {
             assert_eq!(fs::read(snapshot.join("cs2_video.txt")).unwrap(), invalid);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+    #[test]
+    fn missing_machine_convars_is_recorded_without_creating_or_restoring_it() {
+        let (root, video, convars, executable, store) = frame_setup();
+        fs::remove_file(&convars).unwrap();
+        let original_video = fs::read(&video).unwrap();
+        assert!(store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1920, 1080).unwrap()
+            )
+            .is_err());
+        assert!(!convars.exists());
+        assert!(store.load().unwrap().is_none());
+        let snapshot = fs::read_dir(&store.root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.is_dir())
+            .unwrap();
+        assert_eq!(
+            fs::read(snapshot.join("absent.json")).unwrap(),
+            b"[\"cs2_machine_convars.vcfg\"]"
+        );
+        assert!(!snapshot.join("cs2_machine_convars.vcfg").exists());
+        store.prepare_preserved(&video, &executable).unwrap();
+        assert_eq!(fs::read(&video).unwrap(), original_video);
+        assert!(!convars.exists());
+        fs::write(&convars, b"created by game").unwrap();
+        SessionStore::new(root.clone()).restore().unwrap();
+        assert_eq!(fs::read(&convars).unwrap(), b"created by game");
+        // Existing but unreadable as a file is not the absent-file exemption.
+        fs::remove_file(&convars).unwrap();
+        fs::create_dir(&convars).unwrap();
+        assert!(store.prepare_preserved(&video, &executable).is_err());
+        assert!(store.load().unwrap().is_none());
+        assert_eq!(fs::read(&video).unwrap(), original_video);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn frame_rate_conflicts_do_not_overwrite_other_files_or_clear_backups() {
