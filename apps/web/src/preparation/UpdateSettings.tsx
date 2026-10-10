@@ -20,7 +20,13 @@ interface UpdateStatus {
   currentVersion: string;
   distribution: 'installed' | 'portable';
   error: string | null;
-  failureDetails?: { stage: string; summary: string; nextStep: string; operationId: string }[];
+  failureDetails?: {
+    stage: string;
+    stageLabel?: string;
+    summary: string;
+    nextStep: string;
+    operationId: string;
+  }[];
   downloadedBytes: number;
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;

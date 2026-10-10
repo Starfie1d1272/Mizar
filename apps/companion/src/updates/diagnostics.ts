@@ -1,7 +1,7 @@
 import { BOX_READ_TOKEN } from './contract.js';
 
 export function redactDiagnosticText(value: string): string {
-  return value
+  const clean = value
     .replaceAll(BOX_READ_TOKEN, '[redacted]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => {
       try {
@@ -16,8 +16,8 @@ export function redactDiagnosticText(value: string): string {
         ? '[credential-bearing line redacted]'
         : line,
     )
-    .join('\n')
-    .replace(/(.{4096})[\s\S]+/, '$1 [truncated at 4096 characters]');
+    .join('\n');
+  return clean.length > 4096 ? clean.slice(0, 4096) + ' [truncated at 4096 characters]' : clean;
 }
 
 function serializedError(value: object): string {

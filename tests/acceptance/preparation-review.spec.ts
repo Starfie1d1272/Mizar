@@ -150,6 +150,35 @@ test('unverified updates and portable builds offer manual download and render no
     page.getByText('更新来源认证未通过。请保留现有版本，导出诊断并从正式发布页核对安装包。'),
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'GitHub 下载' })).toBeVisible();
+  const diagnostic = {
+    schema: 'mizar-support-bundle/1',
+    logs: [
+      {
+        localDiagnostic: {
+          message: 'independent original transport failure',
+          cause: { code: 'ECONNRESET' },
+        },
+      },
+    ],
+  };
+  await page.route('**/debug/support-bundle', (route) => route.fulfill({ json: diagnostic }));
+  await page.evaluate(() =>
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (text: string) => {
+          Reflect.set(window, 'copiedDiagnostic', text);
+          await Promise.resolve();
+        },
+      },
+      configurable: true,
+    }),
+  );
+  await page.getByRole('button', { name: '复制诊断信息' }).click();
+  await expect(page.getByText('诊断信息已复制，包含脱敏原因与相关输出。')).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(window, 'copiedDiagnostic') as string)).toBe(
+    JSON.stringify(diagnostic),
+  );
+
   await expect(page.getByText('<script>untrusted()</script>', { exact: true })).toBeVisible();
   status.phase = 'manual';
   status.error = null;
