@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -45,7 +45,6 @@ export async function prepareCoreCandidate(product, context, checkedOutSha, requ
   // The output is a new identity, not a rewrite of the original archive or metadata.
   const coreName = name + '-Core';
   const core = join(product, coreName);
-  await mkdir(core, { recursive: false });
   await cp(original, core, { recursive: true, force: false, errorOnExist: true });
   const web = join(core, 'resources/web/dist');
   for (const directory of ['fixtures', 'fixture-media'])

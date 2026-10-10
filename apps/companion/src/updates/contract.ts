@@ -52,12 +52,13 @@ export const updateManifestSchema = z
     channel: z.literal('stable'),
     version,
     gitSha: z.string().regex(/^[a-f0-9]{40}$/),
+    coreArchiveSha256: digest.optional(),
     notes: z.string().min(1).max(48_000),
     compatibility: z.strictObject({ minimumVersion: version, maximumVersionExclusive: version }),
     installer: z.strictObject({
       platform: z.literal('win32-x64'),
       format: z.literal('nsis-setup'),
-      name: z.string().regex(/^Mizar-v\d+\.\d+\.\d+-Windows-x64-Setup\.exe$/),
+      name: z.string().regex(/^Mizar-v\d+\.\d+\.\d+-Windows-x64-(?:Core-)?Setup\.exe$/),
       bytes: z.number().int().positive().max(UPDATE_MAX_BYTES),
       sha256: digest,
       contentDigest: digest,
@@ -65,7 +66,8 @@ export const updateManifestSchema = z
   })
   .superRefine((m, context) => {
     if (
-      m.installer.name !== `Mizar-v${m.version}-Windows-x64-Setup.exe` ||
+      m.installer.name !==
+        `Mizar-v${m.version}-Windows-x64-${m.coreArchiveSha256 ? 'Core-' : ''}Setup.exe` ||
       compareVersions(m.compatibility.minimumVersion, m.compatibility.maximumVersionExclusive) >=
         0 ||
       compareVersions(m.version, m.compatibility.minimumVersion) < 0 ||

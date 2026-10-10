@@ -4,6 +4,7 @@ import {
   readMachineFile,
 } from '@mizar/resource-pack-contract/transport';
 import { createHash } from 'node:crypto';
+import { selectQualifiedCore } from './core.js';
 import { BoxSource } from './box.js';
 import { createVerifier, type Bundle, type BundleVerifier } from 'sigstore';
 import { z } from 'zod';
@@ -86,7 +87,8 @@ export function verifyAttestation(
   )
     throw new Error('update_provenance_invalid');
   const sha = createHash('sha256').update(bytes).digest('hex');
-  if (!statement.subject.some((s) => s.name === name && s.digest.sha256 === sha))
+  const subjects = statement.subject.filter((subject) => subject.name === name);
+  if (subjects.length !== 1 || subjects[0]!.digest.sha256 !== sha)
     throw new Error('update_subject_mismatch');
   const source = statement.predicate.buildDefinition.resolvedDependencies.filter(
     (d) => d.uri === `git+https://github.com/${UPDATE_REPOSITORY}@refs/heads/main`,
@@ -100,6 +102,7 @@ export class StableSource {
   constructor(
     private readonly cachePath: string,
     private readonly fetcher: UpdateFetch = globalThis.fetch,
+    private readonly sourceMode: 'auto' | 'github' = 'auto',
   ) {}
   private async verify(
     bytes: Buffer,
@@ -129,6 +132,42 @@ export class StableSource {
     const manifest = updateManifestSchema.parse(JSON.parse(bytes.toString('utf8')));
     if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
     return manifest;
+  }
+  private async selectCore(
+    manifest: UpdateManifest,
+    signal: AbortSignal,
+    carrier?: Buffer,
+    sourceMode = this.sourceMode,
+  ) {
+    if (compareVersions(manifest.version, '1.2.0') < 0) return manifest;
+    if (!carrier) {
+      if (sourceMode === 'auto') {
+        try {
+          carrier = await new BoxSource(this.fetcher).machine(manifest.version, signal);
+        } catch {
+          signal.throwIfAborted();
+        }
+      }
+      carrier ??= await boundedBytes(
+        await updateRequest(
+          `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${manifest.version}/${MACHINE_METADATA_NAME}`,
+          signal,
+          this.fetcher,
+        ),
+        MACHINE_METADATA_MAX_BYTES,
+      );
+    }
+    const verifier = await createVerifier({
+      certificateIssuer: 'https://token.actions.githubusercontent.com',
+      certificateIdentityURI: '^' + UPDATE_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+      ctLogThreshold: 1,
+      tlogThreshold: 1,
+      tufCachePath: this.cachePath,
+      retry: 0,
+      timeout: 5000,
+    });
+    signal.throwIfAborted();
+    return selectQualifiedCore(carrier, manifest, verifier);
   }
   private async verifyPublication(
     bytes: Buffer,
@@ -203,6 +242,7 @@ export class StableSource {
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
     this.mirrorCandidate = undefined;
     try {
+      if (this.sourceMode === 'github') throw new Error('update_github_transport');
       const attempt = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
       const box = new BoxSource(this.fetcher);
       const { manifest, publication } = await this.authenticateIndex(
@@ -218,7 +258,7 @@ export class StableSource {
         published_at: publication.publishedAt,
         assets: [],
       };
-      this.mirrorCandidate = { release, manifest };
+      this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, attempt) };
       return release;
     } catch {
       signal.throwIfAborted();
@@ -257,6 +297,7 @@ export class StableSource {
       return this.mirrorCandidate.manifest;
     }
     let manifest: UpdateManifest;
+    let carrier: Buffer | undefined;
     const carriers = release.assets.filter((asset) => asset.name === MACHINE_METADATA_NAME);
     const indices = carriers.length
       ? carriers
@@ -274,6 +315,7 @@ export class StableSource {
         asset.digest !== `sha256:${createHash('sha256').update(bytes).digest('hex')}`
       )
         throw new Error('update_metadata_corrupt');
+      if (carriers.length) carrier = bytes;
       const authenticated = await this.authenticateIndex(
         carriers.length ? readMachineFile(bytes, 'update-index.json') : bytes,
         signal,
@@ -321,6 +363,7 @@ export class StableSource {
       .object({ object: z.object({ type: z.literal('commit'), sha: z.string() }) })
       .parse(await updateJson(`${api}/git/ref/tags/${release.tag_name}`, signal, this.fetcher));
     if (tag.object.sha !== manifest.gitSha) throw new Error('update_source_mismatch');
+    manifest = await this.selectCore(manifest, signal, carrier, 'github');
     const assets = release.assets.filter((a) => a.name === manifest.installer.name);
     if (
       assets.length !== 1 ||

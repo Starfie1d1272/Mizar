@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
+import { expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -136,6 +137,81 @@ it('records successful and failed build phases while preserving the build error'
       { phase: 'archive', status: 'failure', durationMs: expect.any(Number) },
     ]);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Only isolate checks already owned by payload/resource tests and ZIP creation;
+// the failing Node filesystem operation runs unchanged on real directories.
+it('partitions into a new Core directory and never overwrites a previous candidate', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-core-partition-'));
+  const name = 'Mizar-v1.2.0-Windows-x64';
+  const artifact = {
+    gitSha: signingSha,
+    appVersion: '1.2.0',
+    resourceMode: 'full',
+    artifactSha256: 'b'.repeat(64),
+    desktopBuildProfile: 'release',
+  };
+  const archive = Buffer.from('unsigned Full fixture');
+  const manifest = {
+    ...artifact,
+    contentDigest: artifact.artifactSha256,
+    archive: name + '.zip',
+    archiveSha256: createHash('sha256').update(archive).digest('hex'),
+    developmentOnly: false,
+  };
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  try {
+    const original = join(root, name);
+    for (const path of [
+      'resources/metadata',
+      'resources/web/dist/fixtures',
+      'resources/web/dist/fixture-media',
+    ])
+      await mkdir(join(original, path), { recursive: true });
+    await writeFile(join(original, 'resources/web/dist/index.html'), 'retained Core');
+    await writeFile(join(original, 'resources/web/dist/fixtures/example'), 'optional replay');
+    await writeFile(join(root, name + '.zip'), archive);
+    await writeFile(join(root, 'release-manifest.json'), JSON.stringify(manifest));
+    vi.doMock('./product-runtime.mjs', () => ({ verifyPayload: vi.fn(async () => artifact) }));
+    vi.doMock('./verify-web-resources.mjs', () => ({ verifyWebResources: vi.fn(async () => {}) }));
+    vi.doMock('./build.mjs', async () => {
+      const actual = await vi.importActual('./build.mjs');
+      return {
+        ...actual,
+        createArchive: async () => ({
+          archivePath: join(root, name + '-Core.zip'),
+          archiveSha256: 'c'.repeat(64),
+        }),
+      };
+    });
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { prepareCoreCandidate } = await import('./core-candidate.mjs');
+    const core = await prepareCoreCandidate(root, signingContext, signingSha, signingSha);
+    expect(core.resourceMode).toBe('core');
+    expect(await readFile(join(root, name + '-Core/resources/web/dist/index.html'), 'utf8')).toBe(
+      'retained Core',
+    );
+    await expect(
+      readFile(join(root, name + '-Core/resources/web/dist/fixtures/example')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(original, 'resources/web/dist/fixtures/example'), 'utf8')).toBe(
+      'optional replay',
+    );
+    expect(await readFile(join(root, manifest.archive))).toEqual(archive);
+    const sentinel = join(root, name + '-Core/keep');
+    await writeFile(sentinel, 'existing candidate');
+    await expect(
+      prepareCoreCandidate(root, signingContext, signingSha, signingSha),
+    ).rejects.toMatchObject({ code: 'ERR_FS_CP_EEXIST' });
+    expect(await readFile(sentinel, 'utf8')).toBe('existing candidate');
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    vi.doUnmock('./product-runtime.mjs');
+    vi.doUnmock('./verify-web-resources.mjs');
+    vi.doUnmock('./build.mjs');
+    vi.resetModules();
     await rm(root, { recursive: true, force: true });
   }
 });

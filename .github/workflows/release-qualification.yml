@@ -459,6 +459,7 @@ jobs:
         env:
           PROVENANCE_BUNDLE: ${{ steps.qualified-provenance.outputs.bundle-path }}
         run: |
+          Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'qualification-provenance.json')
           if (Test-Path -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-manifest.json')) {
             Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-provenance.json')
           }
@@ -482,6 +483,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-provenance.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/qualification-provenance.json
           if-no-files-found: error
 
       - name: Upload release qualification evidence

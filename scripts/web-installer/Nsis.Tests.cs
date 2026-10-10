@@ -37,7 +37,7 @@ namespace Mizar.WebInstaller {
           bool pendingRejected=false;
           string guardedTarget=Path.Combine(root,"pending recovery path");
           try { await Nsis.Install(plan,installer,guardedTarget,CancellationToken.None); }
-          catch(IOException error) { pendingRejected=error.Message.Contains("前一次安装"); }
+          catch(InstallerRecoveryRequired) { pendingRejected=true; }
           Assert(pendingRejected && !Directory.Exists(guardedTarget) && File.Exists(pending));
           Console.WriteLine("PASS: persistent unfinished-install marker rejects a new writer and remains intact");
         } finally { File.Delete(pending); } // Only this test's exclusively created marker.

@@ -20,6 +20,7 @@ import {
 export async function installOfficialPack({
   store,
   inputs,
+  loadInputs,
   authorization,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
@@ -37,13 +38,19 @@ export async function installOfficialPack({
     // authenticated new publication. Offline identity failures remain failures.
     if (
       signal.aborted ||
-      !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
-        (name) => Buffer.isBuffer(inputs?.[name]),
-      )
+      (typeof loadInputs !== 'function' &&
+        !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
+          (name) => Buffer.isBuffer(inputs?.[name]),
+        ))
     )
       throw error;
   }
   if (cached) return finishOfficialPack(store, cached, pinnedPolicy, signal);
+  if (loadInputs !== undefined) {
+    if (typeof loadInputs !== 'function') throw new Error('Official resource loader is invalid');
+    inputs = await loadInputs(signal);
+    signal.throwIfAborted();
+  }
   const frozenInputs = Object.fromEntries(
     [
       ['statementBytes', 64 * 1024],

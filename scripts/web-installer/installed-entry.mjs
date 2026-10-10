@@ -69,7 +69,7 @@ try {
   await app.ready();
   const store = app.getDecorator('getResourceStore')();
   if (!store) throw new Error('Actual product resource Store is unavailable');
-  let authorization, inputs;
+  let authorization, inputs, loadInputs;
   try {
     authorization = await restoreResourceAuthorization({
       store,
@@ -78,7 +78,7 @@ try {
     });
   } catch {
     signal.throwIfAborted();
-    ({ authorization, inputs } = await authenticatePublishedBootstrap({
+    ({ authorization, inputs, loadInputs } = await authenticatePublishedBootstrap({
       version: artifact.appVersion,
       expectedCore: { ...nativePlan, coreMode: artifact.resourceMode === 'core' },
       tufCachePath,
@@ -91,6 +91,7 @@ try {
     corePlan: nativePlan,
     authorization,
     inputs,
+    loadInputs,
     tufCachePath,
     signal,
   });

@@ -10,6 +10,7 @@ const names = new Set([
   'core-release-manifest.json',
   'core-distribution-manifest.json',
   'NSIS-LICENSE.txt',
+  'qualification-provenance.json',
   'update-index.json',
 ]);
 const limit = (name) =>

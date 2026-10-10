@@ -12,6 +12,7 @@ export async function completeBootstrap({
   corePlan,
   authorization,
   inputs,
+  loadInputs,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
   onProgress,
@@ -51,6 +52,7 @@ export async function completeBootstrap({
   const resources = await installOfficialPack({
     store,
     inputs,
+    loadInputs,
     authorization,
     tufCachePath,
     signal,

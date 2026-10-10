@@ -19,6 +19,7 @@ import {
   updatePublicationSchema,
 } from '../src/updates/contract.js';
 import { allowedUpdateUrl, boundedBytes, updateRequest } from '../src/updates/network.js';
+import { selectQualifiedCore } from '../src/updates/core.js';
 import { StableSource, verifyAttestation } from '../src/updates/source.js';
 import { BoxSource } from '../src/updates/box.js';
 
@@ -579,4 +580,163 @@ it('authenticates the real v1.1 dual signatures transported in the GitHub envelo
   release.id = releaseId;
   release.published_at = '2026-10-10T00:00:00Z';
   await expect(source.authenticate(release, signal)).rejects.toThrow('update_publication_mismatch');
+});
+
+it('binds the modern Core to four subjects of one Qualification and the authenticated Full installer', () => {
+  // Structural orchestration evidence. Real signer/certificate rejection is
+  // independently exercised by the unchanged production signatures above.
+  const full = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.2.0',
+    gitSha: 'a'.repeat(40),
+    notes: '说明',
+    compatibility: { minimumVersion: '1.0.0', maximumVersionExclusive: '2.0.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.2.0-Windows-x64-Setup.exe',
+      bytes: 100,
+      sha256: 'b'.repeat(64),
+      contentDigest: 'c'.repeat(64),
+    },
+  });
+  const original = {
+    schemaVersion: 1,
+    appVersion: '1.2.0',
+    gitSha: full.gitSha,
+    resourceMode: 'full',
+    desktopBuildProfile: 'release',
+    developmentOnly: false,
+    archive: 'Mizar-v1.2.0-Windows-x64.zip',
+    archiveSha256: 'd'.repeat(64),
+    contentDigest: full.installer.contentDigest,
+  };
+  const originalSetup = {
+    schemaVersion: 1,
+    appVersion: '1.2.0',
+    gitSha: full.gitSha,
+    format: 'nsis-setup',
+    archive: full.installer.name,
+    archiveSha256: full.installer.sha256,
+    archiveBytes: 100,
+    originalArchiveSha256: original.archiveSha256,
+    contentDigest: full.installer.contentDigest,
+  };
+  const core = {
+    ...original,
+    resourceMode: 'core',
+    archive: 'Mizar-v1.2.0-Windows-x64-Core.zip',
+    archiveSha256: 'e'.repeat(64),
+    contentDigest: 'f'.repeat(64),
+    derivedFrom: {
+      archive: original.archive,
+      archiveSha256: original.archiveSha256,
+      contentDigest: original.contentDigest,
+    },
+  };
+  const setup = {
+    ...originalSetup,
+    archive: 'Mizar-v1.2.0-Windows-x64-Core-Setup.exe',
+    archiveSha256: '1'.repeat(64),
+    archiveBytes: 40,
+    contentDigest: core.contentDigest,
+    originalArchiveSha256: core.archiveSha256,
+  };
+  const records = {
+    'release-manifest.json': original,
+    'distribution-manifest.json': originalSetup,
+    'core-release-manifest.json': core,
+    'core-distribution-manifest.json': setup,
+  };
+  function carrier(values = records, omitted?: string) {
+    const files = new Map(
+      Object.entries(values).map(([name, value]) => [name, Buffer.from(JSON.stringify(value))]),
+    );
+    const statement = {
+      _type: 'https://in-toto.io/Statement/v1',
+      subject: [...files]
+        .filter(([name]) => name !== omitted)
+        .map(([name, data]) => ({
+          name,
+          digest: { sha256: createHash('sha256').update(data).digest('hex') },
+        })),
+      predicateType: 'https://slsa.dev/provenance/v1',
+      predicate: {
+        buildDefinition: {
+          resolvedDependencies: [
+            {
+              uri: 'git+https://github.com/Starfie1d1272/Mizar@refs/heads/main',
+              digest: { gitCommit: full.gitSha },
+            },
+          ],
+          externalParameters: {
+            workflow: {
+              repository: 'https://github.com/Starfie1d1272/Mizar',
+              path: '.github/workflows/release-qualification.yml',
+              ref: 'refs/heads/main',
+            },
+          },
+        },
+      },
+    };
+    files.set(
+      'qualification-provenance.json',
+      Buffer.from(
+        JSON.stringify({
+          dsseEnvelope: {
+            payloadType: 'application/vnd.in-toto+json',
+            payload: Buffer.from(JSON.stringify(statement)).toString('base64'),
+          },
+        }),
+      ),
+    );
+    return makeMachineMetadata(files);
+  }
+  const verify = vi.fn();
+  const verifier = { verify } as BundleVerifier;
+  const selected = selectQualifiedCore(carrier(), full, verifier);
+  expect(selected.installer.name).toBe('Mizar-v1.2.0-Windows-x64-Core-Setup.exe');
+  expect(selected.installer.bytes).toBe(40);
+  expect(selected.coreArchiveSha256).toBe('e'.repeat(64));
+  expect(verify).toHaveBeenCalledTimes(4);
+  for (const name of Object.keys(records))
+    expect(() => selectQualifiedCore(carrier(records, name), full, verifier)).toThrow(
+      'update_subject_mismatch',
+    );
+  for (const patch of [
+    { gitSha: '2'.repeat(40) },
+    { appVersion: '1.3.0' },
+    { resourceMode: 'full' },
+    { developmentOnly: true },
+    { archive: 'Mizar-v1.2.0-Linux-x64-Core.zip' },
+    { derivedFrom: { ...core.derivedFrom, contentDigest: '3'.repeat(64) } },
+  ]) {
+    expect(() =>
+      selectQualifiedCore(
+        carrier({ ...records, 'core-release-manifest.json': { ...core, ...patch } }),
+        full,
+        verifier,
+      ),
+    ).toThrow();
+  }
+  for (const patch of [
+    { format: 'zip' },
+    { originalArchiveSha256: '4'.repeat(64) },
+    { contentDigest: '4'.repeat(64) },
+    { archive: 'Mizar-v1.2.0-Windows-arm64-Core-Setup.exe' },
+  ]) {
+    expect(() =>
+      selectQualifiedCore(
+        carrier({ ...records, 'core-distribution-manifest.json': { ...setup, ...patch } }),
+        full,
+        verifier,
+      ),
+    ).toThrow();
+  }
+  verifier.verify = () => {
+    throw new Error('invalid_signature');
+  };
+  expect(() => selectQualifiedCore(carrier(), full, verifier)).toThrow('invalid_signature');
 });
