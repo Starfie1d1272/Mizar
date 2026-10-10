@@ -10,8 +10,10 @@ import { SpectatorHudCommands } from './SpectatorHudCommands';
 
 export function PictureWorkspace({
   action,
+  onNext,
 }: {
   action: (run: () => Promise<unknown>) => Promise<void>;
+  onNext?: () => void;
 }) {
   const editor = useHudConfigEditorClient();
   const onAir = useHudConfigClient();
@@ -25,8 +27,9 @@ export function PictureWorkspace({
     presets[0];
   return (
     <div className="picture-workspace">
+      <ProgramPreview allowCurrent />
       <Panel className="picture-presets">
-        <h2>视觉选择</h2>
+        <h2>HUD 检视器</h2>
         <Select
           label="检查 HUD 预设"
           value={selected?.id ?? ''}
@@ -62,13 +65,17 @@ export function PictureWorkspace({
         ) : null}
         {selected && editor.document ? (
           <>
-            <p>
-              共享布局 ·{' '}
-              {resourceFor(editor.document, 'layout', selected.layoutId)?.name ?? selected.layoutId}
-              <br />
-              共享外观 ·{' '}
-              {resourceFor(editor.document, 'theme', selected.themeId)?.name ?? selected.themeId}
-            </p>
+            <details>
+              <summary>共享布局与外观</summary>
+              <p>
+                共享布局 ·{' '}
+                {resourceFor(editor.document, 'layout', selected.layoutId)?.name ??
+                  selected.layoutId}
+                <br />
+                共享外观 ·{' '}
+                {resourceFor(editor.document, 'theme', selected.themeId)?.name ?? selected.themeId}
+              </p>
+            </details>
             <Button
               disabled={editor.status !== 'ready'}
               onClick={() => void action(() => openTool('hud', selected.id))}
@@ -86,7 +93,7 @@ export function PictureWorkspace({
         ) : (
           <p>连接未就绪，不使用样例配置冒充已保存选择。</p>
         )}
-        <p>检查与保存不改变播出，只有启用操作应用所选预设；右侧使用正式配置。</p>
+        <small>画布使用正式配置；浏览预设不改变播出。</small>
         <details>
           <summary>本机观战工具</summary>
           <LocalOverlayControls />
@@ -102,8 +109,14 @@ export function PictureWorkspace({
             资源版本 {editor.revision ?? '未知'} · 启用版本 {onAir.activeRevision ?? '未知'}
           </small>
         </details>
+        {onNext ? (
+          <div className="picture-next">
+            <Button variant="primary" onClick={onNext}>
+              进入开播检查
+            </Button>
+          </div>
+        ) : null}
       </Panel>
-      <ProgramPreview allowCurrent />
     </div>
   );
 }

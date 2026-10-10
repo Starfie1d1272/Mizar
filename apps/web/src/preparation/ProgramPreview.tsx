@@ -89,24 +89,14 @@ export function ProgramPreview({
   return (
     <PreviewContainer className="program-preview-panel">
       {standalone ? null : <h2>节目画面</h2>}
-      {allowCurrent ? (
-        <Select
-          label="节目预览来源"
-          value={source}
-          onChange={(event) => {
-            setDemo(null);
-            setSource(event.target.value as 'current' | 'sample');
-          }}
-        >
-          <option value="current">本场资料 / 当前观战数据</option>
-          <option value="sample">版式样例（不是本场事实）</option>
-        </Select>
-      ) : null}
+      <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
+        <ScenePreviewViewport frame={frame} onSettled={onSettled} />
+      </div>
       <div className="preparation-scenes">
         {PROGRAM_SCENES.map((scene) => (
           <Button
             key={scene.id}
-            variant={preview === scene.id ? 'primary' : 'secondary'}
+            aria-current={preview === scene.id ? 'page' : undefined}
             aria-pressed={preview === scene.id}
             onClick={() => chooseScene(scene.id)}
           >
@@ -115,6 +105,20 @@ export function ProgramPreview({
         ))}
       </div>
       <div className="program-preview-toolbar">
+        {allowCurrent ? (
+          <Select
+            label="节目预览来源"
+            value={source}
+            onChange={(event) => {
+              setDemo(null);
+              setSource(event.target.value as 'current' | 'sample');
+            }}
+          >
+            <option value="current">本场资料 / 当前观战数据</option>
+            <option value="sample">版式样例（不是本场事实）</option>
+          </Select>
+        ) : null}
+
         <div className="program-preview-playback">
           <Button onClick={demo ? () => setDemo(null) : startDemo}>
             {demo ? '停止演示' : '播放演示'}
@@ -134,6 +138,9 @@ export function ProgramPreview({
                   : '版式样例 · 名单与比分不是本场核实资料'}
           </span>
         </div>
+        {standalone ? null : (
+          <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>
+        )}
         {demo && (!bp?.projection || bp.state === 'hidden' || bp.state === 'hiding') ? (
           <p>演示将跳过 BP。</p>
         ) : null}
@@ -184,12 +191,6 @@ export function ProgramPreview({
           </div>
         ) : null}
       </div>
-      <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
-        <ScenePreviewViewport frame={frame} onSettled={onSettled} />
-      </div>
-      {standalone ? null : (
-        <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>
-      )}
     </PreviewContainer>
   );
 }

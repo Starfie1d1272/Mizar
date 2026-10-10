@@ -33,9 +33,9 @@ import './preparation.css';
 import './production.css';
 
 const tasks = [
-  ['match', '本场准备'],
-  ['picture', '画面检查'],
-  ['check', '开播检查'],
+  ['match', '资料'],
+  ['picture', '画面'],
+  ['check', '开播'],
 ] as const;
 const taskFor = (tab: string | null, path: string) =>
   tab === 'finish'
@@ -149,18 +149,26 @@ export function PreparationPage() {
               {isSettings
                 ? '本机设置'
                 : isResources
-                  ? '资源'
+                  ? requested === 'hud'
+                    ? 'HUD'
+                    : '比赛库'
                   : match
-                    ? `${match.entrants.a.name} vs ${match.entrants.b.name}`
+                    ? tab === 'picture'
+                      ? '画面'
+                      : tab === 'check'
+                        ? '开播'
+                        : '本场资料'
                     : '本场准备'}
             </h1>
             <p>
               {!isSettings && !isResources
                 ? match
-                  ? `${match.competition?.name ?? '独立比赛'} · ${match.format.toUpperCase()} · ${envelope?.source === 'local' ? '本地资料' : envelope?.source === 'fixture' ? '排练资料' : 'RivalHub'}${read.status === 'stale' || envelope?.freshness === 'stale' ? ' · 资料过期，只读' : ''}`
+                  ? `${match.entrants.a.name} vs ${match.entrants.b.name} · ${match.competition?.name ?? '独立比赛'} · ${match.format.toUpperCase()} · ${envelope?.source === 'local' ? '本地资料' : envelope?.source === 'fixture' ? '排练资料' : 'RivalHub'}${read.status === 'stale' || envelope?.freshness === 'stale' ? ' · 资料过期，只读' : ''}`
                   : '先建立本场，可离线准备名单、BP 与视觉。'
                 : isResources
-                  ? '浏览资源与当前制播分开；确认载入才切换本场。'
+                  ? requested === 'hud'
+                    ? '预设与播出配置'
+                    : '赛事 · 赛程 · 阵容'
                   : '可复用的本机配置与诊断'}
             </p>
           </div>
@@ -168,7 +176,7 @@ export function PreparationPage() {
             <div className="preparation-actions">
               <Button onClick={() => setSelecting((value) => !value)}>选择 / 切换本场</Button>
               <Button
-                variant="primary"
+                variant={tab === 'check' ? 'primary' : 'secondary'}
                 disabled={busy || matchDirty || !production?.canEnter}
                 onClick={() =>
                   production &&
@@ -303,14 +311,6 @@ export function PreparationPage() {
           </>
         ) : isResources ? (
           <>
-            <nav className="preparation-tabs" aria-label="资源分区">
-              <a href="/resources" aria-current={requested !== 'hud' ? 'page' : undefined}>
-                赛事与比赛
-              </a>
-              <a href="/resources?tab=hud" aria-current={requested === 'hud' ? 'page' : undefined}>
-                HUD 文件
-              </a>
-            </nav>
             {requested === 'hud' ? (
               <Panel>
                 <h2>HUD 预设与文件</h2>
@@ -393,7 +393,9 @@ export function PreparationPage() {
               {visited.has('bp') ? <BpWorkbench /> : null}
             </section>
             <section hidden={task !== 'picture' || selecting} aria-label="画面检查工作区">
-              {visited.has('picture') ? <PictureWorkspace action={action} /> : null}
+              {visited.has('picture') ? (
+                <PictureWorkspace action={action} onNext={() => navigateTask('check')} />
+              ) : null}
             </section>
             <section hidden={task !== 'check' || selecting} aria-label="开播检查工作区">
               <div className="production-preflight">

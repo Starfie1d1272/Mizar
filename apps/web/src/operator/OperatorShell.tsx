@@ -11,7 +11,13 @@ export function OperatorShell({
 }) {
   const obs = useObsStatus();
   const section =
-    active === '/resources' ? '/resources' : active === '/settings' ? '/settings' : '/';
+    active === '/resources'
+      ? new URLSearchParams(window.location.search).get('tab') === 'hud'
+        ? '/resources?tab=hud'
+        : '/resources'
+      : active === '/settings'
+        ? '/settings'
+        : '/';
   return (
     <div className="product-shell mizar-surface">
       <a className="product-skip" href="#product-content">
@@ -25,8 +31,9 @@ export function OperatorShell({
         <nav aria-label="制作导航">
           {(
             [
-              ['/', '制播'],
-              ['/resources', '资源'],
+              ['/', '本场'],
+              ['/resources', '比赛库'],
+              ['/resources?tab=hud', 'HUD'],
               ['/settings', '设置'],
             ] as const
           ).map(([path, label]) => (
@@ -44,16 +51,8 @@ export function OperatorShell({
                 ? '密码无效'
                 : obs?.connection === 'password_required'
                   ? '需要密码'
-                  : '无法确认连接'}
+                  : '待连接'}
           </strong>
-          <span>
-            推流 ·{' '}
-            {obs?.connection === 'connected' ? (obs.streaming ? '进行中' : '未启动') : '无法确认'}
-          </span>
-          <span>
-            录制 ·{' '}
-            {obs?.connection === 'connected' ? (obs.recording ? '进行中' : '未启动') : '无法确认'}
-          </span>
         </a>
         <footer>Mizar · 本场制播</footer>
       </aside>

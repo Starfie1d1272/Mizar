@@ -32,6 +32,7 @@ export function EventMatchWorkspace({
   const [matchId, setMatchId] = useState(initial?.matchId ?? '');
   const [editing, setEditing] = useState(query.get('tab') === 'event');
   const [creating, setCreating] = useState(false);
+  const [editingMatch, setEditingMatch] = useState(false);
   const dirty = useRef(false);
   const canChange = () =>
     !dirty.current || window.confirm('赛事资料有未保存修改，放弃后切换资源？');
@@ -49,8 +50,7 @@ export function EventMatchWorkspace({
   const match = matches.find((item) => item.matchId === matchId) ?? matches[0];
   return (
     <div className="event-match-workspace">
-      <Panel className="event-match-browser">
-        <h2>赛事与比赛</h2>
+      <section className="event-match-browser">
         <Select
           label="浏览赛事"
           value={eventId}
@@ -63,6 +63,8 @@ export function EventMatchWorkspace({
             setEventId(change.target.value);
             setMatchId('');
             setCreating(false);
+            setEditingMatch(false);
+            setEditing(false);
           }}
         >
           {view?.events.map((item) => (
@@ -72,9 +74,16 @@ export function EventMatchWorkspace({
           ))}
           <option value="independent">独立比赛（无关联赛事）</option>
         </Select>
-        <p>{event ? `${event.name} · 品牌与默认规则可复用` : '独立比赛不依赖赛事资料。'}</p>
         {event ? (
-          <Button aria-expanded={editing} onClick={() => setEditing((value) => !value)}>
+          <Button
+            aria-expanded={editing}
+            onClick={() => {
+              if (!canChange()) return;
+              setEditing((value) => !value);
+              setCreating(false);
+              setEditingMatch(false);
+            }}
+          >
             编辑赛事品牌与默认规则
           </Button>
         ) : null}
@@ -85,7 +94,11 @@ export function EventMatchWorkspace({
                 key={item.matchId}
                 aria-pressed={match?.matchId === item.matchId}
                 onClick={() => {
+                  if (!canChange()) return;
                   setMatchId(item.matchId);
+                  setEditing(false);
+                  setCreating(false);
+                  setEditingMatch(false);
                   const url = new URL(window.location.href);
                   url.searchParams.set('resource', item.matchId);
                   window.history.replaceState(null, '', url);
@@ -104,11 +117,17 @@ export function EventMatchWorkspace({
             <p>本分组暂无比赛，可创建第一场。</p>
           )}
         </div>
-        <Button onClick={() => setCreating((value) => !value)}>
+        <Button
+          onClick={() => {
+            if (!canChange()) return;
+            setCreating((value) => !value);
+            setEditingMatch(false);
+          }}
+        >
           {event ? '在此赛事追加下一场' : '创建本地 BO 比赛'}
         </Button>
-      </Panel>
-      <div className="event-match-detail">
+      </section>
+      <section className="event-match-detail">
         {creating ? (
           <Panel>
             <h2>{event ? `追加到 ${event.name}` : '快速建立本地比赛'}</h2>
@@ -124,44 +143,72 @@ export function EventMatchWorkspace({
           </Panel>
         ) : !editing && match ? (
           <>
-            <MatchDocumentView document={match} section="details" />
-            <div className="preparation-actions">
-              {match.matchId === view?.activeLocalMatchId ? (
-                <Button variant="primary" onClick={() => window.location.assign('/?tab=match')}>
-                  前往本场准备
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  disabled={!canWrite}
-                  onClick={() => {
-                    if (
-                      !canChange() ||
-                      !window.confirm(
-                        `将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？资源浏览本身不改变播出。`,
-                      )
-                    )
-                      return;
-                    void action(async () => {
-                      await command('/operator/local-match/select', { matchId: match.matchId });
-                      window.location.assign('/?tab=match');
-                    });
-                  }}
-                >
-                  确认载入为本场
-                </Button>
-              )}
-              <small>
-                {match.matchId === view?.activeLocalMatchId
-                  ? '当前本场 · 本地资料'
-                  : '浏览资源 · 当前本场保持不变'}
-              </small>
+            <header className="library-detail-heading">
+              <span>{match.matchId === view?.activeLocalMatchId ? '当前本场' : '候选比赛'}</span>
+              <Button
+                disabled={!canWrite || match.matchId !== view?.activeLocalMatchId}
+                onClick={() => {
+                  if (canChange()) setEditingMatch(true);
+                }}
+              >
+                编辑比赛
+              </Button>
+              {match.matchId !== view?.activeLocalMatchId ? (
+                <small>载入后可编辑本场资料</small>
+              ) : null}
+            </header>
+            <div className="library-detail-body" hidden={editingMatch}>
+              <MatchDocumentView document={match} section="details" />
+              <MatchDocumentView document={match} section="roster" />
+              <details>
+                <summary>地图与禁选资料</summary>
+                <MatchDocumentView document={match} section="maps" />
+              </details>
             </div>
-            <MatchDocumentView document={match} section="roster" />
-            <details>
-              <summary>地图与禁选资料</summary>
-              <MatchDocumentView document={match} section="maps" />
-            </details>
+            {editingMatch ? (
+              <LocalTournamentEditor
+                key={match.matchId}
+                document={match}
+                view={view}
+                refresh={refresh}
+                action={action}
+                canSave={canWrite}
+                section="overview"
+                onDirtyChange={markDirty}
+                onCancel={() => setEditingMatch(false)}
+              />
+            ) : (
+              <footer className="library-detail-actions">
+                <small>
+                  {match.matchId === view?.activeLocalMatchId ? '本场已载入' : '浏览不会切换本场'}
+                </small>
+                {match.matchId === view?.activeLocalMatchId ? (
+                  <Button variant="primary" onClick={() => window.location.assign('/?tab=match')}>
+                    前往本场准备
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    disabled={!canWrite}
+                    onClick={() => {
+                      if (
+                        !canChange() ||
+                        !window.confirm(
+                          `将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？`,
+                        )
+                      )
+                        return;
+                      void action(async () => {
+                        await command('/operator/local-match/select', { matchId: match.matchId });
+                        window.location.assign('/?tab=match');
+                      });
+                    }}
+                  >
+                    确认载入为本场
+                  </Button>
+                )}
+              </footer>
+            )}
           </>
         ) : !editing ? (
           <Panel>
@@ -185,7 +232,7 @@ export function EventMatchWorkspace({
             />
           </div>
         ) : null}
-      </div>
+      </section>
     </div>
   );
 }
