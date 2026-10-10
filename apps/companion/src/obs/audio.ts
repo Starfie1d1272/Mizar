@@ -26,7 +26,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       {
         code: 'audio_missing',
         message:
-          '当前 OBS 场景集合没有游戏或麦克风音频来源。请添加音频来源，并检查混音器与直播音轨。',
+          '当前 OBS 场景集合没有游戏或麦克风音频来源。可点击“添加默认桌面音频与麦克风”，再检查混音器与直播音轨；使用自定义设备时请在 OBS 中添加音频来源。',
       },
     ];
   const findings: ObsFinding[] = [];
