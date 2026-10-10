@@ -141,6 +141,17 @@ export function Settings({ tab }: { tab: string }) {
                     : '未连接'}
             </StatusPill>
           </header>
+          {obs && obs.connection !== 'connected' ? (
+            <StatusBanner tone="warning">
+              {obs.connection === 'invalid_password' || obs.connection === 'password_required'
+                ? '尚未连接 OBS。请在 OBS 的 WebSocket 服务器设置中重新复制密码，粘贴后保存并测试连接；连接成功后再检查场景。'
+                : obs.connectionFailure === 'refused'
+                  ? 'OBS 拒绝连接。请打开 OBS，启用 WebSocket 服务器并核对端口，再保存并测试连接。场景配置尚未确认。'
+                  : obs.connectionFailure === 'timeout'
+                    ? '等待 OBS 响应超时。请确认 OBS 正常响应，再保存并测试连接。场景配置尚未确认。'
+                    : 'OBS 连接状态和具体原因尚未确认。请检查 WebSocket 设置并查看诊断；连接成功后再检查场景。'}
+            </StatusBanner>
+          ) : null}
           <div className="obs-setup__cards">
             <Panel>
               <h3>打开 OBS</h3>
@@ -296,11 +307,13 @@ export function Settings({ tab }: { tab: string }) {
               ) : null}
             </Panel>
           </div>
-          {obs?.findings.map((finding) => (
-            <StatusBanner key={finding.code} tone="warning">
-              {finding.message}
-            </StatusBanner>
-          ))}
+          {obs?.connection === 'connected'
+            ? obs.findings.map((finding) => (
+                <StatusBanner key={finding.code} tone="warning">
+                  {finding.message}
+                </StatusBanner>
+              ))
+            : null}
           <details className="obs-setup__help">
             <summary>游戏捕获说明</summary>
             <p>

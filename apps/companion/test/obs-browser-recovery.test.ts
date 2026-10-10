@@ -139,3 +139,43 @@ it('keeps audio readiness findings in successive normal status polls and clears 
   expect((await first).findings).toEqual([]);
   await adapter.close();
 });
+
+it('drops stale scene findings on authentication failure and reconnects after correcting the password without restart', async () => {
+  const store = new ObsConfigStore('/unused-test-config');
+  let password = 'correct-secret';
+  vi.spyOn(store, 'read').mockImplementation(async () => {
+    await Promise.resolve();
+    return {
+      host: '127.0.0.1',
+      port: 4455,
+      password,
+      executablePath: null,
+    };
+  });
+  websocket.connect.mockImplementation(async (_url: string, supplied: string) => {
+    await Promise.resolve();
+    if (supplied !== 'correct-secret')
+      throw Object.assign(new Error('Authentication failed: wrong-secret'), { code: 4009 });
+  });
+  websocket.disconnect.mockResolvedValue(undefined);
+  websocket.call.mockResolvedValue({});
+  vi.spyOn(reconcile, 'checkObsConfiguration').mockResolvedValue([
+    { code: 'scene_missing', message: 'missing scene' },
+  ]);
+  const diagnostic = vi.fn();
+  const adapter = new ObsAdapter(store, 'http://127.0.0.1:3000', diagnostic);
+  try {
+    await adapter.check();
+    password = 'wrong-secret';
+    expect(await adapter.status()).toMatchObject({ connection: 'invalid_password', findings: [] });
+    expect(JSON.stringify(diagnostic.mock.calls)).toContain('obs_connect');
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('wrong-secret');
+    password = 'correct-secret';
+    expect(await adapter.status()).toMatchObject({
+      connection: 'connected',
+      findings: [{ code: 'scene_missing' }],
+    });
+  } finally {
+    await adapter.close();
+  }
+});

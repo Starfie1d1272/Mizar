@@ -121,6 +121,10 @@ const updateStages = new Set([
   'settings_load',
   'ready_load',
   'download_cleanup',
+  'obs_connect',
+  'obs_request',
+  'obs_configuration_check',
+  'obs_operator_action',
   'production_context',
   'production_safe_scene',
   'production_release',
@@ -161,7 +165,7 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
-    ['update', 'production'].includes(String(entry.event)) &&
+    ['update', 'production', 'obs'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
     updateStages.has(entry.stage);
   const stage =

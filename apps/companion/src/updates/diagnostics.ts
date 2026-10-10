@@ -114,7 +114,11 @@ export function errorEvidence(error: unknown): unknown {
             ...(fields.issues.length > 16 ? { issuesTruncated: true } : {}),
           }
         : {}),
-      ...(typeof fields.code === 'string' ? { code: redactDiagnosticText(fields.code) } : {}),
+      ...(typeof fields.code === 'string'
+        ? { code: redactDiagnosticText(fields.code) }
+        : typeof fields.code === 'number' && Number.isFinite(fields.code)
+          ? { code: fields.code }
+          : {}),
       ...(typeof fields.status === 'number' ? { status: fields.status } : {}),
       ...(fields.rateLimited ? { rateLimited: true } : {}),
       ...(typeof fields.source === 'string' ? { source: redactDiagnosticText(fields.source) } : {}),

@@ -208,7 +208,16 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       route.fulfill({ json: { mode: 'preparation', revision: 'preparation-1', canEnter: true } }),
     );
     await page.route('**/local/v1/obs', (route) =>
-      route.fulfill({ json: { connection, findings: [], port: 4455 } }),
+      route.fulfill({
+        json: {
+          connection,
+          findings:
+            connection === 'connected'
+              ? []
+              : [{ code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' }],
+          port: 4455,
+        },
+      }),
     );
     await page.route('**/operator/production', (route) => {
       entered++;
@@ -223,6 +232,14 @@ for (const connection of ['unavailable', 'password_required', 'invalid_password'
       await expect(page).toHaveURL(/\/settings\?tab=obs&prepare=1$/);
       await expect(page.getByRole('heading', { name: '启动游戏前，连接并检查 OBS' })).toBeVisible();
       await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
+      await expect(page.getByText('请检查 OBS 场景配置。', { exact: true })).toHaveCount(0);
+      if (connection === 'invalid_password')
+        await expect(
+          page.getByText(
+            '尚未连接 OBS。请在 OBS 的 WebSocket 服务器设置中重新复制密码，粘贴后保存并测试连接；连接成功后再检查场景。',
+            { exact: true },
+          ),
+        ).toBeVisible();
       expect(entered).toBe(0);
     }
   });
