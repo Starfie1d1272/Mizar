@@ -6,7 +6,8 @@ import {
 import { createHash } from 'node:crypto';
 import { selectQualifiedCore } from './core.js';
 import { BoxSource } from './box.js';
-import { createVerifier, type Bundle, type BundleVerifier } from 'sigstore';
+import type { Bundle, BundleVerifier } from 'sigstore';
+import { createTufVerifier } from '@mizar/resource-pack-contract/attestation';
 import { z } from 'zod';
 import { boundedBytes, updateJson, updateRequest, type UpdateFetch } from './network.js';
 import {
@@ -103,24 +104,74 @@ export class StableSource {
     private readonly cachePath: string,
     private readonly fetcher: UpdateFetch = globalThis.fetch,
     private readonly sourceMode: 'auto' | 'github' = 'auto',
-    private readonly diagnostic?: (stage: string, error: unknown) => void,
+    private readonly diagnostic?: (stage: string, error: unknown, durationMs?: number) => void,
   ) {}
+  private async verifier(identity: string, signal: AbortSignal): Promise<BundleVerifier> {
+    return this.phase('trust_metadata', signal, 20_000, async (deadline) => {
+      // SDK verifies cached roles and target hashes; expired/corrupt metadata
+      // triggers its normal root rotation and refresh. Never use a custom root.
+      const pending = createTufVerifier(
+        {
+          certificateIssuer: 'https://token.actions.githubusercontent.com',
+          certificateIdentityURI: '^' + identity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+          ctLogThreshold: 1,
+          tlogThreshold: 1,
+          tufCachePath: this.cachePath,
+          tufForceCache: true,
+          retry: { retries: 1, minTimeout: 250, maxTimeout: 250 },
+          timeout: 8000,
+        },
+        deadline,
+      );
+      let aborted: (() => void) | undefined;
+      try {
+        deadline.throwIfAborted();
+        return await Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            aborted = () => {
+              const reason: unknown = deadline.reason;
+              reject(
+                reason instanceof Error
+                  ? reason
+                  : new Error('update_trust_metadata_failed', { cause: reason }),
+              );
+            };
+            deadline.addEventListener('abort', aborted, { once: true });
+          }),
+        ]);
+      } catch (cause) {
+        throw new Error('update_trust_metadata_failed', { cause });
+      } finally {
+        if (aborted) deadline.removeEventListener('abort', aborted);
+      }
+    });
+  }
+  private async phase<T>(
+    stage: string,
+    signal: AbortSignal,
+    timeoutMs: number,
+    operation: (deadline: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const began = Date.now();
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+    try {
+      deadline.throwIfAborted();
+      const result = await operation(deadline);
+      deadline.throwIfAborted();
+      this.diagnostic?.(stage, undefined, Date.now() - began);
+      return result;
+    } catch (error) {
+      this.diagnostic?.(stage, error, Date.now() - began);
+      throw error;
+    }
+  }
   private async verify(
     bytes: Buffer,
     bundles: Bundle[],
     signal: AbortSignal,
   ): Promise<UpdateManifest> {
-    const verifier = await createVerifier({
-      certificateIssuer: 'https://token.actions.githubusercontent.com',
-      certificateIdentityURI: '^' + UPDATE_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
-      ctLogThreshold: 1,
-      tlogThreshold: 1,
-      tufCachePath: this.cachePath,
-      retry: 0,
-      timeout: 5000,
-    }).catch((cause: unknown) => {
-      throw new Error('update_trust_metadata_failed', { cause });
-    });
+    const verifier = await this.verifier(UPDATE_WORKFLOW, signal);
     signal.throwIfAborted();
     let verifiedCommit: string | undefined;
     const failures: unknown[] = [];
@@ -149,7 +200,9 @@ export class StableSource {
     if (!carrier) {
       if (sourceMode === 'auto') {
         try {
-          carrier = await new BoxSource(this.fetcher).machine(manifest.version, signal);
+          carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
+            new BoxSource(this.fetcher).machine(manifest.version, deadline),
+          );
         } catch (error) {
           this.diagnostic?.('box_core_fallback', error);
           signal.throwIfAborted();
@@ -164,17 +217,7 @@ export class StableSource {
         MACHINE_METADATA_MAX_BYTES,
       );
     }
-    const verifier = await createVerifier({
-      certificateIssuer: 'https://token.actions.githubusercontent.com',
-      certificateIdentityURI: '^' + UPDATE_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
-      ctLogThreshold: 1,
-      tlogThreshold: 1,
-      tufCachePath: this.cachePath,
-      retry: 0,
-      timeout: 5000,
-    }).catch((cause: unknown) => {
-      throw new Error('update_trust_metadata_failed', { cause });
-    });
+    const verifier = await this.verifier(UPDATE_WORKFLOW, signal);
     signal.throwIfAborted();
     return selectQualifiedCore(carrier, manifest, verifier);
   }
@@ -185,18 +228,7 @@ export class StableSource {
     manifest: UpdateManifest,
     signal: AbortSignal,
   ) {
-    const verifier = await createVerifier({
-      certificateIssuer: 'https://token.actions.githubusercontent.com',
-      certificateIdentityURI:
-        '^' + PUBLICATION_WORKFLOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
-      ctLogThreshold: 1,
-      tlogThreshold: 1,
-      tufCachePath: this.cachePath,
-      retry: 0,
-      timeout: 5000,
-    }).catch((cause: unknown) => {
-      throw new Error('update_trust_metadata_failed', { cause });
-    });
+    const verifier = await this.verifier(PUBLICATION_WORKFLOW, signal);
     signal.throwIfAborted();
     const promotionSha = verifyAttestation(
       bytes,
@@ -254,10 +286,10 @@ export class StableSource {
     this.mirrorCandidate = undefined;
     try {
       if (this.sourceMode === 'github') throw new Error('update_github_transport');
-      const attempt = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+      const attempt = signal;
       const box = new BoxSource(this.fetcher);
       const { manifest, publication } = await this.authenticateIndex(
-        await box.metadata(attempt),
+        await this.phase('box_metadata', attempt, 15_000, (deadline) => box.metadata(deadline)),
         attempt,
       );
       if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
@@ -274,7 +306,13 @@ export class StableSource {
     } catch (error) {
       if (this.sourceMode !== 'github') this.diagnostic?.('box_metadata_fallback', error);
       signal.throwIfAborted();
+      // Both transports need the same Sigstore trust service. Switching to
+      // GitHub cannot repair its failure and would obscure it with API limits.
+      if (error instanceof Error && error.message === 'update_trust_metadata_failed') throw error;
     }
+    return this.phase('github_metadata', signal, 15_000, (deadline) => this.githubLatest(deadline));
+  }
+  private async githubLatest(signal: AbortSignal): Promise<Release | null> {
     // 'latest' alone can select a release by publication date rather than SemVer.
     const values: Release[] = [];
     for (let page = 1; ; page++) {

@@ -24,6 +24,7 @@ struct LogFile {
     directory: PathBuf,
     identity: Value,
     limit: u64,
+    page_loads: u64,
 }
 
 fn normalized(path: &Path) -> PathBuf {
@@ -152,6 +153,7 @@ impl DesktopLog {
                 directory: directory.clone(),
                 identity,
                 limit: LOG_LIMIT,
+                page_loads: 0,
             })),
             directory,
             state_root,
@@ -162,10 +164,18 @@ impl DesktopLog {
     }
 
     fn write(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
-        let log = self
+        let mut log = self
             .inner
             .lock()
             .map_err(|_| io::Error::other("desktop log lock unavailable"))?;
+        // Aggregate successful navigation at the producer so bounded log tails
+        // still contain the preparation/startup failure that preceded reloads.
+        if stage == "main_page_load" && result == "success" {
+            log.page_loads = log.page_loads.saturating_add(1);
+            if !log.page_loads.is_power_of_two() {
+                return Ok(());
+            }
+        }
         Self::write_entry(&log, stage, result, detail)
     }
 
@@ -185,6 +195,13 @@ impl DesktopLog {
             } else {
                 "detail"
             }] = json!(bounded(detail));
+        }
+        if stage == "main_page_load" && result == "success" {
+            entry["occurrences"] = json!(if log.page_loads <= 1 {
+                1
+            } else {
+                log.page_loads / 2
+            });
         }
         let mut bytes = serde_json::to_vec(&entry)?;
         bytes.push(b'\n');
@@ -301,6 +318,31 @@ mod tests {
                 serde_json::from_str::<Value>(line).unwrap();
             }
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_storm_preserves_failure_in_bounded_tail() {
+        let root = root("reloads");
+        let log = DesktopLog::new(&root, None).unwrap();
+        log.event("main_window", "failure", Some("original OS failure"));
+        for _ in 0..10000 {
+            log.event("main_page_load", "success", None);
+        }
+        let text = fs::read_to_string(rotated(&log.directory, 0)).unwrap();
+        assert!(text.len() < 64 * 1024 && text.contains("original OS failure"));
+        let loads: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|entry| entry["stage"] == "main_page_load")
+            .collect();
+        assert_eq!(
+            loads
+                .iter()
+                .map(|entry| entry["occurrences"].as_u64().unwrap())
+                .sum::<u64>(),
+            8192
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

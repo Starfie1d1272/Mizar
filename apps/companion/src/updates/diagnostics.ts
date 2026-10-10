@@ -70,6 +70,7 @@ export function errorEvidence(error: unknown): unknown {
     const fields = value as Error & {
       code?: unknown;
       status?: unknown;
+      statusCode?: unknown;
       source?: unknown;
       errors?: unknown[];
       rateLimited?: boolean;
@@ -119,7 +120,9 @@ export function errorEvidence(error: unknown): unknown {
         : typeof fields.code === 'number' && Number.isFinite(fields.code)
           ? { code: fields.code }
           : {}),
-      ...(typeof fields.status === 'number' ? { status: fields.status } : {}),
+      ...(typeof (fields.status ?? fields.statusCode) === 'number'
+        ? { status: fields.status ?? fields.statusCode }
+        : {}),
       ...(fields.rateLimited ? { rateLimited: true } : {}),
       ...(typeof fields.source === 'string' ? { source: redactDiagnosticText(fields.source) } : {}),
       ...(original.cause === undefined ? {} : { cause: visit(original.cause, depth + 1) }),
