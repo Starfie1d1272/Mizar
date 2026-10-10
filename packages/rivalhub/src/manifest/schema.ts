@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { liveStreamUrlSchema } from '@mizar/protocol/context';
 
 import {
   broadcastCompetitionSchema,
@@ -79,7 +80,7 @@ export const broadcastCommentatorSchema = z.object({
   userId: z.string(),
   displayName: z.string(),
   avatarUrl: nullableStringSchema,
-  liveStreamUrl: nullableStringSchema,
+  liveStreamUrl: liveStreamUrlSchema,
 });
 
 export const broadcastManifestV1Schema = z.object({

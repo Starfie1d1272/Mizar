@@ -975,3 +975,459 @@ describe('RivalHubConnection.disconnect lifecycle', () => {
     expect(connection.view().paired).toBe(false);
   });
 });
+
+it('classifies disposable LIVE acceptance, bounded failures and recovery independently of reliable ACK', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-live-result-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test',
+      installationId: 'installation',
+      competitionId: 'competition',
+      displayName: 'Test',
+    }),
+  );
+  let response = () => Promise.resolve(Response.json({ accepted: true }));
+  const liveBodies: unknown[] = [];
+  const request = vi.fn<typeof fetch>(async (url, init) => {
+    const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (endpoint.endsWith('/claim')) return Response.json({ claimed: true, authorityRevision: 1 });
+    if (endpoint.endsWith('/reliable')) return new Response(null, { status: 204 });
+    liveBodies.push(JSON.parse(init!.body as string));
+    return response();
+  });
+  const connection = new RivalHubConnection(path, request);
+  const diagnostics = vi.fn();
+  connection.setDiagnosticHandler(diagnostics);
+  await connection.load();
+  const snapshot = {
+    ...claimSnapshot,
+    matchId: 'match',
+    competitionId: 'competition',
+    cursor: { ...claimSnapshot.cursor, liveSessionId: 'session' },
+  };
+  await connection.claim(snapshot, 'revision', false);
+  await connection.sendReliable(
+    { kind: 'map_started', matchId: 'match', cursor: snapshot.cursor } as ReliableEventV1,
+    snapshot,
+  );
+  await connection.sendLive(snapshot);
+  expect(connection.view().liveDelivery.status).toBe('accepted');
+  response = () => Promise.resolve(new Response(null, { status: 204 }));
+  await connection.sendLive(snapshot);
+  expect(connection.view().liveDelivery.status).toBe('failing');
+  for (const reason of ['frame_expired', 'contended', 'delivery_dropped', 'capacity']) {
+    response = () =>
+      Promise.resolve(
+        Response.json({ accepted: false, reason }, { status: reason === 'capacity' ? 429 : 200 }),
+      );
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      reason,
+    });
+    expect(connection.view().liveDelivery.consecutiveUnaccepted).toBeGreaterThan(1);
+    expect(connection.view().liveDelivery.durationMs).toBeGreaterThanOrEqual(0);
+  }
+  expect(diagnostics).not.toHaveBeenCalled();
+  response = () => Promise.resolve(Response.json({ accepted: true }));
+  await connection.sendLive(snapshot);
+  const clock = vi.spyOn(performance, 'now');
+  let now = 0;
+  clock.mockImplementation(() => now);
+  try {
+    response = () => Promise.resolve(Response.json({ accepted: false }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('unknown_rejection');
+    response = () =>
+      Promise.resolve(Response.json({ accepted: false, reason: 'broadcast_unavailable' }));
+    for (let index = 0; index < 3; index++) {
+      now += 3000;
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).not.toHaveBeenCalled();
+    now += 3000;
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(1);
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive({ ...snapshot, cursor: { ...snapshot.cursor, runtimeSeq: 999 } });
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      reason: null,
+      consecutiveUnaccepted: 0,
+      durationMs: 0,
+    });
+    expect(diagnostics).toHaveBeenCalledTimes(2);
+    response = () => Promise.resolve(new Response(null, { status: 503 }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('http_503');
+    response = () => Promise.reject(new DOMException('private URL', 'TimeoutError'));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery.reason).toBe('timeout');
+    expect(diagnostics).toHaveBeenCalledTimes(2);
+    now += 12000;
+    await connection.sendLive(snapshot);
+    await connection.sendLive(snapshot);
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    response = () => Promise.resolve(Response.json({ accepted: false, reason: 'frame_expired' }));
+    await connection.sendLive(snapshot);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      reason: 'frame_expired',
+      consecutiveUnaccepted: 6,
+      durationMs: 12000,
+    });
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    for (const reason of ['contended', 'delivery_dropped']) {
+      response = () => Promise.resolve(Response.json({ accepted: false, reason }));
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).toHaveBeenCalledTimes(3);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      consecutiveUnaccepted: 8,
+      durationMs: 12000,
+    });
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(4);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      consecutiveUnaccepted: 0,
+      durationMs: 0,
+    });
+    response = () =>
+      Promise.resolve(Response.json({ accepted: false, reason: 'capacity' }, { status: 429 }));
+    await connection.sendLive(snapshot);
+    for (let index = 0; index < 3; index++) {
+      now += 3000;
+      await connection.sendLive(snapshot);
+    }
+    expect(diagnostics).toHaveBeenCalledTimes(4);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'dropped',
+      consecutiveUnaccepted: 4,
+      durationMs: 9000,
+    });
+    now += 1000;
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(5);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'failing',
+      reason: 'capacity',
+      consecutiveUnaccepted: 6,
+      durationMs: 10000,
+    });
+    response = () => Promise.resolve(Response.json({ accepted: true }));
+    await connection.sendLive(snapshot);
+    expect(diagnostics).toHaveBeenCalledTimes(6);
+    expect(connection.view().liveDelivery).toMatchObject({
+      status: 'accepted',
+      reason: null,
+      consecutiveUnaccepted: 0,
+      durationMs: 0,
+    });
+    expect(liveBodies).toHaveLength(30);
+    expect(liveBodies[13]).toMatchObject({ cursor: { runtimeSeq: 999 } });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it('loads HTTP viewing links through online select and identifies sanitized conversion failures', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-select-link-'));
+  temporary.push(directory);
+  const original = JSON.parse(
+    await readFile('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json', 'utf8'),
+  ) as BroadcastManifest;
+  let candidate = {
+    ...original,
+    commentators: [{ ...original.commentators[0]!, liveStreamUrl: 'http://video.example/live' }],
+  };
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'private-token',
+      installationId: 'installation',
+      competitionId: original.match.competition!.competitionId,
+      displayName: 'Test',
+    }),
+  );
+  const connection = new RivalHubConnection(path, () => Promise.resolve(Response.json(candidate)));
+  await connection.load();
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(directory, 'manifest.json') }),
+  });
+  const logs: string[] = [];
+  const app = Fastify({
+    logger: {
+      stream: {
+        write: (text: string) => {
+          logs.push(text);
+        },
+      },
+    },
+  });
+  registerRivalHubConnectionRoutes(app, {
+    connection,
+    controller,
+    currentSnapshot: () => null,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+  });
+  const select = () =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/select',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { matchId: original.match.matchId },
+    });
+  try {
+    expect((await select()).statusCode).toBe(200);
+    expect(
+      controller.getPendingOnlineCandidate()?.binding.context.commentators[0]!.liveStreamUrl,
+    ).toBe('http://video.example/live');
+    candidate = {
+      ...candidate,
+      commentators: [
+        {
+          ...candidate.commentators[0]!,
+          avatarUrl: 'http://user:private-secret@video.example/avatar',
+        },
+      ],
+    };
+    const invalid = await select();
+    expect(invalid.statusCode).toBe(502);
+    expect(invalid.json<{ message: string; stage: string }>().message).toContain(
+      'commentators.0.avatarUrl',
+    );
+    expect(invalid.json<{ message: string; stage: string }>().stage).toBe('match_document');
+    expect(logs.join('')).toContain('source_conversion_failed');
+    expect(logs.join('')).not.toContain('private-secret');
+    expect(invalid.body).not.toContain('private-secret');
+  } finally {
+    await app.close();
+  }
+});
+
+const liveFailureCases = [
+  {
+    name: 'timeout',
+    stage: 'fetch',
+    reason: 'timeout',
+    error: { name: 'TimeoutError', code: 23 },
+    response: () => Promise.reject(new DOMException('private-token URL', 'TimeoutError')),
+  },
+  {
+    name: 'network cause',
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: {
+      name: 'TypeError',
+      cause: {
+        name: 'Error',
+        code: 'ECONNREFUSED',
+        cause: { name: 'Error', code: 'EHOSTUNREACH' },
+      },
+    },
+    response: () =>
+      Promise.reject(
+        new TypeError('private-token fetch', {
+          cause: Object.assign(new Error('private-token cause'), {
+            code: 'ECONNREFUSED',
+            cause: Object.assign(new Error('private-token host'), {
+              code: 'EHOSTUNREACH',
+              cause: new Error('private-token fourth level'),
+            }),
+          }),
+        }),
+      ),
+  },
+  {
+    name: 'nested network timeout',
+    stage: 'fetch',
+    reason: 'timeout',
+    error: { name: 'TypeError', cause: { name: 'Error', code: 'UND_ERR_CONNECT_TIMEOUT' } },
+    response: () =>
+      Promise.reject(
+        new TypeError('private-token URL', {
+          cause: Object.assign(new Error('private-token cause'), {
+            code: 'UND_ERR_CONNECT_TIMEOUT',
+          }),
+        }),
+      ),
+  },
+  {
+    name: 'invalid JSON',
+    stage: 'parse',
+    reason: 'invalid_response',
+    error: { name: 'SyntaxError' },
+    response: () => Promise.resolve(new Response('{"private-token invalid JSON')),
+  },
+  {
+    name: 'invalid shape',
+    stage: 'validate',
+    reason: 'invalid_response',
+    error: { name: 'LiveResponseShapeError', code: 'LIVE_RESPONSE_INVALID' },
+    response: () => Promise.resolve(Response.json({ accepted: 'private-token' })),
+  },
+  {
+    name: 'oversized body',
+    stage: 'read',
+    reason: 'response_too_large',
+    error: { name: 'LiveResponseLimitError', code: 'LIVE_RESPONSE_TOO_LARGE' },
+    response: () => Promise.resolve(new Response('private-token'.repeat(400))),
+  },
+  {
+    name: 'read error',
+    stage: 'read',
+    reason: 'response_read_failed',
+    error: { name: 'Error', code: 'ECONNRESET' },
+    response: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                Object.assign(new Error('private-token read'), { code: 'ECONNRESET' }),
+              );
+            },
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'cancel error',
+    stage: 'cancel',
+    reason: 'response_cancel_failed',
+    error: { name: 'Error', code: 'EPIPE' },
+    response: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            cancel() {
+              throw Object.assign(new Error('private-token cancel'), { code: 'EPIPE' });
+            },
+          }),
+          { status: 503 },
+        ),
+      ),
+  },
+  {
+    name: 'future network names and codes',
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: { name: 'FutureTransportError', code: 'NEW_NETWORK_CODE' },
+    response: () =>
+      Promise.reject(
+        Object.assign(new Error('private-token message'), {
+          name: 'FutureTransportError',
+          code: 'NEW_NETWORK_CODE',
+        }),
+      ),
+  },
+  ...[
+    'Bearer private-token',
+    'rh_mizar_private_token',
+    'https://private.example/?token=private-token',
+    'token=private-token',
+  ].map((credential) => ({
+    name: `credential-shaped identifier ${credential.split(/[: =]/)[0]}`,
+    stage: 'fetch',
+    reason: 'network_failed',
+    error: { name: 'UnknownError' },
+    response: () =>
+      Promise.reject(
+        Object.assign(new Error('private-token message'), { name: credential, code: credential }),
+      ),
+  })),
+] as const;
+
+it.each(liveFailureCases)(
+  'retains only bounded safe LIVE $name evidence and diagnoses sustained failures once',
+  async ({ stage, reason, error, response }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-live-evidence-'));
+    temporary.push(directory);
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: 'private-token',
+        installationId: 'installation',
+        competitionId: 'competition',
+        displayName: 'Test',
+      }),
+    );
+    let recovering = false;
+    const request = vi.fn<typeof fetch>((url) => {
+      const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (endpoint.endsWith('/claim'))
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+      if (endpoint.endsWith('/reliable'))
+        return Promise.resolve(new Response(null, { status: 204 }));
+      return recovering ? Promise.resolve(Response.json({ accepted: true })) : response();
+    });
+    const connection = new RivalHubConnection(path, request);
+    const diagnostics = vi.fn();
+    connection.setDiagnosticHandler(diagnostics);
+    await connection.load();
+    const snapshot = {
+      ...claimSnapshot,
+      matchId: 'match',
+      competitionId: 'competition',
+      cursor: { ...claimSnapshot.cursor, liveSessionId: 'session' },
+    };
+    await connection.claim(snapshot, 'revision', false);
+    await connection.sendReliable(
+      { kind: 'map_started', matchId: 'match', cursor: snapshot.cursor } as ReliableEventV1,
+      snapshot,
+    );
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      await connection.sendLive(snapshot);
+      expect(connection.view().liveDelivery).toMatchObject({ reason, failure: { stage, error } });
+      expect(diagnostics).not.toHaveBeenCalled();
+      now = 10_000;
+      for (let index = 0; index < 3; index++) await connection.sendLive(snapshot);
+      await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
+      await connection.sendLive(snapshot);
+      expect(diagnostics).toHaveBeenCalledTimes(1);
+      const diagnostic = diagnostics.mock.calls[0]![1] as Error;
+      expect(diagnostic.cause).toEqual({ stage, error });
+      expect(diagnostic.message).toContain(`stage=${stage}`);
+      const serialized = JSON.stringify({
+        view: connection.view(),
+        message: diagnostic.message,
+        cause: diagnostic.cause,
+      });
+      expect(serialized).not.toContain('private-token');
+      expect(serialized).not.toContain('rh_mizar_private_token');
+      expect(serialized).not.toContain('private.example');
+      expect(serialized).not.toContain('stack');
+      recovering = true;
+      await connection.sendLive(snapshot);
+      expect(diagnostics).toHaveBeenCalledTimes(2);
+      expect(connection.view().liveDelivery).toMatchObject({
+        status: 'accepted',
+        failure: null,
+        consecutiveUnaccepted: 0,
+      });
+      expect(request).toHaveBeenCalledTimes(9);
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);

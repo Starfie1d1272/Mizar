@@ -49,6 +49,7 @@ export interface MatchContextControllerIssue {
   readonly code: MatchContextControllerIssueCode;
   readonly message: string;
   readonly diagnostics?: readonly ContractDiagnostic[];
+  readonly stage?: 'manifest' | 'match_document';
   readonly storeIssue?: MatchContextStoreIssue;
 }
 
@@ -313,7 +314,7 @@ export class MatchContextController {
           controllerIssue(
             'source_conversion_failed',
             'Manifest candidate 无法转换为 MatchContext。',
-            { diagnostics: error.diagnostics },
+            { diagnostics: error.diagnostics, stage: error.stage },
           ),
         ],
       };
@@ -382,6 +383,7 @@ export class MatchContextController {
         diagnostics: [
           controllerIssue('source_conversion_failed', '本地 BP 无法转换为比赛上下文。', {
             diagnostics: error.diagnostics,
+            stage: error.stage,
           }),
         ],
       };
@@ -669,6 +671,7 @@ export class MatchContextController {
         diagnostics: [
           controllerIssue('source_conversion_failed', 'RivalHub BP 无法转换，本地比赛仍保持。', {
             diagnostics: error.diagnostics,
+            stage: error.stage,
           }),
         ],
       };

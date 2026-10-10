@@ -190,8 +190,16 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     ['update', 'production', 'obs', 'resource'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
     updateStages.has(entry.stage);
+  const live =
+    entry.event === 'rivalhub_live' &&
+    typeof entry.stage === 'string' &&
+    ['fetch', 'read', 'parse', 'validate', 'cancel', 'acceptance', 'accepted'].includes(
+      entry.stage,
+    );
   const stage =
-    typeof entry.stage === 'string' && (stages.has(entry.stage) || update) ? entry.stage : null;
+    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live)
+      ? entry.stage
+      : null;
   const diagnostic = record(entry.diagnostic);
   const level = [10, 20, 30, 40, 50, 60].includes(Number(entry.level)) ? Number(entry.level) : null;
   if (stage === null && level === null) return null;
@@ -213,14 +221,15 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
           causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
         }
       : {}),
-    ...(update && diagnostic.error !== undefined
+    ...((update || live) && diagnostic.error !== undefined
       ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
       : {}),
     ...(stage === 'workspace_group_restore' && typeof entry.detail === 'string'
       ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-      : !update && typeof entry.error === 'string'
+      : !update && !live && typeof entry.error === 'string'
         ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
         : !update &&
+            !live &&
             [
               'powershell',
               'cs2_launch',
@@ -232,7 +241,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
             ].includes(stage ?? '') &&
             typeof entry.detail === 'string'
           ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-          : !update && typeof record(entry.err).message === 'string'
+          : !update && !live && typeof record(entry.err).message === 'string'
             ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
             : {}),
     durationMs: count(diagnostic.durationMs),
