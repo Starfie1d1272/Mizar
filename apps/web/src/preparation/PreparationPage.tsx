@@ -234,7 +234,6 @@ export function PreparationPage() {
 
         {path === '/' ? (
           <div className="preparation-dashboard" data-selected={Boolean(match)}>
-            <DemoTestPanel />
             {!match ? (
               <Panel className="preparation-task-panel">
                 <div className="preparation-task-content">
@@ -463,6 +462,7 @@ export function PreparationPage() {
                 </Panel>
               </div>
             ) : null}
+            <DemoTestPanel />
             <div className="preparation-tool-strip">
               <span>常用工具</span>
               {tools}

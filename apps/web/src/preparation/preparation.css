@@ -193,6 +193,7 @@
   align-items: stretch;
 }
 .preparation-dashboard > .production-status,
+.preparation-dashboard > .preparation-demo-test,
 .preparation-dashboard > .preparation-rehearsal-stage,
 .preparation-tool-strip {
   grid-column: 1 / -1;
