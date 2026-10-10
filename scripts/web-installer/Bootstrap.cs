@@ -255,7 +255,7 @@ namespace Mizar.WebInstaller {
         var failures=new System.Collections.Generic.List<Exception>();
         var sources=new System.Collections.Generic.List<string>(plan.urls);
         if(plan.publicationRequired) {
-          try {using(var lookup=CancellationTokenSource.CreateLinkedTokenSource(token)) {lookup.CancelAfter(15000);sources.Insert(0,await Mirror.Resolve(plan,client,lookup.Token));}} catch {token.ThrowIfCancellationRequested();}
+          try {using(var lookup=CancellationTokenSource.CreateLinkedTokenSource(token)) {lookup.CancelAfter(15000);sources.Insert(0,await Mirror.Resolve(plan,client,lookup.Token));}} catch(Exception error) {Window.SaveDiagnostic(new IOException("Core download mirror lookup failed; trying authenticated canonical source.",error));token.ThrowIfCancellationRequested();}
         }
         foreach (string url in sources) {
           token.ThrowIfCancellationRequested();
