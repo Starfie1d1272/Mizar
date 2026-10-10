@@ -29,7 +29,7 @@ export async function installOfficialPack({
   signal.throwIfAborted();
   const identity = getResourceAuthorization(authorization);
   const pinnedPolicy = { ...identity.policy, manifestSha256: identity.manifestSha256 };
-  const verifyActive = createActivePolicyVerifier(pinnedPolicy);
+  const verifyActive = createActivePolicyVerifier(pinnedPolicy, authorization);
   let cached;
   try {
     cached = await store.reuseActive(PACK_ID, verifyActive, { signal });
@@ -45,7 +45,8 @@ export async function installOfficialPack({
     )
       throw error;
   }
-  if (cached) return finishOfficialPack(store, cached, pinnedPolicy, signal);
+  if (cached)
+    return finishOfficialPack(store, cached, pinnedPolicy, signal, undefined, authorization);
   if (loadInputs !== undefined) {
     if (typeof loadInputs !== 'function') throw new Error('Official resource loader is invalid');
     inputs = await loadInputs(signal);
@@ -95,7 +96,14 @@ export async function installOfficialPack({
     { packVersion: verified.manifest.packVersion, signal, force: true },
   );
   const active = await store.reuseActive(PACK_ID, verifyActive, { signal });
-  return finishOfficialPack(store, active, pinnedPolicy, signal, verified.manifestSha256);
+  return finishOfficialPack(
+    store,
+    active,
+    pinnedPolicy,
+    signal,
+    verified.manifestSha256,
+    authorization,
+  );
 }
 
 /** Preserve the old Web URLs while delegating all authorization/Range work to Store. */
@@ -121,6 +129,7 @@ async function finishOfficialPack(
   policy,
   signal,
   expectedManifest = policy.manifestSha256,
+  authorization,
 ) {
   if (
     !active ||
@@ -136,9 +145,13 @@ async function finishOfficialPack(
   }
   await assertDefaultEplReadable(store, signal);
   // Reads return snapshots; confirm the active identity still matches after them.
-  const confirmed = await store.reuseActive(PACK_ID, createActivePolicyVerifier(policy), {
-    signal,
-  });
+  const confirmed = await store.reuseActive(
+    PACK_ID,
+    createActivePolicyVerifier(policy, authorization),
+    {
+      signal,
+    },
+  );
   if (!confirmed || JSON.stringify(confirmed.identity) !== JSON.stringify(active.identity)) {
     throw new Error('Default official resource identity changed before completion');
   }

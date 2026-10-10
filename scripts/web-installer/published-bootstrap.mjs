@@ -8,6 +8,7 @@ import { PACK_ID, LIMITS } from '@mizar/resource-pack-contract';
 import {
   RESOURCE_ASSET_NAMES as resourceNames,
   getResourceAuthorization,
+  verifyCatalogResourceMetadata,
   verifyResourceCatalogBytes,
   verifyResourceCatalogReceipt,
 } from '@mizar/resource-pack-contract/runtime';
@@ -97,7 +98,6 @@ async function authenticateBootstrapSource({
   const loadInputs = async (downloadSignal = signal) => {
     const inputs = {};
     for (const [field, name, maximum, digest] of [
-      ['archiveBytes', identity.archive.name, LIMITS.archiveBytes, identity.archive.sha256],
       ['archiveBundleBytes', names.archiveProof, 2097152],
       ['statementBytes', names.publication, 65536, identity.publication.sha256],
       ['publicationBundleBytes', names.publicationProof, 2097152],
@@ -112,13 +112,30 @@ async function authenticateBootstrapSource({
         fetcher,
         sourceMode,
       });
-      if (
-        (digest && hash(bytes) !== digest) ||
-        (field === 'archiveBytes' && bytes.length !== identity.archive.bytes)
-      )
+      if (digest && hash(bytes) !== digest)
         throw new Error('Authenticated resource asset bytes changed');
       inputs[field] = Buffer.from(bytes);
     }
+    await verifyCatalogResourceMetadata({
+      authorization,
+      ...inputs,
+      tufCachePath,
+      signal: downloadSignal,
+    });
+    const archiveBytes = await downloadResourceOriginal({
+      version: manifest.version,
+      name: identity.archive.name,
+      maximum: LIMITS.archiveBytes,
+      signal: downloadSignal,
+      fetcher,
+      sourceMode,
+    });
+    if (
+      archiveBytes.length !== identity.archive.bytes ||
+      hash(archiveBytes) !== identity.archive.sha256
+    )
+      throw new Error('Authenticated resource archive bytes changed');
+    inputs.archiveBytes = Buffer.from(archiveBytes);
     return inputs;
   };
   return {
@@ -147,7 +164,10 @@ export async function restoreResourceAuthorization({ store, expectedCore, signal
         purpose: 'cache',
         signal: storeSignal,
       });
-      return createActivePolicyVerifier(getResourceAuthorization(authorization).policy)({
+      return createActivePolicyVerifier(
+        getResourceAuthorization(authorization).policy,
+        authorization,
+      )({
         receipt,
         signal: storeSignal,
       });

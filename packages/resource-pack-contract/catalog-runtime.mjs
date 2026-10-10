@@ -2,13 +2,18 @@ import { Buffer } from 'node:buffer';
 import { requireValue } from './index.mjs';
 import { sha256, jsonBytes } from './content.mjs';
 import { RESOURCE_ASSET_NAMES, parseResourceCatalogBytes } from './catalog.mjs';
-import { createMizarVerifier, verifyMizarAttestation } from './attestation.mjs';
+import {
+  createMizarVerifier,
+  verifyMizarAttestation,
+  verifyMizarAttestationDigest,
+} from './attestation.mjs';
 import {
   captureTrustSnapshot,
   createOfflineMizarVerifier,
   RECEIPT_MAX_BYTES,
 } from './trust-snapshot.mjs';
-import { verifyResourcePublicationBytes } from './runtime.mjs';
+import { parsePublication } from './publication.mjs';
+import { verifyResourcePublicationBytes, verifyResourceReceipt } from './runtime.mjs';
 
 const authorizations = new WeakMap();
 function snapshot(value, limit) {
@@ -39,7 +44,7 @@ function decode(value, limit) {
 }
 function parse(bytes, expectedCore, purpose) {
   const parsed = parseResourceCatalogBytes(bytes.descriptorBytes, bytes.catalogBytes, expectedCore);
-  const { publication } = parsed.entry;
+  const publication = parsed.catalog.authorization ?? parsed.entry.publication;
   const now = Date.now();
   requireValue(
     Date.parse(publication.issuedAt) <= now &&
@@ -78,6 +83,9 @@ function authorize(parsed, receipt) {
     publication: parsed.entry.publication,
     assets: parsed.entry.assets,
     descriptorSha256: parsed.catalog.descriptorSha256,
+    ...(parsed.catalog.origin
+      ? { origin: parsed.catalog.origin, authorization: parsed.catalog.authorization }
+      : {}),
   });
   const handle = Object.freeze({ schemaVersion: 'mizar.authenticated-resource-catalog.v1' });
   authorizations.set(handle, { identity, receipt: freeze(receipt) });
@@ -200,6 +208,7 @@ export async function verifyCatalogResourcePublicationBytes({ authorization, ...
     ...inputs,
     statementBytes,
     policy: { ...identity.policy, now: Date.now() },
+    authorization,
   });
   requireValue(
     statementBytes.equals(jsonBytes(verified.statement)) &&
@@ -217,4 +226,100 @@ export async function verifyCatalogResourcePublicationBytes({ authorization, ...
     '带目录双证据的资源 receipt 超限',
   );
   return { ...verified, receipt };
+}
+
+/** Refresh only Core compatibility authorization; retain original content and signer evidence. */
+export async function authorizeCachedResource({ authorization, receipt, signal }) {
+  const identity = getResourceAuthorization(authorization);
+  requireValue(identity.origin?.publication, '此目录未明确授权复用原始发行声明');
+  const previous = globalThis.structuredClone(receipt);
+  const replacement = {
+    ...previous,
+    catalog: previous.catalog ?? authorizations.get(authorization).receipt,
+    catalogHistory: [authorizations.get(authorization).receipt, ...(previous.catalogHistory ?? [])]
+      .filter(
+        (item, index, all) =>
+          item &&
+          (index === 0 ||
+            (() => {
+              const core = JSON.parse(decode(item.descriptorBase64, 65536).toString('utf8')).core;
+              return (
+                core.appVersion !== identity.core.appVersion || core.gitSha !== identity.core.gitSha
+              );
+            })()) &&
+          JSON.stringify(item) !== JSON.stringify(previous.catalog) &&
+          all.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index,
+      )
+      .slice(0, 2),
+  };
+  const manifest = await verifyResourceReceipt({
+    receipt: replacement,
+    expectedCore: identity.core,
+    purpose: 'cache',
+    signal,
+  });
+  return { manifest, receipt: replacement };
+}
+
+/** Authenticate all small original messages before requesting the resource ZIP. */
+export async function verifyCatalogResourceMetadata({
+  authorization,
+  statementBytes,
+  publicationBundleBytes,
+  archiveBundleBytes,
+  tufCachePath,
+  signal,
+}) {
+  const identity = getResourceAuthorization(authorization);
+  const declaration = snapshot(statementBytes, 65536);
+  const statement = parsePublication(
+    JSON.parse(declaration.toString('utf8')),
+    { ...identity.policy, now: Date.now() },
+    { purpose: identity.origin?.publication ? 'cache' : 'install' },
+  );
+  requireValue(
+    sha256(declaration) === identity.publication.sha256 &&
+      declaration.equals(jsonBytes(statement)) &&
+      statement.manifestSha256 === identity.manifestSha256 &&
+      ['name', 'bytes', 'sha256', 'format'].every(
+        (key) => statement.archive[key] === identity.archive[key],
+      ) &&
+      ['sequence', 'issuedAt', 'expiresAt'].every(
+        (key) => statement[key] === identity.publication[key],
+      ),
+    '原资源声明不等于当前签名目录',
+  );
+  signal?.throwIfAborted();
+  const publicationVerifier = await createMizarVerifier(
+    'promotion',
+    statement.promotionSha,
+    tufCachePath,
+  );
+  requireValue(
+    verifyMizarAttestation(
+      declaration,
+      RESOURCE_ASSET_NAMES.publication,
+      JSON.parse(snapshot(publicationBundleBytes, RECEIPT_MAX_BYTES).toString('utf8')),
+      publicationVerifier,
+      'promotion',
+    ) === statement.promotionSha,
+    '原资源发行签名身份不符',
+  );
+  signal?.throwIfAborted();
+  const archiveVerifier = await createMizarVerifier(
+    'qualification',
+    statement.sourceSha,
+    tufCachePath,
+  );
+  requireValue(
+    verifyMizarAttestationDigest(
+      statement.archive.sha256,
+      statement.archive.name,
+      JSON.parse(snapshot(archiveBundleBytes, RECEIPT_MAX_BYTES).toString('utf8')),
+      archiveVerifier,
+    ) === statement.sourceSha,
+    '原资源归档签名身份不符',
+  );
+  signal?.throwIfAborted();
+  return statement;
 }

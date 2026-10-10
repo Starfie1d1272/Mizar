@@ -72,9 +72,9 @@ export function verifyMizarAttestationDigest(
   );
   requireValue(
     Array.isArray(statement.subject) &&
-      statement.subject.some(
+      statement.subject.filter(
         (subject) => subject.name === name && subject.digest?.sha256 === digest,
-      ),
+      ).length === 1,
     '资源签名 subject 不等于实际字节',
   );
   requireValue(Array.isArray(definition.resolvedDependencies), '资源 provenance 缺少源码');

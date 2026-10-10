@@ -102,7 +102,12 @@ namespace Mizar.WebInstaller {
           rejected=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {rejected=true;}
           Assert(rejected && File.ReadAllText(pending)==invalid && Directory.Exists(target));
         }
-        record.writerPid=endedPid;record.writerStarted=endedAt; Nsis.SavePending(record,false);
+        record.writerPid=0; record.writerStarted=0; record.stage="prepared"; Nsis.SavePending(record,false);
+        Assert(!Nsis.RecoverPending(plan,target) && !Directory.Exists(target) && !File.Exists(pending));
+        // The next transaction creates the deleted marker, rather than replacing it.
+        Directory.CreateDirectory(target); File.WriteAllText(Path.Combine(target,".mizar-bootstrap-owner"),record.token);
+        Nsis.SavePending(record,!File.Exists(pending)); Assert(File.Exists(pending));
+        record.writerPid=endedPid;record.writerStarted=endedAt;record.stage="rollback-writing"; Nsis.SavePending(record,false);
         File.WriteAllText(Path.Combine(target,"unknown-user-file"),"preserve exactly");
         Assert(!Nsis.RecoverPending(plan,target));
         Assert(!Directory.Exists(target) && File.ReadAllText(Path.Combine(retained,"unknown-user-file"))=="preserve exactly" && File.Exists(pending));

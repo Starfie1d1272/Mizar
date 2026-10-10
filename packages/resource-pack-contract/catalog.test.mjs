@@ -95,6 +95,66 @@ describe('original Qualification descriptor and Promotion catalog client boundar
       }),
     ).toThrow('必须先认证');
   });
+  it('v2 separates current Core authorization from immutable original Qualification and Promotion while v1 remains strict', () => {
+    const original = candidate();
+    const nextCore = {
+      ...core,
+      appVersion: '1.2.0',
+      gitSha: 'e'.repeat(40),
+      archive: 'Mizar-v1.2.0-Windows-x64-Core.zip',
+    };
+    const originalPublication = original.catalog.resources[0].publication;
+    const descriptor = createResourceDescriptor({
+      core: nextCore,
+      packVersion: '1.0.0',
+      archive: original.descriptor.resources[0].archive,
+      manifestSha256: 'c'.repeat(64),
+      sequence: 8,
+      issuedAt: '2026-10-01T00:00:00Z',
+      expiresAt: '2026-12-01T00:00:00Z',
+      origin: {
+        sourceSha,
+        publication: {
+          promotionSha: sourceSha,
+          sha256: originalPublication.sha256,
+          sequence: 7,
+          issuedAt: originalPublication.issuedAt,
+          expiresAt: originalPublication.expiresAt,
+        },
+      },
+    });
+    const bytes = jsonBytes(descriptor);
+    const catalog = createResourceCatalog(
+      descriptor,
+      bytes,
+      'f'.repeat(40),
+      originalPublication.sha256,
+    );
+    const parsed = parseResourceCatalogBytes(bytes, jsonBytes(catalog), nextCore);
+    expect(parsed.descriptor.schemaVersion).toBe('mizar.resource-descriptor.v2');
+    expect(parsed.entry.policy.sourceSha).toBe(sourceSha);
+    expect(parsed.entry.policy.promotionSha).toBe(sourceSha);
+    expect(parsed.catalog.promotionSha).toBe('f'.repeat(40));
+    expect(parsed.entry.publication.sequence).toBe(7);
+    expect(parsed.catalog.authorization.sequence).toBe(8);
+    expect(() =>
+      createResourceCatalog(descriptor, bytes, 'f'.repeat(40), '0'.repeat(64)),
+    ).toThrow();
+    expect(() =>
+      parseResourceCatalogBytes(
+        jsonBytes({ ...descriptor, schemaVersion: 'mizar.resource-descriptor.v1' }),
+        jsonBytes(catalog),
+        nextCore,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseResourceCatalogBytes(
+        bytes,
+        jsonBytes({ ...catalog, promotionSha: sourceSha, resources: original.catalog.resources }),
+        nextCore,
+      ),
+    ).toThrow();
+  });
   it('requires real fixed-root original descriptor proof offline, including expired cached catalogs', async () => {
     const c = candidate(),
       fixture = new URL('../../apps/companion/test/fixtures/updates/', import.meta.url);

@@ -59,7 +59,11 @@ const coreIdentity = (manifest) => {
 // then the existing shared verifier's archive/publication proofs.
 export function makeResourceDescriptor(pack, manifest, parameters) {
   const core = coreIdentity(manifest);
-  requireValue(pack.manifest.source.gitSha === core.gitSha, 'Pack 与 Core 必须来自同一资格源码');
+  requireValue(
+    parameters.origin?.sourceSha === pack.manifest.source.gitSha ||
+      (!parameters.origin && pack.manifest.source.gitSha === core.gitSha),
+    'Pack 原始来源与目录不一致',
+  );
   const publication = makePublication(pack, { ...parameters, promotionSha: core.gitSha });
   const policy = {
     packVersion: pack.manifest.packVersion,
@@ -77,20 +81,23 @@ export function makeResourceDescriptor(pack, manifest, parameters) {
     sequence: publication.sequence,
     issuedAt: publication.issuedAt,
     expiresAt: publication.expiresAt,
+    ...(parameters.origin ? { origin: parameters.origin } : {}),
   });
 }
 
 export function makePublishedCatalog(candidate, promotionSha) {
   requireValue(isSourceSha(promotionSha), '晋级目录必须绑定精确晋级源码');
-  const publication = makePublication(candidate.pack, {
-    ...candidate.entry.publication,
-    promotionSha,
-  });
+  const publication =
+    candidate.descriptor.origin?.publication ??
+    makePublication(candidate.pack, {
+      ...candidate.entry.publication,
+      promotionSha,
+    });
   return createResourceCatalog(
     candidate.descriptor,
     candidate.bytes,
     promotionSha,
-    sha256(jsonBytes(publication)),
+    candidate.descriptor.origin?.publication?.sha256 ?? sha256(jsonBytes(publication)),
   );
 }
 
@@ -118,6 +125,67 @@ export async function prepareResourceCandidate(
   return { catalog, archive: pack.archive, trusted: false };
 }
 
+export async function reuseResourceCandidate(
+  source,
+  output,
+  manifest,
+  packVersion,
+  sequence,
+  now = Date.now(),
+) {
+  const original = JSON.parse(await boundedRead(join(source, names.descriptor), 65536));
+  const originalCore = {
+    ...original.core,
+    desktopBuildProfile: 'release',
+    developmentOnly: false,
+    resourceMode: 'core',
+  };
+  const published = (await readdir(source)).includes(names.catalog);
+  return withVerifiedSnapshot(
+    source,
+    originalCore,
+    published,
+    async (candidate, frozen) => {
+      requireValue(
+        candidate.pack.manifest.packVersion === packVersion,
+        '复用资源版本不等于选定版本',
+      );
+      const issuedAt = new Date(Math.floor(now / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+      const expiresAt = new Date(Math.floor(now / 1000) * 1000 + 90 * 86400000)
+        .toISOString()
+        .replace('.000Z', 'Z');
+      const origin = { sourceSha: candidate.pack.manifest.source.gitSha };
+      if (published || candidate.descriptor.origin?.publication) {
+        const publication = candidate.entry.publication;
+        origin.publication = {
+          promotionSha:
+            candidate.entry.policy.promotionSha ??
+            candidate.descriptor.origin.publication.promotionSha,
+          sha256: publication.sha256 ?? candidate.descriptor.origin.publication.sha256,
+          sequence: publication.sequence,
+          issuedAt: publication.issuedAt,
+          expiresAt: publication.expiresAt,
+        };
+      }
+      const descriptor = makeResourceDescriptor(candidate.pack, manifest, {
+        sequence,
+        issuedAt,
+        expiresAt,
+        origin,
+      });
+      await mkdir(output, { recursive: false });
+      for (const name of [
+        candidate.entry.archive.name,
+        names.archiveQualification,
+        ...(origin.publication ? [names.publication, names.publicationPromotion] : []),
+      ])
+        await writeFile(join(output, name), frozen.get(name), { flag: 'wx' });
+      await writeFile(join(output, names.descriptor), jsonBytes(descriptor), { flag: 'wx' });
+      return descriptor;
+    },
+    { purpose: 'cache' },
+  );
+}
 export async function readResourceCandidate(folder, manifest) {
   const bytes = await boundedRead(join(folder, names.descriptor), 64 * 1024);
   const catalog = JSON.parse(bytes.toString('utf8'));
@@ -132,7 +200,10 @@ export async function readResourceCandidate(folder, manifest) {
   const pack = verifyPackBytes(archiveBytes, {
     coreVersion: manifest.appVersion.replace(/-rc\.\d+$/, ''),
   });
-  const expected = makeResourceDescriptor(pack, manifest, entry.publication);
+  const expected = makeResourceDescriptor(pack, manifest, {
+    ...(catalog.authorization ?? entry.publication),
+    ...(catalog.schemaVersion === 'mizar.resource-descriptor.v2' ? { origin: catalog.origin } : {}),
+  });
   equal(catalog, expected, '目录字段、策略、摘要或下载地址与真实候选不一致');
   requireValue(bytes.equals(jsonBytes(expected)), '目录必须保持原始规范字节，拒绝额外或重复字段');
   return { descriptor: catalog, bytes, archiveBytes, pack, entry: expected.resources[0] };
@@ -145,18 +216,27 @@ function verifyProof(path, sourceSha, bundle, role = 'qualification') {
     maxBuffer: 2 * 1024 * 1024,
   });
 }
-async function withVerifiedSnapshot(folder, manifest, published, operation) {
+async function withVerifiedSnapshot(
+  folder,
+  manifest,
+  published,
+  operation,
+  { purpose = 'install' } = {},
+) {
   const candidate = await readResourceCandidate(folder, manifest);
   const frozen = new Map([
     [names.descriptor, candidate.bytes],
     [candidate.entry.archive.name, candidate.archiveBytes],
   ]);
+  const originalPublication = candidate.descriptor.origin?.publication;
   const proofNames = [
     names.descriptorQualification,
     names.archiveQualification,
     ...(published
       ? [names.catalog, names.catalogPromotion, names.publication, names.publicationPromotion]
-      : []),
+      : originalPublication
+        ? [names.publication, names.publicationPromotion]
+        : []),
   ];
   for (const name of proofNames)
     frozen.set(
@@ -180,6 +260,31 @@ async function withVerifiedSnapshot(folder, manifest, published, operation) {
       candidate.entry.policy.sourceSha,
       join(directory, names.archiveQualification),
     );
+    if (originalPublication) {
+      requireValue(
+        sha256(frozen.get(names.publication)) === originalPublication.sha256,
+        '复用声明不是原始规范字节',
+      );
+      const statement = JSON.parse(frozen.get(names.publication).toString('utf8'));
+      const result = await verifyResourcePublication({
+        statementPath: join(directory, names.publication),
+        publicationBundlePath: join(directory, names.publicationPromotion),
+        archivePath: join(directory, candidate.entry.archive.name),
+        archiveBundlePath: join(directory, names.archiveQualification),
+        policy: {
+          ...candidate.entry.policy,
+          promotionSha: originalPublication.promotionSha,
+          now: Date.now(),
+        },
+        purpose: 'cache',
+      });
+      requireValue(
+        frozen.get(names.publication).equals(jsonBytes(result.statement)),
+        '原始声明不是规范字节',
+      );
+      for (const key of ['sequence', 'issuedAt', 'expiresAt', 'promotionSha'])
+        requireValue(statement[key] === originalPublication[key], '原始声明身份混搭');
+    }
     if (published) {
       const catalogBytes = frozen.get(names.catalog);
       const catalog = JSON.parse(catalogBytes.toString('utf8'));
@@ -206,6 +311,7 @@ async function withVerifiedSnapshot(folder, manifest, published, operation) {
         archivePath: join(directory, candidate.entry.archive.name),
         archiveBundlePath: join(directory, names.archiveQualification),
         policy: { ...candidate.entry.policy, now: Date.now() },
+        purpose: originalPublication ? 'cache' : purpose,
       });
     }
     return await operation(candidate, frozen);
@@ -227,7 +333,9 @@ function expectedResourceNames(candidate, published) {
     names.archiveQualification,
     ...(published
       ? [names.catalog, names.catalogPromotion, names.publication, names.publicationPromotion]
-      : []),
+      : candidate.descriptor.origin?.publication
+        ? [names.publication, names.publicationPromotion]
+        : []),
   ];
 }
 async function assertFileSet(folder, expected) {
@@ -491,9 +599,28 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       Number(sequence),
     );
     console.log(JSON.stringify({ archive: result.archive, trusted: false }));
+  } else if (mode === 'reuse') {
+    await reuseResourceCandidate(
+      argument,
+      folder,
+      manifest,
+      process.env.RESOURCE_PACK_VERSION,
+      Number(sequence),
+    );
   } else if (mode === 'check') {
     const candidate = await readResourceCandidate(folder, manifest);
-    await assertFileSet(folder, [candidate.entry.archive.name, names.descriptor]);
+    await assertFileSet(folder, [
+      candidate.entry.archive.name,
+      names.descriptor,
+      ...(candidate.descriptor.origin
+        ? [
+            names.archiveQualification,
+            ...(candidate.descriptor.origin.publication
+              ? [names.publication, names.publicationPromotion]
+              : []),
+          ]
+        : []),
+    ]);
     console.log('Resource candidate integrity matches Core; this does not authorize installation');
   } else if (mode === 'qualified') {
     await resourceAssetInventory(folder, manifest);
@@ -506,6 +633,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
           process.env.GITHUB_SHA,
       '资源签发工具必须使用本次晋级工作流精确源码',
     );
+    if (process.env.GITHUB_ENV)
+      await appendFile(
+        process.env.GITHUB_ENV,
+        `RESOURCE_PUBLICATION_REUSED=${Boolean(candidate.descriptor.origin?.publication)}\n`,
+      );
     const catalog = makePublishedCatalog(candidate, process.env.GITHUB_SHA);
     await writeFile(join(folder, names.catalog), jsonBytes(catalog), { flag: 'wx' });
     const { publication } = candidate.entry;

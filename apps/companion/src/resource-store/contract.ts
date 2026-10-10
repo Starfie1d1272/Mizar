@@ -39,6 +39,8 @@ export interface ActivePackVerification<Identity> {
   (input: { receipt: unknown; signal: AbortSignal }): Promise<{
     descriptor: TrustedPack;
     identity: Identity;
+    /** SDK-authorized replacement retains the old Core catalog for rollback. */
+    receipt?: unknown;
   }>;
 }
 

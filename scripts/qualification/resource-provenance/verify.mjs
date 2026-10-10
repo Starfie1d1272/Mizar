@@ -16,9 +16,12 @@ export async function verifyResourcePublication({
   archivePath,
   archiveBundlePath,
   policy,
+  purpose = 'install',
 }) {
   const declarationBytes = await boundedRead(statementPath, 64 * 1024);
-  const statement = parsePublication(JSON.parse(declarationBytes.toString('utf8')), policy);
+  const statement = parsePublication(JSON.parse(declarationBytes.toString('utf8')), policy, {
+    purpose,
+  });
   const archiveBytes = await boundedRead(archivePath, LIMITS.archiveBytes);
   const publicationBundle = await boundedRead(publicationBundlePath, 2 * 1024 * 1024);
   const archiveBundle = await boundedRead(archiveBundlePath, 2 * 1024 * 1024);

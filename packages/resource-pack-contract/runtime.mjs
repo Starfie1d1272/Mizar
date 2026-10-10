@@ -8,6 +8,8 @@ export {
   verifyResourceCatalogBytes,
   verifyResourceCatalogReceipt,
   verifyCatalogResourcePublicationBytes,
+  authorizeCachedResource,
+  verifyCatalogResourceMetadata,
 } from './catalog-runtime.mjs';
 import { parsePublication, assertPublicationContent } from './publication.mjs';
 import {
@@ -34,6 +36,7 @@ export async function verifyResourcePublicationBytes({
   archiveBytes,
   archiveBundleBytes,
   policy,
+  authorization,
   tufCachePath,
   signal,
 }) {
@@ -43,7 +46,18 @@ export async function verifyResourcePublicationBytes({
     archiveProof = snapshot(archiveBundleBytes, 2 * 1024 * 1024);
   const publicationBundle = JSON.parse(publicationProof.toString('utf8'));
   const archiveBundle = JSON.parse(archiveProof.toString('utf8'));
-  const statement = parsePublication(JSON.parse(declaration.toString('utf8')), policy);
+  const identity = authorization && getResourceAuthorization(authorization);
+  if (identity)
+    requireValue(
+      ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion', 'minimumSequence'].every(
+        (key) => policy[key] === identity.policy[key],
+      ) && sha256(declaration) === identity.publication.sha256,
+      '资源策略不属于认证目录',
+    );
+  // Only a fresh authenticated v2 catalog may renew an unchanged original publication.
+  const statement = parsePublication(JSON.parse(declaration.toString('utf8')), policy, {
+    purpose: identity?.origin?.publication ? 'cache' : 'install',
+  });
   const pack = verifyPackBytes(archive, {
     coreVersion: policy.coreVersion,
     expectedArchive: statement.archive,
@@ -131,10 +145,31 @@ export async function verifyResourceReceipt({
   policy = policy && { ...policy };
   let catalogIdentity;
   if (receipt.catalog !== undefined) {
+    const corePin =
+      expectedCore ?? (policy && { appVersion: policy.coreVersion, gitSha: policy.sourceSha });
+    requireValue(corePin, '缓存目录必须绑定当前 Core');
+    requireValue(
+      receipt.catalogHistory === undefined ||
+        (Array.isArray(receipt.catalogHistory) && receipt.catalogHistory.length <= 2),
+      '缓存目录历史无效',
+    );
+    const catalogs = [...(receipt.catalogHistory ?? []), receipt.catalog];
+    const matching = catalogs.filter((item) => {
+      const descriptor = JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8'));
+      return (
+        descriptor.core?.appVersion === corePin.appVersion &&
+        descriptor.core?.gitSha === corePin.gitSha
+      );
+    });
+    requireValue(
+      matching.length >= 1 &&
+        matching.length <= 2 &&
+        (matching.length === 1 || matching[1] === receipt.catalog),
+      '缓存没有唯一当前 Core 授权',
+    );
     const authorization = await verifyResourceCatalogReceipt({
-      receipt: receipt.catalog,
-      expectedCore:
-        expectedCore ?? (policy && { appVersion: policy.coreVersion, gitSha: policy.sourceSha }),
+      receipt: matching[0],
+      expectedCore: corePin,
       purpose,
       tufCachePath,
       signal,
@@ -167,7 +202,9 @@ export async function verifyResourceReceipt({
       localManifestBytes === undefined
         ? receiptBytes(receipt.manifestBase64, LIMITS.manifestBytes)
         : snapshot(localManifestBytes, LIMITS.manifestBytes);
-  const statement = parsePublication(JSON.parse(declaration.toString('utf8')), policy, { purpose });
+  const statement = parsePublication(JSON.parse(declaration.toString('utf8')), policy, {
+    purpose: catalogIdentity?.origin?.publication ? 'cache' : purpose,
+  });
   if (catalogIdentity)
     requireValue(
       declaration.equals(jsonBytes(statement)) &&

@@ -479,8 +479,22 @@ export class ResourceStore {
   ): Promise<{ status: ResourceStatus; identity: Identity } | null> {
     return this.exclusive(async () => {
       const entry = this.entry(packId);
-      const active = entry.active;
-      if (!active) return null;
+      let active = entry.active;
+      if (!active) {
+        // An old Core catalog may be incompatible with this Core until the SDK
+        // authenticates a replacement. The pointer grants no content authorization.
+        let pointer;
+        try {
+          pointer = (await readJson(this.directory(packId), 'pointer.json')) as Pointer;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        }
+        if (pointer?.active === null) return null;
+        if (typeof pointer?.active !== 'string' || !versionId.test(pointer.active))
+          throw new ResourceStoreError('resource_pointer_invalid');
+        active = { id: pointer.active, descriptor: undefined! };
+      }
       const controller = new AbortController();
       const signal = options.signal
         ? AbortSignal.any([options.signal, controller.signal])
@@ -490,13 +504,15 @@ export class ResourceStore {
         signal.throwIfAborted();
         const directory = this.content(packId, active.id);
         const receipt = await readJson(dirname(directory), 'receipt.json');
-        const descriptor = await this.verify(packId, directory, receipt, signal, 'cache');
         const verified = await verifyIdentity({ receipt: structuredClone(receipt), signal });
+        const effectiveReceipt = verified.receipt ?? receipt;
+        const descriptor = await this.verify(packId, directory, effectiveReceipt, signal, 'cache');
         const pinned = checkDescriptor(verified.descriptor, packId);
         if (!pinned.compatible) throw new ResourceStoreError('resource_incompatible');
         if (
           JSON.stringify(descriptor) !== JSON.stringify(pinned) ||
-          JSON.stringify(active.descriptor) !== JSON.stringify(pinned)
+          (active.descriptor !== undefined &&
+            JSON.stringify(active.descriptor) !== JSON.stringify(pinned))
         )
           throw new ResourceStoreError('resource_descriptor_changed');
         try {
@@ -518,6 +534,10 @@ export class ResourceStore {
           throw error;
         }
         signal.throwIfAborted();
+        if (verified.receipt !== undefined)
+          await atomicJson(join(dirname(directory), 'receipt.json'), effectiveReceipt);
+        entry.active = { id: active.id, descriptor: pinned };
+        this.refreshVersions(entry);
         const clearFailure = entry.status.failure !== null;
         entry.status.phase = 'ready';
         entry.status.failure = null;
