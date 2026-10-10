@@ -724,8 +724,18 @@ export async function syncResourceFiles({
           await box.copy(source, folder, file.name);
           copied = true;
         } catch (error) {
-          if (![404, 405, 501].includes(error.httpStatus)) throw error;
-          console.log('Box 服务端复制未提供；使用已验证原资源上传，保留原目录');
+          // 404 may mean the verified source disappeared, not an unsupported endpoint.
+          if (![405, 501].includes(error.httpStatus)) throw error;
+          const destinations = (await box.list(folder)).filter((e) => e.name === file.name);
+          requireValue(
+            destinations.length <= 1 && destinations.every((e) => e.type === 'file'),
+            '资源复制目标无效；保留现场',
+          );
+          if (destinations.length) {
+            await verifyRemote(box, `${folder}/${file.name}`, file);
+            copied = true;
+          }
+          if (!copied) console.log('Box 服务端复制未提供；使用已验证原资源上传，保留原目录');
         }
       }
     }

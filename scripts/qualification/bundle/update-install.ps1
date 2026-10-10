@@ -148,11 +148,15 @@ function Restore-Previous {
   $restore = $plan.bundleRoot + '.mizar-restore-' + (Split-Path $StageRoot -Leaf)
   $failed = $plan.bundleRoot + '.mizar-failed-' + (Split-Path $StageRoot -Leaf)
   Assert-PlainPath $restore; Assert-PlainPath $failed
-  if (!(Test-Path -LiteralPath $restore)) { Copy-Item -LiteralPath $backup -Destination $restore -Recurse }
-  Assert-Payload $restore $plan.previousContentDigest
   if (Test-Path -LiteralPath $plan.bundleRoot) {
     # A retry after a directory swap must not destroy its only failed copy.
     try { Assert-Payload $plan.bundleRoot $plan.previousContentDigest; Restore-Registration; Record-Result 'restored' 'update_rolled_back'; Recovery-Registration $false; return } catch { }
+  }
+  # Check an already restored payload before materializing another full restore copy.
+  # The backup and current payload remain independently verified above.
+  if (!(Test-Path -LiteralPath $restore)) { Copy-Item -LiteralPath $backup -Destination $restore -Recurse }
+  Assert-Payload $restore $plan.previousContentDigest
+  if (Test-Path -LiteralPath $plan.bundleRoot) {
     if (Test-Path -LiteralPath $failed) { throw 'update_recovery_conflict' }
     Move-Item -LiteralPath $plan.bundleRoot -Destination $failed
   }

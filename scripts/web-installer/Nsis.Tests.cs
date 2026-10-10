@@ -67,7 +67,10 @@ namespace Mizar.WebInstaller {
         if(File.Exists(data)) throw new IOException("Refusing to replace existing user sentinel");
         Directory.CreateDirectory(Path.GetDirectoryName(data));File.WriteAllText(data,"preserve user data");
         try {
+          var phaseClock=System.Diagnostics.Stopwatch.StartNew();
           var updated=await Nsis.Install(plan,installer,target,CancellationToken.None);
+          Console.WriteLine("TIMING: same-version native update "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+          phaseClock.Restart();
           Assert(updated.CoreInstalled && File.ReadAllText(data)=="preserve user data");
           var committed=(PendingInstall)typeof(FreshInstallResult).GetField("record",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(updated);
           string script=Path.Combine(committed.updateStage,"update-install.ps1"),nativePlan=Path.Combine(committed.updateStage,"plan.json");
@@ -78,6 +81,8 @@ namespace Mizar.WebInstaller {
             string output=await stdout,errors=await stderr;if(child.ExitCode!=0) throw new IOException(errors);
             stage=Convert.ToString(new JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(output)["stageRoot"]);
           }
+          Console.WriteLine("TIMING: separate native Prepare "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+          phaseClock.Restart();
           var unwritten=Nsis.NewPending(plan,target,installer);unwritten.updateStage=stage;unwritten.updatePlanSha256=Hash(Path.Combine(stage,"plan.json"));unwritten.updateScriptSha256=Hash(Path.Combine(stage,"update-install.ps1"));
           unwritten.ownerPid=prepared.ownerPid;unwritten.ownerStarted=prepared.ownerStarted;unwritten.stage="update-launching";Nsis.SavePending(unwritten,true);
           bool launchAmbiguity=false;try {Nsis.RecoverPending(plan,target);} catch(InstallerRecoveryRequired) {launchAmbiguity=true;}
@@ -85,7 +90,11 @@ namespace Mizar.WebInstaller {
           unwritten.stage="update-prepared";Nsis.SavePending(unwritten,false);
           Assert(!Nsis.RecoverPending(plan,target) && !File.Exists(pending) && File.Exists(Path.Combine(target,"Mizar.exe")));
           Console.WriteLine("PASS: real native Prepare with no writer recovers; ambiguous launch with no writer retains the pending record");
+          Console.WriteLine("TIMING: prepared recovery "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+          phaseClock.Restart();
           await updated.RollbackAsync();
+          Console.WriteLine("TIMING: same-version rollback "+phaseClock.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+"s");
+          Assert(Directory.Exists(Path.Combine(committed.updateStage,"previous")) && !Directory.Exists(target+".mizar-restore-"+Path.GetFileName(committed.updateStage)));
           Assert(File.Exists(Path.Combine(target,"Mizar.exe")) && File.ReadAllText(data)=="preserve user data");
           Console.WriteLine("PASS: real lightweight same-version repair/upgrade and rollback preserve the existing path and user data");
         } finally {File.Delete(data);}
