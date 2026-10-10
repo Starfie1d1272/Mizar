@@ -244,6 +244,50 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        };
+        #[repr(C)]
+        #[derive(Default)]
+        struct WinRect {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+        }
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        impl FileTime {
+            fn value(&self) -> u64 {
+                (self.high as u64) << 32 | self.low as u64
+            }
+        }
+        fn until(condition: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                // ShowWindowAsync queues an event even to this test's thread.
+                // Process the real queue, then assert the requested state.
+                unsafe {
+                    let mut message = MSG::default();
+                    while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                        let _ = TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+                if condition() {
+                    return;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "native window event did not complete"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         #[link(name = "user32")]
         extern "system" {
             fn CreateWindowExW(
@@ -261,17 +305,17 @@ mod native {
                 param: *const std::ffi::c_void,
             ) -> isize;
             fn DestroyWindow(hwnd: isize) -> i32;
-            fn GetWindowRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
+            fn GetWindowRect(hwnd: isize, rect: *mut WinRect) -> i32;
         }
         #[link(name = "kernel32")]
         extern "system" {
             fn GetCurrentProcess() -> isize;
             fn GetProcessTimes(
                 process: isize,
-                created: *mut u64,
-                exit: *mut u64,
-                kernel: *mut u64,
-                user: *mut u64,
+                created: *mut FileTime,
+                exit: *mut FileTime,
+                kernel: *mut FileTime,
+                user: *mut FileTime,
             ) -> i32;
         }
         struct Window(isize);
@@ -302,19 +346,25 @@ mod native {
             };
             assert_ne!(hwnd, 0);
             assert_ne!(unsafe { ShowWindowAsync(hwnd, 4) }, 0);
+            until(|| unsafe { IsWindowVisible(hwnd) != 0 });
             Window(hwnd)
         }
         fn rect(hwnd: isize) -> [i32; 4] {
-            let mut rect = [0; 4];
+            let mut rect = WinRect::default();
             assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
-            rect
+            [rect.left, rect.top, rect.right, rect.bottom]
         }
         #[test]
         fn native_restore_preserves_geometry_focus_and_normal_z_band() {
             let root =
                 std::env::temp_dir().join(format!("mizar-group-native-{}", std::process::id()));
             let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-            let (mut created, mut exit, mut kernel, mut user) = (0, 0, 0, 0);
+            let (mut created, mut exit, mut kernel, mut user) = (
+                FileTime::default(),
+                FileTime::default(),
+                FileTime::default(),
+                FileTime::default(),
+            );
             assert_ne!(
                 unsafe {
                     GetProcessTimes(
@@ -327,6 +377,7 @@ mod native {
                 },
                 0
             );
+            let created = created.value();
             crate::cs2_session::SessionStore::new(log.state_root.clone())
                 .save(&serde_json::json!({
                     "version": 1, "pid": std::process::id(), "created": created,
@@ -355,10 +406,22 @@ mod native {
             let foreground = unsafe { GetForegroundWindow() };
             assert!(native.ready(game.0));
             assert_ne!(unsafe { ShowWindowAsync(game.0, 7) }, 0); // minimize without activation
+            until(|| native.minimized(game.0));
             assert!(native.minimized(game.0));
+            let mut tracker = crate::windows_host::GameTracker::default();
+            let tracked = crate::windows_host::Cs2Window {
+                pid: process.pid,
+                hwnd: game.0,
+            };
+            tracker.observe(Some(tracked));
+            let generation = tracker.generation;
+            assert!(tracker.tick().is_none());
+            assert_eq!(tracker.window, Some(tracked));
+            assert_eq!(tracker.generation, generation);
             assert!(game_window(game.0, process.pid)); // minimized is still discoverable
             assert!(!game_window(game.0, process.pid.wrapping_add(1)));
             assert!(native.restore(game.0));
+            until(|| !native.minimized(game.0));
             assert!(!native.minimized(game.0));
             assert_eq!(rect(game.0), before);
             assert!(raise_without_activation(game.0, left.0));
