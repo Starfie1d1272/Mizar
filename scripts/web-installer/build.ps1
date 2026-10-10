@@ -15,6 +15,12 @@ $icon = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/
 $brand = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/tray-icon.png')).Path
 $bootstrapSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Bootstrap.cs')).Path
 $nsisSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Nsis.cs')).Path
-& $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$exe" "/win32icon:$icon" "/resource:$planPath,plan.json" "/resource:$brand,brand.png" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $bootstrapSource $nsisSource
+$compilerArgs = @(
+  '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu',
+  "/out:$exe", "/win32icon:$icon", "/resource:$planPath,plan.json", "/resource:$brand,brand.png",
+  '/r:System.Net.Http.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll',
+  $bootstrapSource, $nsisSource
+)
+& $compiler @compilerArgs
 if ($LASTEXITCODE) { throw 'Formal bootstrap compilation failed' }
 [ordered]@{schemaVersion=1; artifact=(Split-Path $exe -Leaf); bytes=(Get-Item $exe).Length; sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant(); gitSha=$plan.gitSha; version=$plan.version; published=$false; publicationRequired=$true; productionReady=$false; domesticMirrorReady=$false; productionCompletionEvidence=$false; blockers=@('Box-first authenticated publication and resource bootstrap','published cold-cache installation and offline EPL qualification'); core=$plan.coreName; installer=$plan.name} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'web-installer-build.json') -Encoding UTF8
