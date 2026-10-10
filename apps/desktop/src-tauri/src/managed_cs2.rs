@@ -553,6 +553,14 @@ impl ManagedCs2 {
         }
         result
     }
+    /// A restored or absent journal alone does not prove external CS2 has stopped.
+    pub fn confirm_game_stopped(&self) -> Result<(), String> {
+        if any_cs2_running(&self.log)? {
+            return Err("CS2 仍在运行，本场回收资格未确认。请退出游戏后重试结束游戏。".into());
+        }
+        Ok(())
+    }
+
     pub fn finish(&mut self) -> Result<(), String> {
         // Poll once to adopt a uniquely identified late launch before closing it.
         self.poll();
@@ -594,6 +602,52 @@ impl ManagedCs2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These tests create or inspect machine-wide CS2 processes. Hold the same
+    // gate so the external-game fixture cannot contaminate recovery evidence.
+    static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn absent_journal_cleanup_does_not_prove_an_external_game_stopped() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("mizar-external-game-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        // Use a harmless waiting Windows command process with the game's executable
+        // name to exercise real process enumeration without CS2 or Steam.
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let executable = root.join("cs2.exe");
+        std::fs::copy(system.join("System32/cmd.exe"), &executable).unwrap();
+        struct ExternalGame {
+            child: std::process::Child,
+            root: PathBuf,
+        }
+        impl Drop for ExternalGame {
+            fn drop(&mut self) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                let _ = std::fs::remove_dir_all(&self.root);
+            }
+        }
+        let mut external = ExternalGame {
+            child: Command::new(executable)
+                .args(["/D", "/Q", "/K"])
+                .creation_flags(0x08000000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            root,
+        };
+        let mut managed = ManagedCs2::new(log);
+        assert!(external.child.try_wait().unwrap().is_none());
+        managed.finish().unwrap();
+        assert!(managed.confirm_game_stopped().is_err());
+        // An unrelated process must never be closed by the cleanup operation.
+        assert!(external.child.try_wait().unwrap().is_none());
+        external.child.kill().unwrap();
+        external.child.wait().unwrap();
+        managed.confirm_game_stopped().unwrap();
+    }
+
     #[test]
     fn process_ownership_requires_pid_creation_time_and_executable() {
         let pid = std::process::id();
@@ -613,6 +667,7 @@ mod tests {
 
     #[test]
     fn slow_launch_stays_pending_and_requires_explicit_cancel_before_restoration() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
         let root = std::env::temp_dir().join(format!("mizar-waiting-{}", std::process::id()));
         let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
         let mut managed = ManagedCs2::new(log);

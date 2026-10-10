@@ -5,10 +5,12 @@ import { expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),
+  invoke: vi.fn(),
   refresh: vi.fn(),
   view: {
     teams: [],
     activeLocalMatchId: 'current',
+    canConfirmLocalExit: false,
     inUseMatchId: ((): string | null => 'current')(),
     matches: [
       {
@@ -33,6 +35,7 @@ vi.mock('../src/preparation/tournament', () => ({
   useLocalTournament: () => ({ view: mocks.view, refresh: mocks.refresh }),
 }));
 vi.mock('../src/preparation/client', () => ({ command: mocks.command }));
+vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.invoke }));
 import { LocalMatchControls } from '../src/preparation/LocalMatchControls';
 
 it('protects current matches, cancels without mutation and confirms recovery actions with busy feedback', async () => {
@@ -143,5 +146,68 @@ it('protects current matches, cancels without mutation and confirms recovery act
     else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
     if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose);
     else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+  }
+});
+
+it('requests Host cleanup before refreshing deletion eligibility and surfaces a failed confirmation', async () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  const errors: unknown[] = [];
+  const action = async (run: () => Promise<unknown>) => {
+    try {
+      await run();
+    } catch (error) {
+      errors.push(error);
+    }
+  };
+  const button = () =>
+    [...container.querySelectorAll('button')].find(
+      (item) => item.textContent === '关闭游戏并允许删除',
+    );
+  try {
+    mocks.view.canConfirmLocalExit = true;
+    mocks.refresh.mockReset().mockResolvedValue(undefined);
+    mocks.invoke.mockReset();
+    act(() => root.render(<LocalMatchControls action={action} />));
+    expect(button()).toBeUndefined();
+    window.__TAURI_INTERNALS__ = { invoke: mocks.invoke };
+    act(() => root.render(<LocalMatchControls action={action} />));
+    const failure = new Error('游戏退出尚未确认，请重试。');
+    mocks.invoke.mockRejectedValueOnce(failure);
+    await act(async () => {
+      button()!.click();
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('finish_managed_cs2');
+    expect(errors).toEqual([failure]);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(button()!.disabled).toBe(false);
+    expect(container.textContent).not.toContain('游戏收尾已完成');
+    let finish: () => void = () => {};
+    mocks.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const confirmationButton = button()!;
+    await act(async () => {
+      confirmationButton.click();
+      await Promise.resolve();
+    });
+    expect(confirmationButton.disabled).toBe(true);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      finish();
+      await Promise.resolve();
+    });
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('游戏收尾已完成，已刷新比赛的删除状态');
+  } finally {
+    mocks.view.canConfirmLocalExit = false;
+    delete window.__TAURI_INTERNALS__;
+    act(() => root.unmount());
+    container.remove();
   }
 });

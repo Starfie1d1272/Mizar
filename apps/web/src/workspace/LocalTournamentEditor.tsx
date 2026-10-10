@@ -21,6 +21,7 @@ export interface LocalTournamentView {
     readonly deletedAt: string | null;
   }[];
   readonly inUseMatchId?: string | null;
+  readonly canConfirmLocalExit?: boolean;
   readonly selectedMatchId: string | null;
   readonly activeLocalMatchId: string | null;
   readonly contextRevision: string;

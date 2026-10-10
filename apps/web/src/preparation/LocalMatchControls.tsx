@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button, Dialog, Field, Select, StatusBanner } from '../ui';
 import { command } from './client';
 import { useLocalTournament } from './tournament';
+import { desktopInvoke } from '../workspace/client';
 
 export function LocalMatchControls({
   action,
@@ -137,9 +138,28 @@ export function LocalMatchControls({
       </form>
       <details>
         <summary>管理本地比赛</summary>
-        <p>
-          正在使用的比赛需先结束制作并切换比赛。尚未使用游戏数据的准备比赛可确认后解除选择并回收。
-        </p>
+        <p>正在使用的比赛需先结束制作。游戏退出确认后，可解除当前选择并回收，包括最后一场比赛。</p>
+        {view?.canConfirmLocalExit &&
+        view.activeLocalMatchId === view.inUseMatchId &&
+        window.__TAURI_INTERNALS__ ? (
+          <Button
+            loading={busy}
+            onClick={() =>
+              void action(async () => {
+                setBusy(true);
+                try {
+                  await desktopInvoke('finish_managed_cs2');
+                  await refresh();
+                  setMessage('游戏收尾已完成，已刷新比赛的删除状态。');
+                } finally {
+                  setBusy(false);
+                }
+              })
+            }
+          >
+            关闭游戏并允许删除
+          </Button>
+        ) : null}
         {view?.matches.map((match) => (
           <div key={match.matchId}>
             <span>

@@ -496,6 +496,7 @@ async fn start_managed_cs2(
         let _activity = activity.begin(1);
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
+        production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
         let result = if preserve_settings.unwrap_or(false) {
             cs2.start_with_settings(true)
         } else {
@@ -517,7 +518,13 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(2);
-        cs2.finish()
+        production_exit::finish_managed_game(&app.state::<DesktopLog>(), |requires_proof| {
+            cs2.finish()?;
+            if requires_proof {
+                cs2.confirm_game_stopped()?;
+            }
+            Ok(())
+        })
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?

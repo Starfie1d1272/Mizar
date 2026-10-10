@@ -27,6 +27,7 @@ export function registerLocalTournamentRoutes(
     readonly projections?: ProjectionCoordinator;
     readonly controller: MatchContextController;
     readonly canReleaseLocalSelection: () => boolean;
+    readonly canConfirmLocalExit: () => boolean;
     readonly withLocalSelectionRelease: (commit: () => Promise<void>) => Promise<boolean>;
     readonly originPolicy: LocalWebOriginPolicy;
   },
@@ -51,6 +52,7 @@ export function registerLocalTournamentRoutes(
           ? null
           : (active?.context.matchId ?? null),
       canReleaseLocalSelection: options.canReleaseLocalSelection(),
+      canConfirmLocalExit: options.canConfirmLocalExit(),
       selectedMatchId: state.selectedMatchId,
       activeLocalMatchId:
         active?.origin === 'local' && active.localAuthoringMode === 'standalone'
@@ -269,7 +271,8 @@ export function registerLocalTournamentRoutes(
         const known: Record<string, { status: number; message: string }> = {
           local_match_in_use: {
             status: 409,
-            message: '比赛正在使用，或尚未满足安全解除选择条件。请结束制作并切换比赛后重试。',
+            message:
+              '比赛正在使用，或游戏退出尚未确认。请结束制作，在桌面关闭游戏并确认后重试；也可切换到其他比赛。',
           },
           local_evidence_changed: {
             status: 409,
