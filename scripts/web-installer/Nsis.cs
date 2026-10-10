@@ -37,6 +37,7 @@ namespace Mizar.WebInstaller {
   }
   public static class Nsis {
     const string OwnershipName = ".mizar-bootstrap-owner";
+    static string selectedDestination;
     static string Hash(string path) {
       Downloader.NoReparse(path);
       using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -132,22 +133,54 @@ namespace Mizar.WebInstaller {
         }
         return false;
       } catch (Exception error) {
-        throw new InstallerRecoveryRequired(target, "不能安全恢复该记录；现场保持原样。" + error.Message);
+        throw new InstallerRecoveryRequired(target, "不能安全恢复该记录；现场保持原样。" + error.Message,error);
       }
     }
     static void AssertAllowedTarget(string target) {
       string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Mizar");
       string qualification = Path.Combine(Path.GetTempPath(), "Mizar-WebInstaller-Qualification") + Path.DirectorySeparatorChar;
       if (target != Path.GetFullPath(target) ||
-          (!String.Equals(target, local, StringComparison.OrdinalIgnoreCase) && !target.StartsWith(qualification, StringComparison.OrdinalIgnoreCase) && !IsRegisteredTarget(target)) ||
+          (!String.Equals(target, local, StringComparison.OrdinalIgnoreCase) && !target.StartsWith(qualification, StringComparison.OrdinalIgnoreCase) && !IsRegisteredTarget(target) && !String.Equals(target,selectedDestination,StringComparison.OrdinalIgnoreCase)) ||
           target.IndexOfAny(new char[] {'"', '\r', '\n'}) >= 0) throw new IOException("安装位置不受允许。");
+      if(String.Equals(target,selectedDestination,StringComparison.OrdinalIgnoreCase)) AssertSafeSelection(target);
       Downloader.NoReparse(target);
     }
     static bool IsRegisteredTarget(string target) {
       using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
         return key!=null && String.Equals(Path.GetFullPath(Convert.ToString(key.GetValue("InstallDir"))).TrimEnd(Path.DirectorySeparatorChar),target.TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase) && target!=Path.GetPathRoot(target);
     }
-    internal static string ResolveDestination() {
+    static void AssertSafeSelection(string target) {
+      string state=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar");
+      string windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+      if(target==Path.GetPathRoot(target).TrimEnd(Path.DirectorySeparatorChar) || target.IndexOfAny(new[]{'"','\r','\n'})>=0 || target.StartsWith(@"\\",StringComparison.Ordinal) || String.Equals(target,state,StringComparison.OrdinalIgnoreCase) || target.StartsWith(state+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || String.Equals(target,windows,StringComparison.OrdinalIgnoreCase) || target.StartsWith(windows+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new InstallerActionRequired("请选择独立的安装目录，不能使用系统目录、磁盘根目录或 Mizar 数据目录。");
+      Downloader.NoReparse(target);
+    }
+    internal static bool CanChooseDestination() {
+      using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) return !HasPending() && (key==null || String.IsNullOrEmpty(Convert.ToString(key.GetValue("InstallDir"))));
+    }
+    internal static string SelectDestination(string directory) {
+      if(!Path.IsPathRooted(directory)) throw new InstallerActionRequired("请选择完整的安装目录路径。");
+      string target=Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);AssertSafeSelection(target);
+      using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
+        string registered=key==null ? null : Convert.ToString(key.GetValue("InstallDir"));
+        if(!String.IsNullOrEmpty(registered) && !String.Equals(Path.GetFullPath(registered).TrimEnd(Path.DirectorySeparatorChar),target,StringComparison.OrdinalIgnoreCase)) throw new InstallerActionRequired("升级将沿用原安装位置，请勿迁移已有安装。");
+      }
+      if(File.Exists(target) || (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length!=0 && !IsRegisteredTarget(target))) throw new InstallerActionRequired("该目录已有文件，请选择空目录。已有安装将沿用原位置。");
+      selectedDestination=target;return target;
+    }
+    internal static string ResolveDestination(Plan plan=null) {
+      if(plan!=null && HasPending()) {
+        string path=PendingPath();
+        if(new FileInfo(path).Length<=65536) {
+          string raw=File.ReadAllText(path);var record=Serializer().Deserialize<PendingInstall>(raw);
+          using(var process=Process.GetCurrentProcess()) {
+            if(record!=null && raw==Serializer().Serialize(record) && record.schemaVersion=="mizar.bootstrap-pending.v1" && record.planSha256==PlanHash(plan) && record.bootstrapSha256==Hash(process.MainModule.FileName)) {
+              // The original same-installer record authorizes its own selected destination; recovery still verifies ownership and stopped writers.
+              selectedDestination=record.target;AssertAllowedTarget(record.target);return record.target;
+            }
+          }
+        }
+      }
       using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
         string value=key==null ? null : Convert.ToString(key.GetValue("InstallDir"));
         if(!String.IsNullOrEmpty(value)) {string target=Path.GetFullPath(value);AssertAllowedTarget(target);return target;}
@@ -350,6 +383,7 @@ namespace Mizar.WebInstaller {
         var output=ReadBridgeOutput(child.StandardOutput);var errors=ReadBridgeOutput(child.StandardError);
         int code; try {code=await Wait(child,TimeSpan.FromMinutes(10),progress,token);} catch(TimeoutException error) {throw new InstallerRecoveryRequired(record==null ? script : record.target,error.Message);}
         string text=await output;string diagnostic=await errors;
+        if(code==0 && diagnostic.Length>0) Window.SaveDiagnostic(new IOException("Native update warnings:\r\n"+diagnostic));
         if(code!=0) throw NativeFailure(arguments,diagnostic,new IOException("Exit code: "+code+"\r\nstdout:\r\n"+text+"\r\nstderr:\r\n"+diagnostic));
         return text.Trim().TrimStart('\uFEFF');
       }
@@ -483,6 +517,7 @@ namespace Mizar.WebInstaller {
           catch(TimeoutException e) { throw new InstallerRecoveryRequired(target,e.Message); }
         }
         string output=await stdout; string diagnostic=await stderr;
+        if(child.ExitCode==0 && diagnostic.Length>0) Window.SaveDiagnostic(new IOException("Resource preparation warnings:\r\n"+diagnostic));
         token.ThrowIfCancellationRequested();
         if(child.ExitCode!=0) throw new IOException("默认 EPL 素材尚未就绪；核心已保留，可重试素材或使用完整离线安装。",new IOException("Exit code: "+child.ExitCode+"\r\nstdout:\r\n"+output+"\r\nstderr:\r\n"+diagnostic));
         var result=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(output);
@@ -534,6 +569,7 @@ namespace Mizar.WebInstaller {
             if(Process.GetProcessesByName("Mizar").Length!=0 || new FileInfo(marker).Length!=32 || !System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(marker),"^[a-f0-9]{32}$")) throw new InstallerActionRequired("安装位置有无法确认的残留，请先备份该目录后重试。");
             Directory.Move(destination,destination+".retained-"+Guid.NewGuid().ToString("N"));
           }
+          if(Directory.Exists(destination) && Directory.GetFileSystemEntries(destination).Length==0 && String.Equals(destination,selectedDestination,StringComparison.OrdinalIgnoreCase)) Directory.Delete(destination,false);
           if(Directory.Exists(destination)) return await UpdateInstalled(plan,installer,destination,progress,token);
           ValidateDestination(destination, hadPending);
           using (var locked = new FileStream(installer, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true)) {

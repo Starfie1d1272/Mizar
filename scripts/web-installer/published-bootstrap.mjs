@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { StableSource, installerUrl } from '../updates/source.js';
 import { updateJson } from '../updates/network.js';
-import { downloadResourceOriginal } from './resource-mirror.mjs';
+import { downloadResourceOriginal, logBootstrapFallback } from './resource-mirror.mjs';
 import { createActivePolicyVerifier } from '../resource-store/runtime-adapter.js';
 import { PACK_ID, LIMITS } from '@mizar/resource-pack-contract';
 import {
@@ -26,9 +26,17 @@ const names = {
 export async function authenticatePublishedBootstrap(options) {
   try {
     return await authenticateBootstrapSource({ ...options, sourceMode: 'auto' });
-  } catch {
+  } catch (mirrorError) {
+    logBootstrapFallback('bootstrap authentication fallback', mirrorError);
     options.signal?.throwIfAborted();
-    return authenticateBootstrapSource({ ...options, sourceMode: 'github' });
+    try {
+      return await authenticateBootstrapSource({ ...options, sourceMode: 'github' });
+    } catch (githubError) {
+      throw new AggregateError(
+        [mirrorError, githubError],
+        'Bootstrap mirror and canonical authentication both failed',
+      );
+    }
   }
 }
 async function authenticateBootstrapSource({

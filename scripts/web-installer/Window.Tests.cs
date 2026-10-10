@@ -27,8 +27,10 @@ namespace Mizar.WebInstaller {
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
         window.Show(); Application.DoEvents();
         Assert(!window.detail.Text.Contains("网络"),"Welcome does not preemptively warn about network");
+        Assert(window.destination.Visible && window.destination.Text.EndsWith("Mizar") && window.browse.Visible,"Welcome exposes the default destination without another page");
         Assert(!window.bar.Visible && !window.launchChoice.Visible,"Initial window must hide progress and launch choice");
         Pump(window.Start());
+        Assert(window.openLocation.Visible && !window.destination.Visible,"Completion exposes the installation folder");
         Assert(window.heading.Text=="安装完成" && window.launchChoice.Visible && window.launchChoice.Checked,"Completion has checked launch choice");
         Assert(launches==0,"Reaching completion must not launch");
         window.action.PerformClick(); Assert(launches==1 && window.IsDisposed,"Checked Finish launches once and closes");

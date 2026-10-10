@@ -42,7 +42,10 @@ namespace Mizar.WebInstaller {
           Assert(pendingRejected && !Directory.Exists(guardedTarget) && File.Exists(pending));
           Console.WriteLine("PASS: persistent unfinished-install marker rejects a new writer and remains intact");
         } finally { File.Delete(pending); } // Only this test's exclusively created marker.
-        string target=Path.Combine(root,"real NSIS path");
+        string target=Path.Combine(Path.GetTempPath(),"Mizar selected install "+Guid.NewGuid().ToString("N"));
+        Assert(Nsis.SelectDestination(target)==target);
+        bool unsafeSelection=false;try {Nsis.SelectDestination(Environment.GetFolderPath(Environment.SpecialFolder.Windows));} catch(InstallerActionRequired) {unsafeSelection=true;}
+        Assert(unsafeSelection);
         // Recover the real prepared transaction through Install, including the
         // deleted marker's recreation and subsequent NSIS installation.
         Directory.CreateDirectory(target);
@@ -56,6 +59,8 @@ namespace Mizar.WebInstaller {
         Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
         Assert(String.Equals(Nsis.ResolveDestination(),target,StringComparison.OrdinalIgnoreCase));
+        bool relocation=false;try {Nsis.SelectDestination(Path.Combine(root,"different install"));} catch(InstallerActionRequired) {relocation=true;}
+        Assert(relocation && String.Equals(Nsis.ResolveDestination(),target,StringComparison.OrdinalIgnoreCase));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
         // Re-enter the same lightweight installer against an already owned installation.
         string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","upgrade-sentinel.txt");

@@ -18,8 +18,8 @@ function Assert-PlainPath([string]$path) {
   if (![IO.Path]::IsPathRooted($path) -or $path -match '["\r\n]') { throw 'update_path_invalid' }
   $cursor = [IO.Path]::GetFullPath($path)
   while ($cursor) {
-    if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'update_reparse_point' }
-    $parent = Split-Path -Parent $cursor
+    if (([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) -and ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint)) { throw 'update_reparse_point' }
+    $parent = [IO.Path]::GetDirectoryName($cursor)
     if ($parent -eq $cursor) { break }
     $cursor = $parent
   }
@@ -161,7 +161,7 @@ function Restore-Previous {
   Restore-Registration
   Record-Result 'restored' 'update_rolled_back'
   Recovery-Registration $false
-  Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
+  # Retain the displaced directory: unverified files must never be deleted during recovery.
 }
 
 if ($Mode -eq 'Prepare') {
@@ -264,7 +264,7 @@ try {
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
   if ($journal.phase -eq 'installing') {
     try { Restore-Previous }
-    catch { Recovery-Registration $true; Record-Result 'recovery-required' $code }
+    catch { [Console]::Error.WriteLine($_.ToString()); [Console]::Error.WriteLine($_.ScriptStackTrace); Recovery-Registration $true; Record-Result 'recovery-required' $code }
   } elseif ($journal.phase -eq 'committed') {
     # A committed journal is not evidence that the current files are intact.
     # Cleanup/launch errors may still be successful installs, but corruption
