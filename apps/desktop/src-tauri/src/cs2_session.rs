@@ -221,7 +221,9 @@ impl SessionStore {
         };
         let mut journal = self.prepare_files(video, executable, size, Some(frames))?;
         if let Some(warning) = warning {
-            journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"));
+            journal["spectatorWarning"] = json!(format!(
+                "数字键观战预设未应用：{warning} 可选择保留原设置继续使用。"
+            ));
             self.save(&journal)?;
         }
         Ok(journal)
@@ -448,7 +450,7 @@ mod tests {
     #[test]
     fn number_key_preset_restores_original_without_touching_custom_or_absent_bindings() {
         let (root, video, machine, executable, store) = frame_setup();
-        let original = "\"config\" {\"convars\" {\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"0\" \"other\" \"old\"}}";
+        let original = "\"config\" {\"convars\" {\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"true\" \"other\" \"old\"}}";
         fs::write(&machine, original).unwrap();
         let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
         let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\"}}";
@@ -476,7 +478,9 @@ mod tests {
         store.restore().unwrap();
         assert_eq!(
             fs::read_to_string(&machine).unwrap(),
-            original.replace("\"old\"", "\"new\"")
+            original
+                .replace("\"old\"", "\"new\"")
+                .replace("\"true\"", "\"1\"")
         );
         assert_eq!(fs::read_to_string(keys).unwrap(), bindings);
         assert!(!video
@@ -489,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_number_key_value_skips_preset_and_cloud_mirror_blocks_restoration() {
+    fn missing_or_disabled_value_skips_and_new_mirror_does_not_block_core_recovery() {
         let (root, video, machine, executable, store) = frame_setup();
         let mut preferences = store.preferences().unwrap();
         preferences.spectator_number_keys = true;
@@ -511,10 +515,26 @@ mod tests {
             "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}",
         )
         .unwrap();
-        store
+        let disabled = store
             .prepare_with_frame_rate(&video, &executable, size)
             .unwrap();
-        let before = fs::read(&machine).unwrap();
+        assert!(disabled["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("未启用"));
+        assert!(disabled["frameRateFiles"][0]
+            .get("spectatorNumberKeys")
+            .is_none());
+        store.restore().unwrap();
+        let original = fs::read_to_string(&machine)
+            .unwrap()
+            .replace("\"false\"", "\"true\"");
+        fs::write(&machine, &original).unwrap();
+        let video_before = fs::read(&video).unwrap();
+        let active = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert_eq!(active["frameRateFiles"][0]["spectatorNumberKeys"], true);
         let remote = video
             .parent()
             .unwrap()
@@ -527,15 +547,25 @@ mod tests {
         let mirror = remote.join("cs2_user_convars.vcfg");
         let cloud = "\"config\" {\"convars\" {\"spec_usenumberkeys_nobinds\" \"true\"}}";
         fs::write(&mirror, cloud).unwrap();
-        assert!(store.restore().unwrap_err().contains("镜像"));
-        assert!(store.load().unwrap().is_some());
-        assert_eq!(fs::read(&machine).unwrap(), before);
-        assert_eq!(fs::read_to_string(&mirror).unwrap(), cloud);
-        fs::remove_file(mirror).unwrap();
-        store.restore().unwrap();
-        assert!(fs::read_to_string(&machine)
+        // Game-time optional edits must not become ownership or block FPS/video.
+        let changed = fs::read_to_string(&machine)
             .unwrap()
-            .contains("\"spec_usenumberkeys_nobinds\" \"false\""));
+            .replace("\"true\"", "\"unknown\"");
+        fs::write(&machine, changed).unwrap();
+        store.restore().unwrap();
+        assert!(store.load().unwrap().is_none());
+        assert_eq!(fs::read(&video).unwrap(), video_before);
+        assert_eq!(
+            fs::read_to_string(&machine).unwrap(),
+            original.replace("\"true\"", "\"unknown\"")
+        );
+        assert_eq!(fs::read_to_string(&mirror).unwrap(), cloud);
+        // A subsequent launch still works, but read-only mirror eligibility skips the optional preset.
+        let next = store
+            .prepare_with_frame_rate(&video, &executable, size)
+            .unwrap();
+        assert!(next["spectatorWarning"].as_str().unwrap().contains("镜像"));
+        store.restore().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

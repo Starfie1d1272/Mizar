@@ -449,13 +449,7 @@ pub fn validated<'a>(
             {
                 return Err("帧率恢复路径无效。".into());
             }
-            let patched = patch_convars(original, limit)?;
-            if spectator_owned(record)? {
-                crate::cs2_spectator::check_archive(video)?;
-                crate::cs2_spectator::apply(&patched)?
-            } else {
-                patched
-            }
+            patch_convars(original, limit)?
         }
         Some("cfg") => {
             let root = cfg_root(executable)?;
@@ -478,15 +472,6 @@ pub fn validated<'a>(
     Ok((path, original, applied))
 }
 
-fn spectator_owned(record: &Value) -> Result<bool, String> {
-    match record.get("spectatorNumberKeys") {
-        None => Ok(false),
-        Some(value) => value
-            .as_bool()
-            .ok_or_else(|| "观战配置恢复记录无效。".into()),
-    }
-}
-
 pub fn restored(record: &Value, current: &str) -> Result<String, String> {
     let original = record["original"].as_str().ok_or("原帧率备份缺失。")?;
     let applied = record["applied"].as_str().ok_or("帧率应用记录缺失。")?;
@@ -498,11 +483,7 @@ pub fn restored(record: &Value, current: &str) -> Result<String, String> {
         let now = fps_field(current)?;
         let mut result = current.to_string();
         result.replace_range(now.start..now.end, &original[before.start..before.end]);
-        if spectator_owned(record)? {
-            crate::cs2_spectator::restore(original, &result)
-        } else {
-            Ok(result)
-        }
+        Ok(result)
     } else {
         Err("本次启动配置已被外部修改，请检查帧率备份后重试恢复。".into())
     }

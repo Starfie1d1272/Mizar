@@ -20,30 +20,21 @@ fn boolean(value: &str) -> Result<bool, String> {
     }
 }
 
-pub fn apply(text: &str) -> Result<String, String> {
-    let token = value(text)?;
-    let mut result = text.to_string();
-    result.replace_range(token.start..token.end, "\"true\"");
-    Ok(result)
-}
-
-pub fn restore(original: &str, current: &str) -> Result<String, String> {
-    let before = value(original).map_err(|_| "原始观战配置无法核实，备份仍保留。")?;
-    let now = value(current).map_err(|_| "当前观战配置缺失或无法核实，备份仍保留。")?;
-    // Only the original value or our applied true is attributable to this
-    // transaction. Unknown values / a missing field keep the journal pending.
-    let now_value = boolean(&now.value)?;
-    if now_value != boolean(&before.value)? && !now_value {
-        return Err("数字键观战设置已被外部修改，原值备份仍保留。".into());
+/// First version only confirms an already-enabled machine field. It does not
+/// own archive writes: cloud scope has not yet been verified on current CS2.
+pub fn already_enabled(text: &str) -> Result<(), String> {
+    if boolean(&value(text)?.value)? {
+        Ok(())
+    } else {
+        Err(
+            "原数字键观战设置未启用，本次预设未应用。可在 CS2 中确认该设置，或选择保留原设置。"
+                .into(),
+        )
     }
-    let mut result = current.to_string();
-    result.replace_range(now.start..now.end, &original[before.start..before.end]);
-    Ok(result)
 }
 
-/// Supported scope is a pre-existing machine field in the selected account.
-/// Mirrored / per-user copies are deliberately not taken over. Check again on
-/// recovery, so newly discovered copies cannot lead to a false success report.
+/// Bounded, read-only eligibility check before launch only. Never part of FPS
+/// or video recovery; newly appearing mirrors remain untouched.
 pub fn check_archive(video: &Path) -> Result<(), String> {
     let local = video.parent().ok_or("观战配置目录缺失。")?;
     let app = local
@@ -117,9 +108,7 @@ pub fn prepare(files: &mut [Value], video: &Path) -> Result<(), String> {
     let original = record["original"]
         .as_str()
         .ok_or("观战配置原值备份缺失。")?;
-    value(original)?;
-    let applied = apply(record["applied"].as_str().ok_or("观战配置应用记录缺失。")?)?;
-    record["applied"] = json!(applied);
+    already_enabled(original)?;
     record["spectatorNumberKeys"] = json!(true);
     Ok(())
 }
@@ -129,17 +118,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn restores_exact_source_token_without_owning_bindings_or_other_convars() {
-        for original_value in ["false", "0", "true", "1"] {
-            let original = format!("\u{feff}\"config\" {{ \"convars\" {{ // keep\r\n\"{KEY}\" \"{original_value}\" \"other\" \"old\" }} }}");
-            let applied = apply(&original).unwrap();
-            assert_eq!(restore(&original, &applied).unwrap(), original);
-            let current = applied
-                .replace("\"old\"", "\"new\"")
-                .replace("\"true\"", "\"1\"");
+    fn only_accepts_already_enabled_archive_values_without_mutating_them() {
+        for token in ["true", "1", "false", "0"] {
+            let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{token}\"}}}}");
             assert_eq!(
-                restore(&original, &current).unwrap(),
-                original.replace("\"old\"", "\"new\"")
+                already_enabled(&original).is_ok(),
+                matches!(token, "true" | "1")
             );
         }
     }
@@ -151,9 +135,7 @@ mod tests {
             format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\" \"{KEY}\" \"true\"}}}}"),
             format!("\"config\" {{\"convars\" {{\"{KEY}\" \"unknown\"}}}}"),
         ] {
-            assert!(apply(&text).is_err());
+            assert!(already_enabled(&text).is_err());
         }
-        let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\"}}}}");
-        assert!(restore(&original, "\"config\" {\"convars\" {}}").is_err());
     }
 }

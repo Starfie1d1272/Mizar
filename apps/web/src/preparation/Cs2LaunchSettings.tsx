@@ -109,12 +109,10 @@ export function Cs2LaunchSettings() {
               }}
             >
               <option value="preserve">保留原设置</option>
-              <option value="enabled">下次启动使用原始数字键</option>
+              <option value="enabled">沿用已启用的原始数字键模式</option>
             </Select>
           </div>
-          <p>
-            数字键预设只调整观战设置，保留个人绑定。停止本次游戏后恢复已备份原值；原值缺失或发现配置镜像时不会应用。保留原设置进入工作台时不应用此预设。
-          </p>
+          {preferences?.spectatorNumberKeys ? <p>仅用于已启用的观战模式，保留个人键位。</p> : null}
           {status?.spectatorWarning ? (
             <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
           ) : null}
