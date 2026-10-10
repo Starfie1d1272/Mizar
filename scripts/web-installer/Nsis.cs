@@ -380,7 +380,9 @@ namespace Mizar.WebInstaller {
         File.Delete(PendingPath());return false;
       }
       if(record.writerPid<=0 || ProcessStillActive(record.writerPid,record.writerStarted)) throw new InstallerRecoveryRequired(target,"更新启动或写入状态无法确认；请保留现场并导出诊断。");
-      Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"").GetAwaiter().GetResult();
+      using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
+      SavePending(record,false);
+      Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",record).GetAwaiter().GetResult();
       File.Delete(PendingPath()); return false;
     }
     internal static async Task RollbackUpdate(PendingInstall record) {

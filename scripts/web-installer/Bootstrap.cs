@@ -408,8 +408,9 @@ namespace Mizar.WebInstaller {
       var options=System.Text.RegularExpressions.RegexOptions.IgnoreCase;
       string text=error.ToString();
       text=System.Text.RegularExpressions.Regex.Replace(text,@"\b(?:authorization|proxy-authorization|cookie|set-cookie)[""']?\s*[:=]\s*[^\r\n]+","[redacted credential header]",options);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"rh_mizar_[a-zA-Z0-9_-]+","[redacted]");
       text=System.Text.RegularExpressions.Regex.Replace(text,@"\bBearer\s+[A-Za-z0-9._~+/-]+=*","Bearer [redacted]",options);
-      text=System.Text.RegularExpressions.Regex.Replace(text,@"\b(auth|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|api[_-]?key)[""']?\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^\s,;&""'<>]+)","$1=[redacted]",options);
+      text=System.Text.RegularExpressions.Regex.Replace(text,@"\b(auth|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|credential|client[_-]?secret|api[_-]?key)[""']?\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^\s,;&""'<>]+)","$1=[redacted]",options);
       text=System.Text.RegularExpressions.Regex.Replace(text,@"(https?://)[^/\s@]+@","$1[redacted]@",options);
       return System.Text.RegularExpressions.Regex.Replace(text,@"(https?://[^\s?#]+)[?#][^\s]+","$1?[redacted]",options);
     }

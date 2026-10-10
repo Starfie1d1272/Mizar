@@ -54,6 +54,7 @@ namespace Mizar.WebInstaller {
         Assert(!File.Exists(pending));
         Console.WriteLine("PASS: prepared owner-only transaction reopens and completes real NSIS installation");
         Assert(result.CoreInstalled && !result.ResourcesReady && File.Exists(Path.Combine(target,"Mizar.exe")));
+        Assert(String.Equals(Nsis.ResolveDestination(),target,StringComparison.OrdinalIgnoreCase));
         Console.WriteLine("PASS: authenticated fixed v1.1 NSIS installed into fresh qualification directory; resources completion false");
         // Re-enter the same lightweight installer against an already owned installation.
         string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","upgrade-sentinel.txt");
@@ -108,6 +109,14 @@ namespace Mizar.WebInstaller {
         Console.WriteLine("PASS: completed owned Core recovers without launching a second NSIS writer");
         await result.RollbackAsync();
         Assert(!Directory.Exists(target));
+        string residue=Path.Combine(root,"uninstalled owner-only path"),stamp=new string('a',32);
+        Directory.CreateDirectory(residue);File.WriteAllText(Path.Combine(residue,".mizar-bootstrap-owner"),stamp);
+        var resumedResidue=await Nsis.Install(plan,installer,residue,CancellationToken.None);
+        string[] retained=Directory.GetDirectories(root,"uninstalled owner-only path.retained-*");
+        Assert(retained.Length==1 && File.ReadAllText(Path.Combine(retained[0],".mizar-bootstrap-owner"))==stamp);
+        await resumedResidue.RollbackAsync();
+        Assert(!Directory.Exists(residue) && File.Exists(Path.Combine(retained[0],".mizar-bootstrap-owner")));
+        Console.WriteLine("PASS: owner-only uninstall residue is preserved whole and fresh NSIS installation can resume");
         var badIdentity = new JavaScriptSerializer().Deserialize<Plan>(new JavaScriptSerializer().Serialize(plan));
         badIdentity.contentDigest = new string('0',64);
         string failedTarget=Path.Combine(root,"failed NSIS identity path");
