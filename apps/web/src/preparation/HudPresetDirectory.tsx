@@ -34,37 +34,43 @@ export function HudPresetDirectory({
     );
   const document = editor.document;
   return (
-    <ul className="hud-preset-directory" aria-label="HUD 预设目录">
-      {(resourceList(document, 'preset') as HudPreset[]).map((preset) => (
-        <li key={preset.id}>
-          <figure>
-            <img
-              src={styleReferences[preset.widgets['top-score-bar'].variant] ?? pulseReference}
-              alt=""
-            />
-            <figcaption>内置风格参考 · 非本场画面</figcaption>
-          </figure>
-          <div>
-            <strong>{preset.name}</strong> ·{' '}
-            {preset.id.startsWith('builtin:') ? '内置只读' : '自定义'} ·{' '}
-            {onAir.status !== 'ready'
-              ? '启用状态无法确认'
-              : onAir.current.preset.id === preset.id
-                ? '当前启用'
-                : '未启用'}
-          </div>
-          <details>
-            <summary>布局与外观</summary>
-            <p>
-              布局 · {resourceFor(document, 'layout', preset.layoutId)?.name ?? preset.layoutId}
-              ；外观 · {resourceFor(document, 'theme', preset.themeId)?.name ?? preset.themeId}
-            </p>
-          </details>
-          <Button onClick={() => void action(() => openTool('hud', preset.id))}>
-            编辑 {preset.name}
-          </Button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <p className="hud-directory-reference-note">
+        内置风格参考 · 非本场画面；自定义预设按组件风格显示参考，实际配置请在编辑器检查。
+      </p>
+      <ul className="hud-preset-directory" aria-label="HUD 预设目录">
+        {(resourceList(document, 'preset') as HudPreset[]).map((preset) => (
+          <li key={preset.id}>
+            <figure>
+              <img
+                src={styleReferences[preset.widgets['top-score-bar'].variant] ?? pulseReference}
+                alt=""
+              />
+            </figure>
+            <div>
+              <strong>{preset.name}</strong> ·{' '}
+              {preset.id.startsWith('builtin:') ? '内置只读' : '自定义'} ·{' '}
+              {onAir.status !== 'ready'
+                ? '启用状态无法确认'
+                : onAir.current.preset.id === preset.id
+                  ? '当前启用'
+                  : '未启用'}
+            </div>
+            <div className="hud-preset-card-actions">
+              <details>
+                <summary>布局与外观</summary>
+                <p>
+                  布局 · {resourceFor(document, 'layout', preset.layoutId)?.name ?? preset.layoutId}
+                  ；外观 · {resourceFor(document, 'theme', preset.themeId)?.name ?? preset.themeId}
+                </p>
+              </details>
+              <Button onClick={() => void action(() => openTool('hud', preset.id))}>
+                编辑 {preset.name}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }

@@ -434,7 +434,12 @@ export function PreparationPage() {
                 <PictureWorkspace action={action} onNext={() => navigateTask('check')} />
               ) : null}
             </section>
-            <section hidden={task !== 'check' || selecting} aria-label="开播检查工作区">
+            <section
+              hidden={task !== 'check' || selecting}
+              aria-label="开播检查工作区"
+              tabIndex={0}
+            >
+              <small className="preflight-scroll-hint">检查项与操作可在此区域向下滚动查看。</small>
               <div className="production-preflight">
                 <section className="preflight-checklist" aria-label="开播检查列表">
                   <h2>开播检查</h2>
@@ -451,7 +456,7 @@ export function PreparationPage() {
                             {item.label} · {item.ready ? '已确认' : '待处理'}
                           </summary>
                           <p>{item.reason}</p>
-                          {!item.ready ? (
+                          {!item.ready || item.label === 'OBS' ? (
                             <a
                               href={`${item.href}${item.href.includes('?') ? '&' : '?'}returnTask=check`}
                             >
@@ -487,9 +492,7 @@ export function PreparationPage() {
                 </section>
                 <section className="preflight-confidence" aria-label="开播画面确认">
                   <h2>OBS 实际画面</h2>
-                  <ObsConfidence />
-                  {match ? <ProductionStatus matchId={match.matchId} /> : null}
-                  <a href="/settings?tab=obs&returnTask=check">检查 OBS 连接与音画</a>
+                  <ObsConfidence showRepairAction={false} showAudioHint={false} />
                   <small>缩略图无声音；请在 OBS 核对音画后开始推流。</small>
                 </section>
               </div>

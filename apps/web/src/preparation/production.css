@@ -289,14 +289,18 @@
   gap: var(--mizar-layout-padding);
 }
 .hud-preset-directory {
+  flex: 1;
+  grid-auto-rows: minmax(calc(var(--mizar-layout-target) * 10), 1fr);
   align-content: start;
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
-  gap: var(--mizar-layout-compact);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
   overflow-y: auto;
   min-height: 0;
+  scrollbar-gutter: stable;
 }
 .production-page > .hud-resource-workspace {
   flex: 1;
@@ -305,12 +309,29 @@
   flex-direction: column;
 }
 .hud-preset-directory > li {
-  display: grid;
-  grid-template-columns: calc(var(--mizar-layout-target) * 5) minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--mizar-layout-gap);
+  padding: var(--mizar-layout-gap);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  background: var(--mizar-bg-surface);
+}
+.hud-preset-card-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--mizar-layout-padding);
-  padding: var(--mizar-layout-padding);
-  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+}
+.hud-preset-card-actions > details {
+  min-width: 0;
+  flex: 1;
+}
+.hud-preset-card-actions > .mizar-button {
+  flex-shrink: 0;
 }
 .hud-preset-directory details p {
   font-size: var(--mizar-type-size-small);
@@ -539,15 +560,21 @@
 .preflight-confidence {
   display: flex;
   flex-direction: column;
-  gap: var(--mizar-layout-padding);
+  gap: var(--mizar-layout-gap);
   min-width: 0;
 }
 .preflight-checklist > details {
-  padding-block: var(--mizar-layout-gap);
+  padding-block: var(--mizar-layout-compact);
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
 }
 .preflight-checklist > details > p {
-  margin-top: 0;
+  margin: 0;
+}
+.preflight-checklist > details > summary {
+  padding-block: var(--mizar-layout-compact);
+}
+.preflight-checklist > .mizar-button {
+  align-self: start;
 }
 .preflight-checklist .spectator-workflow {
   padding: 0;
@@ -559,6 +586,10 @@
   aspect-ratio: 16 / 9;
   max-width: none;
 }
+.preflight-confidence .workspace-confidence:not(:has(img)) {
+  aspect-ratio: auto;
+  min-height: calc(var(--mizar-layout-target) * 4);
+}
 .preflight-confidence {
   padding-left: var(--mizar-layout-padding);
   border-left: var(--mizar-line-border) solid var(--mizar-border-default);
@@ -566,9 +597,17 @@
 
 .hud-preset-directory figure {
   margin: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .hud-preset-directory figure img {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  display: block;
   aspect-ratio: 16 / 9;
   object-fit: contain;
 }
@@ -593,9 +632,12 @@
 }
 .obs-settings-section .mizar-field {
   display: grid;
-  grid-template-columns: minmax(120px, 0.5fr) minmax(0, 1fr);
+  grid-template-columns: calc(var(--mizar-layout-target) * 4) minmax(0, 1fr);
   align-items: center;
   gap: var(--mizar-layout-gap);
+}
+.obs-settings-section > form > .mizar-button {
+  justify-self: start;
 }
 .obs-settings-section .mizar-field > span {
   grid-column: 2;
@@ -611,20 +653,39 @@
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
   background: transparent;
 }
-@media (max-width: 1100px) {
-  .hud-preset-directory > li {
-    grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr) auto;
+@media (max-width: 1500px) {
+  .hud-preset-directory {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .hud-preset-directory > li > details {
-    grid-column: 2;
+}
+@media (max-width: 900px) {
+  .hud-preset-directory {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .obs-settings-section .mizar-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .obs-settings-section .mizar-field > span {
+    grid-column: 1;
+  }
+}
+.production-page > section[aria-label='开播检查工作区'] {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--mizar-border-default) var(--mizar-bg-canvas);
+}
+.preflight-scroll-hint {
+  display: none;
+}
+@media (max-height: 900px) {
+  .preflight-scroll-hint {
+    display: block;
+    margin-bottom: var(--mizar-layout-gap);
   }
 }
 
 .hud-resource-workspace {
   gap: var(--mizar-layout-padding);
-}
-.hud-preset-directory > li {
-  padding: var(--mizar-layout-gap) 0;
 }
 .hud-resource-workspace > .mizar-button {
   align-self: end;

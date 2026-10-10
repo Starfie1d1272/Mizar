@@ -94,7 +94,10 @@ test('OBS setup buttons launch the configured target, configure, check and repai
       fullPage: false,
     });
   }
+  await expect(page.getByRole('button', { name: '检查连接', exact: true })).toHaveCount(0);
   await page.locator('summary').filter({ hasText: 'WebSocket 连接设置' }).click();
+  await expect(page.getByRole('button', { name: '编辑连接', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重新检查', exact: true })).toHaveCount(0);
   await page.getByLabel('WebSocket 端口').fill('4466');
   await page.getByLabel('WebSocket 密码').fill('ui-test-password');
   await page.getByLabel('WebSocket 密码').focus();

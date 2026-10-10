@@ -1115,3 +1115,13 @@
     position: static;
   }
 }
+
+/* Dialog owns the visible title; retain the editor's accessible region name. */
+.bp-editor-dialog #bp-local-editor-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -150,16 +150,20 @@ export function Settings({ tab }: { tab: string }) {
                     : '未连接'}
             </StatusPill>
           </header>
-          <section className="obs-connection-summary" aria-label="OBS 连接摘要">
-            <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
-            <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
-            <Button onClick={() => setConnectionEditing(true)}>编辑连接</Button>
-            <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
-              重新检查
-            </Button>
-          </section>
           <div className="obs-setup__cards">
             <div className="obs-setup__connection-stack">
+              <section className="obs-connection-summary" aria-label="OBS 连接摘要">
+                <strong>WebSocket · 端口 {obs?.port ?? '待确认'}</strong>
+                <span>{obs?.passwordConfigured ? '已保存凭据' : '未保存凭据'}</span>
+                {!connectionEditing ? (
+                  <>
+                    <Button onClick={() => setConnectionEditing(true)}>编辑连接</Button>
+                    <Button disabled={busy} onClick={() => void action(() => obsCommand('check'))}>
+                      重新检查
+                    </Button>
+                  </>
+                ) : null}
+              </section>
               <section className="obs-settings-section">
                 <h3>打开 OBS</h3>
                 <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
@@ -259,7 +263,7 @@ export function Settings({ tab }: { tab: string }) {
             </div>
             <section className="obs-settings-section">
               <h3>实际画面与输出检查</h3>
-              <ObsConfidence />
+              <ObsConfidence showRepairAction={false} showAudioHint={false} />
               <div className="obs-setup__signals">
                 <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
                 <span>

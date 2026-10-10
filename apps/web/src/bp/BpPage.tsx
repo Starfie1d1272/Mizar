@@ -302,6 +302,7 @@ export function BpWorkspaceControls() {
           open
           title="编辑比赛 BP"
           className="bp-editor-dialog"
+          showCloseButton={false}
           canClose={canCloseEditor}
           onClose={() => setLocalEditorOpen(false)}
         >

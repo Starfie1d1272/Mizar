@@ -740,7 +740,7 @@ test('local BP authoring compiles to MatchContext and survives restart', async (
     await expect(program.locator('.bp-scene')).toHaveCount(0);
     await page
       .getByRole('dialog', { name: '编辑比赛 BP' })
-      .getByRole('button', { name: '关闭', exact: true })
+      .getByRole('button', { name: '取消编辑', exact: true })
       .click();
     await page.getByRole('button', { name: '播放 BP', exact: true }).click();
     await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);
@@ -802,7 +802,7 @@ for (const failure of ['network', 'timeout'] as const)
       });
       await page
         .getByRole('dialog', { name: '编辑比赛 BP' })
-        .getByRole('button', { name: '关闭', exact: true })
+        .getByRole('button', { name: '取消编辑', exact: true })
         .click();
       expect(closeAsked).toBe(true);
       await expect(title).toHaveValue('保留未保存的测试草稿');

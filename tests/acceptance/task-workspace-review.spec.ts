@@ -270,6 +270,45 @@ test('task workspaces use real local data and keep candidate browsing separate f
           .toBe(true);
         if (evidence)
           await page.screenshot({ path: join(evidence, `${name}-${scale}.png`), fullPage: false });
+        if (name === 'hud-resources' && scale === 100) {
+          const cards = page.locator('.hud-preset-directory > li');
+          await expect(cards).toHaveCount(5);
+          const boxes = await cards.evaluateAll((items) =>
+            items.map((item) => ({
+              x: item.getBoundingClientRect().x,
+              y: item.getBoundingClientRect().y,
+            })),
+          );
+          expect(boxes[0]!.y).toBe(boxes[1]!.y);
+          expect(boxes[1]!.y).toBe(boxes[2]!.y);
+          expect(boxes[3]!.y).toBeGreaterThan(boxes[0]!.y);
+        }
+        if (name === 'check') {
+          const region = page.getByRole('region', { name: '开播检查工作区', exact: true });
+          await expect(
+            region.getByRole('link', { name: '检查 OBS 连接与配置', exact: true }),
+          ).toHaveCount(1);
+          await expect(region.getByRole('button', { name: '检查连接', exact: true })).toHaveCount(
+            0,
+          );
+          if (height < 1080) {
+            await expect(page.locator('.preflight-scroll-hint')).toBeVisible();
+            await region.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            const action = region.getByRole('button', { name: '返回本场继续准备', exact: true });
+            await action.scrollIntoViewIfNeeded();
+            await expect(action).toBeInViewport();
+            expect(
+              await region.evaluate((element) => getComputedStyle(element).scrollbarGutter),
+            ).toBe('stable');
+            if (evidence)
+              await page.screenshot({
+                path: join(evidence, `check-${scale}-bottom.png`),
+                fullPage: false,
+              });
+          }
+        }
       }
     }
     await page.goto('/resources');

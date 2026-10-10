@@ -78,7 +78,13 @@ function ContextPanel({
   );
 }
 
-export function ObsConfidence() {
+export function ObsConfidence({
+  showRepairAction = true,
+  showAudioHint = true,
+}: {
+  showRepairAction?: boolean;
+  showAudioHint?: boolean;
+}) {
   const result = useLocalRead<{
     preview: { scene: string; image: string } | null;
   }>('/local/v1/obs/confidence', 2000);
@@ -87,12 +93,16 @@ export function ObsConfidence() {
       {result?.preview ? (
         <>
           <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
-          <small className="workspace-confidence__time">缩略图 · 无声音</small>
+          {showAudioHint ? (
+            <small className="workspace-confidence__time">缩略图 · 无声音</small>
+          ) : null}
         </>
       ) : (
         <div className="workspace-confidence__empty">
-          <span>OBS 画面暂不可用 · 缩略图无声音</span>
-          <Button onClick={() => void openPreparation('/settings?tab=obs')}>检查连接</Button>
+          <span>{showAudioHint ? 'OBS 画面暂不可用 · 缩略图无声音' : 'OBS 画面暂不可用'}</span>
+          {showRepairAction ? (
+            <Button onClick={() => void openPreparation('/settings?tab=obs')}>检查连接</Button>
+          ) : null}
         </div>
       )}
     </section>

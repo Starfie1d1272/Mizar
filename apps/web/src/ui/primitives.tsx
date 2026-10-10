@@ -188,6 +188,7 @@ export function Dialog({
   children,
   className,
   canClose,
+  showCloseButton = true,
 }: {
   open: boolean;
   title: string;
@@ -195,6 +196,7 @@ export function Dialog({
   children: ReactNode;
   className?: string;
   canClose?: () => boolean;
+  showCloseButton?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -234,13 +236,15 @@ export function Dialog({
     >
       <h2 id={id}>{title}</h2>
       {children}
-      <Button
-        onClick={() => {
-          if (!canClose || canClose()) ref.current?.close();
-        }}
-      >
-        关闭
-      </Button>
+      {showCloseButton ? (
+        <Button
+          onClick={() => {
+            if (!canClose || canClose()) ref.current?.close();
+          }}
+        >
+          关闭
+        </Button>
+      ) : null}
     </dialog>
   );
 }

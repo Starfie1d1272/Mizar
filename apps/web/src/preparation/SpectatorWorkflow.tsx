@@ -30,7 +30,7 @@ export function SpectatorWorkflow({
             <span>首次先安装，已打开的 CS2 请先退出。</span>
           </li>
           <li>
-            <a href="/settings?tab=obs">配置 OBS 控制连接</a>
+            <strong>配置 OBS 控制连接</strong>
             <span>
               在 OBS「工具 → WebSocket 服务器设置」启用服务，填写端口与密码，检查 Mizar 场景。
               {obs?.ready ? '连接与场景检查已通过。' : ''}
@@ -57,8 +57,8 @@ export function SpectatorWorkflow({
             <span>复制命令，在 CS2 控制台粘贴并回车。</span>
           </li>
           <li>
-            <a href="/settings?tab=obs">检查 OBS 实际画面</a>
-            <span>核对游戏、HUD、声音，再在 OBS 开始推流。</span>
+            <strong>检查 OBS 实际画面</strong>
+            <span>确认后在 OBS 开始推流。</span>
           </li>
         </ol>
       </details>
