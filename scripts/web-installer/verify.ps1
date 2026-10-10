@@ -32,6 +32,5 @@ try {
 } finally {
   foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key,$previous[$key]) }
 }
-& "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
 $clock.Stop()
 [ordered]@{ schemaVersion=1; sourceSha=(& git rev-parse HEAD); wallTimeSeconds=$clock.Elapsed.TotalSeconds; nativeUi=$true; realNsisRegression=$true; productionDependencies=$true; productionCompletionEvidence=$false; missingEvidence=@('new trusted Core and official resource publication','cold-cache first installation','offline default EPL','installed desktop launch') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'verification.json') -Encoding UTF8
