@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -61,5 +61,15 @@ export async function verifyCoreCandidate(product, root, sourceSha) {
     throw new Error('Core executable or NSIS differs from its distinct qualification identity');
   return core;
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  await verifyCoreCandidate(resolve(process.argv[2]), resolve(process.argv[3]), process.argv[4]);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const product = resolve(process.argv[2]);
+  const core = await verifyCoreCandidate(product, resolve(process.argv[3]), process.argv[4]);
+  if (process.argv[5])
+    await writeFile(
+      resolve(process.argv[5]),
+      JSON.stringify({
+        ...core,
+        distribution: await json(join(product, 'core-distribution-manifest.json')),
+      }),
+    );
+}
