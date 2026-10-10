@@ -39,6 +39,57 @@ async function run(args) {
   });
   return { code, output: output.replace(/^\uFEFF/, '').trim(), errors, pid: child.pid };
 }
+async function installWithHost(binaryPath, stage) {
+  // Keep a fresh, exact Host alive while Install starts; never reuse an old PID.
+  const host = spawn(binaryPath, ['--host'], {
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const exited = new Promise((done, reject) => {
+    host.once('exit', done);
+    host.once('error', reject);
+  });
+  let output = '';
+  let installation;
+  try {
+    const started = new Promise((done, reject) => {
+      host.stdout.on('data', (bytes) => {
+        output += bytes;
+        if (output.includes('\n')) done();
+      });
+      host.once('error', reject);
+      host.once('exit', () => reject(new Error('Host fixture exited before ready')));
+    });
+    await started;
+    assert.match(output.trim(), /^\d+$/, 'Host must report its actual creation time');
+    await writeFile(join(stage, 'host.txt'), `${host.pid}\n${output.trim()}\n`);
+    const readyPath = join(stage, 'install-script-ready.txt');
+    const literal = (value) => `'${value.replace(/'/g, "''")}'`;
+    let settled = false;
+    installation = run([
+      '-Command',
+      `[IO.File]::WriteAllText(${literal(readyPath)}, 'ready'); & ${literal(script)} -Mode Install -StageRoot ${literal(stage)} -HostProcessId ${host.pid}; exit $LASTEXITCODE`,
+    ]).then((result) => {
+      settled = true;
+      return result;
+    });
+    const deadline = Date.now() + 10000;
+    while (!(await readFile(readyPath, 'utf8').catch(() => ''))) {
+      assert(Date.now() < deadline && !settled, 'Install PowerShell did not become ready');
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    await new Promise((done) => setTimeout(done, 350));
+    assert.equal(host.exitCode, null, 'Host stays alive until explicitly released');
+    assert.equal(settled, false, 'Install must wait for the live Host');
+    host.stdin.end('exit\n');
+    assert.equal(await exited, 0, 'Host exits normally, without killing a writer');
+    return await installation;
+  } finally {
+    host.stdin.end();
+    await exited;
+    await installation; // Even a failed assertion must leave no update writer running.
+  }
+}
 async function payload(path, version, binary) {
   const files = {
     'Mizar.exe': binary,
@@ -97,11 +148,18 @@ public class UpdateFixture {
     foreach (var path in Directory.GetDirectories(source)) Copy(path, Path.Combine(target, Path.GetFileName(path)));
   }
   public static void Main(string[] args) {
+    if (args.Length > 0 && args[0] == "--host") { Console.WriteLine(System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks); Console.ReadLine(); return; }
     var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
     if (Path.GetFileName(exe).Equals("Mizar.exe", StringComparison.OrdinalIgnoreCase)) { if (args.Length > 0 && args[0] == "--hold") Thread.Sleep(30000); return; }
     var stage = Path.GetDirectoryName(exe);
     if (args.Length > 0 && args[0] == "--hold") { File.WriteAllText(Path.Combine(stage, "running.txt"), "ready"); Thread.Sleep(30000); return; }
     var mode = File.ReadAllText(Path.Combine(stage, "mode.txt"));
+    // Independent lifecycle oracle: NSIS must never execute while that exact Host lives.
+    var host = File.ReadAllLines(Path.Combine(stage, "host.txt"));
+    try {
+      using (var process = System.Diagnostics.Process.GetProcessById(Int32.Parse(host[0])))
+        if (!process.HasExited && process.StartTime.ToUniversalTime().Ticks == Int64.Parse(host[1])) throw new InvalidOperationException("Installer ran before Host exit");
+    } catch (ArgumentException) { } // The Host exited and its PID is no longer allocated.
     var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Mizar.lnk");
     if (File.Exists(shortcut)) File.Delete(shortcut);
     var command = String.Join(" ", args);
@@ -119,7 +177,6 @@ public class UpdateFixture {
   const compiled = await run(['-File', compiler, '-Output', binaryPath]);
   assert.equal(compiled.code, 0, compiled.errors);
   const binary = await readFile(binaryPath);
-  const exited = await run(['-Command', 'exit 0']);
   for (const scenario of [
     'success',
     'success-no-shortcut',
@@ -261,40 +318,24 @@ public class UpdateFixture {
         stdio: 'ignore',
       });
       try {
-        result = await run([
-          '-File',
-          script,
-          '-Mode',
-          'Install',
-          '-StageRoot',
-          stage,
-          '-HostProcessId',
-          String(exited.pid),
-        ]);
+        result = await installWithHost(binaryPath, stage);
       } finally {
         owned.kill();
         await new Promise((done) => owned.once('exit', done));
       }
       assert.equal(result.code, 1, 'An existing Mizar process must prevent any installation');
     } else {
-      result = await run([
-        '-File',
-        script,
-        '-Mode',
-        'Install',
-        '-StageRoot',
-        stage,
-        '-HostProcessId',
-        String(exited.pid),
-      ]);
+      result = await installWithHost(binaryPath, stage);
       assert.equal(result.code, success ? 0 : 1, result.errors);
     }
     const report = JSON.parse(
       (await readFile(join(state, 'updates/result.json'), 'utf8')).replace(/^\uFEFF/, ''),
     );
+    assert.notEqual(report.code, 'update_host_exit_timeout', JSON.stringify(report));
     assert.equal(
       report.status,
       success ? 'installed' : scenario === 'remaining-process' ? 'cancelled' : 'restored',
+      JSON.stringify(report),
     );
     const identity = JSON.parse(
       await readFile(join(installed, 'resources/metadata/artifact.json'), 'utf8'),

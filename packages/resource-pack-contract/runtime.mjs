@@ -1,6 +1,14 @@
 import { Buffer } from 'node:buffer';
 import { LIMITS, requireValue, parsePackManifest } from './index.mjs';
-import { verifyPackBytes, sha256 } from './content.mjs';
+import { verifyPackBytes, sha256, jsonBytes } from './content.mjs';
+import { getResourceAuthorization, verifyResourceCatalogReceipt } from './catalog-runtime.mjs';
+export { RESOURCE_ASSET_NAMES } from './catalog.mjs';
+export {
+  getResourceAuthorization,
+  verifyResourceCatalogBytes,
+  verifyResourceCatalogReceipt,
+  verifyCatalogResourcePublicationBytes,
+} from './catalog-runtime.mjs';
 import { parsePublication, assertPublicationContent } from './publication.mjs';
 import {
   createMizarVerifier,
@@ -105,6 +113,7 @@ export async function verifyResourceReceipt({
   manifestBytes: localManifestBytes,
   policy,
   purpose,
+  expectedCore,
   tufCachePath,
   signal,
 }) {
@@ -119,12 +128,57 @@ export async function verifyResourceReceipt({
   );
   receipt = JSON.parse(serialized);
   requireValue(receipt?.schemaVersion === 'mizar.resource-receipt.v1', '缓存 receipt 版本无效');
+  policy = policy && { ...policy };
+  let catalogIdentity;
+  if (receipt.catalog !== undefined) {
+    const authorization = await verifyResourceCatalogReceipt({
+      receipt: receipt.catalog,
+      expectedCore:
+        expectedCore ?? (policy && { appVersion: policy.coreVersion, gitSha: policy.sourceSha }),
+      purpose,
+      tufCachePath,
+      signal,
+    });
+    const pinned = getResourceAuthorization(authorization);
+    catalogIdentity = pinned;
+    if (policy)
+      requireValue(
+        Number.isSafeInteger(policy.minimumSequence) &&
+          policy.minimumSequence >= 0 &&
+          ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'].every(
+            (key) => policy[key] === pinned.policy[key],
+          ),
+        '资源缓存目录不等于当前受信任策略',
+      );
+    policy = {
+      ...pinned.policy,
+      minimumSequence: Math.max(pinned.policy.minimumSequence, policy?.minimumSequence ?? 0),
+      now: Date.now(),
+    };
+    requireValue(
+      sha256(receiptBytes(receipt.publicationBase64, 64 * 1024)) === pinned.publication.sha256 &&
+        sha256(receiptBytes(receipt.manifestBase64, LIMITS.manifestBytes)) ===
+          pinned.manifestSha256,
+      '资源缓存字节不等于签名目录',
+    );
+  }
   const declaration = receiptBytes(receipt.publicationBase64, 64 * 1024),
     manifestBytes =
       localManifestBytes === undefined
         ? receiptBytes(receipt.manifestBase64, LIMITS.manifestBytes)
         : snapshot(localManifestBytes, LIMITS.manifestBytes);
   const statement = parsePublication(JSON.parse(declaration.toString('utf8')), policy, { purpose });
+  if (catalogIdentity)
+    requireValue(
+      declaration.equals(jsonBytes(statement)) &&
+        ['name', 'bytes', 'sha256', 'format'].every(
+          (key) => statement.archive[key] === catalogIdentity.archive[key],
+        ) &&
+        ['sequence', 'issuedAt', 'expiresAt'].every(
+          (key) => statement[key] === catalogIdentity.publication[key],
+        ),
+      '资源缓存归档、序号或时间不等于签名目录',
+    );
   const publicationBundle = JSON.parse(
     receiptBytes(receipt.publicationBundleBase64, RECEIPT_MAX_BYTES).toString('utf8'),
   );

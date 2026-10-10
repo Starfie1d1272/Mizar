@@ -278,3 +278,36 @@ it('serves active verified bytes at original URLs and never mixes missing or cor
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('uses the authenticated Core context to verify a persisted catalog before accepting a policy-free App receipt', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-app-catalog-'));
+  // Structural runtime context only; this denial case makes no formal Core/signature claim.
+  const app = buildApp({
+    resources: { root },
+    productRuntime: {
+      appVersion: '1.1.0',
+      gitSha: 'a'.repeat(40),
+      artifactSha256: 'b'.repeat(64),
+      instanceId: 'catalog-denial-fixture',
+      controlToken: 'fixture-control-token',
+      stop: vi.fn(),
+    },
+  });
+  try {
+    await app.ready();
+    const store = app.getDecorator<() => ResourceStore>('getResourceStore')();
+    await expect(
+      store.installVerified('official:epl-default', async ({ directory }) => {
+        await writeFile(join(directory, 'untrusted.json'), '{}');
+        return { schemaVersion: 'mizar.resource-receipt.v1', catalog: {} };
+      }),
+    ).rejects.toMatchObject({
+      code: 'resource_trust_failed',
+      cause: { message: '资源目录 receipt 版本无效' },
+    });
+    expect(store.getStatus('official:epl-default').activeVersion).toBeNull();
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

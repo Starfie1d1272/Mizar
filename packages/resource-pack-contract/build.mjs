@@ -13,6 +13,8 @@ for (const file of [
   'publication.mjs',
   'attestation.mjs',
   'attestation.d.mts',
+  'catalog.mjs',
+  'catalog-runtime.mjs',
   'runtime.mjs',
   'runtime.d.mts',
   'trust-snapshot.mjs',

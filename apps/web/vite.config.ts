@@ -1,7 +1,12 @@
 import { defineConfig } from 'vite';
-import { cp, readFile } from 'node:fs/promises';
+import { cp, readFile, writeFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import react from '@vitejs/plugin-react';
+
+const resourceMode = process.env.MIZAR_WEB_RESOURCE_MODE ?? 'full';
+if (!['full', 'core-only'].includes(resourceMode)) {
+  throw new Error(`Unknown Web resource mode: ${resourceMode}`);
+}
 
 const cs2AssetsPublicDir = '../../packages/cs2-assets/generated/public';
 const replayPublicDir = resolve(import.meta.dirname, 'public');
@@ -176,6 +181,7 @@ function replayPublicAssets() {
       });
     },
     async closeBundle() {
+      if (resourceMode === 'core-only') return;
       await cp(
         resolve(replayPublicDir, 'fixtures'),
         resolve(import.meta.dirname, 'dist/fixtures'),
@@ -231,6 +237,7 @@ function appPublicAssets(directory: 'brand' | 'fixture-media') {
       });
     },
     async closeBundle() {
+      if (directory === 'fixture-media' && resourceMode === 'core-only') return;
       await cp(assetDirectory, resolve(import.meta.dirname, 'dist', directory), {
         recursive: true,
         force: true,
@@ -316,6 +323,15 @@ function productShellStylesheet() {
 export default defineConfig({
   plugins: [
     react(),
+    {
+      name: 'mizar-web-resource-mode',
+      async closeBundle() {
+        await writeFile(
+          resolve(import.meta.dirname, 'dist/web-resource-mode.json'),
+          `${JSON.stringify({ schemaVersion: 1, resourceMode })}\n`,
+        );
+      },
+    },
     replayPublicAssets(),
     appPublicAssets('brand'),
     appPublicAssets('fixture-media'),

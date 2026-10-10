@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "nsis-setup",
+  "version": "1.1.0",
+  "name": "Mizar-v1.1.0-Windows-x64-Setup.exe",
+  "bytes": 83607477,
+  "sha256": "8e274f20ef46ce211cf3b76da6f6ffca7c8fc66cb8cacd22fd0a4b1a0be9a555",
+  "gitSha": "5f26047c4f6a538c8d4889e742f3bffbda40fb59",
+  "contentDigest": "c73e59ffe7edb27456945732edadccf5e024213e22c23226d651199e789fc584",
+  "urls": ["https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/Mizar-v1.1.0-Windows-x64-Setup.exe"],
+  "allowExecute": true
+}

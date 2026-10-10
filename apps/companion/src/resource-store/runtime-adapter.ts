@@ -17,6 +17,7 @@ import { createManifestVerifier } from './manifest-adapter.js';
 export function createRuntimeVerifier(
   policy: ResourceTrustPolicy | undefined,
   history: readonly ResourceTrustPolicy[] = [],
+  expectedCore?: { appVersion: string; gitSha: string },
 ): StoreOptions['verifyTrustedPack'] {
   const pinned = policy ? { ...policy } : undefined;
   const approved = [pinned, ...history.map((item) => ({ ...item }))].filter(
@@ -28,7 +29,11 @@ export function createRuntimeVerifier(
       assertResourcePath,
       assertCompatibility,
       verifyReceipt: ({ receipt, purpose, signal }) => {
-        if (!pinned) throw new ResourceStoreError('resource_policy_unavailable');
+        if (!pinned) {
+          if (!expectedCore || !(receipt as { catalog?: unknown } | null)?.catalog)
+            throw new ResourceStoreError('resource_policy_unavailable');
+          return verifyResourceReceipt({ receipt, purpose, signal, expectedCore });
+        }
         let selected = pinned;
         if (purpose === 'cache' || purpose === 'rollback') {
           const encoded = (receipt as { publicationBase64?: unknown } | null)?.publicationBase64;
@@ -47,10 +52,11 @@ export function createRuntimeVerifier(
           purpose,
           signal,
           policy: { ...selected, coreVersion: pinned.coreVersion, now: Date.now() },
+          ...(expectedCore ? { expectedCore } : {}),
         });
       },
     },
-    pinned?.coreVersion ?? '1.1.0',
+    pinned?.coreVersion ?? expectedCore?.appVersion.replace(/-rc\.\d+$/, '') ?? '1.1.0',
   );
 }
 
