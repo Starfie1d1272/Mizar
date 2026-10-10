@@ -17,7 +17,7 @@ const sha = (value) => createHash('sha256').update(value).digest('hex');
 const context = {
   repository: 'Starfie1d1272/Mizar',
   ref: 'refs/heads/main',
-  sha: 'a'.repeat(40),
+  sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   event: 'workflow_dispatch',
   workflowRef: 'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main',
 };
@@ -172,6 +172,53 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
     coreSha256: archiveSha256,
     publicationRequired: true,
   });
+  if (process.platform === 'win32') {
+    // Compile the actual formal entry with contract fixtures, without signing or
+    // executing the fixture NSIS. Match Qualification's PowerShell 7 invocation.
+    const output = join(root, 'formal installer output');
+    execFileSync(
+      'pwsh.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-File',
+        resolve('scripts/web-installer/build.ps1'),
+        '-ProductDirectory',
+        product,
+        '-CoreDirectory',
+        core,
+        '-OutputDirectory',
+        output,
+        '-Qualification',
+      ],
+      {
+        timeout: 10000,
+        env: {
+          ...process.env,
+          GITHUB_REPOSITORY: context.repository,
+          GITHUB_REF: context.ref,
+          GITHUB_SHA: context.sha,
+          GITHUB_EVENT_NAME: context.event,
+          GITHUB_WORKFLOW_REF: context.workflowRef,
+          QUALIFICATION_SOURCE_INPUT: context.sha,
+        },
+      },
+    );
+    const build = JSON.parse(await readFile(join(output, 'web-installer-build.json'), 'utf8'));
+    const entry = await readFile(join(output, `Mizar-v${version}-Windows-x64-WebInstaller.exe`));
+    expect(entry.subarray(0, 2).toString()).toBe('MZ');
+    expect(build).toMatchObject({
+      artifact: `Mizar-v${version}-Windows-x64-WebInstaller.exe`,
+      bytes: entry.length,
+      sha256: sha(entry),
+      gitSha: context.sha,
+      version,
+      published: false,
+      core: plan.coreName,
+      installer: plan.name,
+    });
+    console.log(`Formal entry compiled from contract fixture: ${entry.length} bytes`);
+  }
   await writeFile(join(product, name), 'changed');
   await expect(qualificationPlan(product, core, context, context.sha, context.sha)).rejects.toThrow(
     'Qualified archive or NSIS bytes changed',
@@ -181,4 +228,4 @@ it('builds fixed candidate pins from real separate extracted Core and archive by
   await expect(qualificationPlan(product, core, context, context.sha, context.sha)).rejects.toThrow(
     '程序文件校验失败',
   );
-});
+}, 15000);

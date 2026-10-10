@@ -11,6 +11,16 @@ if ($LASTEXITCODE) { throw 'Qualification identity or payload verification faile
 $plan = Get-Content -Raw -LiteralPath $planPath | ConvertFrom-Json
 $exe = Join-Path $output "Mizar-v$($plan.version)-Windows-x64-WebInstaller.exe"
 if (Test-Path -LiteralPath $exe) { throw 'Refusing to replace an existing candidate' }
-& $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$exe" "/win32icon:$PSScriptRoot/../../apps/desktop/src-tauri/icons/icon.ico" "/resource:$planPath,plan.json" "/resource:$PSScriptRoot/../../apps/desktop/src-tauri/icons/tray-icon.png,brand.png" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "$PSScriptRoot/Bootstrap.cs" "$PSScriptRoot/Nsis.cs"
+$icon = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico')).Path
+$brand = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/tray-icon.png')).Path
+$bootstrapSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Bootstrap.cs')).Path
+$nsisSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Nsis.cs')).Path
+$compilerArgs = @(
+  '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu',
+  "/out:$exe", "/win32icon:$icon", "/resource:$planPath,plan.json", "/resource:$brand,brand.png",
+  '/r:System.Net.Http.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll',
+  $bootstrapSource, $nsisSource
+)
+& $compiler @compilerArgs
 if ($LASTEXITCODE) { throw 'Formal bootstrap compilation failed' }
 [ordered]@{schemaVersion=1; artifact=(Split-Path $exe -Leaf); bytes=(Get-Item $exe).Length; sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant(); gitSha=$plan.gitSha; version=$plan.version; published=$false; publicationRequired=$true; productionReady=$false; domesticMirrorReady=$false; productionCompletionEvidence=$false; blockers=@('Box-first authenticated publication and resource bootstrap','published cold-cache installation and offline EPL qualification'); core=$plan.coreName; installer=$plan.name} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'web-installer-build.json') -Encoding UTF8
