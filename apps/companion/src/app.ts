@@ -226,7 +226,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               stage: 'outbox_load',
               err: outboxLocalError(error),
               recovery: recovery ?? null,
-              result: recovery === undefined ? 'failure' : 'success',
+              result:
+                recovery === undefined
+                  ? 'failure'
+                  : recovery.code === 'outbox_recovered'
+                    ? 'success'
+                    : 'unconfirmed',
             };
             if (recovery === undefined)
               app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');

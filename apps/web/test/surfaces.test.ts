@@ -208,7 +208,7 @@ describe('web surface shell', () => {
 
     expect(container!.textContent).toContain('正常');
     expect(container!.textContent).toContain('de_ancient');
-    expect(container!.textContent).toContain('已恢复有效记录并保留原文件');
+    expect(container!.textContent).toContain('已核对同一提交并恢复完整副本');
     expect(container!.textContent).toContain('旧事件未确认送达');
     expect(container!.textContent).toContain('导出诊断包反馈');
     expect(container!.querySelector('details')?.open).toBe(false);
