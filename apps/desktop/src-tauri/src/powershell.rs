@@ -221,6 +221,15 @@ mod tests {
         let error = run(command("[Console]::Error.WriteLine('original-failure test-private-credential'); [Console]::Out.Write(('x' * 70000)); exit 7"), &log, "GSI 检测", Duration::from_secs(15)).unwrap_err();
         assert!(error.contains("GSI 检测"));
         assert!(!error.contains("original-failure"));
+        let error = run(
+            command("@{error=@{code='steam-path-unavailable';stage='launch'}} | ConvertTo-Json -Compress; exit 1"),
+            &log,
+            "CS2 启动配置检测",
+            Duration::from_secs(15),
+        )
+        .unwrap_err();
+        assert!(error.contains("无法读取当前 Steam 客户端的程序位置"));
+        assert!(!error.contains("配置工具发生内部错误"));
         assert!(run(
             command("[Console]::Error.WriteLine('before-timeout'); Start-Sleep -Seconds 10"),
             &log,

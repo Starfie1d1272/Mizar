@@ -186,7 +186,11 @@ function isAcceptancePath(path) {
 }
 
 function isPlatformPath(path) {
-  return PLATFORM_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    PLATFORM_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path === 'scripts/qualification/bundle/gsi-discovery.ps1' ||
+    path === 'scripts/qualification/gsi-discovery.test.mjs'
+  );
 }
 
 function isQualificationPath(path) {
