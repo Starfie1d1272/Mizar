@@ -903,6 +903,13 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
                 break;
             }
         }
+        // A stop/exit can run while the render window is still loading.
+        // Do not reopen a workspace whose managed game has been ended.
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        if app.state::<cs2_activity::Activity>().phase() != "idle"
+            || process.as_ref().is_some_and(|process| !process.is_running())
+        { return Err("游戏启动已取消或正在恢复，请完成收尾后重新进入工作台。".into()); }
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
