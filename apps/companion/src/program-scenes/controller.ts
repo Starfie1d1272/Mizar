@@ -42,6 +42,7 @@ export class ProgramSceneController {
   }
   private active: ProgramSceneId = 'waiting';
   private revision = randomUUID();
+  private introRevision: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private automaticSwitch: AbortController | undefined;
   private preparing: { target: ProgramSceneId; revision: string } | undefined;
@@ -115,6 +116,8 @@ export class ProgramSceneController {
       schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       revision: this.revision,
+      introRevision:
+        this.preparing?.target === 'matchup' ? this.preparing.revision : this.introRevision,
       ...(this.preparing ? { preparing: this.preparing } : {}),
       ...(this.director ? { director: this.director.get() } : {}),
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
@@ -129,6 +132,7 @@ export class ProgramSceneController {
       this.deferredResourceScene = id;
       return;
     }
+    if (id === 'matchup' && this.active !== id) this.introRevision = randomUUID();
     this.active = id;
     this.revision = randomUUID();
   }
@@ -220,6 +224,7 @@ export class ProgramSceneController {
         if (previous === 'bp') this.bpSession.finishSceneExit();
         this.active = id;
         this.revision = nextRevision;
+        if (id === 'matchup') this.introRevision = nextRevision;
       } catch {
         await rollback();
         return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };

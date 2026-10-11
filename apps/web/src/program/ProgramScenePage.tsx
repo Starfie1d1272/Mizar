@@ -385,17 +385,36 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const snapshot = preview
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
+  const preparingIntro = !preview && scenes?.preparing?.target === 'matchup';
+  const onAirIntro = scenes?.active === 'matchup';
+  const incomingIntro =
+    scenes && (preparingIntro || onAirIntro)
+      ? {
+          revision: preparingIntro
+            ? scenes.preparing!.revision
+            : (scenes.introRevision ?? scenes.revision),
+          duration: scenes.director?.introDurationMs ?? 6000,
+          elapsed: preparingIntro ? 0 : (scenes.director?.sceneElapsedMs ?? 0),
+        }
+      : null;
+  // Retain only presentation identity, never telemetry or a second game clock.
+  // A failed poll or another scene's revision cannot restart this source's opening.
+  const [acceptedIntro, setAcceptedIntro] = useState(incomingIntro);
+  if (
+    incomingIntro &&
+    (incomingIntro.revision !== acceptedIntro?.revision ||
+      incomingIntro.duration !== acceptedIntro.duration ||
+      incomingIntro.elapsed !== acceptedIntro.elapsed)
+  )
+    setAcceptedIntro(incomingIntro);
+  const revision = preview ? 'preview' : (incomingIntro ?? acceptedIntro)?.revision;
   const duration = preview
     ? params.get('intro') === 'short'
       ? 2000
       : 6000
-    : (scenes?.director?.introDurationMs ?? 6000);
-  const preparingIntro = !preview && scenes?.preparing?.target === 'matchup';
-  const revision = preview
-    ? 'preview'
-    : preparingIntro
-      ? scenes.preparing!.revision
-      : scenes?.revision;
+    : ((incomingIntro ?? acceptedIntro)?.duration ?? 6000);
+  const introPaused =
+    !preview && (!scenes || preparingIntro || !onAirIntro || scenes.director?.mode === 'blocked');
   const hasSnapshot = snapshot != null;
   const hasPresentation = data != null;
   const targetSignature = JSON.stringify([
@@ -406,14 +425,17 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const syncedAnimations = useRef(new WeakSet<Animation>());
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
   const synchronizeNewAnimations = useEffectEvent((animations: Animation[], root: HTMLElement) => {
-    const elapsed =
-      preview || preparingIntro
-        ? Number(root.getAnimations()[0]?.currentTime ?? 0)
-        : (scenes?.director?.sceneElapsedMs ?? 0);
+    const elapsed = preview
+      ? Number(root.getAnimations()[0]?.currentTime ?? 0)
+      : preparingIntro
+        ? 0
+        : onAirIntro
+          ? (scenes?.director?.sceneElapsedMs ?? 0)
+          : (acceptedIntro?.elapsed ?? 0);
     for (const animation of animations) {
       animation.currentTime = elapsed;
       syncedAnimations.current.add(animation);
-      if (!preview && !preparingIntro && scenes?.director?.mode === 'blocked') animation.pause();
+      if (introPaused) animation.pause();
     }
   });
   useEffect(() => {
@@ -531,7 +553,13 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       ...(hudEntrance?.getAnimations() ?? []),
     ];
     for (const animation of animations) {
-      if (!preview && !preparingIntro && scenes?.director?.sceneElapsedMs !== undefined) {
+      if (preparingIntro) animation.currentTime = 0;
+      if (
+        !preview &&
+        !preparingIntro &&
+        onAirIntro &&
+        scenes?.director?.sceneElapsedMs !== undefined
+      ) {
         const elapsed = scenes.director.sceneElapsedMs;
         const paused = scenes.director.mode === 'blocked';
         if (
@@ -544,8 +572,14 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
         }
         syncedAnimations.current.add(animation);
       }
-      if (!preview && !preparingIntro && scenes?.director?.mode === 'blocked') animation.pause();
-      else if (animation.playState === 'paused') animation.play();
+      if (introPaused) animation.pause();
+      else if (
+        animation.playState === 'paused' &&
+        Number(animation.currentTime ?? 0) <
+          Number(animation.effect?.getComputedTiming().endTime ?? Infinity)
+      )
+        // play() rewinds an already completed animation. Keep its settled frame.
+        animation.play();
     }
   }, [
     scenes?.director?.mode,
@@ -555,6 +589,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     hasSnapshot,
     revision,
     preparingIntro,
+    onAirIntro,
+    introPaused,
   ]);
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
