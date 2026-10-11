@@ -57,15 +57,9 @@ $cfg = Resolve-CfgDirectory
 $game = Split-Path (Split-Path $cfg -Parent) -Parent
 $exe = Join-Path $game 'bin\win64\cs2.exe'
 if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {{ Stop-Cs2Discovery 'selected-path-invalid' }}
-$steamProcesses = @(Get-Process -Name steam -ErrorAction SilentlyContinue)
-if ($steamProcesses.Count -eq 0) {{ Stop-Cs2Discovery 'steam-not-running' }}
-if ($steamProcesses.Count -ne 1) {{ Stop-Cs2Discovery 'steam-not-unique' }}
-$steamExe = $steamProcesses[0].Path
-if (!(Test-Path -LiteralPath $steamExe -PathType Leaf)) {{ Stop-Cs2Discovery 'steam-not-running' }}
-try {{ $accountValue = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser }} catch {{ Stop-Cs2Discovery 'steam-account-unavailable' }}
-if ($accountValue -lt 0) {{ $accountValue = [long]$accountValue + 4294967296 }}
-$account = [uint32]$accountValue
-if ($account -eq 0) {{ Stop-Cs2Discovery 'steam-account-unavailable' }}
+$steamContext = Get-SteamLaunchContext
+$steamExe = $steamContext.executable
+$account = $steamContext.account
 $videos = @()
 foreach ($root in @(Get-SteamInstallRoots)) {{
   $candidate = Join-Path $root ('userdata\' + $account + '\730\local\cfg\cs2_video.txt')

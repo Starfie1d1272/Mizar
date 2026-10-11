@@ -51,6 +51,30 @@ function Stop-Cs2Discovery {
     throw $exception
 }
 
+function Get-SteamLaunchContext {
+    $steamProcesses = @(Get-Process -Name steam -ErrorAction SilentlyContinue)
+    if ($steamProcesses.Count -eq 0) { Stop-Cs2Discovery 'steam-not-running' }
+    if ($steamProcesses.Count -ne 1) { Stop-Cs2Discovery 'steam-not-unique' }
+    try {
+        $steamExe = $steamProcesses[0].Path
+        if ([string]::IsNullOrWhiteSpace($steamExe) -or -not (Test-Path -LiteralPath $steamExe -PathType Leaf)) {
+            Stop-Cs2Discovery 'steam-path-unavailable'
+        }
+    } catch { Stop-Cs2Discovery 'steam-path-unavailable' -Cause $_.Exception }
+    try {
+        $accountValue = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser
+        # A missing value compares less than zero in PowerShell; validate before
+        # normalizing the signed DWORD returned by the registry provider.
+        if (($accountValue -isnot [int] -and $accountValue -isnot [uint32] -and $accountValue -isnot [long]) -or
+            $accountValue -lt -2147483648 -or $accountValue -gt 4294967295 -or $accountValue -eq 0) {
+            Stop-Cs2Discovery 'steam-account-unavailable'
+        }
+        if ($accountValue -lt 0) { $accountValue = [long]$accountValue + 4294967296 }
+        $account = [uint32]$accountValue
+    } catch { Stop-Cs2Discovery 'steam-account-unavailable' -Cause $_.Exception }
+    return @{ executable = $steamExe; account = $account }
+}
+
 # Steam KeyValues: parse object structure rather than matching unrelated numeric keys.
 function Read-SteamVdfObject {
     param([string[]]$Tokens, [hashtable]$Cursor, [int]$Depth = 0)

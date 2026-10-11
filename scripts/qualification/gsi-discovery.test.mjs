@@ -49,6 +49,83 @@ async function library() {
 }
 
 describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery', () => {
+  it('classifies unavailable Steam identity without guessing an account or executable', async () => {
+    const root = await library();
+    const executable = join(root, 'Steam 中文 space', 'steam.exe');
+    await mkdir(join(root, 'Steam 中文 space'));
+    await writeFile(executable, 'fixture');
+    const result = JSON.parse(
+      run(`
+      $script:steamPath=${quote(executable)}
+      function Get-Process { [CmdletBinding()] param([string]$Name)
+        if ($script:processCount -eq 0) { return }
+        for ($i=0; $i -lt $script:processCount; $i++) { [pscustomobject]@{ Path=$script:steamPath } }
+      }
+      function Get-ItemProperty { [CmdletBinding()] param([string]$LiteralPath)
+        if ($script:registryMissing) { throw [IO.IOException]::new('registry fixture unavailable') }
+        [pscustomobject]@{ ActiveUser=$script:activeUser }
+      }
+      $cases=@(
+        @{name='valid'; account=123},
+        @{name='signed-dword'; account=-1},
+        @{name='signed-dword-minimum'; account=-2147483648},
+        @{name='unsigned-dword'; account=[uint32]4294967295},
+        @{name='missing-account'; account=$null},
+        @{name='zero-account'; account=0},
+        @{name='invalid-account'; account='broken'},
+        @{name='numeric-string'; account='123'},
+        @{name='fractional-account'; account=123.5},
+        @{name='overflow-account'; account=4294967296},
+        @{name='negative-overflow'; account=-2147483649},
+        @{name='missing-registry'; account=123; registryMissing=$true},
+        @{name='missing-path'; account=123; path=$null},
+        @{name='blank-path'; account=123; path='  '},
+        @{name='absent-executable'; account=123; path=${quote(join(root, 'absent.exe'))}},
+        @{name='no-steam'; account=123; count=0},
+        @{name='multiple-steam'; account=123; count=2}
+      )
+      @($cases | ForEach-Object {
+        $script:activeUser=$_.account
+        $script:registryMissing=$_.registryMissing
+        $script:steamPath=if ($_.ContainsKey('path')) { $_.path } else { ${quote(executable)} }
+        $script:processCount=if ($_.ContainsKey('count')) { $_.count } else { 1 }
+        $name=$_.name
+        try {
+          $context=Get-SteamLaunchContext
+          @{name=$name; account=$context.account; pathMatches=($context.executable -eq ${quote(executable)})}
+        } catch {
+          @{name=$name; code=$_.Exception.Data['MizarCode']; hasCause=($null -ne $_.Exception.InnerException)}
+        }
+      }) | ConvertTo-Json -Compress
+    `),
+    );
+    expect(result.slice(0, 4)).toEqual([
+      { name: 'valid', account: 123, pathMatches: true },
+      { name: 'signed-dword', account: 4294967295, pathMatches: true },
+      { name: 'signed-dword-minimum', account: 2147483648, pathMatches: true },
+      { name: 'unsigned-dword', account: 4294967295, pathMatches: true },
+    ]);
+    expect(result.slice(4).map(({ name, code }) => ({ name, code }))).toEqual([
+      ...[
+        'missing-account',
+        'zero-account',
+        'invalid-account',
+        'numeric-string',
+        'fractional-account',
+        'overflow-account',
+        'negative-overflow',
+        'missing-registry',
+      ].map((name) => ({ name, code: 'steam-account-unavailable' })),
+      ...['missing-path', 'blank-path', 'absent-executable'].map((name) => ({
+        name,
+        code: 'steam-path-unavailable',
+      })),
+      { name: 'no-steam', code: 'steam-not-running' },
+      { name: 'multiple-steam', code: 'steam-not-unique' },
+    ]);
+    expect(result.find(({ name }) => name === 'missing-registry').hasCause).toBe(true);
+  });
+
   // This lifecycle intentionally launches several real Windows PowerShell processes.
   it(
     'automatically prepares only owned GSI, preserves its token, and refuses unknown senders',
