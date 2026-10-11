@@ -62,7 +62,11 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       $script:steamPath=${quote(executable)}
       function Get-Process { [CmdletBinding()] param([string]$Name)
         if ($script:processCount -eq 0) { return }
-        for ($i=0; $i -lt $script:processCount; $i++) { [pscustomobject]@{ Path=$script:steamPath } }
+        for ($i=0; $i -lt $script:processCount; $i++) {
+          $process=[pscustomobject]@{ Id=42; Path=$script:steamPath }
+          if ($script:pathThrows) { $process | Add-Member -MemberType ScriptProperty -Name Path -Value { throw [IO.IOException]::new('module unavailable') } -Force }
+          $process
+        }
       }
       function Get-ItemProperty { [CmdletBinding()] param([string]$LiteralPath)
         if ($script:registryMissing) { throw [IO.IOException]::new('registry fixture unavailable') }
@@ -85,16 +89,26 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         @{name='blank-path'; account=123; path='  '},
         @{name='absent-executable'; account=123; path=${quote(join(root, 'absent.exe'))}},
         @{name='no-steam'; account=123; count=0},
-        @{name='multiple-steam'; account=123; count=2}
+        @{name='multiple-steam'; account=123; count=2},
+        @{name='native-null-path'; account=123; path=$null; nativePid=42},
+        @{name='native-throwing-path'; account=123; pathThrows=$true; nativePid=42},
+        @{name='native-wrong-pid'; account=123; nativePid=43},
+        @{name='native-absent-executable'; account=123; nativePid=42; nativePath=${quote(join(root, 'absent.exe'))}},
+        @{name='native-no-steam'; account=123; nativePid=42; count=0},
+        @{name='native-multiple-steam'; account=123; nativePid=42; count=2}
       )
       @($cases | ForEach-Object {
         $script:activeUser=$_.account
         $script:registryMissing=$_.registryMissing
+        $script:pathThrows=$_.pathThrows
         $script:steamPath=if ($_.ContainsKey('path')) { $_.path } else { ${quote(executable)} }
         $script:processCount=if ($_.ContainsKey('count')) { $_.count } else { 1 }
         $name=$_.name
         try {
-          $context=Get-SteamLaunchContext
+          $native=if ($_.ContainsKey('nativePid')) {
+            @{pid=$_.nativePid; executable=if ($_.ContainsKey('nativePath')) { $_.nativePath } else { ${quote(executable)} }}
+          } else { $null }
+          $context=Get-SteamLaunchContext -NativeIdentity $native
           @{name=$name; account=$context.account; pathMatches=($context.executable -eq ${quote(executable)})}
         } catch {
           @{name=$name; code=$_.Exception.Data['MizarCode']; hasCause=($null -ne $_.Exception.InnerException)}
@@ -108,7 +122,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         { name: 'signed-dword-minimum', account: 2147483648, pathMatches: true },
         { name: 'unsigned-dword', account: 4294967295, pathMatches: true },
       ]);
-      expect(result.slice(4).map(({ name, code }) => ({ name, code }))).toEqual([
+      expect(result.slice(4, 17).map(({ name, code }) => ({ name, code }))).toEqual([
         ...[
           'missing-account',
           'zero-account',
@@ -125,6 +139,14 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         })),
         { name: 'no-steam', code: 'steam-not-running' },
         { name: 'multiple-steam', code: 'steam-not-unique' },
+      ]);
+      expect(result.slice(17)).toEqual([
+        { name: 'native-null-path', account: 123, pathMatches: true },
+        { name: 'native-throwing-path', account: 123, pathMatches: true },
+        { name: 'native-wrong-pid', code: 'steam-path-unavailable', hasCause: true },
+        { name: 'native-absent-executable', code: 'steam-path-unavailable', hasCause: true },
+        { name: 'native-no-steam', code: 'steam-not-running', hasCause: false },
+        { name: 'native-multiple-steam', code: 'steam-not-unique', hasCause: false },
       ]);
       expect(result.find(({ name }) => name === 'missing-registry').hasCause).toBe(true);
     },

@@ -21,27 +21,12 @@ pub const LAUNCH_ARGS: &[&str] = &[
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
 // Fixed scripts only: no paths supplied by the webview are interpolated as code.
-fn powershell(script: &str, log: &crate::startup_log::DesktopLog) -> Result<String, String> {
-    let system = std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?;
-    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let mut command = Command::new(executable);
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ])
-        .creation_flags(0x08000000);
-    crate::powershell::run(command, log, "CS2 启动配置检测", Duration::from_secs(15))
-}
-
-fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
-    Ok(!cs2_pids(log)?.is_empty())
-}
-
-fn discover(log: &crate::startup_log::DesktopLog) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+fn powershell(
+    body: &str,
+    steam: &SteamProcess,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<String, String> {
+    steam.validate(log)?;
     let discovery = DISCOVERY.trim_start_matches('\u{feff}');
     let script = format!(
         r#"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
@@ -53,25 +38,80 @@ trap {{
   @{{error=@{{code=$code;stage='launch'}}}} | ConvertTo-Json -Compress
   exit 1
 }}
+$nativeSteam = $env:MIZAR_NATIVE_STEAM | ConvertFrom-Json
+{body}
+"#
+    );
+    let system = std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?;
+    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let mut command = Command::new(executable);
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ])
+        .creation_flags(0x08000000);
+    // Paths are data in a private child environment, never PowerShell source.
+    command.env(
+        "MIZAR_NATIVE_STEAM",
+        json!({"pid": steam.pid, "executable": steam.executable}).to_string(),
+    );
+    let output = crate::powershell::run(command, log, "CS2 启动配置检测", Duration::from_secs(15))?;
+    steam.validate(log)?;
+    Ok(output)
+}
+
+fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
+    Ok(!cs2_pids(log)?.is_empty())
+}
+
+struct SteamLaunch {
+    process: SteamProcess,
+    account: u32,
+}
+impl SteamLaunch {
+    fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
+        let output = powershell(
+            "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
+            &self.process,
+            log,
+        )?;
+        let value = crate::powershell::parse(log, "Steam 启动身份复核", &output)?;
+        if value["account"].as_u64() != Some(u64::from(self.account)) {
+            return Err(steam_failure(log, "steam-account-unavailable"));
+        }
+        Ok(())
+    }
+}
+
+fn discover(
+    log: &crate::startup_log::DesktopLog,
+) -> Result<(PathBuf, PathBuf, SteamLaunch), String> {
+    let steam = SteamProcess::discover(log)?;
+    let script = r#"
 $cfg = Resolve-CfgDirectory
 $game = Split-Path (Split-Path $cfg -Parent) -Parent
 $exe = Join-Path $game 'bin\win64\cs2.exe'
-if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {{ Stop-Cs2Discovery 'selected-path-invalid' }}
-$steamContext = Get-SteamLaunchContext
+if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { Stop-Cs2Discovery 'selected-path-invalid' }
+$steamContext = Get-SteamLaunchContext -NativeIdentity $nativeSteam
 $steamExe = $steamContext.executable
 $account = $steamContext.account
 $videos = @()
-foreach ($root in @(Get-SteamInstallRoots)) {{
+foreach ($root in @(Get-UniqueSteamPaths (@((Split-Path -Parent $steamExe)) + @(Get-SteamInstallRoots)))) {
   $candidate = Join-Path $root ('userdata\' + $account + '\730\local\cfg\cs2_video.txt')
-  if (Test-Path -LiteralPath $candidate -PathType Leaf) {{ $videos += (Resolve-Path -LiteralPath $candidate).Path }}
-}}
+  if (Test-Path -LiteralPath $candidate -PathType Leaf) { $videos += (Resolve-Path -LiteralPath $candidate).Path }
+}
 $videos = @($videos | Select-Object -Unique)
-if ($videos.Count -eq 0) {{ Stop-Cs2Discovery 'video-config-missing' }}
-if ($videos.Count -ne 1) {{ Stop-Cs2Discovery 'video-config-ambiguous' }}
-@{{executable=(Resolve-Path -LiteralPath $exe).Path; video=$videos[0]; steam=$steamExe}} | ConvertTo-Json -Compress
-"#
-    );
-    let output = powershell(&script, log)?;
+if ($videos.Count -eq 0) { Stop-Cs2Discovery 'video-config-missing' }
+if ($videos.Count -ne 1) { Stop-Cs2Discovery 'video-config-ambiguous' }
+$confirmed = Get-SteamLaunchContext -NativeIdentity $nativeSteam
+if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavailable' }
+@{executable=(Resolve-Path -LiteralPath $exe).Path; video=$videos[0]; account=$account} | ConvertTo-Json -Compress
+"#;
+    let output = powershell(script, &steam, log)?;
     let value = crate::powershell::parse(log, "CS2 启动配置检测", &output)?;
     let path = |key: &str| {
         value[key]
@@ -79,7 +119,19 @@ if ($videos.Count -ne 1) {{ Stop-Cs2Discovery 'video-config-ambiguous' }}
             .map(PathBuf::from)
             .ok_or_else(|| "CS2 配置路径缺失。".to_string())
     };
-    Ok((path("executable")?, path("video")?, path("steam")?))
+    let account = value["account"]
+        .as_u64()
+        .and_then(|account| u32::try_from(account).ok())
+        .filter(|account| *account != 0)
+        .ok_or_else(|| steam_failure(log, "steam-account-unavailable"))?;
+    Ok((
+        path("executable")?,
+        path("video")?,
+        SteamLaunch {
+            process: steam,
+            account,
+        },
+    ))
 }
 
 #[repr(C)]
@@ -142,12 +194,15 @@ impl Drop for Process {
     }
 }
 fn cs2_pids(log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
+    process_pids("cs2.exe", log)
+}
+fn process_pids(name: &str, log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
     if snapshot == -1 {
         return Err(win32_failure(
             log,
             "CreateToolhelp32Snapshot",
-            "无法检查 CS2 是否运行，未修改游戏设置。",
+            "无法检查启动进程，未修改游戏设置。",
         ));
     }
     let snapshot = Process(snapshot);
@@ -157,13 +212,13 @@ fn cs2_pids(log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
     let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
     while found != 0 {
         let len = entry.executable.iter().position(|v| *v == 0).unwrap_or(260);
-        if String::from_utf16_lossy(&entry.executable[..len]).eq_ignore_ascii_case("cs2.exe") {
+        if String::from_utf16_lossy(&entry.executable[..len]).eq_ignore_ascii_case(name) {
             pids.push(entry.pid);
         }
         found = unsafe { Process32NextW(snapshot.0, &mut entry) };
     }
     if unsafe { GetLastError() } != 18 {
-        return Err(win32_failure(log, "Process32NextW", "CS2 进程检查未完成。"));
+        return Err(win32_failure(log, "Process32NextW", "启动进程检查未完成。"));
     }
     Ok(pids)
 }
@@ -177,7 +232,7 @@ fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process
         Err(win32_failure(
             log,
             "OpenProcess",
-            "无法确认 CS2 进程身份，未关闭游戏或恢复配置。",
+            "无法确认进程身份，未关闭游戏或恢复配置。",
         ))
     }
 }
@@ -193,7 +248,7 @@ fn identity(
         return Err(win32_failure(
             log,
             "GetProcessTimes",
-            "无法确认 CS2 启动身份。",
+            "无法确认进程创建时间。",
         ));
     }
     let mut buffer = vec![0u16; 32768];
@@ -202,7 +257,7 @@ fn identity(
         return Err(win32_failure(
             log,
             "QueryFullProcessImageNameW",
-            "无法确认 CS2 程序路径。",
+            "无法确认进程程序路径。",
         ));
     }
     Ok((
@@ -221,6 +276,73 @@ fn win32_failure(log: &crate::startup_log::DesktopLog, api: &str, message: &str)
         )),
     );
     message.into()
+}
+
+// The held handle binds every observation to the original Steam process, even
+// if it exits and its PID is reused. Registry install paths cannot prove this.
+struct SteamProcess {
+    process: Process,
+    pid: u32,
+    created: u64,
+    executable: PathBuf,
+}
+fn steam_failure(log: &crate::startup_log::DesktopLog, code: &str) -> String {
+    log.event(
+        "cs2_launch",
+        "failure",
+        Some(&format!("stage=steam_identity; code={code}")),
+    );
+    match code {
+        "steam-not-running" => "请先打开 Steam 并登录，再启动 CS2。",
+        "steam-not-unique" => "Steam 进程不唯一，无法确认启动位置。",
+        "steam-account-unavailable" => "Steam 当前账号不可用或已变化，请确认登录后重试。",
+        _ => "Steam 程序位置不可用或进程已变化，请确认 Steam 状态后重试。",
+    }
+    .into()
+}
+impl SteamProcess {
+    fn discover(log: &crate::startup_log::DesktopLog) -> Result<Self, String> {
+        let pids = process_pids("steam.exe", log)?;
+        let pid = match pids.as_slice() {
+            [] => return Err(steam_failure(log, "steam-not-running")),
+            [pid] => *pid,
+            _ => return Err(steam_failure(log, "steam-not-unique")),
+        };
+        let process =
+            open(pid, log)?.ok_or_else(|| steam_failure(log, "steam-path-unavailable"))?;
+        let (created, executable) = identity(&process, log)?;
+        if !executable
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("steam.exe"))
+        {
+            return Err(steam_failure(log, "steam-path-unavailable"));
+        }
+        let steam = Self {
+            process,
+            pid,
+            created,
+            executable,
+        };
+        steam.validate(log)?;
+        Ok(steam)
+    }
+    fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
+        let pids = process_pids("steam.exe", log)?;
+        if pids.len() > 1 {
+            return Err(steam_failure(log, "steam-not-unique"));
+        }
+        if pids.as_slice() != [self.pid] || unsafe { WaitForSingleObject(self.process.0, 0) } != 258
+        {
+            return Err(steam_failure(log, "steam-path-unavailable"));
+        }
+        let (created, executable) = identity(&self.process, log)?;
+        if created != self.created
+            || !same_executable(&executable, &self.executable.to_string_lossy())
+        {
+            return Err(steam_failure(log, "steam-path-unavailable"));
+        }
+        Ok(())
+    }
 }
 
 fn same_executable(actual: &std::path::Path, expected: &str) -> bool {
@@ -615,19 +737,22 @@ impl ManagedCs2 {
                 return Err(error);
             }
         }
-        // Durable ambiguous-launch marker: a crash between spawn and identity save
-        // must never restore settings while an unconfirmed game is running.
-        journal["launchAttempted"] = json!(true);
-        let mut time = FileTime::default();
-        unsafe {
-            GetSystemTimeAsFileTime(&mut time);
-        }
-        let launch_time = ((time.high as u64) << 32) | time.low as u64;
-        journal["launchTime"] = json!(launch_time);
         self.store.save(&journal)?;
         let launch: Result<bool, String> = (|| {
-            let mut command = Command::new(&steam);
-            command.current_dir(steam.parent().ok_or("Steam 程序目录无效。")?);
+            // Recheck the same process and current account before committing a
+            // request. A refused check remains an unlaunched, recoverable journal.
+            steam.validate(&self.log)?;
+            if any_cs2_running(&self.log)? {
+                return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
+            }
+            let mut command = Command::new(&steam.process.executable);
+            command.current_dir(
+                steam
+                    .process
+                    .executable
+                    .parent()
+                    .ok_or("Steam 程序目录无效。")?,
+            );
             if let Some(size) = size {
                 command.args(LAUNCH_ARGS).args([
                     "-w",
@@ -654,6 +779,16 @@ impl ManagedCs2 {
                         .ok_or("Demo 播放 CFG 名称缺失。")?,
                 ]);
             }
+            // Commit the ambiguous-launch marker only after all checks and
+            // argument validation, immediately before sending the Steam request.
+            let mut time = FileTime::default();
+            unsafe {
+                GetSystemTimeAsFileTime(&mut time);
+            }
+            let launch_time = ((time.high as u64) << 32) | time.low as u64;
+            journal["launchTime"] = json!(launch_time);
+            journal["launchAttempted"] = json!(true);
+            self.store.save(&journal)?;
             command
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())
@@ -805,7 +940,7 @@ impl ManagedCs2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // These tests create or inspect machine-wide CS2 processes. Hold the same
+    // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
@@ -849,6 +984,86 @@ mod tests {
         external.child.kill().unwrap();
         external.child.wait().unwrap();
         managed.confirm_game_stopped().unwrap();
+    }
+
+    #[test]
+    fn steam_native_identity_survives_missing_module_path_and_rejects_changed_processes() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mizar-steam-identity-{}", std::process::id()));
+        // Non-ASCII, spaces and PowerShell metacharacters must stay literal data.
+        let directory = root.join("Steam 中文 space $() ' &");
+        std::fs::create_dir_all(&directory).unwrap();
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let executable = directory.join("steam.exe");
+        std::fs::copy(system.join("System32/cmd.exe"), &executable).unwrap();
+        struct Fixture(std::process::Child);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let spawn = || {
+            Fixture(
+                Command::new(&executable)
+                    .args(["/D", "/Q", "/K"])
+                    .creation_flags(0x08000000)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            )
+        };
+        assert!(SteamProcess::discover(&log).is_err());
+        let mut first = spawn();
+        let mut steam = SteamProcess::discover(&log).unwrap();
+        assert_eq!(steam.pid, first.0.id());
+        assert!(same_executable(
+            &steam.executable,
+            &executable.to_string_lossy()
+        ));
+        // Exercise the real Host -> Windows PowerShell 5.1 handoff. Native
+        // enumeration and image queries remain real; only module/account data
+        // are controlled, without touching the user's registry or launching CS2.
+        let output = powershell(r#"
+function Get-Process {
+  param([string]$Name)
+  $process = [pscustomobject]@{ Id=$nativeSteam.pid }
+  $process | Add-Member -MemberType ScriptProperty -Name Path -Value { throw [IO.IOException]::new('module unavailable') }
+  $process
+}
+function Get-ItemProperty { param([string]$LiteralPath) [pscustomobject]@{ ActiveUser=123 } }
+$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam
+@{account=$context.account; pathMatches=($context.executable -ceq $nativeSteam.executable)} | ConvertTo-Json -Compress
+"#, &steam, &log).unwrap();
+        let context: Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(context, json!({"account":123,"pathMatches":true}));
+        let created = steam.created;
+        steam.created += 1;
+        assert!(steam.validate(&log).is_err());
+        steam.created = created;
+        let path = steam.executable.clone();
+        steam.executable = root.join("different/steam.exe");
+        assert!(steam.validate(&log).is_err());
+        steam.executable = path;
+        let second = spawn();
+        assert!(SteamProcess::discover(&log).is_err());
+        assert!(steam.validate(&log).is_err());
+        drop(second);
+        steam.validate(&log).unwrap();
+        first.0.kill().unwrap();
+        first.0.wait().unwrap();
+        assert!(steam.validate(&log).is_err());
+        let replacement = spawn();
+        // A new process at the same program path must not replace the held one.
+        assert!(steam.validate(&log).is_err());
+        drop(replacement);
+        drop(steam);
+        drop(first);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
