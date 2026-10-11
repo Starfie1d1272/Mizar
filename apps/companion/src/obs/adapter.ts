@@ -3,7 +3,9 @@ import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import { ObsConfigStore, discoverObsExecutable } from './config.js';
+import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import { ObsOutputController, ObsOutputError } from './outputs.js';
+import { ObsConfigStore, discoverObsExecutable, type ObsConfig } from './config.js';
 import { checkObsAudio, setupObsAudio } from './audio.js';
 import {
   checkObsConfiguration,
@@ -54,6 +56,8 @@ export interface ObsStatus {
 const TIMEOUT_MS = 4000;
 
 export class ObsAdapter {
+  private readonly outputs: ObsOutputController;
+  private configurationPending = false;
   private queue: Promise<unknown> = Promise.resolve();
   private findings: ObsFinding[] = [
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
@@ -67,7 +71,46 @@ export class ObsAdapter {
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
-  ) {}
+  ) {
+    this.outputs = new ObsOutputController(configStore, (error, password) =>
+      diagnostic('obs_output', obsErrorEvidence(error, password)),
+    );
+  }
+
+  async outputStatus(): Promise<ObsOutputsStatus> {
+    return this.outputs.read().catch(() => this.outputs.snapshot());
+  }
+
+  async outputCommand(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
+    if (this.configurationPending)
+      throw new ObsOutputError('obs_output_busy', 'OBS 配置正在处理，请稍后操作。');
+    try {
+      await this.outputs.command(command);
+    } catch (error) {
+      const config = await this.configStore.read();
+      this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
+      throw error;
+    }
+    return this.outputs.snapshot();
+  }
+
+  private configurationMutation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.configurationPending || this.outputs.busy)
+      return Promise.reject(
+        new ObsOutputError('obs_output_busy', 'OBS 正在处理操作，请等待状态确认。'),
+      );
+    this.configurationPending = true;
+    return this.serial(run).finally(() => {
+      this.configurationPending = false;
+    });
+  }
+
+  configure(config: ObsConfig): Promise<void> {
+    return this.configurationMutation(async () => {
+      await this.configStore.save(config);
+      this.outputs.reset();
+    });
+  }
 
   startBrowserRecovery(): void {
     if (this.recoveryClosed || this.recoveryComplete || this.recoveryTask || this.recoveryTimer)
@@ -97,6 +140,7 @@ export class ObsAdapter {
 
   async close(): Promise<void> {
     this.recoveryClosed = true;
+    await this.outputs.close();
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
@@ -172,10 +216,9 @@ export class ObsAdapter {
     const config = await this.configStore.read();
     try {
       const status = await this.withObs(async (obs) => {
-        const [scene, stream, record, video, findings] = await Promise.all([
+        const [scene, outputs, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
-          obs.call('GetStreamStatus'),
-          obs.call('GetRecordStatus'),
+          this.outputs.read(),
           obs.call('GetVideoSettings'),
           this.configurationFindings(obs).catch((error: unknown) => {
             this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
@@ -194,8 +237,8 @@ export class ObsAdapter {
               ? scene.currentProgramSceneName
               : null,
           port: config.port,
-          streaming: stream.outputActive === true,
-          recording: record.outputActive === true,
+          streaming: outputs.stream.active === true,
+          recording: outputs.record.active === true,
           passwordConfigured: Boolean(config.password),
           video: {
             canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
@@ -266,7 +309,7 @@ export class ObsAdapter {
   }
   private preparationStarted = false;
   ensure(): Promise<readonly ObsFinding[]> {
-    return this.serial(async () => {
+    return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
         const firstPreparation = !this.preparationStarted;
         this.preparationStarted = true;
@@ -277,7 +320,7 @@ export class ObsAdapter {
     });
   }
   repair(activeScene: () => ProgramSceneId): Promise<readonly ObsFinding[]> {
-    return this.serial(async () => {
+    return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
@@ -290,7 +333,7 @@ export class ObsAdapter {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
   }
   setupAudio(): Promise<void> {
-    return this.serial(() =>
+    return this.configurationMutation(() =>
       this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000),
     );
   }

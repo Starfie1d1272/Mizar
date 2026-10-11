@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
@@ -69,4 +70,68 @@ export async function obsCommand(
     return { ...value, alreadyRunning };
   }
   return value;
+}
+
+export function useObsOutputs() {
+  const [outputs, setOutputs] = useState<ObsOutputsStatus | null>(null);
+  const [pending, setPending] = useState<ObsOutputCommand | null>(null);
+  const revision = useRef(0);
+  const inFlight = useRef(false);
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const requestRevision = revision.current;
+      try {
+        const response = await fetch('/local/v1/obs/outputs', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) throw new Error('OBS unavailable');
+        const value = (await response.json()) as ObsOutputsStatus;
+        if (active && requestRevision === revision.current) setOutputs(value);
+      } catch {
+        if (active && requestRevision === revision.current) setOutputs(null);
+      } finally {
+        if (active) timer = setTimeout(() => void poll(), 1000);
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+  async function execute(command: ObsOutputCommand) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    revision.current++;
+    setPending(command);
+    try {
+      const response = await fetch('/operator/obs/output', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        signal: AbortSignal.timeout(25_000),
+      });
+      const result = (await response.json()) as { outputs?: ObsOutputsStatus; message?: string };
+      if (!response.ok || !result.outputs)
+        throw new Error(result.message ?? 'OBS 操作未完成，请核对当前状态。');
+      revision.current++;
+      setOutputs(result.outputs);
+    } catch (error) {
+      revision.current++;
+      setOutputs(null);
+      throw new Error(
+        error instanceof Error && error.name !== 'TimeoutError'
+          ? error.message
+          : '操作结果尚未确认，请等待 OBS 状态更新。',
+        { cause: error },
+      );
+    } finally {
+      inFlight.current = false;
+      setPending(null);
+    }
+  }
+  return { outputs, pending, execute };
 }

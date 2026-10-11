@@ -1,6 +1,48 @@
 import { expect, test } from './companion-isolation.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 
+for (const [path, width, height] of [
+  ['/workspace/dock', 1440, 270],
+  ['/workspace/dock', 1024, 192],
+  ['/workspace/dock', 768, 336],
+  ['/workspace', 1024, 768],
+] as const) {
+  test(`OBS controls preserve existing production tools at ${path} ${width}×${height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto(path);
+    const tools = page.getByRole('region', { name: '制作工具' });
+    for (const name of [
+      'OBS 配置',
+      '直播待确认',
+      '录像待确认',
+      'HUD 编辑器',
+      '运行诊断',
+      '恢复布局',
+      '隐藏工作区',
+    ])
+      await expect(tools.getByRole('button', { name, exact: true })).toBeVisible();
+    const clipped = await tools.evaluate((section) => {
+      const bounds = section.getBoundingClientRect();
+      return Array.from(section.querySelectorAll('button'))
+        .filter((button) => {
+          if (!button.getClientRects().length) return false;
+          const rect = button.getBoundingClientRect();
+          return (
+            rect.left < bounds.left ||
+            rect.right > bounds.right ||
+            rect.bottom > bounds.bottom ||
+            button.scrollWidth > button.clientWidth + 1
+          );
+        })
+        .map((button) => button.textContent);
+    });
+    expect(clipped).toEqual([]);
+    await expect(page.getByRole('button', { name: '退出工作台', exact: true })).toBeVisible();
+  });
+}
+
 test('Desktop HUD scales inside its viewport without native scrollbars', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', {

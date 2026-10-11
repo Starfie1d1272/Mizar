@@ -5,6 +5,61 @@ import { expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 import { ObsAdapter } from '../src/obs/adapter.js';
+import { randomUUID } from 'node:crypto';
+import { ObsOutputError } from '../src/obs/outputs.js';
+
+it('accepts only explicit output intents from a local operator and preserves structured failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-output-route-'));
+  const command = vi
+    .spyOn(ObsAdapter.prototype, 'outputCommand')
+    .mockRejectedValue(new ObsOutputError('obs_output_unconfirmed', '操作结果尚未确认。'));
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
+  const payload = { output: 'stream', action: 'start', expectedRevision: randomUUID() };
+  try {
+    for (const origin of [undefined, 'https://example.test']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/operator/obs/output',
+        headers: origin ? { origin } : {},
+        payload,
+      });
+      expect(response.statusCode).toBe(403);
+    }
+    for (const invalid of [
+      { ...payload, action: 'toggle' },
+      { ...payload, requestType: 'StartStream' },
+      { output: 'record', action: 'stop' },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/operator/obs/output',
+            headers: { origin: 'http://localhost:3000' },
+            payload: invalid,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(command).not.toHaveBeenCalled();
+    const result = await app.inject({
+      method: 'POST',
+      url: '/operator/obs/output',
+      headers: { origin: 'http://localhost:3000' },
+      payload,
+    });
+    expect(result.statusCode).toBe(409);
+    expect(result.json()).toEqual({
+      error: 'obs_output_unconfirmed',
+      message: '操作结果尚未确认。',
+    });
+    expect(command).toHaveBeenCalledExactlyOnceWith(payload);
+  } finally {
+    await app.close();
+    command.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it('resolves a native OBS launch target only for the local operator without launching it', async () => {
   const target = vi

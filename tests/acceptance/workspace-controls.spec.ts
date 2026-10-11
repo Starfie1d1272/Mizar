@@ -4,6 +4,100 @@ import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
+import { randomUUID } from 'node:crypto';
+import type { ObsOutputCommand, ObsOutputsStatus } from '../../packages/protocol/src/obs.js';
+
+test('OBS output controls confirm actual state, protect stop, and reflect external changes', async ({
+  page,
+}) => {
+  let outputs: ObsOutputsStatus = {
+    stream: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+    record: { active: true, phase: 'paused', pending: null, revision: randomUUID() },
+  };
+  let online = true;
+  const calls: ObsOutputCommand[] = [];
+  let release!: () => void;
+  await page.route('**/local/v1/obs/outputs', (route) =>
+    route.fulfill({ status: online ? 200 : 503, json: outputs }),
+  );
+  await page.route('**/operator/obs/output', async (route) => {
+    const command = route.request().postDataJSON() as ObsOutputCommand;
+    calls.push(command);
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    outputs = {
+      ...outputs,
+      [command.output]: {
+        active: command.action === 'start',
+        phase: command.action === 'start' ? 'active' : 'idle',
+        pending: null,
+        revision: randomUUID(),
+      },
+    };
+    await route.fulfill({ json: { ok: true, outputs } });
+  });
+  await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '开始直播', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始直播中…' })).toBeDisabled();
+  await expect.poll(() => calls.length).toBe(1);
+  release();
+  await page.getByRole('button', { name: '停止直播', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('将结束 OBS 当前直播');
+  await expect(page.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  expect(calls).toHaveLength(1);
+  await page.getByRole('button', { name: '停止直播', exact: true }).click();
+  await page.getByRole('button', { name: '确认停止', exact: true }).click();
+  await expect.poll(() => calls.length).toBe(2);
+  expect(calls[1]).toMatchObject({ output: 'stream', action: 'stop' });
+  release();
+  await expect(page.getByRole('button', { name: '开始直播', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '暂停 · 停止', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('将结束 OBS 当前录像');
+  outputs = {
+    ...outputs,
+    record: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+  };
+  await expect(page.getByRole('button', { name: '确认停止', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始录像', exact: true })).toBeEnabled();
+  online = false;
+  await expect(page.getByRole('button', { name: '直播待确认', exact: true })).toBeDisabled();
+  online = true;
+  outputs = {
+    ...outputs,
+    stream: { active: true, phase: 'reconnecting', pending: null, revision: randomUUID() },
+  };
+  await expect(page.getByRole('button', { name: '重连 · 停止', exact: true })).toBeEnabled();
+  expect(calls).toHaveLength(2);
+});
+
+test('OBS unconfirmed output error stays actionable without automatically resending', async ({
+  page,
+}) => {
+  const outputs = {
+    stream: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+    record: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+  };
+  let calls = 0;
+  await page.route('**/local/v1/obs/outputs', (route) => route.fulfill({ json: outputs }));
+  await page.route('**/operator/obs/output', (route) => {
+    calls++;
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: 'obs_output_unconfirmed',
+        message: '操作结果尚未确认，请等待 OBS 重新连接后核对。',
+      },
+    });
+  });
+  await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '开始录像', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('操作结果尚未确认');
+  await expect(page.getByRole('button', { name: '开始录像', exact: true })).toBeEnabled();
+  expect(calls).toBe(1);
+});
 
 test('sidebar links and preparation tools open their actual destinations', async ({
   page,

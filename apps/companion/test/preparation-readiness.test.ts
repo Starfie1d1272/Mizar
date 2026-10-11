@@ -7,7 +7,11 @@ import { obsSceneName } from '../src/obs/desired-state.js';
 
 const rpc = vi.hoisted(() => ({ unavailable: false, failCheck: false }));
 vi.mock('obs-websocket-js', () => ({
+  EventSubscription: { Outputs: 64 },
   OBSWebSocket: class {
+    on() {
+      return this;
+    }
     connect() {
       return rpc.unavailable ? Promise.reject(new Error('offline')) : Promise.resolve();
     }

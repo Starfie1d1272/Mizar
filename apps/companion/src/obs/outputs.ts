@@ -1,0 +1,310 @@
+import { randomUUID } from 'node:crypto';
+import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
+import type {
+  ObsOutputCommand,
+  ObsOutputKind,
+  ObsOutputPhase,
+  ObsOutputsStatus,
+  ObsOutputStatus,
+} from '@mizar/protocol/obs';
+import type { ObsConfigStore } from './config.js';
+
+const REQUEST_MS = 4000;
+const CONFIRM_MS = 8000;
+const RETRY_MS = 1500;
+const kinds = ['stream', 'record'] as const;
+const requests = {
+  stream: { start: 'StartStream', stop: 'StopStream' },
+  record: { start: 'StartRecord', stop: 'StopRecord' },
+} as const;
+
+export class ObsOutputError extends Error {
+  constructor(
+    readonly code:
+      | 'obs_output_busy'
+      | 'obs_output_stale'
+      | 'obs_output_unavailable'
+      | 'obs_output_failed'
+      | 'obs_output_unconfirmed',
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
+function unknown(): ObsOutputStatus {
+  return { phase: 'unknown', active: null, pending: null, revision: randomUUID() };
+}
+
+async function bounded<T>(task: Promise<T>, ms = REQUEST_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('OBS output timeout')), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** One observed output state for all operator windows. Never retries a mutation. */
+export class ObsOutputController {
+  private values: Record<ObsOutputKind, ObsOutputStatus> = { stream: unknown(), record: unknown() };
+  private client: OBSWebSocket | undefined;
+  private generation = 0;
+  private events = { stream: 0, record: 0 };
+  private transitionAt = { stream: 0, record: 0 };
+  private connecting: Promise<void> | undefined;
+  private reading: Promise<void> | undefined;
+  private retry: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
+  private ready = false;
+
+  constructor(
+    private readonly config: ObsConfigStore,
+    private readonly diagnostic: (error: unknown, password: string) => void,
+  ) {}
+
+  get busy(): boolean {
+    return kinds.some((kind) => {
+      const state = this.values[kind];
+      return state.pending !== null || state.phase === 'starting' || state.phase === 'stopping';
+    });
+  }
+
+  snapshot(): ObsOutputsStatus {
+    return { stream: { ...this.values.stream }, record: { ...this.values.record } };
+  }
+
+  private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
+    const previous = this.values[kind];
+    if (previous.phase === phase && previous.active === active) return;
+    this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
+  }
+
+  private invalidate(client?: OBSWebSocket): void {
+    if (client && this.client !== client) return;
+    const old = this.client;
+    this.client = undefined;
+    this.ready = false;
+    this.generation++;
+    this.connecting = undefined;
+    this.reading = undefined;
+    for (const kind of kinds) this.update(kind, 'unknown', null);
+    if (old) void old.disconnect().catch(() => undefined);
+    if (!this.closed && !this.retry) {
+      this.retry = setTimeout(() => {
+        this.retry = undefined;
+        void this.read().catch(() => undefined);
+      }, RETRY_MS);
+      this.retry.unref();
+    }
+  }
+
+  reset(): void {
+    this.invalidate();
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    const client = this.client;
+    this.invalidate();
+    await client?.disconnect().catch(() => undefined);
+  }
+
+  private event(kind: ObsOutputKind, event: { outputState: string; outputActive: boolean }): void {
+    this.events[kind]++;
+    const phases: Record<string, ObsOutputPhase> = {
+      OBS_WEBSOCKET_OUTPUT_STARTING: 'starting',
+      OBS_WEBSOCKET_OUTPUT_STARTED: 'active',
+      OBS_WEBSOCKET_OUTPUT_STOPPING: 'stopping',
+      OBS_WEBSOCKET_OUTPUT_STOPPED: 'idle',
+      OBS_WEBSOCKET_OUTPUT_RECONNECTING: 'reconnecting',
+      OBS_WEBSOCKET_OUTPUT_RECONNECTED: 'active',
+      OBS_WEBSOCKET_OUTPUT_PAUSED: 'paused',
+      OBS_WEBSOCKET_OUTPUT_RESUMED: 'active',
+    };
+    const phase = phases[event.outputState] ?? 'unknown';
+    if (phase === 'starting' || phase === 'stopping') this.transitionAt[kind] = Date.now();
+    this.update(kind, phase, phase === 'unknown' ? null : event.outputActive);
+  }
+
+  private async connect(): Promise<void> {
+    if (this.closed) throw new Error('OBS outputs closed');
+    if (this.ready) return;
+    if (this.connecting) return this.connecting;
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    const generation = this.generation;
+    const client = new OBSWebSocket();
+    this.client = client;
+    const current = () => this.client === client && this.generation === generation && !this.closed;
+    client.on('StreamStateChanged', (event) => {
+      if (current()) this.event('stream', event);
+    });
+    client.on('RecordStateChanged', (event) => {
+      if (current()) this.event('record', event);
+    });
+    client.on('ConnectionClosed', () => {
+      if (current()) this.invalidate(client);
+    });
+    // ConnectionClosed owns invalidation; an error alone need not mean the socket is closed.
+    client.on('ConnectionError', () => undefined);
+    const task = (async () => {
+      const config = await this.config.read();
+      try {
+        if (!current()) throw new Error('OBS connection superseded');
+        await bounded(
+          client
+            .connect(`ws://${config.host}:${config.port}`, config.password, {
+              eventSubscriptions: EventSubscription.Outputs,
+            })
+            .then(async (result) => {
+              if (!current()) await client.disconnect();
+              return result;
+            }),
+        );
+        if (!current()) {
+          await client.disconnect();
+          throw new Error('OBS connection superseded');
+        }
+        await this.refresh(client, generation);
+        if (!current()) throw new Error('OBS connection superseded');
+        this.ready = true;
+      } catch (error) {
+        this.diagnostic(error, config.password);
+        if (current()) this.invalidate(client);
+        throw error;
+      }
+    })();
+    this.connecting = task;
+    try {
+      await task;
+    } finally {
+      if (this.connecting === task) this.connecting = undefined;
+    }
+  }
+
+  private async refresh(client: OBSWebSocket, generation: number): Promise<void> {
+    const versions = { ...this.events };
+    const [stream, record] = await bounded(
+      Promise.all([client.call('GetStreamStatus'), client.call('GetRecordStatus')]),
+    );
+    if (this.client !== client || this.generation !== generation || this.closed)
+      throw new Error('OBS connection superseded');
+    for (const kind of kinds) {
+      // Events received while reading are newer than this snapshot.
+      if (this.events[kind] !== versions[kind]) continue;
+      const value = kind === 'stream' ? stream : record;
+      if (typeof value.outputActive !== 'boolean') {
+        this.update(kind, 'unknown', null);
+        continue;
+      }
+      const phase = !value.outputActive
+        ? 'idle'
+        : kind === 'stream' && stream.outputReconnecting
+          ? 'reconnecting'
+          : kind === 'record' && record.outputPaused
+            ? 'paused'
+            : 'active';
+      // A transitional event is stronger evidence than a snapshot of the old active bit.
+      const previous = this.values[kind].phase;
+      if (
+        Date.now() - this.transitionAt[kind] < CONFIRM_MS &&
+        ((previous === 'starting' && !value.outputActive) ||
+          (previous === 'stopping' && value.outputActive))
+      )
+        continue;
+      this.update(kind, phase, value.outputActive);
+    }
+  }
+
+  async read(): Promise<ObsOutputsStatus> {
+    await this.connect();
+    const client = this.client;
+    if (!client || !this.ready) throw new Error('OBS unavailable');
+    if (!this.reading) {
+      const task = this.refresh(client, this.generation).catch((error: unknown) => {
+        if (this.client === client) this.invalidate(client);
+        throw error;
+      });
+      this.reading = task;
+      void task
+        .finally(() => {
+          if (this.reading === task) this.reading = undefined;
+        })
+        .catch(() => undefined);
+    }
+    await this.reading;
+    return this.snapshot();
+  }
+
+  async command(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
+    const { output, action, expectedRevision } = command;
+    const state = this.values[output];
+    if (state.pending || state.phase === 'starting' || state.phase === 'stopping')
+      throw new ObsOutputError('obs_output_busy', 'OBS 正在处理此输出，请等待状态确认。');
+    if (state.revision !== expectedRevision)
+      throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
+    if (!this.ready || state.active === null)
+      throw new ObsOutputError('obs_output_unavailable', 'OBS 输出状态无法确认，请等待重新连接。');
+    const generation = this.generation;
+    const client = this.client!;
+    this.values[output] = { ...state, pending: action };
+    const reached = () => {
+      const current = this.values[output];
+      return action === 'start'
+        ? current.active === true && (current.phase === 'active' || current.phase === 'paused')
+        : current.active === false && current.phase === 'idle';
+    };
+    try {
+      await this.read();
+      if (generation !== this.generation || this.values[output].revision !== expectedRevision)
+        throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
+      if (reached()) return this.snapshot();
+      let failure: unknown;
+      try {
+        await bounded(client.call(requests[output][action]));
+      } catch (error) {
+        failure = error;
+      }
+      // A successful RPC only acknowledges the request. Confirm the actual output.
+      const deadline = Date.now() + CONFIRM_MS;
+      while (this.generation === generation && Date.now() < deadline) {
+        if (reached()) return this.snapshot();
+        await this.read().catch(() => undefined);
+        if (this.generation !== generation) break;
+        if (reached()) return this.snapshot();
+        // A server rejection is definite; timeout/network failure may have executed.
+        if (typeof (failure as { code?: unknown } | undefined)?.code === 'number')
+          throw new ObsOutputError(
+            'obs_output_failed',
+            'OBS 未完成操作，请检查 OBS 的输出设置后重试。',
+            { cause: failure },
+          );
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      this.update(output, 'unknown', null);
+      throw new ObsOutputError(
+        'obs_output_unconfirmed',
+        '操作结果尚未确认，正在核实 OBS 状态。请勿重复操作。',
+        { cause: failure },
+      );
+    } catch (error) {
+      if (error instanceof ObsOutputError) throw error;
+      throw new ObsOutputError(
+        'obs_output_unconfirmed',
+        '操作结果尚未确认，请等待 OBS 重新连接后核对。',
+        { cause: error },
+      );
+    } finally {
+      this.values[output] = { ...this.values[output], pending: null };
+    }
+  }
+}

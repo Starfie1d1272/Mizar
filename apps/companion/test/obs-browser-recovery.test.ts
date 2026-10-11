@@ -10,7 +10,11 @@ const websocket = vi.hoisted(() => ({
   call: vi.fn(),
 }));
 vi.mock('obs-websocket-js', () => ({
+  EventSubscription: { Outputs: 64 },
   OBSWebSocket: class {
+    on() {
+      return this;
+    }
     connect = websocket.connect;
     disconnect = websocket.disconnect;
     call = websocket.call;
