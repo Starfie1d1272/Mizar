@@ -4,6 +4,155 @@ import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
+import { randomUUID } from 'node:crypto';
+import type { ObsOutputCommand, ObsOutputsStatus } from '../../packages/protocol/src/obs.js';
+
+for (const [width, height] of [
+  [1440, 270],
+  [1024, 192],
+  [960, 180],
+  [682, 128],
+  [618, 116],
+] as const) {
+  test(`OBS stop confirmation fits the independent Host dock ${width}×${height}`, async ({
+    page,
+  }) => {
+    // geometry.rs: 75% cap and integer 16:9 game; full-screen at 100% / 150%,
+    // plus the 1366×768 work-area fallback at 150% with a 48-logical-pixel taskbar.
+    await page.setViewportSize({ width, height });
+    const status: ObsOutputsStatus = {
+      stream: { active: true, phase: 'active', pending: null, revision: randomUUID() },
+      record: { active: true, phase: 'active', pending: null, revision: randomUUID() },
+    };
+    const calls: ObsOutputCommand[] = [];
+    await page.route('**/local/v1/obs/outputs', (route) => route.fulfill({ json: status }));
+    await page.route('**/operator/obs/output', (route) => {
+      calls.push(route.request().postDataJSON() as ObsOutputCommand);
+      return route.fulfill({ status: 409, json: { message: '模拟验证，未执行 OBS 操作。' } });
+    });
+    await page.goto('/workspace/dock');
+    await page.getByRole('button', { name: '停止直播', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(page.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+    expect(
+      await dialog.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return (
+          element.scrollHeight <= element.clientHeight + 1 &&
+          bounds.top >= 0 &&
+          bounds.bottom <= innerHeight &&
+          [...element.querySelectorAll('button')].every((button) => {
+            const rect = button.getBoundingClientRect();
+            return (
+              rect.top >= bounds.top &&
+              rect.bottom <= bounds.bottom &&
+              rect.left >= bounds.left &&
+              rect.right <= bounds.right
+            );
+          })
+        );
+      }),
+    ).toBe(true);
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    expect(calls).toHaveLength(0);
+    await page.getByRole('button', { name: '停止直播', exact: true }).click();
+    await page.getByRole('button', { name: '确认停止', exact: true }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toMatchObject({ output: 'stream', action: 'stop' });
+  });
+}
+
+test('OBS output controls confirm actual state, protect stop, and reflect external changes', async ({
+  page,
+}) => {
+  let outputs: ObsOutputsStatus = {
+    stream: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+    record: { active: true, phase: 'paused', pending: null, revision: randomUUID() },
+  };
+  let online = true;
+  const calls: ObsOutputCommand[] = [];
+  let release!: () => void;
+  await page.route('**/local/v1/obs/outputs', (route) =>
+    route.fulfill({ status: online ? 200 : 503, json: outputs }),
+  );
+  await page.route('**/operator/obs/output', async (route) => {
+    const command = route.request().postDataJSON() as ObsOutputCommand;
+    calls.push(command);
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    outputs = {
+      ...outputs,
+      [command.output]: {
+        active: command.action === 'start',
+        phase: command.action === 'start' ? 'active' : 'idle',
+        pending: null,
+        revision: randomUUID(),
+      },
+    };
+    await route.fulfill({ json: { ok: true, outputs } });
+  });
+  await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '开始直播', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始直播中…' })).toBeDisabled();
+  await expect.poll(() => calls.length).toBe(1);
+  release();
+  await page.getByRole('button', { name: '停止直播', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('停止 OBS 直播');
+  await expect(page.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  expect(calls).toHaveLength(1);
+  await page.getByRole('button', { name: '停止直播', exact: true }).click();
+  await page.getByRole('button', { name: '确认停止', exact: true }).click();
+  await expect.poll(() => calls.length).toBe(2);
+  expect(calls[1]).toMatchObject({ output: 'stream', action: 'stop' });
+  release();
+  await expect(page.getByRole('button', { name: '开始直播', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '暂停 · 停止', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('停止 OBS 录像');
+  outputs = {
+    ...outputs,
+    record: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+  };
+  await expect(page.getByRole('button', { name: '确认停止', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始录像', exact: true })).toBeEnabled();
+  online = false;
+  await expect(page.getByRole('button', { name: '直播待确认', exact: true })).toBeDisabled();
+  online = true;
+  outputs = {
+    ...outputs,
+    stream: { active: true, phase: 'reconnecting', pending: null, revision: randomUUID() },
+  };
+  await expect(page.getByRole('button', { name: '重连 · 停止', exact: true })).toBeEnabled();
+  expect(calls).toHaveLength(2);
+});
+
+test('OBS unconfirmed output error stays actionable without automatically resending', async ({
+  page,
+}) => {
+  const outputs = {
+    stream: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+    record: { active: false, phase: 'idle', pending: null, revision: randomUUID() },
+  };
+  let calls = 0;
+  await page.route('**/local/v1/obs/outputs', (route) => route.fulfill({ json: outputs }));
+  await page.route('**/operator/obs/output', (route) => {
+    calls++;
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: 'obs_output_unconfirmed',
+        message: '操作结果尚未确认，请等待 OBS 重新连接后核对。',
+      },
+    });
+  });
+  await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '开始录像', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('操作结果尚未确认');
+  await expect(page.getByRole('button', { name: '开始录像', exact: true })).toBeEnabled();
+  expect(calls).toBe(1);
+});
 
 test('sidebar links and preparation tools open their actual destinations', async ({
   page,

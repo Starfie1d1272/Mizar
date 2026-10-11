@@ -82,6 +82,10 @@ RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认�
 
 `POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
 
+`GET /local/v1/obs/outputs` 返回 Companion 观察的直播与录像输出状态：`phase`、可空 `active`、在途 `pending` 和 `revision`。OBS 输出事件与首次连接／重连快照共用状态；断线或核实失败为 `unknown`，不能解释为已停止。客户端轻量轮询此本机视图，不直接连接 OBS。
+
+`POST /operator/obs/output` 仅允许本机回环模式与可信 Origin，接收严格的 `{output: "stream" | "record", action: "start" | "stop", expectedRevision}`；修订号使用该输出最近快照的 UUID。不接受 Toggle 或任意 RPC。同一输出只允许一个在途操作，配置、场景修复、音频配置与启停互斥；冲突、过期、未连接及结果未确认返回 `409` 与稳定错误码。RPC 成功后仍等待事件／查询核实实际输出；超时不自动重发，重连只读取状态。OBS 拒绝码按有限类别提示：忙碌、输出未启用并需检查配置、状态已变化或其它明确拒绝；未收到可确认结果时仍为结果未确认，不从超时推断配置缺失。原始拒绝码与原因经现有脱敏 cause 链记录，不直接回显 OBS 原文。命令只使用 OBS 已保存设置，不改变制作生命周期；退出工作台不会隐式停止输出。
+
 `POST /operator/obs/audio-setup` 在 OBS 输出停止且当前集合为 Mizar 时，显式添加默认桌面音频与麦克风到 Mizar 场景。已有自定义来源不自动替换；静音、音量、音轨与场景音频检查通过既有 OBS findings 返回。设备选择与实际试听在 OBS 完成。
 
 ## 本地实时通道

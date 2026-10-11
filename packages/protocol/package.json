@@ -61,6 +61,10 @@
     "./program-scenes": {
       "types": "./dist/program-scenes.d.ts",
       "import": "./dist/program-scenes.js"
+    },
+    "./obs": {
+      "types": "./dist/obs.d.ts",
+      "import": "./dist/obs.js"
     }
   },
   "scripts": {
