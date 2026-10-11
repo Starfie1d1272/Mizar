@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ReliableOutbox } from '../../apps/companion/src/output/reliable-outbox.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
@@ -181,3 +184,115 @@ for (const collectionStatus of ['failed', 'timeout'] as const) {
     expect(JSON.stringify(payload)).not.toContain('private-local-error');
   });
 }
+
+test('damaged terminal queue leaves diagnostics and real export usable, including unconfirmed restart', async ({
+  page,
+}, testInfo) => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-browser-'));
+  const path = join(dir, 'outbox.json');
+  const seed = new ReliableOutbox(path);
+  const base = {
+    schemaVersion: 'mizar.reliable-event.v1',
+    cursor: {
+      producerInstanceId: 'synthetic-producer',
+      liveSessionId: 'synthetic-session',
+      runtimeSeq: 10,
+      programSourceGeneration: 2,
+      programReceiveSequence: 9,
+      mapEpoch: 3,
+    },
+    observedAt: new Date().toISOString(),
+    matchId: 'synthetic-match',
+    competitionId: 'synthetic-event',
+    contextRevision: 'synthetic-revision',
+    mapId: 'synthetic-map',
+    mapName: 'de_ancient',
+    entryAId: 'a',
+    entryBId: 'b',
+    evidence: {
+      identity: 'matched',
+      telemetryFresh: true,
+      contextFresh: true,
+      source: 'runtime-transition',
+    },
+  } as const;
+  await seed.enqueue({
+    ...base,
+    idempotencyKey: 'first',
+    kind: 'map_ended',
+    payload: { scoreA: 13, scoreB: 11, scoreCT: 13, scoreT: 11 },
+  } as const);
+  await seed.enqueue({
+    ...base,
+    idempotencyKey: 'second',
+    kind: 'series_ended',
+    payload: { scoreA: 2, scoreB: 1 },
+  } as const);
+  const damaged = JSON.parse(await readFile(path, 'utf8')) as {
+    version: string;
+    commit?: unknown;
+    records: { status: unknown }[];
+  };
+  damaged.records[1]!.status = ['pending'];
+  await writeFile(path, JSON.stringify(damaged));
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  let app = buildApp({ reliableOutboxPath: path });
+  let address = await app.listen({ host: '127.0.0.1', port: 0 });
+  await page.route('**/debug/runtime', async (route) => {
+    const response = await route.fetch({ url: `${address}/debug/runtime` });
+    await route.fulfill({ response });
+  });
+  await page.route('**/debug/support-bundle', async (route) => {
+    const response = await route.fetch({ url: `${address}/debug/support-bundle` });
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto('/debug');
+    await expect(page.getByRole('heading', { name: '运行诊断', exact: true })).toBeVisible();
+    await page.getByText('高级技术信息', { exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText(/已核对同一提交并恢复完整副本/)).toBeVisible();
+    const status = (
+      await app.inject({ method: 'GET', url: '/local/v1/reliable-output-status' })
+    ).json<{ records: unknown[] }>();
+    expect(status.records).toHaveLength(2);
+    await testInfo.attach('verified-mirror-diagnostics', {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: 'image/png',
+    });
+    await app.close();
+    // Legacy damaged sources have no commit proof. The original two-event mirror
+    // stays on disk, but must not be presented as a verified recovery.
+    damaged.version = 'mizar.reliable-outbox.v1';
+    delete damaged.commit;
+    await writeFile(path, JSON.stringify(damaged));
+    app = buildApp({ reliableOutboxPath: path });
+    address = await app.listen({ host: '127.0.0.1', port: 0 });
+    await page.reload();
+    await page.getByText('高级技术信息', { exact: true }).click();
+    await expect(page.getByText(/无法确认完整提交与回执，旧事件暂停发送/)).toBeVisible();
+    await expect(page.getByText(/已核对同一提交并恢复完整副本/)).toHaveCount(0);
+    await app.close();
+    app = buildApp({ reliableOutboxPath: path });
+    address = await app.listen({ host: '127.0.0.1', port: 0 });
+    await page.reload();
+    await page.getByText('高级技术信息', { exact: true }).click();
+    await expect(page.getByText(/旧事件暂停发送/)).toBeVisible();
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
+    const download = await downloadPromise;
+    const bytes = await readFile(await download.path(), 'utf8');
+    expect(JSON.parse(bytes)).toHaveProperty('schema', 'mizar-support-bundle/1');
+    expect(bytes).not.toContain(dir);
+    expect(bytes).not.toContain('synthetic-producer');
+    expect(errors).toEqual([]);
+    await testInfo.attach('unconfirmed-restart-diagnostics', {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: 'image/png',
+    });
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

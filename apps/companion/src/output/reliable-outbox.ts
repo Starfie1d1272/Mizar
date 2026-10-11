@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 
 import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/output';
@@ -6,7 +6,7 @@ import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/outp
 import { replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 
-export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v1' as const;
+export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v2' as const;
 export const RELIABLE_OUTBOX_MAX_PENDING = 128;
 export const RELIABLE_OUTBOX_MAX_RECORDS = 192;
 export const RELIABLE_OUTBOX_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -39,6 +39,8 @@ interface OutboxFile {
   readonly version: typeof RELIABLE_OUTBOX_VERSION;
   readonly records: readonly ReliableOutboxRecord[];
   readonly continuity?: DeliveryContinuity;
+  readonly commit?: { readonly id: string; readonly sha256: string };
+  readonly unconfirmedRecovery?: true;
 }
 
 function parseRecord(input: unknown): ReliableOutboxRecord {
@@ -72,68 +74,98 @@ export interface OutboxRecovery {
   readonly message: string;
 }
 
-interface ParsedOutbox {
-  readonly file: OutboxFile;
-  readonly damaged: boolean;
+// Hash the complete stored payload, including terminal receipts and continuity.
+// A UUID identifies a single commit; neither field is an event sequence or owner.
+function payloadDigest(value: Record<string, unknown> | OutboxFile): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        records: value.records,
+        continuity: value.continuity,
+        unconfirmedRecovery: value.unconfirmedRecovery,
+      }),
+    )
+    .digest('hex');
 }
 
-function parseOutbox(bytes: Buffer, salvage = false): ParsedOutbox {
+function parseCommit(value: unknown): NonNullable<OutboxFile['commit']> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('outbox_commit_invalid');
+  const commit = value as Record<string, unknown>;
+  if (
+    typeof commit.id !== 'string' ||
+    !/^[0-9a-f-]{36}$/.test(commit.id) ||
+    typeof commit.sha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(commit.sha256)
+  )
+    throw new Error('outbox_commit_invalid');
+  return { id: commit.id, sha256: commit.sha256 };
+}
+
+function parseOutbox(bytes: Buffer): OutboxFile {
   if (bytes.length > 4_000_000) throw new Error('outbox_too_large');
   const raw: unknown = JSON.parse(bytes.toString('utf8'));
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
     throw new Error('outbox_invalid');
   const value = raw as Record<string, unknown>;
   if (
-    value.version !== RELIABLE_OUTBOX_VERSION ||
+    ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v1'].includes(value.version as string) ||
     !Array.isArray(value.records) ||
-    value.records.length > RELIABLE_OUTBOX_MAX_RECORDS
+    value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
+    (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true)
   )
     throw new Error('outbox_invalid');
-  const records: ReliableOutboxRecord[] = [];
-  let damaged = false;
-  for (const record of value.records) {
-    try {
-      records.push(parseRecord(record));
-    } catch (error) {
-      if (!salvage) throw error;
-      damaged = true;
-    }
-  }
+  if (
+    value.version === 'mizar.reliable-outbox.v1' &&
+    (value.commit !== undefined || value.unconfirmedRecovery !== undefined)
+  )
+    throw new Error('outbox_legacy_metadata_invalid');
+  const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
+  if (commit !== undefined && commit.sha256 !== payloadDigest(value))
+    throw new Error('outbox_checksum_mismatch');
+  const records = value.records.map(parseRecord);
   let continuity: DeliveryContinuity | undefined;
   if (value.continuity !== undefined) {
-    try {
-      const checkpoint = value.continuity as DeliveryContinuity;
-      if (
-        checkpoint === null ||
-        typeof checkpoint !== 'object' ||
-        Object.keys(checkpoint).sort().join(',') !==
-          'contextRevision,cursor,mapName,matchId,savedAt'
-      )
-        throw new Error('outbox_continuity_invalid');
-      const reference = records.at(-1)?.event;
-      if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
-        throw new Error('outbox_continuity_invalid');
-      parseReliableEventV1({
-        ...reference,
-        matchId: checkpoint.matchId,
-        contextRevision: checkpoint.contextRevision,
-        cursor: checkpoint.cursor,
-        mapName: checkpoint.mapName,
-        observedAt: checkpoint.savedAt,
-      });
-      continuity = checkpoint;
-    } catch (error) {
-      if (!salvage) throw error;
-      damaged = true;
-    }
+    const checkpoint = value.continuity as DeliveryContinuity;
+    if (
+      checkpoint === null ||
+      typeof checkpoint !== 'object' ||
+      Object.keys(checkpoint).sort().join(',') !== 'contextRevision,cursor,mapName,matchId,savedAt'
+    )
+      throw new Error('outbox_continuity_invalid');
+    const reference = records.at(-1)?.event;
+    if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
+      throw new Error('outbox_continuity_invalid');
+    parseReliableEventV1({
+      ...reference,
+      matchId: checkpoint.matchId,
+      contextRevision: checkpoint.contextRevision,
+      cursor: checkpoint.cursor,
+      mapName: checkpoint.mapName,
+      observedAt: checkpoint.savedAt,
+    });
+    continuity = checkpoint;
   }
   return {
-    file: {
-      version: RELIABLE_OUTBOX_VERSION,
-      records,
-      ...(continuity === undefined ? {} : { continuity }),
-    },
-    damaged,
+    version: RELIABLE_OUTBOX_VERSION,
+    records,
+    ...(continuity === undefined ? {} : { continuity }),
+    ...(commit === undefined ? {} : { commit }),
+    ...(value.unconfirmedRecovery === true ? { unconfirmedRecovery: true } : {}),
+  };
+}
+
+function sealOutbox(file: OutboxFile): OutboxFile {
+  return { ...file, commit: { id: randomUUID(), sha256: payloadDigest(file) } };
+}
+
+function recoveryReport(file: OutboxFile): OutboxRecovery {
+  return {
+    code: file.unconfirmedRecovery ? 'outbox_preserved_without_records' : 'outbox_recovered',
+    recoveredRecords: file.unconfirmedRecovery ? 0 : file.records.length,
+    message: file.unconfirmedRecovery
+      ? '发送队列异常，原文件与已有恢复副本已另存隔离，无法确认完整提交与回执，旧事件暂停发送。Mizar 可继续使用；旧事件未确认送达，请核对接收端结果，在运行诊断导出诊断包反馈。'
+      : `发送队列读取异常，已从同一提交的完整恢复副本恢复 ${file.records.length} 条记录（含已确认记录）；原文件已另存。发送仍需通过原有身份与时效检查。可在运行诊断导出诊断包反馈。`,
   };
 }
 
@@ -174,6 +206,7 @@ export class ReliableOutbox {
   private requestedScope: string | undefined;
 
   private recovery: OutboxRecovery | undefined;
+  private unconfirmedRecovery: true | undefined;
 
   constructor(
     private readonly filePath: string,
@@ -186,18 +219,35 @@ export class ReliableOutbox {
 
   async load(): Promise<void> {
     // I/O errors are not evidence of damaged contents and must stay actionable.
-    const bytes = await readOptional(this.filePath);
+    let bytes: Buffer | undefined;
+    try {
+      bytes = await readOptional(this.filePath);
+    } catch (error) {
+      this.onRecovery?.(undefined, new Error('outbox_primary_read_failed', { cause: error }));
+      throw Object.assign(
+        new Error(
+          '发送队列读取主文件失败。检查数据目录权限与磁盘空间后重试；保留原队列，不要删除。',
+          { cause: error },
+        ),
+        { code: 'outbox_recovery_failed' },
+      );
+    }
     let file: OutboxFile | undefined;
     let cause: unknown;
     if (bytes !== undefined) {
       try {
-        file = parseOutbox(bytes).file;
+        file = parseOutbox(bytes);
       } catch (error) {
         cause = error;
       }
       if (file !== undefined) {
         this.records = file.records;
         this.continuity = file.continuity;
+        this.unconfirmedRecovery = file.unconfirmedRecovery;
+        if (file.unconfirmedRecovery) {
+          this.recovery = recoveryReport(file);
+          this.onRecovery?.(this.recovery, new Error('outbox_previous_recovery_unconfirmed'));
+        }
         return;
       }
     }
@@ -216,33 +266,33 @@ export class ReliableOutbox {
       };
       recoveryPhase = '另存原始文件';
       if (mirror !== undefined) await preserve(mirrorPath, mirror);
-      if (bytes !== undefined) {
-        await preserve(this.filePath, bytes);
+      if (bytes !== undefined) await preserve(this.filePath, bytes);
+      // Never combine records from different snapshots. Even an intact mirror may
+      // predate an ack or belong to an interrupted, unpublished commit.
+      if (bytes !== undefined && bytes.length <= 4_000_000 && mirror !== undefined) {
         try {
-          file = parseOutbox(bytes, true).file;
-        } catch {
-          /* No byte guessing. */
+          const primary = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+          const expected =
+            primary.version === RELIABLE_OUTBOX_VERSION ? parseCommit(primary.commit) : undefined;
+          const candidate = parseOutbox(mirror);
+          if (
+            expected !== undefined &&
+            candidate.commit?.id === expected.id &&
+            candidate.commit.sha256 === expected.sha256
+          )
+            file = candidate;
+        } catch (error) {
+          cause = new AggregateError(
+            [cause, error].filter((value) => value !== undefined),
+            'outbox_recovery_sources_unverified',
+          );
         }
       }
-      if (file === undefined || file.records.length === 0) {
-        if (mirror !== undefined) {
-          try {
-            file = parseOutbox(mirror).file;
-          } catch (error) {
-            cause = new AggregateError(
-              [cause, error].filter((value) => value !== undefined),
-              'outbox_recovery_sources_invalid',
-            );
-            try {
-              file = parseOutbox(mirror, true).file;
-            } catch {
-              /* Preserve only. */
-            }
-          }
-        }
-      }
-      file ??= { version: RELIABLE_OUTBOX_VERSION, records: [] };
-      // The strict contract is checked again; partial state never escapes a failed load.
+      file ??= sealOutbox({
+        version: RELIABLE_OUTBOX_VERSION,
+        records: [],
+        unconfirmedRecovery: true,
+      });
       parseOutbox(Buffer.from(JSON.stringify(file)));
       recoveryPhase = '保存恢复队列';
       await replaceDurableJson(mirrorPath, file);
@@ -266,14 +316,8 @@ export class ReliableOutbox {
     if (file === undefined) throw new Error('outbox_recovery_missing');
     this.records = file.records;
     this.continuity = file.continuity;
-    this.recovery = {
-      code: file.records.length > 0 ? 'outbox_recovered' : 'outbox_preserved_without_records',
-      recoveredRecords: file.records.length,
-      message:
-        file.records.length > 0
-          ? `发送队列读取异常，已从有效内容恢复 ${file.records.length} 条记录；原文件已另存。发送仍需通过原有身份与时效检查。可在运行诊断导出诊断包反馈。`
-          : '发送队列损坏，原文件已另存，但未找到可恢复记录。Mizar 可继续使用；旧事件未确认送达，请核对接收端结果，在运行诊断导出诊断包反馈。',
-    };
+    this.unconfirmedRecovery = file.unconfirmedRecovery;
+    this.recovery = recoveryReport(file);
     this.onRecovery?.(this.recovery, cause ?? new Error('outbox_primary_missing'));
   }
 
@@ -437,11 +481,12 @@ export class ReliableOutbox {
     records: readonly ReliableOutboxRecord[],
     continuity = this.continuity,
   ): Promise<void> {
-    const file: OutboxFile = {
+    const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,
       records,
       ...(continuity === undefined ? {} : { continuity }),
-    };
+      ...(this.unconfirmedRecovery ? { unconfirmedRecovery: true } : {}),
+    });
     // Persist a validated recovery copy before publishing the authoritative file.
     // A failed commit never advances the in-memory queue or reports success.
     await replaceDurableJson(`${this.filePath}.last-good`, file);
