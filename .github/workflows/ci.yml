@@ -15,6 +15,15 @@ on:
         type: boolean
         default: false
 
+      release_profile_benchmark:
+        description: Run the unchanged release Host tests without qualifying or publishing
+        type: boolean
+        default: false
+      release_provenance_benchmark:
+        description: Verify existing original proofs with remote and bundled provenance; never publish
+        type: boolean
+        default: false
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -484,6 +493,46 @@ jobs:
           name: release-extraction-benchmark-${{ github.run_id }}
           path: .agent-tmp/release-extraction-benchmark/report.json
           if-no-files-found: error
+
+  release_provenance_benchmark:
+    name: release provenance benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_provenance_benchmark }}
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Compare original proofs without building or publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/benchmark-provenance.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: release-provenance-benchmark-${{ github.run_id }}
+          path: .agent-tmp/release-provenance-benchmark/report.json
+          if-no-files-found: error
+
+  release_profile_benchmark:
+    name: release Host test benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_profile_benchmark }}
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore release profile cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+      - name: Test Windows desktop startup deadlines and diagnostics
+        run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 
   ci-gate:
     name: ci-gate
