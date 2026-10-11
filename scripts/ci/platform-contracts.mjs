@@ -24,6 +24,7 @@ export function platformTestFiles(platform = process.platform) {
     'apps/companion/test/hud-config-store.test.ts',
     'apps/companion/test/reliable-outbox.test.ts',
     'apps/companion/test/support-export.test.ts',
+    'apps/companion/test/obs-native-evidence.test.ts',
     ...(platform === 'win32' ? ['scripts/qualification/gsi-discovery.test.mjs'] : []),
   ];
 }
