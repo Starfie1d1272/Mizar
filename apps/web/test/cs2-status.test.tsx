@@ -3,11 +3,15 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  action: vi.fn(),
+  production: null as Record<string, unknown> | null,
+}));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.invoke }));
 vi.mock('../src/preparation/client', () => ({
-  useLocalRead: () => null,
-  productionAction: vi.fn(),
+  useLocalRead: () => mocks.production,
+  productionAction: mocks.action,
   checkObsBeforeLaunch: vi.fn(),
 }));
 
@@ -30,7 +34,15 @@ beforeEach(() => {
   vi.useFakeTimers();
   Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
   response = idle;
-  mocks.invoke.mockReset().mockImplementation(() => Promise.resolve(response));
+  mocks.production = null;
+  mocks.action.mockReset();
+  mocks.invoke
+    .mockReset()
+    .mockImplementation((command) =>
+      Promise.resolve(
+        command === 'workspace_exit_status' ? { busy: false, stage: '', message: null } : response,
+      ),
+    );
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -105,6 +117,8 @@ describe('CS2 configuration progress', () => {
 
   it('keeps idle controls stable across routine Host lock contention', async () => {
     await render();
+    expect(container.querySelector('h3')?.textContent).toBe('配置与恢复');
+    expect(container.textContent).toContain('目前没有待恢复的配置。');
     for (let index = 0; index < 4; index += 1) {
       await poll({ busy: true, phase: 'idle' });
       expect(container.textContent).not.toContain('正在检查');
@@ -115,9 +129,11 @@ describe('CS2 configuration progress', () => {
     }
   });
 
-  it('shows one operation region and retains confirmed backup facts while starting', async () => {
+  it('shows operation progress and keeps restore-only and production finish actions explicit', async () => {
+    mocks.production = { mode: 'preparation', revision: 'intent-1' };
     response = { ...idle, pending: true, running: true, phase: 'running' };
     await render();
+    expect(container.textContent).toContain('会关闭本次 CS2，再恢复配置备份');
     await poll({ busy: true, phase: 'starting' });
     expect(container.textContent?.match(/正在启动 CS2，等待 Steam…/g)).toHaveLength(1);
     expect(container.textContent).toContain('打开备份目录');
@@ -125,6 +141,27 @@ describe('CS2 configuration progress', () => {
     expect(container.querySelector('select')?.hasAttribute('disabled')).toBe(true);
     await poll({ busy: true, phase: 'restoring' });
     expect(container.textContent?.match(/正在关闭本次游戏…/g)).toHaveLength(1);
+    await poll({ ...idle, pending: true, running: false, phase: 'pending' });
+    expect(container.textContent).toContain('恢复配置备份只恢复设置，不会启动或关闭游戏');
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === '恢复配置备份')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('restore_cs2_backup', {
+      confirmSteamCancelled: false,
+    });
+    mocks.production = { mode: 'live', revision: 'intent-2' };
+    await poll({ ...idle, pending: true, running: false, phase: 'pending' });
+    expect(container.textContent).toContain('先结束本次制作，并关闭本次 CS2');
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === '结束制作并恢复设置')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(mocks.action).toHaveBeenCalledWith('finish', mocks.production);
   });
 
   it('saves quality and frame limit together and reports unlimited-frame risk in text', async () => {

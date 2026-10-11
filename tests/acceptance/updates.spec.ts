@@ -11,6 +11,13 @@ async function updateFixture(page: import('@playwright/test').Page) {
     currentVersion: '1.0.0',
     distribution: 'installed',
     error: null as string | null,
+    failureDetails: [] as {
+      stage: string;
+      stageLabel: string;
+      summary: string;
+      nextStep: string;
+      operationId: string;
+    }[],
     downloadedBytes: 0,
     candidate: {
       version: '1.1.0',
@@ -92,6 +99,36 @@ async function updateFixture(page: import('@playwright/test').Page) {
     commands: () => page.evaluate(() => Reflect.get(window, 'updateCommands') as string[]),
   };
 }
+
+test('installation recovery read failures stay visible without an operation error after checking', async ({
+  page,
+}) => {
+  const { status, actions } = await updateFixture(page);
+  status.phase = 'current';
+  status.failureDetails = [
+    {
+      stage: 'result_load',
+      stageLabel: '读取安装恢复记录',
+      summary: '操作未完成，原因未知。',
+      nextStep:
+        '保留当前版本及更新、备份和恢复记录；检查用户资料目录的读写权限与剩余空间，导出诊断。不要删除记录绕过校验。',
+      operationId: 'record-read',
+    },
+  ];
+  await page.goto('/settings?tab=advanced');
+  const guidance = page.getByText(/不要删除记录绕过校验/);
+  await expect(guidance).toBeVisible();
+  await expect(page.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect.poll(() => actions).toEqual(['check']);
+  await expect(page.getByRole('button', { name: '检查更新', exact: true })).toBeEnabled();
+  await expect(guidance).toBeVisible();
+  status.failureDetails[0]!.stage = 'result_identity_load';
+  await expect.poll(() => status.error).toBeNull();
+  await page.reload();
+  await expect(guidance).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('update-recovery-read-warning.png') });
+});
 
 test('desktop update reminders wait for safe idle, dismiss once and open the existing update settings', async ({
   page,

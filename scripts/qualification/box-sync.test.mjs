@@ -278,7 +278,7 @@ describe('云盘稳定版同步', () => {
         const stage = failure === 'body' ? '回读/Offline' : '上传/Offline';
         let message;
         try {
-          const client = new TransportClient(token, globalThis.fetch);
+          const client = new TransportClient(token, globalThis.fetch, globalThis.fetch);
           if (failure === 'body') await client.hash('/Offline/release.zip');
           else await client.upload('/Offline', 'release.zip', Buffer.from('original'));
         } catch (error) {
@@ -323,7 +323,7 @@ describe('云盘稳定版同步', () => {
       try {
         vi.resetModules();
         const { BoxClient: TransportClient } = await import('./box-sync.mjs');
-        const request = new TransportClient('fixture-token').api(
+        const request = new TransportClient('fixture-token', undefined, transport).api(
           'dir',
           '/Archive',
           failure === 'write' ? 'POST' : 'GET',
@@ -804,6 +804,88 @@ describe('independent mirror transports before one final publication boundary', 
       '/Resources/v1.0.1/' + options.resources[0].name,
     ])
       expect(readback.mock.calls.filter((call) => call[0] === path)).toHaveLength(2);
+  });
+  it('bounds final full readbacks, joins all active readers and publishes only after every byte identity passes', async () => {
+    const oldIndex = Buffer.from('old pointer');
+    const box = fakeBox({ '/Updates/latest.json': oldIndex });
+    const hash = box.hash;
+    const reads = new Map();
+    const pending = new Map();
+    let active = 0;
+    let peak = 0;
+    box.hash = async (path) => {
+      const count = (reads.get(path) ?? 0) + 1;
+      reads.set(path, count);
+      if (count === 2 && path !== '/Updates/latest.json') {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => pending.set(path, resolve));
+        active--;
+      }
+      return hash.call(box, path);
+    };
+    const options = transports(box);
+    const task = syncStableRelease(options);
+    await vi.waitFor(() => expect(pending.size).toBe(3));
+    expect(active).toBe(3);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    const first = [...pending.keys()];
+    pending.get(first[0])();
+    pending.get(first[1])();
+    await new Promise((resolve) => globalThis.setImmediate(resolve));
+    expect(pending.size).toBe(3);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    pending.get(first[2])();
+    await vi.waitFor(() => expect(pending.size).toBe(5));
+    expect(active).toBe(2);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    for (const path of [...pending.keys()].slice(3)) pending.get(path)();
+    await task;
+    expect(peak).toBe(3);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(options.updateIndex);
+    for (const path of pending.keys()) expect(reads.get(path)).toBe(2);
+  });
+  it('joins final readback siblings after an identity failure without starting later reads or changing the pointer', async () => {
+    const oldIndex = Buffer.from('old pointer');
+    const box = fakeBox({ '/Updates/latest.json': oldIndex });
+    const hash = box.hash;
+    const reads = new Map();
+    let unblock, failedReadback;
+    const blocked = new Promise((resolve) => {
+      unblock = resolve;
+    });
+    const failed = new Promise((resolve) => {
+      failedReadback = resolve;
+    });
+    box.hash = async (path) => {
+      const count = (reads.get(path) ?? 0) + 1;
+      reads.set(path, count);
+      if (count === 2 && path === '/Stable/' + next.name) {
+        failedReadback();
+        return { sha256: '0'.repeat(64), size: next.bytes.length };
+      }
+      if (count === 2 && path.startsWith('/Offline/')) await blocked;
+      return hash.call(box, path);
+    };
+    let settled = false;
+    const task = syncStableRelease(transports(box));
+    task.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await failed;
+    await new Promise((resolve) => globalThis.setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    unblock();
+    await expect(task).rejects.toThrow('云盘同名文件内容冲突');
+    expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+    expect(reads.get('/Runtime/v1.0.1/Mizar-v1.0.1-Windows-x64-Core-Setup.exe')).toBe(1);
+    expect(reads.get('/Runtime/v1.0.1/machine-metadata.json')).toBe(1);
   });
   it('waits for an active sibling writer after failure and keeps the original update pointer', async () => {
     const oldIndex = Buffer.from('old pointer');

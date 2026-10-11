@@ -246,7 +246,7 @@ test('GSI conflict guidance names files and keeps native installation selection 
 test('CS2 launch settings use desktop intents and expose pending recovery', async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-cs2-settings-'));
   const app = buildApp({
     matchManifestPath: join(directory, 'match.json'),
@@ -300,6 +300,11 @@ test('CS2 launch settings use desktop intents and expose pending recovery', asyn
     );
     await page.goto('/settings?tab=gsi');
     await expect(page.getByRole('heading', { name: 'CS2 启动设置' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '配置与恢复' })).toBeVisible();
+    await expect(page.getByText('目前没有待恢复的配置。')).toBeVisible();
+    await page
+      .getByRole('region', { name: '配置与恢复', exact: true })
+      .screenshot({ path: testInfo.outputPath('cs2-recovery-idle.png') });
     const quality = page.getByRole('combobox', { name: '游戏画质', exact: true });
     const frames = page.getByRole('combobox', { name: '游戏帧率上限', exact: true });
     await expect(quality).toHaveValue('very-high');
@@ -609,7 +614,7 @@ test('Overview attention contains recovery actions rather than duplicating optio
 
 test('uncertain Steam launch recovery stays visible after navigation and requires cancellation acknowledgement', async ({
   page,
-}) => {
+}, testInfo) => {
   // Explicit IPC boundary fixture: this proves recovery UX, not Windows process handling.
   await page.addInitScript(() => {
     Object.assign(window, {
@@ -648,6 +653,10 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
+  await expect(page.getByText('恢复配置备份只恢复设置，不会启动或关闭游戏。')).toBeVisible();
+  await page
+    .getByRole('region', { name: '配置与恢复', exact: true })
+    .screenshot({ path: testInfo.outputPath('cs2-recovery-steam-pending.png') });
   await page.getByRole('checkbox', { name: '已取消 Steam 启动请求，并确认 CS2 已关闭' }).check();
   await page.getByRole('button', { name: '恢复配置备份' }).click();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toHaveCount(0);

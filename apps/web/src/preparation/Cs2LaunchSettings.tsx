@@ -144,7 +144,22 @@ export function Cs2LaunchSettings() {
         </div>
         <p>退出工作台或退出 Mizar 时关闭本次游戏并恢复原设置；隐藏工作区保留游戏。</p>
       </details>
-      <Cs2Recovery production={production} />
+      {desktop ? (
+        <section aria-label="配置与恢复">
+          <h3>配置与恢复</h3>
+          <Cs2Recovery production={production} />
+          {status &&
+          !phase &&
+          !statusError &&
+          !status.pending &&
+          !status.spectatorRecoveryPending &&
+          !status.demoCleanupPending &&
+          !status.canPreserve &&
+          !status.message ? (
+            <p>目前没有待恢复的配置。</p>
+          ) : null}
+        </section>
+      ) : null}
       {error || statusError ? (
         <StatusBanner tone="danger">{error || statusError}</StatusBanner>
       ) : null}
