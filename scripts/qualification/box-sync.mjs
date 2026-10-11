@@ -18,7 +18,7 @@ import { makeUpdateIndex } from './update-index.mjs';
 import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
-import { multipartUpload } from './box-upload.mjs';
+import { apiRequest, multipartUpload } from './box-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -222,10 +222,11 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
 }
 
 export class BoxClient {
-  constructor(token, uploadTransport = multipartUpload) {
+  constructor(token, uploadTransport = multipartUpload, apiTransport = apiRequest) {
     requireValue(token, '未配置 MIZAR_BOX_REPO_TOKEN；在 Actions 配置后重试');
     this.token = token;
     this.uploadTransport = uploadTransport;
+    this.apiTransport = apiTransport;
   }
   async api(endpoint, path, method = 'GET', body) {
     const safeEndpoint = [
@@ -244,14 +245,24 @@ export class BoxClient {
       if (path !== undefined) url.searchParams.set('path', path);
       const headers = { Authorization: `Token ${this.token}`, Accept: 'application/json' };
       if (body) headers['Content-Type'] = 'application/json';
-      return (
-        await checkedFetch(url, {
+      const response = await checkedFetch(
+        url,
+        {
           method,
           headers,
           redirect: 'error',
           ...(body ? { body: JSON.stringify(body) } : {}),
-        })
-      ).json();
+        },
+        120000,
+        this.apiTransport,
+      );
+      try {
+        return await response.json();
+      } catch (error) {
+        // JSON parse messages can quote credentials or temporary URLs from the response.
+        const kind = error instanceof SyntaxError ? 'SyntaxError' : 'unknown';
+        throw new MirrorError(`云盘接口返回无效 JSON（解析阶段，${kind}）；保留现有文件`);
+      }
     });
   }
   async list(path) {
@@ -864,20 +875,21 @@ export async function syncStableRelease({
   if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
-  await verifyRemote(box, `/Stable/${identity.name}`, identity);
-  await verifyRemote(
-    box,
-    `${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`,
-    offline.identity,
-  );
-  if (bootstrap)
-    await verifyRemote(box, `${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity);
-  if (resources)
-    for (const file of resources)
-      await verifyRemote(box, `/Resources/v${identity.version}/${file.name}`, file);
-  if (runtime)
-    for (const file of runtime)
-      await verifyRemote(box, `/Runtime/v${identity.version}/${file.name}`, file);
+  const readbacks = [
+    [`/Stable/${identity.name}`, identity],
+    [`${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`, offline.identity],
+    ...(bootstrap ? [[`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity]] : []),
+    ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
+    ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
+  ];
+  // Complete every post-write full hash before publishing. Bound only independent
+  // reads; a failed batch joins its active siblings and starts no further batch.
+  await boxStage('发布前完整回读', async () => {
+    for (let offset = 0; offset < readbacks.length; offset += 3)
+      await settle(
+        readbacks.slice(offset, offset + 3).map(([path, file]) => verifyRemote(box, path, file)),
+      );
+  });
   const root = await box.list('/');
   const updates = root.find((e) => e.name === 'Updates');
   requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');

@@ -22,6 +22,10 @@ namespace Mizar.WebInstaller {
       Assert(secrets.Contains("resource_path_unsafe") && secrets.Contains("exit code 7"),"Sanitization preserves the actionable cause");
       Assert(Nsis.NativeFailure("-Mode Install","update_process_remaining",new Exception()).Message.Contains("正常退出"),"Known running process has an executable action");
       Assert(Nsis.NativeFailure("-Mode Prepare","unknown failure",new Exception()).Message.Contains("更新准备"),"Unknown failure retains the actual phase");
+      var resourceFailure=Nsis.NativeFailure("-Mode Install","update_resources_incomplete",new System.IO.IOException("cache_write_failed",new System.IO.IOException("password=PRIVATE-CACHE-SECRET")));
+      Assert(resourceFailure.Message.Contains("权限") && resourceFailure.Message.Contains("离线包"),"Incomplete resources provide local and offline actions without presuming network failure");
+      string resourceDiagnostic=Window.DiagnosticText(resourceFailure);
+      Assert(resourceDiagnostic.Contains("cache_write_failed") && !resourceDiagnostic.Contains("PRIVATE-CACHE-SECRET"),"Resource failure retains the original cause through the diagnostic sanitizer");
       int launches=0, installs=0;
       Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation=(bytes,stages,token)=>{installs++;return Complete(bytes,stages,token);};
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {

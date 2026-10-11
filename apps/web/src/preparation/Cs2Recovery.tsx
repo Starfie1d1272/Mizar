@@ -111,6 +111,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   )
     return null;
   const uncertain = status?.phase === 'uncertain';
+  const endsProduction = Boolean(production && production.mode !== 'preparation');
   return (
     <StatusBanner
       tone={
@@ -178,6 +179,21 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           <p>
             {status.message ||
               '原画质和帧率已恢复；改动的试播文件及清理记录仍保留，可重试或打开备份目录检查。'}
+          </p>
+        ) : null}
+        {status?.pending ? (
+          <p>
+            {status.running
+              ? status.preserveSettings
+                ? '退出按钮会关闭本次 CS2，保留游戏设置并清理启动记录。'
+                : '退出按钮会关闭本次 CS2，再恢复配置备份。'
+              : endsProduction
+                ? status.preserveSettings
+                  ? '此操作会先结束本次制作，并关闭本次 CS2；保留游戏设置并清理记录。'
+                  : '此操作会先结束本次制作，并关闭本次 CS2，再恢复配置备份。'
+                : status.preserveSettings
+                  ? '清理启动记录不会启动或关闭游戏，也不会替换当前游戏设置。'
+                  : '恢复配置备份只恢复设置，不会启动或关闭游戏。'}
           </p>
         ) : null}
         <div className="preparation-actions">
@@ -250,10 +266,14 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               {status.preserveSettings
                 ? status.running
                   ? '退出本次 CS2'
-                  : '清理启动记录'
+                  : endsProduction
+                    ? '结束制作并清理记录'
+                    : '清理启动记录'
                 : status.running
                   ? '退出 CS2 并恢复设置'
-                  : '恢复配置备份'}
+                  : endsProduction
+                    ? '结束制作并恢复设置'
+                    : '恢复配置备份'}
             </Button>
           ) : null}
           <Button
