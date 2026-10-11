@@ -409,6 +409,13 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--mizar-layout-padding);
 }
+.obs-setup__cards[data-connected='true'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.obs-setup__cards[data-connected='true'] > details {
+  grid-column: 1 / -1;
+  order: 1;
+}
 .obs-setup__cards .mizar-panel {
   display: flex;
   flex-direction: column;
@@ -440,7 +447,8 @@
 }
 @media (max-width: 800px) {
   .preparation-dashboard,
-  .obs-setup__cards {
+  .obs-setup__cards,
+  .obs-setup__cards[data-connected='true'] {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -86,15 +86,31 @@ export function registerObsRoutes(
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
-        if (action === 'ensure') return { ok: true, findings: await options.adapter.ensure() };
+        if (action === 'ensure' || action === 'repair' || action === 'check') {
+          request.log.info(
+            { event: 'obs', stage: 'obs_preparation_start', action },
+            'OBS preparation started',
+          );
+          const findings =
+            action === 'ensure'
+              ? await options.adapter.ensure()
+              : action === 'repair'
+                ? await options.adapter.repair(options.activeScene)
+                : await options.adapter.check();
+          request.log.info(
+            {
+              event: 'obs',
+              stage: 'obs_preparation_result',
+              action,
+              findings: findings.map((item) => item.code.split(':')[0]),
+            },
+            'OBS preparation checked',
+          );
+          return { ok: true, findings };
+        }
         if (action === 'audio-setup') {
           await options.adapter.setupAudio();
           return { ok: true };
-        }
-        if (action === 'check') return { ok: true, findings: await options.adapter.check() };
-        if (action === 'repair') {
-          const findings = await options.adapter.repair(options.activeScene);
-          return { ok: true, findings };
         }
         if (action === 'open') {
           await options.adapter.open();

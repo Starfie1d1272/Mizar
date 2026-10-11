@@ -9,7 +9,9 @@ import type { DemoTestView, SelectedDemo } from './demo-test';
 
 export function DemoTestPanel() {
   const trial = useLocalRead<DemoTestView>('/local/v1/demo-test', 1000);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() =>
+    new URLSearchParams(window.location.search).has('demoTest'),
+  );
   const shown = expanded || trial?.active === true;
   const editor = useHudConfigEditorClient(shown);
   const { status: game } = useCs2Status();
@@ -90,7 +92,7 @@ export function DemoTestPanel() {
   }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run]);
 
   return (
-    <Panel className="preparation-demo-test">
+    <Panel id="demo-test" className="preparation-demo-test">
       <h2>Demo 试播</h2>
       {!shown ? (
         <Button disabled={!desktop} onClick={() => setExpanded(true)}>

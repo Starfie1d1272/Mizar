@@ -675,3 +675,127 @@ test('configuration failure offers an explicit preserved launch and keeps its li
   await expect(page.getByText('关闭本次游戏，保留游戏设置', { exact: true })).toBeVisible();
   await expect(page.getByText('关闭游戏并恢复配置', { exact: true })).toHaveCount(0);
 });
+
+test('OBS preparation groups scene drift, repairs and rechecks while retaining manual video guidance', async ({
+  page,
+}, testInfo) => {
+  let findings = [
+    { code: 'video_settings', message: '画布与输出仍需设为 1920×1080 / 60fps。' },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      code: 'transform_drift',
+      message: `场景 ${index + 1} 的画面变换与目标尺寸不一致；保留自定义来源，仅恢复 Mizar 浏览器画面。`,
+    })),
+  ];
+  const commands: string[] = [];
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: 'Mizar · 等待',
+        port: 4455,
+        sceneAligned: true,
+        streaming: false,
+        recording: false,
+        passwordConfigured: true,
+        video: { canvas: '1280×720', output: '1280×720', fps: 30 },
+        findings,
+      },
+    }),
+  );
+  await page.route('**/operator/obs/*', async (route) => {
+    const action = new URL(route.request().url()).pathname.split('/').at(-1)!;
+    commands.push(action);
+    if (action === 'repair')
+      findings = findings.filter((finding) => finding.code === 'video_settings');
+    await route.fulfill({ json: { ok: true, findings } });
+  });
+  await page.goto('/settings?tab=obs');
+  const repair = page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true });
+  await expect(repair).toBeVisible();
+  await expect(page.getByText('场景 1 的画面变换', { exact: false })).not.toBeVisible();
+  for (const width of [1920, 1366]) {
+    await page.setViewportSize({ width, height: width === 1920 ? 1080 : 768 });
+    await expect(repair).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath(`obs-grouped-${width}.png`) });
+    await page.getByText('技术详情 · 9 项', { exact: true }).click();
+    await expect(page.getByText('场景 8 的画面变换', { exact: false })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath(`obs-details-${width}.png`) });
+    await page.getByText('技术详情 · 9 项', { exact: true }).click();
+  }
+  await repair.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/请在 OBS「设置 → 视频」将画布和输出设为/)).toBeVisible();
+  await expect(repair).toHaveCount(0);
+  expect(commands.filter((action) => action !== 'ensure')).toEqual(['repair', 'check']);
+  await page.screenshot({ path: testInfo.outputPath('obs-after-repair.png') });
+});
+
+test('empty preparation provides existing match and the existing Demo workflow without creating state', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '选择已有比赛', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建本地比赛', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('match-entry-1920.png') });
+  await page.getByRole('button', { name: '选择已有比赛', exact: true }).click();
+  await expect(page).toHaveURL(/\/matches\?select=1$/);
+  await expect(page.getByRole('heading', { name: '本地比赛', exact: true })).toBeVisible();
+  await page.goto('/');
+  await page.getByRole('button', { name: '创建 Demo 测试比赛', exact: true }).click();
+  await expect(page).toHaveURL(/demoTest=1#demo-test$/);
+  await expect(page.getByText('BO1 · 试播资料不入比赛库', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '启动 Demo 试播', exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath('demo-entry-1920.png') });
+});
+
+test('OBS scene repair stays disabled during output and conflicting collections require manual action', async ({
+  page,
+}) => {
+  const commands: string[] = [];
+  let finding = { code: 'scene_missing', message: 'Mizar 场景缺失。' };
+  let streaming = true;
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: '用户场景',
+        port: 4455,
+        sceneAligned: false,
+        streaming,
+        recording: false,
+        passwordConfigured: true,
+        video: null,
+        findings: [finding],
+      },
+    }),
+  );
+  await page.route('**/operator/obs/*', async (route) => {
+    commands.push(new URL(route.request().url()).pathname.split('/').at(-1)!);
+    await route.fulfill({ json: { ok: true, findings: [finding] } });
+  });
+  await page.goto('/settings?tab=obs');
+  await expect(
+    page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText('OBS 正在输出。停止推流与录制后再处理配置。', { exact: true }),
+  ).toBeVisible();
+  expect(commands).toEqual([]);
+  streaming = false;
+  finding = { code: 'collection_inactive', message: '当前未使用 Mizar 场景集合。' };
+  await expect(
+    page.getByText('请在 OBS「场景集合」中选择 Mizar，再返回继续检查。', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: /修复 Mizar 场景/ })).toHaveCount(0);
+  finding = { code: 'source_kind_conflict', message: 'Mizar 来源名称冲突。' };
+  await expect(
+    page.getByText('Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。', { exact: true }),
+  ).toBeVisible();
+  expect(commands.every((action) => action === 'ensure')).toBe(true);
+});

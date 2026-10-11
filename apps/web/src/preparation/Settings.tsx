@@ -11,6 +11,21 @@ import { ResourceSettings } from './ResourceSettings';
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
+  const sceneRepairNeeded = obs?.findings.some((item) =>
+    [
+      'collection_missing',
+      'scene_missing',
+      'source_missing',
+      'url_drift',
+      'capture_drift',
+      'transform_drift',
+      'order_drift',
+      'source_disabled',
+    ].includes(item.code),
+  );
+  const sceneRepairBlocked = obs?.findings.some((item) =>
+    ['collection_inactive', 'source_kind_conflict'].includes(item.code),
+  );
   const [portOverride, setPortOverride] = useState<number | null>(null);
   const port = portOverride ?? obs?.port ?? 4455;
   const [password, setPassword] = useState('');
@@ -152,12 +167,12 @@ export function Settings({ tab }: { tab: string }) {
                     : 'OBS 连接状态和具体原因尚未确认。请检查 WebSocket 设置并查看诊断；连接成功后再检查场景。'}
             </StatusBanner>
           ) : null}
-          <div className="obs-setup__cards">
+          <div className="obs-setup__cards" data-connected={obs?.connection === 'connected'}>
             <Panel>
               <h3>打开 OBS</h3>
               <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
               <Button
-                variant="primary"
+                variant={obs?.connection === 'connected' ? 'secondary' : 'primary'}
                 disabled={busy}
                 onClick={() => void action(() => obsCommand('open'))}
               >
@@ -263,22 +278,53 @@ export function Settings({ tab }: { tab: string }) {
                       : '未启动'}
                 </span>
               </div>
-              <Button
-                disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
-                onClick={() =>
-                  void action(async () => {
-                    const result = (await obsCommand('repair')) as {
-                      findings: { message: string }[];
-                    };
-                    setMessage(
-                      result.findings.map((item) => item.message).join('；') ||
-                        'Mizar 场景已修复，配置检查通过。',
-                    );
-                  })
-                }
-              >
-                修复 Mizar 场景
-              </Button>
+              {obs?.connection === 'connected' ? (
+                <>
+                  <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
+                    {obs.streaming || obs.recording
+                      ? 'OBS 正在输出。停止推流与录制后再处理配置。'
+                      : obs.findings.some((item) => item.code === 'collection_inactive')
+                        ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
+                        : obs.findings.some((item) => item.code === 'source_kind_conflict')
+                          ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
+                          : sceneRepairNeeded
+                            ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
+                            : obs.findings.some((item) => item.code === 'video_settings')
+                              ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
+                              : obs.findings.some((item) => item.code === 'transition_missing')
+                                ? '请在 OBS「场景转场」中添加淡化和直接切换。'
+                                : obs.findings.length
+                                  ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                  : 'Mizar 配置检查通过，请核对实际音画。'}
+                  </StatusBanner>
+                  {sceneRepairNeeded && !sceneRepairBlocked ? (
+                    <Button
+                      variant="primary"
+                      loading={busy}
+                      disabled={busy || obs.streaming || obs.recording}
+                      onClick={() =>
+                        void action(async () => {
+                          await obsCommand('repair');
+                          await obsCommand('check');
+                          setMessage('修复已执行，已重新检查；剩余步骤见当前提示。');
+                        })
+                      }
+                    >
+                      {obs.findings.some((item) => item.code === 'collection_missing')
+                        ? '创建并启用 Mizar 场景集合'
+                        : '一键修复 Mizar 场景'}
+                    </Button>
+                  ) : null}
+                  {obs.findings.length ? (
+                    <details className="obs-setup__help">
+                      <summary>技术详情 · {obs.findings.length} 项</summary>
+                      {obs.findings.map((finding, index) => (
+                        <p key={`${finding.code}-${index}`}>{finding.message}</p>
+                      ))}
+                    </details>
+                  ) : null}
+                </>
+              ) : null}
               <p>
                 修复前停止推流与录制。检查通过后，在 OBS
                 中核对游戏画面、音频电平和直播输出音轨，并录制试听。
@@ -307,13 +353,6 @@ export function Settings({ tab }: { tab: string }) {
               ) : null}
             </Panel>
           </div>
-          {obs?.connection === 'connected'
-            ? obs.findings.map((finding) => (
-                <StatusBanner key={finding.code} tone="warning">
-                  {finding.message}
-                </StatusBanner>
-              ))
-            : null}
           <details className="obs-setup__help">
             <summary>游戏捕获说明</summary>
             <p>
