@@ -148,6 +148,70 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
     Ok(found)
 }
 
+/// Locate scalar entries of one unambiguous section.
+/// Duplicate entries are returned to the caller rather than silently discarded.
+pub(crate) fn scalar_section(text: &str, target: &[&str]) -> Result<Vec<(Token, Token)>, String> {
+    fn walk(
+        tokens: &[Token],
+        i: &mut usize,
+        path: &mut Vec<String>,
+        target: &[&str],
+        result: &mut Option<Vec<(Token, Token)>>,
+        nested: bool,
+    ) -> Result<(), String> {
+        if path.len() > 32 {
+            return Err("启动配置嵌套过深。".into());
+        }
+        let selected = path.len() == target.len()
+            && path
+                .iter()
+                .zip(target)
+                .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        let mut entries = Vec::new();
+        while let Some(key) = tokens.get(*i) {
+            if !key.quoted && key.value == "}" {
+                if !nested {
+                    return Err("启动配置结构无效。".into());
+                }
+                if selected && result.replace(entries).is_some() {
+                    return Err("启动配置包含重复配置段。".into());
+                }
+                *i += 1;
+                return Ok(());
+            }
+            if !key.quoted {
+                return Err("启动配置字段无效。".into());
+            }
+            *i += 1;
+            let value = tokens.get(*i).ok_or("启动配置不完整。")?;
+            *i += 1;
+            if !value.quoted && value.value == "{" {
+                if selected {
+                    return Err("按键绑定不是可恢复的命令值。".into());
+                }
+                path.push(key.value.clone());
+                walk(tokens, i, path, target, result, true)?;
+                path.pop();
+            } else if value.quoted {
+                if selected {
+                    entries.push((key.clone(), value.clone()));
+                }
+            } else {
+                return Err("启动配置值无效。".into());
+            }
+        }
+        if nested {
+            Err("启动配置缺少结束括号。".into())
+        } else {
+            Ok(())
+        }
+    }
+    let tokens = lex(text, false)?;
+    let mut result = None;
+    walk(&tokens, &mut 0, &mut Vec::new(), target, &mut result, false)?;
+    result.ok_or("按键绑定配置段缺失。".into())
+}
+
 // Validate the game's scalar without normalizing the saved token. Target choices
 // remain integers; original decimal spelling, whitespace and quotes survive.
 fn fps_number(value: &str) -> Result<f64, String> {

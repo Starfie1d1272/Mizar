@@ -169,6 +169,32 @@ impl SessionStore {
             Err(error) => Some(error),
         }
     }
+    pub fn validate_spectator_launch(&self) -> Result<(), String> {
+        let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
+        if record["version"] != 2 {
+            return Err("观战原绑定备份版本无法核实。".into());
+        }
+        let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
+        crate::cs2_spectator::check_archive(video)?;
+        crate::cs2_spectator::validate_bindings(video, &record["bindings"])
+    }
+    /// Persist the possible +exec write before submitting Steam's request.
+    /// A definitively failed spawn can disarm it; an ambiguous launch cannot.
+    pub fn spectator_load_attempted(&self, attempted: bool) -> Result<(), String> {
+        if attempted {
+            self.validate_spectator_launch()?;
+        }
+        let mut record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
+        if record["version"] != 2 {
+            return Err("观战原绑定备份版本无法核实。".into());
+        }
+        record["loadAttempted"] = json!(attempted);
+        atomic_write(
+            &self.spectator_path(),
+            &serde_json::to_vec_pretty(&record)
+                .map_err(|e| json_error("观战加载记录无法保存。", &e))?,
+        )
+    }
     /// Same owner, separate durable optional-field record. No core transaction
     /// or settings gate depends on this file. Caller must confirm CS2 has exited.
     pub fn restore_spectator(&self) -> Result<(), String> {
@@ -176,38 +202,68 @@ impl SessionStore {
             return Ok(());
         };
         let result = (|| {
-            if record["version"] != 1 {
+            if record["version"] != 1 && record["version"] != 2 {
                 return Err("观战恢复记录版本不支持。".into());
             }
             let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
             if !video.is_absolute() || video.file_name().is_none_or(|v| v != "cs2_video.txt") {
                 return Err("观战恢复路径无效。".into());
             }
-            crate::cs2_spectator::check_archive(video)?;
-            let original = record["original"].as_str().ok_or("观战原值备份缺失。")?;
-            if original.len() > 256 * 1024 {
-                return Err("观战原值备份过大。".into());
+            if record["version"] == 2 {
+                match record["loadAttempted"].as_bool() {
+                    Some(false) => {
+                        return fs::remove_file(self.spectator_path())
+                            .map_err(|e| io_error("未加载的观战备份记录未能清理，请重试。", &e))
+                    }
+                    Some(true) => (),
+                    None => return Err("观战加载记录无法核实，原值备份仍保留。".into()),
+                }
             }
-            let machine = video
-                .parent()
-                .ok_or("观战配置目录缺失。")?
-                .join("cs2_machine_convars.vcfg");
-            let metadata = fs::symlink_metadata(&machine)
-                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || metadata.len() > 256 * 1024
-            {
-                return Err("当前观战配置无法安全核实。".into());
-            }
-            let current = fs::read_to_string(&machine)
-                .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
-            if current.len() > 256 * 1024 {
-                return Err("当前观战配置过大。".into());
-            }
-            let restored = crate::cs2_spectator::restore(original, &current)?;
-            if restored != current {
-                atomic_write(&machine, restored.as_bytes())?;
+            let bindings_result = if record["version"] == 2 {
+                crate::cs2_spectator::restore_bindings(video, &record["bindings"])
+            } else {
+                Ok(()) // Legacy records own only the spectator convar.
+            };
+            let convar_result = (|| {
+                crate::cs2_spectator::check_archive(video)?;
+                let original = record["original"].as_str().ok_or("观战原值备份缺失。")?;
+                if original.len() > 256 * 1024 {
+                    return Err("观战原值备份过大。".into());
+                }
+                let machine = video
+                    .parent()
+                    .ok_or("观战配置目录缺失。")?
+                    .join("cs2_machine_convars.vcfg");
+                let metadata = fs::symlink_metadata(&machine)
+                    .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.len() > 256 * 1024
+                {
+                    return Err("当前观战配置无法安全核实。".into());
+                }
+                let current = fs::read_to_string(&machine)
+                    .map_err(|error| io_error("当前观战配置无法读取。", &error))?;
+                if current.len() > 256 * 1024 {
+                    return Err("当前观战配置过大。".into());
+                }
+                let restored = if record["version"] == 1 {
+                    crate::cs2_spectator::restore(original, &current)?
+                } else {
+                    crate::cs2_spectator::restore_with_applied(original, &current, false)?
+                };
+                if restored != current {
+                    atomic_write(&machine, restored.as_bytes())?;
+                }
+                Ok::<(), String>(())
+            })();
+            let errors: Vec<_> = bindings_result
+                .err()
+                .into_iter()
+                .chain(convar_result.err())
+                .collect();
+            if !errors.is_empty() {
+                return Err(errors.join(" "));
             }
             fs::remove_file(self.spectator_path())
                 .map_err(|error| io_error("观战原值已恢复，但记录未清理，请重试。", &error))
@@ -674,6 +730,11 @@ mod tests {
         let video = root.join("steam/userdata/1/730/local/cfg/cs2_video.txt");
         fs::create_dir_all(video.parent().unwrap()).unwrap();
         fs::copy(root.join("cs2_video.txt"), &video).unwrap();
+        fs::write(
+            video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg"),
+            "\"config\" {\"bindings\" {}}",
+        )
+        .unwrap();
         let account = root.join("steam/userdata/1/config");
         fs::create_dir_all(&account).unwrap();
         fs::write(account.join("localconfig.vdf"), "\"UserLocalConfigStore\" {\"Software\" {\"Valve\" {\"Steam\" {\"Apps\" {\"730\" {\"LaunchOptions\" \"+exec auto.cfg\"}}}}}}").unwrap();
@@ -826,13 +887,13 @@ mod tests {
     }
 
     #[test]
-    fn observer_cfg_supports_zero_and_one_and_restores_exact_values_without_rebinding() {
+    fn observer_cfg_restores_boolean_and_ten_bindings_preserving_other_game_edits() {
         for token in ["0", "1", "false", "true"] {
             let (root, video, machine, executable, store) = frame_setup();
             let original = format!("\"config\" {{\"convars\" {{\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"{token}\" \"other\" \"old\"}}}}");
             fs::write(&machine, &original).unwrap();
             let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
-            let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\"}}";
+            let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\" \"4\" \"slot4\" \"0\" \"say zero custom\" \"x\" \"original\"}}";
             fs::write(&keys, bindings).unwrap();
             let journal = store
                 .prepare_with_frame_rate(
@@ -849,22 +910,59 @@ mod tests {
             let commands = fs::read_to_string(&cfg).unwrap();
             assert!(commands
                 .lines()
-                .any(|line| line == "spec_usenumberkeys_nobinds 1"));
-            assert!(!commands.contains("bind "));
+                .any(|line| line == "spec_usenumberkeys_nobinds 0"));
+            for number in 1..=9 {
+                assert!(commands
+                    .lines()
+                    .any(|line| line == format!("bind \"{number}\" \"slot{number}\"")));
+            }
+            assert!(commands.lines().any(|line| line == "bind \"0\" \"slot10\""));
+            assert!(!commands.contains("bind \"0\" \"slot0\""));
+            assert_eq!(fs::read_to_string(&keys).unwrap(), bindings); // No prelaunch key writes.
+            let backup = store.spectator_record().unwrap().unwrap();
+            assert_eq!(backup["version"], 2);
+            assert_eq!(backup["bindings"]["1"], "\"say custom; slot7\"");
+            assert_eq!(backup["bindings"]["2"], "\"\"");
+            assert_eq!(backup["bindings"]["3"], Value::Null);
+            assert_eq!(backup["bindings"].as_object().unwrap().len(), 10);
+            store.validate_spectator_launch().unwrap();
+            store.spectator_load_attempted(true).unwrap();
             crate::cs2_spectator::install(&executable).unwrap();
             fs::write(
                 &machine,
                 applied
-                    .replace(&format!("\"{token}\""), "\"1\"")
+                    .replace(&format!("\"{token}\""), "\"0\"")
                     .replace("\"old\"", "\"new\""),
             )
             .unwrap();
-            store.restore().unwrap();
+            fs::write(&keys, "\"config\" {\"bindings\" {\"1\" \"slot1\" \"2\" \"slot2\" \"3\" \"slot3\" \"4\" \"slot4\" \"5\" \"slot5\" \"6\" \"slot6\" \"7\" \"slot7\" \"8\" \"slot8\" \"9\" \"slot9\" \"0\" \"slot10\" \"x\" \"changed-other-key\"}}\n").unwrap();
+            // A restart reconstructs the real recovery owner from the durable record.
+            SessionStore::new(root.clone()).restore().unwrap();
             assert_eq!(
                 fs::read_to_string(&machine).unwrap(),
                 original.replace("\"old\"", "\"new\"")
             );
-            assert_eq!(fs::read_to_string(keys).unwrap(), bindings);
+            let restored = fs::read_to_string(&keys).unwrap();
+            for (key, expected) in [
+                ("1", Some("say custom; slot7")),
+                ("2", Some("")),
+                ("3", None),
+                ("4", Some("slot4")),
+                ("5", None),
+                ("6", None),
+                ("7", None),
+                ("8", None),
+                ("9", None),
+                ("0", Some("say zero custom")),
+                ("x", Some("changed-other-key")),
+            ] {
+                assert_eq!(
+                    cs2_frame_rate::field(&restored, &["config", "bindings", key])
+                        .unwrap()
+                        .map(|token| token.value),
+                    expected.map(str::to_string)
+                );
+            }
             assert!(!video
                 .parent()
                 .unwrap()
@@ -874,6 +972,148 @@ mod tests {
             assert!(!store.spectator_pending());
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn binding_conflict_retains_backup_and_retries_without_blocking_video_or_convar_restore() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original =
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}";
+        fs::write(&machine, original).unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        fs::write(
+            &keys,
+            "\"config\" {\"bindings\" {\"1\" \"original\" \"x\" \"old\"}}",
+        )
+        .unwrap();
+        let before_video = fs::read(&video).unwrap();
+        let journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(journal["spectatorCfg"], true);
+        store.spectator_load_attempted(true).unwrap();
+        fs::write(
+            &keys,
+            "\"config\" {\"bindings\" {\"1\" \"external\" \"x\" \"new\"}}",
+        )
+        .unwrap();
+        assert!(store
+            .validate_spectator_launch()
+            .unwrap_err()
+            .contains("发生变化"));
+        fs::write(
+            &machine,
+            "\"config\" {\"convars\" {\"fps_max\" \"60\" \"spec_usenumberkeys_nobinds\" \"0\"}}",
+        )
+        .unwrap();
+        let changed = fs::read(&keys).unwrap();
+        assert!(store.restore().unwrap().unwrap().contains("数字键 1"));
+        assert!(store.load().unwrap().is_none());
+        assert!(store.spectator_pending());
+        assert_eq!(fs::read(&keys).unwrap(), changed);
+        assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        fs::write(
+            &keys,
+            "\"config\" {\"bindings\" {\"1\" \"slot1\" \"x\" \"new\"}}",
+        )
+        .unwrap();
+        SessionStore::new(root.clone()).restore_spectator().unwrap();
+        assert!(fs::read_to_string(&keys)
+            .unwrap()
+            .contains("\"1\" \"original\" \"x\" \"new\""));
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsubmitted_or_failed_spectator_load_does_not_restore_external_binding_changes() {
+        for failed_spawn in [false, true] {
+            let (root, video, machine, executable, store) = frame_setup();
+            fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}").unwrap();
+            let journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1440, 810).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(journal["spectatorCfg"], true);
+            if failed_spawn {
+                store.spectator_load_attempted(true).unwrap();
+                store.spectator_load_attempted(false).unwrap();
+            }
+            let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+            let external =
+                "\"config\" {\"bindings\" {\"1\" \"slot1\" \"3\" \"slot3\" \"x\" \"external\"}}";
+            fs::write(&keys, external).unwrap();
+            fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"60\" \"spec_usenumberkeys_nobinds\" \"true\"}}").unwrap();
+            store.restore().unwrap();
+            assert_eq!(fs::read_to_string(&keys).unwrap(), external);
+            assert!(fs::read_to_string(&machine)
+                .unwrap()
+                .contains("\"spec_usenumberkeys_nobinds\" \"true\""));
+            assert!(!store.spectator_pending());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn unreadable_keys_skip_optional_cfg_and_legacy_records_never_own_keys() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original =
+            "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}";
+        fs::write(&machine, original).unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        for invalid in [
+            b"\"config\" {\"bindings\" {\"1\" \"slot1\" \"1\" \"other\"}}".to_vec(),
+            b"\"config\" {\"bindings\" {} \"bindings\" {}}".to_vec(),
+            b"\"config\" {\"bindings\" {".to_vec(),
+            vec![b'x'; 256 * 1024 + 1],
+            vec![0xff],
+        ] {
+            fs::write(&keys, &invalid).unwrap();
+            let journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1440, 810).unwrap(),
+                )
+                .unwrap();
+            assert!(journal.get("spectatorCfg").is_none());
+            assert!(!store.spectator_pending());
+            store.restore().unwrap();
+            assert_eq!(fs::read(&keys).unwrap(), invalid);
+        }
+        fs::remove_file(&keys).unwrap();
+        let journal = store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        assert!(journal.get("spectatorCfg").is_none());
+        assert!(journal["spectatorWarning"]
+            .as_str()
+            .unwrap()
+            .contains("数字键"));
+        assert!(!store.spectator_pending());
+        store.restore().unwrap();
+        atomic_write(
+            &store.spectator_path(),
+            &serde_json::to_vec(&json!({"version":1,"video":video,"original":original})).unwrap(),
+        )
+        .unwrap();
+        fs::write(&machine, original.replace("\"false\"", "\"true\"")).unwrap();
+        store.restore_spectator().unwrap();
+        assert!(!keys.exists());
+        assert_eq!(fs::read_to_string(&machine).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -902,12 +1142,19 @@ mod tests {
             .prepare_with_frame_rate(&video, &executable, size)
             .unwrap();
         assert_eq!(active["spectatorCfg"], true);
+        store.spectator_load_attempted(true).unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        fs::write(
+            &keys,
+            "\"config\" {\"bindings\" {\"1\" \"slot1\" \"x\" \"game-edit\"}}",
+        )
+        .unwrap();
         // +exec changes the runtime value; CS2 may archive it at exit.
         fs::write(
             &machine,
             fs::read_to_string(&machine)
                 .unwrap()
-                .replace("\"false\"", "\"true\""),
+                .replace("\"false\"", "\"0\""),
         )
         .unwrap();
         let remote = video
@@ -925,9 +1172,16 @@ mod tests {
         // Game-time optional edits must not become ownership or block FPS/video.
         let changed = fs::read_to_string(&machine)
             .unwrap()
-            .replace("\"true\"", "\"unknown\"");
+            .replace("\"0\"", "\"unknown\"");
         fs::write(&machine, changed).unwrap();
         assert!(store.restore().unwrap().unwrap().contains("镜像"));
+        let restored_keys = fs::read_to_string(&keys).unwrap();
+        assert!(
+            cs2_frame_rate::field(&restored_keys, &["config", "bindings", "1"])
+                .unwrap()
+                .is_none()
+        );
+        assert!(restored_keys.contains("\"x\" \"game-edit\""));
         assert!(store.load().unwrap().is_none());
         assert_eq!(fs::read(&video).unwrap(), video_before);
         assert_eq!(
@@ -948,7 +1202,7 @@ mod tests {
         assert!(store.spectator_pending());
         fs::remove_file(&mirror).unwrap();
         assert!(store.restore_spectator().unwrap_err().contains("字段"));
-        fs::write(&machine, original.replace("\"false\"", "\"1\"")).unwrap();
+        fs::write(&machine, original.replace("\"false\"", "\"0\"")).unwrap();
         let restarted = SessionStore::new(root.clone());
         restarted.restore_spectator().unwrap();
         assert_eq!(fs::read_to_string(&machine).unwrap(), original);
@@ -967,6 +1221,8 @@ mod tests {
             "fps_max 0; spec_usenumberkeys_nobinds false\n",
         )
         .unwrap();
+        // An upgrade must not silently skip the preset on an existing v1.3.0 install.
+        fs::write(root.join("game/csgo/cfg/mizar_observer.cfg"), "// Mizar managed spectator session; personal bindings remain unchanged.\nspec_usenumberkeys_nobinds 1\necho MIZAR_OBSERVER_CFG_LOADED\n").unwrap();
         let journal = store
             .prepare_with_frame_rate(
                 &video,
@@ -975,6 +1231,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(journal["spectatorCfg"], true);
+        let deployed = fs::read_to_string(root.join("game/csgo/cfg/mizar_observer.cfg")).unwrap();
+        assert!(deployed.contains("bind \"1\" \"slot1\""));
+        assert!(deployed.contains("bind \"9\" \"slot9\""));
         assert_eq!(
             fs::read_to_string(root.join("game/csgo/cfg/auto.cfg")).unwrap(),
             "fps_max 60; spec_usenumberkeys_nobinds false\n"

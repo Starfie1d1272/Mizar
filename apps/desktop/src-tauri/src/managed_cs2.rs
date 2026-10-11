@@ -702,7 +702,9 @@ impl ManagedCs2 {
         };
         self.can_preserve = false;
         if journal["spectatorCfg"] == true {
-            if let Err(error) = crate::cs2_spectator::install(&executable) {
+            if let Err(error) = crate::cs2_spectator::install(&executable)
+                .and_then(|()| self.store.validate_spectator_launch())
+            {
                 journal["spectatorCfg"] = json!(false);
                 journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
             }
@@ -769,7 +771,17 @@ impl ManagedCs2 {
                         .to_string(),
                 ]);
                 if journal["spectatorCfg"] == true {
-                    command.args(["+exec", crate::cs2_spectator::CFG_NAME]);
+                    match self.store.spectator_load_attempted(true) {
+                        Ok(()) => {
+                            command.args(["+exec", crate::cs2_spectator::CFG_NAME]);
+                        }
+                        Err(error) => {
+                            journal["spectatorCfg"] = json!(false);
+                            journal["spectatorWarning"] =
+                                json!(format!("观战 CFG 未加载：{error}"));
+                            self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
+                        }
+                    }
                 }
             } else {
                 command.args(["-applaunch", "730"]);
@@ -801,6 +813,11 @@ impl ManagedCs2 {
                 .map_err(|error| {
                     self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
                     journal["launchAttempted"] = json!(false);
+                    if journal["spectatorCfg"] == true {
+                        if let Err(error) = self.store.spectator_load_attempted(false) {
+                            self.log.event("cs2_spectator_restore", "failure", Some(&error));
+                        }
+                    }
                     if let Err(save_error) = self.store.save(&journal) {
                         self.log.event("cs2_launch", "failure", Some(&format!("stage=journal_after_spawn_failure; cause={save_error}")));
                     }
