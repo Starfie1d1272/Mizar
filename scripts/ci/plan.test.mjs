@@ -200,12 +200,20 @@ describe('changed-surface CI planner', () => {
     ['packages/hud-config/test/layout.test.ts', ['quality']],
     ['packages/protocol/test/program.test.ts', ['quality']],
     ['apps/companion/test/program-runtime.test.ts', ['quality', 'platform']],
+    [
+      'scripts/qualification/bundle/gsi-discovery.ps1',
+      ['quality', 'platform', 'qualification_windows'],
+    ],
+    [
+      'scripts/qualification/gsi-discovery.test.mjs',
+      ['quality', 'platform', 'qualification_windows'],
+    ],
     ['apps/companion/src/support/logs.ts', ['quality', 'platform']],
     ['packages/testkit/src/replay/clock.ts', ['quality']],
     ['packages/radar-view/src/radar.css', ['quality']],
     ['packages/core/src/README.md', []],
     ['docs/development/development-validation.md', []],
-  ])('does not add browser or packaging gates for %s', (path, requiredJobs) => {
+  ])('selects the owning checks without unrelated gates for %s', (path, requiredJobs) => {
     expect(createCiPlan({ changedFiles: [path] }).requiredJobs).toEqual(requiredJobs);
   });
 
