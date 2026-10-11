@@ -36,6 +36,43 @@ impl ExitGate {
     }
 }
 
+/// UI feedback only; production and restoration facts remain with their owners.
+#[derive(Clone, Default)]
+pub struct WorkspaceExitStatus {
+    pub busy: bool,
+    pub stage: String,
+    pub message: Option<String>,
+}
+#[derive(Default)]
+pub struct WorkspaceExit(std::sync::Mutex<WorkspaceExitStatus>);
+impl WorkspaceExit {
+    pub fn status(&self) -> WorkspaceExitStatus {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    pub fn stage(&self, stage: &str) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = WorkspaceExitStatus {
+            busy: true,
+            stage: stage.into(),
+            message: None,
+        };
+    }
+    pub fn complete(&self, result: &Result<(), String>) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.busy = false;
+        state.message = result.as_ref().err().cloned();
+        if result.is_ok() {
+            state.stage.clear();
+        }
+    }
+}
+/// Releasing a failed or completed workspace operation must also allow retry.
+pub struct WorkspaceExitGuard<'a>(pub &'a ExitGate);
+impl Drop for WorkspaceExitGuard<'_> {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 pub fn finish_then_restore(
     finish: impl FnOnce() -> Result<(), String>,
     restore: impl FnOnce() -> Result<(), String>,
@@ -359,6 +396,14 @@ pub fn finish_managed_game(
 }
 
 pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
+    finish_production(log, "shutdown")
+}
+
+pub fn finish_workspace_production(log: &DesktopLog) -> Result<(), String> {
+    finish_production(log, "finish")
+}
+
+fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     for _ in 0..3 {
         let (status, state) = request(log, "GET", "/local/v1/production", "", deadline)?;
@@ -371,8 +416,7 @@ pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
             return Err("无法读取制作状态，游戏仍保留。".into());
         }
         let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-        let body =
-            serde_json::json!({"action": "shutdown", "expectedRevision": revision}).to_string();
+        let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
         let (status, result) = request(log, "POST", "/operator/production", &body, deadline)?;
         if status == 200 && result["mode"] == "preparation" {
             return Ok(());
@@ -396,6 +440,38 @@ pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_feedback_keeps_failure_without_sticking_busy_and_retry_replaces_it() {
+        let feedback = WorkspaceExit::default();
+        let gate = ExitGate::default();
+        assert!(gate.begin());
+        {
+            let _guard = WorkspaceExitGuard(&gate);
+            feedback.stage("production");
+            assert!(feedback.status().busy);
+            assert!(!gate.begin());
+            feedback.stage("restoration");
+            feedback.complete(&Err("CS2 尚未退出，请手动退出游戏后重试恢复。".into()));
+        }
+        let result = feedback.status();
+        assert!(!result.busy);
+        assert_eq!(result.stage, "restoration");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("CS2 尚未退出，请手动退出游戏后重试恢复。")
+        );
+        assert!(gate.begin());
+        {
+            let _guard = WorkspaceExitGuard(&gate);
+            feedback.stage("production");
+            assert!(feedback.status().message.is_none());
+            feedback.complete(&Ok(()));
+        }
+        assert!(gate.check().is_ok());
+        assert!(!feedback.status().busy);
+        assert!(feedback.status().message.is_none());
+    }
+
     fn qualification() -> serde_json::Value {
         serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"})
     }

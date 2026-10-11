@@ -24,7 +24,11 @@ import { ProductionStatus } from './ProductionStatus';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
-import { useCs2Status } from '../preparation/cs2-status';
+import {
+  useCs2Status,
+  useWorkspaceExitStatus,
+  workspaceExitLabel,
+} from '../preparation/cs2-status';
 import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import './workspace.css';
 
@@ -204,12 +208,19 @@ export function WorkspaceDock() {
   }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
   const { status: cs2 } = useCs2Status();
+  const exit = useWorkspaceExitStatus();
+  const visibleError = exit?.message || errorMessage || '';
   useEffect(() => {
     const hide = () => {
-      void fetch('/local/v1/production', { cache: 'no-store' })
+      void fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
         .then((response) => response.json() as Promise<Production>)
         .then((current) =>
-          command('/operator/production', { action: 'hide', expectedRevision: current.revision }),
+          current.mode === 'preparation'
+            ? undefined
+            : command('/operator/production', {
+                action: 'hide',
+                expectedRevision: current.revision,
+              }),
         )
         .catch(() => setErrorMessage('工作区已隐藏，制作状态暂未同步。'));
     };
@@ -363,7 +374,13 @@ export function WorkspaceDock() {
           <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
             HUD 编辑器
           </Button>
-          <Button disabled={busy} onClick={() => void action(() => openTool('diagnostics'))}>
+          <Button
+            onClick={() =>
+              void openTool('diagnostics').catch((reason: unknown) =>
+                setErrorMessage(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
+              )
+            }
+          >
             运行诊断
           </Button>
           <Button
@@ -384,14 +401,14 @@ export function WorkspaceDock() {
         <span title={sceneState?.director?.reason ?? undefined}>
           {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
         </span>
-        {errorMessage ? (
+        {visibleError ? (
           <button
             className="workspace-error"
             onClick={() => setDetailsOpen(true)}
-            title={errorMessage}
+            title={visibleError}
             aria-label="查看错误详情"
           >
-            <span role="alert">{errorMessage}</span>
+            <span role="alert">{visibleError}</span>
           </button>
         ) : null}
         {message ? (
@@ -402,21 +419,44 @@ export function WorkspaceDock() {
         <div className="workspace-footer-actions">
           <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
           <small className="workspace-exit-help">
-            {cs2?.preserveSettings ? '关闭本次游戏，保留游戏设置' : '关闭游戏并恢复配置'}
+            {exit?.busy
+              ? workspaceExitLabel(exit.stage)
+              : cs2?.preserveSettings
+                ? '关闭本次游戏，保留游戏设置'
+                : '关闭游戏并恢复配置'}
           </small>
           <Button
             className="workspace-exit"
-            disabled={!production || busy}
-            aria-busy={busy}
+            disabled={!production || busy || Boolean(exit?.busy)}
+            aria-busy={busy || Boolean(exit?.busy)}
             onClick={() => production && void action(() => productionAction('finish', production))}
           >
-            退出工作台
+            {exit?.busy ? '正在退出…' : '退出工作台'}
           </Button>
         </div>
       </footer>
-      <Dialog open={detailsOpen} title="操作未完成" onClose={() => setDetailsOpen(false)}>
-        <p>{errorMessage}</p>
-        <p>{sceneState?.director?.reason}</p>
+      <Dialog
+        open={detailsOpen}
+        title={exit?.message ? '退出工作台需要处理' : '操作未完成'}
+        onClose={() => setDetailsOpen(false)}
+      >
+        <p>{visibleError}</p>
+        <p>
+          {exit?.message
+            ? `${workspaceExitLabel(exit.stage)}：按原因处理后，在准备中心重试；再次失败时导出诊断包反馈。`
+            : sceneState?.director?.reason}
+        </p>
+        {exit?.message ? (
+          <Button
+            onClick={() =>
+              void openPreparation('/').catch((reason: unknown) =>
+                setErrorMessage(reason instanceof Error ? reason.message : '准备中心无法打开。'),
+              )
+            }
+          >
+            打开准备中心
+          </Button>
+        ) : null}
         <Button onClick={() => setDetailsOpen(false)}>关闭详情</Button>
       </Dialog>
     </main>
