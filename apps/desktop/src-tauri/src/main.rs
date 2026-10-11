@@ -855,7 +855,8 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
 
 #[tauri::command]
 async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), String> {
-    present_production_inner(&app, live)
+    tauri::async_runtime::spawn_blocking(move || present_production_inner(&app, live))
+        .await.map_err(|_| "现场窗口未能打开。".to_string())?
 }
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
@@ -868,6 +869,40 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
             .filter(|hwnd| *hwnd == windows_host::foreground()).unwrap_or(0);
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
+        let (mut request, process) = {
+            let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+            let process = cs2.workspace_process()?;
+            let request = process.as_ref().and_then(|process| {
+                app.state::<HostState>().entry_focus.lock().ok()?
+                    .request(focus_session(process), source)
+            });
+            (request, process)
+        };
+        if request.is_some() {
+            let started = Instant::now();
+            let mut readiness = workspace_focus::Readiness::new(source, started);
+            loop {
+                let eligible = process.as_ref().is_some_and(|process| process.is_running())
+                    && app.state::<production_exit::ExitGate>().check().is_ok()
+                    && app.state::<cs2_activity::Activity>().phase() == "idle";
+                let window_ready = windows_host::find_cs2().is_some_and(|window| {
+                    process.as_ref().is_some_and(|process| window.pid == process.pid)
+                });
+                let decision = readiness.poll(Instant::now(), windows_host::foreground(), eligible, window_ready);
+                if decision == workspace_focus::ReadinessState::Waiting {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                if decision != workspace_focus::ReadinessState::Ready { request = None; }
+                app.state::<DesktopLog>().event("workspace_entry_readiness", match decision {
+                    workspace_focus::ReadinessState::Ready => "ready",
+                    workspace_focus::ReadinessState::TimedOut => "timed_out",
+                    _ => "cancelled",
+                }, Some(&format!("elapsedMs={}", started.elapsed().as_millis())));
+                break;
+            }
+        }
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
@@ -880,14 +915,6 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         if let Some(layout) = layout {
             apply_layout(&app, layout);
         }
-        let request = {
-            let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-            let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
-            let state = app.state::<HostState>();
-            cs2.workspace_process()?.and_then(|process| {
-                state.entry_focus.lock().ok()?.request(focus_session(&process), source)
-            })
-        };
         show_workspace(&app);
         let host = app.clone();
         app.run_on_main_thread(move || {
