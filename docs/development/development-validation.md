@@ -77,7 +77,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 - 普通文档只运行计划器和汇总检查；`docs/design/**` 另运行设计检查。
 - 代码运行基础质量检查，Web 语义与验收路径增加浏览器验收，平台相关路径增加对应平台检查。
-- Core、Radar、Radar View、HUD Config、Protocol、Telemetry GSI 的 `src/`，以及 Companion 的运行时、投影、场景、协议发布、配置、BP、比赛资料、系列进展、重放、公开输出与应用组装入口，保守增加完整的既有浏览器验收。精确前缀由计划器维护；这些规则保障消费者回归范围；本地服务与浏览器的完整链路另由集成检查验证。
+- Core、Radar、Radar View、HUD Config、Protocol、Telemetry GSI 的 `src/`，以及 Companion 的运行时、投影、场景、协议发布、配置、BP、比赛资料、系列进展、重放、公开输出与应用组装入口，保守增加完整的既有浏览器验收。Steam 发现脚本及其测试变更同时运行平台消费者，确保 Windows PowerShell 测试实际执行。精确前缀由计划器维护；这些规则保障消费者回归范围；本地服务与浏览器的完整链路另由集成检查验证。
 - 浏览器验收映射适用于上述实现路径；普通文档、CSS 和包外部测试按各自规则分类。基础质量、平台与 Windows 原生检查分别判定，多文件变更取风险并集。
 - 未知路径、无法确定的差异、工作流、锁文件、工具链或计划器改动默认完整验证。
 - Box 镜像工具及其测试由基础质量任务负责：校验已发布资产身份、远端字节、授权和失败时不发布更新清单；这两个明确路径不进入产品载荷，无需重编译 Desktop 或重复安装。与安装器、更新恢复、候选来源、Desktop 或其它路径混合时仍取所有风险并集；Windows 脚本和宿主消费者按明确的已知文件清单保持真实 Windows 原生验证；完整打包及安装生命周期由 Release Qualification 负责，不对 bundle、installer-assets 或 evidence 目录作整目录豁免；资格证据完整性及新增未知文件回退完整验证；候选、晋级、Stable 信任协议与未知 qualification 工具完整验证，工作流仍保守回退。

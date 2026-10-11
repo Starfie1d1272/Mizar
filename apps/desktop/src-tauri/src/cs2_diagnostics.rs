@@ -16,6 +16,7 @@ pub fn message(code: &str) -> &'static str {
         "status-unreadable" => "无法检查 GSI 配置。请检查配置文件夹的访问权限，再重新检查或导出诊断包。",
         "access-denied" => "无法访问 CS2 配置或运行数据。请检查文件访问权限，再重试。",
         "steam-not-running" => "请先打开 Steam 并登录，再启动 CS2。",
+        "steam-path-unavailable" => "无法读取当前 Steam 客户端的程序位置。请正常退出并重新打开 Steam，再重试；若仍失败，请导出诊断包。",
         "steam-not-unique" => "无法确认唯一的 Steam 客户端。请退出多余的 Steam 进程，再重试。",
         "steam-account-unavailable" => "无法读取当前 Steam 账号。请在 Steam 中重新登录，再重试。",
         "video-config-missing" => "当前 Steam 账号还没有 CS2 视频配置。请用该账号从 Steam 运行一次 CS2，正常退出后重试。",
