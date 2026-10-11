@@ -168,8 +168,10 @@ jobs:
           Expand-Archive -LiteralPath "product/$env:PRODUCT_ARCHIVE" -DestinationPath extracted
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-          node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA "product/$env:PRODUCT_ARCHIVE" product/release-manifest.json
-          if ($LASTEXITCODE -ne 0) { throw 'Qualified ZIP and source/version manifest provenance verification failed' }
+          foreach ($subject in @("product/$env:PRODUCT_ARCHIVE", 'product/release-manifest.json')) {
+            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw "Qualified ZIP or source/version manifest provenance verification failed: $subject" }
+          }
       - name: Verify distinct qualified Core original bytes and provenance
         shell: pwsh
         run: |
@@ -181,8 +183,10 @@ jobs:
           node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
           $subjects = @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe')) | ForEach-Object { Join-Path product $_ }
-          node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA @subjects
-          if ($LASTEXITCODE -ne 0) { throw 'Original Core qualification provenance failed' }
+          foreach ($subject in $subjects) {
+            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw "Original Core qualification provenance failed: $subject" }
+          }
 
       - name: Verify qualified installer provenance
         shell: pwsh
@@ -206,8 +210,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
           }
           if ($subjects.Count -gt 0) {
-            node scripts/qualification/release-identity.mjs attestations $env:SOURCE_SHA @subjects
-            if ($LASTEXITCODE -ne 0) { throw 'Original installer/update metadata provenance failed' }
+            foreach ($subject in $subjects) {
+              node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA
+              if ($LASTEXITCODE -ne 0) { throw "Original installer/update metadata provenance failed: $subject" }
+            }
           }
       - name: Resolve release and tag existence without treating API failure as absence
         shell: pwsh
