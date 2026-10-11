@@ -1,0 +1,13 @@
+
+ RUN  v5.0.3 /workspace/Mizar
+
+
+ Test Files  7 passed (7)
+      Tests  81 passed (81)
+   Start at  19:36:52
+   Duration  2.17s (transform 48%, import 27%, tests 25%, setup 1%, worker 1%)
+
+  Transform  transforming modules took 2.37s · 48% of tracked time, re-done on every run
+             persist transforms across runs with fsModuleCache: true
+             learn more: https://vitest.dev/guide/improving-performance#caching-between-reruns
+

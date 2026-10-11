@@ -1,0 +1,36 @@
+
+ RUN  v5.0.3 /workspace/Mizar
+
+ ❯ apps/companion/test/production-lifecycle.test.ts (7 tests | 1 failed | 6 skipped) 165ms
+   × requires only match context, preserves match through hide/resume/finish, and rejects stale commands 163ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/companion/test/production-lifecycle.test.ts > requires only match context, preserves match through hide/resume/finish, and rejects stale commands
+AssertionError: expected { message: 'OBS 场景恢复未完成，请检查连接后重试。' } to match object { mode: 'preparation' }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "mode": "preparation",
++   "message": "OBS 场景恢复未完成，请检查连接后重试。",
+  }
+
+ ❯ apps/companion/test/production-lifecycle.test.ts:66:67
+     64|     expect((await send('hide', (await get()).revision)).json()).toMatc…
+     65|     expect((await send('enter', (await get()).revision)).json()).toMat…
+     66|     expect((await send('finish', (await get()).revision)).json()).toMa…
+       |                                                                   ^
+     67|       mode: 'preparation',
+     68|     });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 6 skipped (7)
+   Start at  19:29:59
+   Duration  1.63s (transform 60%, import 29%, tests 11%)
+

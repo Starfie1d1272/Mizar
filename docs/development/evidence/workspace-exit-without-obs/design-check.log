@@ -1,0 +1,189 @@
+$ pnpm design:tokens:verify && pnpm architecture:check && pnpm design:contracts:test && pnpm design:catalog:build && pnpm design:components:test
+$ node packages/design-tokens/scripts/tokens.mjs --check
+Design tokens: 155 validated; CSS synchronized.
+$ node scripts/architecture/check.mjs
+Architecture contract passed (0 violations).
+$ vitest run --config vitest.config.ts packages/design-tokens/scripts/tokens.test.mjs scripts/architecture scripts/ci/plan.test.mjs
+
+ RUN  v5.0.3 /workspace/Mizar
+
+
+ Test Files  6 passed (6)
+      Tests  175 passed (175)
+   Start at  19:33:43
+   Duration  5.21s (tests 78%, import 16%, transform 5%, setup 1%)
+
+$ pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook:build
+Scope: 8 of 16 workspace projects
+packages/design-tokens build$ node scripts/tokens.mjs --build
+packages/cs2-assets build$ tsc -p tsconfig.json --pretty false
+packages/hud-config build$ tsc -p tsconfig.json
+packages/core build$ tsc -p tsconfig.json --pretty false
+packages/design-tokens build: Design tokens: 155 validated; CSS synchronized.
+packages/design-tokens build: Done
+packages/protocol build$ tsc -p tsconfig.json
+packages/core build: Done
+packages/replay build$ tsc -p tsconfig.json
+packages/cs2-assets build: Done
+packages/radar build$ tsc -p tsconfig.json
+packages/hud-config build: Done
+packages/protocol build: Done
+packages/radar build: Done
+packages/radar-view build$ node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs
+packages/replay build: Done
+packages/radar-view build: Done
+$ storybook build --output-dir ../../.agent-tmp/storybook --disable-telemetry
+Unable to save global settings file to /home/agent/.storybook/settings.json
+Reason: ENOENT: no such file or directory, mkdir '/home/agent/.storybook'
+
+┌  Building storybook v10.6.1
+│
+◇  Cleaning outputDir: ../../.agent-tmp/storybook
+│
+◇  Loading presets
+│
+◇  Building manager..
+│
+●  Building open services..
+│
+●  Building preview..
+│  Vite vite v8.3.2 building client environment for production...
+transforming...
+✓ 59 modules transformed.
+rendering chunks...
+computing gzip size...
+│  Vite
+│  ../../.agent-tmp/storybook/assets/inter-vietnamese-400-normal-DMkecbls.woff2
+│  4.97 kB
+│  ../../.agent-tmp/storybook/assets/inter-vietnamese-600-normal-Cc8MFFhd.woff2
+│  5.10 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-ext-400-normal-DGGRlc-M.woff2
+│  5.26 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-ext-600-normal-DRtmH8MT.woff2
+│  5.43 kB
+│  ../../.agent-tmp/storybook/assets/inter-vietnamese-400-normal-Bbgyi5SW.woff
+│  6.50 kB
+│  ../../.agent-tmp/storybook/assets/inter-vietnamese-600-normal-BuLX-rYi.woff
+│  6.64 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-ext-400-normal-KugGGMne.woff
+│  7.06 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-ext-600-normal-B8X0CLgF.woff
+│  7.21 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-400-normal-obahsSVq.woff2
+│  7.71 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-400-normal-B4URO6DV.woff2
+│  7.77 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-600-normal-plRanbMR.woff2
+│  7.94 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-600-normal-CWCymEST.woff2
+│  7.97 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-400-normal-HOLc17fK.woff
+│  9.78 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-400-normal-q2sYcFCs.woff
+│  9.92 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-600-normal-4D_pXhcN.woff
+│  9.93 kB
+│  ../../.agent-tmp/storybook/assets/inter-greek-600-normal-BZpKdvQh.woff
+│  10.03 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-ext-400-normal-BQZuk6qB.woff2
+│  10.23 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-ext-600-normal-Dfes3d0z.woff2
+│  10.48 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-ext-400-normal-DQukG94-.woff
+│  13.33 kB
+│  ../../.agent-tmp/storybook/assets/inter-cyrillic-ext-600-normal-Bcila6Z-.woff
+│  13.46 kB
+│  ../../.agent-tmp/storybook/iframe.html
+│  18.96 kB │ gzip:   5.33 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-400-normal-C38fXH4l.woff2
+│  23.66 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-600-normal-LgqL8muc.woff2
+│  24.45 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-400-normal-CyCys3Eg.woff
+│  30.69 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-600-normal-CiBQ2DWP.woff
+│  31.26 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-ext-400-normal-C1nco2VV.woff2
+│  35.00 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-ext-600-normal-D2bJ5OIk.woff2
+│  36.26 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-ext-400-normal-77YHD8bZ.woff
+│  47.56 kB
+│  ../../.agent-tmp/storybook/assets/inter-latin-ext-600-normal-CIVaiw4L.woff
+│  48.66 kB
+│  ../../.agent-tmp/storybook/assets/ToolShell-hcHIvKDv.css
+│  0.68 kB │ gzip:   0.30 kB
+│  ../../.agent-tmp/storybook/assets/workbench-DwghiYhb.css
+│  0.75 kB │ gzip:   0.37 kB
+│  ../../.agent-tmp/storybook/assets/iframe-BisJ4TPj.css
+│  17.19 kB │ gzip:   3.58 kB
+│  ../../.agent-tmp/storybook/assets/iframe-CWKx2nNp.js
+│  0.04 kB │ gzip:   0.06 kB
+│  ../../.agent-tmp/storybook/assets/tool-shell.stories-BO-V8CFR.js
+│  0.95 kB │ gzip:   0.62 kB
+│  ../../.agent-tmp/storybook/assets/ToolShell-OKauNIN4.js
+│  0.95 kB │ gzip:   0.53 kB
+│  ../../.agent-tmp/storybook/assets/rolldown-runtime-DkW27tQK.js
+│  1.19 kB │ gzip:   0.67 kB
+│  ../../.agent-tmp/storybook/assets/preload-helper-BVscJdOD.js
+│  1.50 kB │ gzip:   0.82 kB
+│  ../../.agent-tmp/storybook/assets/workbench.stories-XJYhbgoI.js
+│  2.45 kB │ gzip:   1.08 kB
+│  ../../.agent-tmp/storybook/assets/primitives.stories-BX5xzA8w.js
+│  6.44 kB │ gzip:   2.26 kB
+│  ../../.agent-tmp/storybook/assets/ui-D_aTg9ZU.js
+│  6.88 kB │ gzip:   1.84 kB
+│  ../../.agent-tmp/storybook/vite-inject-mocker-entry.js
+│  27.84 kB │ gzip:   9.66 kB
+│  ../../.agent-tmp/storybook/assets/matchers-JIUQ3HVY-C789_MAK.js
+│  28.79 kB │ gzip:   9.68 kB
+│  ../../.agent-tmp/storybook/assets/react-18-T98KycO1.js
+│  211.37 kB │ gzip:  66.04 kB
+│  ../../.agent-tmp/storybook/assets/axe-pQGJbW0T.js
+│  586.90 kB │ gzip: 160.19 kB
+│  ../../.agent-tmp/storybook/assets/iframe-Bs_Z2SEU.js
+│  1,131.80 kB │ gzip: 321.94 kB
+
+│  Vite ✓ built in 773ms
+│
+▲  Vite [plugin builtin:vite-reporter]
+│  (!) Some chunks are larger than 500 kB after minification. Consider:
+│  - Using dynamic import() to code-split the application
+│  - Use build.rolldownOptions.output.codeSplitting to improve chunking:
+│  ]8;;https://rolldown.rs/reference/OutputOptions.codeSplittinghttps://rolldown.rs/reference/OutputOptions.codeSplitting]8;;
+│  - Adjust chunk size limit for this warning via
+│  build.chunkSizeWarningLimit.
+│
+◇  Output directory: /workspace/Mizar/.agent-tmp/storybook
+│
+└  Storybook build completed successfully
+
+$ pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook:test
+Scope: 8 of 16 workspace projects
+packages/design-tokens build$ node scripts/tokens.mjs --build
+packages/core build$ tsc -p tsconfig.json --pretty false
+packages/hud-config build$ tsc -p tsconfig.json
+packages/cs2-assets build$ tsc -p tsconfig.json --pretty false
+packages/design-tokens build: Design tokens: 155 validated; CSS synchronized.
+packages/design-tokens build: Done
+packages/protocol build$ tsc -p tsconfig.json
+packages/cs2-assets build: Done
+packages/replay build$ tsc -p tsconfig.json
+packages/core build: Done
+packages/radar build$ tsc -p tsconfig.json
+packages/hud-config build: Done
+packages/protocol build: Done
+packages/replay build: Done
+packages/radar build: Done
+packages/radar-view build$ node scripts/assets.mjs && tsc -p tsconfig.json && node scripts/finish.mjs
+packages/radar-view build: Done
+$ vitest run --config vitest.design.config.ts
+
+ RUN  v5.0.3 /workspace/Mizar/apps/web
+
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  19:33:52
+   Duration  3.54s (tests 63%, worker 22%, setup 9%, import 6%)
+
