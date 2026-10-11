@@ -82,9 +82,9 @@ export class ObsAdapter {
   }
 
   async outputCommand(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
-    if (this.configurationPending)
-      throw new ObsOutputError('obs_output_busy', 'OBS 配置正在处理，请稍后操作。');
     try {
+      if (this.configurationPending)
+        throw new ObsOutputError('obs_output_busy', 'OBS 配置正在处理，请稍后操作。');
       await this.outputs.command(command);
     } catch (error) {
       const config = await this.configStore.read();
