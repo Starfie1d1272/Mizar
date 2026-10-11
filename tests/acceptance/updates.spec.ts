@@ -293,6 +293,33 @@ test('entering and leaving production during download revokes the previous insta
   expect(await commands()).toEqual([]);
 });
 
+test('a download deadline shows its cause and revokes automatic installation', async ({ page }) => {
+  const { status, commands } = await updateFixture(page);
+  await page.goto('/settings?tab=advanced');
+  await page.getByRole('button', { name: '一键更新', exact: true }).click();
+  await expect(page.getByRole('progressbar', { name: '更新下载进度' })).toBeVisible();
+  status.phase = 'error';
+  status.error = 'update_download_timeout';
+  status.failureDetails = [
+    {
+      stage: 'download',
+      stageLabel: '下载安装包',
+      summary: '安装包下载超时，未完成下载。',
+      nextStep: '保留当前版本，重新检查并下载。',
+      operationId: 'expired-download',
+    },
+  ];
+  await expect(page.getByText(/安装包下载超时，未完成下载/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '检查更新', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '正在更新…', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
+  // Even a later ready snapshot cannot resurrect the timed-out click's install intent.
+  status.phase = 'ready';
+  status.error = null;
+  await expect(page.getByRole('button', { name: '一键更新', exact: true })).toBeEnabled();
+  expect(await commands()).toEqual([]);
+});
+
 test('one update click downloads and installs without a dialog, with manual direction recovery and errors', async ({
   page,
 }) => {
