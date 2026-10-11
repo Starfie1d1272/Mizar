@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
+    inputs:
+      release_extraction_benchmark:
+        description: Verify and benchmark the unchanged published v1.3.0 ZIP; never publish
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha || github.ref) }}
@@ -455,6 +460,29 @@ jobs:
           name: offline-evidence-${{ matrix.name }}-${{ github.run_attempt }}
           include-hidden-files: true
           path: .agent-tmp/offline-evidence/**
+          if-no-files-found: error
+
+  release_extraction_benchmark:
+    name: release extraction benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_extraction_benchmark }}
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Benchmark original signed bytes without building or publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/benchmark-extraction.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-extraction-benchmark-${{ github.run_id }}
+          path: .agent-tmp/release-extraction-benchmark/report.json
           if-no-files-found: error
 
   ci-gate:

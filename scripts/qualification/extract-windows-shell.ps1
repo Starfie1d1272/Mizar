@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Archive,
     [Parameter(Mandatory = $true)][string]$Destination,
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [switch]$Native
 )
 $ErrorActionPreference = 'Stop'
 $archivePath = (Resolve-Path -LiteralPath $Archive).Path
@@ -15,6 +16,15 @@ try {
     if ($expected -eq 0) { throw '产品 ZIP 没有文件' }
 } finally {
     $zip.Dispose()
+}
+# Internal verification need not emulate Explorer's asynchronous user extraction.
+# Its subsequent payload checks still verify every original file and checksum.
+if ($Native) {
+    [IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $destinationPath)
+    $actual = @(Get-ChildItem -LiteralPath $destinationPath -Recurse -File).Count
+    if ($actual -ne $expected) { throw "Native extraction differs: $actual / $expected" }
+    Write-Host "Native extraction complete: $actual files."
+    return
 }
 $shell = New-Object -ComObject Shell.Application
 $source = $shell.NameSpace($archivePath)

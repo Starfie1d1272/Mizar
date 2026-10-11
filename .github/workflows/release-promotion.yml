@@ -164,8 +164,7 @@ jobs:
       - name: Verify original ZIP, payload, compiled version and tag
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path extracted | Out-Null
-          Expand-Archive -LiteralPath "product/$env:PRODUCT_ARCHIVE" -DestinationPath extracted
+          & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive "product/$env:PRODUCT_ARCHIVE" -Destination extracted -Native
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
           foreach ($subject in @("product/$env:PRODUCT_ARCHIVE", 'product/release-manifest.json')) {
@@ -177,7 +176,7 @@ jobs:
         run: |
           $core = Get-Content product/core-release-manifest.json -Raw | ConvertFrom-Json
           $extract = Join-Path $env:RUNNER_TEMP 'promotion original Core'
-          Expand-Archive -LiteralPath (Join-Path product $core.archive) -DestinationPath $extract
+          & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive (Join-Path product $core.archive) -Destination $extract -Native
           $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
           if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
           node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA

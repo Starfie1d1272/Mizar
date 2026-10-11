@@ -453,7 +453,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           $extractRoot = Join-Path $env:RUNNER_TEMP 'final candidate'
-          Expand-Archive -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -DestinationPath $extractRoot
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot -Native
           node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $evidenceRoot 'qualified-identity.json')
           if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
@@ -461,7 +461,7 @@ jobs:
           if ($manifest.appVersion -match '^\d+\.\d+\.\d+$') {
             $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
             $coreExtract = Join-Path $env:RUNNER_TEMP 'final Core candidate'
-            Expand-Archive -LiteralPath (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -DestinationPath $coreExtract
+            & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -Destination $coreExtract -Native
             $cores = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
             if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
             node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $cores[0].FullName $env:SOURCE_SHA
