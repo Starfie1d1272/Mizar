@@ -47,7 +47,7 @@ const declaration = {
   expiresAt: '2026-11-09T19:00:00Z',
 };
 describe('发行授权策略', () => {
-  it('bounds concurrent independent verifiers while retaining each exact main policy', async () => {
+  it('waits for each gh process before starting the next exact main policy', async () => {
     let release, started;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -56,27 +56,52 @@ describe('发行授权策略', () => {
       started = resolve;
     });
     const calls = [];
-    const subjects = Array.from({ length: 6 }, (_, index) => ({
-      file: `subject-${index}.json`,
-      sourceSha,
-    }));
-    const task = verifyReleaseAttestations(subjects, async (command, args) => {
+    const subjects = [
+      {
+        file: 'publication.json',
+        sourceSha: promotionSha,
+        bundle: 'publication-proof.json',
+        workflow: 'promotion',
+      },
+      { file: 'archive.zip', sourceSha, bundle: 'archive-proof.json' },
+    ];
+    const task = verifyReleaseAttestations(subjects, async (command, args, options) => {
       calls.push({ command, args });
-      if (calls.length === 4) started();
-      await blocked;
+      expect(options.env.GH_DEBUG).toBe('1');
+      if (calls.length === 1) {
+        started();
+        await blocked;
+      }
     });
     await running;
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(1);
     release();
     await task;
-    expect(calls).toHaveLength(6);
-    for (const [index, call] of calls.entries())
-      expect(call).toEqual({
+    expect(calls).toEqual([
+      {
         command: 'gh',
         args: [
           'attestation',
           'verify',
-          `subject-${index}.json`,
+          'publication.json',
+          '--repo',
+          'Starfie1d1272/Mizar',
+          '--signer-workflow',
+          'Starfie1d1272/Mizar/.github/workflows/release-promotion.yml@refs/heads/main',
+          '--source-ref',
+          'refs/heads/main',
+          '--source-digest',
+          promotionSha,
+          '--bundle',
+          'publication-proof.json',
+        ],
+      },
+      {
+        command: 'gh',
+        args: [
+          'attestation',
+          'verify',
+          'archive.zip',
           '--repo',
           'Starfie1d1272/Mizar',
           '--signer-workflow',
@@ -85,8 +110,11 @@ describe('发行授权策略', () => {
           'refs/heads/main',
           '--source-digest',
           sourceSha,
+          '--bundle',
+          'archive-proof.json',
         ],
-      });
+      },
+    ]);
   });
   it('validates every source before starting verification and rejects an empty batch', async () => {
     let calls = 0;
@@ -105,35 +133,28 @@ describe('发行授权策略', () => {
     await expect(verifyReleaseAttestations([], execute)).rejects.toThrow('缺少');
     expect(calls).toBe(0);
   });
-  it('waits for an active verifier when another subject fails, and preserves the failure', async () => {
-    let release;
-    const blocked = new Promise((resolve) => {
-      release = resolve;
+  it('blocks later subjects on failure and retains sanitized initialization diagnostics', async () => {
+    const calls = [];
+    const failure = Object.assign(new Error('command failed'), {
+      stdout:
+        'Warning: failed to initialize Sigstore Public Good verifier: failed to create TUF client: access denied',
+      stderr:
+        'Authorization: Bearer PRIVATE\nhttps://example.com/root.json?sig=PRIVATEQUERY\npublic good verifier is not available',
     });
-    const failure = new Error('original signature failure');
-    let settled = false;
     const task = verifyReleaseAttestations(
       [
         { file: 'failing', sourceSha },
-        { file: 'active', sourceSha },
+        { file: 'must-not-start', sourceSha },
       ],
       async (_command, args) => {
-        if (args[2] === 'failing') throw failure;
-        await blocked;
+        calls.push(args[2]);
+        throw failure;
       },
     );
-    task.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await new Promise((resolve) => globalThis.setImmediate(resolve));
-    expect(settled).toBe(false);
-    release();
-    await expect(task).rejects.toBe(failure);
+    await expect(task).rejects.toThrow('failed to create TUF client: access denied');
+    await expect(task).rejects.toThrow('public good verifier is not available');
+    await expect(task).rejects.not.toThrow('PRIVATE');
+    expect(calls).toEqual(['failing']);
   });
   it('接受独立资源版本的结构；结构验证本身不签发可信结果', () => {
     expect(parsePublication(declaration, policy)).toBe(declaration);

@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { appendFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { safeLogText } from './product-logs.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
 const MAIN_REF = 'refs/heads/main';
@@ -62,22 +63,34 @@ export function releaseAttestationArgs(file, sourceSha, bundle, workflow = 'qual
   ];
 }
 
-// Independent subjects share the same fixed main identity policy; failure waits for all active verifiers.
+// gh processes share its default TUF cache. Keep verification serial, including
+// resource archive/publication pairs; parallel downloads do not use this owner.
 export async function verifyReleaseAttestations(subjects, execute = promisify(execFile)) {
   if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('缺少待验证原始资产');
   const argumentsBySubject = subjects.map(({ file, sourceSha, bundle, workflow }) =>
     releaseAttestationArgs(file, sourceSha, bundle, workflow),
   );
-  let next = 0;
-  const workers = Array.from({ length: Math.min(4, subjects.length) }, async () => {
-    while (next < argumentsBySubject.length) {
-      const args = argumentsBySubject[next++];
-      await execute('gh', args, { timeout: 60000, maxBuffer: 2 * 1024 * 1024, windowsHide: true });
+  for (const args of argumentsBySubject) {
+    try {
+      await execute('gh', args, {
+        timeout: 60000,
+        maxBuffer: 2 * 1024 * 1024,
+        windowsHide: true,
+        // Verbose includes the otherwise hidden initialization warning. Never
+        // inherit GH_DEBUG=api, which would dump request headers and bodies.
+        env: { ...process.env, GH_DEBUG: '1' },
+      });
+    } catch (error) {
+      const diagnostics = [error.stdout, error.stderr].filter(Boolean).join('\n') || error.message;
+      // eslint-disable-next-line preserve-caught-error -- Raw gh errors retain credentials and signed URLs; preserve only sanitized diagnostics.
+      throw new Error(
+        safeLogText(
+          `gh attestation verification failed (code=${error.code ?? 'unknown'}, signal=${error.signal ?? 'none'}): ${diagnostics}`,
+          [process.env.GH_TOKEN, process.env.GITHUB_TOKEN],
+        ),
+      );
     }
-  });
-  const results = await Promise.allSettled(workers);
-  const failed = results.find((result) => result.status === 'rejected');
-  if (failed) throw failed.reason;
+  }
 }
 
 const readJson = async (path) => JSON.parse(await readFile(path, 'utf8'));
@@ -111,7 +124,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     assertQualificationRun(await readJson(args[0]), manifest.gitSha);
   } else if (mode === 'attestation' && (args.length === 2 || args.length === 4)) {
     if (args.length === 4 && args[2] !== '--bundle') throw new Error('非法证明参数');
-    execFileSync('gh', releaseAttestationArgs(args[0], args[1], args[3]), { stdio: 'inherit' });
+    await verifyReleaseAttestations([{ file: args[0], sourceSha: args[1], bundle: args[3] }]);
   } else if (mode === 'attestations' && args.length >= 2) {
     await verifyReleaseAttestations(args.slice(1).map((file) => ({ file, sourceSha: args[0] })));
   } else
