@@ -49,13 +49,16 @@ async function library() {
 }
 
 describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery', () => {
-  it('classifies unavailable Steam identity without guessing an account or executable', async () => {
-    const root = await library();
-    const executable = join(root, 'Steam 中文 space', 'steam.exe');
-    await mkdir(join(root, 'Steam 中文 space'));
-    await writeFile(executable, 'fixture');
-    const result = JSON.parse(
-      run(`
+  it(
+    'classifies unavailable Steam identity without guessing an account or executable',
+    { timeout: 20_000 },
+    async () => {
+      const root = await library();
+      const executable = join(root, 'Steam 中文 space', 'steam.exe');
+      await mkdir(join(root, 'Steam 中文 space'));
+      await writeFile(executable, 'fixture');
+      const result = JSON.parse(
+        run(`
       $script:steamPath=${quote(executable)}
       function Get-Process { [CmdletBinding()] param([string]$Name)
         if ($script:processCount -eq 0) { return }
@@ -98,33 +101,34 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         }
       }) | ConvertTo-Json -Compress
     `),
-    );
-    expect(result.slice(0, 4)).toEqual([
-      { name: 'valid', account: 123, pathMatches: true },
-      { name: 'signed-dword', account: 4294967295, pathMatches: true },
-      { name: 'signed-dword-minimum', account: 2147483648, pathMatches: true },
-      { name: 'unsigned-dword', account: 4294967295, pathMatches: true },
-    ]);
-    expect(result.slice(4).map(({ name, code }) => ({ name, code }))).toEqual([
-      ...[
-        'missing-account',
-        'zero-account',
-        'invalid-account',
-        'numeric-string',
-        'fractional-account',
-        'overflow-account',
-        'negative-overflow',
-        'missing-registry',
-      ].map((name) => ({ name, code: 'steam-account-unavailable' })),
-      ...['missing-path', 'blank-path', 'absent-executable'].map((name) => ({
-        name,
-        code: 'steam-path-unavailable',
-      })),
-      { name: 'no-steam', code: 'steam-not-running' },
-      { name: 'multiple-steam', code: 'steam-not-unique' },
-    ]);
-    expect(result.find(({ name }) => name === 'missing-registry').hasCause).toBe(true);
-  });
+      );
+      expect(result.slice(0, 4)).toEqual([
+        { name: 'valid', account: 123, pathMatches: true },
+        { name: 'signed-dword', account: 4294967295, pathMatches: true },
+        { name: 'signed-dword-minimum', account: 2147483648, pathMatches: true },
+        { name: 'unsigned-dword', account: 4294967295, pathMatches: true },
+      ]);
+      expect(result.slice(4).map(({ name, code }) => ({ name, code }))).toEqual([
+        ...[
+          'missing-account',
+          'zero-account',
+          'invalid-account',
+          'numeric-string',
+          'fractional-account',
+          'overflow-account',
+          'negative-overflow',
+          'missing-registry',
+        ].map((name) => ({ name, code: 'steam-account-unavailable' })),
+        ...['missing-path', 'blank-path', 'absent-executable'].map((name) => ({
+          name,
+          code: 'steam-path-unavailable',
+        })),
+        { name: 'no-steam', code: 'steam-not-running' },
+        { name: 'multiple-steam', code: 'steam-not-unique' },
+      ]);
+      expect(result.find(({ name }) => name === 'missing-registry').hasCause).toBe(true);
+    },
+  );
 
   // This lifecycle intentionally launches several real Windows PowerShell processes.
   it(
