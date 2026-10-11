@@ -190,3 +190,9 @@ WebSocket 校验 Origin、子协议和消息大小，通道仅服务端向客户
 
 
 Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、无 Origin 和有效 `x-runtime-token`。`prepare` 为处于准备状态、等待画面的本地独立比赛生成 `{ticket, matchId, contextRevision}`，非适用绑定返回空资格；Host 完成游戏收尾并确认全机没有 CS2 后，以 `confirm` 原样回传资格。`invalidate` 在新的托管游戏启动前撤销资格。Companion 同时核对内部制作修订和游戏接收游标，拒绝旧资格、重复确认或变化后的绑定；票据与令牌不进入普通本机视图。资格不持久化，恢复的当前选择需通过 Host 重新确认。普通删除确认仍要求本机 Origin，并在最终持久化提交前重新验证活动引用和退出资格。
+
+### OBS 配置实例归属
+
+桌面主窗口独占 `begin_obs_configuration` / `finish_obs_configuration` 权限。开始配置以随机 UUID 关联 Host 保存的启动 `Child` 句柄；通过进程名发现的既有 OBS 不取得归属，显式 `launch_obs` 将实例交由用户管理。配置结束只消费对应会话，其他配置会话未结束时保留；原句柄退出后不通过 PID 或进程名重新取得归属。返回有限 `reason` 与中文 `message`，诊断记录 `obs_configuration` 阶段和脱敏工具失败原因。
+
+结束配置不会发送 WM_CLOSE、WebSocket 停止输出或终止进程：OBS 标准接口不提供原子的空闲退出，Windows 关闭事件可能延迟且输出确认受运行时设置控制。Host 只读核对制作与输出，区分 `production / output / unconfirmed / safe_quit_unavailable` 并提示手动关闭；`not_owned / configuration_in_use / session_finished` 不触碰进程。页面卸载前尚未完成的启动在完成后结束同一会话；重复结束幂等，不消费新会话。

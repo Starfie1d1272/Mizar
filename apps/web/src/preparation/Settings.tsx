@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
-import { obsCommand, useObsStatus } from '../workspace/obs-client';
+import { beginObsConfiguration, obsCommand, useObsStatus } from '../workspace/obs-client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
@@ -48,14 +48,41 @@ export function Settings({ tab }: { tab: string }) {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const configuration = useRef<ReturnType<typeof beginObsConfiguration> | null>(null);
   useEffect(() => {
     if (tab !== 'obs' || !window.__TAURI_INTERNALS__) return;
     let active = true;
-    void obsCommand('open').catch((error: unknown) => {
-      if (active) setMessage(error instanceof Error ? error.message : 'OBS 程序未能打开。');
-    });
+    let opened = false;
+    const session = beginObsConfiguration();
+    configuration.current = session;
+    void session.ready
+      .then(() => {
+        opened = true;
+      })
+      .catch((error: unknown) => {
+        if (active) setMessage(error instanceof Error ? error.message : 'OBS 程序未能打开。');
+      });
     return () => {
       active = false;
+      const notify = configuration.current === session;
+      if (notify) configuration.current = null;
+      void session
+        .finish()
+        .then((result) => {
+          if (notify && result.message && configuration.current === null)
+            window.dispatchEvent(
+              new CustomEvent('mizar:obs-configuration-finished', { detail: result.message }),
+            );
+        })
+        .catch(() => {
+          if (notify && opened && configuration.current === null)
+            window.dispatchEvent(
+              new CustomEvent('mizar:obs-configuration-finished', {
+                detail:
+                  'OBS 配置已结束，但实例状态未能确认。请在 OBS 中核对推流与录制，再手动关闭。',
+              }),
+            );
+        });
     };
   }, [tab]);
   const [gsi, setGsi] = useState<{
@@ -226,6 +253,22 @@ export function Settings({ tab }: { tab: string }) {
                 : 'OBS 连接与配置'}
             </h2>
             <div className="preparation-actions">
+              {window.__TAURI_INTERNALS__ ? (
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void action(async () => {
+                      const session = configuration.current;
+                      if (!session) return;
+                      const result = await session.finish();
+                      if (configuration.current === session) configuration.current = null;
+                      setMessage(result.message || 'OBS 配置已结束，现有实例已保留。');
+                    })
+                  }
+                >
+                  完成 OBS 配置
+                </Button>
+              ) : null}
               <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
                 {obs?.connection === 'connected'
                   ? '已连接'

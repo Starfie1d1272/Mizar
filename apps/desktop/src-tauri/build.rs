@@ -7,6 +7,8 @@ fn main() {
             "cs2_host_status",
             "select_obs_executable",
             "launch_obs",
+            "begin_obs_configuration",
+            "finish_obs_configuration",
             "cs2_config_status",
             "start_managed_cs2",
             "finish_managed_cs2",

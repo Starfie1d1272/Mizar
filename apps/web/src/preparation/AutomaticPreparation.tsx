@@ -9,6 +9,15 @@ export function AutomaticPreparation() {
   const ensured = useRef<string | null>(null);
   const [gsiMessage, setGsiMessage] = useState('');
   const [obsMessage, setObsMessage] = useState('');
+  const [configurationMessage, setConfigurationMessage] = useState('');
+  useEffect(() => {
+    const finished = (event: Event) => {
+      const message = (event as CustomEvent<unknown>).detail;
+      if (typeof message === 'string') setConfigurationMessage(message);
+    };
+    window.addEventListener('mizar:obs-configuration-finished', finished);
+    return () => window.removeEventListener('mizar:obs-configuration-finished', finished);
+  }, []);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     let active = true;
@@ -40,6 +49,9 @@ export function AutomaticPreparation() {
   }, [obs]);
   return (
     <>
+      {configurationMessage ? (
+        <StatusBanner tone="info">{configurationMessage}</StatusBanner>
+      ) : null}
       {gsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
       {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
         <StatusBanner tone="warning">{obsMessage}</StatusBanner>

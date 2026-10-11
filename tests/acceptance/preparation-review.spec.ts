@@ -17,7 +17,13 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
     Object.assign(window, {
       __TAURI_INTERNALS__: {
         invoke: (command: string) => {
-          if (command === 'launch_obs') return Promise.resolve(false);
+          if (command === 'launch_obs' || command === 'begin_obs_configuration')
+            return Promise.resolve(false);
+          if (command === 'finish_obs_configuration')
+            return Promise.resolve({
+              reason: 'safe_quit_unavailable',
+              message: 'OBS 配置已结束。无法确认安全自动退出，已保留；请在 OBS 中手动关闭。',
+            });
           return Promise.resolve({ busy: false, pending: false, running: false, message: null });
         },
       },
@@ -66,6 +72,12 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   };
   await page.goto('/settings?tab=obs');
   await expect.poll(() => launches).toBe(1);
+  await page.getByRole('button', { name: '完成 OBS 配置', exact: true }).click();
+  await expect(
+    page.getByText('OBS 配置已结束。无法确认安全自动退出，已保留；请在 OBS 中手动关闭。', {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).not.toBeVisible();
   await expect(page.getByText(/请在工作台重新点击要播出的场景/)).toBeVisible();
   const details = page.getByText('节目与捕获诊断', { exact: true });

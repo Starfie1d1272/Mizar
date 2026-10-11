@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  beginObsConfiguration: vi.fn(() => ({
+    ready: Promise.resolve(false),
+    finish: vi.fn().mockResolvedValue({ reason: 'not_owned', message: '' }),
+  })),
   obsCommand:
     vi.fn<
       (
@@ -27,6 +31,7 @@ vi.mock('../src/workspace/obs-client', () => ({
     findings: [],
   }),
   obsCommand: mocks.obsCommand,
+  beginObsConfiguration: mocks.beginObsConfiguration,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.invoke }));
 vi.mock('../src/preparation/client', () => ({ openTool: vi.fn(), useLocalRead: () => null }));

@@ -1,0 +1,9 @@
+{
+  "identifier": "obs-configuration",
+  "description": "Main settings window may track its OBS configuration instance without terminating unrelated processes.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:3000/*"]
+  },
+  "permissions": ["allow-begin-obs-configuration", "allow-finish-obs-configuration"]
+}
