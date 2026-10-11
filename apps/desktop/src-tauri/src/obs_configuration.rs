@@ -14,6 +14,24 @@ struct State {
     configuration_owned: bool,
     sessions: BTreeSet<String>,
 }
+impl State {
+    fn finish_session(&mut self, session: &str) -> &'static str {
+        if !self.sessions.remove(session) {
+            return "session_finished";
+        }
+        if !self.sessions.is_empty() {
+            return "configuration_in_use";
+        }
+        // End ownership before any fallible process/status read. A retained instance
+        // cannot be reacquired by a later configuration visit after an unknown result.
+        if std::mem::replace(&mut self.configuration_owned, false) {
+            "owned"
+        } else {
+            "not_owned"
+        }
+    }
+}
+
 static STATE: Mutex<State> = Mutex::new(State {
     child: None,
     configuration_owned: false,
@@ -76,7 +94,14 @@ pub fn launch(path: &str, session: Option<&str>, log: &DesktopLog) -> Result<boo
         crate::powershell::run(probe, log, "OBS 进程检测", Duration::from_secs(10))?
             .trim()
             .parse::<u32>()
-            .map_err(|_| "无法检查 OBS 进程。")?
+            .map_err(|error| {
+                log.event(
+                    "obs_configuration",
+                    "process_count_parse_failed",
+                    Some(&error.to_string()),
+                );
+                "无法检查 OBS 进程。"
+            })?
             > 0
     };
     if !already_running {
@@ -133,7 +158,10 @@ fn preservation_reason(production: &Value, outputs: &Value) -> &'static str {
         {
             return "output";
         }
-        if output["active"] != false || output["phase"] != "idle" || !output["pending"].is_null() {
+        if output["active"] != false
+            || output["phase"] != "idle"
+            || output.get("pending") != Some(&Value::Null)
+        {
             return "unconfirmed";
         }
     }
@@ -144,6 +172,7 @@ fn preservation_reason(production: &Value, outputs: &Value) -> &'static str {
 
 fn outcome(reason: &str) -> Value {
     let message = match reason {
+        "configuration_in_use" => "仍有 OBS 配置会话未结束，已保留。请在 OBS 中核对后手动关闭。",
         "production" => "OBS 正用于制作，已保留。结束制作后请在 OBS 中手动关闭。",
         "output" => "OBS 输出已启动或正在变化，已保留。停止推流与录制后请在 OBS 中手动关闭。",
         "unconfirmed" => "OBS 状态未能确认，已保留。请在 OBS 中核对推流与录制，再手动关闭。",
@@ -160,29 +189,31 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
         return Err("OBS 配置会话无法识别。".into());
     }
     let mut state = STATE.lock().map_err(|_| "OBS 启动状态不可用。")?;
-    if !state.sessions.remove(session) {
-        return Ok(outcome("session_finished"));
-    }
-    // A newer configuration session may still be using the same exact instance.
-    if !state.sessions.is_empty() {
-        return Ok(outcome("configuration_in_use"));
+    let session_result = state.finish_session(session);
+    if session_result != "owned" {
+        return Ok(outcome(session_result));
     }
     if reap(&mut state, log).is_err() {
         return Ok(outcome("unconfirmed"));
     }
-    if state.child.is_none() || !state.configuration_owned {
+    if state.child.is_none() {
         return Ok(outcome("not_owned"));
     }
-    // Configuration has ended; a later visit must not acquire the retained instance.
-    state.configuration_owned = false;
     let mut probe = crate::background_powershell();
     probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
     let reason =
         match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8)) {
-            Ok(text) => serde_json::from_str::<Value>(&text)
-                .ok()
-                .map(|value| preservation_reason(&value["production"], &value["outputs"]))
-                .unwrap_or("unconfirmed"),
+            Ok(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(value) => preservation_reason(&value["production"], &value["outputs"]),
+                Err(error) => {
+                    log.event(
+                        "obs_configuration",
+                        "status_parse_failed",
+                        Some(&error.to_string()),
+                    );
+                    "unconfirmed"
+                }
+            },
             Err(_) => "unconfirmed",
         };
     log.event("obs_configuration", "preserved", Some(reason));
@@ -194,6 +225,34 @@ mod tests {
     use super::*;
     fn idle() -> Value {
         json!({"stream":{"active":false,"phase":"idle","pending":null},"record":{"active":false,"phase":"idle","pending":null}})
+    }
+    #[test]
+    fn ending_last_session_releases_ownership_before_fallible_reads_and_later_visits() {
+        let mut state = State {
+            child: None,
+            configuration_owned: true,
+            sessions: BTreeSet::from(["first".into()]),
+        };
+        assert_eq!(state.finish_session("first"), "owned");
+        assert!(!state.configuration_owned);
+        // A failed status probe must not leave permission to acquire this retained instance.
+        state.sessions.insert("later".into());
+        assert_eq!(state.finish_session("first"), "session_finished");
+        assert_eq!(state.finish_session("later"), "not_owned");
+    }
+    #[test]
+    fn an_old_session_cannot_end_ownership_while_a_newer_session_is_unfinished() {
+        let mut state = State {
+            child: None,
+            configuration_owned: true,
+            sessions: BTreeSet::from(["old".into(), "new".into()]),
+        };
+        assert_eq!(state.finish_session("old"), "configuration_in_use");
+        assert!(state.configuration_owned);
+        assert_eq!(state.finish_session("old"), "session_finished");
+        assert!(state.configuration_owned);
+        assert_eq!(state.finish_session("new"), "owned");
+        assert!(!state.configuration_owned);
     }
     #[test]
     fn idle_does_not_authorize_racy_close() {
@@ -224,6 +283,12 @@ mod tests {
             assert_eq!(
                 preservation_reason(&json!({"mode":"preparation"}), &outputs),
                 "output"
+            );
+            outputs = idle();
+            outputs[kind].as_object_mut().unwrap().remove("pending");
+            assert_eq!(
+                preservation_reason(&json!({"mode":"preparation"}), &outputs),
+                "unconfirmed"
             );
             outputs[kind] = Value::Null;
             assert_eq!(
