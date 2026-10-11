@@ -66,6 +66,8 @@ export function Settings({ tab }: { tab: string }) {
   const [gsiError, setGsiError] = useState('');
   const [cs2Error, setCs2Error] = useState('');
   const statusRequest = useRef(0);
+  // Installation reads its final status directly; only external notifications trigger another read.
+  const ownConfiguredEvent = useRef<Event | null>(null);
   const product = useLocalRead<{
     product?: { appVersion?: string; gitSha?: string; artifactSha256?: string };
   }>('/health', 60_000);
@@ -116,7 +118,9 @@ export function Settings({ tab }: { tab: string }) {
   useEffect(() => {
     const requests = statusRequest;
     void readStatus();
-    const reload = () => void refreshGsi();
+    const reload = (event: Event) => {
+      if (event !== ownConfiguredEvent.current) void refreshGsi();
+    };
     window.addEventListener('mizar:gsi-configured', reload);
     return () => {
       requests.current++;
@@ -509,18 +513,17 @@ export function Settings({ tab }: { tab: string }) {
                   }
                   onClick={() =>
                     void action(async () => {
-                      try {
-                        await desktopInvoke('configure_gsi', { restore: false, choose: false });
-                        window.dispatchEvent(new Event('mizar:gsi-configured'));
-                        const next = await refreshGsi();
-                        setMessage(
-                          next?.installed && !next.conflict && !next.readFailed
-                            ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
-                            : '已执行安装检查，请处理上方列出的问题后重新检查。',
-                        );
-                      } finally {
-                        await refreshGsi();
-                      }
+                      await desktopInvoke('configure_gsi', { restore: false, choose: false });
+                      const event = new Event('mizar:gsi-configured');
+                      ownConfiguredEvent.current = event;
+                      window.dispatchEvent(event);
+                      ownConfiguredEvent.current = null;
+                      const next = await refreshGsi();
+                      setMessage(
+                        next?.installed && !next.conflict && !next.readFailed
+                          ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
+                          : '已执行安装检查，请处理上方列出的问题后重新检查。',
+                      );
                     })
                   }
                 >

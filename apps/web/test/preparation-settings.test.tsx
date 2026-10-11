@@ -143,6 +143,49 @@ describe('independent desktop status reads', () => {
   function desktop() {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
   }
+  it('reads status once after installation while notifying other listeners and using the final result', async () => {
+    desktop();
+    let installed = false;
+    const notified = vi.fn();
+    window.addEventListener('mizar:gsi-configured', notified);
+    mocks.invoke.mockImplementation((command) => {
+      if (command === 'configure_gsi') installed = true;
+      return Promise.resolve(
+        command === 'gsi_status'
+          ? installed
+            ? configured
+            : missing
+          : command === 'cs2_host_status'
+            ? { found: true, managed: true }
+            : null,
+      );
+    });
+    try {
+      await act(async () => {
+        root!.render(<Settings tab="gsi" />);
+        await Promise.resolve();
+      });
+      mocks.invoke.mockClear();
+      await act(async () => {
+        [...container.querySelectorAll('button')]
+          .find((button) => button.textContent === '一键安装 / 修复 GSI')!
+          .click();
+        await Promise.resolve();
+      });
+      expect(mocks.invoke).toHaveBeenCalledWith('configure_gsi', { restore: false, choose: false });
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'gsi_status')).toHaveLength(
+        1,
+      );
+      expect(
+        mocks.invoke.mock.calls.filter(([command]) => command === 'cs2_host_status'),
+      ).toHaveLength(1);
+      expect(notified).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain('GSI 文件已配置，请重新启动 CS2 以加载配置。');
+      expect(container.textContent).not.toContain('待安装 GSI');
+    } finally {
+      window.removeEventListener('mizar:gsi-configured', notified);
+    }
+  });
   it('shows delayed GSI as checking and keeps successful GSI when CS2 fails, then recovers both independently', async () => {
     desktop();
     let resolveGsi!: (value: typeof configured) => void;
