@@ -1,3 +1,5 @@
+import type { MatchDocumentV1 } from '../../packages/core/src/match-context/index.js';
+import type { SeriesBindingView } from '../../packages/protocol/src/operator.js';
 import { expect, test } from './companion-isolation.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { readFileSync } from 'node:fs';
@@ -406,7 +408,7 @@ function sampleManifest(): BroadcastManifest {
       ),
       'utf8',
     ),
-  );
+  ) as BroadcastManifest;
 }
 
 const stableClock = {
@@ -479,16 +481,18 @@ test('local server confirmation repairs the live lineup without deleting an unli
     await page.getByRole('button', { name: '从当前服务器识别首发', exact: true }).click();
     await page.getByRole('button', { name: '确认保存首发', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: '名单已保存。' })).toBeVisible();
-    const document = (await app.inject('/local/v1/match-document')).json().document;
+    const document = (await app.inject('/local/v1/match-document')).json<{
+      document: MatchDocumentV1;
+    }>().document;
     expect(document.matchId).toBe(seed.matchId);
     expect(
       document.entrants.a.players.find((p: { playerId: string }) => p.playerId === 'unlinked'),
     ).toEqual({ ...legacy, isStarter: false });
-    expect(
-      document.entrants.a.players.find(
-        (p: { steam64: string | null }) => p.steam64 === players[0]!.steam64,
-      ).playerId,
-    ).not.toBe('unlinked');
+    const observedPlayer = document.entrants.a.players.find(
+      (p) => p.steam64 === players[0]!.steam64,
+    );
+    expect(observedPlayer).toBeDefined();
+    expect(observedPlayer!.playerId).not.toBe('unlinked');
     const current = coordinator.getCurrent().operator;
     expect(current.identity.state).toBe('matched');
     expect(
@@ -538,9 +542,9 @@ test('a website-owned local BP overlay keeps its roster read-only and recovers a
     freshness: 'fresh',
     diagnostics: [],
   });
-  const connection = new RivalHubConnection(connectionPath, async () => {
-    if (failing) throw new TypeError('private-recovery-token /personal/path');
-    return Response.json(manifest);
+  const connection = new RivalHubConnection(connectionPath, () => {
+    if (failing) return Promise.reject(new TypeError('private-recovery-token /personal/path'));
+    return Promise.resolve(Response.json(manifest));
   });
   await connection.load();
   const app = buildApp({
@@ -596,7 +600,8 @@ test('a website-owned local BP overlay keeps its roster read-only and recovers a
     expect(coordinator.getCurrent().operator.matchContext.freshness).toBe('fresh');
     expect(coordinator.getCurrent().operator.identity.state).toBe('matched');
     expect(
-      (await app.inject('/local/v1/match-document')).json().document.entrants.a.players,
+      (await app.inject('/local/v1/match-document')).json<{ document: MatchDocumentV1 }>().document
+        .entrants.a.players,
     ).toEqual(toMatchContext(manifest).entrants.a.players);
   } finally {
     await app.close();
@@ -654,7 +659,9 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
     });
     expect(coordinator.getCurrent().operator.identity.state).toBe('matched');
     const before = structuredClone(coordinator.getCurrent().operator.seriesProgress!);
-    const reviewed = (await app.inject('/local/v1/series-binding')).json().binding;
+    const reviewed = (await app.inject('/local/v1/series-binding')).json<{
+      binding: SeriesBindingView;
+    }>().binding;
     expect(before.bindingState).toBe('needs_operator');
     await page.goto('/matches?tab=maps');
     const panel = page.getByRole('region', { name: '确认当前地图所属场次' });
@@ -705,9 +712,10 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
     expect(after.currentMapOrder).toBe(3);
     expect(after.score).toEqual(before.score);
     expect(after.maps[0]).toEqual(before.maps[0]);
-    expect((await app.inject('/local/v1/match-document')).json().document.maps).toEqual(
-      toMatchContext(manifest).maps,
-    );
+    expect(
+      (await app.inject('/local/v1/match-document')).json<{ document: MatchDocumentV1 }>().document
+        .maps,
+    ).toEqual(toMatchContext(manifest).maps);
     await page.goto('/workspace/left');
     await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).not.toContainText(
       '当前图尚未确认',

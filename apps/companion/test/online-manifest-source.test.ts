@@ -1,3 +1,4 @@
+import type { BroadcastManifest } from '@mizar/rivalhub';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -111,13 +112,13 @@ it.each([
         resolve('packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json'),
         'utf8',
       ),
-    );
+    ) as BroadcastManifest;
     const controller = new MatchContextController({
       lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
     });
     const selected = await controller.selectMatch(manifest.match.matchId, {
       kind: 'online',
-      load: async () => manifest,
+      load: () => Promise.resolve(manifest),
     });
     expect(selected.ok).toBe(true);
     const local = await controller.selectLocalMatch(manifest, controller.getActiveRevision());
@@ -128,7 +129,7 @@ it.each([
       urlTemplate: 'https://example.test/{matchId}',
       readToken: 'secret-token',
       retries: 0,
-      fetchImpl: fail as typeof fetch,
+      fetchImpl: fail,
     });
     const failure = await controller.refreshOnlineMatch(source);
     expect(failure.ok).toBe(false);
@@ -154,7 +155,7 @@ it.each([
     );
     const recovered = await controller.refreshOnlineMatch({
       kind: 'online',
-      load: async () => manifest,
+      load: () => Promise.resolve(manifest),
     });
     expect(recovered.ok).toBe(true);
     expect(controller.getActiveBinding()?.freshness).toBe('fresh');
