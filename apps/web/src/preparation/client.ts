@@ -108,6 +108,10 @@ export async function productionAction(
   state: Production,
   preserveSettings = false,
 ) {
+  if (window.__TAURI_INTERNALS__ && action === 'finish') {
+    await desktopInvoke('finish_workspace');
+    return;
+  }
   if (window.__TAURI_INTERNALS__ && action !== 'hide') {
     const response = await fetch('/local/v1/demo-test', {
       cache: 'no-store',
@@ -145,20 +149,7 @@ export async function productionAction(
   try {
     await command('/operator/production', { action, expectedRevision: state.revision });
     if (window.__TAURI_INTERNALS__) {
-      if (action === 'finish') {
-        // Companion has finished. A window failure must not skip game cleanup.
-        let presentationError: unknown;
-        try {
-          await desktopInvoke('present_production', { live: false });
-        } catch (reason) {
-          presentationError = reason;
-        }
-        await desktopInvoke('finish_managed_cs2');
-        if (presentationError)
-          throw presentationError instanceof Error
-            ? presentationError
-            : new Error('准备中心未能打开。', { cause: presentationError });
-      } else await desktopInvoke('present_production', { live: action === 'enter' });
+      await desktopInvoke('present_production', { live: action === 'enter' });
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
   } catch (reason) {
     if (action !== 'enter' || !window.__TAURI_INTERNALS__) throw reason;
