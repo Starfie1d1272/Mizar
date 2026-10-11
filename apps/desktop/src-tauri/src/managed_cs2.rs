@@ -24,6 +24,7 @@ const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/g
 fn powershell(
     body: &str,
     steam: &SteamProcess,
+    expected_account: Option<u32>,
     log: &crate::startup_log::DesktopLog,
 ) -> Result<String, String> {
     steam.validate(log)?;
@@ -57,7 +58,8 @@ $nativeSteam = $env:MIZAR_NATIVE_STEAM | ConvertFrom-Json
     // Paths are data in a private child environment, never PowerShell source.
     command.env(
         "MIZAR_NATIVE_STEAM",
-        json!({"pid": steam.pid, "executable": steam.executable}).to_string(),
+        json!({"pid": steam.pid, "executable": steam.executable, "account": expected_account})
+            .to_string(),
     );
     let output = crate::powershell::run(command, log, "CS2 启动配置检测", Duration::from_secs(15))?;
     steam.validate(log)?;
@@ -77,6 +79,7 @@ impl SteamLaunch {
         let output = powershell(
             "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
             &self.process,
+            Some(self.account),
             log,
         )?;
         let value = crate::powershell::parse(log, "Steam 启动身份复核", &output)?;
@@ -111,7 +114,7 @@ $confirmed = Get-SteamLaunchContext -NativeIdentity $nativeSteam
 if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavailable' }
 @{executable=(Resolve-Path -LiteralPath $exe).Path; video=$videos[0]; account=$account} | ConvertTo-Json -Compress
 "#;
-    let output = powershell(script, &steam, log)?;
+    let output = powershell(script, &steam, None, log)?;
     let value = crate::powershell::parse(log, "CS2 启动配置检测", &output)?;
     let path = |key: &str| {
         value[key]
@@ -819,9 +822,16 @@ impl ManagedCs2 {
             // by name; the durable PID + creation time + executable owns cleanup.
             Ok(true)
         })();
+        self.complete_launch(launch, demo.is_some())
+    }
+    fn complete_launch(
+        &mut self,
+        launch: Result<bool, String>,
+        is_demo: bool,
+    ) -> Result<bool, String> {
         if let Err(error) = &launch {
             self.message = Some(error.clone());
-            if let Err(recovery_error) = if demo.is_none() {
+            if let Err(recovery_error) = if !is_demo {
                 self.recover(false)
             } else {
                 Ok(())
@@ -1028,7 +1038,7 @@ mod tests {
         // Exercise the real Host -> Windows PowerShell 5.1 handoff. Native
         // enumeration and image queries remain real; only module/account data
         // are controlled, without touching the user's registry or launching CS2.
-        let output = powershell(r#"
+        let context_script = r#"
 function Get-Process {
   param([string]$Name)
   $process = [pscustomobject]@{ Id=$nativeSteam.pid }
@@ -1038,13 +1048,74 @@ function Get-Process {
 function Get-ItemProperty { param([string]$LiteralPath) [pscustomobject]@{ ActiveUser=123 } }
 $context = Get-SteamLaunchContext -NativeIdentity $nativeSteam
 @{account=$context.account; pathMatches=($context.executable -ceq $nativeSteam.executable)} | ConvertTo-Json -Compress
-"#, &steam, &log).unwrap();
+"#;
+        let output = powershell(context_script, &steam, Some(123), &log).unwrap();
         let context: Value = serde_json::from_str(output.trim()).unwrap();
         assert_eq!(context, json!({"account":123,"pathMatches":true}));
+        let account_changed = powershell(context_script, &steam, Some(124), &log).unwrap_err();
         let created = steam.created;
         steam.created += 1;
-        assert!(steam.validate(&log).is_err());
+        let process_changed = steam.validate(&log).unwrap_err();
         steam.created = created;
+        let video = root.join("cs2_video.txt");
+        let original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
+        let mut managed = ManagedCs2::new(log.clone());
+        for failure in [&account_changed, &process_changed] {
+            std::fs::write(&video, original).unwrap();
+            managed
+                .store
+                .prepare(
+                    &video,
+                    &root.join("absent/cs2.exe"),
+                    crate::cs2_video::VideoSize::new(1920, 1080).unwrap(),
+                )
+                .unwrap();
+            assert_ne!(std::fs::read(&video).unwrap(), original);
+            assert!(!managed.demo_launch_attempted().unwrap());
+            assert_eq!(
+                managed
+                    .complete_launch(Err(failure.clone()), false)
+                    .unwrap_err(),
+                *failure
+            );
+            assert_eq!(std::fs::read(&video).unwrap(), original);
+            assert!(managed.store.load().unwrap().is_none());
+        }
+        // Preserve mode owns no game writes; failure removes only its journal.
+        managed
+            .store
+            .prepare_preserved(&video, &root.join("absent/cs2.exe"))
+            .unwrap();
+        let changed = b"operator settings changed while preparing";
+        std::fs::write(&video, changed).unwrap();
+        assert!(managed
+            .complete_launch(Err(account_changed.clone()), false)
+            .is_err());
+        assert_eq!(std::fs::read(&video).unwrap(), changed);
+        assert!(managed.store.load().unwrap().is_none());
+        // Demo completion remains with the existing caller: it must cancel the
+        // Companion trial before recovery, and may do so only with no request.
+        std::fs::write(&video, original).unwrap();
+        let mut journal = managed
+            .store
+            .prepare(
+                &video,
+                &root.join("absent/cs2.exe"),
+                crate::cs2_video::VideoSize::new(1920, 1080).unwrap(),
+            )
+            .unwrap();
+        journal["demoTestRequestId"] = json!(crate::demo_test::request_id().unwrap());
+        managed.store.save(&journal).unwrap();
+        assert!(managed.complete_launch(Err(account_changed), true).is_err());
+        assert!(!managed.demo_launch_attempted().unwrap());
+        assert!(managed.has_demo_journal().unwrap());
+        assert!(!crate::cs2_session::unconfirmed_launch(
+            &managed.store.load().unwrap().unwrap()
+        ));
+        // Caller cancellation is tested in the Companion lifecycle owner. Clean
+        // this physical fixture directly without pretending to cancel that RPC.
+        managed.store.restore().unwrap();
+        assert_eq!(std::fs::read(&video).unwrap(), original);
         let path = steam.executable.clone();
         steam.executable = root.join("different/steam.exe");
         assert!(steam.validate(&log).is_err());

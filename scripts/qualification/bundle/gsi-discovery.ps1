@@ -79,6 +79,9 @@ function Get-SteamLaunchContext {
         }
         if ($accountValue -lt 0) { $accountValue = [long]$accountValue + 4294967296 }
         $account = [uint32]$accountValue
+        if ($null -ne $NativeIdentity -and $null -ne $NativeIdentity.account -and $NativeIdentity.account -ne $account) {
+            Stop-Cs2Discovery 'steam-account-unavailable'
+        }
     } catch { Stop-Cs2Discovery 'steam-account-unavailable' -Cause $_.Exception }
     return @{ executable = $steamExe; account = $account }
 }
