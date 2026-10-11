@@ -5,9 +5,13 @@ import { ObsConfigStore } from '../src/obs/config.js';
 import { obsReadiness } from '../src/program-scenes/readiness.js';
 import { obsSceneName } from '../src/obs/desired-state.js';
 
-const rpc = vi.hoisted(() => ({ unavailable: false, failCheck: false }));
+const rpc = vi.hoisted(() => ({ unavailable: false, failCheck: false, unknownOutputs: false }));
 vi.mock('obs-websocket-js', () => ({
+  EventSubscription: { Outputs: 64 },
   OBSWebSocket: class {
+    on() {
+      return this;
+    }
     connect() {
       return rpc.unavailable ? Promise.reject(new Error('offline')) : Promise.resolve();
     }
@@ -15,6 +19,8 @@ vi.mock('obs-websocket-js', () => ({
       return Promise.resolve();
     }
     call(type: string) {
+      if (rpc.unknownOutputs && (type === 'GetStreamStatus' || type === 'GetRecordStatus'))
+        return Promise.resolve({});
       if (type === 'GetSceneCollectionList') {
         if (rpc.failCheck) return Promise.reject(new Error('check failed'));
         return Promise.resolve({ sceneCollections: [] });
@@ -45,6 +51,18 @@ const connected: ObsStatus = {
   video: null,
   findings: [],
 };
+it('does not project unknown output state as a trusted stopped OBS', async () => {
+  const adapter = new ObsAdapter(new ObsConfigStore('/unused/obs.json'), 'http://127.0.0.1:3000');
+  rpc.unknownOutputs = true;
+  try {
+    const status = await adapter.status();
+    expect(status.connection).toBe('unavailable');
+    expect(obsReadiness(status, 'waiting').ready).toBe(false);
+  } finally {
+    rpc.unknownOutputs = false;
+    await adapter.close();
+  }
+});
 it('requires connected OBS, aligned scene and no configuration findings', () => {
   expect(obsReadiness(connected, 'waiting').ready).toBe(true);
   expect(

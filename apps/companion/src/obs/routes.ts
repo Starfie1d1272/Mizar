@@ -1,3 +1,5 @@
+import { obsOutputCommandSchema } from '@mizar/protocol/obs';
+import { ObsOutputError } from './outputs.js';
 import type { FastifyInstance } from 'fastify';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -17,6 +19,25 @@ export function registerObsRoutes(
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
+  app.get('/local/v1/obs/outputs', async (_request, reply) =>
+    reply.header('cache-control', 'no-store').send(await options.adapter.outputStatus()),
+  );
+  app.post('/operator/obs/output', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = obsOutputCommandSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'obs_output_invalid', message: 'OBS 操作格式有误。' });
+    try {
+      return { ok: true, outputs: await options.adapter.outputCommand(parsed.data) };
+    } catch (error) {
+      if (error instanceof ObsOutputError)
+        return reply.code(409).send({ error: error.code, message: error.message });
+      return reply
+        .code(409)
+        .send({ error: 'obs_output_failed', message: 'OBS 操作未完成，请重新核对状态。' });
+    }
+  });
   app.get('/local/v1/obs/confidence', async (_request, reply) =>
     reply
       .header('cache-control', 'no-store')
@@ -45,9 +66,11 @@ export function registerObsRoutes(
         port: value?.port === undefined ? old.port : value.port,
         password: value?.password === undefined ? old.password : value.password,
       });
-      await options.configStore.save(config);
+      await options.adapter.configure(config);
       return { ok: true, passwordConfigured: Boolean(config.password) };
-    } catch {
+    } catch (error) {
+      if (error instanceof ObsOutputError)
+        return reply.code(409).send({ error: error.code, message: error.message });
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
@@ -81,6 +104,8 @@ export function registerObsRoutes(
           return { ok: true, executablePath: await options.adapter.launchTarget() };
         }
       } catch (error: unknown) {
+        if (error instanceof ObsOutputError)
+          return reply.code(409).send({ error: error.code, message: error.message });
         const password = (await options.configStore.read().catch(() => undefined))?.password;
         request.log.error(
           {

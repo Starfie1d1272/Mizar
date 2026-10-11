@@ -1,3 +1,4 @@
+import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { OperatorPayload } from '@mizar/protocol/operator';
@@ -322,27 +323,23 @@ export function WorkspaceDock() {
       </section>
       <section className="workspace-production" aria-label="制作工具">
         <div className="workspace-section-heading">
-          <small>制作工具</small>
           <span data-tone={connected ? 'success' : 'warning'}>
             {connected
-              ? `OBS · ${obs.streaming ? '推流中' : '已连接'}`
+              ? 'OBS · 已连接'
               : obs?.connection === 'invalid_password'
                 ? 'OBS · 密码无效'
                 : obs?.connection === 'password_required'
                   ? 'OBS · 需要密码'
                   : 'OBS · 未连接'}
           </span>
+          <Button
+            disabled={busy}
+            onClick={() => void action(() => openPreparation('/settings?tab=obs'))}
+          >
+            OBS 配置
+          </Button>
         </div>
-        <Button
-          disabled={busy}
-          onClick={() => void action(() => openPreparation('/settings?tab=obs'))}
-        >
-          OBS 配置
-        </Button>
-        <p className="workspace-obs-live">
-          推流 · {connected ? (obs.streaming ? '进行中' : '未启动') : '无法确认'} · 录制 ·{' '}
-          {connected ? (obs.recording ? '进行中' : '未启动') : '无法确认'}
-        </p>
+        <ObsOutputControls onError={setErrorMessage} />
         <div className="workspace-tools">
           <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
             HUD 编辑器
