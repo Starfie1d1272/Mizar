@@ -57,7 +57,7 @@ Invoke-PackagingPhase 'download-and-verify-original-candidate' {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive.FullName).Hash.ToLowerInvariant() -ne $manifest.archiveSha256) { throw 'Original archive differs' }
     $report.originals += [ordered]@{ mode = $mode; archive = $manifest.archive; bytes = $archive.Length; sha256 = $manifest.archiveSha256; contentDigest = $manifest.contentDigest }
     $extract = Join-Path $root "input-$mode"
-    & (Join-Path $source 'scripts/qualification/extract-windows-shell.ps1') -Archive $archive.FullName -Destination $extract -Native
+    & (Join-Path $source 'scripts/qualification/extract-windows-shell.ps1') -Archive $archive.FullName -Destination $extract
     if ($LASTEXITCODE) { throw 'Candidate extraction failed' }
     $payload = @(Get-ChildItem -LiteralPath $extract -Directory)
     if ($payload.Count -ne 1) { throw 'Ambiguous candidate root' }
