@@ -6,7 +6,7 @@ import { StatusBanner } from '../ui';
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
 export function AutomaticPreparation() {
   const obs = useObsStatus();
-  const ensured = useRef(false);
+  const ensured = useRef<string | null>(null);
   const [gsiMessage, setGsiMessage] = useState('');
   const [obsMessage, setObsMessage] = useState('');
   const [obsLaunchMessage, setObsLaunchMessage] = useState('');
@@ -42,11 +42,12 @@ export function AutomaticPreparation() {
   }, []);
   useEffect(() => {
     if (obs === null || obs.connection !== 'connected') {
-      ensured.current = false;
+      ensured.current = null;
       return;
     }
-    if (ensured.current || obs.streaming || obs.recording) return;
-    ensured.current = true;
+    const signature = JSON.stringify([obs.video, obs.findings]);
+    if (ensured.current === signature || obs.streaming || obs.recording) return;
+    ensured.current = signature;
     void obsCommand('ensure')
       .then(() => setObsMessage(''))
       .catch(() => setObsMessage('Mizar 场景自动配置未完成，请在 OBS 设置中查看诊断并修复。'));

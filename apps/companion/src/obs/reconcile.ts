@@ -291,14 +291,28 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   return findings;
 }
 
-export async function repairObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
+export async function repairObsConfiguration(
+  obs: ObsRpc,
+  baseUrl: string,
+  options: { readonly allowCollectionChange?: boolean } = {},
+): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const before = await checkObsConfiguration(obs, baseUrl);
+  if (
+    options.allowCollectionChange === false &&
+    before.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
+  )
+    return before;
   if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
     return before;
   if (await outputActive(obs)) throw new Error('OBS 正在输出；结束输出后可修复制播配置。');
   const collections = await obs.call('GetSceneCollectionList');
   const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
+  if (
+    options.allowCollectionChange === false &&
+    (!exists || collections.currentSceneCollectionName !== OBS_COLLECTION)
+  )
+    throw new Error('OBS 场景集合已改变，请在 OBS 中选择 Mizar 后重新检查。');
   if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
   else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
@@ -493,18 +507,16 @@ function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obs
   return scene.sceneName;
 }
 
-/** Only the first preparation may reconcile; reconnects preserve operator changes. */
-export async function ensureObsConfiguration(
-  obs: ObsRpc,
-  baseUrl: string,
-  firstPreparation: boolean,
-): Promise<ObsFinding[]> {
+/** Restore owned scenes only in the active Mizar collection; never take over another collection. */
+export async function ensureObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
   const findings = await checkObsConfiguration(obs, baseUrl);
-  if (!firstPreparation || findings.some((finding) => finding.code === 'source_kind_conflict'))
+  if (
+    findings.some((finding) =>
+      ['collection_missing', 'collection_inactive', 'source_kind_conflict'].includes(finding.code),
+    )
+  )
     return findings;
   const repairable = new Set([
-    'collection_missing',
-    'collection_inactive',
     'scene_missing',
     'source_missing',
     'url_drift',
@@ -514,6 +526,6 @@ export async function ensureObsConfiguration(
     'source_disabled',
   ]);
   return findings.some((finding) => repairable.has(finding.code))
-    ? repairObsConfiguration(obs, baseUrl)
+    ? repairObsConfiguration(obs, baseUrl, { allowCollectionChange: false })
     : findings;
 }

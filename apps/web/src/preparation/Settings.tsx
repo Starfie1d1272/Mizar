@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { obsCommand, useObsStatus } from '../workspace/obs-client';
@@ -9,8 +9,35 @@ import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { ResourceSettings } from './ResourceSettings';
 
+type ReadPhase = 'unknown' | 'checking' | 'ready' | 'failed';
+
+// Native diagnostics retain details. Show only the known tool phase here, never raw IPC errors.
+function statusReadReason(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  const phase = message.match(/失败（(启动工具|读取输出|等待工具|解析输出编码|解析结果)）/)?.[1];
+  if (phase) return `检测工具失败（${phase}）。`;
+  return error instanceof Error && error.name === 'TimeoutError'
+    ? '桌面检测请求超时。'
+    : '桌面检测请求失败。';
+}
+
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
+  const sceneRepairNeeded = obs?.findings.some((item) =>
+    [
+      'collection_missing',
+      'scene_missing',
+      'source_missing',
+      'url_drift',
+      'capture_drift',
+      'transform_drift',
+      'order_drift',
+      'source_disabled',
+    ].includes(item.code),
+  );
+  const sceneRepairBlocked = obs?.findings.some((item) =>
+    ['collection_inactive', 'source_kind_conflict'].includes(item.code),
+  );
   const [portOverride, setPortOverride] = useState<number | null>(null);
   const port = portOverride ?? obs?.port ?? 4455;
   const [password, setPassword] = useState('');
@@ -30,40 +57,76 @@ export function Settings({ tab }: { tab: string }) {
     lastOperation: { code: string; stage: string } | null;
   } | null>(null);
   const [cs2, setCs2] = useState<{ found: boolean; managed: boolean } | null>(null);
+  const [gsiPhase, setGsiPhase] = useState<ReadPhase>(
+    window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
+  );
+  const [cs2Phase, setCs2Phase] = useState<ReadPhase>(
+    window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
+  );
+  const [gsiError, setGsiError] = useState('');
+  const [cs2Error, setCs2Error] = useState('');
+  const statusRequest = useRef(0);
+  // Installation reads its final status directly; only external notifications trigger another read.
+  const ownConfiguredEvent = useRef<Event | null>(null);
   const product = useLocalRead<{
     product?: { appVersion?: string; gitSha?: string; artifactSha256?: string };
   }>('/health', 60_000);
-  const refreshGsi = async () => {
-    if (window.__TAURI_INTERNALS__) {
-      setGsi(await desktopInvoke('gsi_status'));
-      setCs2(await desktopInvoke('cs2_host_status'));
-    }
-  };
+  const readStatus = useCallback(async () => {
+    if (!window.__TAURI_INTERNALS__) return null;
+    const request = ++statusRequest.current;
+    const [nextGsi] = await Promise.all([
+      desktopInvoke<NonNullable<typeof gsi>>('gsi_status')
+        .then((next) => {
+          if (!next || typeof next.installed !== 'boolean') throw new Error('Invalid GSI status');
+          if (request !== statusRequest.current) return null;
+          setGsi(next);
+          setGsiPhase('ready');
+          return next;
+        })
+        .catch((error: unknown) => {
+          if (request === statusRequest.current) {
+            setGsiPhase('failed');
+            setGsiError(statusReadReason(error));
+          }
+          return null;
+        }),
+      desktopInvoke<NonNullable<typeof cs2>>('cs2_host_status')
+        .then((next) => {
+          if (!next || typeof next.found !== 'boolean') throw new Error('Invalid CS2 status');
+          if (request !== statusRequest.current) return;
+          setCs2(next);
+          setCs2Phase('ready');
+        })
+        .catch((error: unknown) => {
+          if (request === statusRequest.current) {
+            setCs2Phase('failed');
+            setCs2Error(statusReadReason(error));
+          }
+        }),
+    ]);
+    return request === statusRequest.current ? nextGsi : null;
+  }, []);
+  const refreshGsi = useCallback(() => {
+    setGsiPhase('checking');
+    setCs2Phase('checking');
+    setGsiError('');
+    setCs2Error('');
+    setGsi(null);
+    setCs2(null);
+    return readStatus();
+  }, [readStatus]);
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!window.__TAURI_INTERNALS__) return;
-      try {
-        const [nextGsi, nextCs2] = await Promise.all([
-          desktopInvoke<NonNullable<typeof gsi>>('gsi_status'),
-          desktopInvoke<NonNullable<typeof cs2>>('cs2_host_status'),
-        ]);
-        if (active) {
-          setGsi(nextGsi);
-          setCs2(nextCs2);
-        }
-      } catch {
-        if (active) setMessage('无法读取 CS2 安装状态，请重新检测。');
-      }
-    }
-    void load();
-    const reload = () => void load();
+    const requests = statusRequest;
+    void readStatus();
+    const reload = (event: Event) => {
+      if (event !== ownConfiguredEvent.current) void refreshGsi();
+    };
     window.addEventListener('mizar:gsi-configured', reload);
     return () => {
+      requests.current++;
       window.removeEventListener('mizar:gsi-configured', reload);
-      active = false;
     };
-  }, []);
+  }, [readStatus, refreshGsi]);
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
@@ -77,6 +140,22 @@ export function Settings({ tab }: { tab: string }) {
       setBusy(false);
     }
   }
+  const obsPathControl = window.__TAURI_INTERNALS__ ? (
+    <details>
+      <summary>OBS 路径</summary>
+      <Button
+        disabled={busy}
+        onClick={() =>
+          void action(async () => {
+            const path = await desktopInvoke<string | null>('select_obs_executable');
+            if (path) await obsCommand('configure', { executablePath: path });
+          })
+        }
+      >
+        更改 OBS 路径
+      </Button>
+    </details>
+  ) : null;
   return (
     <>
       {tab === 'rivalhub' ? (
@@ -131,15 +210,22 @@ export function Settings({ tab }: { tab: string }) {
                 ? '启动游戏前，连接并检查 OBS'
                 : 'OBS 连接与配置'}
             </h2>
-            <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
-              {obs?.connection === 'connected'
-                ? '已连接'
-                : obs?.connection === 'invalid_password'
-                  ? '密码无效'
-                  : obs?.connection === 'password_required'
-                    ? '需要密码'
-                    : '未连接'}
-            </StatusPill>
+            <div className="preparation-actions">
+              <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
+                {obs?.connection === 'connected'
+                  ? '已连接'
+                  : obs?.connection === 'invalid_password'
+                    ? '密码无效'
+                    : obs?.connection === 'password_required'
+                      ? '需要密码'
+                      : '未连接'}
+              </StatusPill>
+              {obs?.connection === 'connected' ? (
+                <Button disabled={busy} onClick={() => void action(() => obsCommand('open'))}>
+                  打开 OBS
+                </Button>
+              ) : null}
+            </div>
           </header>
           {obs && obs.connection !== 'connected' ? (
             <StatusBanner tone="warning">
@@ -152,34 +238,21 @@ export function Settings({ tab }: { tab: string }) {
                     : 'OBS 连接状态和具体原因尚未确认。请检查 WebSocket 设置并查看诊断；连接成功后再检查场景。'}
             </StatusBanner>
           ) : null}
-          <div className="obs-setup__cards">
-            <Panel>
-              <h3>打开 OBS</h3>
-              <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() => void action(() => obsCommand('open'))}
-              >
-                打开 OBS
-              </Button>
-              {window.__TAURI_INTERNALS__ ? (
-                <details>
-                  <summary>OBS 路径</summary>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const path = await desktopInvoke<string | null>('select_obs_executable');
-                        if (path) await obsCommand('configure', { executablePath: path });
-                      })
-                    }
-                  >
-                    更改 OBS 路径
-                  </Button>
-                </details>
-              ) : null}
-            </Panel>
+          <div className="obs-setup__cards" data-connected={obs?.connection === 'connected'}>
+            {obs?.connection !== 'connected' ? (
+              <Panel>
+                <h3>打开 OBS</h3>
+                <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => void action(() => obsCommand('open'))}
+                >
+                  打开 OBS
+                </Button>
+                {obsPathControl}
+              </Panel>
+            ) : null}
             <details open={obs?.connection !== 'connected'}>
               <summary>WebSocket 连接设置</summary>
               <Panel>
@@ -240,10 +313,11 @@ export function Settings({ tab }: { tab: string }) {
                     </Button>
                   </details>
                 ) : null}
+                {obs?.connection === 'connected' ? obsPathControl : null}
               </Panel>
             </details>
-            <Panel>
-              <h3>检查画面</h3>
+            <Panel role="region" aria-labelledby="obs-configuration-title">
+              <h3 id="obs-configuration-title">检查画面</h3>
               <div className="obs-setup__signals">
                 <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
                 <span>
@@ -263,22 +337,53 @@ export function Settings({ tab }: { tab: string }) {
                       : '未启动'}
                 </span>
               </div>
-              <Button
-                disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
-                onClick={() =>
-                  void action(async () => {
-                    const result = (await obsCommand('repair')) as {
-                      findings: { message: string }[];
-                    };
-                    setMessage(
-                      result.findings.map((item) => item.message).join('；') ||
-                        'Mizar 场景已修复，配置检查通过。',
-                    );
-                  })
-                }
-              >
-                修复 Mizar 场景
-              </Button>
+              {obs?.connection === 'connected' ? (
+                <>
+                  <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
+                    {obs.streaming || obs.recording
+                      ? 'OBS 正在输出。停止推流与录制后再处理配置。'
+                      : obs.findings.some((item) => item.code === 'collection_inactive')
+                        ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
+                        : obs.findings.some((item) => item.code === 'source_kind_conflict')
+                          ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
+                          : sceneRepairNeeded
+                            ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
+                            : obs.findings.some((item) => item.code === 'video_settings')
+                              ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
+                              : obs.findings.some((item) => item.code === 'transition_missing')
+                                ? '请在 OBS「场景转场」中添加淡化和直接切换。'
+                                : obs.findings.length
+                                  ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                  : 'Mizar 配置检查通过，请核对实际音画。'}
+                  </StatusBanner>
+                  {sceneRepairNeeded && !sceneRepairBlocked ? (
+                    <Button
+                      variant="primary"
+                      loading={busy}
+                      disabled={busy || obs.streaming || obs.recording}
+                      onClick={() =>
+                        void action(async () => {
+                          await obsCommand('repair');
+                          await obsCommand('check');
+                          setMessage('修复已执行，已重新检查；剩余步骤见当前提示。');
+                        })
+                      }
+                    >
+                      {obs.findings.some((item) => item.code === 'collection_missing')
+                        ? '创建并启用 Mizar 场景集合'
+                        : '一键修复 Mizar 场景'}
+                    </Button>
+                  ) : null}
+                  {obs.findings.length ? (
+                    <details className="obs-setup__help">
+                      <summary>技术详情 · {obs.findings.length} 项</summary>
+                      {obs.findings.map((finding, index) => (
+                        <p key={`${finding.code}-${index}`}>{finding.message}</p>
+                      ))}
+                    </details>
+                  ) : null}
+                </>
+              ) : null}
               <p>
                 修复前停止推流与录制。检查通过后，在 OBS
                 中核对游戏画面、音频电平和直播输出音轨，并录制试听。
@@ -307,13 +412,6 @@ export function Settings({ tab }: { tab: string }) {
               ) : null}
             </Panel>
           </div>
-          {obs?.connection === 'connected'
-            ? obs.findings.map((finding) => (
-                <StatusBanner key={finding.code} tone="warning">
-                  {finding.message}
-                </StatusBanner>
-              ))
-            : null}
           <details className="obs-setup__help">
             <summary>游戏捕获说明</summary>
             <p>
@@ -333,16 +431,24 @@ export function Settings({ tab }: { tab: string }) {
               <h2>游戏连接</h2>
               <StatusPill
                 tone={
-                  gsi?.readFailed || gsi?.conflict ? 'warning' : gsi?.installed ? 'success' : 'info'
+                  gsiPhase === 'failed' || gsi?.readFailed || gsi?.conflict
+                    ? 'warning'
+                    : gsiPhase === 'ready' && gsi?.installed
+                      ? 'success'
+                      : 'info'
                 }
               >
-                {gsi?.readFailed
-                  ? '无法检查'
-                  : gsi?.conflict
-                    ? '需检查'
-                    : gsi?.installed
-                      ? 'GSI 文件已配置'
-                      : '待安装 GSI'}
+                {gsiPhase === 'unknown'
+                  ? '尚未检测 GSI'
+                  : gsiPhase === 'checking'
+                    ? '正在检测 GSI'
+                    : gsiPhase === 'failed' || gsi?.readFailed
+                      ? '无法检查 GSI'
+                      : gsi?.conflict
+                        ? '需检查'
+                        : gsi?.installed
+                          ? 'GSI 文件已配置'
+                          : '待安装 GSI'}
               </StatusPill>
             </div>
             <p>
@@ -350,12 +456,30 @@ export function Settings({ tab }: { tab: string }) {
               时加载；若游戏已运行，请重启。收到实际数据后，总览会更新游戏数据状态。
             </p>
             <p>
-              {cs2?.found
-                ? cs2.managed
-                  ? 'CS2 窗口已就绪'
-                  : '已检测到 CS2，打开工作台后安排窗口'
-                : '等待 CS2 窗口'}
+              {cs2Phase === 'unknown'
+                ? 'CS2 窗口状态待确认'
+                : cs2Phase === 'checking'
+                  ? '正在检测 CS2 窗口'
+                  : cs2Phase === 'failed'
+                    ? '无法读取 CS2 窗口状态'
+                    : cs2?.found
+                      ? cs2.managed
+                        ? 'CS2 窗口已就绪'
+                        : '已检测到 CS2，打开工作台后安排窗口'
+                      : '等待 CS2 窗口'}
             </p>
+            {gsiError ? (
+              <StatusBanner tone="warning">
+                GSI 读取失败：{gsiError} 点击「重新检查 CS2 与
+                GSI」重查；详细原因见高级设置中的诊断与支持。
+              </StatusBanner>
+            ) : null}
+            {cs2Error ? (
+              <StatusBanner tone="warning">
+                CS2 窗口读取失败：{cs2Error} 点击「重新检查 CS2 与
+                GSI」重查；详细原因见高级设置中的诊断与支持。
+              </StatusBanner>
+            ) : null}
             {gsi?.issues?.map((issue) => (
               <StatusBanner key={issue.code} tone={gsi.readFailed ? 'danger' : 'warning'}>
                 {issue.message}
@@ -380,27 +504,37 @@ export function Settings({ tab }: { tab: string }) {
               <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
             ) : (
               <div className="preparation-actions">
-                <Button disabled={busy} onClick={() => void action(refreshGsi)}>
+                <Button
+                  variant={
+                    gsiPhase !== 'ready' || gsi?.readFailed || cs2Phase === 'failed'
+                      ? 'primary'
+                      : 'secondary'
+                  }
+                  disabled={busy}
+                  onClick={() => void action(refreshGsi)}
+                >
                   重新检查 CS2 与 GSI
                 </Button>
                 <Button
                   disabled={busy}
-                  variant={gsi?.installed ? 'secondary' : 'primary'}
+                  variant={
+                    gsiPhase === 'ready' && !gsi?.readFailed && (!gsi?.installed || gsi?.conflict)
+                      ? 'primary'
+                      : 'secondary'
+                  }
                   onClick={() =>
                     void action(async () => {
-                      try {
-                        await desktopInvoke('configure_gsi', { restore: false, choose: false });
-                        window.dispatchEvent(new Event('mizar:gsi-configured'));
-                        const next = await desktopInvoke<NonNullable<typeof gsi>>('gsi_status');
-                        setGsi(next);
-                        setMessage(
-                          next.installed && !next.conflict && !next.readFailed
-                            ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
-                            : '已执行安装检查，请处理上方列出的问题后重新检查。',
-                        );
-                      } finally {
-                        await refreshGsi();
-                      }
+                      await desktopInvoke('configure_gsi', { restore: false, choose: false });
+                      const event = new Event('mizar:gsi-configured');
+                      ownConfiguredEvent.current = event;
+                      window.dispatchEvent(event);
+                      ownConfiguredEvent.current = null;
+                      const next = await refreshGsi();
+                      setMessage(
+                        next?.installed && !next.conflict && !next.readFailed
+                          ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
+                          : '已执行安装检查，请处理上方列出的问题后重新检查。',
+                      );
                     })
                   }
                 >
@@ -468,7 +602,12 @@ export function Settings({ tab }: { tab: string }) {
                 支持选择 CS2 安装根目录、game\bin\win64 文件夹或
                 cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；受管理游戏退出并恢复设置后才能更换。
               </p>
-              <p className="settings-conflict-files">{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
+              <p className="settings-conflict-files">
+                {gsi?.cfgPath ??
+                  (gsiPhase === 'ready' && !gsi?.readFailed
+                    ? '尚未发现配置目录'
+                    : '配置目录待确认')}
+              </p>
               {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
             </details>
           </Panel>

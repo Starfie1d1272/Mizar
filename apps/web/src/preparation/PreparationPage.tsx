@@ -206,7 +206,7 @@ export function PreparationPage() {
             </h1>
           </div>
           <Button
-            variant="primary"
+            variant={match ? 'primary' : 'secondary'}
             disabled={busy || !production?.canEnter}
             onClick={() => production && void action(() => productionAction('enter', production))}
           >
@@ -242,10 +242,25 @@ export function PreparationPage() {
                   <div className="preparation-task-header">
                     <div>
                       <h2>选择比赛</h2>
-                      <p>选择已有比赛，或新建本地比赛。</p>
+                      <p>先选择已有比赛，或创建本地比赛；只检查画面可用 Demo 试播。</p>
                     </div>
                   </div>
                   <div className="preparation-actions">
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        window.location.href = '/matches?select=1';
+                      }}
+                    >
+                      选择已有比赛
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        window.location.href = '/?demoTest=1#demo-test';
+                      }}
+                    >
+                      创建 Demo 测试比赛
+                    </Button>
                     {rivalhub?.paired ? (
                       <Button
                         variant="secondary"
@@ -267,12 +282,12 @@ export function PreparationPage() {
                     )}
                     <CurrentServerMatchEntry />
                     <Button
-                      variant="primary"
+                      variant="secondary"
                       onClick={() => {
                         window.location.href = '/matches?createLocal=1#local-match';
                       }}
                     >
-                      新建本地比赛
+                      创建本地比赛
                     </Button>
                   </div>
                   {hasSampleCapability ? (

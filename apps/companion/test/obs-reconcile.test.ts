@@ -390,20 +390,50 @@ it('adopts an already on-air target without waiting for a transition event that 
   expect(obs.listeners.size).toBe(0);
 });
 
-it('prepares without a running game, performs no repeated writes, and preserves edits on reconnect', async () => {
+it('automatically restores active owned scenes repeatedly without taking over user collections', async () => {
   const obs = new FakeObs();
-  expect(await ensureObsConfiguration(obs, baseUrl, true)).toEqual([]);
+  expect((await ensureObsConfiguration(obs, baseUrl))[0]?.code).toBe('collection_missing');
+  expect(obs.collection).toBe('User Collection');
+  expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+  await repairObsConfiguration(obs, baseUrl);
   obs.calls = [];
-  expect(await ensureObsConfiguration(obs, baseUrl, true)).toEqual([]);
+  expect(await ensureObsConfiguration(obs, baseUrl)).toEqual([]);
   expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
   const scene = obsDesiredScenes(baseUrl)[0]!;
-  obs.inputs.get(scene.browserInput)!.settings.url = 'https://operator.example';
+  obs.inputs.get(scene.browserInput)!.settings.url = 'https://old-mizar.example';
+  obs.outputActive = true;
+  obs.calls = [];
+  await expect(ensureObsConfiguration(obs, baseUrl)).rejects.toThrow('OBS 正在输出');
+  expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+  obs.outputActive = false;
+  expect(await ensureObsConfiguration(obs, baseUrl)).toEqual([]);
+  expect(obs.inputs.get(scene.browserInput)!.settings.url).toBe(scene.browserUrl);
+  obs.inputs.get(scene.browserInput)!.kind = 'image_source';
   obs.calls = [];
   expect(
-    (await ensureObsConfiguration(obs, baseUrl, false)).some(
-      (finding) => finding.code === 'url_drift',
+    (await ensureObsConfiguration(obs, baseUrl)).some(
+      (finding) => finding.code === 'source_kind_conflict',
     ),
   ).toBe(true);
-  expect(obs.inputs.get(scene.browserInput)!.settings.url).toBe('https://operator.example');
   expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+  obs.collection = 'User Collection';
+  obs.calls = [];
+  expect((await ensureObsConfiguration(obs, baseUrl))[0]?.code).toBe('collection_inactive');
+  expect(obs.calls.filter((call) => /^(Set|Create|Remove)/.test(call))).toEqual([]);
+});
+
+it('does not take over a collection changed between automatic detection and repair', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.inputs.get(obsDesiredScenes(baseUrl)[0]!.browserInput)!.settings.url = 'https://old.example';
+  const call = obs.call.bind(obs);
+  let collectionReads = 0;
+  vi.spyOn(obs, 'call').mockImplementation((type, data) => {
+    if (type === 'GetSceneCollectionList' && ++collectionReads === 2)
+      obs.collection = 'User Collection';
+    return call(type, data);
+  });
+  obs.calls = [];
+  expect((await ensureObsConfiguration(obs, baseUrl))[0]?.code).toBe('collection_inactive');
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });

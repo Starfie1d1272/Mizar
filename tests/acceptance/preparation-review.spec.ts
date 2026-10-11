@@ -675,3 +675,272 @@ test('configuration failure offers an explicit preserved launch and keeps its li
   await expect(page.getByText('关闭本次游戏，保留游戏设置', { exact: true })).toBeVisible();
   await expect(page.getByText('关闭游戏并恢复配置', { exact: true })).toHaveCount(0);
 });
+
+test('OBS preparation groups scene drift, repairs and rechecks while retaining manual video guidance', async ({
+  page,
+}, testInfo) => {
+  let connected = true;
+  let findings = [
+    { code: 'video_settings', message: '画布与输出仍需设为 1920×1080 / 60fps。' },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      code: 'transform_drift',
+      message: `场景 ${index + 1} 的画面变换与目标尺寸不一致；保留自定义来源，仅恢复 Mizar 浏览器画面。`,
+    })),
+  ];
+  const commands: string[] = [];
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: connected ? 'connected' : 'password_required',
+        currentScene: 'Mizar · 等待',
+        port: 4455,
+        sceneAligned: true,
+        streaming: false,
+        recording: false,
+        passwordConfigured: true,
+        video: { canvas: '1280×720', output: '1280×720', fps: 30 },
+        findings,
+      },
+    }),
+  );
+  await page.route('**/operator/obs/*', async (route) => {
+    const action = new URL(route.request().url()).pathname.split('/').at(-1)!;
+    commands.push(action);
+    if (action === 'repair')
+      findings = findings.filter((finding) => finding.code === 'video_settings');
+    await route.fulfill({ json: { ok: true, findings } });
+  });
+  await page.goto('/settings?tab=obs');
+  const repair = page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true });
+  const pictureCheck = page.getByRole('region', { name: '检查画面', exact: true });
+  const openObs = page.getByRole('button', { name: '打开 OBS', exact: true });
+  await expect(repair).toBeVisible();
+  await expect(openObs).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '打开 OBS', exact: true })).toHaveCount(0);
+  await expect(page.getByText('场景 1 的画面变换', { exact: false })).not.toBeVisible();
+  for (const width of [1920, 1366]) {
+    await page.setViewportSize({ width, height: width === 1920 ? 1080 : 768 });
+    await expect(repair).toBeInViewport();
+    const content = await page.getByRole('main').evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        left: bounds.left + parseFloat(style.paddingLeft),
+        width: bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      };
+    });
+    const collapsed = (await pictureCheck.boundingBox())!;
+    expect(Math.abs(collapsed.x - content.left)).toBeLessThan(1);
+    expect(Math.abs(collapsed.width - content.width)).toBeLessThan(1);
+    expect((await openObs.boundingBox())!.y + (await openObs.boundingBox())!.height).toBeLessThan(
+      collapsed.y,
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath(`obs-grouped-${width}.png`) });
+    await page.getByText('技术详情 · 9 项', { exact: true }).click();
+    await expect(page.getByText('场景 8 的画面变换', { exact: false })).toBeVisible();
+    expect(Math.abs((await pictureCheck.boundingBox())!.width - content.width)).toBeLessThan(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath(`obs-details-${width}.png`) });
+    await page.getByText('技术详情 · 9 项', { exact: true }).click();
+  }
+  await repair.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/请在 OBS「设置 → 视频」将画布和输出设为/)).toBeVisible();
+  await expect(repair).toHaveCount(0);
+  expect(commands.filter((action) => action !== 'ensure')).toEqual(['repair', 'check']);
+  await page.screenshot({ path: testInfo.outputPath('obs-after-repair.png') });
+  connected = false;
+  await expect(page.getByText('需要密码', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '打开 OBS', exact: true })).toBeVisible();
+  await expect(page.getByLabel('WebSocket 端口')).toBeVisible();
+  await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
+  await expect(openObs).toHaveCount(1);
+});
+
+test('empty preparation provides existing match and the existing Demo workflow without creating state', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '选择已有比赛', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建本地比赛', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('match-entry-1920.png') });
+  await page.getByRole('button', { name: '选择已有比赛', exact: true }).click();
+  await expect(page).toHaveURL(/\/matches\?select=1$/);
+  await expect(page.getByRole('heading', { name: '本地比赛', exact: true })).toBeVisible();
+  await page.goto('/');
+  await page.getByRole('button', { name: '创建 Demo 测试比赛', exact: true }).click();
+  await expect(page).toHaveURL(/demoTest=1#demo-test$/);
+  await expect(page.getByText('BO1 · 试播资料不入比赛库', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '启动 Demo 试播', exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath('demo-entry-1920.png') });
+});
+
+test('OBS scene repair stays disabled during output and conflicting collections require manual action', async ({
+  page,
+}) => {
+  const commands: string[] = [];
+  let finding = { code: 'scene_missing', message: 'Mizar 场景缺失。' };
+  let streaming = true;
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: '用户场景',
+        port: 4455,
+        sceneAligned: false,
+        streaming,
+        recording: false,
+        passwordConfigured: true,
+        video: null,
+        findings: [finding],
+      },
+    }),
+  );
+  await page.route('**/operator/obs/*', async (route) => {
+    commands.push(new URL(route.request().url()).pathname.split('/').at(-1)!);
+    await route.fulfill({ json: { ok: true, findings: [finding] } });
+  });
+  await page.goto('/settings?tab=obs');
+  await expect(
+    page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText('OBS 正在输出。停止推流与录制后再处理配置。', { exact: true }),
+  ).toBeVisible();
+  expect(commands).toEqual([]);
+  streaming = false;
+  finding = { code: 'collection_inactive', message: '当前未使用 Mizar 场景集合。' };
+  await expect(
+    page.getByText('请在 OBS「场景集合」中选择 Mizar，再返回继续检查。', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: /修复 Mizar 场景/ })).toHaveCount(0);
+  finding = { code: 'source_kind_conflict', message: 'Mizar 来源名称冲突。' };
+  await expect(
+    page.getByText('Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。', { exact: true }),
+  ).toBeVisible();
+  expect(commands.every((action) => action === 'ensure')).toBe(true);
+});
+
+test('desktop GSI reads distinguish pending and failed queries, preserve independent CS2 results and recheck after navigation', async ({
+  page,
+}, testInfo) => {
+  await page.route('**/operator/obs/*', (route) =>
+    route.fulfill({ json: { ok: true, findings: [], executablePath: 'C:\\OBS\\obs64.exe' } }),
+  );
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: 'Mizar · 等待',
+        port: 4455,
+        streaming: false,
+        recording: false,
+        passwordConfigured: true,
+        sceneAligned: true,
+        video: null,
+        findings: [],
+      },
+    }),
+  );
+  await page.addInitScript(() => {
+    const configured = {
+      detected: true,
+      installed: true,
+      conflict: false,
+      readFailed: false,
+      issues: [],
+      cfgPath: null,
+      conflictFiles: [],
+      candidateCount: 1,
+    };
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          const mode = sessionStorage.getItem('gsi-read-mode') ?? 'pending';
+          if (command === 'launch_obs') return Promise.resolve(true);
+          if (command === 'ensure_gsi') return new Promise(() => {});
+          if (command === 'gsi_status') {
+            sessionStorage.setItem(
+              'gsi-read-count',
+              String(Number(sessionStorage.getItem('gsi-read-count') ?? 0) + 1),
+            );
+            if (mode === 'pending')
+              return new Promise((resolve) =>
+                Reflect.set(window, 'resolveGsiRead', () => resolve(configured)),
+              );
+            if (mode === 'failed')
+              return Promise.reject(
+                new Error('CS2 与 GSI 检测失败（等待工具）。private/token=secret'),
+              );
+            return Promise.resolve({
+              ...configured,
+              installed: mode !== 'missing',
+              conflict: mode === 'conflict',
+            });
+          }
+          if (command === 'cs2_host_status')
+            return mode === 'pending'
+              ? Promise.reject(new Error('C:\\Users\\private\\desktop.log password=secret'))
+              : Promise.resolve({ found: true, managed: true });
+          if (command === 'cs2_config_status')
+            return Promise.resolve({
+              qualityPreset: 'high',
+              frameRateLimit: 60,
+              running: false,
+              pending: false,
+              message: null,
+            });
+          return Promise.resolve(null);
+        },
+      },
+    });
+  });
+  await page.goto('/settings?tab=gsi');
+  await expect(page.getByText('正在检测 GSI', { exact: true })).toBeVisible();
+  await expect(page.getByText('待安装 GSI', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('无法读取 CS2 窗口状态', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('gsi-checking-1920.png') });
+  await page.evaluate(() => (Reflect.get(window, 'resolveGsiRead') as () => void)());
+  await expect(page.getByText('GSI 文件已配置', { exact: true })).toBeVisible();
+  await expect(page.getByText('无法读取 CS2 窗口状态', { exact: true })).toBeVisible();
+  await expect(page.getByText(/password=secret/)).toHaveCount(0);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const retry = page.getByRole('button', { name: '重新检查 CS2 与 GSI', exact: true });
+  await expect(retry).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('gsi-ready-cs2-failed-1366.png') });
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'ready'));
+  await retry.click();
+  await expect(page.getByText('CS2 窗口已就绪', { exact: true })).toBeVisible();
+  await expect(page.getByText(/CS2 窗口读取失败/)).toHaveCount(0);
+  const reads = await page.evaluate(() => Number(sessionStorage.getItem('gsi-read-count')));
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'missing'));
+  await page
+    .locator('.product-sidebar')
+    .getByRole('link', { name: 'OBS 连接', exact: true })
+    .click();
+  await page
+    .locator('.product-sidebar')
+    .getByRole('link', { name: '游戏设置', exact: true })
+    .click();
+  await expect(page.getByText('待安装 GSI', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => Number(sessionStorage.getItem('gsi-read-count'))),
+  ).toBeGreaterThan(reads);
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'conflict'));
+  await retry.click();
+  await expect(page.getByText('需检查', { exact: true })).toBeVisible();
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'failed'));
+  await retry.click();
+  await expect(page.getByText('无法检查 GSI', { exact: true })).toBeVisible();
+  await expect(page.getByText('CS2 窗口已就绪', { exact: true })).toBeVisible();
+  await expect(page.getByText(/检测工具失败（等待工具）/)).toBeVisible();
+  await expect(page.getByText(/token=secret/)).toHaveCount(0);
+  await expect(retry).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('gsi-failed-cs2-ready-1366.png') });
+});

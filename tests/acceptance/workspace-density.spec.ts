@@ -300,7 +300,7 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
       json: {
         connection: 'connected',
         port: 4455,
-        findings: [{ code: 'missing_scene', message: '缺少 Mizar 场景' }],
+        findings: [{ code: 'scene_missing', message: '缺少 Mizar 场景' }],
       },
     }),
   );
@@ -311,6 +311,11 @@ test('Connected OBS with missing scene configuration stays in preparation', asyn
   await page.goto('/');
   await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
   await expect(page).toHaveURL(/prepare=1$/);
+  await expect(
+    page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('缺少 Mizar 场景', { exact: true })).not.toBeVisible();
+  await page.getByText('技术详情 · 1 项', { exact: true }).click();
   await expect(page.getByText('缺少 Mizar 场景', { exact: true })).toBeVisible();
   expect(entered).toBe(0);
 });
