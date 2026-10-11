@@ -623,6 +623,12 @@ describe('support export', () => {
             password: 'private-window-secret',
           }),
         },
+        {
+          stage: 'cs2_startup_recovery',
+          result: 'failure',
+          detail:
+            'restore failed: writeback mismatch; stderr=access denied at C:\\Users\\private-startup\\cfg\npassword=private-recovery-secret',
+        },
         ...Array.from({ length: 80 }, () => ({ stage: 'main_page_load', result: 'success' })),
       ]
         .map((event) => JSON.stringify(event))
@@ -632,6 +638,12 @@ describe('support export', () => {
     expect(history.events.filter((event) => event.hasLocalError)).toHaveLength(2);
     expect(JSON.stringify(history.events)).toContain('OS access denied');
     expect(JSON.stringify(history.events)).toContain('window not ready');
+    const recovery = history.events.find((event) => event.stage === 'cs2_startup_recovery');
+    expect(recovery).toMatchObject({ result: 'failure' });
+    expect(JSON.stringify(recovery?.localDiagnostic)).toContain('writeback mismatch');
+    expect(JSON.stringify(recovery?.localDiagnostic)).toContain('access denied');
+    expect(JSON.stringify(recovery)).not.toMatch(/private-(?:startup|recovery)/);
+
     expect(JSON.stringify(history.events)).not.toContain('private-secret');
     expect(history.events.find((event) => event.stage === 'workspace_group_restore')).toMatchObject(
       {

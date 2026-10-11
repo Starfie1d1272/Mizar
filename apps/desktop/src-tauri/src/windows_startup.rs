@@ -272,7 +272,7 @@ impl ExitSignal {
 const WEBVIEW2_DOWNLOAD_PAGE: &str =
     "https://developer.microsoft.com/en-us/microsoft-edge/webview2/";
 
-fn open_recovery_target(target: &str) -> io::Result<()> {
+pub(crate) fn open_recovery_target(target: &str) -> io::Result<()> {
     let open: Vec<u16> = "open\0".encode_utf16().collect();
     let target: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
     let result = unsafe {
