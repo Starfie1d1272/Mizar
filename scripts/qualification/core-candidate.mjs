@@ -18,7 +18,13 @@ async function treeBytes(root) {
   return total;
 }
 /** Partition an unsigned same-run Full candidate; never modify qualified original assets. */
-export async function prepareCoreCandidate(product, context, checkedOutSha, requestedSha) {
+export async function prepareCoreCandidate(
+  product,
+  context,
+  checkedOutSha,
+  requestedSha,
+  timed = async (_phase, operation) => operation(),
+) {
   const full = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
   assertQualificationIdentity(context, checkedOutSha, requestedSha, full.gitSha);
   if (
@@ -45,35 +51,42 @@ export async function prepareCoreCandidate(product, context, checkedOutSha, requ
   // The output is a new identity, not a rewrite of the original archive or metadata.
   const coreName = name + '-Core';
   const core = join(product, coreName);
-  await cp(original, core, { recursive: true, force: false, errorOnExist: true });
-  const web = join(core, 'resources/web/dist');
-  for (const directory of ['fixtures', 'fixture-media'])
-    await rm(join(web, directory), { recursive: true, force: true });
-  await writeFile(
-    join(web, 'web-resource-mode.json'),
-    JSON.stringify({ schemaVersion: 1, resourceMode: 'core' }) + '\n',
+  await timed('copy-full-payload', () =>
+    cp(original, core, { recursive: true, force: false, errorOnExist: true }),
   );
-  await verifyWebResources(web, 'core');
-  const digest = await contentDigest(core);
-  const derivedFrom = {
-    archive: full.archive,
-    archiveSha256: full.archiveSha256,
-    contentDigest: full.contentDigest,
-  };
-  const metadata = {
-    ...artifact,
-    resourceMode: 'core',
-    webBytes: await treeBytes(web),
-    artifactSha256: digest,
-    derivedFrom,
-  };
-  await writeFile(
-    join(core, 'resources/metadata/artifact.json'),
-    JSON.stringify(metadata, null, 2) + '\n',
-  );
-  await writeShaSums(core);
-  await verifyPayload(core);
-  const archive = await createArchive(core, product, coreName);
+  const metadata = await timed('partition-and-verify-core', async () => {
+    const web = join(core, 'resources/web/dist');
+    for (const directory of ['fixtures', 'fixture-media'])
+      await rm(join(web, directory), { recursive: true, force: true });
+    await writeFile(
+      join(web, 'web-resource-mode.json'),
+      JSON.stringify({ schemaVersion: 1, resourceMode: 'core' }) + '\n',
+    );
+    await verifyWebResources(web, 'core');
+    const digest = await contentDigest(core);
+    const derivedFrom = {
+      archive: full.archive,
+      archiveSha256: full.archiveSha256,
+      contentDigest: full.contentDigest,
+    };
+    const metadata = {
+      ...artifact,
+      resourceMode: 'core',
+      webBytes: await treeBytes(web),
+      artifactSha256: digest,
+      derivedFrom,
+    };
+    await writeFile(
+      join(core, 'resources/metadata/artifact.json'),
+      JSON.stringify(metadata, null, 2) + '\n',
+    );
+    await writeShaSums(core);
+    await verifyPayload(core);
+    return metadata;
+  });
+  const digest = metadata.artifactSha256;
+  const derivedFrom = metadata.derivedFrom;
+  const archive = await timed('zip-archive', () => createArchive(core, product, coreName));
   await writeFile(
     archive.archivePath + '.sha256',
     archive.archiveSha256 + '  ' + coreName + '.zip\n',
