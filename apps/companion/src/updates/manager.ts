@@ -413,6 +413,7 @@ export class UpdateManager {
           this.phase = 'ready';
           return;
         } catch (error) {
+          this.checkFailure = error;
           this.failure('cached_download_verify', error);
           await this.discard();
         }

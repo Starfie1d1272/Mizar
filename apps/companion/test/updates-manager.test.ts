@@ -252,6 +252,57 @@ describe('controlled update lifecycle', () => {
     }
   });
 
+  it('reports tampered cached bytes through HTTP and clears that failure after a normal check', async () => {
+    const { manager, root } = await setup();
+    await manager.check();
+    await manager.download();
+    await finished(manager);
+    expect(manager.status().phase).toBe('ready');
+    const ready = JSON.parse(await readFile(join(root, 'updates/ready.json'), 'utf8')) as {
+      directory: string;
+    };
+    const cached = join(root, 'updates', ready.directory, manifest.installer.name);
+    // Keep the authenticated size: this must fail the digest check, not just a size check.
+    await writeFile(cached, Buffer.alloc(bytes.length, 0));
+    const app = buildApp({ updates: manager, productRuntime });
+    try {
+      const reply = await app.inject({
+        method: 'POST',
+        url: '/operator/updates/install-plan',
+        headers: { 'x-runtime-token': 'private-test-token' },
+        payload: { action: 'prepare' },
+      });
+      expect(reply.statusCode).toBe(409);
+      expect(reply.json<{ message: string }>().message).toContain('下载内容与已认证清单不一致。');
+      expect(reply.body).not.toContain('原因未知');
+      expect(manager.status().phase).toBe('available');
+      expect(manager.status().failureDetails.at(-1)).toMatchObject({
+        stage: 'install_plan',
+        code: 'update_download_corrupt',
+      });
+      await expect(readFile(cached)).rejects.toMatchObject({ code: 'ENOENT' });
+      await manager.check();
+      expect(manager.status()).toMatchObject({
+        phase: 'available',
+        error: null,
+        failureDetails: [],
+      });
+      await manager.download();
+      await finished(manager);
+      const plan = await manager.prepare();
+      expect(plan.installerSha256).toBe(manifest.installer.sha256);
+      expect(await readFile(plan.installer)).toEqual(bytes);
+      expect(manager.status()).toMatchObject({
+        phase: 'installing',
+        error: null,
+        failureDetails: [],
+      });
+      manager.release();
+    } finally {
+      await app.close();
+    }
+  });
+
   it('distinguishes trust metadata refresh, exhausted API quota and unknown failure without declaring bad signatures', () => {
     const trust = new Error('update_trust_metadata_failed', {
       cause: Object.assign(new Error('metadata refresh timeout'), {
