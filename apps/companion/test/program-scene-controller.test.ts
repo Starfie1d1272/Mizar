@@ -3,8 +3,11 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { BpSession } from '../src/bp/controller.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
+import type { ObsSceneSwitchOptions } from '../src/obs/reconcile.js';
 
-function controller(switchObs: (id: ProgramSceneId) => Promise<void>) {
+function controller(
+  switchObs: (id: ProgramSceneId, options?: ObsSceneSwitchOptions) => Promise<void>,
+) {
   const operator = {
     runtime: { telemetryFreshness: 'fresh' },
     matchContext: { freshness: 'fresh' },
@@ -68,6 +71,58 @@ it('a repeated manual Take restores the OBS scene and reports failed restoration
   expect((await pending).ok).toBe(false);
   expect(actual).toBe('waiting');
   expect(scene.get().active).toBe('waiting');
+});
+it('invalidates a queued recovery when a newer forced scene supersedes its target', async () => {
+  let actual: ProgramSceneId = 'waiting';
+  const switchObs = vi.fn<(id: ProgramSceneId, options?: ObsSceneSwitchOptions) => Promise<void>>(
+    (id) => {
+      actual = id;
+      return Promise.resolve();
+    },
+  );
+  const { scene } = controller(switchObs);
+  await scene.select('gameplay', scene.get().revision);
+  expect(actual).toBe('gameplay');
+  let finishTake!: () => void;
+  let takeStarted!: () => void;
+  const take = new Promise<void>((resolve) => {
+    takeStarted = resolve;
+  });
+  switchObs.mockImplementationOnce(() => {
+    takeStarted();
+    return new Promise<void>((resolve) => {
+      finishTake = resolve;
+    });
+  });
+  let finishRecovery!: () => void;
+  let recoveryStarted!: () => void;
+  const recovery = new Promise<void>((resolve) => {
+    recoveryStarted = resolve;
+  });
+  switchObs.mockImplementationOnce((id, options) => {
+    recoveryStarted();
+    return new Promise<void>((resolve, reject) => {
+      finishRecovery = () => {
+        if (options?.valid?.() !== true) {
+          reject(new Error('recovery superseded'));
+          return;
+        }
+        actual = id;
+        resolve();
+      };
+    });
+  });
+  const pending = scene.select('gameplay', scene.get().revision);
+  await take;
+  scene.forceScene('waiting');
+  finishTake();
+  await recovery;
+  scene.forceScene('matchup');
+  actual = 'matchup';
+  finishRecovery();
+  expect((await pending).ok).toBe(false);
+  expect(actual).toBe('matchup');
+  expect(scene.get().active).toBe('matchup');
 });
 it('lets manual summaries review confirmed history without requiring the current demo identity', async () => {
   const { scene, operator, program } = controller(async () => {});

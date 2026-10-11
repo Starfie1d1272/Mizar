@@ -358,41 +358,39 @@ export function Settings({ tab }: { tab: string }) {
                     <StatusBanner tone="warning">
                       OBS 当前节目与 Mizar 选择不一致。请在工作台重新点击要播出的场景。
                     </StatusBanner>
-                  ) : null}
-                  <p>
-                    Mizar 选择 · {obs.expectedScene ?? '待确认'}；编排 ·{' '}
-                    {program?.director
-                      ? {
-                          auto: '自动',
-                          manual: '手动保持',
-                          blocked: '已暂停',
-                          preparation: '准备中',
-                        }[program.director.mode]
-                      : '待确认'}
-                    {program?.director?.reason ? ` · ${program.director.reason}` : ''}
-                  </p>
-                  {!evidence || evidence.state !== 'measured' ? (
-                    <p role="status">
-                      {evidence?.state === 'changed'
-                        ? '检查期间 OBS 场景发生变化，请等待下一次检查。'
-                        : '当前节目来源状态未确认，请重新检查；失败原因可在诊断包中查看。'}
-                    </p>
-                  ) : evidence.composition === 'full_screen_graphic' ? (
-                    <p>
-                      当前节目为全屏包装，不使用游戏采集。要查看游戏画面，请在工作台选择「比赛中」。
-                    </p>
-                  ) : evidence.capture?.targetAvailable === false ? (
-                    <p role="status">
-                      OBS 当前捕获目标不在可选窗口中。请确认 CS2 已打开，再停止输出并修复场景；多个
-                      CS2 窗口请在 OBS 核对目标。
-                    </p>
+                  ) : evidence?.state === 'measured' &&
+                    evidence.capture?.targetAvailable === false ? (
+                    <StatusBanner tone="warning">
+                      捕获目标已不可选。请确认 CS2 已打开，再在 OBS 核对目标窗口。
+                    </StatusBanner>
                   ) : null}
                   <details className="obs-setup__help">
                     <summary>节目与捕获诊断</summary>
                     <p>
+                      Mizar 选择 · {obs.expectedScene ?? '待确认'}；编排 ·{' '}
+                      {program?.director
+                        ? {
+                            auto: '自动',
+                            manual: '手动保持',
+                            blocked: '已暂停',
+                            preparation: '准备中',
+                          }[program.director.mode]
+                        : '待确认'}
+                      {program?.director?.reason ? ` · ${program.director.reason}` : ''}
+                    </p>
+                    <p>
                       场景集合 ·{' '}
                       {evidence ? (evidence.collection === 'mizar' ? 'Mizar' : '其他') : '待确认'}
                     </p>
+                    {!evidence || evidence.state !== 'measured' ? (
+                      <p>
+                        {evidence?.state === 'changed'
+                          ? '场景正在变化，等待复查。'
+                          : '来源状态待确认，失败原因见诊断包。'}
+                      </p>
+                    ) : evidence.composition === 'full_screen_graphic' ? (
+                      <p>当前节目为全屏包装，不使用游戏采集。</p>
+                    ) : null}
                     {evidence?.state === 'measured'
                       ? evidence.sources.map((source) => (
                           <p key={source.role}>
@@ -404,8 +402,13 @@ export function Settings({ tab }: { tab: string }) {
                     {evidence?.state === 'measured' && evidence.capture ? (
                       <>
                         <p>
-                          捕获类型 · {evidence.capture.kind}；目标程序 ·{' '}
-                          {evidence.capture.target ?? '待确认'}；目标可选 ·{' '}
+                          捕获类型 ·{' '}
+                          {
+                            { game_capture: '游戏捕获', other: '其他来源', missing: '来源缺失' }[
+                              evidence.capture.kind
+                            ]
+                          }
+                          ；目标程序 · {evidence.capture.target ?? '待确认'}；目标可选 ·{' '}
                           {signal(evidence.capture.targetAvailable)}；CS2 可选窗口 ·{' '}
                           {evidence.capture.cs2WindowCount}
                         </p>
@@ -414,11 +417,7 @@ export function Settings({ tab }: { tab: string }) {
                           {signal(evidence.capture.videoShowing)}；来源尺寸 ·{' '}
                           {evidence.capture.width ?? '?'} × {evidence.capture.height ?? '?'}
                         </p>
-                        <p>
-                          活动状态和尺寸不能证明已捕获游戏帧，也不能确认实际捕获 PID。请在 OBS
-                          核对目标、实际画面及日志。若仍无画面，检查 CS2 启动选项与显示模式；OBS
-                          官方建议 CS2 使用窗口／无边框模式，必要时手动测试窗口捕获。
-                        </p>
+                        <p>状态用于定位来源，实际画面与捕获进程请在 OBS 核对。</p>
                         <a
                           href="https://obsproject.com/kb/game-capture-troubleshooting"
                           target="_blank"

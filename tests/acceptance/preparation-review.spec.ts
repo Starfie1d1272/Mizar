@@ -66,11 +66,12 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   };
   await page.goto('/settings?tab=obs');
   await expect.poll(() => launches).toBe(1);
-  await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).toBeVisible();
+  await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).not.toBeVisible();
   await expect(page.getByText(/请在工作台重新点击要播出的场景/)).toBeVisible();
   const details = page.getByText('节目与捕获诊断', { exact: true });
   await details.focus();
   await page.keyboard.press('Enter');
+  await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).toBeVisible();
   await expect(page.getByText('播出网页 · 已添加 是 · 已启用 是', { exact: true })).toBeVisible();
   obs = {
     ...obs,
@@ -98,7 +99,8 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
       },
     },
   };
-  await expect(page.getByText(/不能证明已捕获游戏帧/)).toBeVisible();
+  await expect(page.getByText(/状态用于定位来源/)).toBeVisible();
+  await expect(page.getByText(/捕获类型 · 游戏捕获/)).toBeVisible();
   await expect(page.getByText(/目标可选 · 否/)).toBeVisible();
   await expect(page.getByText(/来源尺寸 · 0 × 0/)).toBeVisible();
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -107,6 +109,11 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
     path: testInfo.outputPath('obs-program-diagnostics.png'),
     fullPage: true,
   });
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/捕获类型 · 游戏捕获/)).not.toBeVisible();
+  await expect(page.getByText(/Mizar 选择 ·/)).not.toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('obs-capture-collapsed.png'), fullPage: true });
 });
 
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({

@@ -190,9 +190,12 @@ export class ProgramSceneController {
       // A manual Take also restores OBS after an external scene change or reconnect.
       // Preserve presentation identity (including BP / matchup) on the same scene.
       const restoreCurrent = async () => {
-        if (this.active !== id)
-          await this.switchObs?.(this.active, {
-            transition: programTransition(id, this.active, true),
+        const target = this.active;
+        const revision = this.revision;
+        if (target !== id)
+          await this.switchObs?.(target, {
+            transition: programTransition(id, target, true),
+            valid: () => this.active === target && this.revision === revision,
           }).catch(() => undefined);
       };
       try {
