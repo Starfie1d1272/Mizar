@@ -47,6 +47,7 @@ export function registerObsRoutes(
     const status = await options.adapter.status();
     return reply.header('cache-control', 'no-store').send({
       ...status,
+      expectedScene: obsSceneName(options.activeScene()),
       sceneAligned:
         status.connection === 'connected'
           ? status.currentScene === obsSceneName(options.activeScene())
