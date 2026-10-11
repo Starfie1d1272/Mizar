@@ -31,11 +31,18 @@ fn session_allowed(id: &str) -> bool {
         })
 }
 
-fn reap(state: &mut State) -> Result<(), String> {
+fn reap(state: &mut State, log: &DesktopLog) -> Result<(), String> {
     if let Some(child) = state.child.as_mut() {
         if child
             .try_wait()
-            .map_err(|_| "OBS 实例状态未能确认。")?
+            .map_err(|error| {
+                log.event(
+                    "obs_configuration",
+                    "process_read_failed",
+                    Some(&error.to_string()),
+                );
+                "OBS 实例状态未能确认。"
+            })?
             .is_some()
         {
             state.child = None;
@@ -51,7 +58,7 @@ pub fn launch(path: &str, session: Option<&str>, log: &DesktopLog) -> Result<boo
         return Err("OBS 配置会话无法识别。".into());
     }
     let mut state = STATE.lock().map_err(|_| "OBS 启动状态不可用。")?;
-    reap(&mut state)?;
+    reap(&mut state, log)?;
     let path = Path::new(path);
     if !crate::obs_executable_allowed(path) || !path.is_file() {
         return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
@@ -160,7 +167,7 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
     if !state.sessions.is_empty() {
         return Ok(outcome("configuration_in_use"));
     }
-    if reap(&mut state).is_err() {
+    if reap(&mut state, log).is_err() {
         return Ok(outcome("unconfirmed"));
     }
     if state.child.is_none() || !state.configuration_owned {
