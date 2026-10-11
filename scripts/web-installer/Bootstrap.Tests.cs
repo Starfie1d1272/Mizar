@@ -18,6 +18,78 @@ namespace Mizar.WebInstaller {
     public CancellationTokenSource Source;
     public void Report(long value) { Source.Cancel(); }
   }
+  // Real HTTP/1.1 sockets, with test-only routing of the approved HTTPS origin
+  // to loopback. Production URL/TLS policy has no loopback exemption.
+  sealed class RangeServer : IDisposable {
+    internal sealed class Reply {
+      public int status=200;
+      public string headers="";
+      public byte[] body;
+      public long length;
+      public bool hold;
+    }
+    readonly System.Net.Sockets.TcpListener listener;
+    readonly Task serving;
+    Exception failure;
+    public Func<System.Collections.Generic.Dictionary<string,string>, Reply> Respond;
+    public int Calls;
+    public readonly TaskCompletionSource<bool> Release = new TaskCompletionSource<bool>();
+    public readonly Uri Address;
+    public RangeServer() {
+      listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0); listener.Start();
+      Address = new Uri("http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/fixture");
+      serving = Task.Run(async () => {
+        while (true) {
+          System.Net.Sockets.TcpClient connection;
+          try { connection = await listener.AcceptTcpClientAsync(); }
+          catch (ObjectDisposedException) { return; }
+          catch (System.Net.Sockets.SocketException) { return; }
+          catch (InvalidOperationException) { return; }
+          using (connection) using (var stream = connection.GetStream()) {
+            var headers = new System.Collections.Generic.Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            var reader = new StreamReader(stream, System.Text.Encoding.ASCII, false, 1024, true);
+            headers["request"] = await reader.ReadLineAsync();
+            if (headers["request"] == null) continue;
+            string line;
+            while (!String.IsNullOrEmpty(line = await reader.ReadLineAsync())) {
+              int colon = line.IndexOf(':');
+              if (colon > 0) headers[line.Substring(0,colon)] = line.Substring(colon+1).Trim();
+            }
+            Calls++;
+            Reply reply;
+            try { reply = Respond(headers); }
+            catch (Exception error) { failure=error; reply=new Reply {status=500,length=0}; }
+            byte[] head = System.Text.Encoding.ASCII.GetBytes("HTTP/1.1 " + reply.status + " Fixture\r\nContent-Length: " + reply.length + "\r\nConnection: close\r\n" + reply.headers + "\r\n");
+            try {
+              await stream.WriteAsync(head,0,head.Length);
+              if (reply.body != null) await stream.WriteAsync(reply.body,0,reply.body.Length);
+              if (reply.hold) await Release.Task;
+            } catch (IOException) { /* A cancelled client may close the socket. */ }
+          }
+        }
+      });
+    }
+    public void Dispose() { Release.TrySetResult(true); listener.Stop(); serving.GetAwaiter().GetResult(); if(failure!=null) throw new Exception("HTTP fixture assertion failed",failure); }
+  }
+  sealed class LoopbackRoute : HttpMessageHandler {
+    readonly HttpClient wire = new HttpClient(new HttpClientHandler {AllowAutoRedirect=false, UseProxy=false, UseCookies=false}) {Timeout=Timeout.InfiniteTimeSpan};
+    readonly Uri address;
+    public LoopbackRoute(Uri value) { address=value; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) {
+      using (var routed = new HttpRequestMessage(request.Method, address)) {
+        foreach (var header in request.Headers) routed.Headers.TryAddWithoutValidation(header.Key,header.Value);
+        routed.Headers.Add("X-Fixture-Source",request.RequestUri.AbsoluteUri);
+        return await wire.SendAsync(routed,HttpCompletionOption.ResponseHeadersRead,token);
+      }
+    }
+    protected override void Dispose(bool disposing) { if (disposing) wire.Dispose(); base.Dispose(disposing); }
+  }
+  sealed class ObserveProgress : IProgress<long> {
+    public readonly System.Collections.Generic.List<long> Values = new System.Collections.Generic.List<long>();
+    public CancellationTokenSource Cancel;
+    public Action<long> Observe;
+    public void Report(long value) { if(Observe!=null) Observe(value); Values.Add(value); if (Cancel != null && value > 0) Cancel.Cancel(); }
+  }
   static class Tests {
     static readonly byte[] body = new byte[] { 1, 2, 3, 4 };
     static Plan Good() {
@@ -120,6 +192,208 @@ namespace Mizar.WebInstaller {
         if(Directory.Exists(root)) Directory.Delete(root,true);
       }
     }
+    static RangeServer.Reply WireReply(int status, string headers, byte[] bytes) {
+      return new RangeServer.Reply {status=status, headers=headers, body=bytes, length=bytes.Length};
+    }
+    static byte[] RangePayload() {
+      byte[] payload=new byte[256*1024]; for(int i=0;i<payload.Length;i++) payload[i]=(byte)(i*17+3);
+      return payload;
+    }
+    static Plan RangePlan() {
+      var plan=Good(); byte[] payload=RangePayload(); plan.bytes=payload.Length;
+      using(var hash=SHA256.Create()) plan.sha256=BitConverter.ToString(hash.ComputeHash(payload)).Replace("-","").ToLowerInvariant();
+      return plan;
+    }
+    static async Task CancelRange(Uri address, string root) {
+      using(var cancelled=new CancellationTokenSource())
+      using(var client=new HttpClient(new LoopbackRoute(address))) {
+        try { await new Downloader(client).Download(RangePlan(),root,new ObserveProgress {Cancel=cancelled},cancelled.Token); throw new Exception("Cancellation was ignored"); }
+        catch(OperationCanceledException) { Assert(cancelled.IsCancellationRequested); }
+      }
+    }
+    static async Task SeedPartial(RangeServer server, Plan plan, byte[] payload, string validator, string root, string target) {
+      string part=target+".part";
+      if(File.Exists(target)) File.Delete(target);
+      server.Respond=h=> {Assert(!h.ContainsKey("Range"));return WireReply(200,validator,payload);};
+      await CancelRange(server.Address,root);
+      Assert(!File.Exists(target) && File.Exists(part) && File.Exists(part+".json"));
+      Assert(new FileInfo(part).Length>0 && new FileInfo(part).Length<plan.bytes);
+    }
+    static async Task RangeContracts() {
+      byte[] payload=RangePayload(); var plan=RangePlan();
+      string root=Path.Combine(Path.GetTempPath(),"mizar-range-"+Guid.NewGuid().ToString("N"));
+      string target=Path.Combine(root,plan.sha256+"-"+plan.name), part=target+".part";
+      string validator="ETag: \"qualified-transport\"\r\n";
+      try {
+        using(var server=new RangeServer()) {
+          Func<System.Collections.Generic.Dictionary<string,string>,RangeServer.Reply> remaining=h=> {
+            long offset=new FileInfo(part).Length;
+            Assert(h["Range"]=="bytes="+offset+"-" && h["If-Range"]=="\"qualified-transport\"");
+            Assert(h["Accept-Encoding"]=="identity" && !h.ContainsKey("Authorization"));
+            var suffix=new byte[payload.Length-(int)offset];Array.Copy(payload,(int)offset,suffix,0,suffix.Length);
+            return WireReply(206,validator+"Content-Range: bytes "+offset+"-"+(payload.Length-1)+"/"+payload.Length+"\r\n",suffix);
+          };
+          // New clients/downloaders have no in-memory state from the cancelled run.
+          Console.WriteLine("Range: cancelled download and persistent suffix");
+          await SeedPartial(server,plan,payload,validator,root,target); long retained=new FileInfo(part).Length; int calls=server.Calls;
+          server.Respond=remaining;
+          var progress=new ObserveProgress();
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) {
+            string result=await new Downloader(client).Download(plan,root,progress,CancellationToken.None);
+            Assert(result==target && Downloader.Matches(result,plan) && server.Calls==calls+1);
+            Assert(progress.Values[0]==retained && progress.Values[progress.Values.Count-1]==plan.bytes);
+            for(int i=1;i<progress.Values.Count;i++) Assert(progress.Values[i]>=progress.Values[i-1] && progress.Values[i]<=plan.bytes);
+          }
+          Assert(!File.Exists(part) && !File.Exists(part+".json"));
+          // Cancel while the server keeps the body open without further bytes.
+          // This verifies actual socket-read cancellation, rather than only a
+          // token checked between already-buffered reads.
+          File.Delete(target);
+          byte[] stalledPrefix=new byte[65536];Array.Copy(payload,stalledPrefix,stalledPrefix.Length);
+          server.Respond=h=>new RangeServer.Reply {headers=validator,body=stalledPrefix,length=payload.Length,hold=true};
+          using(var stopped=new CancellationTokenSource())
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) {
+            var written=new TaskCompletionSource<bool>();
+            var pending=new Downloader(client).Download(plan,root,new ObserveProgress {Observe=value=> {if(value==stalledPrefix.Length) written.TrySetResult(true);}},stopped.Token);
+            Assert(await Task.WhenAny(written.Task,Task.Delay(10000))==written.Task);
+            await Task.Delay(100);stopped.Cancel();
+            Assert(await Task.WhenAny(pending,Task.Delay(10000))==pending);
+            try {await pending;throw new Exception("Blocked download ignored cancellation");} catch(OperationCanceledException) {}
+          }
+          Assert(new FileInfo(part).Length==stalledPrefix.Length && !File.Exists(target));
+          server.Release.TrySetResult(true);server.Respond=remaining;
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(Downloader.Matches(target,plan));
+          // The partial also survives exit of a separate native test process.
+          File.Delete(target);
+          server.Respond=h=> {Assert(!h.ContainsKey("Range"));return WireReply(200,validator,payload);};
+          string executable=System.Reflection.Assembly.GetExecutingAssembly().Location;
+          string arguments="--range-cancel \""+server.Address.AbsoluteUri+"\" \""+root+"\"";
+          using(var current=System.Diagnostics.Process.GetCurrentProcess()) {
+            if(Path.GetFileName(current.MainModule.FileName).StartsWith("mono",StringComparison.Ordinal)) {
+              arguments="\""+executable+"\" "+arguments;executable=current.MainModule.FileName;
+            }
+          }
+          using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=executable,Arguments=arguments,UseShellExecute=false,CreateNoWindow=true})) {
+            // Keep accepting fixture requests while the child downloads/cancels.
+            bool exited=await Task.Run(()=>child.WaitForExit(30000));
+            if(!exited) {child.Kill();child.WaitForExit();throw new Exception("Range cancellation fixture process did not exit");}
+            Assert(child.ExitCode==0 && File.Exists(part));
+          }
+          server.Respond=remaining;
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(Downloader.Matches(target,plan));
+          // Range ignored (or If-Range failed): consume 200 from zero, never append.
+          await SeedPartial(server,plan,payload,validator,root,target);server.Respond=h=> {Assert(h.ContainsKey("Range"));return WireReply(200,"ETag: \"changed\"\r\n",payload);};
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) {
+            await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+            Assert(Downloader.Matches(target,plan));
+          }
+          // Malformed/resized/changed/encoded ranges must never enter the cache;
+          // an independent next full response recovers within the bounded retry.
+          foreach(string fault in new[]{"start","end","total","missing","etag","weak","416","length","encoding","endpoint"}) {
+            Console.WriteLine("Range response fault: "+fault);
+            await SeedPartial(server,plan,payload,validator,root,target);calls=server.Calls;int ranged=0;
+            server.Respond=h=> {
+              if(!h.ContainsKey("Range")) return WireReply(200,validator,payload);
+              ranged++;
+              var response=remaining(h);
+              long offset=new FileInfo(part).Length;
+              if(fault=="start") response.headers=response.headers.Replace("bytes "+offset+"-","bytes 0-");
+              if(fault=="end") response.headers=response.headers.Replace("-"+(payload.Length-1)+"/","-"+(payload.Length-2)+"/");
+              if(fault=="total") response.headers=response.headers.Replace("/"+payload.Length,"/"+(payload.Length+1));
+              if(fault=="missing") response.headers=validator;
+              if(fault=="etag") response.headers=response.headers.Replace("qualified-transport","different");
+              if(fault=="weak") response.headers=response.headers.Replace("ETag: ","ETag: W/");
+              if(fault=="416") response=WireReply(416,"Content-Range: bytes */"+payload.Length+"\r\n",new byte[0]);
+              if(fault=="length") response.length++;
+              if(fault=="encoding") response.headers+="Content-Encoding: gzip\r\n";
+              return response;
+            };
+            if(fault=="endpoint") {
+              string record=File.ReadAllText(part+".json");
+              // source must remain identical; only the redirect endpoint changes.
+              var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
+              var data=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(record);
+              data["endpoint"]=plan.urls[0].Replace("fixture.bin","different.bin");
+              File.WriteAllText(part+".json",serializer.Serialize(data));
+            }
+            using(var client=new HttpClient(new LoopbackRoute(server.Address))) {
+              if(fault=="length" || fault=="encoding") {
+                await Reject(()=>new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None));
+                Assert(!File.Exists(target) && !File.Exists(part) && !File.Exists(part+".json"));
+              } else {
+                await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+                Assert(Downloader.Matches(target,plan) && server.Calls==calls+2);
+              }
+            }
+            Assert(ranged==1);
+          }
+          // Local partial tampering and a same-length corrupt response still fail
+          // the independently pinned complete hash, regardless of ETag agreement.
+          foreach(bool local in new[]{false,true}) {
+            await SeedPartial(server,plan,payload,validator,root,target);
+            if(local) {var bytes=File.ReadAllBytes(part);bytes[0]^=255;File.WriteAllBytes(part,bytes);}
+            server.Respond=h=> {var response=remaining(h);if(!local) response.body[0]^=255;return response;};
+            using(var client=new HttpClient(new LoopbackRoute(server.Address))) await Reject(()=>new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None));
+            Assert(!File.Exists(target) && !File.Exists(part) && !File.Exists(part+".json"));
+          }
+          // Identity and mirror changes, torn metadata and unsafe local paths
+          // never reuse prior bytes, even when the expected payload hash is equal.
+          foreach(string change in new[]{"identity","mirror","record","orphan","oversize"}) {
+            await SeedPartial(server,plan,payload,validator,root,target);string version=plan.version, source=plan.urls[0];
+            if(change=="identity") plan.version="different-qualified-version";
+            if(change=="mirror") plan.urls=new[]{"https://box.nju.edu.cn/seafhttp/files/mirror/fixture.bin"};
+            if(change=="record") File.WriteAllText(part+".json","{torn");
+            if(change=="orphan") File.Delete(part+".json");
+            if(change=="oversize") using(var file=new FileStream(part,FileMode.Open)) file.SetLength(plan.bytes+1);
+            server.Respond=h=> {Assert(!h.ContainsKey("Range"));return WireReply(200,validator,payload);};
+            using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+            Assert(Downloader.Matches(target,plan));plan.version=version;plan.urls=new[]{source};
+          }
+          // A short real response retains its validated transport identity and
+          // retries only the suffix; absent/weak ETags restart with a full GET.
+          foreach(string tag in new[]{validator,"","ETag: W/\"weak\"\r\n"}) {
+            File.Delete(target);int first=server.Calls;
+            server.Respond=h=> {
+              if(server.Calls==first+1) {var prefix=new byte[65536];Array.Copy(payload,prefix,prefix.Length);return new RangeServer.Reply {headers=tag,body=prefix,length=payload.Length};}
+              if(tag==validator) return remaining(h);
+              Assert(!h.ContainsKey("Range"));return WireReply(200,tag,payload);
+            };
+            using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+            Assert(Downloader.Matches(target,plan) && server.Calls==first+2);
+          }
+          // A real allowed redirect endpoint change also restarts instead of
+          // combining bytes from two signed download URLs, even with equal ETag.
+          await SeedPartial(server,plan,payload,validator,root,target);
+          int redirectedRanges=0;
+          server.Respond=h=> {
+            if(h["X-Fixture-Source"]==plan.urls[0]) return WireReply(302,"Location: https://release-assets.githubusercontent.com/changed-fixture\r\n",new byte[0]);
+            if(h.ContainsKey("Range")) {redirectedRanges++;return remaining(h);}
+            return WireReply(200,validator,payload);
+          };
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(redirectedRanges==1 && Downloader.Matches(target,plan));
+          // All bytes written before cancellation are still untrusted until the
+          // next process verifies them; no network or executable admission shortcut.
+          await SeedPartial(server,plan,payload,validator,root,target);
+          File.WriteAllBytes(part,payload);calls=server.Calls;
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(Downloader.Matches(target,plan) && server.Calls==calls);
+          // An unavailable original source must clear its bytes before fallback.
+          await SeedPartial(server,plan,payload,validator,root,target);
+          string primary=plan.urls[0];plan.urls=new[]{primary,"https://box.nju.edu.cn/seafhttp/files/mirror/fixture.bin"};
+          int transient=0;
+          server.Respond=h=> {
+            if(h.ContainsKey("Range")) {transient++;return WireReply(503,"",new byte[0]);}
+            Assert(!File.Exists(part));return WireReply(200,validator,payload);
+          };
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(transient==2 && Downloader.Matches(target,plan));plan.urls=new[]{primary};
+          Console.WriteLine("PASS: real HTTP Range/If-Range restart, cancellation, truncation, validators, invalid 206/416, mirror/identity isolation, progress and pinned hash");
+        }
+      } finally {if(Directory.Exists(root)) Directory.Delete(root,true);}
+    }
     static async Task Run() {
       string root=Path.Combine(Path.GetTempPath(), "mizar-bootstrap-test-" + Guid.NewGuid());
       try {
@@ -177,6 +451,6 @@ namespace Mizar.WebInstaller {
         }
       } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
-    [STAThread] public static int Main() { try { PublicationContract(); RecoveryContracts(); BoxOnly().GetAwaiter().GetResult(); Run().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
+    [STAThread] public static int Main(string[] args) { try { if(args.Length==3 && args[0]=="--range-cancel") {CancelRange(new Uri(args[1]),args[2]).GetAwaiter().GetResult();return 0;} PublicationContract(); RecoveryContracts(); BoxOnly().GetAwaiter().GetResult(); Run().GetAwaiter().GetResult(); RangeContracts().GetAwaiter().GetResult(); WindowTests.Run(); Console.WriteLine("PASS: bounded download, hash, truncation, redirect, cancellation, fallback, cache and execution denial"); return 0; } catch(Exception e) { Console.Error.WriteLine(e); return 1; } }
   }
 }

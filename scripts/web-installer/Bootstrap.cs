@@ -215,12 +215,66 @@ namespace Mizar.WebInstaller {
         return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant() == plan.sha256;
       }
     }
-    async Task<HttpResponseMessage> Request(string url, CancellationToken token) {
+    // Transport hints are never trust evidence: only the qualified Plan hash can
+    // promote these bytes. Keep this record under the existing artifact lock.
+    sealed class Partial {
+      public string identity, source, endpoint, etag;
+      public long bytes;
+    }
+    sealed class RestartDownload : IOException {
+      public RestartDownload() : base("下载源已改变，重新下载完整文件。") {}
+    }
+    static string Identity(Plan plan) {
+      return new JavaScriptSerializer().Serialize(new {plan.schemaVersion, plan.version,
+        plan.name, plan.bytes, plan.sha256, plan.kind, plan.gitSha, plan.contentDigest,
+        plan.updateManifestSha256, plan.coreName, plan.coreBytes, plan.coreSha256,
+        plan.allowExecute, plan.publicationRequired});
+    }
+    static void Discard(string staging) {
+      NoReparse(staging); NoReparse(staging + ".json");
+      if (File.Exists(staging)) File.Delete(staging);
+      if (File.Exists(staging + ".json")) File.Delete(staging + ".json");
+    }
+    static Partial ReadPartial(string staging, Plan plan, string source) {
+      NoReparse(staging); NoReparse(staging + ".json");
+      if (!File.Exists(staging) || !File.Exists(staging + ".json")) { Discard(staging); return null; }
+      Partial partial = null;
+      try {
+        if (new FileInfo(staging + ".json").Length <= 16384)
+          partial = new JavaScriptSerializer {MaxJsonLength=16384}.Deserialize<Partial>(File.ReadAllText(staging + ".json"));
+      } catch (ArgumentException) {} catch (InvalidOperationException) {}
+      System.Net.Http.Headers.EntityTagHeaderValue etag;
+      Uri endpoint;
+      long length = new FileInfo(staging).Length;
+      if (partial == null || partial.identity != Identity(plan) || partial.source != source ||
+          partial.bytes != plan.bytes || length < 1 || length > plan.bytes ||
+          !Uri.TryCreate(partial.endpoint, UriKind.Absolute, out endpoint) || !Allowed(endpoint) ||
+          !System.Net.Http.Headers.EntityTagHeaderValue.TryParse(partial.etag, out etag) || etag.IsWeak || etag.Tag == "*") {
+        Discard(staging); return null;
+      }
+      return partial;
+    }
+    static void SavePartial(string staging, Partial partial) {
+      // Write before the first payload byte. A torn record after a process crash
+      // simply causes a full restart; it cannot authenticate any payload.
+      NoReparse(staging + ".json");
+      using (var output = new FileStream(staging + ".json", FileMode.Create, FileAccess.Write, FileShare.None)) {
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(partial));
+        output.Write(bytes, 0, bytes.Length); output.Flush(true);
+      }
+    }
+    async Task<HttpResponseMessage> Request(string url, long offset, Partial partial, CancellationToken token) {
       Uri current = new Uri(url);
       for (int n = 0; n < 5; n++) {
         if (!Allowed(current)) throw new InvalidDataException("下载重定向地址不受信任。");
         using (var request = new HttpRequestMessage(HttpMethod.Get, current)) {
           request.Headers.TryAddWithoutValidation("User-Agent", "Mizar-WebInstaller");
+          request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+          if (offset > 0) {
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(offset, null);
+            request.Headers.IfRange = new System.Net.Http.Headers.RangeConditionHeaderValue(
+              new System.Net.Http.Headers.EntityTagHeaderValue(partial.etag));
+          }
           var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
           int status = (int)response.StatusCode;
           if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
@@ -230,15 +284,27 @@ namespace Mizar.WebInstaller {
             current = location.IsAbsoluteUri ? location : new Uri(current, location);
             continue;
           }
-          if (status != 200 || response.Content.Headers.ContentEncoding.Count != 0) {
+          if (status == 416 && offset > 0) { response.Dispose(); throw new RestartDownload(); }
+          if ((status != 200 && status != 206) || response.Content.Headers.ContentEncoding.Count != 0) {
             response.Dispose();
             if(status==408 || status==429 || status>=500) throw new HttpRequestException("下载源暂时不可用。");
-            throw new IOException("下载源不可用。");
+            throw new InvalidDataException("下载源不可用或响应编码无效。");
           }
+          if (status == 206) {
+            var range = response.Content.Headers.ContentRange;
+            var etag = response.Headers.ETag;
+            if (offset == 0 || partial.endpoint != current.AbsoluteUri || range == null ||
+                range.Unit != "bytes" || range.From != offset || range.To != partial.bytes - 1 ||
+                range.Length != partial.bytes || etag == null || etag.IsWeak || etag.ToString() != partial.etag) {
+              response.Dispose(); throw new RestartDownload();
+            }
+          }
+          // The request may already be disposed on return; only its URI is used.
+          response.RequestMessage = request;
           return response;
         }
       }
-      throw new IOException("下载重定向次数超限。");
+      throw new InvalidDataException("下载重定向次数超限。");
     }
     public async Task<string> Download(Plan plan, string cache, IProgress<long> progress, CancellationToken token, IProgress<string> stages=null) {
       if(stages!=null) stages.Report("checking-cache");
@@ -251,7 +317,7 @@ namespace Mizar.WebInstaller {
       using (var gate = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
         if (await MatchesAsync(target, plan, token)) { token.ThrowIfCancellationRequested(); progress.Report(plan.bytes); return target; }
         string staging = target + ".part";
-        NoReparse(staging);
+        NoReparse(staging); NoReparse(staging + ".json");
         var failures=new System.Collections.Generic.List<Exception>();
         var sources=new System.Collections.Generic.List<string>(plan.urls);
         if(plan.publicationRequired) {
@@ -262,26 +328,48 @@ namespace Mizar.WebInstaller {
           using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token)) {
             deadline.CancelAfter(TimeSpan.FromMinutes(5));
             for(int attempt=0;attempt<2;attempt++) {
-            bool retry=false;
+            bool retry=false, resumable=false;
             try {
-              if(stages!=null) stages.Report("connecting-download");
-              using (var response = await Request(url, deadline.Token)) {
-                if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != plan.bytes)
-                  throw new InvalidDataException("下载文件大小不匹配。");
-                using (var input = await response.Content.ReadAsStreamAsync())
-                using (var output = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true)) {
-                  if(stages!=null) stages.Report("downloading-core");
-                  var buffer = new byte[65536]; long total = 0;
-                  for (;;) {
-                    int count = await input.ReadAsync(buffer, 0, buffer.Length, deadline.Token);
-                    if (count == 0) break;
-                    total += count;
-                    if (total > plan.bytes) throw new InvalidDataException("下载文件超过大小上限。");
-                    await output.WriteAsync(buffer, 0, count, deadline.Token);
-                    progress.Report(total);
+              Partial partial = ReadPartial(staging, plan, url);
+              long offset = partial == null ? 0 : new FileInfo(staging).Length;
+              resumable = partial != null;
+              // Cancellation can leave all bytes written but not yet verified.
+              if (offset != plan.bytes) {
+                if(stages!=null) stages.Report("connecting-download");
+                using (var response = await Request(url, offset, partial, deadline.Token)) {
+                  bool append = response.StatusCode == HttpStatusCode.PartialContent;
+                  if (!append) { Discard(staging); offset = 0; resumable = false; }
+                  if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != plan.bytes - offset)
+                    throw new InvalidDataException("下载文件大小不匹配。");
+                  if (!append && response.Content.Headers.ContentRange != null)
+                    throw new InvalidDataException("完整下载响应包含无效范围。");
+                  if (!append) {
+                    var etag = response.Headers.ETag;
+                    if (etag != null && !etag.IsWeak && etag.Tag != "*") {
+                      SavePartial(staging, new Partial {identity=Identity(plan), source=url,
+                        endpoint=response.RequestMessage.RequestUri.AbsoluteUri, bytes=plan.bytes, etag=etag.ToString()});
+                      resumable = true;
+                    }
                   }
-                  output.Flush(true);
-                  if (total != plan.bytes) throw new InvalidDataException("下载文件不完整。");
+                  // Framework HTTP streams can ignore ReadAsync cancellation
+                  // while waiting for data; closing the response aborts that read.
+                  using (var abortRead = deadline.Token.Register(response.Dispose))
+                  using (var input = await response.Content.ReadAsStreamAsync())
+                  using (var output = new FileStream(staging, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 65536, true)) {
+                    if(stages!=null) stages.Report("downloading-core");
+                    progress.Report(offset);
+                    var buffer = new byte[65536]; long total = offset;
+                    try {
+                      for (;;) {
+                        int count = await input.ReadAsync(buffer, 0, buffer.Length, deadline.Token);
+                        if (count == 0) break;
+                        if (count > plan.bytes - total) throw new InvalidDataException("下载文件超过大小上限。");
+                        await output.WriteAsync(buffer, 0, count, deadline.Token);
+                        total += count; progress.Report(total);
+                      }
+                    } finally { output.Flush(true); }
+                    if (total != plan.bytes) throw new IOException("下载文件不完整。");
+                  }
                 }
               }
               deadline.Token.ThrowIfCancellationRequested();
@@ -291,12 +379,18 @@ namespace Mizar.WebInstaller {
               NoReparse(target);
               if (File.Exists(target)) File.Delete(target);
               File.Move(staging, target);
+              Discard(staging);
+              progress.Report(plan.bytes);
               return target;
             } catch (Exception error) {
-              if (File.Exists(staging)) File.Delete(staging);
+              if (deadline.IsCancellationRequested && !(error is InvalidDataException))
+                error = new OperationCanceledException("下载已取消或超时。", error, deadline.Token);
+              bool transport = error is HttpRequestException || (error is IOException && !(error is InvalidDataException));
+              if (!resumable || (!transport && !(error is OperationCanceledException)) || error is RestartDownload)
+                Discard(staging);
               token.ThrowIfCancellationRequested();
               failures.Add(error);Window.SaveDiagnostic(new IOException("Core download attempt failed: "+url,error));
-              retry=attempt==0 && error is HttpRequestException && !deadline.IsCancellationRequested;
+              retry=attempt==0 && transport && !deadline.IsCancellationRequested;
             }
             if(!retry) break;
             await Task.Delay(500,token);
