@@ -126,9 +126,11 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 | `POST /operator/obs/launch-target` | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程 |
 | `GET /local/v1/program-scenes` | 当前场景、修订号、候选、阻断与编排状态 |
 | `POST /operator/program-scene` | 有修订号校验的人工切场 |
-| `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动 |
+| `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式 |
 | `GET /local/v1/program-presentation` | 有限节目摘要与相邻赛程，不返回完整比赛文档 |
 | `GET /local/v1/production-guidance` | 私有、只读、不缓存的制作提示与平台状态 |
+
+场景状态的可选 `introRevision` 标识一次开场 Take：准备期间使用本次 `preparing.revision`，成功切入后保留该标识；恢复自动或切到其他场景不创建新的开场实例。浏览器只保留开场标识、时长与最后接受的服务端展示位置，状态读取中断时暂停，恢复后同步 Director 锚点，不保留旧遥测或建立游戏时钟。
 
 切场中的 `preparing` 用于准备渲染，OBS 完成后才提交 `active`；失败清理准备状态，人工意图使旧自动请求失效。静态节目缓存只保留最后安全展示，换比赛清除，不成为赛果来源。
 

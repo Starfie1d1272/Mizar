@@ -1,19 +1,26 @@
 import type { ProgramProjection } from '@mizar/core/projection';
-import type { ProgramSceneId, ProgramSceneState } from '@mizar/protocol/program-scenes';
+import {
+  programTransition,
+  type ProgramSceneId,
+  type ProgramSceneState,
+} from '@mizar/protocol/program-scenes';
 import type { BpSession } from '../bp/controller.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
 import { isRegulationHalftime } from './presentation.js';
 
 export const DEFAULT_PROGRAM_TIMINGS = Object.freeze({
-  bpFinalMs: 10_000,
+  bpFinalMs: 12_000,
   introMs: 6_000,
   shortIntroMs: 2_000,
-  hudLeadMs: 9_000,
+  hudLeadMs: 5_000,
   halftimeLeadMs: 5_000,
   mapResultMs: 12_000,
   ggHoldMs: 3_000,
-  warmupFinalMs: 2_000,
+  warmupFinalMs: 10_000,
+  bpRevealSettleMs: 450,
+  // Reserve the existing OBS completion window; this is budget, never a sleep.
+  switchBudgetMs: 1000,
 });
 type DirectorView = NonNullable<ProgramSceneState['director']>;
 
@@ -31,7 +38,9 @@ export class ProgramDirector {
   };
   private manual = false;
   private failure: string | null = null;
-  private inFlight = false;
+  private inFlight: ProgramSceneId | null = null;
+  private warmupChoice: 'waiting' | 'gameplay' = 'waiting';
+  private warmupChoiceKey = '';
   private lastTime: number | null = null;
   private elapsed = 0;
   private scene: ProgramSceneId = 'waiting';
@@ -58,7 +67,25 @@ export class ProgramDirector {
     private readonly timings = DEFAULT_PROGRAM_TIMINGS,
   ) {}
   get(): DirectorView {
-    return { ...this.view, sceneElapsedMs: this.elapsed };
+    return { ...this.view, warmupScene: this.warmupChoice, sceneElapsedMs: this.elapsed };
+  }
+  setWarmupScene(scene: 'waiting' | 'gameplay'): void {
+    this.warmupChoice = scene;
+    this.warmupChoiceKey = this.contextKey(this.projections.getCurrent().program);
+    this.generation++;
+  }
+  private takeBudget(from: ProgramSceneId, to: ProgramSceneId): number {
+    return programTransition(from, to).durationMs + this.timings.switchBudgetMs;
+  }
+  private hudDue(p: ProgramProjection, active: ProgramSceneId): boolean {
+    return (
+      p.map.phase === 'live' &&
+      (p.round?.phase === 'live' ||
+        (p.clock?.phase === 'freezetime' &&
+          p.clock.endsInSeconds !== null &&
+          p.clock.endsInSeconds * 1000 <=
+            this.timings.hudLeadMs + this.takeBudget(active, 'gameplay')))
+    );
   }
   hold(): void {
     this.ggStartedAt = null;
@@ -160,7 +187,7 @@ export class ProgramDirector {
       } else if (active === 'bp') next = 'matchup';
       else next = 'gameplay';
     } else if (p.map.phase === 'warmup') {
-      if (active === 'bp') next = 'waiting';
+      if (active === 'bp') next = this.warmupChoice;
       else if (!this.warmupPlayed && this.projections.getBpAssessment().readiness === 'ready')
         next = 'bp';
       else next = 'matchup';
@@ -173,11 +200,26 @@ export class ProgramDirector {
     this.view.nextReason = '后续节目预告，实际切换仍需满足比赛与播出条件。';
   }
   async tick(): Promise<void> {
-    if (this.inFlight) return;
+    if (this.inFlight) {
+      const current = this.projections.getCurrent().program;
+      if (
+        this.inFlight !== 'gameplay' &&
+        !this.manual &&
+        this.safe(current) &&
+        this.hudDue(current, this.scenes.get().active)
+      )
+        this.scenes.cancelAutomatic();
+      return;
+    }
     const time = this.now();
     const delta = this.lastTime === null ? 0 : Math.min(1000, Math.max(0, time - this.lastTime));
     this.lastTime = time;
     const { program: p, operator } = this.projections.getCurrent();
+    const choiceKey = this.contextKey(p);
+    if (choiceKey !== this.warmupChoiceKey) {
+      this.warmupChoiceKey = choiceKey;
+      this.warmupChoice = 'waiting';
+    }
     this.view.gg = null;
     this.predict(p, this.scenes.get().active);
     const production = this.production() && operator.matchContext.origin !== 'fixture';
@@ -293,24 +335,40 @@ export class ProgramDirector {
       this.setPrediction('gameplay');
       if (
         p.round?.phase === 'live' ||
-        (seconds !== null && seconds > 0 && remaining <= this.timings.halftimeLeadMs)
+        (seconds !== null &&
+          seconds > 0 &&
+          remaining <= this.timings.halftimeLeadMs + this.takeBudget(active, 'gameplay'))
       )
         target = 'gameplay';
     } else if (p.map.phase === 'warmup') {
       if (!this.warmupPlayed && this.projections.getBpAssessment().readiness === 'ready')
         target = 'bp';
-      else if (active === 'bp' && this.bp.get().state === 'shown') {
-        if (!this.manual) this.warmupFinalElapsed += delta;
-        this.setPrediction('waiting');
-        if (this.warmupFinalElapsed >= this.timings.warmupFinalMs) target = 'waiting';
-      }
+      else if (active === 'bp') {
+        if (this.bp.get().state === 'shown') {
+          if (!this.manual) this.warmupFinalElapsed += delta;
+          this.setPrediction(this.warmupChoice);
+          if (this.warmupFinalElapsed >= this.timings.warmupFinalMs + this.timings.bpRevealSettleMs)
+            target = this.warmupChoice;
+        } else this.warmupFinalElapsed = 0;
+      } else target = this.warmupChoice;
     } else if (p.map.phase === 'live') {
       const firstFreeze =
         p.map.roundNumber === 0 &&
         p.round?.phase === 'freezetime' &&
         seconds !== null &&
         seconds > 0;
-      if (!firstFreeze || this.introFinished || remaining <= this.timings.hudLeadMs) {
+      const introBudget =
+        remaining -
+        this.timings.hudLeadMs -
+        this.takeBudget(active, 'matchup') -
+        this.takeBudget('matchup', 'gameplay');
+      const introDuration =
+        introBudget >= this.timings.introMs
+          ? this.timings.introMs
+          : introBudget >= this.timings.shortIntroMs
+            ? this.timings.shortIntroMs
+            : null;
+      if (!firstFreeze || this.introFinished || this.hudDue(p, active)) {
         if (!this.manual) this.introFinished = true;
         target = 'gameplay';
       } else if (active === 'matchup' && this.introStarted) {
@@ -321,30 +379,34 @@ export class ProgramDirector {
         }
       } else if (active === 'bp' && this.introStarted) {
         this.setPrediction('matchup');
-        if (
-          this.elapsed >= this.timings.bpFinalMs ||
-          remaining <= this.timings.introMs + this.timings.hudLeadMs
-        )
-          target = 'matchup';
+        if (this.elapsed >= this.timings.bpFinalMs || introBudget <= this.timings.introMs) {
+          if (introDuration !== null) target = 'matchup';
+          else {
+            if (!this.manual) this.introFinished = true;
+            target = 'gameplay';
+          }
+        }
       } else if (!this.introStarted) {
-        const budget = remaining - this.timings.hudLeadMs;
+        const recapBudget =
+          remaining -
+          this.timings.hudLeadMs -
+          this.takeBudget(active, 'bp') -
+          this.takeBudget('bp', 'matchup') -
+          this.takeBudget('matchup', 'gameplay') -
+          this.timings.introMs;
         if (
-          budget >= this.timings.bpFinalMs + this.timings.introMs &&
+          recapBudget >= this.timings.shortIntroMs &&
           this.projections.getBpAssessment().readiness === 'ready'
         ) {
           target = 'bp';
           finalBp = true;
-        } else if (budget >= this.timings.shortIntroMs) target = 'matchup';
+        } else if (introDuration !== null) target = 'matchup';
         else {
           if (!this.manual) this.introFinished = true;
           target = 'gameplay';
         }
       }
-      if (target === 'matchup')
-        this.view.introDurationMs =
-          remaining >= this.timings.introMs + this.timings.hudLeadMs
-            ? this.timings.introMs
-            : this.timings.shortIntroMs;
+      if (target === 'matchup') this.view.introDurationMs = introDuration!;
     }
     if (!target) return;
     this.view.readyToTake = target === active ? null : target;
@@ -370,7 +432,7 @@ export class ProgramDirector {
       }
       return;
     }
-    this.inFlight = true;
+    this.inFlight = target;
     const generation = this.generation;
     const key = mapKey;
     try {
@@ -386,11 +448,31 @@ export class ProgramDirector {
             (this.projections.getCurrent().program.round?.phase === 'freezetime' &&
               this.projections.getCurrent().program.clock?.phase === 'freezetime' &&
               (this.projections.getCurrent().program.clock?.endsInSeconds ?? 0) * 1000 >=
-                this.timings.hudLeadMs + this.timings.shortIntroMs)) &&
+                this.timings.hudLeadMs +
+                  this.takeBudget(this.scenes.get().active, 'matchup') +
+                  this.takeBudget('matchup', 'gameplay') +
+                  this.timings.shortIntroMs)) &&
           key === this.executionKey(this.projections.getCurrent().program),
         finalBp,
       );
       if (!result.ok) {
+        // A changed automatic choice or a consumed real freeze budget is a normal
+        // cancellation. Re-evaluate current facts instead of permanently blocking.
+        const current = this.projections.getCurrent().program;
+        if (
+          generation !== this.generation ||
+          (key === this.executionKey(current) &&
+            target !== 'gameplay' &&
+            this.safe(current) &&
+            (this.hudDue(current, this.scenes.get().active) ||
+              (target === 'matchup' &&
+                (current.clock?.endsInSeconds ?? 0) * 1000 <
+                  this.timings.hudLeadMs +
+                    this.takeBudget(this.scenes.get().active, 'matchup') +
+                    this.takeBudget('matchup', 'gameplay') +
+                    this.timings.shortIntroMs)))
+        )
+          return;
         if (!this.manual) this.failure = result.message;
         return;
       }
@@ -408,7 +490,7 @@ export class ProgramDirector {
       if (target === 'map_result') this.resultShown = true;
       this.predict(this.projections.getCurrent().program, target);
     } finally {
-      this.inFlight = false;
+      this.inFlight = null;
     }
   }
 }

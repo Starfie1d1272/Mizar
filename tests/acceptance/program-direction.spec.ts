@@ -90,27 +90,40 @@ test('live intro mounts after delayed presentation and polls do not repeatedly s
   let clockStarted = 0;
   let mode = 'auto';
   let elapsed = 0;
-  await page.routeWebSocket('**/local/v1/program', (socket) =>
-    socket.send(JSON.stringify(snapshot)),
-  );
+  let failScenes = false;
+  let revision = 'control-1';
+  let introRevision = 'intro-1';
+  let active = 'matchup';
+  let preparing = false;
+  let closeProgram: (() => Promise<void>) | undefined;
+  let connections = 0;
+  await page.routeWebSocket('**/local/v1/program', (socket) => {
+    connections++;
+    closeProgram = () => socket.close({ code: 1012, reason: 'reconnect regression' });
+    socket.send(JSON.stringify(snapshot));
+  });
   await page.route('**/local/v1/program-scenes', (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 'mizar.program-scenes.v1',
-        active: 'matchup',
-        revision: 'intro-1',
-        available: ['matchup'],
-        blocked: {},
-        director: {
-          mode,
-          next: 'gameplay',
-          reason: null,
-          introDurationMs: 6000,
-          sceneElapsedMs:
-            mode === 'blocked' ? elapsed : clockStarted ? Date.now() - clockStarted : 0,
-        },
-      },
-    }),
+    failScenes
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({
+          json: {
+            schemaVersion: 'mizar.program-scenes.v1',
+            active,
+            revision,
+            introRevision,
+            ...(preparing ? { preparing: { target: 'matchup', revision: 'intro-2' } } : {}),
+            available: ['matchup'],
+            blocked: {},
+            director: {
+              mode,
+              next: 'gameplay',
+              reason: null,
+              introDurationMs: 6000,
+              sceneElapsedMs:
+                mode === 'blocked' ? elapsed : clockStarted ? Date.now() - clockStarted : 0,
+            },
+          },
+        }),
   );
   let releasePresentation!: () => void;
   const ready = new Promise<void>((resolve) => {
@@ -177,6 +190,60 @@ test('live intro mounts after delayed presentation and polls do not repeatedly s
       page.locator('.intro-team--a img').evaluate((el) => el.getAnimations()[0]?.playState),
     )
     .toBe('running');
+  // Tail visibility must survive a control-plane fault, socket recovery and other
+  // scene revisions; only a genuinely new opening can return to its start.
+  clockStarted = Date.now() - 6100;
+  const tailOpacity = () =>
+    page.locator('.intro-hud').evaluate((el) => Number(getComputedStyle(el).opacity));
+  await expect.poll(tailOpacity).toBe(1);
+  await page.evaluate(() => {
+    const probe = { minimum: 1, running: true };
+    Object.assign(window, { introTailProbe: probe });
+    const sample = () => {
+      const el = document.querySelector('.intro-hud');
+      if (el) probe.minimum = Math.min(probe.minimum, Number(getComputedStyle(el).opacity));
+      if (probe.running) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  failScenes = true;
+  await expect
+    .poll(() => page.locator('.intro-hud').evaluate((el) => el.getAnimations()[0]?.playState))
+    .toBe('paused');
+  expect(await tailOpacity()).toBe(1);
+  failScenes = false;
+  revision = 'control-resume';
+  await page.waitForTimeout(350);
+  expect(await tailOpacity()).toBe(1);
+  await closeProgram!();
+  await expect.poll(() => connections).toBe(2);
+  expect(await tailOpacity()).toBe(1);
+  active = 'gameplay';
+  revision = 'gameplay-take';
+  await page.waitForTimeout(350);
+  expect(await tailOpacity()).toBe(1);
+  const minimumTailOpacity = await page.evaluate(() => {
+    const probe = (window as unknown as { introTailProbe: { minimum: number; running: boolean } })
+      .introTailProbe;
+    probe.running = false;
+    return probe.minimum;
+  });
+  expect(minimumTailOpacity).toBe(1);
+  preparing = true;
+  await expect.poll(tailOpacity).toBe(0);
+  await expect
+    .poll(() => page.locator('.intro-hud').evaluate((el) => el.getAnimations()[0]?.playState))
+    .toBe('paused');
+  expect(
+    await page.locator('.intro-hud').evaluate((el) => el.getAnimations()[0]?.currentTime),
+  ).toBe(0);
+  preparing = false;
+  active = 'matchup';
+  revision = 'new-take';
+  introRevision = 'intro-2';
+  clockStarted = Date.now();
+  await expect.poll(tailOpacity).toBe(0);
+  await expect(page.locator('.intro-team--a img')).toBeVisible();
 });
 
 test('result headers stay clear of map tabs and winners appear only at match completion', async ({

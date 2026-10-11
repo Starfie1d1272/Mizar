@@ -40,8 +40,25 @@ export class ProgramSceneController {
     this.revision = randomUUID();
     return true;
   }
+  cancelAutomatic(): void {
+    this.automaticSwitch?.abort();
+  }
+  setWarmupScene(scene: 'waiting' | 'gameplay', expectedRevision: string): boolean {
+    if (
+      this.updatePending ||
+      this.resourceActivationPending ||
+      !this.director ||
+      expectedRevision !== this.revision
+    )
+      return false;
+    this.director.setWarmupScene(scene);
+    this.automaticSwitch?.abort();
+    this.revision = randomUUID();
+    return true;
+  }
   private active: ProgramSceneId = 'waiting';
   private revision = randomUUID();
+  private introRevision: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private automaticSwitch: AbortController | undefined;
   private preparing: { target: ProgramSceneId; revision: string } | undefined;
@@ -115,6 +132,8 @@ export class ProgramSceneController {
       schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       revision: this.revision,
+      introRevision:
+        this.preparing?.target === 'matchup' ? this.preparing.revision : this.introRevision,
       ...(this.preparing ? { preparing: this.preparing } : {}),
       ...(this.director ? { director: this.director.get() } : {}),
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
@@ -129,6 +148,7 @@ export class ProgramSceneController {
       this.deferredResourceScene = id;
       return;
     }
+    if (id === 'matchup' && this.active !== id) this.introRevision = randomUUID();
     this.active = id;
     this.revision = randomUUID();
   }
@@ -194,7 +214,7 @@ export class ProgramSceneController {
         const urgent =
           id === 'gameplay' &&
           (p.round?.phase === 'live' ||
-            (p.clock?.phase === 'freezetime' && (p.clock.endsInSeconds ?? 0) <= 1));
+            (p.clock?.phase === 'freezetime' && (p.clock.endsInSeconds ?? 0) <= 5));
         this.preparing = { target: id, revision: nextRevision };
         await this.switchObs?.(id, {
           transition: programTransition(previous, id, !automaticValid || urgent),
@@ -220,6 +240,7 @@ export class ProgramSceneController {
         if (previous === 'bp') this.bpSession.finishSceneExit();
         this.active = id;
         this.revision = nextRevision;
+        if (id === 'matchup') this.introRevision = nextRevision;
       } catch {
         await rollback();
         return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
@@ -249,6 +270,14 @@ export function registerProgramSceneRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const body = request.body as Record<string, unknown> | null;
+    if (
+      body?.action === 'warmup' &&
+      typeof body.expectedRevision === 'string' &&
+      (body.scene === 'waiting' || body.scene === 'gameplay')
+    )
+      return options.controller.setWarmupScene(body.scene, body.expectedRevision)
+        ? options.controller.get()
+        : reply.code(409).send({ message: '播出状态已变化，请核对后重试。' });
     if (body?.action !== 'resume' || typeof body.expectedRevision !== 'string')
       return reply.code(400).send({ error: 'invalid_director_command' });
     return options.controller.resumeAutomatic(body.expectedRevision)

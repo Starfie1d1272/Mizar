@@ -55,6 +55,8 @@ export const programSceneStateSchema = z.object({
   schemaVersion: z.literal('mizar.program-scenes.v1'),
   active: programSceneIdSchema,
   revision: z.string().min(1),
+  // Opening identity survives unrelated control revisions and leaving its source.
+  introRevision: z.string().min(1).optional(),
   preparing: z.object({ target: programSceneIdSchema, revision: z.string().min(1) }).optional(),
   available: z.array(programSceneIdSchema),
   director: z
@@ -67,6 +69,7 @@ export const programSceneStateSchema = z.object({
       // A target admitted by the Director timing gates; manual hold still prevents execution.
       readyToTake: programSceneIdSchema.nullable().optional(),
       reason: z.string().nullable(),
+      warmupScene: z.enum(['waiting', 'gameplay']).optional(),
       introDurationMs: z.number().nonnegative(),
       sceneElapsedMs: z.number().nonnegative(),
       gg: z

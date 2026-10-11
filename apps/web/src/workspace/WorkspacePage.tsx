@@ -19,7 +19,7 @@ import {
   type Production,
   command,
 } from '../preparation/client';
-import { Button, StatusPill, Dialog } from '../ui';
+import { Button, StatusPill, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
@@ -283,6 +283,25 @@ export function WorkspaceDock() {
           ))}
         </div>
         <div className="workspace-next-preview" aria-label="下一个场景预览">
+          <Select
+            label="热身画面"
+            disabled={busy || !sceneState?.director}
+            value={sceneState?.director?.warmupScene ?? 'waiting'}
+            onChange={(event) => {
+              const scene = event.currentTarget.value;
+              if (sceneState && (scene === 'waiting' || scene === 'gameplay'))
+                void action(() =>
+                  command('/operator/program-director', {
+                    action: 'warmup',
+                    scene,
+                    expectedRevision: sceneState.revision,
+                  }),
+                );
+            }}
+          >
+            <option value="waiting">赛前等待</option>
+            <option value="gameplay">游戏画面</option>
+          </Select>
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
             <small>下一场景</small>
