@@ -24,7 +24,7 @@ $report = [ordered]@{
 function Save-Report {
   $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $root 'report.json') -Encoding utf8NoBOM
 }
-function Measure([string]$Phase, [scriptblock]$Operation) {
+function Invoke-PackagingPhase([string]$Phase, [scriptblock]$Operation) {
   $timer = [Diagnostics.Stopwatch]::StartNew()
   $status = 'failure'
   try { & $Operation | Out-Host; $status = 'success' }
@@ -37,7 +37,7 @@ function Measure([string]$Phase, [scriptblock]$Operation) {
   }
 }
 $product = Join-Path $root 'original'
-Measure 'download-and-verify-original-candidate' {
+Invoke-PackagingPhase 'download-and-verify-original-candidate' {
   $runText = & gh api "repos/$repository/actions/runs/$candidateRun"
   if ($LASTEXITCODE) { throw 'Candidate run lookup failed' }
   $run = ($runText | Out-String) | ConvertFrom-Json
@@ -72,7 +72,7 @@ Measure 'download-and-verify-original-candidate' {
   if ($fullExe -ne $coreExe) { throw 'Full/Core do not reuse identical formal compilation' }
   $report.desktopExeSha256 = $fullExe.ToLowerInvariant()
 }
-Measure 'install-fixed-nsis-tools' {
+Invoke-PackagingPhase 'install-fixed-nsis-tools' {
   & choco install nsis --version=3.11 -y --no-progress
   if ($LASTEXITCODE) { throw 'Fixed NSIS tools unavailable' }
 }
@@ -89,12 +89,12 @@ for ($round = 1; $round -le 3; $round++) {
     $bundle = Join-Path $out $originalRoot.Name
     $env:PACKAGING_INPUT = $originalRoot.FullName
     $env:PACKAGING_OUTPUT = $bundle
-    if ($mode -eq 'full') { Measure 'assemble-compiled-payload' {
+    if ($mode -eq 'full') { Invoke-PackagingPhase 'assemble-compiled-payload' {
       node --input-type=module -e "import {cp} from 'node:fs/promises'; await cp(process.env.PACKAGING_INPUT,process.env.PACKAGING_OUTPUT,{recursive:true,force:false,errorOnExist:true});"
       if ($LASTEXITCODE) { throw 'Payload assembly failed' }
     } }
     $archive = Join-Path $out ($originalRoot.Name + '.zip')
-    if ($mode -eq 'full') { Measure 'zip-compression' {
+    if ($mode -eq 'full') { Invoke-PackagingPhase 'zip-compression' {
       & (Join-Path $source 'scripts/qualification/create-windows-archive.ps1') -BundleRoot $bundle -ArchivePath $archive
     } } else {
       # The original formal Full is the shared compilation/staging boundary. Materialize
@@ -102,7 +102,7 @@ for ($round = 1; $round -le 3; $round++) {
       $fullInput = @(Get-ChildItem -LiteralPath (Join-Path $root 'input-full') -Directory)[0]
       $env:PACKAGING_INPUT = $fullInput.FullName
       $env:PACKAGING_OUTPUT = Join-Path $out $fullInput.Name
-      Measure 'prepare-shared-full-input-excluded-from-comparison' {
+      Invoke-PackagingPhase 'prepare-shared-full-input-excluded-from-comparison' {
         node --input-type=module -e "import {cp} from 'node:fs/promises'; await cp(process.env.PACKAGING_INPUT,process.env.PACKAGING_OUTPUT,{recursive:true,force:false,errorOnExist:true});"
         if ($LASTEXITCODE) { throw 'Shared Full input preparation failed' }
         Copy-Item -LiteralPath (Join-Path $product 'release-manifest.json') -Destination $out
@@ -110,7 +110,7 @@ for ($round = 1; $round -le 3; $round++) {
       }
       $env:PACKAGING_OUTPUT = $out
       $env:PACKAGING_INSTRUMENTED_SOURCE = (Get-Location).Path
-      Measure 'core-partition-and-compression-total-with-input-verification' {
+      Invoke-PackagingPhase 'core-partition-and-compression-total-with-input-verification' {
         node --input-type=module -e "import {pathToFileURL} from 'node:url';import {writeFile} from 'node:fs/promises';import {performance} from 'node:perf_hooks';const {prepareCoreCandidate}=await import(pathToFileURL(process.env.PACKAGING_INSTRUMENTED_SOURCE+'/scripts/qualification/core-candidate.mjs'));const phases=[];const timed=async(phase,op)=>{const t=performance.now();const result=await op();phases.push({phase,durationMs:Math.round(performance.now()-t),status:'success'});await writeFile(process.env.PACKAGING_OUTPUT+'/core-partition-timings.json',JSON.stringify({phases},null,2));return result;};await prepareCoreCandidate(process.env.PACKAGING_OUTPUT,{repository:'$repository',ref:'refs/heads/main',sha:'$sourceSha',event:'workflow_dispatch',workflowRef:'$repository/.github/workflows/release-qualification.yml@refs/heads/main'},'$sourceSha','$sourceSha',timed);"
         if ($LASTEXITCODE) { throw 'Real Core partition failed' }
       }
@@ -126,7 +126,7 @@ for ($round = 1; $round -le 3; $round++) {
     $distributionName = if ($mode -eq 'full') { 'distribution-manifest.json' } else { 'core-distribution-manifest.json' }
     if ($mode -eq 'full') { Copy-Item -LiteralPath (Join-Path $product $manifestName) -Destination (Join-Path $out $manifestName) }
     $installed = Join-Path $out 'installed'
-    Measure 'original-setup-lifecycle' {
+    Invoke-PackagingPhase 'original-setup-lifecycle' {
       & (Join-Path $source 'scripts/qualification/create-windows-setup.ps1') -BundleRoot $bundle -OutputRoot $out -ExtractRoot $installed -ManifestName $manifestName -DistributionName $distributionName
     }
     $distribution = Get-Content -Raw -LiteralPath (Join-Path $out $distributionName) | ConvertFrom-Json
@@ -134,7 +134,7 @@ for ($round = 1; $round -le 3; $round++) {
     $script:sample.setupSha256 = $distribution.archiveSha256
     $script:sample.installerCompilerSha256 = $distribution.installerCompilerSha256
     $script:sample.installerScriptSha256 = $distribution.installerScriptSha256
-    Measure 'cleanup-runner-installation' {
+    Invoke-PackagingPhase 'cleanup-runner-installation' {
       $uninstaller = Join-Path (Join-Path $installed $originalRoot.Name) 'Uninstall.exe'
       $p = Start-Process -FilePath $uninstaller -ArgumentList @('/S', ('_?=' + (Split-Path $uninstaller))) -PassThru -Wait
       if ($p.ExitCode) { throw 'Runner uninstall failed' }
