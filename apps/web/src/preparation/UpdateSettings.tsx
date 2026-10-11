@@ -306,13 +306,14 @@ export function UpdateSettings() {
       ) : null}
       {status?.lastResult === 'recovery-required' ? (
         <StatusBanner tone="danger">
-          升级需要恢复。
+          升级需要恢复。保存资料并关闭 Mizar 与残留安装向导后，在对应 install-* 安装记录目录运行
+          Restore-Mizar.cmd。保留备份和恢复记录。
           <Button
             onClick={() =>
-              void desktopInvoke('open_update_recovery').catch(() => setError('恢复工具未能打开。'))
+              void desktopInvoke('open_update_recovery').catch(() => setError('恢复目录未能打开。'))
             }
           >
-            打开恢复工具
+            打开恢复目录
           </Button>
         </StatusBanner>
       ) : null}

@@ -73,6 +73,8 @@ export class UpdateManager {
   private prepared = false;
   private planning = false;
   private settingsInvalid = false;
+  private initializationError: string | null = null;
+  private checkFailure: unknown;
   private lastResult: string | null = null;
   private operationId = randomUUID();
   private failureDetails: ReturnType<typeof updateFailure>[] = [];
@@ -142,10 +144,28 @@ export class UpdateManager {
     this.settingsSave = save.catch(() => {});
     return save;
   }
+  private disableInitialization(stage: string, cause: unknown) {
+    const code = safeCode(cause);
+    this.initializationError =
+      code === 'update_operation_failed' ? 'update_initialization_failed' : code;
+    this.error = this.initializationError;
+    this.phase = 'error';
+    this.candidate = null;
+    this.ready = null;
+    this.failure(stage, new Error(this.initializationError, { cause }));
+  }
+  private requireInitialized() {
+    if (this.initializationError) throw new Error(this.initializationError);
+  }
   async load() {
-    await mkdir(this.root, { recursive: true });
-    if (!(await lstat(this.root)).isDirectory() || (await lstat(this.root)).isSymbolicLink())
-      throw new Error('update_directory_invalid');
+    try {
+      await mkdir(this.root, { recursive: true });
+      const info = await lstat(this.root);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('update_directory_invalid');
+    } catch (cause) {
+      this.disableInitialization('directory_load', cause);
+      return;
+    }
     try {
       this.config = configSchema.parse(
         JSON.parse(await readFile(join(this.root, 'settings.json'), 'utf8')),
@@ -166,9 +186,21 @@ export class UpdateManager {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('ready_load', error);
       this.ready = null;
     }
-    for (const name of await readdir(this.root)) {
-      if (/^download-[A-Za-z0-9_-]+$/.test(name) && name !== this.ready?.directory)
-        await rm(join(this.root, name), { recursive: true, force: true });
+    let names: string[] = [];
+    try {
+      names = await readdir(this.root);
+    } catch (cause) {
+      this.disableInitialization('directory_scan', cause);
+    }
+    for (const name of names) {
+      if (/^download-[A-Za-z0-9_-]+$/.test(name) && name !== this.ready?.directory) {
+        try {
+          await rm(join(this.root, name), { recursive: true, force: true });
+        } catch (cause) {
+          this.disableInitialization('download_cleanup', cause);
+          break;
+        }
+      }
     }
     try {
       const result = z
@@ -249,7 +281,7 @@ export class UpdateManager {
     void this.automaticCheck('startup');
   }
   private async automaticCheck(reason: 'startup' | 'periodic') {
-    if (!this.config.automatic || this.settingsInvalid || this.closed) {
+    if (!this.config.automatic || this.settingsInvalid || this.initializationError || this.closed) {
       if (this.startupPending) this.event('check', 'update_check_startup_disabled');
       this.startupPending = false;
       return;
@@ -295,6 +327,7 @@ export class UpdateManager {
   }
   setAutomatic(automatic: boolean) {
     const change = this.preferenceChange.then(async () => {
+      this.requireInitialized();
       if (this.settingsInvalid) throw new Error('update_settings_invalid');
       if (this.task || this.prepared || this.planning) throw new Error('update_busy');
       const previous = this.config.automatic;
@@ -311,6 +344,7 @@ export class UpdateManager {
   }
   async check(internal = false, reason: 'manual' | 'startup' | 'periodic' = 'manual') {
     await this.preferenceChange;
+    this.requireInitialized();
     if (this.settingsInvalid) throw new Error('update_settings_invalid');
     if (this.task && this.phase === 'checking' && !this.prepared && !this.planning)
       return this.task;
@@ -332,6 +366,7 @@ export class UpdateManager {
   private async doCheck(signal: AbortSignal, reason: 'manual' | 'startup' | 'periodic') {
     this.operationId = randomUUID();
     this.failureDetails = [];
+    this.checkFailure = undefined;
     this.event('check', `update_check_${reason}`);
     try {
       await this.saveConfig();
@@ -378,6 +413,7 @@ export class UpdateManager {
           this.phase = 'ready';
           return;
         } catch (error) {
+          this.checkFailure = error;
           this.failure('cached_download_verify', error);
           await this.discard();
         }
@@ -385,6 +421,7 @@ export class UpdateManager {
       this.phase = 'available';
       this.event('check', 'authenticated');
     } catch (e) {
+      this.checkFailure = e;
       this.phase = 'error';
       this.error = safeCode(e);
       this.failure('check', e);
@@ -410,6 +447,7 @@ export class UpdateManager {
     return path;
   }
   download(): Promise<void> {
+    if (this.initializationError) return Promise.reject(new Error(this.initializationError));
     if (
       this.task ||
       this.planning ||
@@ -540,6 +578,7 @@ export class UpdateManager {
     }
   }
   async cancel() {
+    this.requireInitialized();
     if (this.prepared || this.planning) throw new Error('update_busy');
     this.abort?.abort();
     await this.task;
@@ -555,6 +594,7 @@ export class UpdateManager {
     await rm(join(this.root, 'ready.json'), { force: true });
   }
   async prepare() {
+    this.requireInitialized();
     if (this.phase !== 'ready' || !this.ready || this.task || this.prepared || this.planning)
       throw new Error('update_unavailable');
     this.planning = true;
@@ -562,7 +602,7 @@ export class UpdateManager {
       // Re-authenticate at installation time; a previously downloaded version can be revoked by publication of a newer Stable.
       await this.check(true);
       if (this.phase !== 'ready' || !this.ready || !this.candidate)
-        throw new Error('update_recheck_required');
+        throw new Error('update_recheck_required', { cause: this.checkFailure });
       const installer = await this.verifyFile(this.ready);
       this.prepared = true;
       this.phase = 'installing';
@@ -624,6 +664,7 @@ export function updateFailure(stage: string, error: unknown, operationId: string
     update_settings_invalid: '更新记录无法读取或保存。',
     update_publication_mismatch: '正式发布确认与已认证版本不一致。',
     update_cleanup_failed: '下载失败后清理暂存文件也未完成。',
+    update_initialization_failed: '更新目录初始化未完成，更新功能暂不可用。',
     update_download_timeout: '安装包下载超时，未完成下载。',
   };
   const summary =
@@ -656,36 +697,44 @@ export function updateFailure(stage: string, error: unknown, operationId: string
   ].includes(stage);
   const nextStep = security
     ? '保留现有版本，请导出诊断并从正式发布页核对安装包。'
-    : code === 'update_settings_invalid' || recordFailure
-      ? '保留当前版本及更新、备份和恢复记录；检查用户资料目录的读写权限与剩余空间，导出诊断。不要删除记录绕过校验。'
-      : code === 'update_cleanup_failed' || stage === 'download_cleanup'
-        ? '保留当前版本及备份和恢复目录；检查是否有进程占用暂存文件及目录权限，导出诊断后处理。清理未完成时不要继续安装。'
-        : code === 'update_download_timeout'
-          ? '保留当前版本；核对下载来源的连接、代理及暂存目录权限与空间后，重新检查并下载，或从正式发布页获取完整离线包。'
-          : code === 'update_trust_metadata_failed'
-            ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
-            : rateLimited
-              ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
-              : status === 403
-                ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
-                : code === 'update_network_failed'
-                  ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
-                  : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
+    : code === 'update_initialization_failed'
+      ? '保留当前版本及更新、备份和恢复记录；检查目录读写权限、文件占用与剩余空间，导出诊断。修复后重启 Mizar；不要删除记录绕过校验。'
+      : code === 'update_settings_invalid' || recordFailure
+        ? '保留当前版本及更新、备份和恢复记录；检查用户资料目录的读写权限与剩余空间，导出诊断。不要删除记录绕过校验。'
+        : code === 'update_cleanup_failed' || stage === 'download_cleanup'
+          ? '保留当前版本及备份和恢复目录；检查是否有进程占用暂存文件及目录权限，导出诊断后处理。清理未完成时不要继续安装。'
+          : code === 'update_download_timeout'
+            ? '保留当前版本；核对下载来源的连接、代理及暂存目录权限与空间后，重新检查并下载，或从正式发布页获取完整离线包。'
+            : code === 'update_trust_metadata_failed'
+              ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
+              : rateLimited
+                ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
+                : status === 403
+                  ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
+                  : code === 'update_network_failed'
+                    ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
+                    : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
   const stageLabel =
-    stage === 'trust_metadata'
-      ? '刷新信任元数据'
-      : stage.includes('download')
-        ? '下载安装包'
-        : stage === 'install_plan'
-          ? '准备安装'
-          : stage.startsWith('result')
-            ? '读取安装恢复记录'
-            : stage.includes('load')
-              ? '读取更新记录'
-              : stage === 'operator_action'
-                ? '执行更新操作'
-                : stage === 'qualification_proof_rejected'
-                  ? '验证更新来源'
-                  : '检查更新来源';
+    stage === 'directory_load'
+      ? '初始化更新目录'
+      : stage === 'directory_scan'
+        ? '读取更新目录'
+        : stage === 'download_cleanup'
+          ? '清理更新暂存目录'
+          : stage === 'trust_metadata'
+            ? '刷新信任元数据'
+            : stage.includes('download')
+              ? '下载安装包'
+              : stage === 'install_plan'
+                ? '准备安装'
+                : stage.startsWith('result')
+                  ? '读取安装恢复记录'
+                  : stage.includes('load')
+                    ? '读取更新记录'
+                    : stage === 'operator_action'
+                      ? '执行更新操作'
+                      : stage === 'qualification_proof_rejected'
+                        ? '验证更新来源'
+                        : '检查更新来源';
   return { code, stage, stageLabel, summary, nextStep, operationId };
 }

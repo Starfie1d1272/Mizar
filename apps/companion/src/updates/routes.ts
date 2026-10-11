@@ -6,7 +6,7 @@ import { isObsProcessRunning } from '../obs/config.js';
 import { errorEvidence } from './diagnostics.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 import type { registerProductionRoutes } from '../program-scenes/production.js';
-import { UpdateManager, safeCode } from './manager.js';
+import { UpdateManager, safeCode, updateFailure } from './manager.js';
 
 export function installBlockReason(
   production: { mode: string },
@@ -154,23 +154,29 @@ export function registerUpdateRoutes(
       return { released: true };
     }
     if (action !== 'prepare') return reply.code(400).send({ error: 'update_action_invalid' });
+    let blockedReason: string | null = null;
     try {
       const plan = await manager.prepare();
-      const reason = await assess();
-      if (reason) throw new Error(reason);
-      if (!production.reserveUpdate()) throw new Error('制作状态已变化，请结束制作后重试。');
+      blockedReason = await assess();
+      if (blockedReason) throw new Error(blockedReason);
+      if (!production.reserveUpdate()) {
+        blockedReason = '制作状态已变化，请结束制作后重试。';
+        throw new Error(blockedReason);
+      }
       scenes.setUpdatePending(true);
       return plan;
     } catch (e) {
-      manager.failure('install_plan', e);
+      const reason =
+        e instanceof Error && e.message === 'update_recheck_required' && e.cause instanceof Error
+          ? e.cause
+          : e;
+      manager.failure('install_plan', reason);
+      const failure = updateFailure('install_plan', reason, '');
       manager.release();
       production.releaseUpdate();
       scenes.setUpdatePending(false);
       return reply.code(409).send({
-        message:
-          e instanceof Error && !e.message.startsWith('update_')
-            ? e.message
-            : '更新尚未通过重新验证，请检查更新后重试。',
+        message: blockedReason ?? `${failure.summary} ${failure.nextStep}`,
       });
     }
   });
