@@ -1082,6 +1082,7 @@ mod tests {
             .prepare_preserved(&video, &root.join("absent/cs2.exe"))
             .unwrap();
         journal["launchAttempted"] = json!(true);
+        journal["launchTime"] = json!(1); // Complete the same submitted-launch record as the existing owner fixture.
         managed.store.save(&journal).unwrap();
         let before = std::fs::read(managed.store.backup_directory().join("pending.json")).unwrap();
         assert!(managed.startup_recovery_status().unwrap().uncertain);
