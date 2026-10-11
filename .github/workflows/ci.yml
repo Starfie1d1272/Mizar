@@ -513,6 +513,7 @@ jobs:
             .agent-tmp/packaging-evidence/*/setup-timings.json
             .agent-tmp/packaging-evidence/*/core-setup-timings.json
             .agent-tmp/packaging-evidence/*/core-partition-timings.json
+            .agent-tmp/packaging-evidence/*/full-packaging-timings.json
             .agent-tmp/packaging-evidence/*/distribution-manifest.json
             .agent-tmp/packaging-evidence/*/core-distribution-manifest.json
           if-no-files-found: error

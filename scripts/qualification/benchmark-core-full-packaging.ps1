@@ -89,14 +89,15 @@ for ($round = 1; $round -le 3; $round++) {
     $bundle = Join-Path $out $originalRoot.Name
     $env:PACKAGING_INPUT = $originalRoot.FullName
     $env:PACKAGING_OUTPUT = $bundle
-    if ($mode -eq 'full') { Invoke-PackagingPhase 'assemble-compiled-payload' {
-      node --input-type=module -e "import {cp} from 'node:fs/promises'; await cp(process.env.PACKAGING_INPUT,process.env.PACKAGING_OUTPUT,{recursive:true,force:false,errorOnExist:true});"
-      if ($LASTEXITCODE) { throw 'Payload assembly failed' }
-    } }
     $archive = Join-Path $out ($originalRoot.Name + '.zip')
-    if ($mode -eq 'full') { Invoke-PackagingPhase 'zip-compression' {
-      & (Join-Path $source 'scripts/qualification/create-windows-archive.ps1') -BundleRoot $bundle -ArchivePath $archive
-    } } else {
+    if ($mode -eq 'full') {
+      $env:PACKAGING_SAMPLE_ROOT = $out
+      Invoke-PackagingPhase 'full-assembly-and-compression-total' {
+        node --input-type=module -e "import {cp,writeFile} from 'node:fs/promises';import {pathToFileURL} from 'node:url';import {basename} from 'node:path';import {performance} from 'node:perf_hooks';const {createArchive}=await import(pathToFileURL(process.env.PACKAGING_SOURCE+'/scripts/qualification/build.mjs'));const phases=[];const timed=async(phase,op)=>{const t=performance.now();await op();phases.push({phase,durationMs:Math.round(performance.now()-t),status:'success'});await writeFile(process.env.PACKAGING_SAMPLE_ROOT+'/full-packaging-timings.json',JSON.stringify({phases},null,2));};await timed('copy-full-payload',()=>cp(process.env.PACKAGING_INPUT,process.env.PACKAGING_OUTPUT,{recursive:true,force:false,errorOnExist:true}));await timed('zip-archive',()=>createArchive(process.env.PACKAGING_OUTPUT,process.env.PACKAGING_SAMPLE_ROOT,basename(process.env.PACKAGING_OUTPUT)));"
+        if ($LASTEXITCODE) { throw 'Full assembly or compression failed' }
+      }
+      $script:sample.fullPackagingPhases = (Get-Content -Raw -LiteralPath (Join-Path $out 'full-packaging-timings.json') | ConvertFrom-Json).phases
+    } else {
       # The original formal Full is the shared compilation/staging boundary. Materialize
       # that input outside Core partition timing; the partition itself always copies it.
       $fullInput = @(Get-ChildItem -LiteralPath (Join-Path $root 'input-full') -Directory)[0]
