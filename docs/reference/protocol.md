@@ -126,7 +126,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 | `POST /operator/obs/launch-target` | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程 |
 | `GET /local/v1/program-scenes` | 当前场景、修订号、候选、阻断与编排状态 |
 | `POST /operator/program-scene` | 有修订号校验的人工切场 |
-| `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动 |
+| `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式 |
 | `GET /local/v1/program-presentation` | 有限节目摘要与相邻赛程，不返回完整比赛文档 |
 | `GET /local/v1/production-guidance` | 私有、只读、不缓存的制作提示与平台状态 |
 
