@@ -52,11 +52,19 @@ function Stop-Cs2Discovery {
 }
 
 function Get-SteamLaunchContext {
+    param($NativeIdentity)
     $steamProcesses = @(Get-Process -Name steam -ErrorAction SilentlyContinue)
     if ($steamProcesses.Count -eq 0) { Stop-Cs2Discovery 'steam-not-running' }
     if ($steamProcesses.Count -ne 1) { Stop-Cs2Discovery 'steam-not-unique' }
     try {
-        $steamExe = $steamProcesses[0].Path
+        if ($null -ne $NativeIdentity) {
+            # Host obtained this path from a held native process handle. Never
+            # substitute an installation-root candidate for the running image.
+            if ($NativeIdentity.pid -ne $steamProcesses[0].Id) { Stop-Cs2Discovery 'steam-path-unavailable' }
+            $steamExe = $NativeIdentity.executable
+        } else {
+            $steamExe = $steamProcesses[0].Path
+        }
         if ([string]::IsNullOrWhiteSpace($steamExe) -or -not (Test-Path -LiteralPath $steamExe -PathType Leaf)) {
             Stop-Cs2Discovery 'steam-path-unavailable'
         }
@@ -71,6 +79,9 @@ function Get-SteamLaunchContext {
         }
         if ($accountValue -lt 0) { $accountValue = [long]$accountValue + 4294967296 }
         $account = [uint32]$accountValue
+        if ($null -ne $NativeIdentity -and $null -ne $NativeIdentity.account -and $NativeIdentity.account -ne $account) {
+            Stop-Cs2Discovery 'steam-account-unavailable'
+        }
     } catch { Stop-Cs2Discovery 'steam-account-unavailable' -Cause $_.Exception }
     return @{ executable = $steamExe; account = $account }
 }
