@@ -22,13 +22,18 @@ concurrency:
 jobs:
   sync:
     if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && github.event.workflow_run.event == 'workflow_dispatch'))
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: fbf4bf51680dd206e0f0cb303884af82714011b7
           persist-credentials: false
+      - name: Set up Node.js 24 for the unchanged mirror tools
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
       - name: 同步与校验云盘
         env:
           # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
