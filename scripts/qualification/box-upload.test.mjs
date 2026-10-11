@@ -3,10 +3,10 @@ import { once } from 'node:events';
 import { Buffer, Blob } from 'node:buffer';
 import { setTimeout } from 'node:timers';
 import { afterEach, expect, it, vi } from 'vitest';
-import { multipartUpload } from './box-upload.mjs';
+import { apiRequest, multipartUpload } from './box-upload.mjs';
 import { BoxClient } from './box-sync.mjs';
 
-const { AbortSignal, FormData } = globalThis;
+const { AbortController, AbortSignal, FormData } = globalThis;
 
 const servers = [];
 afterEach(async () => {
@@ -30,6 +30,93 @@ function options(signal = AbortSignal.timeout(5000)) {
   body.set('file', new Blob([Buffer.from([0, 1, 255, 13, 10])]), 'original.exe');
   return { body, signal };
 }
+it('sends an API mutation once with the original JSON, authentication and UTF-8 length', async () => {
+  let observed;
+  const url = await endpoint(async (incoming, response) => {
+    const chunks = [];
+    for await (const chunk of incoming) chunks.push(chunk);
+    observed = { method: incoming.method, headers: incoming.headers, bytes: Buffer.concat(chunks) };
+    response.end(JSON.stringify({ ok: true }));
+  });
+  let calls = 0;
+  const client = new BoxClient('fixture-token', undefined, (address, settings) => {
+    calls++;
+    expect(address.origin).toBe('https://box.nju.edu.cn');
+    expect(address.pathname).toBe('/api/v2.1/via-repo-token/sync-batch-move-item/');
+    return apiRequest(url, settings, request);
+  });
+  const body = { src_dir: '/Stable', dst_dir: '/Archive', names: ['原文件.zip'] };
+  expect(await client.api('sync-batch-move-item', undefined, 'POST', body)).toEqual({ ok: true });
+  expect(calls).toBe(1);
+  expect(observed.method).toBe('POST');
+  expect(observed.headers.authorization).toBe('Token fixture-token');
+  expect(observed.headers['content-type']).toBe('application/json');
+  expect(Number(observed.headers['content-length'])).toBe(observed.bytes.length);
+  expect(observed.bytes.toString('utf8')).toBe(JSON.stringify(body));
+});
+it('cancels API connection and response waits through the caller signal without replay', async () => {
+  let calls = 0;
+  const url = await endpoint((incoming, response) => {
+    calls++;
+    incoming.resume();
+    response.write('partial response');
+  });
+  await expect(apiRequest(url, { signal: AbortSignal.abort() }, request)).rejects.toMatchObject({
+    name: 'AbortError',
+  });
+  expect(calls).toBe(0);
+  const controller = new AbortController();
+  const received = once(servers.at(-1), 'request');
+  const pending = apiRequest(url, { method: 'POST', signal: controller.signal }, request);
+  const failed = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  await received;
+  controller.abort();
+  await failed;
+  expect(calls).toBe(1);
+});
+it('does not follow API redirects or expose their private body', async () => {
+  const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+  let calls = 0;
+  const url = await endpoint((incoming, response) => {
+    calls++;
+    incoming.resume();
+    response.writeHead(302, { Location: '/private-target' });
+    response.end('private-server-body');
+  });
+  const client = new BoxClient('private-token', undefined, (_address, settings) =>
+    apiRequest(url, settings, request),
+  );
+  await expect(client.api('dir', '/Stable')).rejects.toThrow('HTTP 302');
+  expect(calls).toBe(1);
+  expect(logs.mock.calls.flat().join('\n')).not.toMatch(/private|http:\/\//);
+});
+it('bounds the API response while accepting an empty HTTP result', async () => {
+  const empty = await endpoint((incoming, response) => {
+    incoming.resume();
+    response.writeHead(204);
+    response.end();
+  });
+  const result = await apiRequest(empty, { signal: AbortSignal.timeout(5000) }, request);
+  expect(result.status).toBe(204);
+  expect(await result.text()).toBe('');
+  const large = await endpoint((incoming, response) => {
+    incoming.resume();
+    response.end(Buffer.alloc(2 * 1024 * 1024 + 1));
+  });
+  await expect(apiRequest(large, { signal: AbortSignal.timeout(5000) }, request)).rejects.toThrow();
+});
+it('reports the API JSON parsing stage without quoting private server content', async () => {
+  const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const url = await endpoint((incoming, response) => {
+    incoming.resume();
+    response.end('private-token https://box.nju.edu.cn/private-signed-link');
+  });
+  const client = new BoxClient('private-token', undefined, (_address, settings) =>
+    apiRequest(url, settings, request),
+  );
+  await expect(client.api('dir', '/Stable')).rejects.toThrow('JSON（解析阶段，SyntaxError）');
+  expect(logs.mock.calls.flat().join('\n')).not.toMatch(/private|https:\/\//);
+});
 it('sends complete multipart bytes with a correct length, then awaits the upload receipt', async () => {
   let observed;
   const url = await endpoint(async (incoming, response) => {

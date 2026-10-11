@@ -278,7 +278,7 @@ describe('云盘稳定版同步', () => {
         const stage = failure === 'body' ? '回读/Offline' : '上传/Offline';
         let message;
         try {
-          const client = new TransportClient(token, globalThis.fetch);
+          const client = new TransportClient(token, globalThis.fetch, globalThis.fetch);
           if (failure === 'body') await client.hash('/Offline/release.zip');
           else await client.upload('/Offline', 'release.zip', Buffer.from('original'));
         } catch (error) {
@@ -323,7 +323,7 @@ describe('云盘稳定版同步', () => {
       try {
         vi.resetModules();
         const { BoxClient: TransportClient } = await import('./box-sync.mjs');
-        const request = new TransportClient('fixture-token').api(
+        const request = new TransportClient('fixture-token', undefined, transport).api(
           'dir',
           '/Archive',
           failure === 'write' ? 'POST' : 'GET',
