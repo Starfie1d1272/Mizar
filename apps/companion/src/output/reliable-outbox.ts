@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 
 import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/output';
 
@@ -45,7 +46,8 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
     throw new Error('outbox_record_invalid');
   const item = input as Record<string, unknown>;
   if (
-    !['pending', 'accepted', 'rejected', 'expired', 'superseded'].includes(String(item.status)) ||
+    typeof item.status !== 'string' ||
+    !['pending', 'accepted', 'rejected', 'expired', 'superseded'].includes(item.status) ||
     typeof item.attempts !== 'number' ||
     !Number.isSafeInteger(item.attempts) ||
     item.attempts < 0 ||
@@ -64,56 +66,215 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
   };
 }
 
+export interface OutboxRecovery {
+  readonly code: 'outbox_recovered' | 'outbox_preserved_without_records';
+  readonly recoveredRecords: number;
+  readonly message: string;
+}
+
+interface ParsedOutbox {
+  readonly file: OutboxFile;
+  readonly damaged: boolean;
+}
+
+function parseOutbox(bytes: Buffer, salvage = false): ParsedOutbox {
+  if (bytes.length > 4_000_000) throw new Error('outbox_too_large');
+  const raw: unknown = JSON.parse(bytes.toString('utf8'));
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new Error('outbox_invalid');
+  const value = raw as Record<string, unknown>;
+  if (
+    value.version !== RELIABLE_OUTBOX_VERSION ||
+    !Array.isArray(value.records) ||
+    value.records.length > RELIABLE_OUTBOX_MAX_RECORDS
+  )
+    throw new Error('outbox_invalid');
+  const records: ReliableOutboxRecord[] = [];
+  let damaged = false;
+  for (const record of value.records) {
+    try {
+      records.push(parseRecord(record));
+    } catch (error) {
+      if (!salvage) throw error;
+      damaged = true;
+    }
+  }
+  let continuity: DeliveryContinuity | undefined;
+  if (value.continuity !== undefined) {
+    try {
+      const checkpoint = value.continuity as DeliveryContinuity;
+      if (
+        checkpoint === null ||
+        typeof checkpoint !== 'object' ||
+        Object.keys(checkpoint).sort().join(',') !==
+          'contextRevision,cursor,mapName,matchId,savedAt'
+      )
+        throw new Error('outbox_continuity_invalid');
+      const reference = records.at(-1)?.event;
+      if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
+        throw new Error('outbox_continuity_invalid');
+      parseReliableEventV1({
+        ...reference,
+        matchId: checkpoint.matchId,
+        contextRevision: checkpoint.contextRevision,
+        cursor: checkpoint.cursor,
+        mapName: checkpoint.mapName,
+        observedAt: checkpoint.savedAt,
+      });
+      continuity = checkpoint;
+    } catch (error) {
+      if (!salvage) throw error;
+      damaged = true;
+    }
+  }
+  return {
+    file: {
+      version: RELIABLE_OUTBOX_VERSION,
+      records,
+      ...(continuity === undefined ? {} : { continuity }),
+    },
+    damaged,
+  };
+}
+
+async function readOptional(path: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/** Local-only evidence: never use this object as an HTTP response or support export. */
+export function outboxLocalError(error: unknown, depth = 0): unknown {
+  if (depth >= 6) return { message: 'cause depth exceeded' };
+  if (!(error instanceof Error)) return { message: String(error) };
+  const code = (error as NodeJS.ErrnoException).code;
+  return {
+    type: error.name,
+    message: error.message,
+    stack: error.stack,
+    ...(code === undefined ? {} : { code }),
+    ...(error.cause === undefined ? {} : { cause: outboxLocalError(error.cause, depth + 1) }),
+    ...(error instanceof AggregateError
+      ? {
+          errors: error.errors
+            .slice(0, 4)
+            .map((item: unknown) => outboxLocalError(item, depth + 1)),
+        }
+      : {}),
+  };
+}
+
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
   private readonly queue = new SerialCommitQueue();
   private continuity: DeliveryContinuity | undefined;
   private requestedScope: string | undefined;
 
-  constructor(private readonly filePath: string) {}
+  private recovery: OutboxRecovery | undefined;
+
+  constructor(
+    private readonly filePath: string,
+    private readonly onRecovery?: (report: OutboxRecovery | undefined, error: unknown) => void,
+  ) {}
+
+  getRecovery(): OutboxRecovery | undefined {
+    return this.recovery;
+  }
 
   async load(): Promise<void> {
-    try {
-      const text = await readFile(this.filePath, 'utf8');
-      if (Buffer.byteLength(text) > 4_000_000) throw new Error('outbox_too_large');
-      const raw: unknown = JSON.parse(text);
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
-        throw new Error('outbox_invalid');
-      const value = raw as Record<string, unknown>;
-      if (
-        value.version !== RELIABLE_OUTBOX_VERSION ||
-        !Array.isArray(value.records) ||
-        value.records.length > RELIABLE_OUTBOX_MAX_RECORDS
-      )
-        throw new Error('outbox_invalid');
-      this.records = value.records.map(parseRecord);
-      if (value.continuity !== undefined) {
-        const checkpoint = value.continuity as DeliveryContinuity;
-        if (
-          checkpoint === null ||
-          typeof checkpoint !== 'object' ||
-          Object.keys(checkpoint).sort().join(',') !==
-            'contextRevision,cursor,mapName,matchId,savedAt'
-        )
-          throw new Error('outbox_continuity_invalid');
-        // Validate the cursor and identity through the same strict event contract.
-        const reference = this.records.at(-1)?.event;
-        if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
-          throw new Error('outbox_continuity_invalid');
-        parseReliableEventV1({
-          ...reference,
-          matchId: checkpoint.matchId,
-          contextRevision: checkpoint.contextRevision,
-          cursor: checkpoint.cursor,
-          mapName: checkpoint.mapName,
-          observedAt: checkpoint.savedAt,
-        });
-        this.continuity = checkpoint;
+    // I/O errors are not evidence of damaged contents and must stay actionable.
+    const bytes = await readOptional(this.filePath);
+    let file: OutboxFile | undefined;
+    let cause: unknown;
+    if (bytes !== undefined) {
+      try {
+        file = parseOutbox(bytes).file;
+      } catch (error) {
+        cause = error;
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
+      if (file !== undefined) {
+        this.records = file.records;
+        this.continuity = file.continuity;
+        return;
+      }
     }
+    const mirrorPath = `${this.filePath}.last-good`;
+    let recoveryPhase = '读取恢复副本';
+    try {
+      const mirror = await readOptional(mirrorPath);
+      if (bytes === undefined && mirror === undefined) return;
+      // Preserve exact bytes before replacing anything. Failure remains a startup error.
+      const preserve = async (path: string, contents: Buffer): Promise<void> => {
+        await writeFile(`${path}.corrupt-${randomUUID()}`, contents, {
+          flag: 'wx',
+          mode: 0o600,
+          flush: true,
+        });
+      };
+      recoveryPhase = '另存原始文件';
+      if (mirror !== undefined) await preserve(mirrorPath, mirror);
+      if (bytes !== undefined) {
+        await preserve(this.filePath, bytes);
+        try {
+          file = parseOutbox(bytes, true).file;
+        } catch {
+          /* No byte guessing. */
+        }
+      }
+      if (file === undefined || file.records.length === 0) {
+        if (mirror !== undefined) {
+          try {
+            file = parseOutbox(mirror).file;
+          } catch (error) {
+            cause = new AggregateError(
+              [cause, error].filter((value) => value !== undefined),
+              'outbox_recovery_sources_invalid',
+            );
+            try {
+              file = parseOutbox(mirror, true).file;
+            } catch {
+              /* Preserve only. */
+            }
+          }
+        }
+      }
+      file ??= { version: RELIABLE_OUTBOX_VERSION, records: [] };
+      // The strict contract is checked again; partial state never escapes a failed load.
+      parseOutbox(Buffer.from(JSON.stringify(file)));
+      recoveryPhase = '保存恢复队列';
+      await replaceDurableJson(mirrorPath, file);
+      await replaceDurableJson(this.filePath, file);
+    } catch (error) {
+      this.onRecovery?.(
+        undefined,
+        new AggregateError(
+          [cause, error].filter((value) => value !== undefined),
+          'outbox_recovery_failed',
+        ),
+      );
+      throw Object.assign(
+        new Error(
+          `发送队列${recoveryPhase}失败。检查数据目录权限与磁盘空间后重试；保留原队列，不要删除。`,
+          { cause: error },
+        ),
+        { code: 'outbox_recovery_failed' },
+      );
+    }
+    if (file === undefined) throw new Error('outbox_recovery_missing');
+    this.records = file.records;
+    this.continuity = file.continuity;
+    this.recovery = {
+      code: file.records.length > 0 ? 'outbox_recovered' : 'outbox_preserved_without_records',
+      recoveredRecords: file.records.length,
+      message:
+        file.records.length > 0
+          ? `发送队列读取异常，已从有效内容恢复 ${file.records.length} 条记录；原文件已另存。发送仍需通过原有身份与时效检查。可在运行诊断导出诊断包反馈。`
+          : '发送队列损坏，原文件已另存，但未找到可恢复记录。Mizar 可继续使用；旧事件未确认送达，请核对接收端结果，在运行诊断导出诊断包反馈。',
+    };
+    this.onRecovery?.(this.recovery, cause ?? new Error('outbox_primary_missing'));
   }
 
   getRecords(): readonly ReliableOutboxRecord[] {
@@ -281,6 +442,9 @@ export class ReliableOutbox {
       records,
       ...(continuity === undefined ? {} : { continuity }),
     };
+    // Persist a validated recovery copy before publishing the authoritative file.
+    // A failed commit never advances the in-memory queue or reports success.
+    await replaceDurableJson(`${this.filePath}.last-good`, file);
     await replaceDurableJson(this.filePath, file);
     this.records = records;
     this.continuity = continuity;

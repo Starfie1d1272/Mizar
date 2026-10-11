@@ -1318,3 +1318,29 @@ it('cancels a timed-out outbox request and keeps map B live after map A returns 
     await f.close();
   }
 });
+
+it('starts the local application after preserving malformed output queue and exposes safe recovery', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-output-startup-'));
+  const path = join(dir, 'reliable-outbox.json');
+  await writeFile(path, Buffer.alloc(32));
+  const app = buildApp({ reliableOutboxPath: path });
+  try {
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    const response = await app.inject({ method: 'GET', url: '/local/v1/reliable-output-status' });
+    expect(response.statusCode).toBe(200);
+    const recoveryStatus: unknown = response.json();
+    expect(recoveryStatus).toMatchObject({
+      recovery: {
+        code: 'outbox_preserved_without_records',
+        recoveredRecords: 0,
+      },
+      records: [],
+    });
+    expect(response.body).toContain('旧事件未确认送达');
+    expect(response.body).not.toContain(dir);
+    expect(response.body).not.toContain('SyntaxError');
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

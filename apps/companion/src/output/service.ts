@@ -399,6 +399,10 @@ export class OutputService {
     }
   }
 
+  getReliableRecovery() {
+    return this.outbox?.getRecovery();
+  }
+
   getReliableRecords() {
     return this.outbox?.getRecords() ?? [];
   }
