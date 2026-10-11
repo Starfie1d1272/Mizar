@@ -76,7 +76,6 @@ function mutateProgram(id: DefaultHudCompositeFixture, snapshot: ProgramSnapshot
     } else if (snapshot.payload.match) {
       snapshot.payload.match.stage = stagePreview[id]!;
     }
-    if (id === 'default-stage-playin-00') snapshot.payload.map.score = { ct: 0, t: 0 };
     if (id === 'default-stage-long' && snapshot.payload.series) {
       snapshot.payload.series.entrants.a.name = '南京航空航天大学电子竞技代表队';
       snapshot.payload.series.entrants.b.name = '华东理工大学电子竞技联合代表队';
