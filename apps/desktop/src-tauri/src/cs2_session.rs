@@ -1058,12 +1058,32 @@ mod tests {
     }
 
     #[test]
-    fn missing_keys_skip_optional_cfg_and_legacy_records_never_own_keys() {
+    fn unreadable_keys_skip_optional_cfg_and_legacy_records_never_own_keys() {
         let (root, video, machine, executable, store) = frame_setup();
         let original =
             "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"false\"}}";
         fs::write(&machine, original).unwrap();
         let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        for invalid in [
+            b"\"config\" {\"bindings\" {\"1\" \"slot1\" \"1\" \"other\"}}".to_vec(),
+            b"\"config\" {\"bindings\" {} \"bindings\" {}}".to_vec(),
+            b"\"config\" {\"bindings\" {".to_vec(),
+            vec![b'x'; 256 * 1024 + 1],
+            vec![0xff],
+        ] {
+            fs::write(&keys, &invalid).unwrap();
+            let journal = store
+                .prepare_with_frame_rate(
+                    &video,
+                    &executable,
+                    cs2_video::VideoSize::new(1440, 810).unwrap(),
+                )
+                .unwrap();
+            assert!(journal.get("spectatorCfg").is_none());
+            assert!(!store.spectator_pending());
+            store.restore().unwrap();
+            assert_eq!(fs::read(&keys).unwrap(), invalid);
+        }
         fs::remove_file(&keys).unwrap();
         let journal = store
             .prepare_with_frame_rate(
