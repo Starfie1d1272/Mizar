@@ -37,6 +37,13 @@ impl PendingUpdate {
         }
     }
 }
+fn failure_guidance(summary: &str) -> String {
+    if summary.contains('请') {
+        summary.into()
+    } else {
+        format!("{summary} 升级未启动，旧版仍可用。请导出诊断并从正式发布页下载。")
+    }
+}
 fn io_failure(log: &DesktopLog, phase: &str, error: &std::io::Error, summary: &str) -> String {
     log.event(
         "update_install",
@@ -46,7 +53,7 @@ fn io_failure(log: &DesktopLog, phase: &str, error: &std::io::Error, summary: &s
             error.raw_os_error()
         )),
     );
-    summary.into()
+    failure_guidance(summary)
 }
 fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summary: &str) -> String {
     log.event(
@@ -59,7 +66,7 @@ fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summar
             error.column()
         )),
     );
-    summary.into()
+    failure_guidance(summary)
 }
 fn release_plan(log: &DesktopLog) {
     if request(log, "release").is_err() {
@@ -149,7 +156,14 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
             .set_read_timeout(Some(
                 deadline
                     .checked_duration_since(Instant::now())
-                    .ok_or("更新来源重新验证超时。")?,
+                    .ok_or_else(|| {
+                        log.event(
+                            "update_install",
+                            "failure",
+                            Some("phase=response_deadline; timeout"),
+                        );
+                        failure_guidance("更新来源重新验证超时。")
+                    })?,
             ))
             .map_err(|error| io_failure(log, "tcp_read_timeout", &error, "更新响应未完成。"))?;
         let mut chunk = [0; 4096];
@@ -166,7 +180,7 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
                 "failure",
                 Some("phase=response_read; size_limit_exceeded"),
             );
-            return Err("更新响应超出限制。".into());
+            return Err(failure_guidance("更新响应超出限制。"));
         }
     }
     let text = std::str::from_utf8(&bytes).map_err(|error| {
@@ -175,7 +189,7 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
             "failure",
             Some(&format!("phase=response_utf8; cause={error}")),
         );
-        "更新响应无效。"
+        failure_guidance("更新响应无效。")
     })?;
     let (headers, body) = text.split_once("\r\n\r\n").ok_or_else(|| {
         log.event(
@@ -191,7 +205,7 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
             "failure",
             Some("phase=response_framing; unsupported_transfer_encoding"),
         );
-        return Err("更新响应格式不支持。".into());
+        return Err(failure_guidance("更新响应格式不支持。"));
     }
     let value: Value = serde_json::from_str(body)
         .map_err(|error| json_failure(log, "response_json", &error, "更新响应无效。"))?;
@@ -209,7 +223,7 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
         );
         return Err(value["message"]
             .as_str()
-            .unwrap_or("更新尚未就绪，请重新检查。")
+            .unwrap_or("更新尚未就绪，升级未启动。请导出诊断并核对更新页面的阻断原因。")
             .into());
     }
     log.event(
@@ -219,11 +233,17 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
     );
     Ok(value)
 }
-fn same_path(value: &Value, expected: &Path) -> bool {
-    value
-        .as_str()
-        .and_then(|v| Path::new(v).canonicalize().ok())
-        .is_some_and(|p| p == expected)
+fn same_path(value: &Value, expected: &Path, log: &DesktopLog, phase: &str) -> bool {
+    let Some(value) = value.as_str() else {
+        return false;
+    };
+    match Path::new(value).canonicalize() {
+        Ok(path) => path == expected,
+        Err(error) => {
+            io_failure(log, phase, &error, "安装计划位置无法核对。");
+            false
+        }
+    }
 }
 pub fn check_on_startup(log: DesktopLog) {
     // Best effort background metadata check; failure never blocks or closes the Host.
@@ -236,8 +256,8 @@ fn validate_plan(plan: &Value, root: &Path, log: &DesktopLog) -> Result<(), Stri
     let state = &log.state_root;
     if plan["schemaVersion"] != 1
         || !root.join("installed.flag").is_file()
-        || !same_path(&plan["bundleRoot"], root)
-        || !same_path(&plan["stateRoot"], state)
+        || !same_path(&plan["bundleRoot"], root, log, "plan_bundle_canonicalize")
+        || !same_path(&plan["stateRoot"], state, log, "plan_state_canonicalize")
         || state.starts_with(root)
     {
         return Err("安装目录或用户资料位置不支持自动升级，请从正式发布页下载。".into());
@@ -686,16 +706,18 @@ mod tests {
                 .as_nanos()
         ));
         let log = DesktopLog::new(&root, Some(root.join("state"))).unwrap();
-        io_failure(
+        let message = io_failure(
             &log,
             "runtime_read",
             &std::io::Error::from_raw_os_error(5),
             "short UI",
         );
+        assert!(message.contains("导出诊断"));
+        assert!(message.contains("旧版仍可用"));
         let error =
             serde_json::from_str::<Value>(r#"{"controlToken":"private-control-token","secret":} "#)
                 .unwrap_err();
-        json_failure(&log, "runtime_json", &error, "short UI");
+        assert!(json_failure(&log, "runtime_json", &error, "short UI").contains("正式发布页"));
         let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
         assert!(evidence.contains("runtime_read"));
         assert!(evidence.contains("os_code=Some(5)"));
