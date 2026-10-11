@@ -12,14 +12,16 @@ export function installBlockReason(
   production: { mode: string },
   scenes: ReturnType<ProgramSceneController['get']>,
   obs: ObsStatus | undefined,
-  obsProcessAbsent = false,
+  obsProcessAbsent?: boolean,
 ): string | null {
   if (production.mode !== 'preparation') return '结束制作后可更新。';
   if (scenes.preparing || scenes.active !== 'waiting' || scenes.director?.mode === 'manual')
     return '结束节目制作后可更新。';
   if (obs?.streaming || obs?.recording) return '停止 OBS 推流或录制后可更新。';
   if ((!obs || obs.connection !== 'connected') && !obsProcessAbsent)
-    return 'OBS 正在运行或状态未确认，请关闭 OBS，或连接后核对推流与录制再更新。';
+    return obsProcessAbsent === false
+      ? 'OBS 正在运行但未连接，请关闭 OBS，或连接后核对推流与录制再更新。'
+      : 'OBS 进程状态检测未完成，升级尚未启动。请查看诊断、核对 OBS 已关闭后重试；再次失败时从正式发布页下载。';
   return null;
 }
 export function registerUpdateRoutes(

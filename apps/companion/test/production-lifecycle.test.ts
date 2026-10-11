@@ -439,8 +439,14 @@ it('requires the private Host and idle production, then prevents entry until upg
     // A process started after the page's assessment must still block the Host plan.
     obsProcessRunning.mockResolvedValue(true);
     expect((await host('prepare')).statusCode).toBe(409);
+    expect((await host('prepare')).json<{ message: string }>().message).toContain(
+      '正在运行但未连接',
+    );
     obsProcessRunning.mockRejectedValue(new Error('probe timed out'));
     expect((await host('prepare')).statusCode).toBe(409);
+    expect((await host('prepare')).json<{ message: string }>().message).toContain(
+      '进程状态检测未完成',
+    );
     expect(JSON.stringify(warn.mock.calls)).toContain('probe timed out');
     obsProcessRunning.mockResolvedValue(false);
     expect((await host('prepare')).statusCode).toBe(200);
