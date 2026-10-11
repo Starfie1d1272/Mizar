@@ -38,7 +38,7 @@ fn status_message(status: &Result<StartupRecoveryStatus, String>) -> String {
         Ok(status) if status.running => "CS2 正在运行，本次仅检查。可以继续当前游戏；正常退出游戏后再重新检查配置恢复。".into(),
         Ok(status) if status.requires_service => "Demo 试播隔离状态需要制播服务确认，本次不恢复配置。请修复制播服务启动问题后，再在准备中心恢复。".into(),
         Ok(status) if status.uncertain => "Steam 启动结果待确认。先取消 Steam 启动请求并确认 CS2 已关闭，再明确确认恢复；Mizar 不会在此关闭游戏。".into(),
-        Ok(status) if status.pending => "发现未完成的配置恢复，原始备份仍保留。可在游戏关闭后恢复配置备份；失败时保留记录并显示具体原因。".into(),
+        Ok(status) if status.pending => "发现待恢复配置，原始备份仍保留。恢复只写回备份，不会启动或关闭游戏。".into(),
         Ok(_) => "未发现待恢复记录。可以重试启动，或查看本机日志定位服务启动失败。".into(),
     }
 }
@@ -53,11 +53,24 @@ fn restoration_feedback(
         Ok(_) => format!("{reason}\n原始备份仍保留。此操作只恢复配置，不结束制作。"),
     }
 }
+fn action_label(action: Action, steam_confirmation: bool) -> &'static str {
+    match action {
+        Action::Check => "重新检查",
+        Action::Restore => "恢复配置备份",
+        Action::ConfirmSteam if steam_confirmation => "已取消请求，恢复备份",
+        Action::ConfirmSteam => "恢复前确认 Steam 请求",
+        Action::RetryStartup => "重试启动 Mizar",
+        Action::Logs => "查看本机日志",
+        Action::Exit if steam_confirmation => "返回",
+        Action::Exit => "退出",
+    }
+}
 fn choose(
     instruction: &str,
     content: &str,
     details: &str,
     choices: &[Action],
+    steam_confirmation: bool,
 ) -> Result<Action, String> {
     use windows::{
         core::PCWSTR,
@@ -81,16 +94,7 @@ fn choose(
     let expand = wide("查看启动原因与日志位置");
     let labels = choices
         .iter()
-        .map(|choice| {
-            wide(match choice {
-                Action::Check => "重新检查",
-                Action::Restore => "恢复配置备份",
-                Action::ConfirmSteam => "确认已取消 Steam 请求并恢复",
-                Action::RetryStartup => "重试启动 Mizar",
-                Action::Logs => "查看本机日志",
-                Action::Exit => "退出",
-            })
-        })
+        .map(|choice| wide(action_label(*choice, steam_confirmation)))
         .collect::<Vec<_>>();
     let buttons = choices
         .iter()
@@ -142,7 +146,13 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
             status_message(&status)
         );
         let details = format!("原启动失败：{startup_error}\n\n本机日志目录：{}\n\n原始日志与配置只供本机检查，请勿公开整个数据目录。服务恢复后，从运行诊断导出脱敏诊断包反馈。", log.directory.display());
-        let choice = match choose("Mizar 启动未完成", &content, &details, &actions(&status)) {
+        let choice = match choose(
+            "Mizar 启动未完成",
+            &content,
+            &details,
+            &actions(&status),
+            false,
+        ) {
             Ok(choice) => choice,
             Err(error) => {
                 log.event("cs2_startup_recovery", "failure", Some(&error));
@@ -170,7 +180,7 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
             }
             Action::Restore | Action::ConfirmSteam => {
                 if choice == Action::ConfirmSteam {
-                    match choose("确认 Steam 请求已取消且游戏已关闭", "请先在 Steam 取消启动请求，并确认所有 CS2 窗口已关闭。只有完成这些操作后才选择恢复；返回不会修改配置。", "恢复前会重新检查游戏进程。原始备份和恢复记录不会因取消而删除。", &[Action::ConfirmSteam, Action::Exit]) {
+                    match choose("确认 Steam 请求已取消且游戏已关闭", "请先在 Steam 取消启动请求，并确认所有 CS2 窗口已关闭。只有完成这些操作后才选择恢复；返回不会修改配置。", "恢复前会重新检查游戏进程。原始备份和恢复记录不会因取消而删除。", &[Action::ConfirmSteam, Action::Exit], true) {
                         Ok(Action::ConfirmSteam) => (),
                         Ok(_) => continue,
                         Err(error) => { feedback = error; continue; }
@@ -219,6 +229,13 @@ mod tests {
             assert!(!offered.contains(&Action::Restore));
             assert!(!offered.contains(&Action::ConfirmSteam));
         }
+        assert_ne!(
+            action_label(Action::ConfirmSteam, false),
+            action_label(Action::ConfirmSteam, true)
+        );
+        assert!(action_label(Action::ConfirmSteam, false).contains("确认"));
+        assert!(action_label(Action::ConfirmSteam, true).contains("已取消"));
+        assert_eq!(action_label(Action::Exit, true), "返回");
         let incomplete = Ok(StartupRecoveryStatus {
             pending: true,
             ..Default::default()

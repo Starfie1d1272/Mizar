@@ -875,20 +875,21 @@ export async function syncStableRelease({
   if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
-  await verifyRemote(box, `/Stable/${identity.name}`, identity);
-  await verifyRemote(
-    box,
-    `${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`,
-    offline.identity,
-  );
-  if (bootstrap)
-    await verifyRemote(box, `${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity);
-  if (resources)
-    for (const file of resources)
-      await verifyRemote(box, `/Resources/v${identity.version}/${file.name}`, file);
-  if (runtime)
-    for (const file of runtime)
-      await verifyRemote(box, `/Runtime/v${identity.version}/${file.name}`, file);
+  const readbacks = [
+    [`/Stable/${identity.name}`, identity],
+    [`${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`, offline.identity],
+    ...(bootstrap ? [[`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity]] : []),
+    ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
+    ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
+  ];
+  // Complete every post-write full hash before publishing. Bound only independent
+  // reads; a failed batch joins its active siblings and starts no further batch.
+  await boxStage('发布前完整回读', async () => {
+    for (let offset = 0; offset < readbacks.length; offset += 3)
+      await settle(
+        readbacks.slice(offset, offset + 3).map(([path, file]) => verifyRemote(box, path, file)),
+      );
+  });
   const root = await box.list('/');
   const updates = root.find((e) => e.name === 'Updates');
   requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
