@@ -5,7 +5,10 @@ import { buildApp } from '../../apps/companion/src/app.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
 import { expect, test } from './companion-isolation.js';
 
-type WorkspaceTestWindow = Window & {
+// These fields are injected by addInitScript into Playwright's browser realm.
+// Cross through unknown at that boundary: the root test project also declares
+// a jsdom Window, which is distinct from the browser's Window type.
+type WorkspaceTestWindow = {
   focusAudit: string[];
   auditCalls: unknown[];
   focusResult: boolean;
@@ -315,9 +318,9 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
       .poll(() => commands.at(-1))
       .toEqual({ sceneId: scene.id, expectedRevision: 'next-1' });
     await expect(page.getByRole('button', { name: scene.title, exact: true })).toBeEnabled();
-    expect(await page.evaluate(() => (window as WorkspaceTestWindow).focusAudit)).not.toContain(
-      'restore_cs2_focus',
-    );
+    expect(
+      await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit),
+    ).not.toContain('restore_cs2_focus');
   }
 });
 
@@ -363,7 +366,7 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
       .poll(() => page.evaluate(() => (window as unknown as { auditCalls: unknown[] }).auditCalls))
       .toContainEqual({ command, args });
   }
-  expect(await page.evaluate(() => (window as WorkspaceTestWindow).auditCalls)).toEqual([
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).auditCalls)).toEqual([
     { command: 'open_main', args: { path: '/matches' } },
     { command: 'open_main', args: { path: '/settings?tab=gsi' } },
     { command: 'open_main', args: { path: '/settings?tab=obs' } },
@@ -396,9 +399,9 @@ test('delayed panel actions never return focus; only explicit return to game inv
           calls.push(command);
           if (command === 'restore_layout')
             return new Promise<void>((resolve) => {
-              (window as WorkspaceTestWindow).completeLayout = resolve;
+              (window as unknown as WorkspaceTestWindow).completeLayout = resolve;
             });
-          return Promise.resolve((window as WorkspaceTestWindow).focusResult);
+          return Promise.resolve((window as unknown as WorkspaceTestWindow).focusResult);
         },
       },
     });
@@ -444,14 +447,16 @@ test('delayed panel actions never return focus; only explicit return to game inv
     await otherApp.getByRole('textbox').fill('Operator selected another application');
     completeScene!();
     await expect(returnToGame).toBeEnabled();
-    expect(await page.evaluate(() => (window as WorkspaceTestWindow).focusAudit)).toEqual([]);
+    expect(
+      await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit),
+    ).toEqual([]);
   }
   await page.getByRole('button', { name: '恢复布局', exact: true }).click();
   await expect(returnToGame).toBeDisabled();
   await otherApp.bringToFront();
-  await page.evaluate(() => (window as WorkspaceTestWindow).completeLayout());
+  await page.evaluate(() => (window as unknown as WorkspaceTestWindow).completeLayout());
   await expect(returnToGame).toBeEnabled();
-  expect(await page.evaluate(() => (window as WorkspaceTestWindow).focusAudit)).toEqual([
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
     'restore_layout',
   ]);
   await otherApp.close();
@@ -460,15 +465,15 @@ test('delayed panel actions never return focus; only explicit return to game inv
   await returnToGame.focus();
   await returnToGame.press('Enter');
   await expect(page.getByText('操作已完成，未能将焦点交还 CS2。', { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => (window as WorkspaceTestWindow).focusAudit)).toEqual([
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
     'restore_layout',
     'restore_cs2_focus',
   ]);
-  await page.evaluate(() => ((window as WorkspaceTestWindow).focusResult = true));
+  await page.evaluate(() => ((window as unknown as WorkspaceTestWindow).focusResult = true));
   await returnToGame.click();
   await expect(returnToGame).toBeEnabled();
   await expect(page.getByText('操作已完成，未能将焦点交还 CS2。', { exact: true })).toHaveCount(0);
-  expect(await page.evaluate(() => (window as WorkspaceTestWindow).focusAudit)).toEqual([
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
     'restore_layout',
     'restore_cs2_focus',
     'restore_cs2_focus',
