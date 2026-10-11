@@ -11,6 +11,7 @@ mod demo_test;
 mod desktop_worker;
 mod geometry;
 mod managed_cs2;
+mod obs_configuration;
 mod powershell;
 mod production_exit;
 mod startup_log;
@@ -55,7 +56,6 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
-static OBS_LAUNCH_LOCK: Mutex<()> = Mutex::new(());
 
 #[link(name = "shell32")]
 extern "system" {
@@ -478,40 +478,43 @@ async fn launch_obs(
 ) -> Result<bool, String> {
     let log = log.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = OBS_LAUNCH_LOCK.lock().map_err(|_| "OBS 启动状态不可用。")?;
-        let path = Path::new(&executable_path);
-        if !obs_executable_allowed(path) || !path.is_file() {
-            return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
-        }
-        // Query all processes, including minimized/tray OBS; never start a second instance.
-        let mut probe = background_powershell();
-        probe.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "@(Get-Process -Name obs64 -ErrorAction SilentlyContinue).Count",
-        ]);
-        let output = powershell::run(probe, &log, "OBS 进程检测", Duration::from_secs(10))?;
-        let count = output
-            .trim()
-            .parse::<u32>()
-            .map_err(|_| "无法检查 OBS 进程。".to_string())?;
-        if count > 0 {
-            return Ok(true);
-        }
-        // Host is outside the runtime Job. Independent OBS must not inherit
-        // Companion's rollback/shutdown ownership.
-        Command::new(path)
-            .current_dir(path.parent().ok_or("OBS 程序未能打开。")?)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| "OBS 程序未能打开。".to_string())?;
-        Ok(false)
+        obs_configuration::launch(&executable_path, None, &log)
     })
     .await
     .map_err(|_| "OBS 程序未能打开。".to_string())?
+}
+
+#[tauri::command]
+async fn begin_obs_configuration(
+    executable_path: String,
+    session_id: String,
+    document_generation: String,
+    log: tauri::State<'_, DesktopLog>,
+) -> Result<bool, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        obs_configuration::launch(&executable_path, Some((&session_id, &document_generation)), &log)
+    })
+    .await
+    .map_err(|_| "OBS 程序未能打开。".to_string())?
+}
+
+#[tauri::command]
+async fn finish_obs_configuration(
+    session_id: String,
+    log: tauri::State<'_, DesktopLog>,
+) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || obs_configuration::finish(&session_id, &log))
+        .await
+        .map_err(|_| "OBS 配置状态未能确认，请在 OBS 中手动核对。".to_string())?
+}
+
+#[tauri::command]
+async fn read_obs_configuration_context(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || obs_configuration::context(&log))
+        .await.map_err(|_| "OBS 配置状态未能确认。".to_string())?
 }
 
 #[tauri::command]
@@ -1595,6 +1598,9 @@ fn run_desktop(
             cs2_host_status,
             select_obs_executable,
             launch_obs,
+            begin_obs_configuration,
+            finish_obs_configuration,
+            read_obs_configuration_context,
             cs2_config_status,
             start_managed_cs2,
             finish_managed_cs2,
@@ -1636,6 +1642,9 @@ fn run_desktop(
                     .visible(true)
                     .on_navigation(trusted_navigation)
                     .on_page_load(move |_window, payload| {
+                        if payload.event() == tauri::webview::PageLoadEvent::Started {
+                            obs_configuration::document_changed(&page_log);
+                        }
                         if payload.event() == tauri::webview::PageLoadEvent::Finished
                             && trusted_navigation(payload.url())
                         {
@@ -1862,6 +1871,9 @@ fn run_desktop(
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                obs_configuration::document_changed(window.state::<DesktopLog>().inner());
+            }
             if matches!(event, tauri::WindowEvent::Resized(_)) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
                     let _ = window_presentation::sync_visibility(&webview);
