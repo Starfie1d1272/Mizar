@@ -99,6 +99,43 @@ pub fn set_visible(window: &WebviewWindow, visible: bool) -> tauri::Result<()> {
     sync_visibility(window)
 }
 
+#[link(name = "user32")]
+extern "system" {
+    fn IsWindowVisible(hwnd: isize) -> i32;
+    fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
+}
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetLastError() -> u32;
+}
+
+fn set_native_overlay_visible(hwnd: isize, visible: bool) -> std::io::Result<()> {
+    if (unsafe { IsWindowVisible(hwnd) } != 0) == visible {
+        return Ok(());
+    }
+    // Preserve the HUD's geometry, z band and the user's foreground window.
+    const KEEP_PLACEMENT: u32 = 0x0001 | 0x0002 | 0x0004 | 0x0010;
+    const SHOW_WINDOW: u32 = 0x0040;
+    const HIDE_WINDOW: u32 = 0x0080;
+    let flags = KEEP_PLACEMENT | if visible { SHOW_WINDOW } else { HIDE_WINDOW };
+    if unsafe { SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags) } == 0 {
+        return Err(std::io::Error::from_raw_os_error(
+            unsafe { GetLastError() } as i32
+        ));
+    }
+    Ok(())
+}
+
+/// HUD-only visibility: Tao 0.37.1's later show() uses SW_SHOW even for a
+/// nonfocusable window; focused(false) only protects initial construction.
+/// Keep both transitions native because Tao caches its own VISIBLE flag.
+/// Call from the existing Host UI-thread presentation path.
+pub fn set_overlay_visible(window: &WebviewWindow, visible: bool) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    set_native_overlay_visible(hwnd.0 as isize, visible)
+        .map_err(|error| format!("HUD SetWindowPos failed: {error}"))?;
+    sync_visibility(window).map_err(|error| error.to_string())
+}
 /// The existing Host worker bounds dispatch to one pending tick. This also
 /// covers OS minimize/restore and Tauri close-to-hide, including tool windows.
 pub fn sync_all(app: &tauri::AppHandle) {
@@ -111,6 +148,91 @@ pub fn sync_all(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    #[repr(C)]
+    #[derive(Default, Debug, PartialEq)]
+    struct NativeRect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn CreateWindowExW(
+            ex: u32,
+            class: *const u16,
+            title: *const u16,
+            style: u32,
+            x: i32,
+            y: i32,
+            w: i32,
+            h: i32,
+            parent: isize,
+            menu: isize,
+            instance: isize,
+            param: *const std::ffi::c_void,
+        ) -> isize;
+        fn DestroyWindow(hwnd: isize) -> i32;
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowRect(hwnd: isize, rect: *mut NativeRect) -> i32;
+        fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
+    }
+    struct NativeWindow(isize);
+    impl Drop for NativeWindow {
+        fn drop(&mut self) {
+            unsafe {
+                DestroyWindow(self.0);
+            }
+        }
+    }
+    fn native_overlay() -> NativeWindow {
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0x0800_0088, // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+                class.as_ptr(),
+                class.as_ptr(),
+                0x8000_0000, // WS_POPUP, initially hidden
+                -10000,
+                -10000,
+                320,
+                240,
+                0,
+                0,
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(hwnd, 0);
+        NativeWindow(hwnd)
+    }
+    fn native_rect(hwnd: isize) -> NativeRect {
+        let mut rect = NativeRect::default();
+        assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
+        rect
+    }
+    #[test]
+    fn native_overlay_visibility_preserves_foreground_geometry_and_topmost_band() {
+        let overlay = native_overlay();
+        let foreground = unsafe { GetForegroundWindow() };
+        let rect = native_rect(overlay.0);
+        let style = unsafe { GetWindowLongW(overlay.0, -20) };
+        assert_ne!(style & 0x8, 0);
+        // Repeated transitions cover a hidden HUD becoming eligible again and
+        // unchanged Host ticks. Both directions must use the real native state.
+        for visible in [false, true, true, false, false, true, false] {
+            set_native_overlay_visible(overlay.0, visible).unwrap();
+            assert_eq!(unsafe { IsWindowVisible(overlay.0) } != 0, visible);
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+            assert_eq!(native_rect(overlay.0), rect);
+            assert_eq!(unsafe { GetWindowLongW(overlay.0, -20) }, style);
+        }
+    }
+    #[test]
+    fn native_overlay_show_reports_invalid_window_error() {
+        let error = set_native_overlay_visible(0, true).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(1400)); // ERROR_INVALID_WINDOW_HANDLE
+    }
     #[derive(Default)]
     struct FakeWindow {
         size: Option<(u32, u32)>,

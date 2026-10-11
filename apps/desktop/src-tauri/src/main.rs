@@ -330,9 +330,9 @@ fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
     };
     if let Some(rect) = rect {
         placement(&overlay, rect);
-        let _ = window_presentation::set_visible(&overlay, true);
+        let _ = window_presentation::set_overlay_visible(&overlay, true);
     } else {
-        let _ = window_presentation::set_visible(&overlay, false);
+        let _ = window_presentation::set_overlay_visible(&overlay, false);
     }
 }
 
@@ -785,11 +785,12 @@ fn hide_workspace(app: &tauri::AppHandle) {
         *group = workspace_group::Group::default();
     }
     sync_workspace_shell(app);
-    for label in ["workspace-left", "workspace-dock", "program-overlay"] {
+    for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window_presentation::set_visible(&window, false);
         }
     }
+    present_overlay(app, None);
 }
 
 fn main_path_allowed(path: &str) -> bool {
