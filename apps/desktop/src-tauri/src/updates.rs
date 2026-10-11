@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
+    os::windows::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -231,7 +232,8 @@ pub fn check_on_startup(log: DesktopLog) {
     });
 }
 
-pub fn validate_plan(plan: &Value, root: &Path, state: &Path) -> Result<(), String> {
+fn validate_plan(plan: &Value, root: &Path, log: &DesktopLog) -> Result<(), String> {
+    let state = &log.state_root;
     if plan["schemaVersion"] != 1
         || !root.join("installed.flag").is_file()
         || !same_path(&plan["bundleRoot"], root)
@@ -240,28 +242,46 @@ pub fn validate_plan(plan: &Value, root: &Path, state: &Path) -> Result<(), Stri
     {
         return Err("安装目录或用户资料位置不支持自动升级，请从正式发布页下载。".into());
     }
-    let path = PathBuf::from(plan["installer"].as_str().ok_or("安装包路径无效。")?);
+    let path = PathBuf::from(
+        plan["installer"]
+            .as_str()
+            .ok_or("安装包路径无效，升级未启动。请导出诊断并从正式发布页下载。")?,
+    );
     let parent = path
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|p| p.to_str())
-        .ok_or("安装包目录无效。")?;
+        .ok_or("安装包目录无效，升级未启动。请导出诊断并从正式发布页下载。")?;
+    let expected = state.join("updates").canonicalize().map_err(|error| {
+        io_failure(
+            log,
+            "plan_updates_canonicalize",
+            &error,
+            "更新目录无法读取，升级未启动。旧版仍可用，请检查用户资料目录权限并导出诊断。",
+        )
+    })?;
+    let actual = path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("安装包目录无效，升级未启动。请导出诊断并从正式发布页下载。")?
+        .canonicalize()
+        .map_err(|error| {
+            io_failure(
+                log,
+                "plan_installer_parent_canonicalize",
+                &error,
+                "安装包目录无法读取，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。",
+            )
+        })?;
     if !parent.starts_with("download-")
         || !parent
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
-        || path
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.canonicalize().ok())
-            != Some(
-                state
-                    .join("updates")
-                    .canonicalize()
-                    .map_err(|_| "更新目录不可用。")?,
-            )
+        || actual != expected
     {
-        return Err("安装包必须来自已验证的更新暂存目录。".into());
+        return Err(
+            "安装包必须来自已验证的更新暂存目录，升级未启动。请导出诊断并从正式发布页下载。".into(),
+        );
     }
     Ok(())
 }
@@ -283,6 +303,73 @@ fn provider_plan(mut plan: Value, root: &Path, state: &Path) -> Result<Value, St
     }
     Ok(plan)
 }
+
+fn helper_failure(log: &DesktopLog, reason: &str) -> String {
+    log.event(
+        "update_install",
+        "failure",
+        Some(&format!("phase=helper_validate; cause={reason}")),
+    );
+    "安装工具目录未通过安全检查，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。".into()
+}
+
+fn plain_helper_directory(path: &Path, log: &DesktopLog) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        io_failure(
+            log,
+            "helper_directory_metadata",
+            &error,
+            "安装工具目录无法读取，升级未启动。旧版仍可用，请检查用户资料目录权限并导出诊断。",
+        )
+    })?;
+    // Junctions are reparse points too, even when file_type() is not a symlink.
+    if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
+        return Err(helper_failure(log, "helper_directory_not_plain"));
+    }
+    Ok(())
+}
+
+fn helper_stage(value: &Value, log: &DesktopLog) -> Result<PathBuf, String> {
+    let reported = PathBuf::from(
+        value["stageRoot"]
+            .as_str()
+            .ok_or_else(|| helper_failure(log, "stage_root_missing"))?,
+    );
+    if !reported.is_absolute() {
+        return Err(helper_failure(log, "stage_root_relative"));
+    }
+    let updates = log.state_root.join("updates");
+    plain_helper_directory(&updates, log)?;
+    plain_helper_directory(&reported, log)?;
+    let canonical = |path: &Path| {
+        path.canonicalize().map_err(|error| {
+            io_failure(
+                log,
+                "helper_directory_canonicalize",
+                &error,
+                "安装工具目录无法确认，升级未启动。旧版仍可用，请导出诊断或从正式发布页下载。",
+            )
+        })
+    };
+    let updates = canonical(&updates)?;
+    let stage = canonical(&reported)?;
+    // Compare filesystem identities on both sides, preserving the direct-child boundary.
+    if updates.parent() != Some(log.state_root.as_path())
+        || stage.parent() != Some(updates.as_path())
+    {
+        return Err(helper_failure(log, "helper_parent_mismatch"));
+    }
+    let name = stage.file_name().and_then(|name| name.to_str());
+    if !name.is_some_and(|name| {
+        name.starts_with("install-")
+            && name.len() == 40
+            && name.as_bytes()[8..].iter().all(u8::is_ascii_hexdigit)
+    }) {
+        return Err(helper_failure(log, "helper_name_invalid"));
+    }
+    Ok(stage)
+}
+
 pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
     let pending = app.state::<PendingUpdate>();
     if pending.preparing.swap(true, Ordering::AcqRel) {
@@ -308,7 +395,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         let log = host.state::<DesktopLog>();
         let root = crate::bundle_root()?
             .canonicalize()
-            .map_err(|error| io_failure(&log, "root_canonicalize", &error, "安装目录不可用。"))?;
+            .map_err(|error| io_failure(&log, "root_canonicalize", &error, "安装目录无法读取，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。"))?;
         let plan = match request(&log, "prepare") {
             Ok(plan) => plan,
             Err(error) => {
@@ -317,7 +404,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             }
         };
         let prepared: Result<(), String> = (|| {
-            validate_plan(&plan, &root, &log.state_root).map_err(|error| {
+            validate_plan(&plan, &root, &log).map_err(|error| {
                 log.event(
                     "update_install",
                     "failure",
@@ -335,7 +422,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 .create_new(true)
                 .open(&path)
                 .map_err(|error| {
-                    io_failure(&log, "plan_create", &error, "安装准备记录无法创建。")
+                    io_failure(&log, "plan_create", &error, "安装准备记录无法创建，升级未启动。旧版仍可用，请检查用户资料目录权限与剩余空间并导出诊断。")
                 })?;
             let write = file.write_all(plan.to_string().as_bytes());
             drop(file);
@@ -344,7 +431,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 if let Err(error) = fs::remove_file(&path) {
                     io_failure(&log, "plan_cleanup", &error, "安装准备记录清理失败。");
                 }
-                return Err("安装准备记录未能保存。".into());
+                return Err("安装准备记录未能保存，升级未启动。旧版仍可用，请检查用户资料目录权限与剩余空间并导出诊断。".into());
             }
             let mut command = crate::background_powershell();
             command
@@ -363,23 +450,8 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 io_failure(&log, "plan_cleanup", &error, "安装准备记录清理失败。");
             }
             let value: Value = serde_json::from_str(&result?)
-                .map_err(|error| json_failure(&log, "helper_json", &error, "安装工具响应无效。"))?;
-            let stage = PathBuf::from(value["stageRoot"].as_str().ok_or("安装工具目录缺失。")?)
-                .canonicalize()
-                .map_err(|error| {
-                    io_failure(&log, "helper_directory", &error, "安装工具目录不可用。")
-                })?;
-            let name = stage
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or("安装工具目录无效。")?;
-            if stage.parent() != Some(log.state_root.join("updates").as_path())
-                || !name.starts_with("install-")
-                || !name[8..].bytes().all(|c| c.is_ascii_hexdigit())
-                || name.len() != 40
-            {
-                return Err("安装工具目录不在允许范围内。".into());
-            }
+                .map_err(|error| json_failure(&log, "helper_json", &error, "安装工具响应无效，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。"))?;
+            let stage = helper_stage(&value, &log)?;
             *host
                 .state::<PendingUpdate>()
                 .stage
@@ -400,7 +472,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             "failure",
             Some(&format!("phase=prepare_task; cause={error:?}")),
         );
-        Err("升级准备未完成，请重试。".into())
+        Err("升级准备意外中断，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。".into())
     });
     pending.preparing.store(false, Ordering::Release);
     result?;
@@ -462,6 +534,146 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn helper_fixture() -> (PathBuf, DesktopLog) {
+        let root = std::env::temp_dir().join(format!(
+            "mizar-helper-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let log = DesktopLog::new(&root, Some(root.join("state"))).unwrap();
+        (root, log)
+    }
+
+    #[test]
+    fn helper_accepts_actual_updates_directory_case_and_provider_paths() {
+        let (root, log) = helper_fixture();
+        let stage = log
+            .state_root
+            .join("Updates/install-0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&stage).unwrap();
+        for reported in [stage.clone(), powershell::provider_path(&stage)] {
+            assert_eq!(
+                helper_stage(&json!({ "stageRoot": reported }), &log).unwrap(),
+                stage.canonicalize().unwrap()
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn helper_rejects_escape_bad_identity_and_unreadable_directory_with_guidance() {
+        let (root, log) = helper_fixture();
+        let updates = log.state_root.join("updates");
+        fs::create_dir_all(&updates).unwrap();
+        let outside = root.join("install-0123456789abcdef0123456789abcdef");
+        fs::create_dir(&outside).unwrap();
+        let bad_name = updates.join("install-0123456789abcdef0123456789abcdeg");
+        fs::create_dir(&bad_name).unwrap();
+        let nested = updates.join("nested/install-0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&nested).unwrap();
+        for value in [
+            json!({ "stageRoot": outside }),
+            json!({ "stageRoot": bad_name }),
+            json!({ "stageRoot": nested }),
+            json!({ "stageRoot": "updates/install-0123456789abcdef0123456789abcdef" }),
+            json!({ "stageRoot": 42 }),
+            json!({}),
+        ] {
+            let message = helper_stage(&value, &log).unwrap_err();
+            assert!(message.contains("升级未启动"));
+            assert!(message.contains("旧版仍可用"));
+            assert!(message.contains("导出诊断"));
+            assert!(message.contains("正式发布页"));
+        }
+        let absent = updates.join("install-ffffffffffffffffffffffffffffffff");
+        assert!(helper_stage(&json!({ "stageRoot": absent }), &log)
+            .unwrap_err()
+            .contains("检查用户资料目录权限"));
+        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        for cause in [
+            "helper_parent_mismatch",
+            "helper_name_invalid",
+            "stage_root_relative",
+            "stage_root_missing",
+            "helper_directory_metadata",
+            "os_code=Some(",
+        ] {
+            assert!(evidence.contains(cause), "missing {cause}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn helper_refuses_junctions_without_touching_the_target() {
+        let (root, log) = helper_fixture();
+        let target = root.join("outside");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), "original").unwrap();
+        let updates = log.state_root.join("updates");
+        let stage = updates.join("install-0123456789abcdef0123456789abcdef");
+        for junction in [&updates, &stage] {
+            if junction == &stage {
+                fs::create_dir(&updates).unwrap();
+            }
+            let output = crate::background_powershell()
+                .arg("-Command")
+                .arg("New-Item -ItemType Junction -Path $env:MIZAR_TEST_LINK -Target $env:MIZAR_TEST_TARGET -ErrorAction Stop | Out-Null")
+                .env("MIZAR_TEST_LINK", junction)
+                .env("MIZAR_TEST_TARGET", &target)
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let reported = if junction == &updates {
+                updates.join("install-0123456789abcdef0123456789abcdef")
+            } else {
+                stage.clone()
+            };
+            assert!(helper_stage(&json!({ "stageRoot": reported }), &log).is_err());
+            fs::remove_dir(junction).unwrap();
+            assert_eq!(
+                fs::read_to_string(target.join("keep.txt")).unwrap(),
+                "original"
+            );
+        }
+        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        assert!(evidence.contains("helper_directory_not_plain"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_plan_directories_keep_the_filesystem_cause() {
+        let (root, log) = helper_fixture();
+        let bundle = root.join("bundle");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(bundle.join("installed.flag"), "installed").unwrap();
+        let bundle = bundle.canonicalize().unwrap();
+        let mut plan = json!({
+            "schemaVersion": 1,
+            "bundleRoot": powershell::provider_path(&bundle),
+            "stateRoot": powershell::provider_path(&log.state_root),
+            "installer": log.state_root.join("updates/download-case/Setup.exe")
+        });
+        assert!(validate_plan(&plan, &bundle, &log)
+            .unwrap_err()
+            .contains("导出诊断"));
+        fs::create_dir(log.state_root.join("updates")).unwrap();
+        plan["installer"] = json!(root.join("missing/download-case/Setup.exe"));
+        assert!(validate_plan(&plan, &bundle, &log)
+            .unwrap_err()
+            .contains("正式发布页"));
+        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        assert!(evidence.contains("plan_updates_canonicalize"));
+        assert!(evidence.contains("plan_installer_parent_canonicalize"));
+        assert!(evidence.contains("os_code=Some("));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn io_and_json_failures_keep_stage_and_codes_without_runtime_input() {
