@@ -363,19 +363,32 @@ fn focus_session(process: &managed_cs2::WorkspaceProcess) -> workspace_focus::Se
 }
 
 fn attempt_game_focus(app: &tauri::AppHandle, request: workspace_focus::Request) -> bool {
-    let state = app.state::<HostState>();
-    let eligible = state.visible.load(Ordering::Acquire)
-        && app.state::<production_exit::ExitGate>().check().is_ok()
-        && app.state::<cs2_activity::Activity>().phase() == "idle";
-    let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    let Ok(cs2) = cs2_state.try_lock() else { return false; };
-    let Ok(Some(process)) = cs2.workspace_process() else { return false; };
-    let Ok(tracker) = state.tracker.try_lock() else { return false; };
-    request.attempt(focus_session(&process), windows_host::foreground(), eligible, |source| {
-        process.is_running()
-            && tracker.window.is_some_and(|window| window.pid == process.pid)
-            && tracker.restore_focus(source)
-    })
+    let result = (|| -> Result<(), &'static str> {
+        let state = app.state::<HostState>();
+        if !state.visible.load(Ordering::Acquire)
+            || app.state::<production_exit::ExitGate>().check().is_err()
+            || app.state::<cs2_activity::Activity>().phase() != "idle"
+        { return Err("workspace_unavailable"); }
+        let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = cs2_state.try_lock().map_err(|_| "session_busy")?;
+        let process = cs2.workspace_process().map_err(|_| "session_invalid")?
+            .ok_or("session_missing")?;
+        if !process.is_running() { return Err("process_stopped"); }
+        let tracker = state.tracker.try_lock().map_err(|_| "tracker_busy")?;
+        let window = tracker.window.ok_or("game_window_missing")?;
+        if window.pid != process.pid { return Err("game_window_mismatch"); }
+        let mut invoked = false;
+        let focused = request.attempt(focus_session(&process), windows_host::foreground(), true, |source| {
+            invoked = true;
+            tracker.restore_focus(source)
+        });
+        if focused { Ok(()) }
+        else if invoked { Err("native_focus_not_acquired") }
+        else { Err("intent_cancelled") }
+    })();
+    app.state::<DesktopLog>().event("workspace_focus_attempt",
+        if result.is_ok() { "focused" } else { "not_focused" }, result.err());
+    result.is_ok()
 }
 
 #[tauri::command]
