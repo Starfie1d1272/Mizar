@@ -38,9 +38,12 @@ function rig() {
     getCurrent: () => ({ program, operator }),
     getBpAssessment: () => ({ readiness: 'ready' }),
   } as unknown as ProjectionCoordinator;
-  const showFinal = vi.fn();
+  let bpState = 'shown';
+  const showFinal = vi.fn(() => {
+    bpState = 'shown';
+  });
   const bp = {
-    get: vi.fn(() => ({ projection: {}, state: 'shown', revision: 'bp' })),
+    get: vi.fn(() => ({ projection: {}, state: bpState, revision: 'bp' })),
     showFinal,
     setPaused: vi.fn(),
     command: vi.fn(() => ({})),
@@ -75,6 +78,9 @@ function rig() {
         time += 100;
         await director.tick();
       }
+    },
+    setBpState(value: 'shown' | 'revealing') {
+      bpState = value;
     },
     setProduction(value: boolean) {
       production = value;
@@ -184,7 +190,7 @@ describe('automatic Program choreography', () => {
     r.program.map.phase = 'warmup';
     r.program.clock!.phase = 'warmup';
     await r.step();
-    await r.pass(2000);
+    await r.pass(10_500);
     expect(r.scenes.get().active).toBe('waiting');
     expect(r.director.get().next).toBe('matchup');
     r.setProduction(false);
@@ -228,21 +234,60 @@ describe('automatic Program choreography', () => {
     expect(r.scenes.get().active).toBe('waiting');
     expect(r.scenes.get().available).toContain('gameplay');
   });
-  it('reveals warmup only once and does not replay it on map two', async () => {
+  it.each(['waiting', 'gameplay'] as const)(
+    'holds the first completed BP for about 10s then automatically takes %s',
+    async (choice) => {
+      const r = rig();
+      r.program.map.phase = 'warmup';
+      r.program.clock!.phase = 'warmup';
+      r.program.round = null;
+      r.setBpState('revealing');
+      const previousRevision = r.scenes.get().revision;
+      expect(r.scenes.setWarmupScene(choice, previousRevision)).toBe(true);
+      expect(r.scenes.setWarmupScene('waiting', previousRevision)).toBe(false);
+      await r.step();
+      expect(r.scenes.get().active).toBe('bp');
+      await r.pass(9600);
+      expect(r.scenes.get().active).toBe('bp');
+      r.setBpState('shown');
+      await r.pass(10_400);
+      expect(r.scenes.get().active).toBe('bp');
+      r.program.status.telemetry = 'stale';
+      await r.pass(3000);
+      expect(r.scenes.get().active).toBe('bp');
+      r.program.status.telemetry = 'fresh';
+      await r.step();
+      expect(r.scenes.get().active).toBe(choice);
+      expect(r.director.get().mode).toBe('auto');
+      await r.pass(20_000);
+      expect(r.scenes.get().active).toBe(choice);
+      r.program.cursor.mapEpoch++;
+      r.program.series!.currentMapOrder = 2;
+      await r.step();
+      expect(r.scenes.get().active).toBe(choice);
+      expect(r.showFinal).not.toHaveBeenCalled();
+      // Preference changes are automatic policy, never a manual Take/resume pair.
+      const other = choice === 'waiting' ? 'gameplay' : 'waiting';
+      expect(r.scenes.setWarmupScene(other, r.scenes.get().revision)).toBe(true);
+      await r.step();
+      expect(r.scenes.get().active).toBe(other);
+      expect(r.director.get().mode).toBe('auto');
+      await r.scenes.select('waiting', r.scenes.get().revision);
+      r.scenes.setWarmupScene('gameplay', r.scenes.get().revision);
+      await r.step();
+      expect(r.scenes.get().active).toBe('waiting');
+      expect(r.director.get().mode).toBe('manual');
+    },
+  );
+  it('keeps the automatic warmup choice through preparation, then defaults a different match to waiting', async () => {
     const r = rig();
-    r.program.map.phase = 'warmup';
-    r.program.clock!.phase = 'warmup';
+    r.setProduction(false);
+    r.scenes.setWarmupScene('gameplay', r.scenes.get().revision);
     await r.step();
-    expect(r.scenes.get().active).toBe('bp');
-    await r.pass(2000);
-    expect(r.scenes.get().active).toBe('waiting');
-    await r.pass(20_000);
-    expect(r.scenes.get().active).toBe('waiting');
-    r.program.cursor.mapEpoch++;
-    r.program.series!.currentMapOrder = 2;
+    expect(r.director.get().warmupScene).toBe('gameplay');
+    r.program.match!.matchId = 'different-match';
     await r.step();
-    expect(r.scenes.get().active).toBe('waiting');
-    expect(r.showFinal).not.toHaveBeenCalled();
+    expect(r.director.get().warmupScene).toBe('waiting');
   });
   it('aborts an in-flight switch if the source generation changes', async () => {
     const r = rig();
@@ -268,7 +313,7 @@ describe('automatic Program choreography', () => {
     await r.step();
     expect(r.scenes.get().active).toBe('bp');
     expect(r.showFinal).toHaveBeenCalledOnce();
-    await r.pass(10_000);
+    await r.pass(12_000);
     expect(r.scenes.get().active).toBe('matchup');
     await r.pass(6000);
     expect(r.scenes.get().active).toBe('gameplay');
@@ -312,8 +357,9 @@ describe('automatic Program choreography', () => {
     expect(r.showFinal).toHaveBeenCalledOnce();
   });
   it.each([
-    [14, 'matchup', 2000],
-    [10, 'gameplay', 6000],
+    [14, 'matchup', 6000],
+    [10, 'matchup', 2000],
+    [5, 'gameplay', 6000],
     [8, 'gameplay', 6000],
   ] as const)('respects a %ss first-freeze deadline', async (seconds, scene, duration) => {
     const r = rig();
@@ -321,6 +367,73 @@ describe('automatic Program choreography', () => {
     await r.step();
     expect(r.scenes.get().active).toBe(scene);
     expect(r.director.get().introDurationMs).toBe(duration);
+  });
+  it.each([40, 26.3, 20, 14, 10, 6, 5, 3])(
+    'completes the normal HUD by 5s with a real %ss freeze and bounded OBS delay',
+    async (initial) => {
+      const r = rig();
+      let remaining = initial;
+      r.program.clock!.endsInSeconds = remaining;
+      // Advance the same clock during OBS work: the deadline is completion, not request time.
+      r.switchObs.mockImplementation(() => {
+        remaining -= 0.8;
+        r.program.clock!.endsInSeconds = remaining;
+        return Promise.resolve();
+      });
+      await r.step();
+      if (initial <= 5) expect(r.scenes.get().active).toBe('gameplay');
+      while (remaining > 5 && r.scenes.get().active !== 'gameplay') {
+        remaining -= 0.1;
+        r.program.clock!.endsInSeconds = remaining;
+        await r.step();
+      }
+      expect(r.scenes.get().active).toBe('gameplay');
+      if (initial > 5) expect(remaining).toBeGreaterThanOrEqual(5);
+      expect(r.showFinal.mock.calls.length).toBeLessThanOrEqual(1);
+    },
+  );
+  it('re-evaluates a shortened/extended freeze and does not replay BP after telemetry recovery', async () => {
+    const r = rig();
+    await r.step();
+    expect(r.scenes.get().active).toBe('bp');
+    r.program.clock!.endsInSeconds = 20;
+    await r.pass(1000);
+    expect(r.scenes.get().active).toBe('bp');
+    r.program.clock!.endsInSeconds = 30;
+    await r.pass(1000);
+    expect(r.scenes.get().active).toBe('bp');
+    r.program.status.telemetry = 'stale';
+    await r.pass(5000);
+    r.program.status.telemetry = 'fresh';
+    r.program.clock!.endsInSeconds = 10;
+    await r.step();
+    expect(r.scenes.get().active).toBe('matchup');
+    expect(r.director.get().introDurationMs).toBe(2000);
+    r.program.clock!.endsInSeconds = 6;
+    await r.step();
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.showFinal).toHaveBeenCalledOnce();
+  });
+  it('cancels an obsolete opening Take at a late deadline without permanently blocking auto', async () => {
+    const r = rig();
+    r.program.clock!.endsInSeconds = 13;
+    let release!: () => void;
+    r.switchObs.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const take = r.step();
+    await Promise.resolve();
+    await Promise.resolve();
+    r.program.clock!.endsInSeconds = 4;
+    await r.step();
+    release();
+    await take;
+    await r.step();
+    expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.director.get().mode).toBe('auto');
   });
   it('does not run in preparation, repeat a live intro, or progress on stale data', async () => {
     const r = rig();
@@ -357,9 +470,14 @@ describe('automatic Program choreography', () => {
       await r.step();
       expect(r.scenes.get().active).toBe('halftime');
     }
-    r.program.clock.endsInSeconds = 5;
+    r.switchObs.mockImplementation(() => {
+      r.program.clock!.endsInSeconds! -= 0.8;
+      return Promise.resolve();
+    });
+    r.program.clock.endsInSeconds = 6.1;
     await r.step();
     expect(r.scenes.get().active).toBe('gameplay');
+    expect(r.program.clock.endsInSeconds).toBeGreaterThanOrEqual(5);
     r.program.map.score = { ct: 12, t: 12 };
     r.program.map.phase = 'intermission';
     await r.step();
@@ -367,17 +485,17 @@ describe('automatic Program choreography', () => {
   });
   it('pauses intro time and aborts safely when OBS fails without retrying', async () => {
     const r = rig();
-    r.program.clock!.endsInSeconds = 20;
+    r.program.clock!.endsInSeconds = 13;
     await r.step();
     expect(r.scenes.get().active).toBe('matchup');
     r.program.clock!.phase = 'paused';
     await r.pass(20_000);
     expect(r.scenes.get().active).toBe('matchup');
     r.program.clock!.phase = 'freezetime';
-    r.program.clock!.endsInSeconds = 9;
+    r.program.clock!.endsInSeconds = 6;
     r.switchObs.mockRejectedValueOnce(new Error('offline'));
     await r.step();
-    await r.pass(10_000);
+    await r.pass(12_000);
     expect(r.scenes.get().active).toBe('matchup');
     expect(r.director.get().mode).toBe('blocked');
     // One failed Take plus one Cut restoring the last confirmed scene; no retry loop.

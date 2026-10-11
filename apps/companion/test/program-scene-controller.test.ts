@@ -211,7 +211,8 @@ it('manual Take interrupts the automatic fade wait and immediately requests Cut'
 });
 
 it.each([
-  { phase: 'freezetime', remaining: 5, from: 'halftime' as const, kind: 'fade', durationMs: 150 },
+  { phase: 'freezetime', remaining: 6.2, from: 'halftime' as const, kind: 'fade', durationMs: 150 },
+  { phase: 'freezetime', remaining: 5, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'freezetime', remaining: 0.5, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'live', remaining: 0, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'freezetime', remaining: 20, from: 'matchup' as const, kind: 'cut', durationMs: 0 },
