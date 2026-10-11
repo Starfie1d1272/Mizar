@@ -56,6 +56,7 @@ export interface ObsStatus {
 }
 
 const TIMEOUT_MS = 4000;
+const PROGRAM_EVIDENCE_MS = 750;
 
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
@@ -157,6 +158,7 @@ export class ObsAdapter {
   private async withObs<T>(
     operation: (obs: ObsRpc) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
+    diagnosticStage?: string,
   ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
@@ -189,7 +191,7 @@ export class ObsAdapter {
         }),
       ]);
     } catch (error) {
-      this.diagnostic(stage, obsErrorEvidence(error, config.password));
+      this.diagnostic(diagnosticStage ?? stage, obsErrorEvidence(error, config.password));
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -236,18 +238,9 @@ export class ObsAdapter {
           throw new Error('OBS 输出状态无法确认。');
         const currentScene =
           typeof scene.currentProgramSceneName === 'string' ? scene.currentProgramSceneName : null;
-        const programEvidence = await readObsProgramEvidence(
-          obs,
-          this.browserBaseUrl,
-          currentScene,
-        ).catch((error: unknown) => {
-          this.diagnostic('obs_program_check', obsErrorEvidence(error, config.password));
-          return null;
-        });
         return {
           connection: 'connected',
           currentScene,
-          programEvidence,
           port: config.port,
           streaming: outputs.stream.active === true,
           recording: outputs.record.active === true,
@@ -261,7 +254,28 @@ export class ObsAdapter {
         } satisfies ObsStatus;
       });
       this.findings = [...status.findings];
-      return status;
+      // Evidence gets a separate session and deadline after base facts are confirmed.
+      // Its failure cannot consume the base session's deadline or change connection facts.
+      let evidenceTimeout: ReturnType<typeof setTimeout> | undefined;
+      const programEvidence = await Promise.race([
+        this.withObs(
+          (obs) => readObsProgramEvidence(obs, this.browserBaseUrl, status.currentScene),
+          PROGRAM_EVIDENCE_MS,
+          'obs_program_check',
+        ).catch(() => null),
+        new Promise<null>((resolve) => {
+          // Also bound config/cleanup work; withObs may still be disconnecting after its RPC timeout.
+          evidenceTimeout = setTimeout(() => {
+            this.diagnostic('obs_program_check', {
+              message: 'OBS 节目取证超时，未能在期限内完成。',
+            });
+            resolve(null);
+          }, PROGRAM_EVIDENCE_MS + 50);
+        }),
+      ]).finally(() => {
+        if (evidenceTimeout) clearTimeout(evidenceTimeout);
+      });
+      return { ...status, programEvidence };
     } catch (error: unknown) {
       const kind = obsFailureKind(error);
       return {
