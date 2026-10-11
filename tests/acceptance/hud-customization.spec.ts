@@ -24,9 +24,18 @@ test('HUD settings preview → save → disk reload → activate → Program', a
   const filePath = join(directory, 'hud.json');
   let store = new HudConfigStore({ filePath });
   let app = buildApp({ hudConfigStore: store });
+  let restarting = false;
   try {
     await app.ready();
     await context.route(/\/(?:operator|local\/v1)\/hud-config$/, async (route) => {
+      if (restarting) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'companion_offline' }),
+        });
+        return;
+      }
       const request = route.request();
       const response = await app.inject({
         method: request.method() as 'GET' | 'POST',
@@ -80,11 +89,15 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await page.getByRole('button', { name: '另存为', exact: true }).click();
     await expect(page.getByText('已另存为「内容定制验收」。', { exact: true })).toBeVisible();
     expect(store.getState().etag).toBe(originalEtag);
+    // The editor keeps polling while the disk-backed Companion is restarted.
+    restarting = true;
     await app.close();
+    expect(await page.evaluate(async () => (await fetch('/operator/hud-config')).status)).toBe(503);
     store = new HudConfigStore({ filePath });
     await store.load();
     app = buildApp({ hudConfigStore: store });
     await app.ready();
+    restarting = false;
     await page.reload();
     await page.getByRole('button', { name: '预设', exact: true }).click();
     await page
