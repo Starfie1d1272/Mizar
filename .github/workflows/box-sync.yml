@@ -34,6 +34,65 @@ jobs:
         with:
           runtime: node@24
           install: false
+      - name: Prepare bounded native HTTPS for recovery API requests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .agent-tmp | Out-Null
+          @'
+          import { request as httpsRequest } from 'node:https';
+
+          export async function nativeApi(url, options = {}, request = httpsRequest) {
+            options.signal?.throwIfAborted();
+            if (options.body !== undefined && typeof options.body !== 'string')
+              throw new Error('Recovery API body must be the original JSON string');
+            const body = options.body === undefined ? undefined : Buffer.from(options.body);
+            const headers = Object.fromEntries(new Headers(options.headers).entries());
+            if (body) headers['content-length'] = String(body.length);
+            return new Promise((resolve, reject) => {
+              const outgoing = request(url, {
+                method: options.method ?? 'GET', headers, signal: options.signal,
+              }, (incoming) => {
+                const chunks = [];
+                let size = 0;
+                incoming.on('data', (chunk) => {
+                  size += chunk.length;
+                  if (size > 2 * 1024 * 1024) {
+                    incoming.destroy(new Error('Recovery API response exceeds limit'));
+                    return;
+                  }
+                  chunks.push(chunk);
+                });
+                incoming.on('error', reject);
+                incoming.on('aborted', () => reject(new Error('Recovery API response interrupted')));
+                incoming.on('end', () => {
+                  try {
+                    const status = incoming.statusCode;
+                    if (!Number.isInteger(status) || status < 200 || status > 599)
+                      throw new Error('Recovery API response status invalid');
+                    const responseHeaders = Object.entries(incoming.headers)
+                      .filter(([, value]) => value !== undefined)
+                      .map(([name, value]) => [name, Array.isArray(value) ? value.join(', ') : value]);
+                    resolve(new Response(size ? Buffer.concat(chunks) : null, {
+                      status, headers: responseHeaders,
+                    }));
+                  } catch (error) { reject(error); }
+                });
+              });
+              outgoing.on('error', reject);
+              outgoing.end(body);
+            });
+          }
+
+          const originalFetch = globalThis.fetch;
+          globalThis.fetch = (url, options) => {
+            const address = new URL(url);
+            if (address.origin === 'https://box.nju.edu.cn' &&
+                address.pathname.startsWith('/api/v2.1/via-repo-token/')) {
+              return nativeApi(url, options);
+            }
+            return originalFetch(url, options);
+          };
+          '@ | Set-Content .agent-tmp/mizar-box-native-api.mjs -Encoding utf8
       - name: 同步与校验云盘
         env:
           # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
@@ -42,7 +101,7 @@ jobs:
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
-        run: node scripts/qualification/box-sync.mjs
+        run: node --import ./.agent-tmp/mizar-box-native-api.mjs scripts/qualification/box-sync.mjs
       - name: Record complete qualification trigger through Box verification timing
         env:
           GH_TOKEN: ${{ github.token }}
