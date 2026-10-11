@@ -102,6 +102,8 @@ pub fn set_visible(window: &WebviewWindow, visible: bool) -> tauri::Result<()> {
 #[link(name = "user32")]
 extern "system" {
     fn IsWindowVisible(hwnd: isize) -> i32;
+    fn IsIconic(hwnd: isize) -> i32;
+    fn ShowWindow(hwnd: isize, command: i32) -> i32;
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
 }
 #[link(name = "kernel32")]
@@ -109,7 +111,7 @@ extern "system" {
     fn GetLastError() -> u32;
 }
 
-fn set_native_overlay_visible(hwnd: isize, visible: bool) -> std::io::Result<()> {
+fn set_native_visible_without_activation(hwnd: isize, visible: bool) -> std::io::Result<()> {
     if (unsafe { IsWindowVisible(hwnd) } != 0) == visible {
         return Ok(());
     }
@@ -126,6 +128,34 @@ fn set_native_overlay_visible(hwnd: isize, visible: bool) -> std::io::Result<()>
     Ok(())
 }
 
+/// Reopening a workspace is visibility work, not an input-target selection.
+/// As with HUD visibility, perform native mutations on the owning UI thread.
+pub fn show_without_activation(window: &WebviewWindow) -> Result<(), String> {
+    let current = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = (|| {
+                let hwnd = current.hwnd().map_err(|error| error.to_string())?.0 as isize;
+                if unsafe { IsIconic(hwnd) } != 0 {
+                    unsafe {
+                        ShowWindow(hwnd, 4);
+                    } // SW_SHOWNOACTIVATE
+                }
+                set_native_visible_without_activation(hwnd, true)
+                    .map_err(|error| error.to_string())?;
+                sync_visibility(&current).map_err(|error| error.to_string())
+            })();
+            if let Err(error) = result {
+                current.state::<crate::startup_log::DesktopLog>().event(
+                    "workspace_visibility",
+                    "failure",
+                    Some(&error),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// HUD-only visibility: Tao 0.37.1's later show() uses SW_SHOW even for a
 /// nonfocusable window; focused(false) only protects initial construction.
 /// Keep both transitions native because Tao caches its own VISIBLE flag.
@@ -138,7 +168,7 @@ pub fn set_overlay_visible(window: &WebviewWindow, visible: bool) -> Result<(), 
         .run_on_main_thread(move || {
             let result = (|| {
                 let hwnd = current.hwnd().map_err(|error| error.to_string())?;
-                set_native_overlay_visible(hwnd.0 as isize, visible)
+                set_native_visible_without_activation(hwnd.0 as isize, visible)
                     .map_err(|error| format!("HUD SetWindowPos failed: {error}"))?;
                 sync_visibility(&current).map_err(|error| error.to_string())
             })();
@@ -201,11 +231,11 @@ mod tests {
             }
         }
     }
-    fn native_overlay() -> NativeWindow {
+    fn native_window(ex_style: u32) -> NativeWindow {
         let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
         let hwnd = unsafe {
             CreateWindowExW(
-                0x0800_0088, // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+                ex_style,
                 class.as_ptr(),
                 class.as_ptr(),
                 0x8000_0000, // WS_POPUP, initially hidden
@@ -228,25 +258,28 @@ mod tests {
         rect
     }
     #[test]
-    fn native_overlay_visibility_preserves_foreground_geometry_and_topmost_band() {
-        let overlay = native_overlay();
-        let foreground = unsafe { GetForegroundWindow() };
-        let rect = native_rect(overlay.0);
-        let style = unsafe { GetWindowLongW(overlay.0, -20) };
-        assert_ne!(style & 0x8, 0);
-        // Repeated transitions cover a hidden HUD becoming eligible again and
-        // unchanged Host ticks. Both directions must use the real native state.
-        for visible in [false, true, true, false, false, true, false] {
-            set_native_overlay_visible(overlay.0, visible).unwrap();
-            assert_eq!(unsafe { IsWindowVisible(overlay.0) } != 0, visible);
-            assert_eq!(unsafe { GetForegroundWindow() }, foreground);
-            assert_eq!(native_rect(overlay.0), rect);
-            assert_eq!(unsafe { GetWindowLongW(overlay.0, -20) }, style);
+    fn native_visibility_preserves_foreground_geometry_and_window_styles() {
+        // Both the nonfocusable HUD and ordinary focusable panels use this path.
+        for ex_style in [0x0800_0088, 0] {
+            let overlay = native_window(ex_style);
+            let foreground = unsafe { GetForegroundWindow() };
+            let rect = native_rect(overlay.0);
+            let style = unsafe { GetWindowLongW(overlay.0, -20) };
+            assert_eq!(style as u32, ex_style);
+            // Repeated transitions cover a hidden HUD becoming eligible again and
+            // unchanged Host ticks. Both directions must use the real native state.
+            for visible in [false, true, true, false, false, true, false] {
+                set_native_visible_without_activation(overlay.0, visible).unwrap();
+                assert_eq!(unsafe { IsWindowVisible(overlay.0) } != 0, visible);
+                assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+                assert_eq!(native_rect(overlay.0), rect);
+                assert_eq!(unsafe { GetWindowLongW(overlay.0, -20) }, style);
+            }
         }
     }
     #[test]
     fn native_overlay_show_reports_invalid_window_error() {
-        let error = set_native_overlay_visible(0, true).unwrap_err();
+        let error = set_native_visible_without_activation(0, true).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(1400)); // ERROR_INVALID_WINDOW_HANDLE
     }
     #[derive(Default)]

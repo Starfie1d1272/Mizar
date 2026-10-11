@@ -21,6 +21,7 @@ mod window_frame;
 mod window_presentation;
 mod windows_host;
 mod windows_startup;
+mod workspace_focus;
 mod workspace_group;
 mod workspace_shell;
 
@@ -76,6 +77,7 @@ struct HostState {
     tray_available: AtomicBool,
     fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
     window_group: Mutex<workspace_group::Group>,
+    entry_focus: Mutex<workspace_focus::Entry>,
 }
 
 fn bundle_root() -> Result<PathBuf, String> {
@@ -356,29 +358,52 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
     Ok(())
 }
 
+fn focus_session(process: &managed_cs2::WorkspaceProcess) -> workspace_focus::Session {
+    workspace_focus::Session { pid: process.pid, created: process.created }
+}
+
+fn attempt_game_focus(app: &tauri::AppHandle, request: workspace_focus::Request) -> bool {
+    let result = (|| -> Result<(), &'static str> {
+        let state = app.state::<HostState>();
+        if !state.visible.load(Ordering::Acquire)
+            || app.state::<production_exit::ExitGate>().check().is_err()
+            || app.state::<cs2_activity::Activity>().phase() != "idle"
+        { return Err("workspace_unavailable"); }
+        let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = cs2_state.try_lock().map_err(|_| "session_busy")?;
+        let process = cs2.workspace_process().map_err(|_| "session_invalid")?
+            .ok_or("session_missing")?;
+        if !process.is_running() { return Err("process_stopped"); }
+        let tracker = state.tracker.try_lock().map_err(|_| "tracker_busy")?;
+        let window = tracker.window.ok_or("game_window_missing")?;
+        if window.pid != process.pid { return Err("game_window_mismatch"); }
+        let mut invoked = false;
+        let focused = request.attempt(focus_session(&process), windows_host::foreground(), true, |source| {
+            invoked = true;
+            tracker.restore_focus(source)
+        });
+        if focused { Ok(()) }
+        else if invoked { Err("native_focus_not_acquired") }
+        else { Err("intent_cancelled") }
+    })();
+    app.state::<DesktopLog>().event("workspace_focus_attempt",
+        if result.is_ok() { "focused" } else { "not_focused" }, result.err());
+    result.is_ok()
+}
+
 #[tauri::command]
-fn restore_cs2_focus(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> bool {
-    if !state.visible.load(Ordering::Acquire)
-        || app.state::<production_exit::ExitGate>().check().is_err()
-        || app.state::<cs2_activity::Activity>().phase() != "idle"
-    {
-        return false;
-    }
-    let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    let Ok(cs2) = cs2_state.try_lock() else {
-        return false;
+fn restore_cs2_focus(window: tauri::WebviewWindow, app: tauri::AppHandle) -> bool {
+    if !matches!(window.label(), "workspace-left" | "workspace-dock") { return false; }
+    let Ok(hwnd) = window.hwnd() else { return false; };
+    let source = hwnd.0 as isize;
+    if windows_host::foreground() != source { return false; }
+    let request = {
+        let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let Ok(cs2) = managed.try_lock() else { return false; };
+        let Ok(Some(process)) = cs2.workspace_process() else { return false; };
+        workspace_focus::Request::new(focus_session(&process), source)
     };
-    let Ok(Some(process)) = cs2.workspace_process() else {
-        return false;
-    };
-    state
-        .tracker
-        .lock()
-        .is_ok_and(|tracker| {
-            process.is_running()
-                && tracker.window.is_some_and(|window| window.pid == process.pid)
-                && tracker.restore_focus()
-        })
+    request.is_some_and(|request| attempt_game_focus(&app, request))
 }
 
 #[tauri::command]
@@ -650,6 +675,7 @@ async fn enter_demo_test(
         host.state::<updates::PendingUpdate>().check()?;
         cs2.validate_demo_running(&request_id)?;
         demo_test::request(&host.state::<DesktopLog>(), "playing", &request_id, None)?;
+        drop(cs2);
         present_production_inner(&host, true)
     })
     .await
@@ -771,14 +797,8 @@ fn show_workspace(app: &tauri::AppHandle) {
     }
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.unminimize();
-            let _ = window_presentation::set_visible(&window, true);
+            let _ = window_presentation::show_without_activation(&window);
         }
-    }
-    // Select one input target. The group restores its peers without activating
-    // them when the existing worker observes this explicit activation.
-    if let Some(dock) = app.get_webview_window("workspace-dock") {
-        let _ = dock.set_focus();
     }
     update_overlay(app, &state);
 }
@@ -835,13 +855,61 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
 
 #[tauri::command]
 async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), String> {
-    present_production_inner(&app, live)
+    tauri::async_runtime::spawn_blocking(move || present_production_inner(&app, live))
+        .await.map_err(|_| "现场窗口未能打开。".to_string())?
 }
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
+        // Capture before window creation/layout work. A later foreground change
+        // cancels this one-shot intent; showing the panels must not select them.
+        let source = app.get_webview_window("main")
+            .and_then(|window| window.hwnd().ok())
+            .map(|hwnd| hwnd.0 as isize)
+            .filter(|hwnd| *hwnd == windows_host::foreground()).unwrap_or(0);
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
+        let (mut request, process) = {
+            let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+            let process = cs2.workspace_process()?;
+            let request = process.as_ref().and_then(|process| {
+                app.state::<HostState>().entry_focus.lock().ok()?
+                    .request(focus_session(process), source)
+            });
+            (request, process)
+        };
+        if request.is_some() {
+            let started = Instant::now();
+            let mut readiness = workspace_focus::Readiness::new(source, started);
+            loop {
+                let eligible = process.as_ref().is_some_and(|process| process.is_running())
+                    && app.state::<production_exit::ExitGate>().check().is_ok()
+                    && app.state::<cs2_activity::Activity>().phase() == "idle";
+                let window_ready = windows_host::find_cs2().is_some_and(|window| {
+                    process.as_ref().is_some_and(|process| window.pid == process.pid)
+                });
+                let decision = readiness.poll(Instant::now(), windows_host::foreground(), eligible, window_ready);
+                if decision == workspace_focus::ReadinessState::Waiting {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                if decision != workspace_focus::ReadinessState::Ready { request = None; }
+                app.state::<DesktopLog>().event("workspace_entry_readiness", match decision {
+                    workspace_focus::ReadinessState::Ready => "ready",
+                    workspace_focus::ReadinessState::TimedOut => "timed_out",
+                    _ => "cancelled",
+                }, Some(&format!("elapsedMs={}", started.elapsed().as_millis())));
+                break;
+            }
+        }
+        // A stop/exit can run while the render window is still loading.
+        // Do not reopen a workspace whose managed game has been ended.
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        if app.state::<cs2_activity::Activity>().phase() != "idle"
+            || process.as_ref().is_some_and(|process| !process.is_running())
+        { return Err("游戏启动已取消或正在恢复，请完成收尾后重新进入工作台。".into()); }
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
@@ -855,9 +923,18 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
             apply_layout(&app, layout);
         }
         show_workspace(&app);
-        if let Some(main) = app.get_webview_window("main") {
-            let _ = window_presentation::set_visible(&main, false);
-        }
+        let host = app.clone();
+        app.run_on_main_thread(move || {
+            if !host.state::<HostState>().visible.load(Ordering::Acquire) { return; }
+            if let Some(request) = request {
+                let focused = attempt_game_focus(&host, request);
+                host.state::<DesktopLog>().event("workspace_entry_focus",
+                    if focused { "focused" } else { "not_focused" }, None);
+            }
+            if let Some(main) = host.get_webview_window("main") {
+                let _ = window_presentation::set_visible(&main, false);
+            }
+        }).map_err(|error| error.to_string())?;
     } else {
         open_main(app.clone(), None)?;
         hide_workspace(&app);
@@ -1402,6 +1479,7 @@ fn run_desktop(
         tray_available: AtomicBool::new(false),
         fullscreen_scope: Mutex::new(workspace_shell::FullscreenScope::default()),
         window_group: Mutex::new(workspace_group::Group::default()),
+        entry_focus: Mutex::new(workspace_focus::Entry::default()),
     };
     log.event("tauri_begin", "begin", None);
     let setup_log = log.clone();

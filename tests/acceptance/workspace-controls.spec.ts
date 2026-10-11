@@ -154,6 +154,16 @@ test('OBS unconfirmed output error stays actionable without automatically resend
   expect(calls).toBe(1);
 });
 
+// These fields are injected by addInitScript into Playwright's browser realm.
+// Cross through unknown at that boundary: the root test project also declares
+// a jsdom Window, which is distinct from the browser's Window type.
+type WorkspaceTestWindow = {
+  focusAudit: string[];
+  auditCalls: unknown[];
+  focusResult: boolean;
+  completeLayout: () => void;
+};
+
 test('sidebar links and preparation tools open their actual destinations', async ({
   page,
   context,
@@ -404,6 +414,19 @@ test('HUD command copy confirms copying, and clipboard failure retains the exact
 test('next scene uses the registered Program renderer, never guesses or takes a scene', async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, {
+      focusAudit: calls,
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
+          calls.push(command);
+          return Promise.resolve(true);
+        },
+      },
+    });
+  });
   let next: string | null = 'halftime';
   let mode = 'auto';
   const commands: unknown[] = [];
@@ -443,6 +466,10 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
     await expect
       .poll(() => commands.at(-1))
       .toEqual({ sceneId: scene.id, expectedRevision: 'next-1' });
+    await expect(page.getByRole('button', { name: scene.title, exact: true })).toBeEnabled();
+    expect(
+      await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit),
+    ).not.toContain('restore_cs2_focus');
   }
 });
 
@@ -458,6 +485,7 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
       auditCalls: calls,
       __TAURI_INTERNALS__: {
         invoke: (command: string, args?: unknown) => {
+          if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
           calls.push({ command, args: args ?? null });
           return Promise.resolve(true);
         },
@@ -487,6 +515,15 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
       .poll(() => page.evaluate(() => (window as unknown as { auditCalls: unknown[] }).auditCalls))
       .toContainEqual({ command, args });
   }
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).auditCalls)).toEqual([
+    { command: 'open_main', args: { path: '/matches' } },
+    { command: 'open_main', args: { path: '/settings?tab=gsi' } },
+    { command: 'open_main', args: { path: '/settings?tab=obs' } },
+    { command: 'open_tool', args: { tool: 'hud' } },
+    { command: 'open_tool', args: { tool: 'diagnostics' } },
+    { command: 'open_tool', args: { tool: 'bp' } },
+    { command: 'restore_layout', args: null },
+  ]);
   for (const [label, action] of [
     ['隐藏工作区', 'hide'],
     ['退出工作台', 'finish'],
@@ -494,4 +531,104 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
     await page.getByRole('button', { name: label, exact: true }).click();
     await expect.poll(() => lifecycle.at(-1)).toEqual({ action, expectedRevision: 'production-1' });
   }
+});
+
+test('delayed panel actions never return focus; only explicit return to game invokes the Host', async ({
+  page,
+  context,
+}) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, {
+      focusAudit: calls,
+      focusResult: false,
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
+          calls.push(command);
+          if (command === 'restore_layout')
+            return new Promise<void>((resolve) => {
+              (window as unknown as WorkspaceTestWindow).completeLayout = resolve;
+            });
+          return Promise.resolve((window as unknown as WorkspaceTestWindow).focusResult);
+        },
+      },
+    });
+  });
+  await page.route('**/local/v1/program-scenes', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 'mizar.program-scenes.v1',
+        active: 'waiting',
+        revision: 'focus-1',
+        available: PROGRAM_SCENES.map((scene) => scene.id),
+        blocked: {},
+        director: {
+          mode: 'manual',
+          next: null,
+          reason: null,
+          introDurationMs: 3000,
+          sceneElapsedMs: 0,
+        },
+      },
+    }),
+  );
+  let completeScene: (() => void) | undefined;
+  const scenes: unknown[] = [];
+  await page.route('**/operator/program-scene', async (route) => {
+    scenes.push(route.request().postDataJSON());
+    await new Promise<void>((resolve) => {
+      completeScene = resolve;
+    });
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/workspace/dock');
+  const returnToGame = page.getByRole('button', { name: '返回游戏', exact: true });
+  await expect(returnToGame).toBeEnabled();
+  const otherApp = await context.newPage();
+  await otherApp.setContent('<input aria-label="Other application notes">');
+  for (const sceneId of ['gameplay', 'bp'] as const) {
+    const scene = PROGRAM_SCENES.find((item) => item.id === sceneId)!;
+    await page.getByRole('button', { name: scene.title, exact: true }).click();
+    await expect.poll(() => scenes.at(-1)).toEqual({ sceneId, expectedRevision: 'focus-1' });
+    await expect(returnToGame).toBeDisabled();
+    await otherApp.bringToFront();
+    await otherApp.getByRole('textbox').fill('Operator selected another application');
+    completeScene!();
+    await expect(returnToGame).toBeEnabled();
+    expect(
+      await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit),
+    ).toEqual([]);
+  }
+  await page.getByRole('button', { name: '恢复布局', exact: true }).click();
+  await expect(returnToGame).toBeDisabled();
+  await otherApp.bringToFront();
+  await page.evaluate(() => (window as unknown as WorkspaceTestWindow).completeLayout());
+  await expect(returnToGame).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
+    'restore_layout',
+  ]);
+  await otherApp.close();
+  // A keyboard activation is the sole focus request, and a declined Host
+  // request leaves the existing visible feedback instead of retrying later.
+  await returnToGame.focus();
+  await returnToGame.press('Enter');
+  await expect(page.getByText('操作已完成，未能将焦点交还 CS2。', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
+    'restore_layout',
+    'restore_cs2_focus',
+  ]);
+  await page.evaluate(() => ((window as unknown as WorkspaceTestWindow).focusResult = true));
+  await returnToGame.click();
+  await expect(returnToGame).toBeEnabled();
+  await expect(page.getByText('操作已完成，未能将焦点交还 CS2。', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as WorkspaceTestWindow).focusAudit)).toEqual([
+    'restore_layout',
+    'restore_cs2_focus',
+    'restore_cs2_focus',
+  ]);
+  expect(scenes).toEqual([
+    { sceneId: 'gameplay', expectedRevision: 'focus-1' },
+    { sceneId: 'bp', expectedRevision: 'focus-1' },
+  ]);
 });

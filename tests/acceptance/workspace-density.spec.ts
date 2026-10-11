@@ -142,6 +142,9 @@ for (const [width, height] of [
       });
       await page.goto('/workspace/dock');
       await expect(page.getByRole('button', { name: '停止作为数据源' })).toBeVisible();
+      await expect(page.getByRole('button', { name: '返回游戏', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '直播待确认', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '录像待确认', exact: true })).toBeVisible();
       const measureDock = () =>
         page.locator('.workspace-dock').evaluate((root) => {
           const bounds = root.getBoundingClientRect();

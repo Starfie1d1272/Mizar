@@ -216,17 +216,13 @@ export function WorkspaceDock() {
     window.addEventListener('mizar-hide', hide);
     return () => window.removeEventListener('mizar-hide', hide);
   }, []);
-  async function action(run: () => Promise<unknown>, restoreFocus = false) {
+  async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
     setMessage('');
     setErrorMessage('');
     try {
       await run();
-      if (restoreFocus && window.__TAURI_INTERNALS__) {
-        const focused = await desktopInvoke<boolean>('restore_cs2_focus');
-        if (!focused) setMessage('操作已完成，未能将焦点交还 CS2。');
-      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '操作未完成。');
     } finally {
@@ -279,11 +275,7 @@ export function WorkspaceDock() {
               aria-pressed={sceneState?.active === scene.id}
               title={sceneState?.blocked?.[scene.id] ?? `手动切换到${scene.title}`}
               onClick={() =>
-                sceneState &&
-                void action(
-                  () => selectProgramScene(scene.id, sceneState.revision),
-                  scene.id === 'gameplay' || scene.id === 'bp',
-                )
+                sceneState && void action(() => selectProgramScene(scene.id, sceneState.revision))
               }
             >
               {scene.title}
@@ -304,6 +296,18 @@ export function WorkspaceDock() {
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
           <small>观战 · 本机</small>
+          <Button
+            disabled={busy || !window.__TAURI_INTERNALS__}
+            aria-busy={busy}
+            onClick={() =>
+              void action(async () => {
+                const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+                if (!focused) setMessage('操作已完成，未能将焦点交还 CS2。');
+              })
+            }
+          >
+            返回游戏
+          </Button>
           <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
             BP 工作台
           </Button>
@@ -345,7 +349,7 @@ export function WorkspaceDock() {
           </Button>
           <Button
             disabled={busy || !window.__TAURI_INTERNALS__}
-            onClick={() => void action(() => desktopInvoke('restore_layout'), true)}
+            onClick={() => void action(() => desktopInvoke('restore_layout'))}
           >
             恢复布局
           </Button>
