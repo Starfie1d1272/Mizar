@@ -95,6 +95,22 @@
   .match-header__top-score {
     width: 100%;
   }
+  .match-header__stage-caption {
+    position: absolute;
+    top: -21px;
+    left: 16px;
+    right: 16px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: center;
+    color: var(--mizar-hud-text-muted);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 18px;
+    letter-spacing: 0.06em;
+    text-shadow: 0 1px 3px var(--mizar-broadcast-pulse-canvas);
+  }
   .match-header__score-shell {
     width: 100%;
     height: 80px;

@@ -14,6 +14,15 @@ export const DEFAULT_HUD_COMPOSITE_FIXTURES = [
   'default-halftime',
   'default-nuke-multifloor',
   'default-missing-logo',
+  'default-stage-playin-10',
+  'default-stage-playin-00',
+  'default-stage-bo3',
+  'default-stage-semifinal',
+  'default-stage-third-place',
+  'default-stage-grand-final',
+  'default-stage-long',
+  'default-stage-unknown',
+  'default-stage-local-missing',
 ] as const;
 
 export type DefaultHudCompositeFixture = (typeof DEFAULT_HUD_COMPOSITE_FIXTURES)[number];

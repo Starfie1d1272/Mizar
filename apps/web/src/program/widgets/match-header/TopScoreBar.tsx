@@ -137,6 +137,11 @@ export function TopScoreBar({
       data-side-mapping={p.currentSideMapping}
       data-freeze={snapshot.payload.round?.phase === 'freezetime'}
     >
+      {design === 'current' && p.stageName?.trim() ? (
+        <div className="match-header__stage-caption" title={p.stageName}>
+          {p.stageName}
+        </div>
+      ) : null}
       {(design === 'iem' || design === 'esl') && (p.competitionName || p.stageName) ? (
         <div className="broadcast-event-ribbon">
           <span>{p.competitionName}</span>
