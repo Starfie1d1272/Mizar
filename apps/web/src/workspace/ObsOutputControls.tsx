@@ -75,17 +75,17 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
         })}
       </div>
       <Dialog
+        className="workspace-obs-confirmation"
         open={confirmation !== null}
-        title={confirmation?.output === 'stream' ? '停止直播？' : '停止录像？'}
+        title={
+          !canConfirm
+            ? 'OBS 状态已变化，请重新核对'
+            : confirmation?.output === 'stream'
+              ? '停止 OBS 直播？'
+              : '停止 OBS 录像？'
+        }
         onClose={() => setConfirmation(null)}
       >
-        <p>
-          {canConfirm
-            ? confirmation?.output === 'stream'
-              ? '将结束 OBS 当前直播。'
-              : '将结束 OBS 当前录像。'
-            : 'OBS 状态已变化，请取消后重新核对。'}
-        </p>
         <Button autoFocus onClick={() => setConfirmation(null)}>
           取消
         </Button>

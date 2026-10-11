@@ -24,6 +24,7 @@ export class ObsOutputError extends Error {
       | 'obs_output_busy'
       | 'obs_output_stale'
       | 'obs_output_unavailable'
+      | 'obs_output_disabled'
       | 'obs_output_failed'
       | 'obs_output_unconfirmed',
     message: string,
@@ -31,6 +32,38 @@ export class ObsOutputError extends Error {
   ) {
     super(message, options);
   }
+}
+
+/** OBS request-status codes, not arbitrary server comments, choose operator guidance. */
+function rejectedOutput(failure: unknown): ObsOutputError {
+  const code = (failure as { code: number }).code;
+  if (code === 207 || code === 500)
+    return new ObsOutputError(
+      'obs_output_busy',
+      'OBS 输出正在使用或暂时忙碌，请等待状态稳定后重试。',
+      { cause: failure },
+    );
+  if (code === 504)
+    return new ObsOutputError(
+      'obs_output_disabled',
+      'OBS 输出未启用，请先在 OBS 完成相应直播或录像配置。',
+      { cause: failure },
+    );
+  if (code === 501 || code === 502 || code === 503)
+    return new ObsOutputError(
+      'obs_output_stale',
+      'OBS 输出已停止或暂停状态已变化，请核对当前状态后操作。',
+      { cause: failure },
+    );
+  if (code === 204)
+    return new ObsOutputError(
+      'obs_output_failed',
+      '当前 OBS 不支持此操作，请检查 OBS 与 WebSocket 版本。',
+      { cause: failure },
+    );
+  return new ObsOutputError('obs_output_failed', 'OBS 拒绝了此操作，请查看诊断中的 OBS 原因。', {
+    cause: failure,
+  });
 }
 
 function unknown(): ObsOutputStatus {
@@ -273,6 +306,8 @@ export class ObsOutputController {
         await bounded(client.call(requests[output][action]));
       } catch (error) {
         failure = error;
+        const config = await this.config.read();
+        this.diagnostic(error, config.password);
       }
       // A successful RPC only acknowledges the request. Confirm the actual output.
       const deadline = Date.now() + CONFIRM_MS;
@@ -282,12 +317,9 @@ export class ObsOutputController {
         if (this.generation !== generation) break;
         if (reached()) return this.snapshot();
         // A server rejection is definite; timeout/network failure may have executed.
-        if (typeof (failure as { code?: unknown } | undefined)?.code === 'number')
-          throw new ObsOutputError(
-            'obs_output_failed',
-            'OBS 未完成操作，请检查 OBS 的输出设置后重试。',
-            { cause: failure },
-          );
+        const failureCode = (failure as { code?: unknown } | undefined)?.code;
+        if (typeof failureCode === 'number' && failureCode >= 200 && failureCode < 800)
+          throw rejectedOutput(failure);
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
       this.update(output, 'unknown', null);

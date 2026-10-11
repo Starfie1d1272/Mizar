@@ -67,6 +67,78 @@ afterEach(async () => {
   wire.active = { stream: false, record: false };
 });
 
+it.each([
+  [207, 'obs_output_busy', '忙碌'],
+  [500, 'obs_output_busy', '正在使用'],
+  [504, 'obs_output_disabled', '完成相应直播或录像配置'],
+  [501, 'obs_output_stale', '状态已变化'],
+  [502, 'obs_output_stale', '状态已变化'],
+  [503, 'obs_output_stale', '状态已变化'],
+  [204, 'obs_output_failed', '版本'],
+  [702, 'obs_output_failed', '诊断'],
+])(
+  'gives safe output guidance for OBS rejection %s and retains its cause',
+  async (code, expected, message) => {
+    const { controller } = setup();
+    const status = await controller.read();
+    const client = wire.clients[0]!;
+    const original = client.call.getMockImplementation()!;
+    const cause = Object.assign(new Error('private server comment'), { code });
+    client.call.mockImplementation((type) =>
+      type === 'StartStream' ? Promise.reject(cause) : original(type),
+    );
+    const failure: unknown = await controller
+      .command({ output: 'stream', action: 'start', expectedRevision: status.stream.revision })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: expected, cause });
+    expect((failure as Error).message).toContain(message);
+  },
+);
+
+it('logs the OBS rejection code and original reason through the existing redaction boundary', async () => {
+  const { store } = setup();
+  vi.spyOn(store, 'read').mockResolvedValue({
+    host: '127.0.0.1',
+    port: 4455,
+    password: 'private-obs-value',
+    executablePath: null,
+  });
+  const diagnostic = vi.fn<(stage: string, error: unknown) => void>();
+  const adapter = new ObsAdapter(store, 'http://127.0.0.1:3000', diagnostic);
+  try {
+    const status = await adapter.outputStatus();
+    const client = wire.clients[0]!;
+    const original = client.call.getMockImplementation()!;
+    client.call.mockImplementation((type) =>
+      type === 'StartStream'
+        ? Promise.reject(
+            Object.assign(new Error('encoder initialization failed\npassword=private-obs-value'), {
+              code: 702,
+            }),
+          )
+        : original(type),
+    );
+    await expect(
+      adapter.outputCommand({
+        output: 'stream',
+        action: 'start',
+        expectedRevision: status.stream.revision,
+      }),
+    ).rejects.toMatchObject({
+      code: 'obs_output_failed',
+      message: 'OBS 拒绝了此操作，请查看诊断中的 OBS 原因。',
+    });
+    const evidence: unknown = diagnostic.mock.calls.find(
+      ([stage]) => stage === 'obs_output_command',
+    )?.[1];
+    expect(evidence).toMatchObject({ cause: { code: 702 } });
+    expect(JSON.stringify(evidence)).toContain('encoder initialization failed');
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-obs-value');
+  } finally {
+    await adapter.close();
+  }
+});
+
 it('recovers external transitions with a bounded snapshot check when the final event is lost', async () => {
   vi.useFakeTimers();
   const { controller } = setup();
@@ -75,6 +147,24 @@ it('recovers external transitions with a bounded snapshot check when the final e
   expect((await controller.read()).stream.phase).toBe('starting');
   await vi.advanceTimersByTimeAsync(8000);
   expect((await controller.read()).stream).toMatchObject({ phase: 'idle', active: false });
+});
+
+it('does not mistake a numeric transport error for a definite OBS rejection', async () => {
+  vi.useFakeTimers();
+  const { controller } = setup();
+  const status = await controller.read();
+  const client = wire.clients[0]!;
+  const original = client.call.getMockImplementation()!;
+  client.call.mockImplementation((type) =>
+    type === 'StartStream'
+      ? Promise.reject(Object.assign(new Error('transport timeout'), { code: -1 }))
+      : original(type),
+  );
+  const result = controller
+    .command({ output: 'stream', action: 'start', expectedRevision: status.stream.revision })
+    .catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(8500);
+  expect(await result).toMatchObject({ code: 'obs_output_unconfirmed' });
 });
 
 it('does not send an old intent when OBS changes during command preflight', async () => {
@@ -231,7 +321,7 @@ it('reconciles server errors against observed state and rejects stale confirmati
       action: 'start',
       expectedRevision: status.stream.revision,
     }),
-  ).rejects.toMatchObject({ code: 'obs_output_failed' });
+  ).rejects.toMatchObject({ code: 'obs_output_disabled' });
   event('stream', 'STARTED', true);
   await expect(
     controller.command({
