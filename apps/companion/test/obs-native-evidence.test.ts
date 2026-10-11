@@ -100,6 +100,25 @@ describe('OBS native evidence', () => {
     expect(event?.message).toContain('5');
     expect(JSON.stringify(event)).not.toMatch(/Alice|secret|private.example/);
   });
+  it('keeps upstream capture initialization and blocked-target errors without claiming current frame failure', () => {
+    for (const text of [
+      'init_events: failed to get hook_ready event: 5',
+      'init_capture_data: failed to open file mapping: 5',
+      'error acquiring, failed to get window information: 5',
+      'cannot capture private.exe due to being blacklisted',
+    ]) {
+      const event = projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] " + text,
+      );
+      expect(event?.outcome).toBe('failure');
+      expect(JSON.stringify(event)).not.toContain('private');
+    }
+    expect(
+      projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] hook not loaded yet, retrying..",
+      ),
+    ).toMatchObject({ outcome: 'retry' });
+  });
   it('collects bounded native evidence and keeps absence/credentials out of conclusions', async () => {
     const { appData, root } = await fixture();
     const now = Date.parse('2026-10-11T12:30:00Z');

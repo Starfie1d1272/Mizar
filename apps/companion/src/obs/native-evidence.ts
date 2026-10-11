@@ -185,10 +185,10 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   else if (hook && /^hook not loaded yet, retrying\.\.$/i.test(text)) outcome = 'retry';
   else if (
     capture &&
-    /^(?:hook_direct:|hook:|init_hook_info:|init_pipe:|Failed to|failed to|could not|Game capture file|Game capture .*not found|\[WGC\])/i.test(
+    /^(?:hook_direct:|hook:|init_[a-z_]+:|error acquiring|cannot capture|Failed to|failed to|could not|Game capture file|Game capture .*not found|\[WGC\])/i.test(
       text,
     ) &&
-    /fail|error|not found|could not|unavailable/i.test(text)
+    /fail|error|not found|could not|unavailable|blacklisted/i.test(text)
   )
     outcome = 'failure';
   else if (
