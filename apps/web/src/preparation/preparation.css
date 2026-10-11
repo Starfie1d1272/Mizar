@@ -330,6 +330,12 @@
 .obs-setup__heading h2 {
   margin: 0;
 }
+.obs-setup__heading {
+  flex-wrap: wrap;
+}
+.obs-setup__heading .preparation-actions {
+  align-items: center;
+}
 .preparation-readiness {
   justify-content: start;
   gap: var(--mizar-layout-gap);
@@ -410,7 +416,14 @@
   gap: var(--mizar-layout-padding);
 }
 .obs-setup__cards[data-connected='true'] {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+.obs-setup__cards[data-connected='true'] .mizar-panel {
+  min-height: 0;
+}
+.obs-setup__cards[data-connected='true'] > .mizar-panel > .mizar-button {
+  align-self: flex-start;
+  margin-top: 0;
 }
 .obs-setup__cards[data-connected='true'] > details {
   grid-column: 1 / -1;

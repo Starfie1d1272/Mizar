@@ -140,6 +140,22 @@ export function Settings({ tab }: { tab: string }) {
       setBusy(false);
     }
   }
+  const obsPathControl = window.__TAURI_INTERNALS__ ? (
+    <details>
+      <summary>OBS 路径</summary>
+      <Button
+        disabled={busy}
+        onClick={() =>
+          void action(async () => {
+            const path = await desktopInvoke<string | null>('select_obs_executable');
+            if (path) await obsCommand('configure', { executablePath: path });
+          })
+        }
+      >
+        更改 OBS 路径
+      </Button>
+    </details>
+  ) : null;
   return (
     <>
       {tab === 'rivalhub' ? (
@@ -194,15 +210,22 @@ export function Settings({ tab }: { tab: string }) {
                 ? '启动游戏前，连接并检查 OBS'
                 : 'OBS 连接与配置'}
             </h2>
-            <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
-              {obs?.connection === 'connected'
-                ? '已连接'
-                : obs?.connection === 'invalid_password'
-                  ? '密码无效'
-                  : obs?.connection === 'password_required'
-                    ? '需要密码'
-                    : '未连接'}
-            </StatusPill>
+            <div className="preparation-actions">
+              <StatusPill tone={obs?.connection === 'connected' ? 'success' : 'warning'}>
+                {obs?.connection === 'connected'
+                  ? '已连接'
+                  : obs?.connection === 'invalid_password'
+                    ? '密码无效'
+                    : obs?.connection === 'password_required'
+                      ? '需要密码'
+                      : '未连接'}
+              </StatusPill>
+              {obs?.connection === 'connected' ? (
+                <Button disabled={busy} onClick={() => void action(() => obsCommand('open'))}>
+                  打开 OBS
+                </Button>
+              ) : null}
+            </div>
           </header>
           {obs && obs.connection !== 'connected' ? (
             <StatusBanner tone="warning">
@@ -216,33 +239,20 @@ export function Settings({ tab }: { tab: string }) {
             </StatusBanner>
           ) : null}
           <div className="obs-setup__cards" data-connected={obs?.connection === 'connected'}>
-            <Panel>
-              <h3>打开 OBS</h3>
-              <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
-              <Button
-                variant={obs?.connection === 'connected' ? 'secondary' : 'primary'}
-                disabled={busy}
-                onClick={() => void action(() => obsCommand('open'))}
-              >
-                打开 OBS
-              </Button>
-              {window.__TAURI_INTERNALS__ ? (
-                <details>
-                  <summary>OBS 路径</summary>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const path = await desktopInvoke<string | null>('select_obs_executable');
-                        if (path) await obsCommand('configure', { executablePath: path });
-                      })
-                    }
-                  >
-                    更改 OBS 路径
-                  </Button>
-                </details>
-              ) : null}
-            </Panel>
+            {obs?.connection !== 'connected' ? (
+              <Panel>
+                <h3>打开 OBS</h3>
+                <p>在 OBS「工具 → WebSocket 服务器设置」中启用服务器。</p>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => void action(() => obsCommand('open'))}
+                >
+                  打开 OBS
+                </Button>
+                {obsPathControl}
+              </Panel>
+            ) : null}
             <details open={obs?.connection !== 'connected'}>
               <summary>WebSocket 连接设置</summary>
               <Panel>
@@ -303,10 +313,11 @@ export function Settings({ tab }: { tab: string }) {
                     </Button>
                   </details>
                 ) : null}
+                {obs?.connection === 'connected' ? obsPathControl : null}
               </Panel>
             </details>
-            <Panel>
-              <h3>检查画面</h3>
+            <Panel role="region" aria-labelledby="obs-configuration-title">
+              <h3 id="obs-configuration-title">检查画面</h3>
               <div className="obs-setup__signals">
                 <strong>{obs?.currentScene ?? '等待节目场景'}</strong>
                 <span>

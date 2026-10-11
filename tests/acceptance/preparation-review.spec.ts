@@ -679,6 +679,7 @@ test('configuration failure offers an explicit preserved launch and keeps its li
 test('OBS preparation groups scene drift, repairs and rechecks while retaining manual video guidance', async ({
   page,
 }, testInfo) => {
+  let connected = true;
   let findings = [
     { code: 'video_settings', message: '画布与输出仍需设为 1920×1080 / 60fps。' },
     ...Array.from({ length: 8 }, (_, index) => ({
@@ -690,7 +691,7 @@ test('OBS preparation groups scene drift, repairs and rechecks while retaining m
   await page.route('**/local/v1/obs', (route) =>
     route.fulfill({
       json: {
-        connection: 'connected',
+        connection: connected ? 'connected' : 'password_required',
         currentScene: 'Mizar · 等待',
         port: 4455,
         sceneAligned: true,
@@ -711,17 +712,36 @@ test('OBS preparation groups scene drift, repairs and rechecks while retaining m
   });
   await page.goto('/settings?tab=obs');
   const repair = page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true });
+  const pictureCheck = page.getByRole('region', { name: '检查画面', exact: true });
+  const openObs = page.getByRole('button', { name: '打开 OBS', exact: true });
   await expect(repair).toBeVisible();
+  await expect(openObs).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '打开 OBS', exact: true })).toHaveCount(0);
   await expect(page.getByText('场景 1 的画面变换', { exact: false })).not.toBeVisible();
   for (const width of [1920, 1366]) {
     await page.setViewportSize({ width, height: width === 1920 ? 1080 : 768 });
     await expect(repair).toBeInViewport();
+    const content = await page.getByRole('main').evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        left: bounds.left + parseFloat(style.paddingLeft),
+        width: bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      };
+    });
+    const collapsed = (await pictureCheck.boundingBox())!;
+    expect(Math.abs(collapsed.x - content.left)).toBeLessThan(1);
+    expect(Math.abs(collapsed.width - content.width)).toBeLessThan(1);
+    expect((await openObs.boundingBox())!.y + (await openObs.boundingBox())!.height).toBeLessThan(
+      collapsed.y,
+    );
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
     await page.screenshot({ path: testInfo.outputPath(`obs-grouped-${width}.png`) });
     await page.getByText('技术详情 · 9 项', { exact: true }).click();
     await expect(page.getByText('场景 8 的画面变换', { exact: false })).toBeVisible();
+    expect(Math.abs((await pictureCheck.boundingBox())!.width - content.width)).toBeLessThan(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
@@ -734,6 +754,12 @@ test('OBS preparation groups scene drift, repairs and rechecks while retaining m
   await expect(repair).toHaveCount(0);
   expect(commands.filter((action) => action !== 'ensure')).toEqual(['repair', 'check']);
   await page.screenshot({ path: testInfo.outputPath('obs-after-repair.png') });
+  connected = false;
+  await expect(page.getByText('需要密码', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '打开 OBS', exact: true })).toBeVisible();
+  await expect(page.getByLabel('WebSocket 端口')).toBeVisible();
+  await expect(page.getByLabel('WebSocket 密码')).toBeVisible();
+  await expect(openObs).toHaveCount(1);
 });
 
 test('empty preparation provides existing match and the existing Demo workflow without creating state', async ({
