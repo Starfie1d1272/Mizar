@@ -116,6 +116,7 @@ it('keeps audio readiness findings in successive normal status polls and clears 
     if (type === 'GetInputVolume') return { inputVolumeMul: 1 };
     if (type === 'GetInputAudioTracks') return { inputAudioTracks: { '1': audio === 'ready' } };
     if (type === 'GetSceneItemList') return { sceneItems: [] };
+    if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
     return {};
   });
   const store = new ObsConfigStore('/unused-test-config');
@@ -162,7 +163,7 @@ it('drops stale scene findings on authentication failure and reconnects after co
       throw Object.assign(new Error('Authentication failed: wrong-secret'), { code: 4009 });
   });
   websocket.disconnect.mockResolvedValue(undefined);
-  websocket.call.mockResolvedValue({});
+  websocket.call.mockResolvedValue({ outputActive: false });
   vi.spyOn(reconcile, 'checkObsConfiguration').mockResolvedValue([
     { code: 'scene_missing', message: 'missing scene' },
   ]);

@@ -230,6 +230,8 @@ export class ObsAdapter {
             ];
           }),
         ]);
+        if (outputs.stream.active === null || outputs.record.active === null)
+          throw new Error('OBS 输出状态无法确认。');
         return {
           connection: 'connected',
           currentScene:
