@@ -10,6 +10,10 @@ on:
     - cron: '0 10 * * *'
   workflow_dispatch:
     inputs:
+      core_full_packaging_benchmark:
+        description: Measure pinned same-compilation Full/Core payload assembly and compression; never publish
+        type: boolean
+        default: false
       core_setup_preparation_benchmark:
         description: Compare serial and parallel Core preparation using pinned successful 1.3.1 candidate; never publish
         type: boolean
@@ -474,6 +478,44 @@ jobs:
           name: offline-evidence-${{ matrix.name }}-${{ github.run_attempt }}
           include-hidden-files: true
           path: .agent-tmp/offline-evidence/**
+          if-no-files-found: error
+
+  core_full_packaging_benchmark:
+    name: Full Core packaging / ${{ matrix.first }} first
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_full_packaging_benchmark }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        first: [full, core]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 433c86836cfc36224bdadb17928cff58385f2c7b
+          path: .agent-tmp/packaging-source
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Measure original compiled payloads with original packaging scripts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/qualification/benchmark-core-full-packaging.ps1 -First ${{ matrix.first }} -SourceDirectory .agent-tmp/packaging-source -OutputDirectory .agent-tmp/packaging-evidence
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: core-full-packaging-${{ matrix.first }}-${{ github.run_id }}
+          path: |
+            .agent-tmp/packaging-evidence/report.json
+            .agent-tmp/packaging-evidence/*/setup-timings.json
+            .agent-tmp/packaging-evidence/*/core-setup-timings.json
+            .agent-tmp/packaging-evidence/*/core-partition-timings.json
+            .agent-tmp/packaging-evidence/*/full-packaging-timings.json
+            .agent-tmp/packaging-evidence/*/distribution-manifest.json
+            .agent-tmp/packaging-evidence/*/core-distribution-manifest.json
           if-no-files-found: error
 
   core_setup_preparation_benchmark:
