@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
+import { outboxLocalError } from '../src/output/reliable-outbox.js';
 import {
   RivalHubConnection,
   OFFICIAL_RIVALHUB_URL,
@@ -878,4 +879,63 @@ it('exports actual LIVE diagnostic logs with stage and safe network causes throu
     clock.mockRestore();
     await app.close();
   }
+});
+
+it('exports outbox recovery cause without JSON.parse fragments or private paths', async () => {
+  const dir = await directory();
+  const lines: string[] = [];
+  const logger = Fastify({
+    logger: {
+      level: 'warn',
+      stream: {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    },
+  });
+  const malformed = new SyntaxError('Unexpected token private-team-name secret-token');
+  const invalidRecord = Object.assign(new Error('unrecognized key private-rejected-value'), {
+    name: 'ZodError',
+  });
+  const io = Object.assign(new Error('Access denied C:\\Users\\private-user\\queue.json'), {
+    code: 'EACCES',
+  });
+  const raw = new AggregateError([malformed, invalidRecord, io], 'queue recovery');
+  try {
+    logger.log.warn(
+      {
+        event: 'outbox',
+        stage: 'outbox_load',
+        recovery: { code: 'outbox_recovered', recoveredRecords: 2, secret: 'private-payload' },
+        err: outboxLocalError(raw),
+      },
+      'queue recovery',
+    );
+    // Also cover Pino standard AggregateError serialization, not a handwritten shape.
+    logger.log.warn({ event: 'outbox', stage: 'outbox_load', err: raw }, 'queue recovery');
+    logger.log.error(
+      Object.assign(new Error('queue preservation failed', { cause: io }), {
+        code: 'outbox_recovery_failed',
+      }),
+      'startup failed',
+    );
+    expect(lines.join('')).toContain('private-team-name');
+    expect(lines.join('')).toContain('EACCES');
+    await writeFile(join(dir, 'companion.log'), lines.join(''));
+  } finally {
+    await logger.close();
+  }
+  const result = await readSupportLogs(dir);
+  const serialized = JSON.stringify(result);
+  expect(serialized).toContain('outbox_recovered');
+  expect(serialized).toContain('recoveredRecords');
+  expect(serialized).toContain('SyntaxError');
+  expect(serialized).toContain('EACCES');
+  expect(serialized).toContain('Access denied');
+  expect(serialized).not.toContain('private-team-name');
+  expect(serialized).not.toContain('secret-token');
+  expect(serialized).not.toContain('private-user');
+  expect(serialized).not.toContain('private-payload');
+  expect(serialized).not.toContain('private-rejected-value');
 });

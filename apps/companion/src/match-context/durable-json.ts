@@ -36,6 +36,7 @@ export async function replaceDurableJson(
     await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
+      flush: true,
     });
     options.faultInjector?.('after-write');
     if (options.canCommit !== undefined && !options.canCommit()) return false;
