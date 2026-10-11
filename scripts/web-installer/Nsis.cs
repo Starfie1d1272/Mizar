@@ -312,7 +312,7 @@ namespace Mizar.WebInstaller {
         int nativeError = blocked.HResult & 0xffff;
         if (blocked is InstallerRecoveryRequired || (nativeError != 5 && nativeError != 32 && nativeError != 33)) throw blocked;
         if (cleanupClock.Elapsed >= TimeSpan.FromSeconds(30))
-          throw new InstallerRecoveryRequired(target, "系统尚未允许清理原卸载文件；保留现场以便修复。");
+          throw new InstallerRecoveryRequired(target, "系统尚未允许清理原卸载文件；保留现场以便修复。",blocked);
         await Task.Delay(100).ConfigureAwait(false);
       }
       string owner = Path.Combine(target, OwnershipName);
@@ -386,7 +386,7 @@ namespace Mizar.WebInstaller {
       using(var child=Process.Start(start)) {
         if(record!=null) {record.writerPid=child.Id;record.writerStarted=child.StartTime.ToUniversalTime().Ticks;record.stage="update-writing";SavePending(record,false);}
         var output=ReadBridgeOutput(child.StandardOutput);var errors=ReadBridgeOutput(child.StandardError);
-        int code; try {code=await Wait(child,TimeSpan.FromMinutes(10),progress,token);} catch(TimeoutException error) {throw new InstallerRecoveryRequired(record==null ? script : record.target,error.Message);}
+        int code; try {code=await Wait(child,TimeSpan.FromMinutes(10),progress,token);} catch(TimeoutException error) {throw new InstallerRecoveryRequired(record==null ? script : record.target,error.Message,error);}
         string text=await output;string diagnostic=await errors;
         if(code==0 && diagnostic.Length>0) Window.SaveDiagnostic(new IOException("Native update warnings:\r\n"+diagnostic));
         if(code!=0) throw NativeFailure(arguments,diagnostic,new IOException("Exit code: "+code+"\r\nstdout:\r\n"+text+"\r\nstderr:\r\n"+diagnostic));
@@ -396,7 +396,7 @@ namespace Mizar.WebInstaller {
     }
     internal static InstallerActionRequired NativeFailure(string arguments,string diagnostic,Exception cause) {
       if(diagnostic.Contains("resource_path_unsafe")) return new InstallerActionRequired("素材目录安全检查未通过。请从正常桌面环境重新打开安装器；原程序和现场已保留。",false,cause);
-      if(diagnostic.Contains("update_resources_incomplete")) return new InstallerActionRequired("素材准备未完成。请检查网络后重试；若反复失败，请导出诊断。",true,cause);
+      if(diagnostic.Contains("update_resources_incomplete")) return new InstallerActionRequired("素材准备未完成。请查看或导出诊断，核对网络、缓存目录权限与剩余空间；也可使用正式完整离线包。",true,cause);
       if(diagnostic.Contains("update_process_remaining") || diagnostic.Contains("update_service_remaining") || diagnostic.Contains("update_host_exit_timeout")) return new InstallerActionRequired("Mizar 或原更新进程仍在运行。请正常退出后重新打开安装器。",true,cause);
       if(diagnostic.Contains("update_installer_corrupt")) return new InstallerActionRequired("安装文件验证未通过。请重新下载官方轻量安装器后重试。",false,cause);
       if(diagnostic.Contains("update_payload_") || diagnostic.Contains("update_reparse_point") || diagnostic.Contains("update_registration_snapshot_invalid")) return new InstallerActionRequired("原安装文件或恢复记录未通过验证。请保留安装目录并使用原恢复入口；需要协助时导出诊断。",false,cause);
@@ -519,7 +519,7 @@ namespace Mizar.WebInstaller {
         var stdout=ReadBridgeOutput(child.StandardOutput); var stderr=ReadBridgeOutput(child.StandardError);
         using(token.Register(()=>{try {child.StandardInput.WriteLine("cancel"); child.StandardInput.Flush();} catch(IOException) {} catch(InvalidOperationException) {}})) {
           try { await Wait(child,TimeSpan.FromMinutes(10),progress,token); }
-          catch(TimeoutException e) { throw new InstallerRecoveryRequired(target,e.Message); }
+          catch(TimeoutException e) { throw new InstallerRecoveryRequired(target,e.Message,e); }
         }
         string output=await stdout; string diagnostic=await stderr;
         if(child.ExitCode==0 && diagnostic.Length>0) Window.SaveDiagnostic(new IOException("Resource preparation warnings:\r\n"+diagnostic));
@@ -602,7 +602,7 @@ namespace Mizar.WebInstaller {
               record.writerPid=child.Id; record.writerStarted=child.StartTime.ToUniversalTime().Ticks; record.stage="writing"; SavePending(record, false);
               if (progress != null) progress.Report("installing-core");
               try { code = await Wait(child, deadline ?? TimeSpan.FromMinutes(10), progress, token); }
-              catch (TimeoutException error) { throw new InstallerRecoveryRequired(destination, error.Message); }
+              catch (TimeoutException error) { throw new InstallerRecoveryRequired(destination, error.Message,error); }
             }
             if (code != 0 || token.IsCancellationRequested) {
               await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
