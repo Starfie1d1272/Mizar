@@ -43,6 +43,19 @@ jobs:
         with:
           runtime: node@24
           install: false
+      - name: Initialize and verify official Sigstore trust caches
+        shell: pwsh
+        env:
+          GH_DEBUG: '1'
+        run: |
+          gh version
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            gh attestation trusted-root --verify-only
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { throw 'Official Sigstore TUF initialization failed; provenance verification remains required' }
+            Write-Warning "Official trust cache initialization failed (attempt $attempt); retrying after 10 seconds"
+            Start-Sleep -Seconds 10
+          }
       - name: Preserve the exact main publication tools
         shell: pwsh
         run: |
