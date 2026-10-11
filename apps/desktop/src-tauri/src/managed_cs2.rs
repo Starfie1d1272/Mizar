@@ -1075,7 +1075,7 @@ mod tests {
             std::env::temp_dir().join(format!("mizar-startup-recovery-{}", std::process::id()));
         let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
         let mut managed = ManagedCs2::new(log.clone());
-        let video = root.join("opaque-video.txt");
+        let video = root.join("cs2_video.txt");
         std::fs::write(&video, b"original untouched settings").unwrap();
         let mut journal = managed
             .store
