@@ -59,7 +59,7 @@ impl Readiness {
     pub fn new(source: isize, now: std::time::Instant) -> Self {
         Self {
             source,
-            deadline: now + std::time::Duration::from_secs(10),
+            deadline: now + std::time::Duration::from_secs(30),
             state: ReadinessState::Waiting,
         }
     }
@@ -134,7 +134,7 @@ mod tests {
         }
         let mut readiness = Readiness::new(10, now);
         assert_eq!(
-            readiness.poll(now + std::time::Duration::from_secs(10), 10, true, true),
+            readiness.poll(now + std::time::Duration::from_secs(30), 10, true, true),
             ReadinessState::TimedOut
         );
         assert_eq!(
