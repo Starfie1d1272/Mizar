@@ -15,6 +15,7 @@ mod powershell;
 mod production_exit;
 mod startup_log;
 mod startup_wait;
+mod startup_recovery;
 mod support_export;
 mod updates;
 mod window_frame;
@@ -2137,7 +2138,9 @@ fn main() {
                 continue;
             }
         } else {
-            failure_dialog(&error, Some(&log.directory));
+            if startup_recovery::show(&log, &error) {
+                continue;
+            }
         }
         std::process::exit(1);
     }

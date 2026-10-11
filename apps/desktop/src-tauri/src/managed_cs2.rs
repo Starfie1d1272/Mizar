@@ -441,6 +441,31 @@ unsafe extern "system" fn close_window(window: isize, pid: isize) -> i32 {
     1
 }
 
+/// Read-only recovery facts usable before the local service or WebView exists.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StartupRecoveryStatus {
+    pub pending: bool,
+    pub running: bool,
+    pub uncertain: bool,
+    pub requires_service: bool,
+}
+impl StartupRecoveryStatus {
+    pub fn permits_restore(self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        if self.running {
+            return Err("CS2 正在运行，未恢复配置。请先正常退出游戏，再重新检查。".into());
+        }
+        if self.requires_service {
+            return Err("Demo 试播隔离状态需要制播服务确认；本次未恢复配置。请修复制播服务启动问题后，在准备中心恢复。".into());
+        }
+        if self.uncertain && !confirm_steam_cancelled {
+            return Err(
+                "Steam 启动仍待确认。请先取消启动请求并确认 CS2 已关闭，再明确确认恢复。".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 pub struct ManagedCs2 {
     store: SessionStore,
     log: crate::startup_log::DesktopLog,
@@ -471,6 +496,30 @@ impl ManagedCs2 {
             can_preserve: false,
         }
     }
+    /// Never poll/recover here: merely showing a startup error must not write files.
+    pub fn startup_recovery_status(&self) -> Result<StartupRecoveryStatus, String> {
+        let journal = self.store.load()?;
+        let requires_service = crate::demo_test::requires_recovery(&self.log, journal.as_ref());
+        Ok(StartupRecoveryStatus {
+            pending: journal.is_some()
+                || self.store.spectator_pending()
+                || self.store.playback_cleanup_pending()
+                || requires_service,
+            running: any_cs2_running(&self.log)?,
+            uncertain: journal
+                .as_ref()
+                .is_some_and(crate::cs2_session::unconfirmed_launch),
+            requires_service,
+        })
+    }
+    /// Configuration recovery only. Never closes a game or certifies production exit.
+    pub fn restore_at_startup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        self.startup_recovery_status()?
+            .permits_restore(confirm_steam_cancelled)?;
+        // The existing owner rechecks process identity and writeback before writes.
+        self.restore_backup(confirm_steam_cancelled)
+    }
+
     pub fn workspace_process(&self) -> Result<Option<WorkspaceProcess>, String> {
         let Some(value) = self.store.load()? else {
             return Ok(None);
@@ -1004,6 +1053,12 @@ mod tests {
         };
         let mut managed = ManagedCs2::new(log);
         assert!(external.child.try_wait().unwrap().is_none());
+        assert!(managed.startup_recovery_status().unwrap().running);
+        assert!(managed
+            .restore_at_startup(true)
+            .unwrap_err()
+            .contains("CS2 正在运行"));
+        assert!(external.child.try_wait().unwrap().is_none());
         managed.finish().unwrap();
         assert!(managed.confirm_game_stopped().is_err());
         // An unrelated process must never be closed by the cleanup operation.
@@ -1011,6 +1066,55 @@ mod tests {
         external.child.kill().unwrap();
         external.child.wait().unwrap();
         managed.confirm_game_stopped().unwrap();
+    }
+
+    #[test]
+    fn startup_restore_retains_pending_until_cancelled_and_never_bypasses_demo_isolation() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mizar-startup-recovery-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let mut managed = ManagedCs2::new(log.clone());
+        let video = root.join("opaque-video.txt");
+        std::fs::write(&video, b"original untouched settings").unwrap();
+        let mut journal = managed
+            .store
+            .prepare_preserved(&video, &root.join("absent/cs2.exe"))
+            .unwrap();
+        journal["launchAttempted"] = json!(true);
+        managed.store.save(&journal).unwrap();
+        let before = std::fs::read(managed.store.backup_directory().join("pending.json")).unwrap();
+        assert!(managed.startup_recovery_status().unwrap().uncertain);
+        assert!(managed
+            .restore_at_startup(false)
+            .unwrap_err()
+            .contains("Steam"));
+        assert_eq!(
+            std::fs::read(managed.store.backup_directory().join("pending.json")).unwrap(),
+            before
+        );
+        managed.restore_at_startup(true).unwrap();
+        assert!(managed.store.load().unwrap().is_none());
+        assert_eq!(
+            std::fs::read(&video).unwrap(),
+            b"original untouched settings"
+        );
+        managed
+            .store
+            .prepare_preserved(&video, &root.join("absent/cs2.exe"))
+            .unwrap();
+        std::fs::write(
+            log.state_root.join("data/demo-test.json"),
+            b"corrupt-is-still-an-isolation-hint",
+        )
+        .unwrap();
+        assert!(managed.startup_recovery_status().unwrap().requires_service);
+        assert!(managed
+            .restore_at_startup(true)
+            .unwrap_err()
+            .contains("Demo"));
+        assert!(managed.store.load().unwrap().is_some());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
