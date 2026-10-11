@@ -56,7 +56,23 @@ const emptyState = (): LocalTournamentState => ({
   selectedAt: null,
 });
 
-/** Recovery is confined to persisted optional links; normal writes remain strict. */
+/** rc29 validated optional viewing links with the relative media-asset contract. */
+function isLegacyRelativeLink(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 2048 &&
+    value.startsWith('/') &&
+    !value.startsWith('//') &&
+    !value
+      .split('')
+      .some(
+        (character) =>
+          character === '\\' || character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+      )
+  );
+}
+
+/** Recovery is confined to rc29 persisted relative links; normal writes remain strict. */
 function recoverPersistedLinks(input: unknown): boolean {
   const parsed = localTournamentStateV1Schema.safeParse(input);
   if (parsed.success) return false;
@@ -64,12 +80,7 @@ function recoverPersistedLinks(input: unknown): boolean {
   for (const issue of parsed.error.issues) {
     const path = issue.path;
     const matchPath = path.length === 5 && path[0] === 'matches' && path[2] === 'commentators';
-    const trashPath =
-      path.length === 6 &&
-      path[0] === 'trashedMatches' &&
-      path[2] === 'document' &&
-      path[3] === 'commentators';
-    if ((!matchPath && !trashPath) || path.at(-1) !== 'liveStreamUrl') throw parsed.error;
+    if (!matchPath || path.at(-1) !== 'liveStreamUrl') throw parsed.error;
     let parent = input;
     for (const key of path.slice(0, -1)) {
       if (typeof parent !== 'object' || parent === null) throw parsed.error;
@@ -79,7 +90,7 @@ function recoverPersistedLinks(input: unknown): boolean {
       typeof parent !== 'object' ||
       parent === null ||
       !('liveStreamUrl' in parent) ||
-      typeof parent.liveStreamUrl !== 'string'
+      !isLegacyRelativeLink(parent.liveStreamUrl)
     )
       throw parsed.error;
     links.push(parent);

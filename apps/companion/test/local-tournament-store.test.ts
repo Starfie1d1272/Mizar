@@ -66,15 +66,17 @@ it('does not hide unrelated schema or identity errors behind link recovery', asy
     for (const invalid of [
       { ...fixture, extra: true },
       { ...fixture, teams: [] },
-      {
-        ...fixture,
-        matches: [
-          {
-            ...fixture.matches[0],
-            commentators: [{ ...fixture.matches[0]!.commentators[0], liveStreamUrl: 42 }],
-          },
-        ],
-      },
+      ...[42, 'javascript:alert(1)', '//example.com/room', '/bad\\room', '/bad\nroom'].map(
+        (liveStreamUrl) => ({
+          ...fixture,
+          matches: [
+            {
+              ...fixture.matches[0],
+              commentators: [{ ...fixture.matches[0]!.commentators[0], liveStreamUrl }],
+            },
+          ],
+        }),
+      ),
     ]) {
       const original = JSON.stringify(invalid);
       await writeFile(file, original);
