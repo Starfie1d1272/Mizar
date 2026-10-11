@@ -69,7 +69,38 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: '核对地图',
       path: '/matches?tab=maps',
     });
-  if (identityCodes.has('unexpected_human_steam64'))
+  const rosterIncomplete = identityCodes.has('roster_incomplete');
+  const steam64Missing = identityCodes.has('missing_canonical_steam64');
+  const rosterAmbiguous =
+    identityCodes.has('duplicate_canonical_player_id') ||
+    identityCodes.has('duplicate_canonical_steam64');
+  // An account absent from incomplete/ambiguous source data is not proof of
+  // a player mismatch. Repair the canonical roster before checking live IDs.
+  if (rosterIncomplete)
+    issues.push({
+      id: 'roster',
+      summary: '名单不完整',
+      detail: `比赛资料中至少一队的名单少于五人。补全名单及对应 Steam64 后重新核对当前选手账号。${rosterRecovery}`,
+      action: '补全名单',
+      path: '/matches?tab=roster',
+    });
+  else if (steam64Missing)
+    issues.push({
+      id: 'steam64',
+      summary: '选手 Steam64 缺失',
+      detail: `比赛名单中的选手缺少 Steam64。补全对应账号后重新核对当前选手，不按昵称猜测身份。${rosterRecovery}`,
+      action: '补全名单',
+      path: '/matches?tab=roster',
+    });
+  else if (rosterAmbiguous)
+    issues.push({
+      id: 'roster',
+      summary: '名单不一致',
+      detail: `比赛资料中的选手身份重复。修正重复身份后重新核对当前选手账号。${rosterRecovery}`,
+      action: '核对名单',
+      path: '/matches?tab=roster',
+    });
+  else if (identityCodes.has('unexpected_human_steam64'))
     issues.push({
       id: 'steam64',
       summary: '选手 Steam64 不匹配',
@@ -77,26 +108,19 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: '核对名单',
       path: '/matches?tab=roster',
     });
-  else if (identityCodes.has('missing_canonical_steam64'))
-    issues.push({
-      id: 'steam64',
-      summary: '选手 Steam64 缺失',
-      detail: `比赛名单中的选手缺少 Steam64。补全对应账号后重新核对，不按昵称猜测身份。${rosterRecovery}`,
-      action: '补全名单',
-      path: '/matches?tab=roster',
-    });
-  if (
-    [
-      'roster_incomplete',
-      'duplicate_canonical_player_id',
-      'duplicate_canonical_steam64',
-      'lineup_differs_from_expected',
-    ].some((code) => identityCodes.has(code))
-  )
+  else if (identityCodes.has('lineup_differs_from_expected'))
     issues.push({
       id: 'roster',
       summary: '名单不一致',
-      detail: `比赛名单存在缺项、重复身份，或当前阵容与预期首发不同。核对两队名单及替补。${rosterRecovery}`,
+      detail: `当前阵容与比赛资料中的预期首发不同。核对两队首发及替补。${rosterRecovery}`,
+      action: '核对名单',
+      path: '/matches?tab=roster',
+    });
+  else if (identityCodes.has('side_mapping_conflict'))
+    issues.push({
+      id: 'identity',
+      summary: '比赛身份待核对',
+      detail: '当前队伍阵营与比赛资料存在冲突。核对所选比赛、名单与双方阵营。',
       action: '核对名单',
       path: '/matches?tab=roster',
     });
@@ -108,9 +132,10 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
     issues.push({
       id: 'identity',
       summary: '比赛身份待核对',
-      detail: '当前选手或队伍阵营与比赛资料存在冲突。核对所选比赛、名单与双方阵营。',
-      action: '核对名单',
-      path: '/matches?tab=roster',
+      detail:
+        '比赛身份核验尚未恢复，当前数据不足以确认具体原因。核对所选比赛及资料，并等待完整游戏数据重新核验。',
+      action: '核对比赛',
+      path: '/matches',
     });
   if (operator.runtime.telemetryFreshness === 'stale')
     issues.push({
