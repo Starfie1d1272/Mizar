@@ -115,6 +115,52 @@ describe('controlled update lifecycle', () => {
     expect(updateFailure('check', new Error('unknown original cause'), 'one').summary).toContain(
       '原因未知',
     );
+    expect(
+      updateFailure('check', new Error('unknown original cause'), 'one').nextStep,
+    ).not.toContain('网络恢复');
+    expect(
+      updateFailure('download_cleanup', new Error('update_cleanup_failed'), 'one').nextStep,
+    ).toContain('进程占用');
+    expect(updateFailure('settings_load', new SyntaxError('invalid JSON'), 'one')).toMatchObject({
+      code: 'update_settings_invalid',
+      summary: '更新记录无法读取或保存。',
+    });
+  });
+
+  it('retains corrupt local records and their original diagnostic causes with local recovery guidance', async () => {
+    const log =
+      vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
+    const { manager, root } = await setup({ log });
+    const settings = '{ "automatic": false, "password": "secret-local-value", "lastAttempt": }';
+    const result = '{ "status": "recovery-required", "version": }';
+    await writeFile(join(root, 'updates/settings.json'), settings);
+    await writeFile(join(root, 'updates/result.json'), result);
+    await manager.load();
+    expect(await readFile(join(root, 'updates/settings.json'), 'utf8')).toBe(settings);
+    expect(await readFile(join(root, 'updates/result.json'), 'utf8')).toBe(result);
+    await expect(manager.check()).rejects.toThrow('update_settings_invalid');
+    for (const stage of ['settings_load', 'result_load']) {
+      const failure = manager.status().failureDetails.find((value) => value.stage === stage)!;
+      expect(failure.nextStep).toContain('不要删除记录');
+      expect(failure.nextStep).not.toContain('网络');
+      const entry = log.mock.calls.find(([value]) => value === stage)!;
+      expect(entry[3]).toMatchObject({ error: { name: 'SyntaxError' } });
+    }
+    expect(JSON.stringify(log.mock.calls)).not.toContain('secret-local-value');
+  });
+
+  it('preserves a settings write failure cause and the existing settings', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    const settings = await readFile(join(root, 'updates/settings.json'), 'utf8');
+    await mkdir(join(root, 'updates/settings.tmp'));
+    const error = await manager.setAutomatic(false).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const failure = error as Error & { cause: NodeJS.ErrnoException };
+    expect(failure.message).toBe('update_settings_invalid');
+    expect(failure.cause.code).toBeTypeOf('string');
+    expect(await readFile(join(root, 'updates/settings.json'), 'utf8')).toBe(settings);
+    expect(manager.status().automatic).toBe(true);
+    expect(updateFailure('operator_action', error, 'one').nextStep).toContain('读写权限');
   });
   it('retains both source failures with HTTP status and a shared correlation ID outside UI', async () => {
     const log =

@@ -124,8 +124,14 @@ export class UpdateManager {
     });
   }
   private async saveConfig() {
-    await writeFile(join(this.root, 'settings.tmp'), JSON.stringify(this.config), { mode: 0o600 });
-    await rename(join(this.root, 'settings.tmp'), join(this.root, 'settings.json'));
+    try {
+      await writeFile(join(this.root, 'settings.tmp'), JSON.stringify(this.config), {
+        mode: 0o600,
+      });
+      await rename(join(this.root, 'settings.tmp'), join(this.root, 'settings.json'));
+    } catch (cause) {
+      throw new Error('update_settings_invalid', { cause });
+    }
   }
   async load() {
     await mkdir(this.root, { recursive: true });
@@ -195,12 +201,14 @@ export class UpdateManager {
           const resultDigest =
             result.status === 'installed' ? plan.contentDigest : plan.previousContentDigest;
           if (resultDigest !== this.options.currentContentDigest) this.lastResult = null;
-        } catch {
+        } catch (error) {
           /* No reliable payload identity: retain the recorded result. */
+          this.failure('result_identity_load', error);
         }
       }
-    } catch {
+    } catch (error) {
       /* No completed attempt. */
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }
   }
   start() {
@@ -279,8 +287,14 @@ export class UpdateManager {
   async setAutomatic(automatic: boolean) {
     if (this.settingsInvalid) throw new Error('update_settings_invalid');
     if (this.task || this.prepared || this.planning) throw new Error('update_busy');
+    const previous = this.config.automatic;
     this.config.automatic = automatic;
-    await this.saveConfig();
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.automatic = previous;
+      throw error;
+    }
   }
   async check(internal = false, reason: 'manual' | 'startup' | 'periodic' = 'manual') {
     if (this.settingsInvalid) throw new Error('update_settings_invalid');
@@ -567,7 +581,11 @@ export function safeCode(error: unknown): string {
 }
 
 export function updateFailure(stage: string, error: unknown, operationId: string) {
-  const code = safeCode(error);
+  const originalCode = safeCode(error);
+  const code =
+    stage === 'settings_load' && originalCode === 'update_operation_failed'
+      ? 'update_settings_invalid'
+      : originalCode;
   const status = error instanceof Error ? (error as Error & { status?: number }).status : undefined;
   const rateLimited =
     error instanceof Error && (error as Error & { rateLimited?: boolean }).rateLimited;
@@ -608,15 +626,27 @@ export function updateFailure(stage: string, error: unknown, operationId: string
     /provenance|identity|rollback|subject|source_mismatch|asset_mismatch|publication|metadata_corrupt|directory_invalid/.test(
       code,
     );
+  const recordFailure = [
+    'settings_load',
+    'ready_load',
+    'result_load',
+    'result_identity_load',
+  ].includes(stage);
   const nextStep = security
     ? '保留现有版本，请导出诊断并从正式发布页核对安装包。'
-    : code === 'update_trust_metadata_failed'
-      ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
-      : rateLimited
-        ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
-        : status === 403
-          ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
-          : '请导出诊断定位原因；网络恢复后可重新检查，或从正式发布页下载完整包。';
+    : code === 'update_settings_invalid' || recordFailure
+      ? '保留当前版本及更新、备份和恢复记录；检查用户资料目录的读写权限与剩余空间，导出诊断。不要删除记录绕过校验。'
+      : code === 'update_cleanup_failed' || stage === 'download_cleanup'
+        ? '保留当前版本及备份和恢复目录；检查是否有进程占用暂存文件及目录权限，导出诊断后处理。清理未完成时不要继续安装。'
+        : code === 'update_trust_metadata_failed'
+          ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
+          : rateLimited
+            ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
+            : status === 403
+              ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
+              : code === 'update_network_failed'
+                ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
+                : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
   const stageLabel =
     stage === 'trust_metadata'
       ? '刷新信任元数据'
@@ -624,12 +654,14 @@ export function updateFailure(stage: string, error: unknown, operationId: string
         ? '下载安装包'
         : stage === 'install_plan'
           ? '准备安装'
-          : stage.includes('load')
-            ? '读取更新记录'
-            : stage === 'operator_action'
-              ? '执行更新操作'
-              : stage === 'qualification_proof_rejected'
-                ? '验证更新来源'
-                : '检查更新来源';
+          : stage.startsWith('result')
+            ? '读取安装恢复记录'
+            : stage.includes('load')
+              ? '读取更新记录'
+              : stage === 'operator_action'
+                ? '执行更新操作'
+                : stage === 'qualification_proof_rejected'
+                  ? '验证更新来源'
+                  : '检查更新来源';
   return { code, stage, stageLabel, summary, nextStep, operationId };
 }
