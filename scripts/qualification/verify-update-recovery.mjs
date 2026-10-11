@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { safeLogText } from './product-logs.mjs';
 
 if (process.platform !== 'win32') throw new Error('此验证需要 Windows PowerShell 与真实文件系统');
 const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
@@ -36,7 +37,8 @@ async function run(args, overrides = {}) {
   });
   const code = await new Promise((done, reject) => {
     child.on('error', reject);
-    child.on('exit', done);
+    // exit can precede the final stdout/stderr chunks; close follows stream closure.
+    child.once('close', done);
   });
   return { code, output: output.replace(/^\uFEFF/, '').trim(), errors, pid: child.pid };
 }
@@ -324,18 +326,36 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
           'corrupt committed payload',
         );
       result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
-      assert.equal(result.code, success ? 0 : 1, result.errors);
+      const diagnostic = (registration) => {
+        const summarize = (value) =>
+          value && {
+            code: value.code,
+            pid: value.pid,
+            stdout: safeLogText(value.output, [process.env.GH_TOKEN, process.env.GITHUB_TOKEN]),
+            stderr: safeLogText(value.errors, [process.env.GH_TOKEN, process.env.GITHUB_TOKEN]),
+          };
+        return JSON.stringify(
+          { scenario, recovery: summarize(result), registration: summarize(registration) },
+          null,
+          2,
+        );
+      };
+      assert.equal(result.code, success ? 0 : 1, diagnostic());
       const report = JSON.parse(await readFile(join(state, 'updates/result.json'), 'utf8'));
       assert.equal(report.status, success ? 'installed' : 'recovery-required');
       assert.equal(report.code, success ? 'update_completed' : 'update_committed_payload_invalid');
       const recovery = await run([
         '-Command',
-        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $expected = [IO.Path]::GetFullPath('${stage.replace(/'/g, "''")}').TrimEnd('\\'); $entry = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'; @{ present = [bool]$entry; targetsStage = [bool]($entry -and $entry.Contains(' -File "' + (Join-Path $expected 'update-install.ps1') + '" -Mode Recover -StageRoot "' + $expected + '"')) } | ConvertTo-Json -Compress`,
+        `$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $expected = [IO.Path]::GetFullPath('${stage.replace(/'/g, "''")}').TrimEnd('\\'); $entry = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction Continue).'!MizarUpdateRecovery'; @{ present = [bool]$entry; targetsStage = [bool]($entry -and $entry.Contains(' -File "' + (Join-Path $expected 'update-install.ps1') + '" -Mode Recover -StageRoot "' + $expected + '"')) } | ConvertTo-Json -Compress`,
       ]);
-      assert.equal(recovery.code, 0, recovery.errors);
+      assert.equal(recovery.code, 0, diagnostic(recovery));
       // Compare the actual command with the OS-normalized target: Framework
       // GetFullPath can expand the runner's RUNNER~1 temporary directory alias.
-      assert.deepEqual(JSON.parse(recovery.output), { present: !success, targetsStage: !success });
+      assert.deepEqual(
+        JSON.parse(recovery.output),
+        { present: !success, targetsStage: !success },
+        diagnostic(recovery),
+      );
       if (!success) assert.deepEqual(await readFile(join(stage, 'previous/Mizar.exe')), binary);
       assert.equal(
         await readFile(join(state, 'user-data.json'), 'utf8'),
