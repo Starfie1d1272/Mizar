@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,34 @@ interface TournamentView {
   readonly contextRevision: string;
   readonly matches: readonly MatchDocumentV1[];
 }
+
+it('starts with the rc29 library and restores the selected match after optional link recovery', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rc29-startup-'));
+  const localTournamentPath = join(directory, 'local-tournament.json');
+  await writeFile(
+    localTournamentPath,
+    await readFile(new URL('./fixtures/rc29/local-tournament.json', import.meta.url)),
+  );
+  const app = buildApp({ localTournamentPath, matchManifestPath: join(directory, 'context.json') });
+  try {
+    await app.ready();
+    const response = await app.inject({ url: '/local/v1/tournament' });
+    expect(response.statusCode).toBe(200);
+    const library = response.json<TournamentView>();
+    expect(library.selectedMatchId).toBe('local-match-1');
+    expect(
+      library.matches[0]!.commentators.map((commentator) => commentator.liveStreamUrl),
+    ).toEqual([null, 'https://example.com/room/456']);
+    const document = (await app.inject({ url: '/local/v1/match-document' })).json<{
+      document: MatchDocumentV1;
+    }>();
+    expect(document.document.matchId).toBe('local-match-1');
+    expect(document.document.maps[0]!.mapName).toBe('de_ancient');
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 it('inherits persisted event rules, preserves existing BP when defaults change, and restores after restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-event-bp-rules-'));
