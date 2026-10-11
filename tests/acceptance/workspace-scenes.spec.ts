@@ -359,12 +359,13 @@ async function connectOwnedCompanion(
 function liveRoster(
   players: { steam64: string; displayName?: string | null }[],
   mapName = 'de_ancient',
+  mapPhase = 'live',
 ) {
   return {
     auth: { token: 'recovery-test' },
     map: {
       name: mapName,
-      phase: 'live',
+      phase: mapPhase,
       round: 3,
       team_ct: { name: 'Alpha', score: 2 },
       team_t: { name: 'Beta', score: 1 },
@@ -511,10 +512,25 @@ test('local server confirmation repairs the live lineup without deleting an unli
 test('a website-owned local BP overlay keeps its roster read-only and recovers a network failure by the card retry', async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-online-closure-'));
   const { runtime, coordinator } = ownedRuntime();
-  const manifest = sampleManifest();
+  const base = sampleManifest();
+  const manifest: BroadcastManifest = {
+    ...base,
+    entrants: {
+      ...base.entrants,
+      a: {
+        ...base.entrants.a,
+        roster: {
+          ...base.entrants.a.roster,
+          players: base.entrants.a.roster.players.map((player) =>
+            player.isStarter ? player : { ...player, steam64: null },
+          ),
+        },
+      },
+    },
+  };
   coordinator.setMatchContextBinding({
     manifest,
     context: toMatchContext(manifest),
@@ -581,6 +597,38 @@ test('a website-owned local BP overlay keeps its roster read-only and recovers a
         })
       ).statusCode,
     ).toBe(204);
+    await app.inject({
+      method: 'POST',
+      url: '/gsi',
+      payload: liveRoster(
+        players.map((p) => ({ steam64: p.steam64!, displayName: p.displayName })),
+        'de_overpass',
+      ),
+    });
+    await page.goto('/workspace/left');
+    const wrongMapCard = page.getByRole('region', { name: '当前比赛与制作状态' });
+    await expect(wrongMapCard).toContainText('地图不一致');
+    await expect(wrongMapCard).not.toContainText('选手 Steam64 缺失');
+    await expect(
+      wrongMapCard.getByRole('button', { name: '核对网站名单', exact: true }),
+    ).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('website-bench-wrong-map.png') });
+    await app.inject({
+      method: 'POST',
+      url: '/gsi',
+      payload: liveRoster(
+        players.map((p) => ({ steam64: p.steam64!, displayName: p.displayName })),
+        manifest.maps[1]!.mapName,
+      ),
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/gsi',
+      payload: liveRoster(
+        players.map((p) => ({ steam64: p.steam64!, displayName: p.displayName })),
+        manifest.maps[1]!.mapName,
+      ),
+    });
     await page.goto('/matches?tab=roster');
     await expect(page.getByRole('button', { name: '确认保存首发' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: '打开网站本场工作台' })).toBeVisible();
@@ -648,14 +696,14 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
         await app.inject({
           method: 'POST',
           url: '/gsi',
-          payload: liveRoster(players, manifest.maps[2]!.mapName),
+          payload: liveRoster(players, 'Nuke', 'warmup'),
         })
       ).statusCode,
     ).toBe(204);
     await app.inject({
       method: 'POST',
       url: '/gsi',
-      payload: liveRoster(players, manifest.maps[2]!.mapName),
+      payload: liveRoster(players, 'Nuke', 'warmup'),
     });
     expect(coordinator.getCurrent().operator.identity.state).toBe('matched');
     const before = structuredClone(coordinator.getCurrent().operator.seriesProgress!);
@@ -663,6 +711,11 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
       binding: SeriesBindingView;
     }>().binding;
     expect(before.bindingState).toBe('needs_operator');
+    expect(reviewed.canBind).toBe(true);
+    await page.goto('/workspace/left');
+    await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).toContainText(
+      '当前图尚未确认为第 3 图',
+    );
     await page.goto('/matches?tab=maps');
     const panel = page.getByRole('region', { name: '确认当前地图所属场次' });
     await expect(panel.getByRole('button', { name: '确认当前是第 3 图' })).toBeEnabled();

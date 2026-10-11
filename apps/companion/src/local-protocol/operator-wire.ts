@@ -180,6 +180,7 @@ export function mapOperatorProjection(projection: OperatorProjection): OperatorP
         sourcePlayerId: issue.sourcePlayerId ?? null,
         steam64: issue.steam64 ?? null,
         canonicalPlayerId: issue.canonicalPlayerId ?? null,
+        affectsExpectedLineup: issue.affectsExpectedLineup ?? null,
         entryId: issue.entryId ?? null,
         observedSide: issue.observedSide ?? null,
         mapSide: issue.mapSide ?? null,

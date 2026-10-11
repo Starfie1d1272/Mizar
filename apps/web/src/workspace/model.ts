@@ -1,3 +1,4 @@
+import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { buildMatchHeaderPresentation } from '../program/widgets/match-header/presentation';
@@ -74,10 +75,10 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       path: '/matches?tab=maps',
     });
   else if (seriesNeedsOperator) {
+    const actualMap =
+      operator.runtime.mapName === null ? null : canonicalizeCs2MapName(operator.runtime.mapName);
     const matching = operator.seriesProgress!.maps.filter(
-      (map) =>
-        (map.status === 'pending' || map.status === 'current') &&
-        map.mapName === operator.runtime.mapName,
+      (map) => (map.status === 'pending' || map.status === 'current') && map.mapName === actualMap,
     );
     issues.push(
       matching.length > 0
@@ -123,9 +124,11 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       path: '/debug',
     });
   const rosterIncomplete = identityCodes.has('roster_incomplete');
-  // A null account on an unused substitute does not block a matched live lineup.
-  const steam64Missing =
-    identityCodes.has('missing_canonical_steam64') && operator.identity.state !== 'matched';
+  // The identity owner identifies the affected expected starter. Map mismatch
+  // or incomplete observations cannot turn an unused bench record into one.
+  const steam64Missing = operator.identity.issues.some(
+    (issue) => issue.code === 'missing_canonical_steam64' && issue.affectsExpectedLineup === true,
+  );
   const rosterAmbiguous =
     identityCodes.has('duplicate_canonical_player_id') ||
     identityCodes.has('duplicate_canonical_steam64');
@@ -147,7 +150,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
     issues.push({
       id: 'steam64',
       summary: '选手 Steam64 缺失',
-      detail: `当前选手尚不能通过比赛资料核验 Steam64。${rosterRecovery}`,
+      detail: `比赛资料中的预期首发缺少 Steam64。${rosterRecovery}`,
       action: rosterAction,
       path: '/matches?tab=roster',
     });

@@ -86,6 +86,7 @@ it.each([
       {
         code,
         message: 'private raw cause',
+        ...(code === 'missing_canonical_steam64' ? { affectsExpectedLineup: true } : {}),
         severity: 'warning',
       } as OperatorPayload['identity']['issues'][number],
     ];
@@ -353,3 +354,76 @@ it('treats startup cache restoration as recovery and routes known source failure
     expect.objectContaining({ summary: '网站授权被拒绝', path: '/settings?tab=rivalhub' }),
   ]);
 });
+
+it.each(['wrong-map', 'no-gsi', 'partial-frame', 'partial-wrong-map'] as const)(
+  'keeps an unlinked unused bench record out of live roster recovery during %s',
+  (scenario) => {
+    const { context, observed } = identityFixture();
+    const bench = {
+      playerId: 'unused-bench',
+      steam64: null,
+      displayName: observed[0]!.displayName ?? null,
+      avatarUrl: null,
+      isStarter: false,
+    };
+    const withBench: MatchContext = {
+      ...context,
+      entrants: {
+        ...context.entrants,
+        a: { ...context.entrants.a, players: [...context.entrants.a.players, bench] },
+      },
+    };
+    const before = structuredClone(withBench);
+    const noGsi = scenario === 'no-gsi';
+    const partial = scenario.startsWith('partial');
+    const wrongMap = scenario.endsWith('wrong-map');
+    const resolution = resolveIdentity(withBench, {
+      sourceGeneration: 0,
+      mapEpoch: 1,
+      ...(noGsi ? {} : { allPlayers: partial ? observed.slice(0, 4) : observed }),
+      allPlayersCoverage: noGsi ? 'absent' : 'present',
+      mapName: wrongMap ? 'de_overpass' : 'de_ancient',
+      mapPhase: 'live',
+    });
+    expect(resolution.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'missing_canonical_steam64',
+        canonicalPlayerId: 'unused-bench',
+        affectsExpectedLineup: false,
+      }),
+    );
+    expect(issuesFromResolution(resolution)).toEqual(
+      wrongMap ? [expect.objectContaining({ summary: '地图不一致', action: '核对地图' })] : [],
+    );
+    expect(withBench).toEqual(before);
+  },
+);
+
+it.each(['Nuke', ' Nuke ', 'DE_NUKE', 'de_nuke'])(
+  'offers current-map confirmation for the owner-supported alias %s',
+  (mapName) => {
+    const payload = structuredClone(operator);
+    payload.runtime.mapName = mapName;
+    payload.seriesProgress = {
+      ...payload.seriesProgress!,
+      bindingState: 'needs_operator',
+      maps: [
+        {
+          mapOrder: 3,
+          mapName: 'de_nuke',
+          status: 'pending',
+          executionMapEpoch: null,
+          finalScore: null,
+          roundHistoryCompleteness: 'unavailable',
+        },
+      ],
+    };
+    expect(workspaceIssues(payload)).toEqual([
+      expect.objectContaining({
+        summary: '当前图尚未确认为第 3 图',
+        action: '确认当前图',
+        path: '/matches?tab=maps',
+      }),
+    ]);
+  },
+);

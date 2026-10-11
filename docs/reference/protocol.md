@@ -205,3 +205,5 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 `read_obs_configuration_context` 同时返回该文档的有限保留提示 `message`；下一准备页面读取并展示，重复读取不消费提示，避免 StrictMode 丢失反馈。再次导航时按新的文档代号更新提示，既有或明确交由用户管理的实例不额外提示。Host 重启没有可复用的归属记录，不按名称重建归属。浏览器只保留当前会话对象，不保存归属或文档代号到存储。
 
 私有 operator 的 `matchContext.rosterAuthority` 区分 `local-server / rivalhub / fixture / unknown`，名单编辑权限不从 `origin` 推断；`sourceFailureCode` 是最近真实获取失败的有限类别（网络、超时、授权、未找到、服务、响应、清单或比赛不一致）。它们属于获取外层信息，不写入比赛事实或公开输出。启动缓存不产生失败类别，恢复同版本有效来源后清除失败；原始异常正文和凭据不进入这些字段。
+
+私有 operator 身份诊断的 `affectsExpectedLineup` 由 identity owner 对缺少 Steam64 的 canonical 记录按 `isStarter` 赋值；`false` 保留替补技术诊断但不触发首发恢复操作，`null` 表示旧协议未提供范围。页面不从整体 identity 状态、错图或部分观测推断缺失记录已上场，也不按昵称匹配身份。

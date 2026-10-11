@@ -94,6 +94,7 @@ const identityIssueSchema = z.object({
   sourcePlayerId: nullableString,
   steam64: nullableString,
   canonicalPlayerId: nullableString,
+  affectsExpectedLineup: z.boolean().nullable().default(null),
   entryId: nullableString,
   observedSide: sourceSideSchema.nullable(),
   mapSide: sourceSideSchema.nullable(),
