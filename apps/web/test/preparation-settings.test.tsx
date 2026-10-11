@@ -131,6 +131,134 @@ describe('CS2 installation and conflict guidance', () => {
   });
 });
 
+describe('independent desktop status reads', () => {
+  const configured = {
+    installed: true,
+    conflict: false,
+    readFailed: false,
+    issues: [],
+    cfgPath: null,
+  };
+  const missing = { ...configured, installed: false };
+  function desktop() {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
+  }
+  it('shows delayed GSI as checking and keeps successful GSI when CS2 fails, then recovers both independently', async () => {
+    desktop();
+    let resolveGsi!: (value: typeof configured) => void;
+    const pendingGsi = new Promise<typeof configured>((resolve) => {
+      resolveGsi = resolve;
+    });
+    mocks.invoke.mockImplementation((command) =>
+      command === 'gsi_status'
+        ? pendingGsi
+        : command === 'cs2_host_status'
+          ? Promise.reject(new Error('C:\\Users\\private\\secret.log password=private'))
+          : Promise.resolve(null),
+    );
+    await act(async () => {
+      root!.render(<Settings tab="gsi" />);
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('正在检测 GSI');
+    expect(container.textContent).not.toContain('待安装 GSI');
+    expect(container.textContent).toContain('无法读取 CS2 窗口状态');
+    await act(async () => {
+      resolveGsi(configured);
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('GSI 文件已配置');
+    expect(container.textContent).toContain('CS2 窗口读取失败');
+    expect(container.textContent).not.toContain('password=private');
+    mocks.invoke.mockImplementation((command) =>
+      command === 'gsi_status'
+        ? Promise.reject(new Error('CS2 与 GSI 检测失败（等待工具）。private/token=secret'))
+        : command === 'cs2_host_status'
+          ? Promise.resolve({ found: true, managed: true })
+          : Promise.resolve(null),
+    );
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === '重新检查 CS2 与 GSI')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('无法检查 GSI');
+    expect(container.textContent).toContain('检测工具失败（等待工具）');
+    expect(container.textContent).toContain('CS2 窗口已就绪');
+    expect(container.textContent).not.toContain('GSI 文件已配置');
+    expect(container.textContent).not.toContain('待安装 GSI');
+    expect(container.textContent).not.toContain('token=secret');
+  });
+  it('ignores older reads and queries again after leaving and returning to settings', async () => {
+    desktop();
+    let resolveOldGsi!: (value: typeof configured) => void;
+    let resolveOldCs2!: (value: { found: boolean; managed: boolean }) => void;
+    const oldGsi = new Promise<typeof configured>((resolve) => {
+      resolveOldGsi = resolve;
+    });
+    const oldCs2 = new Promise<{ found: boolean; managed: boolean }>((resolve) => {
+      resolveOldCs2 = resolve;
+    });
+    mocks.invoke.mockImplementation((command) =>
+      command === 'gsi_status'
+        ? oldGsi
+        : command === 'cs2_host_status'
+          ? oldCs2
+          : Promise.resolve(null),
+    );
+    await act(async () => {
+      root!.render(<Settings tab="gsi" />);
+      await Promise.resolve();
+    });
+    mocks.invoke.mockImplementation((command) =>
+      Promise.resolve(
+        command === 'gsi_status'
+          ? missing
+          : command === 'cs2_host_status'
+            ? { found: true, managed: true }
+            : null,
+      ),
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event('mizar:gsi-configured'));
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('待安装 GSI');
+    expect(container.textContent).toContain('CS2 窗口已就绪');
+    await act(async () => {
+      resolveOldGsi(configured);
+      resolveOldCs2({ found: false, managed: false });
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('待安装 GSI');
+    expect(container.textContent).not.toContain('GSI 文件已配置');
+    expect(container.textContent).toContain('CS2 窗口已就绪');
+    act(() => root!.render(null));
+    mocks.invoke.mockImplementation((command) =>
+      Promise.resolve(
+        command === 'gsi_status'
+          ? configured
+          : command === 'cs2_host_status'
+            ? { found: false, managed: false }
+            : null,
+      ),
+    );
+    const previousReads = mocks.invoke.mock.calls.filter(
+      ([command]) => command === 'gsi_status',
+    ).length;
+    await act(async () => {
+      root!.render(<Settings tab="gsi" />);
+      await Promise.resolve();
+    });
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'gsi_status')).toHaveLength(
+      previousReads + 1,
+    );
+    expect(container.textContent).toContain('GSI 文件已配置');
+    expect(container.textContent).not.toContain('待安装 GSI');
+  });
+});
+
 describe('official resource cache status', () => {
   const status = {
     packId: 'official:epl-default',

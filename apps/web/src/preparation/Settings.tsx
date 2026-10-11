@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { obsCommand, useObsStatus } from '../workspace/obs-client';
@@ -8,6 +8,18 @@ import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { ResourceSettings } from './ResourceSettings';
+
+type ReadPhase = 'unknown' | 'checking' | 'ready' | 'failed';
+
+// Native diagnostics retain details. Show only the known tool phase here, never raw IPC errors.
+function statusReadReason(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  const phase = message.match(/失败（(启动工具|读取输出|等待工具|解析输出编码|解析结果)）/)?.[1];
+  if (phase) return `检测工具失败（${phase}）。`;
+  return error instanceof Error && error.name === 'TimeoutError'
+    ? '桌面检测请求超时。'
+    : '桌面检测请求失败。';
+}
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
@@ -45,40 +57,72 @@ export function Settings({ tab }: { tab: string }) {
     lastOperation: { code: string; stage: string } | null;
   } | null>(null);
   const [cs2, setCs2] = useState<{ found: boolean; managed: boolean } | null>(null);
+  const [gsiPhase, setGsiPhase] = useState<ReadPhase>(
+    window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
+  );
+  const [cs2Phase, setCs2Phase] = useState<ReadPhase>(
+    window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
+  );
+  const [gsiError, setGsiError] = useState('');
+  const [cs2Error, setCs2Error] = useState('');
+  const statusRequest = useRef(0);
   const product = useLocalRead<{
     product?: { appVersion?: string; gitSha?: string; artifactSha256?: string };
   }>('/health', 60_000);
-  const refreshGsi = async () => {
-    if (window.__TAURI_INTERNALS__) {
-      setGsi(await desktopInvoke('gsi_status'));
-      setCs2(await desktopInvoke('cs2_host_status'));
-    }
-  };
+  const readStatus = useCallback(async () => {
+    if (!window.__TAURI_INTERNALS__) return null;
+    const request = ++statusRequest.current;
+    const [nextGsi] = await Promise.all([
+      desktopInvoke<NonNullable<typeof gsi>>('gsi_status')
+        .then((next) => {
+          if (!next || typeof next.installed !== 'boolean') throw new Error('Invalid GSI status');
+          if (request !== statusRequest.current) return null;
+          setGsi(next);
+          setGsiPhase('ready');
+          return next;
+        })
+        .catch((error: unknown) => {
+          if (request === statusRequest.current) {
+            setGsiPhase('failed');
+            setGsiError(statusReadReason(error));
+          }
+          return null;
+        }),
+      desktopInvoke<NonNullable<typeof cs2>>('cs2_host_status')
+        .then((next) => {
+          if (!next || typeof next.found !== 'boolean') throw new Error('Invalid CS2 status');
+          if (request !== statusRequest.current) return;
+          setCs2(next);
+          setCs2Phase('ready');
+        })
+        .catch((error: unknown) => {
+          if (request === statusRequest.current) {
+            setCs2Phase('failed');
+            setCs2Error(statusReadReason(error));
+          }
+        }),
+    ]);
+    return request === statusRequest.current ? nextGsi : null;
+  }, []);
+  const refreshGsi = useCallback(() => {
+    setGsiPhase('checking');
+    setCs2Phase('checking');
+    setGsiError('');
+    setCs2Error('');
+    setGsi(null);
+    setCs2(null);
+    return readStatus();
+  }, [readStatus]);
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!window.__TAURI_INTERNALS__) return;
-      try {
-        const [nextGsi, nextCs2] = await Promise.all([
-          desktopInvoke<NonNullable<typeof gsi>>('gsi_status'),
-          desktopInvoke<NonNullable<typeof cs2>>('cs2_host_status'),
-        ]);
-        if (active) {
-          setGsi(nextGsi);
-          setCs2(nextCs2);
-        }
-      } catch {
-        if (active) setMessage('无法读取 CS2 安装状态，请重新检测。');
-      }
-    }
-    void load();
-    const reload = () => void load();
+    const requests = statusRequest;
+    void readStatus();
+    const reload = () => void refreshGsi();
     window.addEventListener('mizar:gsi-configured', reload);
     return () => {
+      requests.current++;
       window.removeEventListener('mizar:gsi-configured', reload);
-      active = false;
     };
-  }, []);
+  }, [readStatus, refreshGsi]);
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
@@ -372,16 +416,24 @@ export function Settings({ tab }: { tab: string }) {
               <h2>游戏连接</h2>
               <StatusPill
                 tone={
-                  gsi?.readFailed || gsi?.conflict ? 'warning' : gsi?.installed ? 'success' : 'info'
+                  gsiPhase === 'failed' || gsi?.readFailed || gsi?.conflict
+                    ? 'warning'
+                    : gsiPhase === 'ready' && gsi?.installed
+                      ? 'success'
+                      : 'info'
                 }
               >
-                {gsi?.readFailed
-                  ? '无法检查'
-                  : gsi?.conflict
-                    ? '需检查'
-                    : gsi?.installed
-                      ? 'GSI 文件已配置'
-                      : '待安装 GSI'}
+                {gsiPhase === 'unknown'
+                  ? '尚未检测 GSI'
+                  : gsiPhase === 'checking'
+                    ? '正在检测 GSI'
+                    : gsiPhase === 'failed' || gsi?.readFailed
+                      ? '无法检查 GSI'
+                      : gsi?.conflict
+                        ? '需检查'
+                        : gsi?.installed
+                          ? 'GSI 文件已配置'
+                          : '待安装 GSI'}
               </StatusPill>
             </div>
             <p>
@@ -389,12 +441,30 @@ export function Settings({ tab }: { tab: string }) {
               时加载；若游戏已运行，请重启。收到实际数据后，总览会更新游戏数据状态。
             </p>
             <p>
-              {cs2?.found
-                ? cs2.managed
-                  ? 'CS2 窗口已就绪'
-                  : '已检测到 CS2，打开工作台后安排窗口'
-                : '等待 CS2 窗口'}
+              {cs2Phase === 'unknown'
+                ? 'CS2 窗口状态待确认'
+                : cs2Phase === 'checking'
+                  ? '正在检测 CS2 窗口'
+                  : cs2Phase === 'failed'
+                    ? '无法读取 CS2 窗口状态'
+                    : cs2?.found
+                      ? cs2.managed
+                        ? 'CS2 窗口已就绪'
+                        : '已检测到 CS2，打开工作台后安排窗口'
+                      : '等待 CS2 窗口'}
             </p>
+            {gsiError ? (
+              <StatusBanner tone="warning">
+                GSI 读取失败：{gsiError} 点击「重新检查 CS2 与
+                GSI」重查；详细原因见高级设置中的诊断与支持。
+              </StatusBanner>
+            ) : null}
+            {cs2Error ? (
+              <StatusBanner tone="warning">
+                CS2 窗口读取失败：{cs2Error} 点击「重新检查 CS2 与
+                GSI」重查；详细原因见高级设置中的诊断与支持。
+              </StatusBanner>
+            ) : null}
             {gsi?.issues?.map((issue) => (
               <StatusBanner key={issue.code} tone={gsi.readFailed ? 'danger' : 'warning'}>
                 {issue.message}
@@ -419,21 +489,32 @@ export function Settings({ tab }: { tab: string }) {
               <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
             ) : (
               <div className="preparation-actions">
-                <Button disabled={busy} onClick={() => void action(refreshGsi)}>
+                <Button
+                  variant={
+                    gsiPhase !== 'ready' || gsi?.readFailed || cs2Phase === 'failed'
+                      ? 'primary'
+                      : 'secondary'
+                  }
+                  disabled={busy}
+                  onClick={() => void action(refreshGsi)}
+                >
                   重新检查 CS2 与 GSI
                 </Button>
                 <Button
                   disabled={busy}
-                  variant={gsi?.installed ? 'secondary' : 'primary'}
+                  variant={
+                    gsiPhase === 'ready' && !gsi?.readFailed && (!gsi?.installed || gsi?.conflict)
+                      ? 'primary'
+                      : 'secondary'
+                  }
                   onClick={() =>
                     void action(async () => {
                       try {
                         await desktopInvoke('configure_gsi', { restore: false, choose: false });
                         window.dispatchEvent(new Event('mizar:gsi-configured'));
-                        const next = await desktopInvoke<NonNullable<typeof gsi>>('gsi_status');
-                        setGsi(next);
+                        const next = await refreshGsi();
                         setMessage(
-                          next.installed && !next.conflict && !next.readFailed
+                          next?.installed && !next.conflict && !next.readFailed
                             ? 'GSI 文件已配置，请重新启动 CS2 以加载配置。'
                             : '已执行安装检查，请处理上方列出的问题后重新检查。',
                         );
@@ -507,7 +588,12 @@ export function Settings({ tab }: { tab: string }) {
                 支持选择 CS2 安装根目录、game\bin\win64 文件夹或
                 cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；受管理游戏退出并恢复设置后才能更换。
               </p>
-              <p className="settings-conflict-files">{gsi?.cfgPath ?? '尚未发现配置目录'}</p>
+              <p className="settings-conflict-files">
+                {gsi?.cfgPath ??
+                  (gsiPhase === 'ready' && !gsi?.readFailed
+                    ? '尚未发现配置目录'
+                    : '配置目录待确认')}
+              </p>
               {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
             </details>
           </Panel>

@@ -799,3 +799,122 @@ test('OBS scene repair stays disabled during output and conflicting collections 
   ).toBeVisible();
   expect(commands.every((action) => action === 'ensure')).toBe(true);
 });
+
+test('desktop GSI reads distinguish pending and failed queries, preserve independent CS2 results and recheck after navigation', async ({
+  page,
+}, testInfo) => {
+  await page.route('**/operator/obs/*', (route) =>
+    route.fulfill({ json: { ok: true, findings: [], executablePath: 'C:\\OBS\\obs64.exe' } }),
+  );
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: 'Mizar · 等待',
+        port: 4455,
+        streaming: false,
+        recording: false,
+        passwordConfigured: true,
+        sceneAligned: true,
+        video: null,
+        findings: [],
+      },
+    }),
+  );
+  await page.addInitScript(() => {
+    const configured = {
+      detected: true,
+      installed: true,
+      conflict: false,
+      readFailed: false,
+      issues: [],
+      cfgPath: null,
+      conflictFiles: [],
+      candidateCount: 1,
+    };
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          const mode = sessionStorage.getItem('gsi-read-mode') ?? 'pending';
+          if (command === 'launch_obs') return Promise.resolve(true);
+          if (command === 'ensure_gsi') return new Promise(() => {});
+          if (command === 'gsi_status') {
+            sessionStorage.setItem(
+              'gsi-read-count',
+              String(Number(sessionStorage.getItem('gsi-read-count') ?? 0) + 1),
+            );
+            if (mode === 'pending')
+              return new Promise((resolve) =>
+                Reflect.set(window, 'resolveGsiRead', () => resolve(configured)),
+              );
+            if (mode === 'failed')
+              return Promise.reject(
+                new Error('CS2 与 GSI 检测失败（等待工具）。private/token=secret'),
+              );
+            return Promise.resolve({
+              ...configured,
+              installed: mode !== 'missing',
+              conflict: mode === 'conflict',
+            });
+          }
+          if (command === 'cs2_host_status')
+            return mode === 'pending'
+              ? Promise.reject(new Error('C:\\Users\\private\\desktop.log password=secret'))
+              : Promise.resolve({ found: true, managed: true });
+          if (command === 'cs2_config_status')
+            return Promise.resolve({
+              qualityPreset: 'high',
+              frameRateLimit: 60,
+              running: false,
+              pending: false,
+              message: null,
+            });
+          return Promise.resolve(null);
+        },
+      },
+    });
+  });
+  await page.goto('/settings?tab=gsi');
+  await expect(page.getByText('正在检测 GSI', { exact: true })).toBeVisible();
+  await expect(page.getByText('待安装 GSI', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('无法读取 CS2 窗口状态', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('gsi-checking-1920.png') });
+  await page.evaluate(() => (Reflect.get(window, 'resolveGsiRead') as () => void)());
+  await expect(page.getByText('GSI 文件已配置', { exact: true })).toBeVisible();
+  await expect(page.getByText('无法读取 CS2 窗口状态', { exact: true })).toBeVisible();
+  await expect(page.getByText(/password=secret/)).toHaveCount(0);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const retry = page.getByRole('button', { name: '重新检查 CS2 与 GSI', exact: true });
+  await expect(retry).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('gsi-ready-cs2-failed-1366.png') });
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'ready'));
+  await retry.click();
+  await expect(page.getByText('CS2 窗口已就绪', { exact: true })).toBeVisible();
+  await expect(page.getByText(/CS2 窗口读取失败/)).toHaveCount(0);
+  const reads = await page.evaluate(() => Number(sessionStorage.getItem('gsi-read-count')));
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'missing'));
+  await page
+    .locator('.product-sidebar')
+    .getByRole('link', { name: 'OBS 连接', exact: true })
+    .click();
+  await page
+    .locator('.product-sidebar')
+    .getByRole('link', { name: '游戏设置', exact: true })
+    .click();
+  await expect(page.getByText('待安装 GSI', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => Number(sessionStorage.getItem('gsi-read-count'))),
+  ).toBeGreaterThan(reads);
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'conflict'));
+  await retry.click();
+  await expect(page.getByText('需检查', { exact: true })).toBeVisible();
+  await page.evaluate(() => sessionStorage.setItem('gsi-read-mode', 'failed'));
+  await retry.click();
+  await expect(page.getByText('无法检查 GSI', { exact: true })).toBeVisible();
+  await expect(page.getByText('CS2 窗口已就绪', { exact: true })).toBeVisible();
+  await expect(page.getByText(/检测工具失败（等待工具）/)).toBeVisible();
+  await expect(page.getByText(/token=secret/)).toHaveCount(0);
+  await expect(retry).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('gsi-failed-cs2-ready-1366.png') });
+});
