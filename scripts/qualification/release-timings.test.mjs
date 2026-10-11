@@ -78,6 +78,24 @@ it('counts qualification, handoffs and runner queues in the complete release bud
   ).toBe(false);
 });
 
+it('does not label retry and recovery waiting as the initial runner queue', () => {
+  const input = fixture();
+  input.qualification.run_attempt = 2;
+  input.qualification.run_started_at = '2026-10-10T00:04:00Z';
+  input.qualification.updated_at = '2026-10-10T00:04:55Z';
+  input.jobs.qualificationFirstAttempt = input.jobs.qualification;
+  input.jobs.qualification = [
+    { name: 'build', started_at: '2026-10-10T00:04:20Z', completed_at: '2026-10-10T00:04:55Z' },
+  ];
+  const report = releaseTimingReport(input);
+  expect(report.qualification.initialQueueMs).toBe(20000);
+  expect(report.qualification.attemptQueueMs).toBe(20000);
+  expect(report.qualification.durationMs).toBe(295000);
+  expect(report.freshReleaseWithin600Seconds).toBe(false);
+  delete input.jobs.qualificationFirstAttempt;
+  expect(releaseTimingReport(input).qualification.initialQueueMs).toBeNull();
+});
+
 it('rejects mixed or failed source evidence and invalid clocks', () => {
   for (const patch of [
     { head_sha: 'b'.repeat(40) },

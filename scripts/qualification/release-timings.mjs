@@ -20,17 +20,23 @@ const elapsed = (start, end) => {
   if (!Number.isFinite(value) || value < 0) throw new Error('Invalid release timing order');
   return value;
 };
-function runTiming(run, jobs, completedAt) {
+function runTiming(run, jobs, completedAt, firstAttemptJobs = run.run_attempt === 1 ? jobs : []) {
   const starts = jobs
     .filter((job) => job.started_at)
     .map((job) => job.started_at)
+    .sort();
+  const firstStarts = firstAttemptJobs
+    .map((job) => job.started_at)
+    .filter(Boolean)
     .sort();
   return {
     id: run.id,
     createdAt: run.created_at,
     completedAt,
     durationMs: elapsed(run.created_at, completedAt),
-    initialQueueMs: starts.length ? elapsed(run.created_at, starts[0]) : null,
+    initialQueueMs: firstStarts.length ? elapsed(run.created_at, firstStarts[0]) : null,
+    attemptQueueMs:
+      starts.length && run.run_started_at ? elapsed(run.run_started_at, starts[0]) : null,
     jobs: jobs.map(({ name, started_at, completed_at }) => ({
       name,
       startedAt: started_at,
@@ -84,11 +90,21 @@ export function releaseTimingReport({
     recovery,
     publishedAt,
     build: build ? { phases: build.phases, cargoCache: build.cargoCache } : undefined,
-    qualification: runTiming(qualification, jobs.qualification, qualification.updated_at),
-    promotion: runTiming(promotion, jobs.promotion, box ? promotion.updated_at : finishedAt),
+    qualification: runTiming(
+      qualification,
+      jobs.qualification,
+      qualification.updated_at,
+      jobs.qualificationFirstAttempt,
+    ),
+    promotion: runTiming(
+      promotion,
+      jobs.promotion,
+      box ? promotion.updated_at : finishedAt,
+      jobs.promotionFirstAttempt,
+    ),
   };
   if (box) {
-    result.box = runTiming(box, jobs.box, finishedAt);
+    result.box = runTiming(box, jobs.box, finishedAt, jobs.boxFirstAttempt);
     result.triggerToBoxMs = elapsed(qualification.created_at, finishedAt);
     result.promotionToBoxMs = elapsed(promotion.created_at, finishedAt);
     result.publishedToBoxMs = elapsed(publishedAt, finishedAt);
@@ -125,6 +141,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const finishedAt = new Date().toISOString();
     const current = api(`actions/runs/${process.env.GITHUB_RUN_ID}`);
     const currentJobs = api(`actions/runs/${current.id}/jobs?per_page=100`).jobs;
+    const firstAttemptJobs = (run) =>
+      run.run_attempt === 1
+        ? undefined
+        : api(`actions/runs/${run.id}/attempts/1/jobs?per_page=100`).jobs;
     if (mode === 'promotion') {
       const qualification = await json('qualification-run.json');
       const release = await json(
@@ -139,6 +159,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         jobs: {
           qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
           promotion: currentJobs,
+          qualificationFirstAttempt: firstAttemptJobs(qualification),
+          promotionFirstAttempt: firstAttemptJobs(current),
         },
         tag: process.env.RELEASE_TAG,
         sourceSha: process.env.SOURCE_SHA,
@@ -154,7 +176,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           {
             recovery: true,
             freshReleaseWithin600Seconds: false,
-            box: runTiming(current, currentJobs, finishedAt),
+            box: runTiming(current, currentJobs, finishedAt, firstAttemptJobs(current)),
           },
           output,
         );
@@ -189,6 +211,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
                 promotion: api(`actions/runs/${promotion.id}/jobs?per_page=100`).jobs,
                 box: currentJobs,
+                qualificationFirstAttempt: firstAttemptJobs(qualification),
+                promotionFirstAttempt: firstAttemptJobs(promotion),
+                boxFirstAttempt: firstAttemptJobs(current),
               },
               finishedAt: finishedAt,
               tag: record.tag,
