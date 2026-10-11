@@ -521,7 +521,7 @@ namespace Mizar.WebInstaller {
         Publication.ValidatePlan(plan);
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new Window(plan)); return 0;
-      } catch { MessageBox.Show("安装器无法启动。", "Mizar", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
+      } catch(Exception error) { MessageBox.Show("安装器无法启动。请保留当前版本，查看诊断："+Window.SaveDiagnostic(error), "Mizar", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
     }
   }
 }

@@ -312,7 +312,7 @@ namespace Mizar.WebInstaller {
         int nativeError = blocked.HResult & 0xffff;
         if (blocked is InstallerRecoveryRequired || (nativeError != 5 && nativeError != 32 && nativeError != 33)) throw blocked;
         if (cleanupClock.Elapsed >= TimeSpan.FromSeconds(30))
-          throw new InstallerRecoveryRequired(target, "系统尚未允许清理原卸载文件；保留现场以便修复。");
+          throw new InstallerRecoveryRequired(target, "系统尚未允许清理原卸载文件；保留现场以便修复。",blocked);
         await Task.Delay(100).ConfigureAwait(false);
       }
       string owner = Path.Combine(target, OwnershipName);
