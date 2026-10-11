@@ -211,7 +211,8 @@ it('manual Take interrupts the automatic fade wait and immediately requests Cut'
 });
 
 it.each([
-  { phase: 'freezetime', remaining: 5, from: 'halftime' as const, kind: 'fade', durationMs: 150 },
+  { phase: 'freezetime', remaining: 6.2, from: 'halftime' as const, kind: 'fade', durationMs: 150 },
+  { phase: 'freezetime', remaining: 5, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'freezetime', remaining: 0.5, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'live', remaining: 0, from: 'halftime' as const, kind: 'cut', durationMs: 0 },
   { phase: 'freezetime', remaining: 20, from: 'matchup' as const, kind: 'cut', durationMs: 0 },
@@ -267,4 +268,23 @@ it('keeps preparation revision through commit and drops it when the context inva
   expect((await stale).ok).toBe(false);
   expect(scene.get().active).toBe('waiting');
   expect(scene.get().preparing).toBeUndefined();
+});
+
+it('keeps opening identity through control revisions and creates it only for a new Take', async () => {
+  const switchObs = vi.fn<(id: ProgramSceneId) => Promise<void>>().mockResolvedValue();
+  const { scene } = controller(switchObs);
+  expect((await scene.select('matchup', scene.get().revision)).ok).toBe(true);
+  const first = scene.get().introRevision;
+  expect(first).toBeTruthy();
+  expect(scene.resumeAutomatic(scene.get().revision)).toBe(true);
+  expect(scene.get().introRevision).toBe(first);
+  await scene.select('matchup', scene.get().revision);
+  expect(scene.get().introRevision).toBe(first);
+  await scene.select('gameplay', scene.get().revision);
+  expect(scene.get().introRevision).toBe(first);
+  switchObs.mockRejectedValueOnce(new Error('OBS unavailable'));
+  expect((await scene.select('matchup', scene.get().revision)).ok).toBe(false);
+  expect(scene.get().introRevision).toBe(first);
+  await scene.select('matchup', scene.get().revision);
+  expect(scene.get().introRevision).not.toBe(first);
 });

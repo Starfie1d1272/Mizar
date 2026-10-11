@@ -50,24 +50,29 @@ test('every Program Scene route renders without match data', async ({ page }) =>
 test('all scene controls stay visible and manual takeover can resume', async ({ page }) => {
   let mode = 'auto';
   let revision = 'auto-1';
+  let warmupScene = 'waiting';
+  let failScenes = false;
   const commands: unknown[] = [];
   await page.route('**/local/v1/program-scenes', (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 'mizar.program-scenes.v1',
-        active: mode === 'manual' ? 'matchup' : 'waiting',
-        revision,
-        available: PROGRAM_SCENES.map((s) => s.id),
-        blocked: {},
-        director: {
-          mode,
-          next: 'gameplay',
-          reason: null,
-          introDurationMs: 3000,
-          sceneElapsedMs: 0,
-        },
-      },
-    }),
+    failScenes
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({
+          json: {
+            schemaVersion: 'mizar.program-scenes.v1',
+            active: mode === 'manual' ? 'matchup' : 'waiting',
+            revision,
+            available: PROGRAM_SCENES.map((s) => s.id),
+            blocked: {},
+            director: {
+              mode,
+              warmupScene,
+              next: 'gameplay',
+              reason: null,
+              introDurationMs: 3000,
+              sceneElapsedMs: 0,
+            },
+          },
+        }),
   );
   await page.route('**/operator/program-scene', async (route) => {
     commands.push(route.request().postDataJSON());
@@ -76,9 +81,15 @@ test('all scene controls stay visible and manual takeover can resume', async ({ 
     await route.fulfill({ json: { ok: true } });
   });
   await page.route('**/operator/program-director', async (route) => {
-    commands.push(route.request().postDataJSON());
-    mode = 'auto';
-    revision = 'auto-3';
+    const body = route.request().postDataJSON() as { action: string; scene: string };
+    commands.push(body);
+    if (body.action === 'warmup') {
+      warmupScene = body.scene;
+      revision = 'auto-choice';
+    } else {
+      mode = 'auto';
+      revision = 'auto-3';
+    }
     await route.fulfill({ json: { ok: true } });
   });
   await page.goto('/workspace');
@@ -87,12 +98,29 @@ test('all scene controls stay visible and manual takeover can resume', async ({ 
   await expect(page.getByRole('button', { name: 'BP 控制', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'BP 工作台', exact: true })).toHaveCount(1);
   expect(commands).toEqual([]);
+  await page.getByLabel('热身画面').selectOption('gameplay');
+  await expect
+    .poll(() => commands)
+    .toEqual([{ action: 'warmup', scene: 'gameplay', expectedRevision: 'auto-1' }]);
+  await expect(page.getByText('自动编排', { exact: false })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('热身画面')).toHaveValue('gameplay');
+  failScenes = true;
+  await expect(page.getByLabel('热身画面')).toBeDisabled();
+  failScenes = false;
+  await expect(page.getByLabel('热身画面')).toBeEnabled();
+  await expect(page.getByLabel('热身画面')).toHaveValue('gameplay');
   await page.getByRole('button', { name: '对阵', exact: true }).click();
+  await expect(page.getByText('手动保持', { exact: false })).toBeVisible();
+  await page.getByLabel('热身画面').selectOption('waiting');
+  await expect(page.getByLabel('热身画面')).toHaveValue('waiting');
   await expect(page.getByText('手动保持', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '恢复自动', exact: true }).click();
   await expect(page.getByRole('button', { name: '对阵', exact: true })).toBeVisible();
   expect(commands).toEqual([
-    { sceneId: 'matchup', expectedRevision: 'auto-1' },
-    { action: 'resume', expectedRevision: 'manual-2' },
+    { action: 'warmup', scene: 'gameplay', expectedRevision: 'auto-1' },
+    { sceneId: 'matchup', expectedRevision: 'auto-choice' },
+    { action: 'warmup', scene: 'waiting', expectedRevision: 'manual-2' },
+    { action: 'resume', expectedRevision: 'auto-choice' },
   ]);
 });
