@@ -26,12 +26,14 @@ namespace Mizar.WebInstaller {
       public string headers="";
       public byte[] body;
       public long length;
+      public bool hold;
     }
     readonly System.Net.Sockets.TcpListener listener;
     readonly Task serving;
     Exception failure;
     public Func<System.Collections.Generic.Dictionary<string,string>, Reply> Respond;
     public int Calls;
+    public readonly TaskCompletionSource<bool> Release = new TaskCompletionSource<bool>();
     public readonly Uri Address;
     public RangeServer() {
       listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0); listener.Start();
@@ -61,12 +63,13 @@ namespace Mizar.WebInstaller {
             try {
               await stream.WriteAsync(head,0,head.Length);
               if (reply.body != null) await stream.WriteAsync(reply.body,0,reply.body.Length);
+              if (reply.hold) await Release.Task;
             } catch (IOException) { /* A cancelled client may close the socket. */ }
           }
         }
       });
     }
-    public void Dispose() { listener.Stop(); serving.GetAwaiter().GetResult(); if(failure!=null) throw new Exception("HTTP fixture assertion failed",failure); }
+    public void Dispose() { Release.TrySetResult(true); listener.Stop(); serving.GetAwaiter().GetResult(); if(failure!=null) throw new Exception("HTTP fixture assertion failed",failure); }
   }
   sealed class LoopbackRoute : HttpMessageHandler {
     readonly HttpClient wire = new HttpClient(new HttpClientHandler {AllowAutoRedirect=false, UseProxy=false, UseCookies=false}) {Timeout=Timeout.InfiniteTimeSpan};
@@ -84,7 +87,8 @@ namespace Mizar.WebInstaller {
   sealed class ObserveProgress : IProgress<long> {
     public readonly System.Collections.Generic.List<long> Values = new System.Collections.Generic.List<long>();
     public CancellationTokenSource Cancel;
-    public void Report(long value) { Values.Add(value); if (Cancel != null && value > 0) Cancel.Cancel(); }
+    public Action<long> Observe;
+    public void Report(long value) { if(Observe!=null) Observe(value); Values.Add(value); if (Cancel != null && value > 0) Cancel.Cancel(); }
   }
   static class Tests {
     static readonly byte[] body = new byte[] { 1, 2, 3, 4 };
@@ -241,6 +245,25 @@ namespace Mizar.WebInstaller {
             for(int i=1;i<progress.Values.Count;i++) Assert(progress.Values[i]>=progress.Values[i-1] && progress.Values[i]<=plan.bytes);
           }
           Assert(!File.Exists(part) && !File.Exists(part+".json"));
+          // Cancel while the server keeps the body open without further bytes.
+          // This verifies actual socket-read cancellation, rather than only a
+          // token checked between already-buffered reads.
+          File.Delete(target);
+          byte[] stalledPrefix=new byte[65536];Array.Copy(payload,stalledPrefix,stalledPrefix.Length);
+          server.Respond=h=>new RangeServer.Reply {headers=validator,body=stalledPrefix,length=payload.Length,hold=true};
+          using(var stopped=new CancellationTokenSource())
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) {
+            var written=new TaskCompletionSource<bool>();
+            var pending=new Downloader(client).Download(plan,root,new ObserveProgress {Observe=value=> {if(value==stalledPrefix.Length) written.TrySetResult(true);}},stopped.Token);
+            Assert(await Task.WhenAny(written.Task,Task.Delay(10000))==written.Task);
+            await Task.Delay(100);stopped.Cancel();
+            Assert(await Task.WhenAny(pending,Task.Delay(10000))==pending);
+            try {await pending;throw new Exception("Blocked download ignored cancellation");} catch(OperationCanceledException) {}
+          }
+          Assert(new FileInfo(part).Length==stalledPrefix.Length && !File.Exists(target));
+          server.Release.TrySetResult(true);server.Respond=remaining;
+          using(var client=new HttpClient(new LoopbackRoute(server.Address))) await new Downloader(client).Download(plan,root,new IgnoreProgress(),CancellationToken.None);
+          Assert(Downloader.Matches(target,plan));
           // The partial also survives exit of a separate native test process.
           File.Delete(target);
           server.Respond=h=> {Assert(!h.ContainsKey("Range"));return WireReply(200,validator,payload);};

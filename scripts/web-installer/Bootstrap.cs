@@ -351,6 +351,9 @@ namespace Mizar.WebInstaller {
                       resumable = true;
                     }
                   }
+                  // Framework HTTP streams can ignore ReadAsync cancellation
+                  // while waiting for data; closing the response aborts that read.
+                  using (var abortRead = deadline.Token.Register(response.Dispose))
                   using (var input = await response.Content.ReadAsStreamAsync())
                   using (var output = new FileStream(staging, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 65536, true)) {
                     if(stages!=null) stages.Report("downloading-core");
@@ -380,6 +383,8 @@ namespace Mizar.WebInstaller {
               progress.Report(plan.bytes);
               return target;
             } catch (Exception error) {
+              if (deadline.IsCancellationRequested && !(error is InvalidDataException))
+                error = new OperationCanceledException("下载已取消或超时。", error, deadline.Token);
               bool transport = error is HttpRequestException || (error is IOException && !(error is InvalidDataException));
               if (!resumable || (!transport && !(error is OperationCanceledException)) || error is RestartDownload)
                 Discard(staging);
