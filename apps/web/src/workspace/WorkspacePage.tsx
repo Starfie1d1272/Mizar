@@ -28,6 +28,7 @@ import {
   useCs2Status,
   useWorkspaceExitStatus,
   workspaceExitLabel,
+  type WorkspaceExitStatus,
 } from '../preparation/cs2-status';
 import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import './workspace.css';
@@ -227,7 +228,7 @@ export function WorkspaceDock() {
     window.addEventListener('mizar-hide', hide);
     return () => window.removeEventListener('mizar-hide', hide);
   }, []);
-  async function action(run: () => Promise<unknown>) {
+  async function action(run: () => Promise<unknown>, reportsExit = false) {
     if (busy) return;
     setBusy(true);
     setMessage('');
@@ -235,7 +236,12 @@ export function WorkspaceDock() {
     try {
       await run();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '操作未完成。');
+      const detail = error instanceof Error ? error.message : '操作未完成。';
+      const shared = reportsExit
+        ? await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status').catch(() => null)
+        : null;
+      // Host owns exit errors. Do not leave a second, stale copy after recovery.
+      if (shared?.message !== detail) setErrorMessage(detail);
     } finally {
       setBusy(false);
     }
@@ -429,7 +435,9 @@ export function WorkspaceDock() {
             className="workspace-exit"
             disabled={!production || busy || Boolean(exit?.busy)}
             aria-busy={busy || Boolean(exit?.busy)}
-            onClick={() => production && void action(() => productionAction('finish', production))}
+            onClick={() =>
+              production && void action(() => productionAction('finish', production), true)
+            }
           >
             {exit?.busy ? '正在退出…' : '退出工作台'}
           </Button>
