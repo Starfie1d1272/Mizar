@@ -24,6 +24,7 @@
     "allow-cs2-config-status",
     "allow-start-managed-cs2",
     "allow-finish-managed-cs2",
+    "allow-workspace-exit-status",
     "allow-restore-cs2-backup",
     "allow-open-cs2-backup",
     "allow-set-cs2-preferences",

@@ -18,7 +18,7 @@ import { makeUpdateIndex } from './update-index.mjs';
 import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
-import { multipartUpload } from './box-upload.mjs';
+import { apiRequest, multipartUpload } from './box-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -222,10 +222,11 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
 }
 
 export class BoxClient {
-  constructor(token, uploadTransport = multipartUpload) {
+  constructor(token, uploadTransport = multipartUpload, apiTransport = apiRequest) {
     requireValue(token, '未配置 MIZAR_BOX_REPO_TOKEN；在 Actions 配置后重试');
     this.token = token;
     this.uploadTransport = uploadTransport;
+    this.apiTransport = apiTransport;
   }
   async api(endpoint, path, method = 'GET', body) {
     const safeEndpoint = [
@@ -244,14 +245,24 @@ export class BoxClient {
       if (path !== undefined) url.searchParams.set('path', path);
       const headers = { Authorization: `Token ${this.token}`, Accept: 'application/json' };
       if (body) headers['Content-Type'] = 'application/json';
-      return (
-        await checkedFetch(url, {
+      const response = await checkedFetch(
+        url,
+        {
           method,
           headers,
           redirect: 'error',
           ...(body ? { body: JSON.stringify(body) } : {}),
-        })
-      ).json();
+        },
+        120000,
+        this.apiTransport,
+      );
+      try {
+        return await response.json();
+      } catch (error) {
+        // JSON parse messages can quote credentials or temporary URLs from the response.
+        const kind = error instanceof SyntaxError ? 'SyntaxError' : 'unknown';
+        throw new MirrorError(`云盘接口返回无效 JSON（解析阶段，${kind}）；保留现有文件`);
+      }
     });
   }
   async list(path) {

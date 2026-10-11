@@ -30,7 +30,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
   response = idle;
-  mocks.invoke.mockReset().mockImplementation(() => Promise.resolve(response));
+  mocks.invoke
+    .mockReset()
+    .mockImplementation((command) =>
+      Promise.resolve(
+        command === 'workspace_exit_status' ? { busy: false, stage: '', message: null } : response,
+      ),
+    );
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);

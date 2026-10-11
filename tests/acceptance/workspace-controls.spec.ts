@@ -436,6 +436,8 @@ test('next scene uses the registered Program renderer, never guesses or takes a 
       __TAURI_INTERNALS__: {
         invoke: (command: string) => {
           if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
+          if (command === 'workspace_exit_status')
+            return Promise.resolve({ busy: false, stage: '', message: null });
           calls.push(command);
           return Promise.resolve(true);
         },
@@ -501,6 +503,8 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
       __TAURI_INTERNALS__: {
         invoke: (command: string, args?: unknown) => {
           if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
+          if (command === 'workspace_exit_status')
+            return Promise.resolve({ busy: false, stage: '', message: null });
           calls.push({ command, args: args ?? null });
           return Promise.resolve(true);
         },
@@ -539,13 +543,15 @@ test('desktop tool buttons dispatch the intended windows and lifecycle actions',
     { command: 'open_tool', args: { tool: 'bp' } },
     { command: 'restore_layout', args: null },
   ]);
-  for (const [label, action] of [
-    ['隐藏工作区', 'hide'],
-    ['退出工作台', 'finish'],
-  ] as const) {
-    await page.getByRole('button', { name: label, exact: true }).click();
-    await expect.poll(() => lifecycle.at(-1)).toEqual({ action, expectedRevision: 'production-1' });
-  }
+  await page.getByRole('button', { name: '隐藏工作区', exact: true }).click();
+  await expect
+    .poll(() => lifecycle.at(-1))
+    .toEqual({ action: 'hide', expectedRevision: 'production-1' });
+  await page.getByRole('button', { name: '退出工作台', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as WorkspaceTestWindow).auditCalls))
+    .toContainEqual({ command: 'finish_workspace', args: null });
+  expect(lifecycle).toHaveLength(1);
 });
 
 test('delayed panel actions never return focus; only explicit return to game invokes the Host', async ({
@@ -560,6 +566,8 @@ test('delayed panel actions never return focus; only explicit return to game inv
       __TAURI_INTERNALS__: {
         invoke: (command: string) => {
           if (command === 'cs2_config_status') return Promise.resolve({ phase: 'running' });
+          if (command === 'workspace_exit_status')
+            return Promise.resolve({ busy: false, stage: '', message: null });
           calls.push(command);
           if (command === 'restore_layout')
             return new Promise<void>((resolve) => {
@@ -646,4 +654,145 @@ test('delayed panel actions never return focus; only explicit return to game inv
     { sceneId: 'gameplay', expectedRevision: 'focus-1' },
     { sceneId: 'bp', expectedRevision: 'focus-1' },
   ]);
+});
+
+test('workspace exit outcome survives a closed dock and failure allows a single retry with diagnostics', async ({
+  page,
+  context,
+}, testInfo) => {
+  // Shared IPC fixture; this proves UI visibility, not native CS2 cleanup.
+  let outcome = { busy: false, stage: '', message: null as string | null };
+  let finishes = 0;
+  let release!: () => void;
+  const calls: { command: string; args?: unknown }[] = [];
+  await context.exposeBinding('exitNative', async (_source, command: string, args?: unknown) => {
+    if (command === 'workspace_exit_status') return outcome;
+    if (command === 'cs2_config_status') return { pending: true, running: true, phase: 'running' };
+    calls.push({ command, args });
+    if (command === 'finish_workspace') {
+      finishes++;
+      outcome = { busy: true, stage: 'restoration', message: null };
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      outcome =
+        finishes === 1
+          ? {
+              busy: false,
+              stage: 'restoration',
+              message: 'CS2 尚未退出，请手动退出游戏后重试恢复。',
+            }
+          : { busy: false, stage: '', message: null };
+      if (outcome.message) throw new Error(outcome.message);
+    }
+    return null;
+  });
+  await context.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: unknown) =>
+          (
+            window as unknown as {
+              exitNative: (command: string, args?: unknown) => Promise<unknown>;
+            }
+          ).exitNative(command, args),
+      },
+    }),
+  );
+  await context.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: { connection: 'connected', findings: [], streaming: false, recording: false },
+    }),
+  );
+  await context.route('**/operator/obs/*', (route) =>
+    route.fulfill({ json: { alreadyRunning: true } }),
+  );
+  await context.route('**/local/v1/production', (route) =>
+    route.fulfill({ json: { mode: 'live', revision: 'exit-1', canEnter: true } }),
+  );
+  await page.goto('/workspace/dock');
+  await page.getByRole('button', { name: '退出工作台', exact: true }).click();
+  await expect.poll(() => finishes).toBe(1);
+  const recovery = await context.newPage();
+  await recovery.goto('/');
+  const result = recovery.getByLabel('工作台退出结果');
+  await expect(result).toContainText('关闭游戏与恢复设置');
+  await expect(
+    recovery.getByRole('button', { name: '打开直播工作台', exact: true }),
+  ).toBeDisabled();
+  await expect(result.getByRole('button', { name: '正在退出…' })).toBeDisabled();
+  await result.getByRole('button', { name: '运行诊断', exact: true }).click();
+  expect(calls).toContainEqual({ command: 'open_tool', args: { tool: 'diagnostics' } });
+  await page.close();
+  release();
+  await expect(result).toContainText('CS2 尚未退出，请手动退出游戏后重试恢复。');
+  await expect(result.getByRole('button', { name: '重试退出工作台' })).toBeEnabled();
+  await expect(
+    recovery.getByText('CS2 尚未退出，请手动退出游戏后重试恢复。', { exact: true }),
+  ).toHaveCount(1);
+  const screenshot = testInfo.outputPath('workspace-exit-recovery.png');
+  await recovery.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach('隐藏后的退出失败反馈（浏览器 IPC 模拟）', {
+    path: screenshot,
+    contentType: 'image/png',
+  });
+  await result.getByRole('button', { name: '重试退出工作台' }).click();
+  await expect.poll(() => finishes).toBe(2);
+  await expect(result.getByRole('button', { name: '正在退出…' })).toBeDisabled();
+  expect(finishes).toBe(2);
+  release();
+  await expect(result).toHaveCount(0);
+});
+
+test('exit recovery requires explicit Steam cancellation confirmation and permits changing that choice', async ({
+  page,
+  context,
+}) => {
+  let outcome = {
+    busy: false,
+    stage: 'restoration',
+    message: 'Steam 启动仍在等待。请先取消 Steam 启动请求，并确认 CS2 已关闭，再恢复备份。' as
+      string | null,
+  };
+  let finished = false;
+  const requests: unknown[] = [];
+  await context.exposeBinding('cancelExitNative', (_source, command: string, args?: unknown) => {
+    if (command === 'workspace_exit_status') return outcome;
+    if (command === 'cs2_config_status')
+      return { pending: !finished, running: false, phase: finished ? 'idle' : 'uncertain' };
+    if (command === 'finish_workspace') {
+      requests.push(args);
+      finished = true;
+      outcome = { busy: false, stage: '', message: null };
+    }
+    return null;
+  });
+  await context.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: unknown) =>
+          (
+            window as unknown as {
+              cancelExitNative: (command: string, args?: unknown) => Promise<unknown>;
+            }
+          ).cancelExitNative(command, args),
+      },
+    }),
+  );
+  await page.goto('/');
+  const result = page.getByLabel('工作台退出结果');
+  const retry = result.getByRole('button', { name: '恢复配置并重试退出' });
+  const confirmation = result.getByRole('checkbox', {
+    name: '已取消 Steam 启动请求，并确认 CS2 已关闭',
+  });
+  await expect(retry).toBeDisabled();
+  await confirmation.check();
+  await expect(retry).toBeEnabled();
+  await confirmation.uncheck();
+  await expect(retry).toBeDisabled();
+  expect(requests).toHaveLength(0);
+  await confirmation.check();
+  await retry.click();
+  expect(requests).toEqual([{ confirmSteamCancelled: true }]);
+  await expect(result).toHaveCount(0);
 });
