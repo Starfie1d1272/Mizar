@@ -426,6 +426,65 @@ describe('controlled update lifecycle', () => {
       [],
     );
   });
+  it('reports an expired total download deadline rather than an operator cancellation', async () => {
+    const deadline = new AbortController();
+    let started = false;
+    const log =
+      vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
+    const { manager, root } = await setup({
+      log,
+      fetcher: (input, options) => {
+        if (fetchUrl(input).includes('box.nju.edu.cn'))
+          return Promise.resolve(new Response(null, { status: 503 }));
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                started = true;
+                controller.enqueue(bytes.subarray(0, 3));
+                options?.signal?.addEventListener(
+                  'abort',
+                  () => controller.error(options.signal!.reason),
+                  { once: true },
+                );
+              },
+            }),
+          ),
+        );
+      },
+    });
+    await manager.check();
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((milliseconds) =>
+        milliseconds === 15 * 60_000 ? deadline.signal : nativeTimeout(milliseconds),
+      );
+    try {
+      await manager.download();
+      await vi.waitFor(() => expect(started).toBe(true));
+      deadline.abort(new DOMException('Total download deadline expired', 'TimeoutError'));
+      await finished(manager);
+      expect(manager.status()).toMatchObject({ phase: 'error', error: 'update_download_timeout' });
+      expect(manager.status().failureDetails).toContainEqual(
+        expect.objectContaining({
+          code: 'update_download_timeout',
+          summary: '安装包下载超时，未完成下载。',
+        }),
+      );
+      const event = log.mock.calls.find(
+        ([stage, code]) => stage === 'download' && code === 'update_download_timeout',
+      );
+      expect(event?.slice(0, 3)).toEqual(['download', 'update_download_timeout', '1.1.0']);
+      expect(event?.[3]).toMatchObject({ error: { cause: { name: 'TimeoutError' } } });
+      expect(
+        (await readdir(join(root, 'updates'))).filter((p) => p.startsWith('download-')),
+      ).toEqual([]);
+      await expect(manager.prepare()).rejects.toThrow('update_unavailable');
+    } finally {
+      timeout.mockRestore();
+    }
+  });
   it('rejects a verified version rollback and a replacement under the same version', async () => {
     let next = manifest;
     const { manager } = await setup({
