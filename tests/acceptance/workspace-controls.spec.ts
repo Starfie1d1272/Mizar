@@ -196,7 +196,7 @@ test('sidebar links and preparation tools open their actual destinations', async
     await expect(tool.locator('body')).not.toBeEmpty();
     await tool.close();
   }
-  await page.getByRole('button', { name: '新建本地比赛', exact: true }).click();
+  await page.getByRole('button', { name: '创建本地比赛', exact: true }).click();
   await expect(page).toHaveURL(/\/matches\?createLocal=1#local-match$/);
   await expect(page.getByRole('button', { name: '创建本地比赛', exact: true })).toBeVisible();
 });
@@ -224,6 +224,9 @@ test('OBS setup buttons launch the configured target, configure, check and repai
     });
   });
   let streaming = false;
+  let sceneRepairNeeded = false;
+  const findings = () =>
+    sceneRepairNeeded ? [{ code: 'scene_missing', message: '缺少 Mizar 场景' }] : [];
   await page.route('**/local/v1/obs', (r) =>
     r.fulfill({
       json: {
@@ -234,7 +237,7 @@ test('OBS setup buttons launch the configured target, configure, check and repai
         streaming,
         recording: false,
         video: null,
-        findings: [],
+        findings: findings(),
         sceneAligned: true,
       },
     }),
@@ -243,10 +246,11 @@ test('OBS setup buttons launch the configured target, configure, check and repai
   await page.route('**/operator/obs/*', (r) => {
     const path = new URL(r.request().url()).pathname;
     requests.push({ path, body: r.request().postDataJSON() });
+    if (path.endsWith('/repair')) sceneRepairNeeded = false;
     return r.fulfill({
       json: path.endsWith('launch-target')
         ? { executablePath: 'C:\\ConfiguredOBS\\obs64.exe' }
-        : { findings: [] },
+        : { findings: findings() },
     });
   });
   await page.goto('/settings?tab=obs');
@@ -271,8 +275,16 @@ test('OBS setup buttons launch the configured target, configure, check and repai
     });
   await expect(page.getByLabel('WebSocket 密码')).toHaveValue('');
   await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/check', body: {} });
-  await page.getByRole('button', { name: '修复 Mizar 场景', exact: true }).click();
-  await expect.poll(() => requests.at(-1)).toEqual({ path: '/operator/obs/repair', body: {} });
+  const repair = page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true });
+  await expect(repair).toHaveCount(0);
+  sceneRepairNeeded = true;
+  await expect(repair).toBeVisible();
+  await repair.click();
+  await expect.poll(() => requests).toContainEqual({ path: '/operator/obs/repair', body: {} });
+  await expect
+    .poll(() => requests[requests.findIndex((item) => item.path === '/operator/obs/repair') + 1])
+    .toEqual({ path: '/operator/obs/check', body: {} });
+  await expect(repair).toHaveCount(0);
   await page.getByRole('button', { name: '添加默认桌面音频与麦克风', exact: true }).click();
   await expect.poll(() => requests).toContainEqual({ path: '/operator/obs/audio-setup', body: {} });
   await expect(page.getByText('已添加系统默认桌面音频与麦克风。', { exact: false })).toBeVisible();
@@ -287,8 +299,11 @@ test('OBS setup buttons launch the configured target, configure, check and repai
     .poll(() => requests)
     .toContainEqual({ path: '/operator/obs/configure', body: { port: 4466, password: '' } });
   streaming = true;
+  sceneRepairNeeded = true;
   await page.reload();
-  await expect(page.getByRole('button', { name: '修复 Mizar 场景', exact: true })).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: '一键修复 Mizar 场景', exact: true }),
+  ).toBeDisabled();
   await expect(
     page.getByRole('button', { name: '添加默认桌面音频与麦克风', exact: true }),
   ).toBeDisabled();

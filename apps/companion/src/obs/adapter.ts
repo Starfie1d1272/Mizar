@@ -309,13 +309,10 @@ export class ObsAdapter {
       return this.findings;
     });
   }
-  private preparationStarted = false;
   ensure(): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
-        const firstPreparation = !this.preparationStarted;
-        this.preparationStarted = true;
-        const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, firstPreparation);
+        const visual = await ensureObsConfiguration(obs, this.browserBaseUrl);
         return this.configurationFindings(obs, visual);
       }, 12_000);
       return this.findings;
