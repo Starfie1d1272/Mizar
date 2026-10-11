@@ -1,3 +1,8 @@
+import {
+  collectObsNativeEvidence,
+  failedObsNativeEvidence,
+  type ObsNativeEvidence,
+} from '../obs/native-evidence.js';
 import type { FastifyInstance } from 'fastify';
 import { arch, platform, release } from 'node:os';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -64,6 +69,7 @@ export function registerSupportRoutes(
       binding: string | null;
     };
     readonly gsiConfigured: boolean;
+    readonly nativeObs?: () => Promise<ObsNativeEvidence>;
   },
 ) {
   let exporting = false;
@@ -138,8 +144,13 @@ export function registerSupportRoutes(
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
       try {
-        const logs = await readSupportLogs(options.logsDirectory);
-        const obs = await options.obs().catch(() => undefined);
+        const [logs, obs, nativeObs] = await Promise.all([
+          readSupportLogs(options.logsDirectory, 160 * 1024),
+          options.obs().catch(() => undefined),
+          Promise.resolve()
+            .then(() => (options.nativeObs ?? collectObsNativeEvidence)())
+            .catch(failedObsNativeEvidence),
+        ]);
         const program = options.program?.();
         const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
@@ -182,9 +193,11 @@ export function registerSupportRoutes(
             '日志保留阶段、结果、错误码及有界脱敏的异常消息、原因链和堆栈。session 只在本文件内关联。',
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
+            'nativeObs 只读取本机 OBS 配置、近期日志和进程元数据；配置来自已保存文件，不等同于当前节目画面。日志成功不证明当前画面正常，进程时间关联不证明实际 hook PID；缺失或未知均不能判为黑屏根因。',
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
+            nativeObs,
             program: program
               ? {
                   active: program.active,

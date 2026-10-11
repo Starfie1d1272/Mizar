@@ -12,7 +12,7 @@ const bundle = {
 
 test('normal UI downloads the real Companion allowlist export through the local proxy', async ({
   page,
-}) => {
+}, testInfo) => {
   const app = buildApp({
     productRuntime: {
       gitSha: 'a'.repeat(40),
@@ -39,7 +39,7 @@ test('normal UI downloads the real Companion allowlist export through the local 
     const result = JSON.parse(bytes.toString('utf8')) as {
       schema: string;
       manifest: unknown;
-      snapshot: { runtime: { freshness: string } };
+      snapshot: { runtime: { freshness: string }; nativeObs: { collectionStatus: string } };
     };
     expect(result.schema).toBe('mizar-support-bundle/1');
     expect(result.manifest).toMatchObject({
@@ -47,6 +47,15 @@ test('normal UI downloads the real Companion allowlist export through the local 
       artifactSha256: 'b'.repeat(64),
     });
     expect(result.snapshot.runtime.freshness).toBe('awaiting');
+    if (process.platform === 'win32')
+      expect(['available', 'failed', 'timeout']).toContain(
+        result.snapshot.nativeObs.collectionStatus,
+      );
+    else expect(result.snapshot.nativeObs.collectionStatus).toBe('unsupported');
+    await testInfo.attach('support-export-real-ui', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    });
     expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
     expect(bytes.toString('utf8')).not.toContain('private-');
     expect(errors).toEqual([]);
