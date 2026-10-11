@@ -135,10 +135,31 @@ const updateStages = new Set([
   'obs_request',
   'obs_configuration_check',
   'obs_operator_action',
+  'obs_output',
+  'obs_output_command',
   'production_context',
   'production_safe_scene',
   'production_release',
 ]);
+
+/** Output errors can contain RTMP endpoints/keys; keep causes without exporting destinations. */
+function obsOutputEvidence(error: unknown): unknown {
+  const redact = (value: unknown): unknown => {
+    if (typeof value === 'string')
+      return value
+        .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, '[redacted-url]')
+        .split('\n')
+        .map((line) =>
+          /stream[ _-]?key["']?\s*[:=]/i.test(line) ? '[credential-bearing line redacted]' : line,
+        )
+        .join('\n');
+    if (Array.isArray(value)) return value.map(redact);
+    if (typeof value === 'object' && value !== null)
+      return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redact(field)]));
+    return value;
+  };
+  return redact(errorEvidence(error));
+}
 
 function updateCauses(value: unknown, depth = 0): unknown[] {
   if (depth >= 4 || typeof value !== 'object' || value === null || Array.isArray(value)) return [];
@@ -268,6 +289,8 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       ? entry.stage
       : null;
   const diagnostic = record(entry.diagnostic);
+  const obsOutput =
+    entry.event === 'obs' && (stage === 'obs_output' || stage === 'obs_output_command');
   const level = [10, 20, 30, 40, 50, 60].includes(Number(entry.level)) ? Number(entry.level) : null;
   if (stage === null && level === null) return null;
   const status = record(entry.res).statusCode;
@@ -307,7 +330,12 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
         }
       : {}),
     ...((update || live) && diagnostic.error !== undefined
-      ? { localDiagnostic: boundDiagnostic(errorEvidence(diagnostic.error), 8 * 1024) }
+      ? {
+          localDiagnostic: boundDiagnostic(
+            obsOutput ? obsOutputEvidence(diagnostic.error) : errorEvidence(diagnostic.error),
+            8 * 1024,
+          ),
+        }
       : {}),
     ...(spectator
       ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
