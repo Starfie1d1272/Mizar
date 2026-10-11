@@ -1,0 +1,63 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (native/target/debug/deps/mizar_exit_owner_regression-ec9e624f040be451)
+
+running 56 tests
+test cs2_frame_rate::tests::localconfig_read_selects_only_the_active_apps_launch_options ... ok
+test cs2_frame_rate::tests::rejects_ambiguous_or_truncated_convars_and_outside_references ... ok
+test cs2_frame_rate::tests::edits_only_fps_and_restores_after_game_writes_other_convars ... ok
+test cs2_preferences::tests::old_quality_choices_migrate_without_enabling_unlimited_frames ... ok
+test cs2_frame_rate::tests::startup_commands_preserve_comments_bindings_and_nested_exec ... ok
+test cs2_frame_rate::tests::decimal_originals_validate_and_restore_without_rounding ... ok
+test cs2_session::tests::backup_failure_does_not_modify_game_and_missing_file_keeps_recovery ... ok
+test cs2_session::tests::a_timed_out_steam_request_survives_restart_until_confirmed ... ok
+test cs2_session::tests::durable_restart_recovery_does_not_overwrite_pending_backup ... ok
+test cs2_session::tests::completed_write_with_pending_journal_recovers_idempotently ... ok
+test cs2_session::tests::binding_conflict_retains_backup_and_retries_without_blocking_video_or_convar_restore ... ok
+test cs2_session::tests::frame_rate_conflicts_do_not_overwrite_other_files_or_clear_backups ... ok
+test cs2_session::tests::failed_cleanup_handoff_restores_core_and_keeps_original_ownership_journal ... ok
+test cs2_session::tests::changed_or_partially_written_demo_cfg_never_blocks_core_restore_and_can_retry ... ok
+test cs2_session::tests::invalid_formats_keep_original_and_pending_record ... ok
+test cs2_session::tests::missing_machine_convars_is_recorded_without_creating_or_restoring_it ... ok
+test cs2_session::tests::incompatible_config_is_backed_up_and_preserved_sessions_never_restore_over_game_writes ... ok
+test cs2_session::tests::optional_error_evidence_retains_system_codes_and_json_positions_without_input_contents ... ok
+test cs2_session::tests::frame_rate_startup_override_and_crash_recovery_restore_exact_user_config ... ok
+test cs2_session::tests::production_safety_precedes_real_restore_and_restart_retries_failed_restore ... ok
+test cs2_session::tests::missing_value_skips_and_optional_cloud_or_field_errors_never_block_core_recovery ... ok
+test cs2_session::tests::personal_startup_cfg_is_preserved_and_unknown_observer_file_only_skips_optional_preset ... ok
+test cs2_session::tests::sized_launch_restores_after_restart_and_rejects_extra_owned_fields ... ok
+test cs2_session::tests::startup_alias_definitions_are_preserved_but_invocations_fail_before_writes ... ok
+test cs2_spectator::tests::absent_duplicate_and_unreadable_values_are_not_invented ... ok
+test cs2_spectator::tests::binding_tokens_restore_custom_empty_and_missing_values_and_accept_consistent_duplicates ... ok
+test cs2_spectator::tests::conflicting_or_ambiguous_bindings_and_damaged_backups_are_refused ... ok
+test cs2_spectator::tests::restores_both_original_boolean_states_preserving_other_game_edits ... ok
+test cs2_video::tests::duplicate_and_nested_diagnostics_do_not_expose_user_values ... ok
+test cs2_video::tests::every_native_quality_preset_is_recognized_and_restorable ... ok
+test cs2_video::tests::exact_restoration_and_quality_choice ... ok
+test cs2_session::tests::observer_cfg_restores_boolean_and_ten_bindings_preserving_other_game_edits ... ok
+test cs2_video::tests::preserves_unrelated_edits_and_restores_game_updated_resolution ... ok
+test cs2_video::tests::rejects_unknown_duplicate_truncated_and_missing_config ... ok
+test cs2_video::tests::removes_added_fields_without_matching_an_unrelated_value ... ok
+test demo_test::tests::extended_windows_paths_become_game_paths_without_losing_unicode ... ok
+test demo_test::tests::normal_recovery_is_offline_but_demo_evidence_requires_companion ... ok
+test cs2_session::tests::unsubmitted_or_failed_spectator_load_does_not_restore_external_binding_changes ... ok
+test demo_test::tests::playback_cfg_is_owned_and_recovered_without_overwriting_collisions ... ok
+test demo_test::tests::private_rpc_response_rejects_failures_and_bad_framing ... ok
+test demo_test::tests::selected_file_stays_native_and_is_revalidated ... ok
+test production_exit::tests::absent_or_failed_qualification_still_cleans_up_without_acknowledgement ... ok
+test production_exit::tests::completed_exit_invalidates_old_entry_without_clearing_failure_or_hiding_main ... ok
+test production_exit::tests::exit_rejects_new_launch_and_allows_cleanup_retry ... ok
+test production_exit::tests::game_cleanup_and_process_check_must_succeed_before_confirmation ... ok
+test production_exit::tests::only_verified_stop_skips_an_already_completed_production_request ... ok
+test production_exit::tests::private_handshake_uses_token_without_origin_and_preserves_captured_identity ... ok
+test production_exit::tests::safe_finish_precedes_game_close_and_failure_keeps_game ... ok
+test production_exit::tests::workspace_feedback_keeps_failure_without_sticking_busy_and_retry_replaces_it ... ok
+test production_exit::tests::malformed_private_runtime_identity_is_bounded_and_never_logged ... ok
+test cs2_session::tests::unreadable_keys_skip_optional_cfg_and_legacy_records_never_own_keys ... ok
+test startup_log::tests::rejects_relative_and_normalized_payload_state_paths ... ok
+test startup_log::tests::logs_failed_stage_and_artifact_identity_and_preserves_previous_session ... ok
+test startup_log::tests::reload_storm_preserves_failure_in_bounded_tail ... ok
+test startup_log::tests::bounds_utf8_entries_total_files_and_preserves_parseable_ndjson ... ok
+test demo_test::tests::diagnostics_keep_failure_evidence_without_private_data_or_retry_storms ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
