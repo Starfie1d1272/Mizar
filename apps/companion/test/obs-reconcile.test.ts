@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { checkObsAudio, setupObsAudio } from '../src/obs/audio.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
+import { readObsProgramEvidence } from '../src/obs/program-evidence.js';
 import {
   checkObsConfiguration,
   repairObsConfiguration,
@@ -106,6 +107,7 @@ class FakeObs implements ObsRpc {
       return { inputSettings: this.inputs.get(String(data.inputName))!.settings };
     if (type === 'GetInputPropertiesListPropertyItems')
       return { propertyItems: this.captureWindows };
+    if (type === 'GetSourceActive') return { videoActive: true, videoShowing: true };
     if (type === 'GetSceneItemList')
       return { sceneItems: this.scenes.get(name)?.map((item) => ({ ...item })) ?? [] };
     if (type === 'CreateSceneItem') {
@@ -285,6 +287,64 @@ it('replaces the null-window target and follows actual CS2 windows across server
     expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
     expect(capture.settings.window).toBe(window);
   }
+  // OBS property order is not ownership: keep an operator's available CS2 target.
+  obs.captureWindows.unshift({ itemValue: 'Another CS2:SDL_app:cs2.exe', itemEnabled: true });
+  expect(await checkObsConfiguration(obs, baseUrl)).toEqual([]);
+  expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
+  expect(capture.settings.window).toBe('反恐精英2:SDL_app:cs2.exe');
+  capture.settings.window = 'Prior CS2:SDL_app:cs2.exe';
+  await repairObsConfiguration(obs, baseUrl);
+  expect(capture.settings.window).toBe('Prior CS2:SDL_app:cs2.exe');
+});
+
+it('measures owned Program sources without claiming captured frames or reading inactive game capture', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.currentScene = 'Mizar · 赛前等待';
+  obs.calls = [];
+  const waiting = await readObsProgramEvidence(obs, baseUrl, obs.currentScene);
+  expect(waiting).toMatchObject({
+    state: 'measured',
+    sceneId: 'waiting',
+    composition: 'full_screen_graphic',
+    capture: null,
+  });
+  expect(obs.calls).not.toContain('GetInputSettings');
+  expect(obs.calls).not.toContain('GetSourceActive');
+  obs.currentScene = 'Mizar · 比赛中';
+  const capture = obs.scenes
+    .get(obs.currentScene)!
+    .find((item) => item.sourceName === 'Mizar · CS2 Game Capture')!;
+  capture.sceneItemEnabled = false;
+  obs.transforms.set(capture.sceneItemId, { sourceWidth: 0, sourceHeight: 0 });
+  const measured = await readObsProgramEvidence(obs, baseUrl, obs.currentScene);
+  expect(measured).toMatchObject({
+    state: 'measured',
+    sceneId: 'gameplay',
+    sources: [
+      { role: 'capture', present: true, enabled: false },
+      { role: 'browser', present: true, enabled: true },
+    ],
+    capture: {
+      target: 'cs2.exe',
+      targetAvailable: false,
+      width: 0,
+      height: 0,
+      frameHealth: 'unverified',
+      processIdentity: 'unavailable',
+    },
+  });
+  obs.captureWindows = [{ itemValue: 'Counter-Strike 2:SDL_app:cs2.exe', itemEnabled: true }];
+  expect(
+    (await readObsProgramEvidence(obs, baseUrl, obs.currentScene)).capture?.targetAvailable,
+  ).toBe(true);
+  const original = obs.call.bind(obs);
+  vi.spyOn(obs, 'call').mockImplementation(async (type, data) =>
+    type === 'GetCurrentProgramScene'
+      ? { currentProgramSceneName: 'Mizar · 赛前等待' }
+      : original(type, data),
+  );
+  expect((await readObsProgramEvidence(obs, baseUrl, obs.currentScene)).state).toBe('changed');
 });
 
 it('refuses collection mutations during output and protects user source names', async () => {

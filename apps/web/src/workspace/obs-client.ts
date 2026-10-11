@@ -6,6 +6,25 @@ export interface ObsStatus {
   readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
+  readonly expectedScene?: string;
+  readonly programEvidence?: null | {
+    state: 'measured' | 'changed' | 'failed';
+    collection: 'mizar' | 'other';
+    sceneId: string | null;
+    composition: 'gameplay_overlay' | 'full_screen_graphic' | null;
+    sources: readonly { role: 'capture' | 'browser'; present: boolean; enabled: boolean | null }[];
+    capture: null | {
+      kind: 'game_capture' | 'other' | 'missing';
+      mode: 'window' | 'other' | null;
+      target: 'cs2.exe' | 'other' | null;
+      targetAvailable: boolean | null;
+      cs2WindowCount: number;
+      videoActive: boolean | null;
+      videoShowing: boolean | null;
+      width: number | null;
+      height: number | null;
+    };
+  };
   readonly port: number;
   readonly sceneAligned: boolean | null;
   readonly streaming: boolean;
@@ -44,8 +63,21 @@ export function useObsStatus(): ObsStatus | null {
   return value;
 }
 
-export async function obsCommand(
-  action: 'open' | 'check' | 'ensure' | 'repair' | 'configure' | 'audio-setup',
+type ObsAction = 'open' | 'check' | 'ensure' | 'repair' | 'configure' | 'audio-setup';
+let opening: Promise<unknown> | null = null;
+export function obsCommand(
+  action: ObsAction,
+  body: Record<string, unknown> = {},
+): Promise<unknown> {
+  if (action !== 'open') return performObsCommand(action, body);
+  opening ??= performObsCommand(action, body).finally(() => {
+    opening = null;
+  });
+  return opening;
+}
+
+async function performObsCommand(
+  action: ObsAction,
   body: Record<string, unknown> = {},
 ): Promise<unknown> {
   const nativeOpen = action === 'open' && Boolean(window.__TAURI_INTERNALS__);

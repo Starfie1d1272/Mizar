@@ -51,15 +51,22 @@ function isCs2Window(value: unknown): value is string {
   );
 }
 
-async function cs2CaptureWindow(obs: ObsRpc): Promise<string> {
+async function cs2CaptureWindow(obs: ObsRpc, preferred?: unknown): Promise<string> {
   const properties = await obs.call('GetInputPropertiesListPropertyItems', {
     inputName: OBS_CAPTURE_INPUT,
     propertyName: 'window',
   });
-  const available = objects(properties.propertyItems).find(
+  const windows = objects(properties.propertyItems).filter(
     (item) => item.itemEnabled !== false && isCs2Window(item.itemValue),
   );
-  return typeof available?.itemValue === 'string' ? available.itemValue : CS2_WINDOW_FALLBACK;
+  const available =
+    windows.find((item) => item.itemValue === preferred) ??
+    (windows.length === 1 ? windows[0] : undefined);
+  return typeof available?.itemValue === 'string'
+    ? available.itemValue
+    : isCs2Window(preferred)
+      ? preferred
+      : CS2_WINDOW_FALLBACK;
 }
 
 // OBS WebSocket returns collection names as strings, unlike scene/input lists.
@@ -205,7 +212,7 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
     const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
     const settings = capture.inputSettings as Record<string, unknown> | undefined;
-    const currentWindow = await cs2CaptureWindow(obs);
+    const currentWindow = await cs2CaptureWindow(obs, settings?.window);
     if (
       settings?.capture_mode !== 'window' ||
       !isCs2Window(settings.window) ||
@@ -331,17 +338,20 @@ export async function repairObsConfiguration(
     )
       throw new Error('Mizar 浏览器来源名称冲突，未执行修复。');
   }
-  if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture')
+  if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
+    const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
+    const settings = capture.inputSettings as Record<string, unknown> | undefined;
     await obs.call('SetInputSettings', {
       inputName: OBS_CAPTURE_INPUT,
       inputSettings: {
         capture_mode: 'window',
-        window: await cs2CaptureWindow(obs),
+        window: await cs2CaptureWindow(obs, settings?.window),
         priority: 2,
         capture_cursor: false,
       },
       overlay: true,
     });
+  }
   for (const scene of desired) {
     if (!sceneNames.has(scene.sceneName)) {
       await obs.call('CreateScene', { sceneName: scene.sceneName });

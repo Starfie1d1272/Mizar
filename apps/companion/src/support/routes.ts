@@ -3,6 +3,8 @@ import { arch, platform, release } from 'node:os';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { LocalWebHostDiagnostics } from '../local-web/websocket-transport.js';
 import type { ObsStatus } from '../obs/adapter.js';
+import { PROGRAM_SCENES, type ProgramSceneState } from '@mizar/protocol/program-scenes';
+import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
@@ -55,6 +57,12 @@ export function registerSupportRoutes(
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
     readonly hosts: () => LocalWebHostDiagnostics;
     readonly obs: () => Promise<ObsStatus | undefined>;
+    readonly program?: () => ProgramSceneState;
+    readonly programContext?: () => {
+      contextFreshness: string;
+      identity: string;
+      binding: string | null;
+    };
     readonly gsiConfigured: boolean;
   },
 ) {
@@ -132,6 +140,8 @@ export function registerSupportRoutes(
       try {
         const logs = await readSupportLogs(options.logsDirectory);
         const obs = await options.obs().catch(() => undefined);
+        const program = options.program?.();
+        const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
         const gsi = record(desktop.gsi);
         const cs2 = record(desktop.cs2);
@@ -175,6 +185,27 @@ export function registerSupportRoutes(
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
+            program: program
+              ? {
+                  active: program.active,
+                  preparing: program.preparing?.target ?? null,
+                  mode: program.director?.mode ?? null,
+                  gameplayAvailable: program.available.includes('gameplay'),
+                  contextFreshness: choice(context?.contextFreshness, [
+                    'unbound',
+                    'fresh',
+                    'stale',
+                  ]),
+                  identity: choice(context?.identity, [
+                    'unbound',
+                    'resolving',
+                    'matched',
+                    'degraded',
+                    'mismatch',
+                  ]),
+                  binding: choice(context?.binding, ['unbound', 'bound', 'needs_operator']),
+                }
+              : null,
             runtime: options.runtimeSummary(),
             gsi: {
               ingressConfigured: options.gsiConfigured,
@@ -221,6 +252,15 @@ export function registerSupportRoutes(
                     ]),
                     streaming: bool(obs.streaming),
                     recording: bool(obs.recording),
+                    connectionFailure: obs.connectionFailure ?? null,
+                    currentScene:
+                      PROGRAM_SCENES.find((scene) => obsSceneName(scene.id) === obs.currentScene)
+                        ?.id ?? null,
+                    sceneAligned:
+                      program && obs.connection === 'connected'
+                        ? obs.currentScene === obsSceneName(program.active)
+                        : null,
+                    programEvidence: obs.programEvidence ?? null,
                     findings: obs.findings
                       .slice(0, 32)
                       .map(({ code }) => choice(code, findingCodes) ?? 'unknown_finding'),

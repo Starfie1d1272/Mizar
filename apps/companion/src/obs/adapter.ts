@@ -5,6 +5,7 @@ import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
+import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import { ObsConfigStore, discoverObsExecutable, type ObsConfig } from './config.js';
 import { checkObsAudio, setupObsAudio } from './audio.js';
 import {
@@ -51,6 +52,7 @@ export interface ObsStatus {
   readonly passwordConfigured: boolean;
   readonly video: null | { readonly canvas: string; readonly output: string; readonly fps: number };
   readonly findings: readonly ObsFinding[];
+  readonly programEvidence?: ObsProgramEvidence | null;
 }
 
 const TIMEOUT_MS = 4000;
@@ -232,12 +234,20 @@ export class ObsAdapter {
         ]);
         if (outputs.stream.active === null || outputs.record.active === null)
           throw new Error('OBS 输出状态无法确认。');
+        const currentScene =
+          typeof scene.currentProgramSceneName === 'string' ? scene.currentProgramSceneName : null;
+        const programEvidence = await readObsProgramEvidence(
+          obs,
+          this.browserBaseUrl,
+          currentScene,
+        ).catch((error: unknown) => {
+          this.diagnostic('obs_program_check', obsErrorEvidence(error, config.password));
+          return null;
+        });
         return {
           connection: 'connected',
-          currentScene:
-            typeof scene.currentProgramSceneName === 'string'
-              ? scene.currentProgramSceneName
-              : null,
+          currentScene,
+          programEvidence,
           port: config.port,
           streaming: outputs.stream.active === true,
           recording: outputs.record.active === true,
@@ -269,6 +279,7 @@ export class ObsAdapter {
         passwordConfigured: Boolean(config.password),
         video: null,
         findings: [],
+        programEvidence: null,
       };
     }
   }

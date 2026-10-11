@@ -186,6 +186,30 @@ export class ProgramSceneController {
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
     const reason = this.blockedReason(id, automaticValid !== undefined);
     if (reason !== null) return { ok: false as const, message: reason };
+    if (this.active === id && !automaticValid) {
+      // A manual Take also restores OBS after an external scene change or reconnect.
+      // Preserve presentation identity (including BP / matchup) on the same scene.
+      const restoreCurrent = async () => {
+        if (this.active !== id)
+          await this.switchObs?.(this.active, {
+            transition: programTransition(id, this.active, true),
+          }).catch(() => undefined);
+      };
+      try {
+        await this.switchObs?.(id, {
+          transition: programTransition(id, id, true),
+          valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
+        });
+        if (expectedRevision !== this.revision || this.blockedReason(id) !== null) {
+          await restoreCurrent();
+          return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
+        }
+        this.revision = randomUUID();
+      } catch {
+        await restoreCurrent();
+        return { ok: false as const, message: 'OBS 场景恢复未完成，请检查连接后重试。' };
+      }
+    }
     if (this.active !== id) {
       const abort = new AbortController();
       if (automaticValid) this.automaticSwitch = abort;

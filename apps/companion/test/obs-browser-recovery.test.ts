@@ -184,3 +184,41 @@ it('drops stale scene findings on authentication failure and reconnects after co
     await adapter.close();
   }
 });
+
+it('keeps an OBS connection when Program diagnostics fail and retains the redacted request cause', async () => {
+  websocket.connect.mockResolvedValue(undefined);
+  websocket.disconnect.mockResolvedValue(undefined);
+  vi.spyOn(reconcile, 'checkObsConfiguration').mockResolvedValue([
+    { code: 'scene_missing', message: 'missing' },
+  ]);
+  websocket.call.mockImplementation(async (type: string) => {
+    await Promise.resolve();
+    if (type === 'GetSceneCollectionList')
+      throw Object.assign(new Error('property lookup denied private-password'), { code: 600 });
+    if (type === 'GetCurrentProgramScene') return { currentProgramSceneName: 'Mizar · 比赛中' };
+    return { outputActive: false };
+  });
+  const store = new ObsConfigStore('/unused-test-config');
+  vi.spyOn(store, 'read').mockResolvedValue({
+    host: '127.0.0.1',
+    port: 4455,
+    password: 'private-password',
+    executablePath: null,
+  });
+  const diagnostic = vi.fn();
+  const adapter = new ObsAdapter(store, 'http://127.0.0.1:3000', diagnostic);
+  try {
+    expect(await adapter.status()).toMatchObject({
+      connection: 'connected',
+      currentScene: 'Mizar · 比赛中',
+      programEvidence: null,
+    });
+    expect(diagnostic).toHaveBeenCalledWith(
+      'obs_program_check',
+      expect.objectContaining({ code: 600, message: 'property lookup denied [redacted]' }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-password');
+  } finally {
+    await adapter.close();
+  }
+});
