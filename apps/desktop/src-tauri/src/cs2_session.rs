@@ -247,7 +247,11 @@ impl SessionStore {
                 if current.len() > 256 * 1024 {
                     return Err("当前观战配置过大。".into());
                 }
-                let restored = crate::cs2_spectator::restore(original, &current)?;
+                let restored = if record["version"] == 1 {
+                    crate::cs2_spectator::restore(original, &current)?
+                } else {
+                    crate::cs2_spectator::restore_with_applied(original, &current, false)?
+                };
                 if restored != current {
                     atomic_write(&machine, restored.as_bytes())?;
                 }
@@ -883,13 +887,13 @@ mod tests {
     }
 
     #[test]
-    fn observer_cfg_restores_boolean_and_nine_bindings_preserving_other_game_edits() {
+    fn observer_cfg_restores_boolean_and_ten_bindings_preserving_other_game_edits() {
         for token in ["0", "1", "false", "true"] {
             let (root, video, machine, executable, store) = frame_setup();
             let original = format!("\"config\" {{\"convars\" {{\"fps_max\" \"230.43442\" \"spec_usenumberkeys_nobinds\" \"{token}\" \"other\" \"old\"}}}}");
             fs::write(&machine, &original).unwrap();
             let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
-            let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\" \"4\" \"slot4\" \"0\" \"slot10\" \"x\" \"original\"}}";
+            let bindings = "\"config\" {\"bindings\" {\"1\" \"say custom; slot7\" \"2\" \"\" \"4\" \"slot4\" \"0\" \"say zero custom\" \"x\" \"original\"}}";
             fs::write(&keys, bindings).unwrap();
             let journal = store
                 .prepare_with_frame_rate(
@@ -906,31 +910,32 @@ mod tests {
             let commands = fs::read_to_string(&cfg).unwrap();
             assert!(commands
                 .lines()
-                .any(|line| line == "spec_usenumberkeys_nobinds 1"));
+                .any(|line| line == "spec_usenumberkeys_nobinds 0"));
             for number in 1..=9 {
                 assert!(commands
                     .lines()
                     .any(|line| line == format!("bind \"{number}\" \"slot{number}\"")));
             }
-            assert!(!commands.contains("bind \"0\""));
+            assert!(commands.lines().any(|line| line == "bind \"0\" \"slot10\""));
+            assert!(!commands.contains("bind \"0\" \"slot0\""));
             assert_eq!(fs::read_to_string(&keys).unwrap(), bindings); // No prelaunch key writes.
             let backup = store.spectator_record().unwrap().unwrap();
             assert_eq!(backup["version"], 2);
             assert_eq!(backup["bindings"]["1"], "\"say custom; slot7\"");
             assert_eq!(backup["bindings"]["2"], "\"\"");
             assert_eq!(backup["bindings"]["3"], Value::Null);
-            assert_eq!(backup["bindings"].as_object().unwrap().len(), 9);
+            assert_eq!(backup["bindings"].as_object().unwrap().len(), 10);
             store.validate_spectator_launch().unwrap();
             store.spectator_load_attempted(true).unwrap();
             crate::cs2_spectator::install(&executable).unwrap();
             fs::write(
                 &machine,
                 applied
-                    .replace(&format!("\"{token}\""), "\"1\"")
+                    .replace(&format!("\"{token}\""), "\"0\"")
                     .replace("\"old\"", "\"new\""),
             )
             .unwrap();
-            fs::write(&keys, "\"config\" {\"bindings\" {\"1\" \"slot1\" \"2\" \"slot2\" \"3\" \"slot3\" \"4\" \"slot4\" \"5\" \"slot5\" \"6\" \"slot6\" \"7\" \"slot7\" \"8\" \"slot8\" \"9\" \"slot9\" \"0\" \"changed-zero\" \"x\" \"changed-other-key\"}}\n").unwrap();
+            fs::write(&keys, "\"config\" {\"bindings\" {\"1\" \"slot1\" \"2\" \"slot2\" \"3\" \"slot3\" \"4\" \"slot4\" \"5\" \"slot5\" \"6\" \"slot6\" \"7\" \"slot7\" \"8\" \"slot8\" \"9\" \"slot9\" \"0\" \"slot10\" \"x\" \"changed-other-key\"}}\n").unwrap();
             // A restart reconstructs the real recovery owner from the durable record.
             SessionStore::new(root.clone()).restore().unwrap();
             assert_eq!(
@@ -948,7 +953,7 @@ mod tests {
                 ("7", None),
                 ("8", None),
                 ("9", None),
-                ("0", Some("changed-zero")),
+                ("0", Some("say zero custom")),
                 ("x", Some("changed-other-key")),
             ] {
                 assert_eq!(
@@ -1002,7 +1007,7 @@ mod tests {
             .contains("发生变化"));
         fs::write(
             &machine,
-            "\"config\" {\"convars\" {\"fps_max\" \"60\" \"spec_usenumberkeys_nobinds\" \"true\"}}",
+            "\"config\" {\"convars\" {\"fps_max\" \"60\" \"spec_usenumberkeys_nobinds\" \"0\"}}",
         )
         .unwrap();
         let changed = fs::read(&keys).unwrap();
@@ -1149,7 +1154,7 @@ mod tests {
             &machine,
             fs::read_to_string(&machine)
                 .unwrap()
-                .replace("\"false\"", "\"true\""),
+                .replace("\"false\"", "\"0\""),
         )
         .unwrap();
         let remote = video
@@ -1167,7 +1172,7 @@ mod tests {
         // Game-time optional edits must not become ownership or block FPS/video.
         let changed = fs::read_to_string(&machine)
             .unwrap()
-            .replace("\"true\"", "\"unknown\"");
+            .replace("\"0\"", "\"unknown\"");
         fs::write(&machine, changed).unwrap();
         assert!(store.restore().unwrap().unwrap().contains("镜像"));
         let restored_keys = fs::read_to_string(&keys).unwrap();
@@ -1197,7 +1202,7 @@ mod tests {
         assert!(store.spectator_pending());
         fs::remove_file(&mirror).unwrap();
         assert!(store.restore_spectator().unwrap_err().contains("字段"));
-        fs::write(&machine, original.replace("\"false\"", "\"1\"")).unwrap();
+        fs::write(&machine, original.replace("\"false\"", "\"0\"")).unwrap();
         let restarted = SessionStore::new(root.clone());
         restarted.restore_spectator().unwrap();
         assert_eq!(fs::read_to_string(&machine).unwrap(), original);

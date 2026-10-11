@@ -1,4 +1,4 @@
-//! Optional spectator preset. Own only keys 1-9 and the existing spectator field.
+//! Optional spectator preset. Own only number keys and the existing spectator field.
 use crate::{cs2_frame_rate::field, cs2_session::io_error};
 use serde_json::{json, Value};
 use std::{
@@ -28,6 +28,18 @@ pub const CFG_NAME: &str = "mizar_observer.cfg";
 const CFG: &[u8] = include_bytes!("../../../../config/mizar_observer.cfg");
 const LEGACY_CFG: &[u8] = b"// Mizar managed spectator session; personal bindings remain unchanged.\nspec_usenumberkeys_nobinds 1\necho MIZAR_OBSERVER_CFG_LOADED\n";
 const KEYS_NAME: &str = "cs2_user_keys_0_slot0.vcfg";
+const NUMBER_BINDINGS: [(&str, &str); 10] = [
+    ("1", "slot1"),
+    ("2", "slot2"),
+    ("3", "slot3"),
+    ("4", "slot4"),
+    ("5", "slot5"),
+    ("6", "slot6"),
+    ("7", "slot7"),
+    ("8", "slot8"),
+    ("9", "slot9"),
+    ("0", "slot10"),
+];
 
 pub(crate) fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
     executable
@@ -127,8 +139,7 @@ type Entry = (crate::cs2_frame_rate::Token, crate::cs2_frame_rate::Token);
 
 fn binding_entries(text: &str) -> Result<Vec<Entry>, String> {
     let entries = crate::cs2_frame_rate::scalar_section(text, &["config", "bindings"])?;
-    for number in 1..=9 {
-        let digit = number.to_string();
+    for (digit, _) in NUMBER_BINDINGS {
         let mut values = entries
             .iter()
             .filter(|(key, _)| key.value == digit)
@@ -145,13 +156,12 @@ fn binding_entries(text: &str) -> Result<Vec<Entry>, String> {
 fn backup_bindings(text: &str) -> Result<Value, String> {
     let entries = binding_entries(text)?;
     let mut saved = serde_json::Map::new();
-    for number in 1..=9 {
-        let digit = number.to_string();
+    for (digit, _) in NUMBER_BINDINGS {
         let token = entries
             .iter()
             .find(|(key, _)| key.value == digit)
             .map(|(_, value)| text[value.start..value.end].to_string());
-        saved.insert(digit, json!(token));
+        saved.insert(digit.to_string(), json!(token));
     }
     Ok(Value::Object(saved))
 }
@@ -178,16 +188,18 @@ pub fn validate_bindings(video: &Path, saved: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Patch only our nine keys in the current file, preserving all other game edits.
+/// Patch only number keys in the current file, preserving all other game edits.
 fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
-    if saved.as_object().is_none_or(|object| object.len() != 9) {
+    if saved
+        .as_object()
+        .is_none_or(|object| object.len() != NUMBER_BINDINGS.len())
+    {
         return Err("数字键备份格式无法核实。".into());
     }
     let entries = binding_entries(current)?;
     let mut edits = Vec::new();
-    for number in 1..=9 {
-        let digit = number.to_string();
-        let original = saved_binding(saved, &digit)?;
+    for (digit, applied) in NUMBER_BINDINGS {
+        let original = saved_binding(saved, digit)?;
         let matches: Vec<_> = entries
             .iter()
             .filter(|(key, _)| key.value == digit)
@@ -196,7 +208,7 @@ fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
         if now == original.as_ref().map(|(_, value)| value.as_str()) {
             continue; // Already restored, or +exec was never applied.
         }
-        if now != Some(format!("slot{number}").as_str()) {
+        if now != Some(applied) {
             return Err(format!(
                 "数字键 {digit} 已被外部修改，未覆盖该修改；原绑定备份仍保留。"
             ));
@@ -230,10 +242,18 @@ pub fn restore_bindings(video: &Path, saved: &Value) -> Result<(), String> {
 }
 
 pub fn restore(original: &str, current: &str) -> Result<String, String> {
+    restore_with_applied(original, current, true)
+}
+
+pub fn restore_with_applied(
+    original: &str,
+    current: &str,
+    applied: bool,
+) -> Result<String, String> {
     let before = value(original).map_err(|_| "原观战字段备份无法核实。")?;
     let now = value(current).map_err(|_| "当前观战字段缺失、重复或值异常，原值备份仍保留。")?;
-    if !boolean(&now.value)? && boolean(&before.value)? {
-        return Err("观战字段已被外部关闭，未覆盖外部修改；原值备份仍保留。".into());
+    if boolean(&now.value)? != boolean(&before.value)? && boolean(&now.value)? != applied {
+        return Err("观战字段已被外部修改，未覆盖外部修改；原值备份仍保留。".into());
     }
     let mut restored = current.to_string();
     restored.replace_range(now.start..now.end, &original[before.start..before.end]);
@@ -327,7 +347,7 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
     value(original)?;
     let bindings = backup_bindings(&read_keys(video)?)?;
     install(executable)?;
-    // Runtime +exec will enable true even when the original was false. Do not
+    // Runtime +exec selects weapon-slot bindings even when the original was true. Do not
     // prewrite this archive field or change FPS's original/applied contract.
     Ok(
         json!({"version":2,"video":video,"original":original,"bindings":bindings,"loadAttempted":false}),
@@ -342,13 +362,25 @@ mod tests {
     fn restores_both_original_boolean_states_preserving_other_game_edits() {
         for token in ["true", "1", "false", "0"] {
             let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{token}\"}}}}");
-            let current =
-                format!("\"config\" {{\"convars\" {{\"{KEY}\" \"true\" \"other\" \"new\"}}}}");
-            assert_eq!(
-                restore(&original, &current).unwrap(),
-                current.replace("\"true\"", &format!("\"{token}\""))
-            );
+            for applied in [false, true] {
+                let applied_token = if applied { "true" } else { "0" };
+                let current = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{applied_token}\" \"other\" \"new\"}}}}");
+                assert_eq!(
+                    restore_with_applied(&original, &current, applied).unwrap(),
+                    current.replace(&format!("\"{applied_token}\""), &format!("\"{token}\""))
+                );
+                if applied {
+                    assert_eq!(
+                        restore(&original, &current).unwrap(),
+                        current.replace("\"true\"", &format!("\"{token}\""))
+                    );
+                }
+            }
         }
+        let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\"}}}}");
+        assert!(
+            restore_with_applied(&original, &original.replace("false", "true"), false).is_err()
+        );
     }
 
     #[test]
@@ -367,11 +399,11 @@ mod tests {
         let original = r#""config" {"bindings" {"1" "say \"中文\"; slot7" "2" "" "4" "slot4" "4" "slot4" "0" "original-zero" "x" "original-other"}}"#;
         let saved = backup_bindings(original).unwrap();
         // Independent game-exit fixture, including repeated identical commands.
-        let current = r#""config" {"bindings" {"1" "slot1" "1" "slot1" "2" "slot2" "3" "slot3" "4" "slot4" "5" "slot5" "6" "slot6" "7" "slot7" "8" "slot8" "9" "slot9" "0" "new-zero" "x" "new-other"} "version" "2"}"#;
+        let current = r#""config" {"bindings" {"1" "slot1" "1" "slot1" "2" "slot2" "3" "slot3" "4" "slot4" "5" "slot5" "6" "slot6" "7" "slot7" "8" "slot8" "9" "slot9" "0" "slot10" "x" "new-other"} "version" "2"}"#;
         let restored = restored_bindings(&saved, current).unwrap();
         assert!(restored.contains(r#""1" "say \"中文\"; slot7" "1" "say \"中文\"; slot7""#));
         assert!(restored.contains(r#""2" """#));
-        assert!(restored.contains(r#""0" "new-zero" "x" "new-other""#));
+        assert!(restored.contains(r#""0" "original-zero" "x" "new-other""#));
         assert!(restored.contains(r#""version" "2""#));
         for digit in ["3", "5", "6", "7", "8", "9"] {
             assert!(field(&restored, &["config", "bindings", digit])
@@ -380,6 +412,25 @@ mod tests {
         }
         assert_eq!(restored_bindings(&saved, &restored).unwrap(), restored);
         assert_eq!(restored_bindings(&saved, original).unwrap(), original);
+        for (entry, expected) in [(r#""0" """#, Some("")), ("", None)] {
+            let saved =
+                backup_bindings(&format!(r#""config" {{"bindings" {{{entry}}}}}"#)).unwrap();
+            let current = r#""config" {"bindings" {"0" "slot10" "0" "slot10" "x" "user-edit"}}"#;
+            let restored = restored_bindings(&saved, current).unwrap();
+            let zero_values: Vec<_> = binding_entries(&restored)
+                .unwrap()
+                .into_iter()
+                .filter(|(key, _)| key.value == "0")
+                .map(|(_, token)| token.value)
+                .collect();
+            assert_eq!(
+                zero_values,
+                expected
+                    .map(|value| vec![value.to_string(), value.to_string()])
+                    .unwrap_or_default()
+            );
+            assert!(restored.contains(r#""x" "user-edit""#));
+        }
     }
 
     #[test]
@@ -387,6 +438,7 @@ mod tests {
         let saved = backup_bindings(r#""config" {"bindings" {"1" "original"}}"#).unwrap();
         for current in [
             r#""config" {"bindings" {"1" "external"}}"#,
+            r#""config" {"bindings" {"1" "original" "0" "external-zero"}}"#,
             r#""config" {"bindings" {}}"#,
             r#""config" {"bindings" {"1" "slot1" "1" "external"}}"#,
             r#""config" {"bindings" {} "bindings" {}}"#,
