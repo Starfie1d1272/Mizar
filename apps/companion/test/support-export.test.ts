@@ -94,8 +94,8 @@ describe('support export', () => {
         });
         for (const event of events) expect(JSON.stringify(event.localDiagnostic)).toContain(reason);
         if (rpcCode !== null) {
-          expect(events[0].localDiagnostic).toMatchObject({ code: rpcCode });
-          expect(events[1].localDiagnostic).toMatchObject({ cause: { code: rpcCode } });
+          expect(events[0]!.localDiagnostic).toMatchObject({ code: rpcCode });
+          expect(events[1]!.localDiagnostic).toMatchObject({ cause: { code: rpcCode } });
         }
         for (const secret of [
           'private-output',
