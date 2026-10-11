@@ -688,9 +688,14 @@ mod tests {
         assert!(validate_plan(&plan, &bundle, &log)
             .unwrap_err()
             .contains("正式发布页"));
+        plan["bundleRoot"] = json!(root.join("missing-bundle"));
+        assert!(validate_plan(&plan, &bundle, &log)
+            .unwrap_err()
+            .contains("正式发布页"));
         let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
         assert!(evidence.contains("plan_updates_canonicalize"));
         assert!(evidence.contains("plan_installer_parent_canonicalize"));
+        assert!(evidence.contains("plan_bundle_canonicalize"));
         assert!(evidence.contains("os_code=Some("));
         fs::remove_dir_all(root).unwrap();
     }
