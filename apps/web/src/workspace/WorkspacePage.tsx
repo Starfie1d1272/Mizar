@@ -37,7 +37,8 @@ const previewSettled = () => {};
 
 async function openPreparation(path: string) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_main', { path });
-  else window.open(path, 'mizar-preparation');
+  else if (!window.open(path, 'mizar-preparation'))
+    throw new Error('处理页面未能打开，请允许弹出窗口后重试。');
 }
 
 function ContextPanel({
@@ -51,6 +52,22 @@ function ContextPanel({
   const score = workspaceMatchScore(program);
   const pov = workspaceCurrentPov(program);
   const issues = workspaceIssues(operator);
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
+  const issueKey = issues.map((issue) => issue.id).join(',');
+  const visibleIssueError = issueError?.key === issueKey ? issueError.message : null;
+  async function openIssue(path: string) {
+    setIssueError(null);
+    try {
+      if (path === '/debug' && window.__TAURI_INTERNALS__) await openTool('diagnostics');
+      else await openPreparation(path);
+    } catch (error) {
+      setIssueError({
+        key: issueKey,
+        message: error instanceof Error ? error.message : '处理页面无法打开，请重试。',
+      });
+    }
+  }
   return (
     <section className="workspace-context" aria-label="当前比赛与制作状态">
       <div className="workspace-section-heading">
@@ -78,14 +95,30 @@ function ContextPanel({
       )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
       {issues.length > 0 ? (
-        <div className="workspace-attention">
-          <span role="status">有 {issues.length} 项需要处理</span>
-          <Button onClick={() => void openTool('diagnostics')}>查看问题</Button>
-          {operator?.identity.state === 'mismatch' ? (
-            <Button onClick={() => void openPreparation('/matches?tab=roster')}>核对名单</Button>
-          ) : null}
+        <div className="workspace-attention" data-multiple={issues.length > 1}>
+          <span role="status" title={issues.map((issue) => issue.summary).join('；')}>
+            {issues[0]!.summary}
+            {issues.length > 1 ? ` · 共 ${issues.length} 项` : ''}
+          </span>
+          <Button onClick={() => void openIssue(issues[0]!.path)}>{issues[0]!.action}</Button>
+          {issues.length > 1 ? <Button onClick={() => setIssuesOpen(true)}>全部问题</Button> : null}
         </div>
       ) : null}
+      {visibleIssueError && issues.length > 0 ? <p role="alert">{visibleIssueError}</p> : null}
+      <Dialog
+        open={issuesOpen && issues.length > 1}
+        title="本场需要处理"
+        onClose={() => setIssuesOpen(false)}
+      >
+        {issues.map((issue) => (
+          <section key={issue.id} aria-label={issue.summary}>
+            <h3>{issue.summary}</h3>
+            <p>{issue.detail}</p>
+            <Button onClick={() => void openIssue(issue.path)}>{issue.action}</Button>
+          </section>
+        ))}
+        {visibleIssueError ? <p role="alert">{visibleIssueError}</p> : null}
+      </Dialog>
     </section>
   );
 }
@@ -170,7 +203,7 @@ export function WorkspaceLeft() {
                 )}
                 <div className="workspace-empty">
                   <strong>
-                    {payload?.identity.state === 'mismatch' ? '等待核对比赛名单' : '等待 GSI 数据'}
+                    {payload?.identity.state === 'mismatch' ? '等待核对比赛资料' : '等待 GSI 数据'}
                   </strong>
                   <p>
                     {artwork ? '地图底图 · 实时位置尚不可用' : '进入 CS2 观战后显示地图与选手位置'}

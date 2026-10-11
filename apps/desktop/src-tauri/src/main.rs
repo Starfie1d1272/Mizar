@@ -918,6 +918,7 @@ fn main_path_allowed(path: &str) -> bool {
         "/",
         "/matches",
         "/matches?tab=roster",
+        "/matches?tab=maps",
         "/picture",
         "/picture?tab=overlay",
         "/settings",
@@ -2276,6 +2277,8 @@ mod startup_tests {
     #[test]
     fn live_settings_open_only_known_preparation_sections() {
         for path in [
+            "/matches?tab=maps",
+            "/matches?tab=roster",
             "/settings?tab=obs",
             "/settings?tab=gsi",
             "/picture?tab=overlay",
@@ -2286,6 +2289,7 @@ mod startup_tests {
             "https://example.test",
             "//example.test",
             "/settings?tab=obs&redirect=https://example.test",
+            "/matches?tab=maps&redirect=https://example.test",
             "/program",
             "/../settings",
             "javascript:alert(1)",
