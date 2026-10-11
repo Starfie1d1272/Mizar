@@ -225,15 +225,20 @@ export function UpdateSettings() {
   const waiting = busy || phase === 'checking' || phase === 'installing';
   const downloading = phase === 'downloading';
   const blocked = status?.installBlockedReason && !status.canResumeAutomatic;
+  const visibleDetails = status?.failureDetails?.filter(
+    (detail) =>
+      (status.error && status.error !== 'update_cancelled') ||
+      detail.stage === 'result_load' ||
+      detail.stage === 'result_identity_load',
+  );
   const failure =
     error ||
     connectionError ||
+    visibleDetails
+      ?.map((detail) => `${detail.stageLabel ?? '更新'}：${detail.summary} ${detail.nextStep}`)
+      .join('\n') ||
     (status?.error && status.error !== 'update_cancelled'
-      ? status.failureDetails
-          ?.map((detail) => `${detail.stageLabel ?? '更新'}：${detail.summary} ${detail.nextStep}`)
-          .join('\n') ||
-        failures[status.error] ||
-        '更新未完成，原因未知。请导出诊断定位原因。'
+      ? failures[status.error] || '更新未完成，原因未知。请导出诊断定位原因。'
       : '');
   return (
     <Panel className="settings-card settings-card--wide settings-update">

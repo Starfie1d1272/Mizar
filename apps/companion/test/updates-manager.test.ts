@@ -115,6 +115,109 @@ describe('controlled update lifecycle', () => {
     expect(updateFailure('check', new Error('unknown original cause'), 'one').summary).toContain(
       '原因未知',
     );
+    expect(
+      updateFailure('check', new Error('unknown original cause'), 'one').nextStep,
+    ).not.toContain('网络恢复');
+    expect(
+      updateFailure('download_cleanup', new Error('update_cleanup_failed'), 'one').nextStep,
+    ).toContain('进程占用');
+    expect(updateFailure('settings_load', new SyntaxError('invalid JSON'), 'one')).toMatchObject({
+      code: 'update_settings_invalid',
+      summary: '更新记录无法读取或保存。',
+    });
+  });
+
+  it('retains corrupt local records and their original diagnostic causes with local recovery guidance', async () => {
+    const log =
+      vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
+    const { manager, root } = await setup({ log });
+    const settings = '{ "automatic": false, "password": "secret-local-value", "lastAttempt": }';
+    const result = '{ "status": "recovery-required", "version": }';
+    await writeFile(join(root, 'updates/settings.json'), settings);
+    await writeFile(join(root, 'updates/result.json'), result);
+    await manager.load();
+    expect(await readFile(join(root, 'updates/settings.json'), 'utf8')).toBe(settings);
+    expect(await readFile(join(root, 'updates/result.json'), 'utf8')).toBe(result);
+    await expect(manager.check()).rejects.toThrow('update_settings_invalid');
+    for (const stage of ['settings_load', 'result_load']) {
+      const failure = manager.status().failureDetails.find((value) => value.stage === stage)!;
+      expect(failure.nextStep).toContain('不要删除记录');
+      expect(failure.nextStep).not.toContain('网络');
+      const entry = log.mock.calls.find(([value]) => value === stage)!;
+      expect(entry[3]).toMatchObject({ error: { name: 'SyntaxError' } });
+    }
+    expect(JSON.stringify(log.mock.calls)).not.toContain('secret-local-value');
+  });
+
+  it('keeps a corrupt installation result visible across successful checks and downloads', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    const result = '{ "status": "recovery-required", "version": }';
+    await writeFile(join(root, 'updates/result.json'), result);
+    await manager.load();
+    expect(manager.status().error).toBeNull();
+    const failure = manager.status().failureDetails.find((value) => value.stage === 'result_load');
+    expect(failure?.nextStep).toContain('不要删除记录');
+    await manager.check();
+    expect(manager.status().phase).toBe('available');
+    expect(manager.status().failureDetails).toContainEqual(failure);
+    await manager.download();
+    await finished(manager);
+    expect(manager.status().phase).toBe('ready');
+    expect(manager.status().failureDetails).toContainEqual(failure);
+    expect(await readFile(join(root, 'updates/result.json'), 'utf8')).toBe(result);
+  });
+
+  it('serializes overlapping preference saves and continues after an earlier failure', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    let rejectFirst!: (error: Error) => void;
+    const firstSave = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    // Control only persistence completion; the manager owns mutation ordering.
+    const persistence = manager as unknown as { saveConfig: () => Promise<void> };
+    const realSave = persistence.saveConfig.bind(manager);
+    const save = vi
+      .spyOn(persistence, 'saveConfig')
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementation(realSave);
+    const first = manager.setAutomatic(false);
+    const firstRejected = expect(first).rejects.toThrow('controlled disk failure');
+    const second = manager.setAutomatic(false);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(manager.status().automatic).toBe(false);
+    expect(
+      (
+        JSON.parse(await readFile(join(root, 'updates/settings.json'), 'utf8')) as {
+          automatic: boolean;
+        }
+      ).automatic,
+    ).toBe(true);
+    rejectFirst(new Error('controlled disk failure'));
+    await firstRejected;
+    await second;
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(manager.status().automatic).toBe(false);
+    expect(
+      (
+        JSON.parse(await readFile(join(root, 'updates/settings.json'), 'utf8')) as {
+          automatic: boolean;
+        }
+      ).automatic,
+    ).toBe(false);
+  });
+
+  it('preserves a settings write failure cause and the existing settings', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    const settings = await readFile(join(root, 'updates/settings.json'), 'utf8');
+    await mkdir(join(root, 'updates/settings.tmp'));
+    const error = await manager.setAutomatic(false).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const failure = error as Error & { cause: NodeJS.ErrnoException };
+    expect(failure.message).toBe('update_settings_invalid');
+    expect(failure.cause.code).toBeTypeOf('string');
+    expect(await readFile(join(root, 'updates/settings.json'), 'utf8')).toBe(settings);
+    expect(manager.status().automatic).toBe(true);
+    expect(updateFailure('operator_action', error, 'one').nextStep).toContain('读写权限');
   });
   it('retains both source failures with HTTP status and a shared correlation ID outside UI', async () => {
     const log =
@@ -230,6 +333,15 @@ describe('controlled update lifecycle', () => {
       );
       await manager.load();
       expect(manager.status().lastResult).toBe('restored');
+      if (scenario !== 'outside-updates') {
+        const failure = manager
+          .status()
+          .failureDetails.find((value) => value.stage === 'result_identity_load');
+        expect(failure?.nextStep).toContain('不要删除记录');
+        await manager.check();
+        expect(manager.status().failureDetails).toContainEqual(failure);
+        expect(manager.status().lastResult).toBe('restored');
+      }
     },
   );
   it('falls back to identical GitHub bytes, keeps a ready download across restart and rechecks before preparing', async () => {
