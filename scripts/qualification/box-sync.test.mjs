@@ -278,7 +278,7 @@ describe('云盘稳定版同步', () => {
         const stage = failure === 'body' ? '回读/Offline' : '上传/Offline';
         let message;
         try {
-          const client = new TransportClient(token);
+          const client = new TransportClient(token, globalThis.fetch);
           if (failure === 'body') await client.hash('/Offline/release.zip');
           else await client.upload('/Offline', 'release.zip', Buffer.from('original'));
         } catch (error) {

@@ -18,6 +18,7 @@ import { makeUpdateIndex } from './update-index.mjs';
 import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
+import { multipartUpload } from './box-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -194,14 +195,14 @@ async function boxStage(stage, action) {
     throw error;
   }
 }
-async function checkedFetch(url, options = {}, timeout = 120000) {
+async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   let response;
   const readOnlyBox = (options.method ?? 'GET') === 'GET' && new URL(url).origin === origin;
   for (let attempt = 0; ; attempt++) {
     const signal = AbortSignal.timeout(timeout);
     try {
-      response = await fetch(url, { ...options, signal });
+      response = await transport(url, { ...options, signal });
       break;
     } catch (error) {
       const code = safeNetworkCode(error);
@@ -221,9 +222,10 @@ async function checkedFetch(url, options = {}, timeout = 120000) {
 }
 
 export class BoxClient {
-  constructor(token) {
+  constructor(token, uploadTransport = multipartUpload) {
     requireValue(token, '未配置 MIZAR_BOX_REPO_TOKEN；在 Actions 配置后重试');
     this.token = token;
+    this.uploadTransport = uploadTransport;
   }
   async api(endpoint, path, method = 'GET', body) {
     const safeEndpoint = [
@@ -300,7 +302,12 @@ export class BoxClient {
       form.set('replace', replace ? '1' : '0');
       form.set('file', new Blob([bytes]), name);
       const result = await (
-        await checkedFetch(url, { method: 'POST', body: form, redirect: 'error' }, 600000)
+        await checkedFetch(
+          url,
+          { method: 'POST', body: form, redirect: 'error' },
+          600000,
+          this.uploadTransport,
+        )
       ).json();
       requireValue(
         Array.isArray(result) && result.length === 1 && result[0].name === name,

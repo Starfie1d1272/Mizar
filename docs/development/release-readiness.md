@@ -2,6 +2,8 @@
 
 本文维护 Mizar 的**长期发布约束与操作原则**；具体版本的进度、验收报告、变更列表和已发布资产分别由 GitHub Milestones、PR、[Releases](https://github.com/Starfie1d1272/Mizar/releases) 持有。当前发布实现以 [CI](../../.github/workflows/ci.yml)、[Release Qualification](../../.github/workflows/release-qualification.yml)、[Release Promotion](../../.github/workflows/release-promotion.yml) 和 [Box Sync](../../.github/workflows/box-sync.yml) 为准。
 
+Box 文件上传使用原生 HTTPS 和完整 multipart 请求体，沿用十分钟总期限，不受 fetch 独立的五分钟响应头期限提前终止。记录请求体写出与响应阶段，不记录临时地址、凭据或服务器正文；上传不自动重试。中断后先核对已存在文件的原字节，缺失文件才上传；完整回读与来源验证完成后才发布更新指针。
+
 ## 版本与兼容性
 
 应用版本遵循 `MAJOR.MINOR.PATCH`；正式标签为 `v<应用版本>`，有风险的新能力可按需要使用 `-alpha.N`、`-beta.N`、`-rc.N` 预发布版本。不要为每次小修改单独发布一个 RC，也不能因为改动小就省略必要的验收。
