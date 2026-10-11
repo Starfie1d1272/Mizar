@@ -167,6 +167,30 @@ it('does not mistake a numeric transport error for a definite OBS rejection', as
   expect(await result).toMatchObject({ code: 'obs_output_unconfirmed' });
 });
 
+it('does not erase a reconnected snapshot when the old request finally times out', async () => {
+  vi.useFakeTimers();
+  const { controller } = setup();
+  const status = await controller.read();
+  const client = wire.clients[0]!;
+  const original = client.call.getMockImplementation()!;
+  client.call.mockImplementation((type) =>
+    type === 'StartStream' ? new Promise(() => {}) : original(type),
+  );
+  const result = controller
+    .command({ output: 'stream', action: 'start', expectedRevision: status.stream.revision })
+    .catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(0);
+  client.emit('ConnectionClosed');
+  wire.active.stream = true;
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(await result).toMatchObject({ code: 'obs_output_unconfirmed' });
+  expect(controller.snapshot().stream).toMatchObject({
+    active: true,
+    phase: 'active',
+    pending: null,
+  });
+});
+
 it('does not send an old intent when OBS changes during command preflight', async () => {
   const { controller } = setup();
   const status = await controller.read();

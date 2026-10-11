@@ -322,7 +322,7 @@ export class ObsOutputController {
           throw rejectedOutput(failure);
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
-      this.update(output, 'unknown', null);
+      if (this.generation === generation) this.update(output, 'unknown', null);
       throw new ObsOutputError(
         'obs_output_unconfirmed',
         '操作结果尚未确认，正在核实 OBS 状态。请勿重复操作。',
