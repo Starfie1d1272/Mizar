@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
 import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
 import { OutputService, type OutputServiceOptions } from './output/service.js';
-import { ReliableOutbox } from './output/reliable-outbox.js';
+import { outboxLocalError, ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
@@ -219,7 +219,22 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.reliableOutboxPath === undefined
       ? {}
       : {
-          outbox: new ReliableOutbox(options.reliableOutboxPath),
+          outbox: new ReliableOutbox(options.reliableOutboxPath, (recovery, error) => {
+            // Raw cause stays in the local log; support export applies its existing redaction.
+            const evidence = {
+              event: 'outbox',
+              stage: 'outbox_load',
+              err: outboxLocalError(error),
+              recovery: recovery ?? null,
+              result: recovery === undefined ? 'failure' : 'success',
+            };
+            if (recovery === undefined)
+              app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
+            else {
+              app.log.warn(evidence, recovery.message);
+              recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
+            }
+          }),
         }),
     ...(options.rivalhubConnection !== undefined
       ? {
@@ -926,6 +941,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   app.get('/local/v1/reliable-output-status', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
+      recovery: outputService.getReliableRecovery() ?? null,
       records: outputService.getReliableRecords().map((record) => ({
         idempotencyKey: record.event.idempotencyKey,
         kind: record.event.kind,

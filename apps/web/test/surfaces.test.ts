@@ -187,7 +187,14 @@ describe('web surface shell', () => {
       vi.fn(() =>
         Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(DEBUG_RESPONSE),
+          json: () =>
+            Promise.resolve({
+              ...DEBUG_RESPONSE,
+              recentRuntimeDiagnostics: [
+                { code: 'output-outbox_recovered' },
+                { code: 'output-outbox_preserved_without_records' },
+              ],
+            }),
         }),
       ),
     );
@@ -201,6 +208,9 @@ describe('web surface shell', () => {
 
     expect(container!.textContent).toContain('正常');
     expect(container!.textContent).toContain('de_ancient');
+    expect(container!.textContent).toContain('已恢复有效记录并保留原文件');
+    expect(container!.textContent).toContain('旧事件未确认送达');
+    expect(container!.textContent).toContain('导出诊断包反馈');
     expect(container!.querySelector('details')?.open).toBe(false);
     expect(container!.textContent).toContain('高级技术信息');
     expect(container!.textContent).toContain('已接收原始数据');

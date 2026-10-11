@@ -8,6 +8,7 @@ import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import {
+  explainRuntimeDiagnostic,
   formatDebugJson,
   numberValue,
   parseDebugRuntimeResponse,
@@ -514,7 +515,10 @@ function DebugContent({
             eyebrow="07 / 本地服务"
             title="近期运行诊断"
             tone={data.recentRuntimeDiagnostics.length === 0 ? 'neutral' : 'warning'}
-            value={data.recentRuntimeDiagnostics}
+            value={data.recentRuntimeDiagnostics.map((diagnostic) => {
+              const message = explainRuntimeDiagnostic(diagnostic.code);
+              return message === undefined ? diagnostic : { ...diagnostic, message };
+            })}
           />
           <DebugEvidencePanel
             eyebrow="08 / 浏览器接入"
