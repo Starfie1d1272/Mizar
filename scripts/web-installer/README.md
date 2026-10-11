@@ -16,6 +16,8 @@
 
 Native 先读取 Box 的只读 Mizar 资料库、原 v2 更新信封及精确 Setup 文件，核对 Qualification 内嵌的版本、源码、大小和摘要；Box 不可用或不匹配时回退 GitHub 固定版本。此步骤核对公开状态，不能替代来源签名。下载的原 NSIS 全部字节必须符合固定资格身份，执行前再验证。只读 Token 只发往指定 Box API，不随临时文件链接或 GitHub 请求发送。
 
+原生后端下载在既有摘要命名的缓存和独占锁内保存 `.part` 与有界运输记录。记录绑定内嵌资格计划的版本、源码、清单摘要、载荷名称、完整 SHA-256 和长度，以及请求来源、最终允许地址和强 ETag；不保存只读 Token。取消与超时同时关闭响应以中断停滞读取；取消、超时或截断等待文件关闭并保留合格 partial，重开同一计划时使用 `Range` / `If-Range` 续传。无强 ETag、损坏记录或不同计划／镜像重新完整下载；最终地址变化、206 范围或 ETag 不匹配、416 清空后有界重试，200 从零覆盖。运输记录与 ETag 只保证续传条件，不能授予来源信任；完整原字节仍须通过固定资格摘要，执行前沿用原锁定文件复验，资源与签名验证继续由原 SDK / Store 负责。
+
 安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 验证原更新清单与正式发布确认的双签名；机器元数据从 Box Runtime/v<应用版本>/machine-metadata.json 或 GitHub 同名附件解出原字节；资源 ZIP 从 Resources/v<应用版本>/ 读取，失败回退 GitHub。运输载体有名称白名单、大小、重复条目和规范编码边界；原目录/出版/归档签名仍交同一 SDK 验证，不建立第二根。现代客户端验证同次 Qualification 对 Full/Core 四份原始清单的精确 subject，并核对版本、源码、派生摘要和 Windows x64 安装包身份后选择 Core；旧 1.1 继续消费原 Full 更新清单。仅 Core 与同一 Store 的官方资源通过验证才显示完成，先验证资源小元数据及缓存原 receipt 和实际内容，缓存不可用时再验证原资源声明与归档的精确签名 subject，之后才请求 ZIP。更新工具在提交 Core 升级前完成同一安装桥；资源准备失败恢复旧程序，Store 保留原可用缓存。Full 保留随包来源，Core 只使用已授权缓存。
 
 Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 ZIP 和八份资源文件，回读全部原字节并完成历史归档，最后更新 `Updates/latest.json`。资源版本目录只补缺，不覆盖异内容。公开分享使用既有根地址，实际同步状态以版本号和回读结果为准。
@@ -33,5 +35,7 @@ Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 
 ## 验证边界
 
 常规 CI 的 `installer / Windows / update` 与 `installer / Windows / faults` 在两台隔离 runner 分别执行安装/更新恢复链和独立失败生命周期；两组共同进入 ci-gate 和发行源码门禁，复用真实 Native 控件、下载、SDK、Store、App 与受控历史 NSIS 回归。`verify.ps1` 在 runner 独立目录执行；测试与截图保存在 CI artifacts，不进入 Release 附件。原 NSIS 用例全集按 case identity 核验，两组必须都成功且覆盖完整；证据绑定同 run、精确源码与各自最新 attempt，最新损坏记录不能回退旧结果。
+
+`test-native.ps1` 同时运行原生 Downloader 的真实本地 HTTP/1.1 样例：取消并退出独立测试进程后读取持久 partial，检查实际 `Range` / `If-Range` 和仅剩余字节请求，覆盖停滞读取取消、截断、强／弱 ETag、200／206／416、长度、编码、来源／身份更换、损坏记录与错误完整摘要。测试专用 handler 把允许的 HTTPS 来源转到随机端口 loopback；生产允许列表没有本地 HTTP 例外，此样例不声称验证生产 TLS 或 Windows 10/11 实机。既有 Windows installer CI 原生编译并执行这些用例，系统实机验收仍由 #228 保留。
 
 `test-native.ps1` 的 UI 注入和 `capture-ui.ps1` 的演示截图只证明控件行为；真实 v1.1 双签名回归只证明既有来源链。新候选发版前须用 Qualification 的真实签名产物验证 Core 资格链，并在隔离环境验证冷缓存首次安装、持久缓存断网启动与已安装桌面启动；生产目录/声明的 Promotion 授权及未上线网络入口要单独记录剩余验证范围，不能用 fixture、旧版证明或构建报告代替。旧 v1.1 缺少新安装桥，不能作为新安装完成证据，也不重新发布旧资产。
