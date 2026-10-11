@@ -129,12 +129,28 @@ fn set_native_overlay_visible(hwnd: isize, visible: bool) -> std::io::Result<()>
 /// HUD-only visibility: Tao 0.37.1's later show() uses SW_SHOW even for a
 /// nonfocusable window; focused(false) only protects initial construction.
 /// Keep both transitions native because Tao caches its own VISIBLE flag.
-/// Call from the existing Host UI-thread presentation path.
+/// Async production commands also reach this function. Dispatch the whole
+/// operation before reading HWND: synchronous cross-thread SetWindowPos can
+/// wait on a window thread that is itself servicing a runtime getter.
 pub fn set_overlay_visible(window: &WebviewWindow, visible: bool) -> Result<(), String> {
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-    set_native_overlay_visible(hwnd.0 as isize, visible)
-        .map_err(|error| format!("HUD SetWindowPos failed: {error}"))?;
-    sync_visibility(window).map_err(|error| error.to_string())
+    let current = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = (|| {
+                let hwnd = current.hwnd().map_err(|error| error.to_string())?;
+                set_native_overlay_visible(hwnd.0 as isize, visible)
+                    .map_err(|error| format!("HUD SetWindowPos failed: {error}"))?;
+                sync_visibility(&current).map_err(|error| error.to_string())
+            })();
+            if let Err(error) = result {
+                current.state::<crate::startup_log::DesktopLog>().event(
+                    "program_overlay_visibility",
+                    "failure",
+                    Some(&error),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())
 }
 /// The existing Host worker bounds dispatch to one pending tick. This also
 /// covers OS minimize/restore and Tauri close-to-hide, including tool windows.

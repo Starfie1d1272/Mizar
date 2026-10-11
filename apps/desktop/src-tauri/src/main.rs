@@ -759,10 +759,15 @@ fn show_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
     state.visible.store(true, Ordering::Relaxed);
     sync_workspace_shell(app);
-    if let Ok(mut tracker) = state.tracker.lock() {
-        if let Some(layout) = tracker.restore_layout() {
-            apply_layout(app, layout);
-        }
+    // Native window calls can synchronously dispatch window events. Release
+    // the tracker before presenting any WebView or posting HUD visibility.
+    let layout = state
+        .tracker
+        .lock()
+        .ok()
+        .and_then(|mut tracker| tracker.restore_layout());
+    if let Some(layout) = layout {
+        apply_layout(app, layout);
     }
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
