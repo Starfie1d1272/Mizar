@@ -1021,6 +1021,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
     hosts: () => localWebTransport.getHostDiagnostics(),
     obs: async () => obsAdapter?.status(),
+    program: () => sceneController.get(),
+    programContext: () => {
+      const { operator, program } = projectionCoordinator.getCurrent();
+      return {
+        contextFreshness: operator.matchContext.freshness,
+        identity: operator.identity.state,
+        binding: program.series?.bindingState ?? null,
+      };
+    },
     gsiConfigured: options.gsiToken !== undefined,
   });
 

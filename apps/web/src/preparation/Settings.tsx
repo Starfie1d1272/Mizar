@@ -8,6 +8,7 @@ import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { ResourceSettings } from './ResourceSettings';
+import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
 
 type ReadPhase = 'unknown' | 'checking' | 'ready' | 'failed';
 
@@ -23,6 +24,13 @@ function statusReadReason(error: unknown) {
 
 export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
+  const program = useLocalRead<ProgramSceneState>('/local/v1/program-scenes', 3000);
+  const evidence = obs?.programEvidence;
+  const programIssue =
+    obs?.sceneAligned === false ||
+    (evidence?.state === 'measured' && evidence.capture?.targetAvailable === false);
+  const signal = (value: boolean | null | undefined) =>
+    value === true ? '是' : value === false ? '否' : '待确认';
   const sceneRepairNeeded = obs?.findings.some((item) =>
     [
       'collection_missing',
@@ -43,6 +51,16 @@ export function Settings({ tab }: { tab: string }) {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (tab !== 'obs' || !window.__TAURI_INTERNALS__) return;
+    let active = true;
+    void obsCommand('open').catch((error: unknown) => {
+      if (active) setMessage(error instanceof Error ? error.message : 'OBS 程序未能打开。');
+    });
+    return () => {
+      active = false;
+    };
+  }, [tab]);
   const [gsi, setGsi] = useState<{
     detected: boolean;
     installed: boolean;
@@ -339,23 +357,102 @@ export function Settings({ tab }: { tab: string }) {
               </div>
               {obs?.connection === 'connected' ? (
                 <>
-                  <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
-                    {obs.streaming || obs.recording
-                      ? 'OBS 正在输出。停止推流与录制后再处理配置。'
-                      : obs.findings.some((item) => item.code === 'collection_inactive')
-                        ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
-                        : obs.findings.some((item) => item.code === 'source_kind_conflict')
-                          ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
-                          : sceneRepairNeeded
-                            ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
-                            : obs.findings.some((item) => item.code === 'video_settings')
-                              ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
-                              : obs.findings.some((item) => item.code === 'transition_missing')
-                                ? '请在 OBS「场景转场」中添加淡化和直接切换。'
-                                : obs.findings.length
-                                  ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
-                                  : 'Mizar 配置检查通过，请核对实际音画。'}
-                  </StatusBanner>
+                  {obs.sceneAligned === false ? (
+                    <StatusBanner tone="warning">
+                      OBS 当前节目与 Mizar 选择不一致。请在工作台重新点击要播出的场景。
+                    </StatusBanner>
+                  ) : evidence?.state === 'measured' &&
+                    evidence.capture?.targetAvailable === false ? (
+                    <StatusBanner tone="warning">
+                      捕获目标已不可选。请确认 CS2 已打开，再在 OBS 核对目标窗口。
+                    </StatusBanner>
+                  ) : null}
+                  <details className="obs-setup__help">
+                    <summary>节目与捕获诊断</summary>
+                    <p>
+                      Mizar 选择 · {obs.expectedScene ?? '待确认'}；编排 ·{' '}
+                      {program?.director
+                        ? {
+                            auto: '自动',
+                            manual: '手动保持',
+                            blocked: '已暂停',
+                            preparation: '准备中',
+                          }[program.director.mode]
+                        : '待确认'}
+                      {program?.director?.reason ? ` · ${program.director.reason}` : ''}
+                    </p>
+                    <p>
+                      场景集合 ·{' '}
+                      {evidence ? (evidence.collection === 'mizar' ? 'Mizar' : '其他') : '待确认'}
+                    </p>
+                    {!evidence || evidence.state !== 'measured' ? (
+                      <p>
+                        {evidence?.state === 'changed'
+                          ? '场景正在变化，等待复查。'
+                          : '来源状态待确认，失败原因见诊断包。'}
+                      </p>
+                    ) : evidence.composition === 'full_screen_graphic' ? (
+                      <p>当前节目为全屏包装，不使用游戏采集。</p>
+                    ) : null}
+                    {evidence?.state === 'measured'
+                      ? evidence.sources.map((source) => (
+                          <p key={source.role}>
+                            {source.role === 'capture' ? '游戏采集' : '播出网页'} · 已添加{' '}
+                            {signal(source.present)} · 已启用 {signal(source.enabled)}
+                          </p>
+                        ))
+                      : null}
+                    {evidence?.state === 'measured' && evidence.capture ? (
+                      <>
+                        <p>
+                          捕获类型 ·{' '}
+                          {
+                            { game_capture: '游戏捕获', other: '其他来源', missing: '来源缺失' }[
+                              evidence.capture.kind
+                            ]
+                          }
+                          ；目标程序 · {evidence.capture.target ?? '待确认'}；目标可选 ·{' '}
+                          {signal(evidence.capture.targetAvailable)}；CS2 可选窗口 ·{' '}
+                          {evidence.capture.cs2WindowCount}
+                        </p>
+                        <p>
+                          OBS 报告节目活动 · {signal(evidence.capture.videoActive)}；界面显示 ·{' '}
+                          {signal(evidence.capture.videoShowing)}；来源尺寸 ·{' '}
+                          {evidence.capture.width ?? '?'} × {evidence.capture.height ?? '?'}
+                        </p>
+                        <p>状态用于定位来源，实际画面与捕获进程请在 OBS 核对。</p>
+                        <a
+                          href="https://obsproject.com/kb/game-capture-troubleshooting"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          OBS 游戏捕获排查说明
+                        </a>
+                      </>
+                    ) : null}
+                  </details>
+                  {programIssue &&
+                  !obs.findings.length &&
+                  !obs.streaming &&
+                  !obs.recording ? null : (
+                    <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
+                      {obs.streaming || obs.recording
+                        ? 'OBS 正在输出。停止推流与录制后再处理配置。'
+                        : obs.findings.some((item) => item.code === 'collection_inactive')
+                          ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
+                          : obs.findings.some((item) => item.code === 'source_kind_conflict')
+                            ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
+                            : sceneRepairNeeded
+                              ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
+                              : obs.findings.some((item) => item.code === 'video_settings')
+                                ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
+                                : obs.findings.some((item) => item.code === 'transition_missing')
+                                  ? '请在 OBS「场景转场」中添加淡化和直接切换。'
+                                  : obs.findings.length
+                                    ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                    : 'Mizar 配置检查通过，请核对实际音画。'}
+                    </StatusBanner>
+                  )}
                   {sceneRepairNeeded && !sceneRepairBlocked ? (
                     <Button
                       variant="primary"

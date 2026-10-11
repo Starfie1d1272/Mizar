@@ -135,6 +135,7 @@ const updateStages = new Set([
   'obs_connect',
   'obs_request',
   'obs_configuration_check',
+  'obs_program_check',
   'obs_operator_action',
   'obs_output',
   'obs_output_command',

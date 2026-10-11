@@ -9,6 +9,121 @@ import {
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
 
+test('OBS Program diagnostics distinguish packaging, capture evidence and an offline preparation', async ({
+  page,
+}, testInfo) => {
+  let launches = 0;
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          if (command === 'launch_obs') return Promise.resolve(false);
+          return Promise.resolve({ busy: false, pending: false, running: false, message: null });
+        },
+      },
+    });
+  });
+  let obs = {
+    connection: 'unavailable',
+    connectionFailure: 'refused',
+    currentScene: null as string | null,
+    expectedScene: 'Mizar · 比赛中',
+    sceneAligned: null as boolean | null,
+    port: 4455,
+    streaming: false,
+    recording: false,
+    passwordConfigured: false,
+    video: null,
+    findings: [],
+    programEvidence: null as Record<string, unknown> | null,
+  };
+  await page.route('**/local/v1/obs', (route) => route.fulfill({ json: obs }));
+  await page.route('**/operator/obs/*', (route) => {
+    if (route.request().url().endsWith('/launch-target')) launches++;
+    return route.fulfill({
+      json: { ok: true, findings: [], executablePath: 'C:\\OBS\\obs64.exe' },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('main')).toBeVisible();
+  expect(launches).toBe(0);
+  await expect(
+    page.getByText('未找到 OBS，请在设置中选择 obs64.exe。', { exact: true }),
+  ).toHaveCount(0);
+  obs = {
+    ...obs,
+    connection: 'connected',
+    currentScene: 'Mizar · 赛前等待',
+    sceneAligned: false,
+    programEvidence: {
+      state: 'measured',
+      collection: 'mizar',
+      sceneId: 'waiting',
+      composition: 'full_screen_graphic',
+      sources: [{ role: 'browser', present: true, enabled: true }],
+      capture: null,
+    },
+  };
+  await page.goto('/settings?tab=obs');
+  await expect.poll(() => launches).toBe(1);
+  await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).not.toBeVisible();
+  await expect(page.getByText(/请在工作台重新点击要播出的场景/)).toBeVisible();
+  const details = page.getByText('节目与捕获诊断', { exact: true });
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).toBeVisible();
+  await expect(page.getByText('播出网页 · 已添加 是 · 已启用 是', { exact: true })).toBeVisible();
+  obs = {
+    ...obs,
+    currentScene: 'Mizar · 比赛中',
+    sceneAligned: true,
+    programEvidence: {
+      state: 'measured',
+      collection: 'mizar',
+      sceneId: 'gameplay',
+      composition: 'gameplay_overlay',
+      sources: [
+        { role: 'capture', present: true, enabled: false },
+        { role: 'browser', present: true, enabled: true },
+      ],
+      capture: {
+        kind: 'game_capture',
+        mode: 'window',
+        target: 'cs2.exe',
+        targetAvailable: false,
+        cs2WindowCount: 0,
+        videoActive: false,
+        videoShowing: true,
+        width: 0,
+        height: 0,
+      },
+    },
+  };
+  await expect(page.getByText(/状态用于定位来源/)).toBeVisible();
+  await expect(page.getByText(/捕获类型 · 游戏捕获/)).toBeVisible();
+  await expect(page.getByText(/目标可选 · 否/)).toBeVisible();
+  await expect(page.getByText(/来源尺寸 · 0 × 0/)).toBeVisible();
+  await expect(page.getByText('Mizar 配置检查通过，请核对实际音画。', { exact: true })).toHaveCount(
+    0,
+  );
+  await page.setViewportSize({ width: 1366, height: 768 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath('obs-program-diagnostics.png'),
+    fullPage: true,
+  });
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/捕获类型 · 游戏捕获/)).not.toBeVisible();
+  await expect(page.getByText(/Mizar 选择 ·/)).not.toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('obs-capture-collapsed.png'), fullPage: true });
+  obs = { ...obs, programEvidence: null };
+  await expect(page.getByText(/捕获目标已不可选/)).toHaveCount(0);
+  await expect(
+    page.getByText('Mizar 配置检查通过，请核对实际音画。', { exact: true }),
+  ).toBeVisible();
+});
+
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({
   page,
 }) => {

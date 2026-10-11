@@ -13,7 +13,7 @@ import { buildApp } from '../src/app.js';
 import { DebugEvidenceStore } from '../src/runtime/debug-state.js';
 import { readSupportLogs, SUPPORT_LOG_READ_BYTES } from '../src/support/logs.js';
 import { SUPPORT_BUNDLE_MAX_BYTES } from '../src/support/routes.js';
-import { obsErrorEvidence } from '../src/obs/adapter.js';
+import { ObsAdapter, obsErrorEvidence } from '../src/obs/adapter.js';
 import { ObsOutputError } from '../src/obs/outputs.js';
 
 type SupportBundle = {
@@ -41,6 +41,68 @@ const request = {
 };
 
 describe('support export', () => {
+  it('exports Program alignment and safe source evidence without arbitrary scene names or credentials', async () => {
+    const dir = await directory();
+    const status = vi.spyOn(ObsAdapter.prototype, 'status').mockResolvedValue({
+      connection: 'connected',
+      currentScene: 'private-user-scene',
+      port: 4455,
+      streaming: false,
+      recording: false,
+      passwordConfigured: true,
+      video: null,
+      findings: [],
+      programEvidence: {
+        state: 'measured',
+        collection: 'other',
+        sceneId: null,
+        composition: null,
+        sources: [],
+        capture: null,
+      },
+    });
+    await writeFile(
+      join(dir, 'companion.log'),
+      JSON.stringify({
+        event: 'obs',
+        stage: 'obs_program_check',
+        result: 'failure',
+        diagnostic: {
+          error: obsErrorEvidence(
+            Object.assign(new Error('source query failed private-password'), { code: 600 }),
+            'private-password',
+          ),
+        },
+      }),
+    );
+    const app = buildApp({ supportLogsDirectory: dir, obsConfigPath: join(dir, 'obs.json') });
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      const bundle = response.json<{
+        snapshot: Record<string, unknown>;
+        logs: SupportBundle['logs'];
+      }>();
+      expect(bundle.snapshot).toMatchObject({
+        program: {
+          active: 'waiting',
+          preparing: null,
+          mode: 'preparation',
+          gameplayAvailable: false,
+        },
+        obs: { currentScene: null, sceneAligned: false, programEvidence: { collection: 'other' } },
+      });
+      expect(bundle.logs.find((log) => log.name === 'companion.log')!.events[0]).toMatchObject({
+        stage: 'obs_program_check',
+        localDiagnostic: { code: 600, message: 'source query failed [redacted]' },
+      });
+      expect(response.body).not.toContain('private-user-scene');
+      expect(response.body).not.toContain('private-password');
+    } finally {
+      await app.close();
+      status.mockRestore();
+    }
+  });
   it.each([
     { rpcCode: 702, code: 'obs_output_failed' as const, reason: 'encoder initialization failed' },
     { rpcCode: 504, code: 'obs_output_disabled' as const, reason: 'output is disabled' },

@@ -110,9 +110,11 @@ describe('automatic Program choreography', () => {
     await r.step();
     expect(r.director.get()).toMatchObject({ mode: 'blocked', next, readyToTake: null });
     await r.scenes.select('gameplay', r.scenes.get().revision);
+    // The explicit manual Take now re-verifies OBS even on the selected scene.
+    expect(r.switchObs).toHaveBeenCalledTimes(calls + 1);
     await r.step();
     expect(r.director.get()).toMatchObject({ mode: 'manual', next, readyToTake: null });
-    expect(r.switchObs).toHaveBeenCalledTimes(calls);
+    expect(r.switchObs).toHaveBeenCalledTimes(calls + 1);
   });
   it('keeps halftime prediction while waiting for the second half and rejects stale/source facts', async () => {
     const r = rig();
