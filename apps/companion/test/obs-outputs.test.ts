@@ -387,7 +387,8 @@ it('invalidates an in-flight command on disconnect and never replays it after re
 it('keeps output mutations mutually exclusive with configuration and repair across windows', async () => {
   vi.useFakeTimers();
   const { store } = setup();
-  const adapter = new ObsAdapter(store, 'http://127.0.0.1:3000');
+  const diagnostic = vi.fn();
+  const adapter = new ObsAdapter(store, 'http://127.0.0.1:3000', diagnostic);
   try {
     const status = await adapter.outputStatus();
     const command = {
@@ -411,7 +412,20 @@ it('keeps output mutations mutually exclusive with configuration and repair acro
         }),
     );
     const saving = adapter.configure(await store.read());
+    diagnostic.mockClear();
     await expect(adapter.outputCommand(command)).rejects.toMatchObject({ code: 'obs_output_busy' });
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      'obs_output_command',
+      expect.objectContaining({
+        code: 'obs_output_busy',
+        message: 'OBS 配置正在处理，请稍后操作。',
+      }),
+    );
+    expect(
+      wire.clients
+        .flatMap((client) => client.call.mock.calls)
+        .filter(([type]) => type === 'StartStream'),
+    ).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(0);
     saved();
     await saving;

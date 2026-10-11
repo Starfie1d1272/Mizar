@@ -13,6 +13,8 @@ import { buildApp } from '../src/app.js';
 import { DebugEvidenceStore } from '../src/runtime/debug-state.js';
 import { readSupportLogs, SUPPORT_LOG_READ_BYTES } from '../src/support/logs.js';
 import { SUPPORT_BUNDLE_MAX_BYTES } from '../src/support/routes.js';
+import { obsErrorEvidence } from '../src/obs/adapter.js';
+import { ObsOutputError } from '../src/obs/outputs.js';
 
 type SupportBundle = {
   manifest: Record<string, unknown>;
@@ -39,6 +41,81 @@ const request = {
 };
 
 describe('support export', () => {
+  it.each([
+    { rpcCode: 702, code: 'obs_output_failed' as const, reason: 'encoder initialization failed' },
+    { rpcCode: 504, code: 'obs_output_disabled' as const, reason: 'output is disabled' },
+    { rpcCode: null, code: 'obs_output_unconfirmed' as const, reason: 'OBS output timeout' },
+  ])(
+    'exports OBS output $rpcCode failures and their safe cause through the user bundle',
+    async ({ rpcCode, code, reason }) => {
+      const dir = await directory();
+      const original = Object.assign(
+        new Error(
+          `${reason}\nrtmps://private-output.example/live/private-stream-key\nhttps://private-control.example/?key=private-query\nws://private-websocket.example/secret\nstreamKey=private-key-field\npassword=private-obs-password`,
+          { cause: Object.assign(new Error('transport permission denied'), { code: 'EACCES' }) },
+        ),
+        rpcCode === null ? {} : { code: rpcCode },
+      );
+      const entries = [
+        { stage: 'obs_output', error: original },
+        {
+          stage: 'obs_output_command',
+          error: new ObsOutputError(code, 'OBS output command rejected', { cause: original }),
+        },
+      ].map(({ stage, error }) => ({
+        event: 'obs',
+        stage,
+        result: 'failure',
+        level: 40,
+        diagnostic: { error: obsErrorEvidence(error, 'private-obs-password') },
+      }));
+      const path = join(dir, 'companion.log');
+      const localLog = entries.map((entry) => JSON.stringify(entry)).join('\n');
+      await writeFile(path, localLog);
+      const app = buildApp({ supportLogsDirectory: dir });
+      try {
+        const response = await app.inject(request);
+        expect(response.statusCode).toBe(200);
+        const events = response
+          .json<SupportBundle>()
+          .logs.find((log) => log.name === 'companion.log')!.events;
+        expect(events).toHaveLength(2);
+        expect(events[0]).toMatchObject({
+          stage: 'obs_output',
+          result: 'failure',
+          hasLocalError: true,
+          localDiagnostic: { cause: { code: 'EACCES', message: 'transport permission denied' } },
+        });
+        expect(events[1]).toMatchObject({
+          stage: 'obs_output_command',
+          result: 'failure',
+          hasLocalError: true,
+          localDiagnostic: { code, cause: { cause: { code: 'EACCES' } } },
+        });
+        for (const event of events) expect(JSON.stringify(event.localDiagnostic)).toContain(reason);
+        if (rpcCode !== null) {
+          expect(events[0]!.localDiagnostic).toMatchObject({ code: rpcCode });
+          expect(events[1]!.localDiagnostic).toMatchObject({ cause: { code: rpcCode } });
+        }
+        for (const secret of [
+          'private-output',
+          'private-stream-key',
+          'private-control',
+          'private-query',
+          'private-websocket',
+          'private-key-field',
+          'private-obs-password',
+        ])
+          expect(response.body).not.toContain(secret);
+        expect(await readFile(path, 'utf8')).toBe(localLog);
+        expect(localLog).toContain('private-stream-key');
+        expect(localLog).toContain('private-key-field');
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it('exports observer CFG and restore evidence through the user bundle without private configuration contents', async () => {
     const dir = await directory();
     const prepared = { stage: 'prepared', file: 'mizar_observer.cfg', runtime: 'unverified' };
