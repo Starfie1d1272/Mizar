@@ -952,6 +952,7 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
+        let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
         // Capture before window creation/layout work. A later foreground change
         // cancels this one-shot intent; showing the panels must not select them.
         let source = app.get_webview_window("main")
@@ -1004,29 +1005,26 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
-        let state = app.state::<HostState>();
-        let layout = state
-            .tracker
-            .lock()
-            .ok()
-            .and_then(|mut tracker| tracker.restore_layout());
-        if let Some(layout) = layout {
-            apply_layout(&app, layout);
-        }
-        app.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
-        show_workspace(&app);
         let host = app.clone();
+        let (published, completion) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
-            if !host.state::<HostState>().visible.load(Ordering::Acquire) { return; }
-            if let Some(request) = request {
-                let focused = attempt_game_focus(&host, request);
-                host.state::<DesktopLog>().event("workspace_entry_focus",
-                    if focused { "focused" } else { "not_focused" }, None);
-            }
-            if let Some(main) = host.get_webview_window("main") {
-                let _ = window_presentation::set_visible(&main, false);
-            }
+            // Check and publish under the same gate on the actual UI thread.
+            // An exit begun during readiness invalidates this callback even after it finishes.
+            let result = host.state::<production_exit::ExitGate>().publish(ticket, || {
+                host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
+                show_workspace(&host);
+                if let Some(request) = request {
+                    let focused = attempt_game_focus(&host, request);
+                    host.state::<DesktopLog>().event("workspace_entry_focus",
+                        if focused { "focused" } else { "not_focused" }, None);
+                }
+                if let Some(main) = host.get_webview_window("main") {
+                    let _ = window_presentation::set_visible(&main, false);
+                }
+            });
+            let _ = published.send(result);
         }).map_err(|error| error.to_string())?;
+        completion.recv().map_err(|_| "现场窗口呈现未能完成，请在准备中心重新进入工作台。".to_string())??;
     } else {
         open_main(app.clone(), None)?;
         hide_workspace(&app);
@@ -1054,7 +1052,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .decorations(false)
                 .shadow(false)
                 .resizable(false)
-                .visible(true)
+                .visible(false)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
@@ -1065,7 +1063,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .decorations(false)
                 .shadow(false)
                 .resizable(false)
-                .visible(true)
+                .visible(false)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()

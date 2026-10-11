@@ -2,7 +2,8 @@
 use crate::startup_log::DesktopLog;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -19,10 +20,17 @@ impl VerifiedStop {
 #[derive(Default)]
 pub struct ExitGate {
     active: AtomicBool,
+    generation: AtomicU64,
+    publication: Mutex<()>,
 }
 impl ExitGate {
     pub fn begin(&self) -> bool {
-        !self.active.swap(true, Ordering::AcqRel)
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        if self.active.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        true
     }
     pub fn check(&self) -> Result<(), String> {
         if self.active.load(Ordering::Acquire) {
@@ -31,7 +39,24 @@ impl ExitGate {
             Ok(())
         }
     }
+    /// Capture before readiness/window creation. Even a completed exit invalidates this entry.
+    pub fn presentation_ticket(&self) -> Result<u64, String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check()?;
+        Ok(self.generation.load(Ordering::Acquire))
+    }
+    /// Serialize the actual main-thread window publication with starting an exit.
+    pub fn publish(&self, ticket: u64, present: impl FnOnce()) -> Result<(), String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check()?;
+        if self.generation.load(Ordering::Acquire) != ticket {
+            return Err("此前的进入操作已因退出而取消，请在准备中心重新进入工作台。".into());
+        }
+        present();
+        Ok(())
+    }
     pub fn cancel(&self) {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
         self.active.store(false, Ordering::Release);
     }
 }
@@ -469,6 +494,33 @@ mod tests {
         }
         assert!(gate.check().is_ok());
         assert!(!feedback.status().busy);
+        assert!(feedback.status().message.is_none());
+    }
+
+    #[test]
+    fn completed_exit_invalidates_old_entry_without_clearing_failure_or_hiding_main() {
+        let gate = ExitGate::default();
+        let feedback = WorkspaceExit::default();
+        let old_entry = gate.presentation_ticket().unwrap();
+        assert!(gate.begin());
+        feedback.stage("restoration");
+        feedback.complete(&Err("CS2 仍在运行，原配置尚未恢复。".into()));
+        gate.cancel();
+        let published = std::cell::Cell::new(false);
+        assert!(gate
+            .publish(old_entry, || {
+                published.set(true); // Represents showing panels and hiding the preparation window.
+                feedback.complete(&Ok(()));
+            })
+            .is_err());
+        assert!(!published.get());
+        assert_eq!(
+            feedback.status().message.as_deref(),
+            Some("CS2 仍在运行，原配置尚未恢复。")
+        );
+        let new_entry = gate.presentation_ticket().unwrap();
+        gate.publish(new_entry, || feedback.complete(&Ok(())))
+            .unwrap();
         assert!(feedback.status().message.is_none());
     }
 
