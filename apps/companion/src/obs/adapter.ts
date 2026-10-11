@@ -6,9 +6,15 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
-import { ObsConfigStore, discoverObsExecutable, type ObsConfig } from './config.js';
+import {
+  ObsConfigStore,
+  discoverObsExecutable,
+  isObsProcessRunning,
+  type ObsConfig,
+} from './config.js';
 import { checkObsAudio, setupObsAudio } from './audio.js';
 import {
+  ObsExitSafetyError,
   checkObsConfiguration,
   ensureObsConfiguration,
   repairObsConfiguration,
@@ -355,6 +361,33 @@ export class ObsAdapter {
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
+  }
+  switchToWaitingForExit(options: ObsSceneSwitchOptions): Promise<void> {
+    return this.serial(async () => {
+      try {
+        await this.withObs((obs) => switchObsScene(obs, 'waiting', options));
+      } catch (error) {
+        // A fresh native absence proof also covers a previously used OBS that
+        // the operator has closed. Disconnection alone never proves output stopped.
+        let running: boolean;
+        try {
+          running = await isObsProcessRunning();
+        } catch (probeError) {
+          this.diagnostic('obs_exit_process_probe', obsErrorEvidence(probeError));
+          throw new ObsExitSafetyError(
+            'OBS 运行状态未确认，制作尚未结束。请连接 OBS 后重试退出；若 OBS 已关闭，请查看诊断并重试。',
+            { cause: error },
+          );
+        }
+        if (running)
+          throw new ObsExitSafetyError(
+            'OBS 等待画面未确认，制作尚未结束。请连接 OBS 后重试退出；若无法连接，请在 OBS 中确认停止推流与录制并关闭 OBS 后重试。',
+            { cause: error },
+          );
+        if (options.valid && !options.valid())
+          throw new Error('退出请求已失效，请重试。', { cause: error });
+      }
+    });
   }
   setupAudio(): Promise<void> {
     return this.configurationMutation(() =>
