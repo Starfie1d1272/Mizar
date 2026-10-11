@@ -1,3 +1,4 @@
+import { downloadQualifiedArtifacts } from './download-qualified-artifacts.mjs';
 import { Buffer } from 'node:buffer';
 import { expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -244,4 +245,34 @@ it('partitions into a new Core directory and never overwrites a previous candida
     vi.resetModules();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it('downloads independent same-run artifacts concurrently and joins a failed transfer', async () => {
+  const calls = [];
+  let finishEvidence;
+  const execute = async (command, args) => {
+    calls.push([command, args]);
+    if (args.includes('product')) throw new Error('product unavailable');
+    await new Promise((resolve) => {
+      finishEvidence = resolve;
+    });
+  };
+  let settled = false;
+  const result = downloadQualifiedArtifacts('123', execute).catch((error) => {
+    settled = true;
+    return error;
+  });
+  await Promise.resolve();
+  expect(calls).toEqual([
+    ['gh', ['run', 'download', '123', '--name', 'release-portable-product', '--dir', 'product']],
+    [
+      'gh',
+      ['run', 'download', '123', '--name', 'release-qualification-evidence', '--dir', 'evidence'],
+    ],
+  ]);
+  expect(settled).toBe(false);
+  finishEvidence();
+  expect((await result).message).toBe('product unavailable');
+  await expect(downloadQualifiedArtifacts('main', execute)).rejects.toThrow('Invalid');
+  expect(calls).toHaveLength(2);
 });
