@@ -274,8 +274,34 @@ function spectatorEvidence(text: string, stage: string) {
   };
 }
 
+/** JSON.parse messages can quote queue contents; keep that raw evidence local. */
+function outboxErrorEvidence(value: unknown, depth = 0): unknown {
+  if (depth >= 4) return null;
+  const error = record(value);
+  const errors = error.errors ?? error.aggregateErrors;
+  return {
+    name: identifier(error.type ?? error.name),
+    code: identifier(error.code),
+    message:
+      error.type === 'SyntaxError' || error.name === 'SyntaxError'
+        ? '发送队列 JSON 内容不可解析；原始字节与错误保留在本机。'
+        : error.type === 'ZodError' || error.name === 'ZodError'
+          ? '发送队列记录不符合事件结构；原始字节与错误保留在本机。'
+          : typeof error.message === 'string'
+            ? redactDiagnosticText(error.message)
+            : null,
+    ...(error.cause === undefined ? {} : { cause: outboxErrorEvidence(error.cause, depth + 1) }),
+    ...(Array.isArray(errors)
+      ? { errors: errors.slice(0, 4).map((item) => outboxErrorEvidence(item, depth + 1)) }
+      : {}),
+  };
+}
+
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
+  const outbox =
+    (entry.event === 'outbox' && entry.stage === 'outbox_load') ||
+    record(entry.err).code === 'outbox_recovery_failed';
   const update =
     ['update', 'production', 'obs', 'resource'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
@@ -288,7 +314,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       entry.stage,
     );
   const stage =
-    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live || demo)
+    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live || demo || outbox)
       ? entry.stage
       : null;
   const diagnostic = record(entry.diagnostic);
@@ -332,38 +358,51 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
           causes: diagnostic.error === undefined ? [] : updateCauses(diagnostic.error),
         }
       : {}),
-    ...((update || live) && diagnostic.error !== undefined
+    ...(outbox
       ? {
-          localDiagnostic: boundDiagnostic(
-            obsOutput ? obsOutputEvidence(diagnostic.error) : errorEvidence(diagnostic.error),
-            8 * 1024,
-          ),
+          recoveryCode: choice(record(entry.recovery).code, [
+            'outbox_recovered',
+            'outbox_preserved_without_records',
+          ]),
+          recoveredRecords: count(record(entry.recovery).recoveredRecords),
         }
       : {}),
-    ...(spectator
-      ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
-      : stage === 'workspace_group_restore' && typeof entry.detail === 'string'
-        ? { localDiagnostic: windowRestoreDetail(entry.detail) }
-        : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
-          ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
-          : !update &&
-              !live &&
-              !demo &&
-              [
-                'powershell',
-                'cs2_launch',
-                'update_install',
-                'production_finish',
-                'cs2_startup_recovery',
-                'webview2_preflight',
-                'webview2_recheck',
-                'webview2_recovery_action',
-              ].includes(stage ?? '') &&
-              typeof entry.detail === 'string'
-            ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
-            : !update && !live && !demo && typeof record(entry.err).message === 'string'
-              ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
-              : {}),
+    ...(outbox
+      ? { localDiagnostic: boundDiagnostic(outboxErrorEvidence(entry.err), 8 * 1024) }
+      : (update || live) && diagnostic.error !== undefined
+        ? {
+            localDiagnostic: boundDiagnostic(
+              obsOutput ? obsOutputEvidence(diagnostic.error) : errorEvidence(diagnostic.error),
+              8 * 1024,
+            ),
+          }
+        : {}),
+    ...(outbox
+      ? {}
+      : spectator
+        ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
+        : stage === 'workspace_group_restore' && typeof entry.detail === 'string'
+          ? { localDiagnostic: windowRestoreDetail(entry.detail) }
+          : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
+            ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
+            : !update &&
+                !live &&
+                !demo &&
+                [
+                  'powershell',
+                  'cs2_launch',
+                  'update_install',
+                  'production_finish',
+                  'cs2_startup_recovery',
+                  'webview2_preflight',
+                  'webview2_recheck',
+                  'webview2_recovery_action',
+                ].includes(stage ?? '') &&
+                typeof entry.detail === 'string'
+              ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.detail), 8 * 1024) }
+              : !update && !live && !demo && typeof record(entry.err).message === 'string'
+                ? { localDiagnostic: boundDiagnostic(errorEvidence(entry.err), 8 * 1024) }
+                : {}),
     durationMs: count(diagnostic.durationMs),
     occurrences: Math.max(1, count(entry.occurrences ?? nativeDemo.occurrences)),
     timestamp: timestamp(entry.time ?? entry.timestamp),

@@ -114,3 +114,11 @@ export function stringValue(value: unknown, key: string): string | undefined {
   const candidate = recordValue(value, key);
   return typeof candidate === 'string' ? candidate : undefined;
 }
+
+export function explainRuntimeDiagnostic(code: string): string | undefined {
+  if (code === 'output-outbox_recovered')
+    return '发送队列读取异常，已恢复有效记录并保留原文件。发送仍受身份与时效检查保护；请核对接收端结果，可导出诊断包反馈。';
+  if (code === 'output-outbox_preserved_without_records')
+    return '发送队列损坏，原文件已保留，但没有可恢复记录。Mizar 可继续使用，旧事件未确认送达；请核对接收端结果，并导出诊断包反馈。';
+  return undefined;
+}

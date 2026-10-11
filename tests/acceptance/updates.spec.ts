@@ -1,6 +1,9 @@
 import { expect, test } from './companion-isolation.js';
 
-async function updateFixture(page: import('@playwright/test').Page) {
+async function updateFixture(
+  page: import('@playwright/test').Page,
+  installFailure = '更新未完成，请重试。',
+) {
   // API/IPC fixtures prove interaction only; native installation has separate evidence.
   const status = {
     phase: 'available',
@@ -11,6 +14,7 @@ async function updateFixture(page: import('@playwright/test').Page) {
     currentVersion: '1.0.0',
     distribution: 'installed',
     error: null as string | null,
+    lastResult: null as string | null,
     failureDetails: [] as {
       stage: string;
       stageLabel: string;
@@ -64,7 +68,7 @@ async function updateFixture(page: import('@playwright/test').Page) {
     }
     await route.fulfill({ json: status });
   });
-  await page.addInitScript(() => {
+  await page.addInitScript((installFailure) => {
     const commands: string[] = [];
     Object.assign(window, {
       updateCommands: commands,
@@ -75,12 +79,12 @@ async function updateFixture(page: import('@playwright/test').Page) {
           if (command === 'install_update' || command.startsWith('open_update'))
             commands.push(command);
           return command === 'install_update'
-            ? Promise.reject(new Error('更新未完成，请重试。'))
+            ? Promise.reject(new Error(installFailure))
             : Promise.resolve({} as T);
         },
       },
     });
-  });
+  }, installFailure);
   return {
     status,
     actions,
@@ -295,6 +299,33 @@ test('entering and leaving production during download revokes the previous insta
   expect(await commands()).toEqual([]);
 });
 
+test('a download deadline shows its cause and revokes automatic installation', async ({ page }) => {
+  const { status, commands } = await updateFixture(page);
+  await page.goto('/settings?tab=advanced');
+  await page.getByRole('button', { name: '一键更新', exact: true }).click();
+  await expect(page.getByRole('progressbar', { name: '更新下载进度' })).toBeVisible();
+  status.phase = 'error';
+  status.error = 'update_download_timeout';
+  status.failureDetails = [
+    {
+      stage: 'download',
+      stageLabel: '下载安装包',
+      summary: '安装包下载超时，未完成下载。',
+      nextStep: '保留当前版本，重新检查并下载。',
+      operationId: 'expired-download',
+    },
+  ];
+  await expect(page.getByText(/安装包下载超时，未完成下载/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '检查更新', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '正在更新…', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
+  // Even a later ready snapshot cannot resurrect the timed-out click's install intent.
+  status.phase = 'ready';
+  status.error = null;
+  await expect(page.getByRole('button', { name: '一键更新', exact: true })).toBeEnabled();
+  expect(await commands()).toEqual([]);
+});
+
 test('one update click downloads and installs without a dialog, with manual direction recovery and errors', async ({
   page,
 }) => {
@@ -388,4 +419,31 @@ test('unverified updates and portable builds offer manual download and render no
   await page.reload();
   await expect(page.getByRole('button', { name: '下载新版', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '一键更新', exact: true })).toHaveCount(0);
+});
+
+test('installation recheck reason forwarded by native IPC stays actionable in update settings', async ({
+  page,
+}) => {
+  const message =
+    'GitHub API 访问额度已耗尽（HTTP 403）。 请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。';
+  const { commands, completeDownload } = await updateFixture(page, message);
+  completeDownload();
+  await page.goto('/settings?tab=advanced');
+  await page.getByRole('button', { name: '一键更新', exact: true }).click();
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('update-recheck-quota.png') });
+  await expect(page.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
+  expect(await commands()).toEqual(['install_update']);
+});
+
+test('recovery action accurately opens the directory and explains the existing manual recovery', async ({
+  page,
+}) => {
+  const { status, commands } = await updateFixture(page);
+  status.lastResult = 'recovery-required';
+  await page.goto('/settings?tab=advanced');
+  await expect(page.getByText(/对应 install-\* 安装记录目录运行 Restore-Mizar.cmd/)).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('update-recovery-directory.png') });
+  await page.getByRole('button', { name: '打开恢复目录', exact: true }).click();
+  expect(await commands()).toEqual(['open_update_recovery']);
 });

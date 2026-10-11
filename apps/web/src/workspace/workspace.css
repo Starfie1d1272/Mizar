@@ -173,9 +173,23 @@
 }
 .workspace-attention {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--mizar-layout-compact);
   color: var(--mizar-status-warning);
+}
+.workspace-attention > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-attention > button {
+  flex-shrink: 0;
+}
+.workspace-attention[data-multiple='true'] > span {
+  flex-basis: 100%;
 }
 .workspace-confidence {
   position: relative;
