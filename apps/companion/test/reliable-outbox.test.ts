@@ -566,7 +566,11 @@ describe('bounded reliable output', () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-io-'));
     try {
       const unreadable = new ReliableOutbox(dir);
-      await expect(unreadable.load()).rejects.toBeDefined();
+      await expect(unreadable.load()).rejects.toMatchObject({
+        code: 'outbox_recovery_failed',
+        message: '发送队列读取主文件失败。检查数据目录权限与磁盘空间后重试；保留原队列，不要删除。',
+        cause: { code: 'EISDIR' },
+      });
       expect(unreadable.getRecovery()).toBeUndefined();
       const path = join(dir, 'outbox.json');
       await mkdir(`${path}.last-good`);

@@ -219,7 +219,19 @@ export class ReliableOutbox {
 
   async load(): Promise<void> {
     // I/O errors are not evidence of damaged contents and must stay actionable.
-    const bytes = await readOptional(this.filePath);
+    let bytes: Buffer | undefined;
+    try {
+      bytes = await readOptional(this.filePath);
+    } catch (error) {
+      this.onRecovery?.(undefined, new Error('outbox_primary_read_failed', { cause: error }));
+      throw Object.assign(
+        new Error(
+          '发送队列读取主文件失败。检查数据目录权限与磁盘空间后重试；保留原队列，不要删除。',
+          { cause: error },
+        ),
+        { code: 'outbox_recovery_failed' },
+      );
+    }
     let file: OutboxFile | undefined;
     let cause: unknown;
     if (bytes !== undefined) {
