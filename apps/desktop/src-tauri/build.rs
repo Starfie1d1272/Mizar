@@ -10,6 +10,8 @@ fn main() {
             "cs2_config_status",
             "start_managed_cs2",
             "finish_managed_cs2",
+            "finish_workspace",
+            "workspace_exit_status",
             "select_demo_file",
             "start_demo_test",
             "enter_demo_test",
