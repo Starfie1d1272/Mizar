@@ -12,6 +12,9 @@ export interface ObsRpc {
   onTransitionVideoEnded?(listener: (transitionName: string) => void): () => void;
 }
 
+/** Only these fixed, actionable exit messages may cross the scene-control boundary. */
+export class ObsExitSafetyError extends Error {}
+
 export interface ObsSceneSwitchOptions {
   readonly transition: ProgramTransition;
   readonly signal?: AbortSignal;

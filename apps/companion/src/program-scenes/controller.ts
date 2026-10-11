@@ -11,7 +11,7 @@ import {
 } from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { BpSession } from '../bp/controller.js';
-import type { ObsSceneSwitchOptions } from '../obs/reconcile.js';
+import { ObsExitSafetyError, type ObsSceneSwitchOptions } from '../obs/reconcile.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 export class ProgramSceneController {
@@ -70,6 +70,7 @@ export class ProgramSceneController {
       id: ProgramSceneId,
       options: ObsSceneSwitchOptions,
     ) => Promise<void>,
+    private readonly switchObsForExit?: (options: ObsSceneSwitchOptions) => Promise<void>,
   ) {}
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
@@ -163,6 +164,17 @@ export class ProgramSceneController {
     return result;
   }
 
+  /** Exit has its own OBS safety proof; manual Takes still always verify OBS. */
+  selectWaitingForExit(expectedRevision: string) {
+    this.director?.hold();
+    this.automaticSwitch?.abort();
+    const result = this.queue.then(() =>
+      this.selectSerial('waiting', expectedRevision, undefined, false, true),
+    );
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
   selectAutomatic(
     id: ProgramSceneId,
     expectedRevision: string,
@@ -179,7 +191,15 @@ export class ProgramSceneController {
     expectedRevision: string,
     automaticValid?: () => boolean,
     finalBp = false,
+    exiting = false,
   ) {
+    const switchObs =
+      exiting && this.switchObsForExit
+        ? async (target: ProgramSceneId, options: ObsSceneSwitchOptions) =>
+            target === 'waiting'
+              ? this.switchObsForExit!(options)
+              : this.switchObs?.(target, options)
+        : this.switchObs;
     const valid = automaticValid ?? (() => true);
     if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
     if (expectedRevision !== this.revision)
@@ -193,13 +213,13 @@ export class ProgramSceneController {
         const target = this.active;
         const revision = this.revision;
         if (target !== id)
-          await this.switchObs?.(target, {
+          await switchObs?.(target, {
             transition: programTransition(id, target, true),
             valid: () => this.active === target && this.revision === revision,
           }).catch(() => undefined);
       };
       try {
-        await this.switchObs?.(id, {
+        await switchObs?.(id, {
           transition: programTransition(id, id, true),
           valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
         });
@@ -208,9 +228,15 @@ export class ProgramSceneController {
           return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
         }
         this.revision = randomUUID();
-      } catch {
+      } catch (error) {
         await restoreCurrent();
-        return { ok: false as const, message: 'OBS 场景恢复未完成，请检查连接后重试。' };
+        return {
+          ok: false as const,
+          message:
+            error instanceof ObsExitSafetyError
+              ? error.message
+              : 'OBS 场景恢复未完成，请检查连接后重试。',
+        };
       }
     }
     if (this.active !== id) {
@@ -221,7 +247,7 @@ export class ProgramSceneController {
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
         // A Cut is not delayed by the obsolete automatic transition or its signal.
-        await this.switchObs?.(this.active, {
+        await switchObs?.(this.active, {
           transition: programTransition(id, this.active, true),
         }).catch(() => undefined);
         if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
@@ -243,7 +269,7 @@ export class ProgramSceneController {
           (p.round?.phase === 'live' ||
             (p.clock?.phase === 'freezetime' && (p.clock.endsInSeconds ?? 0) <= 5));
         this.preparing = { target: id, revision: nextRevision };
-        await this.switchObs?.(id, {
+        await switchObs?.(id, {
           transition: programTransition(previous, id, !automaticValid || urgent),
           signal: abort.signal,
           valid: () =>
@@ -268,9 +294,15 @@ export class ProgramSceneController {
         this.active = id;
         this.revision = nextRevision;
         if (id === 'matchup') this.introRevision = nextRevision;
-      } catch {
+      } catch (error) {
         await rollback();
-        return { ok: false as const, message: 'OBS 场景切换未完成，当前播出场景保持不变。' };
+        return {
+          ok: false as const,
+          message:
+            error instanceof ObsExitSafetyError
+              ? error.message
+              : 'OBS 场景切换未完成，当前播出场景保持不变。',
+        };
       } finally {
         this.preparing = undefined;
         if (this.automaticSwitch === abort) this.automaticSwitch = undefined;

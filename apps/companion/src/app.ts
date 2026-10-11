@@ -502,6 +502,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     projectionCoordinator,
     bpSession,
     obsAdapter === undefined ? undefined : (id, options) => obsAdapter.switchScene(id, options),
+    obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
   );
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());

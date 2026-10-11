@@ -63,7 +63,7 @@ export function registerProductionRoutes(
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
           stage = 'production_safe_scene';
-          const result = await options.scenes.select('waiting', options.scenes.get().revision);
+          const result = await options.scenes.selectWaitingForExit(options.scenes.get().revision);
           if (!result.ok) return { code: 409, value: { message: result.message } };
         }
         stage = 'production_release';
