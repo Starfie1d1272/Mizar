@@ -310,6 +310,8 @@ it('requires the private Host and idle production, then prevents entry until upg
     release: () => Promise.resolve(),
   });
   let obs = { connection: 'connected', streaming: false, recording: false } as ObsStatus;
+  const obsProcessRunning = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+  const warn = vi.spyOn(app.log, 'warn');
   registerUpdateRoutes(app, {
     manager,
     production,
@@ -317,6 +319,7 @@ it('requires the private Host and idle production, then prevents entry until upg
     originPolicy,
     controlToken: 'private-test-token',
     obs: () => Promise.resolve(obs),
+    obsProcessRunning,
   });
   const host = (action: string, headers = { 'x-runtime-token': 'private-test-token' }) =>
     app.inject({
@@ -425,7 +428,26 @@ it('requires the private Host and idle production, then prevents entry until upg
     expect((await enter()).statusCode).toBe(409);
     expect(scenes.resumeAutomatic(scenes.get().revision)).toBe(false);
     expect((await host('release')).statusCode).toBe(200);
-    expect((await enter()).statusCode).toBe(200);
+    // Offline OBS is optional when a fresh process probe proves it is not running.
+    obs = { connection: 'unavailable', streaming: false, recording: false } as ObsStatus;
+    obsProcessRunning.mockResolvedValue(false);
+    expect(
+      (await app.inject('/local/v1/updates')).json<{ installBlockedReason: string | null }>()
+        .installBlockedReason,
+    ).toBeNull();
+    expect((await notify()).json<{ notification: unknown }>().notification).not.toBeNull();
+    // A process started after the page's assessment must still block the Host plan.
+    obsProcessRunning.mockResolvedValue(true);
+    expect((await host('prepare')).statusCode).toBe(409);
+    obsProcessRunning.mockRejectedValue(new Error('probe timed out'));
+    expect((await host('prepare')).statusCode).toBe(409);
+    expect(JSON.stringify(warn.mock.calls)).toContain('probe timed out');
+    obsProcessRunning.mockResolvedValue(false);
+    expect((await host('prepare')).statusCode).toBe(200);
+    expect(production.get().canEnter).toBe(false);
+    expect((await production.shutdown()).code).toBe(200);
+    expect((await host('release')).statusCode).toBe(200);
+    expect((await enter()).statusCode).toBe(409); // Successful shutdown keeps entry closed.
   } finally {
     await app.close();
   }

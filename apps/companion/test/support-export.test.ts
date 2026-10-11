@@ -399,6 +399,20 @@ describe('support export', () => {
             },
           },
         }),
+        JSON.stringify({
+          event: 'update',
+          stage: 'install_plan',
+          code: 'update_obs_process_probe_failed',
+          result: 'failure',
+          diagnostic: {
+            error: {
+              name: 'Error',
+              message: 'OBS process probe timeout',
+              code: 'ETIMEDOUT',
+              cause: { message: poison },
+            },
+          },
+        }),
       ].join('\n'),
     );
     await writeFile(join(dir, 'companion.stderr.log'), poison);
@@ -464,6 +478,12 @@ describe('support export', () => {
         operationId: '12345678-abcd-1234-abcd-123456789012',
         hasLocalError: true,
         causes: [{ httpStatus: 503, source: 'github.com' }, { code: 'ECONNRESET' }],
+      });
+      expect(bundle.logs.find((log) => log.name === 'companion.log')?.events[3]).toMatchObject({
+        stage: 'install_plan',
+        updateCode: 'update_obs_process_probe_failed',
+        hasLocalError: true,
+        localDiagnostic: { message: 'OBS process probe timeout', code: 'ETIMEDOUT' },
       });
       expect(bundle.snapshot.runtime.gsiDiagnostics).toMatchObject({
         suppressedCount: 3,
