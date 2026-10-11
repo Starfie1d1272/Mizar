@@ -1,5 +1,185 @@
 import { expect, test } from './companion-isolation.js';
 import { PROGRAM_SCENES } from '../../packages/protocol/src/program-scenes.js';
+import { readFileSync } from 'node:fs';
+import type { WebSocketRoute } from '@playwright/test';
+import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
+import { adaptGsiPayload } from '../../packages/telemetry-gsi/src/adapter.js';
+import { createProgramRuntime } from '../../apps/companion/src/runtime/program-runtime.js';
+import { createProjectionCoordinator } from '../../apps/companion/src/projections/projection-coordinator.js';
+import { createCstvSourceManagers } from '../../apps/companion/src/telemetry/cstv-source-manager.js';
+
+test('match card exposes real map and Steam64 causes with task-specific recovery', async ({
+  page,
+}, testInfo) => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL(
+        '../../packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as BroadcastManifest;
+  const runtime = createProgramRuntime('workspace-cause-regression');
+  let nowMonotonicMs = 0;
+  const coordinator = createProjectionCoordinator({
+    matchContextBinding: {
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    },
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    nowMonotonicMs: () => nowMonotonicMs,
+    predictionPublishCoalescing: false,
+  });
+  const players = [...manifest.entrants.a.roster.players, ...manifest.entrants.b.roster.players];
+  const allplayers = Object.fromEntries(
+    players.map((player, index) => {
+      const steamid = index === 0 ? '76561198999999999' : player.steam64!;
+      return [
+        steamid,
+        {
+          steamid,
+          name: player.displayName,
+          team: index < 5 ? 'CT' : 'T',
+          observer_slot: index,
+          activity: 'playing',
+          state: { health: 100 },
+        },
+      ];
+    }),
+  );
+  try {
+    await page.setViewportSize({ width: 320, height: 720 });
+    const input = adaptGsiPayload(
+      {
+        map: {
+          name: 'de_overpass',
+          phase: 'live',
+          round: 3,
+          team_ct: { score: 2 },
+          team_t: { score: 1 },
+        },
+        round: { phase: 'live' },
+        allplayers,
+      },
+      { sequence: 1, receivedAt: '2026-10-11T00:00:00.000Z', receivedMonotonicMs: 0 },
+    );
+    if (!input.ok) throw new Error('Synthetic failure GSI rejected');
+    coordinator.afterRuntimeMutation(runtime.acceptObservation(input.observation));
+    const snapshot = coordinator.getPublisher('operator').getCurrent()!;
+    expect(snapshot.payload.identity.issues.map((issue) => issue.code)).toContain('map_mismatch');
+    expect(snapshot.payload.identity.issues.map((issue) => issue.code)).toContain(
+      'unexpected_human_steam64',
+    );
+    let operatorSocket: WebSocketRoute | undefined;
+    await page.routeWebSocket('**/local/v1/operator', (socket) => {
+      operatorSocket = socket;
+      socket.send(JSON.stringify(snapshot));
+    });
+    await page.addInitScript(() => {
+      const host = window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> };
+        openedTasks: unknown[];
+        failOpen: boolean;
+      };
+      host.openedTasks = [];
+      host.failOpen = true;
+      host.__TAURI_INTERNALS__ = {
+        invoke: (command, args) => {
+          if (host.failOpen) return Promise.reject(new Error('准备中心暂时无法打开，请重试。'));
+          host.openedTasks.push({ command, args });
+          return Promise.resolve(null);
+        },
+      };
+    });
+    await page.goto('/workspace/left');
+    const card = page.getByRole('region', { name: '当前比赛与制作状态' });
+    await expect(card).toContainText('地图不一致');
+    await expect(card.getByRole('button', { name: '查看问题', exact: true })).toHaveCount(0);
+    await card.getByRole('button', { name: '核对地图', exact: true }).click();
+    await expect(card.getByRole('alert')).toContainText('准备中心暂时无法打开');
+    await page.evaluate(() => {
+      (window as unknown as { failOpen: boolean }).failOpen = false;
+    });
+    await card.getByRole('button', { name: '核对地图', exact: true }).click();
+    await expect(card.getByRole('alert')).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { openedTasks: unknown[] }).openedTasks),
+      )
+      .toContainEqual({ command: 'open_main', args: { path: '/matches?tab=maps' } });
+    await card.getByRole('button', { name: '全部问题' }).click();
+    const dialog = page.getByRole('dialog', { name: '本场需要处理' });
+    await expect(dialog).toContainText('选手 Steam64 不匹配');
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
+    await dialog.getByRole('button', { name: '核对名单', exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { openedTasks: unknown[] }).openedTasks),
+      )
+      .toContainEqual({ command: 'open_main', args: { path: '/matches?tab=roster' } });
+    await page.screenshot({ path: testInfo.outputPath('workspace-actionable-causes.png') });
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+    await expect(card.getByRole('button', { name: '全部问题' })).toBeFocused();
+    await page.setViewportSize({ width: 256, height: 720 });
+    expect(
+      await card
+        .getByRole('status')
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+    await page.evaluate(() => {
+      delete window.__TAURI_INTERNALS__;
+      window.open = () => null;
+    });
+    await card.getByRole('button', { name: '核对地图', exact: true }).click();
+    await expect(card.getByRole('alert')).toContainText('允许弹出窗口后重试');
+    const recovered = adaptGsiPayload(
+      {
+        map: {
+          name: 'de_ancient',
+          phase: 'live',
+          round: 3,
+          team_ct: { score: 2 },
+          team_t: { score: 1 },
+        },
+        round: { phase: 'live' },
+        allplayers: Object.fromEntries(
+          players
+            .filter((player) => player.isStarter)
+            .map((player, index) => [
+              player.steam64!,
+              {
+                steamid: player.steam64,
+                name: player.displayName,
+                team: index < 5 ? 'CT' : 'T',
+                observer_slot: index,
+                activity: 'playing',
+                state: { health: 100 },
+              },
+            ]),
+        ),
+      },
+      { sequence: 2, receivedAt: '2026-10-11T00:00:01.000Z', receivedMonotonicMs: 1000 },
+    );
+    if (!recovered.ok) throw new Error('Recovery GSI rejected');
+    nowMonotonicMs = 1000;
+    coordinator.afterRuntimeMutation(runtime.acceptObservation(recovered.observation));
+    operatorSocket!.send(JSON.stringify(coordinator.getPublisher('operator').getCurrent()!));
+    await expect(card).not.toContainText('地图不一致');
+    await expect(card.getByRole('button', { name: '全部问题' })).toHaveCount(0);
+    await expect(card.getByRole('button', { name: '核对名单' })).toHaveCount(0);
+    await expect(card.getByRole('alert')).toHaveCount(0);
+  } finally {
+    await coordinator.close();
+  }
+});
 
 test('Workspace preview shares the scene registry and sends a revisioned command', async ({
   page,
