@@ -1,3 +1,6 @@
+import * as fs from 'node:fs/promises';
+import { buildApp } from '../src/app.js';
+import { UpdateRequestError } from '../src/updates/diagnostics.js';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +13,16 @@ import {
   type UpdateSource,
 } from '../src/updates/manager.js';
 import type { UpdateManifest } from '../src/updates/contract.js';
+
+vi.mock('node:fs/promises', { spy: true });
+
+const productRuntime = {
+  artifactSha256: 'a'.repeat(64),
+  gitSha: 'b'.repeat(40),
+  instanceId: 'test',
+  controlToken: 'private-test-token',
+  stop: () => {},
+};
 
 const bytes = Buffer.from('independent qualified installer fixture');
 const manifest: UpdateManifest = {
@@ -92,11 +105,153 @@ async function finished(manager: UpdateManager) {
   await vi.waitFor(() => expect(manager.status().phase).not.toBe('downloading'));
 }
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(managers.splice(0).map((m) => m.close()));
   await Promise.all(directories.splice(0).map((p) => rm(p, { force: true, recursive: true })));
   vi.useRealTimers();
 });
 describe('controlled update lifecycle', () => {
+  it('isolates a blocked update directory while the main app and status remain available', async () => {
+    const latest = vi.fn(() => Promise.resolve({ tag_name: 'v1.1.0' }));
+    const { manager, root } = await setup({
+      source: { latest, authenticate: () => Promise.resolve(manifest) },
+    });
+    await rm(join(root, 'updates'), { recursive: true });
+    await writeFile(join(root, 'updates'), 'preserved local record');
+    await expect(manager.load()).resolves.toBeUndefined();
+    expect(manager.status()).toMatchObject({
+      phase: 'error',
+      error: 'update_initialization_failed',
+      candidate: null,
+    });
+    expect(manager.status().failureDetails.at(-1)).toMatchObject({
+      stage: 'directory_load',
+      stageLabel: '初始化更新目录',
+    });
+    for (const operation of [
+      () => manager.check(),
+      () => manager.download(),
+      () => manager.prepare(),
+      () => manager.cancel(),
+      () => manager.setAutomatic(false),
+    ]) {
+      await expect(operation()).rejects.toThrow('update_initialization_failed');
+    }
+    manager.desktopStartup(`${'a'.repeat(32)}-${'b'.repeat(8)}`);
+    await Promise.resolve();
+    expect(latest).not.toHaveBeenCalled();
+    expect(await readFile(join(root, 'updates'), 'utf8')).toBe('preserved local record');
+    const app = buildApp({ updates: manager, productRuntime });
+    try {
+      expect((await app.inject('/health')).statusCode).toBe(200);
+      const status = await app.inject('/local/v1/updates');
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toMatchObject({
+        phase: 'error',
+        error: 'update_initialization_failed',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each(['directory_scan', 'download_cleanup'])(
+    'retains recovery records and the sanitized IO cause when %s fails',
+    async (stage) => {
+      const log =
+        vi.fn<(stage: string, code: string, version?: string, diagnostic?: unknown) => void>();
+      const { manager, root } = await setup({ log });
+      const recovery = JSON.stringify({ status: 'recovery-required' });
+      await writeFile(join(root, 'updates/result.json'), recovery);
+      await mkdir(join(root, 'updates/download-orphan'));
+      const cause = Object.assign(new Error('EACCES /home/private-user/updates'), {
+        code: 'EACCES',
+      });
+      if (stage === 'directory_scan') vi.spyOn(fs, 'readdir').mockRejectedValueOnce(cause);
+      else vi.spyOn(fs, 'rm').mockRejectedValueOnce(cause);
+      await expect(manager.load()).resolves.toBeUndefined();
+      expect(manager.status()).toMatchObject({
+        phase: 'error',
+        error: 'update_initialization_failed',
+        lastResult: 'recovery-required',
+      });
+      expect(manager.status().failureDetails.at(-1)).toMatchObject({ stage });
+      const logged = log.mock.calls.find(([value]) => value === stage);
+      expect(logged?.slice(0, 3)).toEqual([stage, 'update_initialization_failed', undefined]);
+      expect(logged?.[3]).toMatchObject({
+        error: { cause: { code: 'EACCES', message: 'EACCES /home/[user]/updates' } },
+      });
+      expect(await readFile(join(root, 'updates/result.json'), 'utf8')).toBe(recovery);
+      expect(await readdir(join(root, 'updates'))).toContain('download-orphan');
+      await expect(manager.prepare()).rejects.toThrow('update_initialization_failed');
+    },
+  );
+
+  it('returns this installation recheck cause through HTTP and clears it before a later check', async () => {
+    const source = {
+      latest: vi.fn<UpdateSource['latest']>(() => Promise.resolve({ tag_name: 'v1.1.0' })),
+      authenticate: vi.fn(() => Promise.resolve(manifest)),
+    };
+    const { manager } = await setup({ source });
+    await manager.check();
+    await manager.download();
+    await finished(manager);
+    const quota = new UpdateRequestError('update_network_failed', 'api.github.com', 403);
+    quota.rateLimited = true;
+    source.authenticate.mockRejectedValueOnce(quota);
+    const app = buildApp({
+      updates: manager,
+      productRuntime: {
+        artifactSha256: 'a'.repeat(64),
+        gitSha: 'b'.repeat(40),
+        instanceId: 'test',
+        controlToken: 'private-test-token',
+        stop: () => {},
+      },
+    });
+    try {
+      const reply = await app.inject({
+        method: 'POST',
+        url: '/operator/updates/install-plan',
+        headers: { 'x-runtime-token': 'private-test-token' },
+        payload: { action: 'prepare' },
+      });
+      expect(reply.statusCode).toBe(409);
+      expect(reply.json<{ message: string }>().message).toContain(
+        'GitHub API 访问额度已耗尽（HTTP 403）',
+      );
+      expect(reply.json<{ message: string }>().message).toContain('请等待 GitHub API 额度恢复');
+      expect(manager.status().failureDetails.at(-1)).toMatchObject({
+        stage: 'install_plan',
+        code: 'update_network_failed',
+      });
+      expect(manager.status().phase).toBe('error');
+      await manager.check();
+      expect(manager.status().phase).toBe('ready');
+      source.latest.mockResolvedValueOnce(null);
+      await expect(manager.prepare()).rejects.toMatchObject({
+        message: 'update_recheck_required',
+        cause: undefined,
+      });
+      expect(manager.status().failureDetails).toEqual([]);
+      await manager.check();
+      source.authenticate.mockRejectedValueOnce(
+        new Error('unknown IO /home/private-user/private-path'),
+      );
+      const unknown = await app.inject({
+        method: 'POST',
+        url: '/operator/updates/install-plan',
+        headers: { 'x-runtime-token': 'private-test-token' },
+        payload: { action: 'prepare' },
+      });
+      expect(unknown.statusCode).toBe(409);
+      expect(unknown.json<{ message: string }>().message).toContain('原因未知');
+      expect(unknown.body).not.toContain('private-user');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('distinguishes trust metadata refresh, exhausted API quota and unknown failure without declaring bad signatures', () => {
     const trust = new Error('update_trust_metadata_failed', {
       cause: Object.assign(new Error('metadata refresh timeout'), {
