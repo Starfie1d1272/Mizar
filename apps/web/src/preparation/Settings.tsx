@@ -26,6 +26,9 @@ export function Settings({ tab }: { tab: string }) {
   const obs = useObsStatus();
   const program = useLocalRead<ProgramSceneState>('/local/v1/program-scenes', 3000);
   const evidence = obs?.programEvidence;
+  const programIssue =
+    obs?.sceneAligned === false ||
+    (evidence?.state === 'measured' && evidence.capture?.targetAvailable === false);
   const signal = (value: boolean | null | undefined) =>
     value === true ? '是' : value === false ? '否' : '待确认';
   const sceneRepairNeeded = obs?.findings.some((item) =>
@@ -428,23 +431,28 @@ export function Settings({ tab }: { tab: string }) {
                       </>
                     ) : null}
                   </details>
-                  <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
-                    {obs.streaming || obs.recording
-                      ? 'OBS 正在输出。停止推流与录制后再处理配置。'
-                      : obs.findings.some((item) => item.code === 'collection_inactive')
-                        ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
-                        : obs.findings.some((item) => item.code === 'source_kind_conflict')
-                          ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
-                          : sceneRepairNeeded
-                            ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
-                            : obs.findings.some((item) => item.code === 'video_settings')
-                              ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
-                              : obs.findings.some((item) => item.code === 'transition_missing')
-                                ? '请在 OBS「场景转场」中添加淡化和直接切换。'
-                                : obs.findings.length
-                                  ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
-                                  : 'Mizar 配置检查通过，请核对实际音画。'}
-                  </StatusBanner>
+                  {programIssue &&
+                  !obs.findings.length &&
+                  !obs.streaming &&
+                  !obs.recording ? null : (
+                    <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
+                      {obs.streaming || obs.recording
+                        ? 'OBS 正在输出。停止推流与录制后再处理配置。'
+                        : obs.findings.some((item) => item.code === 'collection_inactive')
+                          ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
+                          : obs.findings.some((item) => item.code === 'source_kind_conflict')
+                            ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
+                            : sceneRepairNeeded
+                              ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
+                              : obs.findings.some((item) => item.code === 'video_settings')
+                                ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
+                                : obs.findings.some((item) => item.code === 'transition_missing')
+                                  ? '请在 OBS「场景转场」中添加淡化和直接切换。'
+                                  : obs.findings.length
+                                    ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                    : 'Mizar 配置检查通过，请核对实际音画。'}
+                    </StatusBanner>
+                  )}
                   {sceneRepairNeeded && !sceneRepairBlocked ? (
                     <Button
                       variant="primary"
