@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ObsStatus } from '../obs/adapter.js';
+import { isObsProcessRunning } from '../obs/config.js';
+import { errorEvidence } from './diagnostics.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 import type { registerProductionRoutes } from '../program-scenes/production.js';
 import { UpdateManager, safeCode } from './manager.js';
@@ -10,12 +12,16 @@ export function installBlockReason(
   production: { mode: string },
   scenes: ReturnType<ProgramSceneController['get']>,
   obs: ObsStatus | undefined,
+  obsProcessAbsent?: boolean,
 ): string | null {
   if (production.mode !== 'preparation') return '结束制作后可更新。';
   if (scenes.preparing || scenes.active !== 'waiting' || scenes.director?.mode === 'manual')
     return '结束节目制作后可更新。';
-  if (!obs || obs.connection !== 'connected') return '请先连接 OBS。';
-  if (obs.streaming || obs.recording) return '停止 OBS 推流或录制后可更新。';
+  if (obs?.streaming || obs?.recording) return '停止 OBS 推流或录制后可更新。';
+  if ((!obs || obs.connection !== 'connected') && !obsProcessAbsent)
+    return obsProcessAbsent === false
+      ? 'OBS 正在运行但未连接，请关闭 OBS，或连接后核对推流与录制再更新。'
+      : 'OBS 进程状态检测未完成，升级尚未启动。请查看诊断、核对 OBS 已关闭后重试；再次失败时从正式发布页下载。';
   return null;
 }
 export function registerUpdateRoutes(
@@ -27,12 +33,41 @@ export function registerUpdateRoutes(
     production: ReturnType<typeof registerProductionRoutes>;
     scenes: ProgramSceneController;
     obs: () => Promise<ObsStatus | undefined>;
+    obsProcessRunning?: () => Promise<boolean>;
   },
 ) {
   const { manager, production, scenes } = options;
   const assess = async () => {
     const obs = await options.obs().catch(() => undefined);
-    return installBlockReason(production.get(), scenes.get(), obs);
+    const reason = installBlockReason(production.get(), scenes.get(), obs);
+    if (
+      !reason ||
+      production.get().mode !== 'preparation' ||
+      scenes.get().preparing ||
+      scenes.get().active !== 'waiting' ||
+      scenes.get().director?.mode === 'manual' ||
+      obs?.connection === 'connected' ||
+      obs?.streaming ||
+      obs?.recording
+    )
+      return reason;
+    try {
+      const running = await (options.obsProcessRunning ?? isObsProcessRunning)();
+      // Read production/scene state again after the asynchronous process probe.
+      return installBlockReason(production.get(), scenes.get(), obs, !running);
+    } catch (error) {
+      app.log.warn(
+        {
+          event: 'update',
+          stage: 'install_plan',
+          code: 'update_obs_process_probe_failed',
+          result: 'failure',
+          diagnostic: { error: errorEvidence(error) },
+        },
+        'OBS process state could not be confirmed',
+      );
+      return installBlockReason(production.get(), scenes.get(), obs);
+    }
   };
   const publicView = async () => {
     const status = manager.status();

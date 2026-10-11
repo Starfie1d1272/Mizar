@@ -3,6 +3,32 @@ import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises
 import { basename, dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 
+/** A failed WebSocket connection does not prove the local OBS process is absent. */
+export async function isObsProcessRunning(): Promise<boolean> {
+  if (process.platform !== 'win32') throw new Error('OBS process detection requires Windows');
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "$ErrorActionPreference='Stop'; @(Get-Process | Where-Object { $_.ProcessName -in @('obs64','obs32') }).Count",
+      ],
+      { timeout: 2000, windowsHide: true, maxBuffer: 4096, encoding: 'utf8' },
+      (error, value) => {
+        if (error instanceof Error) reject(error);
+        else if (error) reject(new Error('OBS process query failed', { cause: error }));
+        else resolve(value);
+      },
+    );
+  });
+  const count = stdout.trim();
+  if (!/^\d+$/.test(count) || !Number.isSafeInteger(Number(count)))
+    throw new Error('OBS process count response is invalid');
+  return Number(count) > 0;
+}
+
 export interface ObsConfig {
   readonly executablePath: string | null;
   readonly host: string;

@@ -70,6 +70,8 @@ async function updateFixture(page: import('@playwright/test').Page) {
       updateCommands: commands,
       __TAURI_INTERNALS__: {
         invoke: <T>(command: string): Promise<T> => {
+          if (command === 'read_obs_configuration_context')
+            return Promise.resolve({ documentGeneration: '0', message: '' } as T);
           if (command === 'install_update' || command.startsWith('open_update'))
             commands.push(command);
           return command === 'install_update'
@@ -335,6 +337,34 @@ test('one update click downloads and installs without a dialog, with manual dire
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(actions).toEqual(['download', 'resume']);
   expect(await commands()).toEqual(['install_update']);
+});
+
+test('idle update reaches installation without starting or connecting OBS', async ({
+  page,
+}, testInfo) => {
+  // Actual rendered flow; status/IPC fixtures do not prove Windows installation.
+  const { actions, commands, completeDownload } = await updateFixture(page);
+  completeDownload();
+  let obsLaunches = 0;
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: { connection: 'unavailable', streaming: false, recording: false, findings: [] },
+    }),
+  );
+  await page.route('**/operator/obs/launch-target', (route) => {
+    obsLaunches++;
+    return route.fulfill({ json: { executablePath: null } });
+  });
+  await page.goto('/settings?tab=advanced');
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(page.getByRole('button', { name: '一键更新', exact: true })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath('update-without-obs-ready.png') });
+  await page.getByRole('button', { name: '一键更新', exact: true }).click();
+  await expect(page.getByText('更新未完成，请重试。', { exact: true })).toBeVisible();
+  expect(actions).toEqual(['check', 'download']);
+  expect(await commands()).toEqual(['install_update']);
+  expect(obsLaunches).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath('update-without-obs.png') });
 });
 
 test('unverified updates and portable builds offer manual download and render notes as text', async ({
