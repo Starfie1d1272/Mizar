@@ -562,8 +562,15 @@ export class UpdateManager {
           this.failure('download_cleanup', error),
         );
       this.ready = null;
-      this.phase = signal.aborted ? 'available' : 'error';
-      this.error = signal.aborted ? 'update_cancelled' : safeCode(e);
+      const timedOut =
+        signal.aborted && signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+      const cancelled = signal.aborted && !timedOut;
+      this.phase = cancelled ? 'available' : 'error';
+      this.error = timedOut
+        ? 'update_download_timeout'
+        : cancelled
+          ? 'update_cancelled'
+          : safeCode(e);
       this.failure(
         'download',
         signal.aborted ? new Error(this.error, { cause: signal.reason }) : e,
@@ -658,6 +665,7 @@ export function updateFailure(stage: string, error: unknown, operationId: string
     update_publication_mismatch: '正式发布确认与已认证版本不一致。',
     update_cleanup_failed: '下载失败后清理暂存文件也未完成。',
     update_initialization_failed: '更新目录初始化未完成，更新功能暂不可用。',
+    update_download_timeout: '安装包下载超时，未完成下载。',
   };
   const summary =
     code === 'update_trust_metadata_failed'
@@ -695,15 +703,17 @@ export function updateFailure(stage: string, error: unknown, operationId: string
         ? '保留当前版本及更新、备份和恢复记录；检查用户资料目录的读写权限与剩余空间，导出诊断。不要删除记录绕过校验。'
         : code === 'update_cleanup_failed' || stage === 'download_cleanup'
           ? '保留当前版本及备份和恢复目录；检查是否有进程占用暂存文件及目录权限，导出诊断后处理。清理未完成时不要继续安装。'
-          : code === 'update_trust_metadata_failed'
-            ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
-            : rateLimited
-              ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
-              : status === 403
-                ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
-                : code === 'update_network_failed'
-                  ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
-                  : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
+          : code === 'update_download_timeout'
+            ? '保留当前版本；核对下载来源的连接、代理及暂存目录权限与空间后，重新检查并下载，或从正式发布页获取完整离线包。'
+            : code === 'update_trust_metadata_failed'
+              ? '检查到 Sigstore 的网络连接后重新检查更新；也可从正式发布页下载完整离线包，仍须核对来源。'
+              : rateLimited
+                ? '请等待 GitHub API 额度恢复后重新检查，或从正式发布页获取完整包；保留当前版本。'
+                : status === 403
+                  ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
+                  : code === 'update_network_failed'
+                    ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
+                    : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
   const stageLabel =
     stage === 'directory_load'
       ? '初始化更新目录'
