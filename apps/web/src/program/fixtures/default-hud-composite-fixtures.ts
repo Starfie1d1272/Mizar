@@ -46,6 +46,11 @@ const SOURCES: Record<DefaultHudCompositeFixture, string> = {
   'default-stage-long': 'live-canonical',
   'default-stage-unknown': 'live-canonical',
   'default-stage-local-missing': 'live-neutral',
+  'default-stage-swiss-11': 'live-canonical',
+  'default-stage-direct-bo3': 'live-canonical',
+  'default-stage-upper-semifinal': 'live-canonical',
+  'default-stage-lower-final': 'live-canonical',
+  'default-stage-ranking': 'live-canonical',
 };
 
 function sourceSnapshot(id: DefaultHudCompositeFixture): ProgramSnapshot {
@@ -68,6 +73,11 @@ function mutateProgram(id: DefaultHudCompositeFixture, snapshot: ProgramSnapshot
       '全国高校电子竞技联赛秋季邀请赛华东赛区公开组资格选拔阶段最终晋级附加赛特别加赛暨全国总决赛资格争夺最终晋级特别邀请挑战赛',
     'default-stage-unknown': '周末社区挑战赛',
     'default-stage-local-missing': null,
+    'default-stage-swiss-11': 'PLAY-IN · 1–1',
+    'default-stage-direct-bo3': 'PLAY-IN',
+    'default-stage-upper-semifinal': '胜者组半决赛',
+    'default-stage-lower-final': '败者组决赛',
+    'default-stage-ranking': '排位赛',
   };
   if (Object.hasOwn(stagePreview, id)) {
     if (id === 'default-stage-local-missing') {

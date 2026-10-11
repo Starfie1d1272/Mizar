@@ -23,6 +23,11 @@ export const DEFAULT_HUD_COMPOSITE_FIXTURES = [
   'default-stage-long',
   'default-stage-unknown',
   'default-stage-local-missing',
+  'default-stage-swiss-11',
+  'default-stage-direct-bo3',
+  'default-stage-upper-semifinal',
+  'default-stage-lower-final',
+  'default-stage-ranking',
 ] as const;
 
 export type DefaultHudCompositeFixture = (typeof DEFAULT_HUD_COMPOSITE_FIXTURES)[number];
