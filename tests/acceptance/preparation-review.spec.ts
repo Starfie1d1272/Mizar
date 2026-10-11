@@ -115,6 +115,9 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   await expect(page.getByText(/捕获类型 · 游戏捕获/)).toBeVisible();
   await expect(page.getByText(/目标可选 · 否/)).toBeVisible();
   await expect(page.getByText(/来源尺寸 · 0 × 0/)).toBeVisible();
+  await expect(page.getByText('Mizar 配置检查通过，请核对实际音画。', { exact: true })).toHaveCount(
+    0,
+  );
   await page.setViewportSize({ width: 1366, height: 768 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({
@@ -126,6 +129,11 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   await expect(page.getByText(/捕获类型 · 游戏捕获/)).not.toBeVisible();
   await expect(page.getByText(/Mizar 选择 ·/)).not.toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('obs-capture-collapsed.png'), fullPage: true });
+  obs = { ...obs, programEvidence: null };
+  await expect(page.getByText(/捕获目标已不可选/)).toHaveCount(0);
+  await expect(
+    page.getByText('Mizar 配置检查通过，请核对实际音画。', { exact: true }),
+  ).toBeVisible();
 });
 
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({

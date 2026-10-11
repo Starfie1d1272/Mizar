@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     ready: Promise.resolve(false),
     finish: vi.fn().mockResolvedValue({ reason: 'not_owned', message: '' }),
   })),
+  captureUnavailable: false,
   obsCommand:
     vi.fn<
       (
@@ -29,6 +30,26 @@ vi.mock('../src/workspace/obs-client', () => ({
     passwordConfigured: true,
     video: null,
     findings: [],
+    programEvidence: mocks.captureUnavailable
+      ? {
+          state: 'measured',
+          collection: 'mizar',
+          sceneId: 'gameplay',
+          composition: 'gameplay_overlay',
+          sources: [],
+          capture: {
+            kind: 'game_capture',
+            mode: 'window',
+            target: 'cs2.exe',
+            targetAvailable: false,
+            cs2WindowCount: 0,
+            videoActive: false,
+            videoShowing: false,
+            width: 0,
+            height: 0,
+          },
+        }
+      : null,
   }),
   obsCommand: mocks.obsCommand,
   beginObsConfiguration: mocks.beginObsConfiguration,
@@ -49,6 +70,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  mocks.captureUnavailable = false;
   mocks.obsCommand.mockReset().mockResolvedValue({ findings: [] });
   mocks.invoke.mockReset().mockResolvedValue(null);
 });
@@ -62,6 +84,21 @@ afterEach(() => {
 });
 
 describe('OBS connection settings', () => {
+  it('shows configuration success only when no capture issue needs attention, then restores it after recovery', () => {
+    act(() => root!.render(<Settings tab="obs" />));
+    expect(container.textContent).toContain('Mizar 配置检查通过，请核对实际音画。');
+    mocks.captureUnavailable = true;
+    act(() => root!.render(<Settings tab="obs" />));
+    expect(container.textContent).toContain(
+      '捕获目标已不可选。请确认 CS2 已打开，再在 OBS 核对目标窗口。',
+    );
+    expect(container.textContent).not.toContain('Mizar 配置检查通过');
+    mocks.captureUnavailable = false;
+    act(() => root!.render(<Settings tab="obs" />));
+    expect(container.textContent).not.toContain('捕获目标已不可选');
+    expect(container.textContent).toContain('Mizar 配置检查通过，请核对实际音画。');
+  });
+
   it('preserves a saved password when saving only the port and clears it only on explicit action', async () => {
     act(() => root!.render(<Settings tab="obs" />));
     const form = container.querySelector('form');
