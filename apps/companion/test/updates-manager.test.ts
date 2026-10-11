@@ -149,6 +149,63 @@ describe('controlled update lifecycle', () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain('secret-local-value');
   });
 
+  it('keeps a corrupt installation result visible across successful checks and downloads', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    const result = '{ "status": "recovery-required", "version": }';
+    await writeFile(join(root, 'updates/result.json'), result);
+    await manager.load();
+    expect(manager.status().error).toBeNull();
+    const failure = manager.status().failureDetails.find((value) => value.stage === 'result_load');
+    expect(failure?.nextStep).toContain('不要删除记录');
+    await manager.check();
+    expect(manager.status().phase).toBe('available');
+    expect(manager.status().failureDetails).toContainEqual(failure);
+    await manager.download();
+    await finished(manager);
+    expect(manager.status().phase).toBe('ready');
+    expect(manager.status().failureDetails).toContainEqual(failure);
+    expect(await readFile(join(root, 'updates/result.json'), 'utf8')).toBe(result);
+  });
+
+  it('serializes overlapping preference saves and continues after an earlier failure', async () => {
+    const { manager, root } = await setup({ settingsAutomatic: true });
+    let rejectFirst!: (error: Error) => void;
+    const firstSave = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    // Control only persistence completion; the manager owns mutation ordering.
+    const persistence = manager as unknown as { saveConfig: () => Promise<void> };
+    const realSave = persistence.saveConfig.bind(manager);
+    const save = vi
+      .spyOn(persistence, 'saveConfig')
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementation(realSave);
+    const first = manager.setAutomatic(false);
+    const firstRejected = expect(first).rejects.toThrow('controlled disk failure');
+    const second = manager.setAutomatic(false);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(manager.status().automatic).toBe(false);
+    expect(
+      (
+        JSON.parse(await readFile(join(root, 'updates/settings.json'), 'utf8')) as {
+          automatic: boolean;
+        }
+      ).automatic,
+    ).toBe(true);
+    rejectFirst(new Error('controlled disk failure'));
+    await firstRejected;
+    await second;
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(manager.status().automatic).toBe(false);
+    expect(
+      (
+        JSON.parse(await readFile(join(root, 'updates/settings.json'), 'utf8')) as {
+          automatic: boolean;
+        }
+      ).automatic,
+    ).toBe(false);
+  });
+
   it('preserves a settings write failure cause and the existing settings', async () => {
     const { manager, root } = await setup({ settingsAutomatic: true });
     const settings = await readFile(join(root, 'updates/settings.json'), 'utf8');
@@ -276,6 +333,15 @@ describe('controlled update lifecycle', () => {
       );
       await manager.load();
       expect(manager.status().lastResult).toBe('restored');
+      if (scenario !== 'outside-updates') {
+        const failure = manager
+          .status()
+          .failureDetails.find((value) => value.stage === 'result_identity_load');
+        expect(failure?.nextStep).toContain('不要删除记录');
+        await manager.check();
+        expect(manager.status().failureDetails).toContainEqual(failure);
+        expect(manager.status().lastResult).toBe('restored');
+      }
     },
   );
   it('falls back to identical GitHub bytes, keeps a ready download across restart and rechecks before preparing', async () => {

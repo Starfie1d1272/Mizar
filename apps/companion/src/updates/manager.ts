@@ -76,6 +76,9 @@ export class UpdateManager {
   private lastResult: string | null = null;
   private operationId = randomUUID();
   private failureDetails: ReturnType<typeof updateFailure>[] = [];
+  private recoveryFailures: ReturnType<typeof updateFailure>[] = [];
+  private settingsSave: Promise<void> = Promise.resolve();
+  private preferenceChange: Promise<void> = Promise.resolve();
   private readonly root: string;
   private readonly source: UpdateSource;
   constructor(
@@ -115,7 +118,9 @@ export class UpdateManager {
     this.options.log?.(stage, code, this.candidate?.version, { operationId: this.operationId });
   }
   failure(stage: string, error: unknown, durationMs?: number) {
-    this.failureDetails.push(updateFailure(stage, error, this.operationId));
+    if (stage === 'result_load' || stage === 'result_identity_load') {
+      this.recoveryFailures = [updateFailure(stage, error, this.operationId)];
+    } else this.failureDetails.push(updateFailure(stage, error, this.operationId));
     this.failureDetails = this.failureDetails.slice(-6);
     this.options.log?.(stage, safeCode(error), this.candidate?.version, {
       operationId: this.operationId,
@@ -123,15 +128,19 @@ export class UpdateManager {
       ...(durationMs === undefined ? {} : { durationMs }),
     });
   }
-  private async saveConfig() {
-    try {
-      await writeFile(join(this.root, 'settings.tmp'), JSON.stringify(this.config), {
-        mode: 0o600,
-      });
-      await rename(join(this.root, 'settings.tmp'), join(this.root, 'settings.json'));
-    } catch (cause) {
-      throw new Error('update_settings_invalid', { cause });
-    }
+  private saveConfig() {
+    const save = this.settingsSave.then(async () => {
+      try {
+        await writeFile(join(this.root, 'settings.tmp'), JSON.stringify(this.config), {
+          mode: 0o600,
+        });
+        await rename(join(this.root, 'settings.tmp'), join(this.root, 'settings.json'));
+      } catch (cause) {
+        throw new Error('update_settings_invalid', { cause });
+      }
+    });
+    this.settingsSave = save.catch(() => {});
+    return save;
   }
   async load() {
     await mkdir(this.root, { recursive: true });
@@ -266,7 +275,7 @@ export class UpdateManager {
     return {
       phase: this.phase,
       error: this.error,
-      failureDetails: this.failureDetails,
+      failureDetails: [...this.recoveryFailures, ...this.failureDetails],
       currentVersion: this.options.version,
       distribution: this.options.installed ? 'installed' : 'portable',
       automatic: this.config.automatic,
@@ -284,19 +293,24 @@ export class UpdateManager {
       lastResult: this.lastResult,
     };
   }
-  async setAutomatic(automatic: boolean) {
-    if (this.settingsInvalid) throw new Error('update_settings_invalid');
-    if (this.task || this.prepared || this.planning) throw new Error('update_busy');
-    const previous = this.config.automatic;
-    this.config.automatic = automatic;
-    try {
-      await this.saveConfig();
-    } catch (error) {
-      this.config.automatic = previous;
-      throw error;
-    }
+  setAutomatic(automatic: boolean) {
+    const change = this.preferenceChange.then(async () => {
+      if (this.settingsInvalid) throw new Error('update_settings_invalid');
+      if (this.task || this.prepared || this.planning) throw new Error('update_busy');
+      const previous = this.config.automatic;
+      this.config.automatic = automatic;
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        this.config.automatic = previous;
+        throw error;
+      }
+    });
+    this.preferenceChange = change.catch(() => {});
+    return change;
   }
   async check(internal = false, reason: 'manual' | 'startup' | 'periodic' = 'manual') {
+    await this.preferenceChange;
     if (this.settingsInvalid) throw new Error('update_settings_invalid');
     if (this.task && this.phase === 'checking' && !this.prepared && !this.planning)
       return this.task;
