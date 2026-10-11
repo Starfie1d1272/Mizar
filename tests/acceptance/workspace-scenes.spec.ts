@@ -135,7 +135,7 @@ test('match card exposes real map and Steam64 causes with task-specific recovery
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await page.evaluate(() => {
-      delete window.__TAURI_INTERNALS__;
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       window.open = () => null;
     });
     await card.getByRole('button', { name: '核对地图', exact: true }).click();
