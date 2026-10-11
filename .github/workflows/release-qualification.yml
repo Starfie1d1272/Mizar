@@ -272,10 +272,13 @@ jobs:
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
           $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
           & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
-      - name: Install pinned NSIS
+      - name: Prepare Core Setup tools and pristine candidate concurrently
         if: ${{ matrix.lane == 'core-setup' }}
         shell: pwsh
-        run: choco install nsis --version=3.11 -y --no-progress
+        run: |
+          $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
+          $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
+          & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
 
       - name: Verify native update cancellation and recovery
         if: ${{ matrix.lane != 'portable' }}
@@ -309,7 +312,6 @@ jobs:
         run: |
           $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
           $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
-          ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
           $payload = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
           if ($payload.Count -ne 1) { throw 'Core extraction is ambiguous' }
           $installed = Join-Path $env:RUNNER_TEMP 'core installed qualification'
