@@ -1179,6 +1179,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerOperatorCommandRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     execute: (command) => projectionCoordinator.executeOperatorCommand(command),
+    getBindingState: () =>
+      matchContextController?.getActiveBinding()
+        ? {
+            contextRevision: matchContextController.getActiveRevision(),
+            operator: projectionCoordinator.getCurrent().operator,
+          }
+        : null,
   });
 
   app.addHook('onClose', async () => {

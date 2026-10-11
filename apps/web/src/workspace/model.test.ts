@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { resolveIdentity, type IdentityResolution } from '@mizar/core/identity';
 import type { MatchContext } from '@mizar/core/match-context';
 import type { ObservedPlayer } from '@mizar/core/telemetry';
-import type { OperatorPayload } from '@mizar/protocol/operator';
+import { operatorPayloadSchema, type OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './model';
 import { getProgramFixture } from '../program/fixtures';
@@ -57,7 +57,7 @@ const operator = {
     requiredWins: 2,
     maps: [{ status: 'completed' }, { status: 'current' }],
   },
-  matchContext: { freshness: 'fresh' },
+  matchContext: { freshness: 'fresh', rosterAuthority: 'rivalhub', sourceFailure: null },
   identity: { state: 'matched', issues: [] },
 } as unknown as OperatorPayload;
 
@@ -86,6 +86,7 @@ it.each([
       {
         code,
         message: 'private raw cause',
+        ...(code === 'missing_canonical_steam64' ? { affectsExpectedLineup: true } : {}),
         severity: 'warning',
       } as OperatorPayload['identity']['issues'][number],
     ];
@@ -108,13 +109,13 @@ it('keeps awaiting input and incomplete evidence distinct from a confirmed misma
     issues: [],
   };
   expect(workspaceIssues(payload)).toEqual([
-    expect.objectContaining({ summary: '地图执行待确认', path: '/matches?tab=maps' }),
+    expect.objectContaining({ summary: '当前地图没有可用比赛位置', path: '/debug' }),
   ]);
   payload.seriesProgress.issues = [
     { code: 'map_mismatch' } as NonNullable<OperatorPayload['seriesProgress']>['issues'][number],
   ];
   expect(workspaceIssues(payload)).toEqual([
-    expect.objectContaining({ summary: '地图执行待确认' }),
+    expect.objectContaining({ summary: '当前地图没有可用比赛位置' }),
   ]);
   payload.identity.issues = [
     { code: 'map_mismatch' } as OperatorPayload['identity']['issues'][number],
@@ -231,7 +232,7 @@ it('prioritizes incomplete canonical data over unexpected accounts from the real
     expect.arrayContaining(['missing_canonical_steam64', 'unexpected_human_steam64']),
   );
   expect(issuesFromResolution(missingResult)).toEqual([
-    expect.objectContaining({ summary: '选手 Steam64 缺失', action: '补全名单' }),
+    expect.objectContaining({ summary: '选手 Steam64 缺失', action: '核对网站名单' }),
   ]);
   const short: MatchContext = {
     ...missing,
@@ -249,7 +250,7 @@ it('prioritizes incomplete canonical data over unexpected accounts from the real
     ]),
   );
   expect(issuesFromResolution(shortResult)).toEqual([
-    expect.objectContaining({ summary: '名单不完整', action: '补全名单' }),
+    expect.objectContaining({ summary: '网站名单不完整', action: '核对网站名单' }),
   ]);
   const duplicate: MatchContext = {
     ...context,
@@ -329,4 +330,199 @@ it('does not invent a roster conflict when a real map mismatch persists without 
   );
   expect(recovered.state).toBe('matched');
   expect(issuesFromResolution(recovered)).toEqual([]);
+});
+
+it('treats startup cache restoration as recovery and routes known source failures to an actual retry or reconnect', () => {
+  const payload = structuredClone(operator);
+  payload.matchContext = {
+    ...payload.matchContext,
+    origin: 'cache',
+    cachedFrom: 'online',
+    freshness: 'stale',
+  };
+  expect(workspaceIssues(payload)).toEqual([]);
+  payload.matchContext.sourceFailure = 'network';
+  expect(workspaceIssues(payload)).toEqual([
+    expect.objectContaining({
+      summary: '网站比赛资料更新失败',
+      action: '重试更新资料',
+      run: 'refresh-rivalhub',
+    }),
+  ]);
+  payload.matchContext.sourceFailure = 'authorization';
+  expect(workspaceIssues(payload)).toEqual([
+    expect.objectContaining({ summary: '网站授权被拒绝', path: '/settings?tab=rivalhub' }),
+  ]);
+});
+
+it.each(['wrong-map', 'no-gsi', 'partial-frame', 'partial-wrong-map'] as const)(
+  'keeps an unlinked unused bench record out of live roster recovery during %s',
+  (scenario) => {
+    const { context, observed } = identityFixture();
+    const bench = {
+      playerId: 'unused-bench',
+      steam64: null,
+      displayName: observed[0]!.displayName ?? null,
+      avatarUrl: null,
+      isStarter: false,
+    };
+    const withBench: MatchContext = {
+      ...context,
+      entrants: {
+        ...context.entrants,
+        a: { ...context.entrants.a, players: [...context.entrants.a.players, bench] },
+      },
+    };
+    const before = structuredClone(withBench);
+    const noGsi = scenario === 'no-gsi';
+    const partial = scenario.startsWith('partial');
+    const wrongMap = scenario.endsWith('wrong-map');
+    const resolution = resolveIdentity(withBench, {
+      sourceGeneration: 0,
+      mapEpoch: 1,
+      ...(noGsi ? {} : { allPlayers: partial ? observed.slice(0, 4) : observed }),
+      allPlayersCoverage: noGsi ? 'absent' : 'present',
+      mapName: wrongMap ? 'de_overpass' : 'de_ancient',
+      mapPhase: 'live',
+    });
+    expect(resolution.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'missing_canonical_steam64',
+        canonicalPlayerId: 'unused-bench',
+        affectsExpectedLineup: false,
+      }),
+    );
+    expect(issuesFromResolution(resolution)).toEqual(
+      wrongMap ? [expect.objectContaining({ summary: '地图不一致', action: '核对地图' })] : [],
+    );
+    expect(withBench).toEqual(before);
+  },
+);
+
+it.each(['Nuke', ' Nuke ', 'DE_NUKE', 'de_nuke'])(
+  'offers current-map confirmation for the owner-supported alias %s',
+  (mapName) => {
+    const payload = structuredClone(operator);
+    payload.runtime.mapName = mapName;
+    payload.seriesProgress = {
+      ...payload.seriesProgress!,
+      bindingState: 'needs_operator',
+      maps: [
+        {
+          mapOrder: 3,
+          mapName: 'de_nuke',
+          status: 'pending',
+          executionMapEpoch: null,
+          finalScore: null,
+          roundHistoryCompleteness: 'unavailable',
+        },
+      ],
+    };
+    expect(workspaceIssues(payload)).toEqual([
+      expect.objectContaining({
+        summary: '当前图尚未确认为第 3 图',
+        action: '确认当前图',
+        path: '/matches?tab=maps',
+      }),
+    ]);
+  },
+);
+
+function parseLegacyIdentity(resolution: IdentityResolution) {
+  return operatorPayloadSchema.shape.identity.parse({
+    ...resolution,
+    resolvedCount: resolution.players.length,
+    issues: resolution.issues.map((issue) => {
+      const wire = {
+        ...issue,
+        sourcePlayerId: issue.sourcePlayerId ?? null,
+        steam64: issue.steam64 ?? null,
+        canonicalPlayerId: issue.canonicalPlayerId ?? null,
+        entryId: issue.entryId ?? null,
+        observedSide: issue.observedSide ?? null,
+        mapSide: issue.mapSide ?? null,
+      };
+      delete wire.affectsExpectedLineup;
+      return wire;
+    }),
+  });
+}
+
+it('parses an older owner missing-account plus unexpected-account wire as unscoped and requests neutral source review', () => {
+  const { context, observed } = identityFixture();
+  const missing: MatchContext = {
+    ...context,
+    entrants: {
+      ...context.entrants,
+      a: {
+        ...context.entrants.a,
+        players: context.entrants.a.players.map((player, index) =>
+          index === 0 ? { ...player, steam64: null } : player,
+        ),
+      },
+    },
+  };
+  const resolution = resolveIdentity(missing, {
+    sourceGeneration: 0,
+    mapEpoch: 1,
+    allPlayers: observed,
+    allPlayersCoverage: 'present',
+    mapName: 'de_ancient',
+    mapPhase: 'live',
+  });
+  const legacy = parseLegacyIdentity(resolution);
+  expect(legacy.issues.map((issue) => issue.code)).toEqual(
+    expect.arrayContaining(['missing_canonical_steam64', 'unexpected_human_steam64']),
+  );
+  expect(
+    legacy.issues.find((issue) => issue.code === 'missing_canonical_steam64')!
+      .affectsExpectedLineup,
+  ).toBeNull();
+  expect(workspaceIssues({ ...operator, identity: legacy })).toEqual([
+    expect.objectContaining({
+      summary: '名单资料待核对',
+      action: '核对比赛资料',
+      path: '/matches',
+    }),
+  ]);
+});
+
+it('does not turn an unscoped older bench diagnostic plus wrong map into a roster task', () => {
+  const { context, observed } = identityFixture();
+  const withBench: MatchContext = {
+    ...context,
+    entrants: {
+      ...context.entrants,
+      a: {
+        ...context.entrants.a,
+        players: [
+          ...context.entrants.a.players,
+          {
+            playerId: 'unused-bench',
+            steam64: null,
+            displayName: observed[0]!.displayName ?? null,
+            avatarUrl: null,
+            isStarter: false,
+          },
+        ],
+      },
+    },
+  };
+  const legacy = parseLegacyIdentity(
+    resolveIdentity(withBench, {
+      sourceGeneration: 0,
+      mapEpoch: 1,
+      allPlayers: observed,
+      allPlayersCoverage: 'present',
+      mapName: 'de_overpass',
+      mapPhase: 'live',
+    }),
+  );
+  expect(
+    legacy.issues.find((issue) => issue.code === 'missing_canonical_steam64')!
+      .affectsExpectedLineup,
+  ).toBeNull();
+  expect(workspaceIssues({ ...operator, identity: legacy })).toEqual([
+    expect.objectContaining({ summary: '地图不一致', action: '核对地图' }),
+  ]);
 });

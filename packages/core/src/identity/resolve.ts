@@ -165,7 +165,11 @@ function addCanonicalIssues(
           'missing_canonical_steam64',
           'warning',
           `canonical player ${player.playerId} 缺少 Steam64，只影响该 player mapping。`,
-          { canonicalPlayerId: player.playerId, entryId: player.entryId },
+          {
+            canonicalPlayerId: player.playerId,
+            entryId: player.entryId,
+            affectsExpectedLineup: player.isStarter,
+          },
         ),
       );
     }

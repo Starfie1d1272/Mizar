@@ -45,14 +45,39 @@ export function createOnlineManifestSource(
             signal: AbortSignal.timeout(timeoutMs),
           });
           if (response.status === 401 || response.status === 403)
-            throw new SourceLoadError('RivalHub 只读凭据无效。');
+            throw new SourceLoadError(
+              'RivalHub 只读凭据无效。',
+              undefined,
+              'authorization',
+              response.status,
+            );
           if (response.status >= 300 && response.status < 400)
-            throw new SourceLoadError('RivalHub Manifest 禁止跨地址重定向。');
+            throw new SourceLoadError(
+              'RivalHub Manifest 禁止跨地址重定向。',
+              undefined,
+              'invalid_response',
+            );
           if ((response.status === 429 || response.status >= 500) && attempt < retries) continue;
-          if (!response.ok) throw new SourceLoadError(`RivalHub Manifest HTTP ${response.status}`);
+          if (!response.ok)
+            throw new SourceLoadError(
+              `RivalHub Manifest HTTP ${response.status}`,
+              undefined,
+              response.status === 404 ? 'not_found' : 'unavailable',
+              response.status,
+            );
           const size = Number(response.headers.get('content-length') ?? '0');
-          if (size > 1_000_000) throw new SourceLoadError('RivalHub Manifest 响应过大。');
-          if (!response.body) throw new SourceLoadError('RivalHub Manifest 响应为空。');
+          if (size > 1_000_000)
+            throw new SourceLoadError(
+              'RivalHub Manifest 响应过大。',
+              undefined,
+              'invalid_response',
+            );
+          if (!response.body)
+            throw new SourceLoadError(
+              'RivalHub Manifest 响应为空。',
+              undefined,
+              'invalid_response',
+            );
           const reader = (response.body as ReadableStream<Uint8Array>).getReader();
           const chunks: Uint8Array[] = [];
           let bytes = 0;
@@ -61,18 +86,38 @@ export function createOnlineManifestSource(
               const { done, value } = await reader.read();
               if (done) break;
               bytes += value.byteLength;
-              if (bytes > 1_000_000) throw new SourceLoadError('RivalHub Manifest 响应过大。');
+              if (bytes > 1_000_000)
+                throw new SourceLoadError(
+                  'RivalHub Manifest 响应过大。',
+                  undefined,
+                  'invalid_response',
+                );
               chunks.push(value);
             }
           } finally {
             await reader.cancel().catch(() => undefined);
           }
           const body = Buffer.concat(chunks).toString('utf8');
-          return JSON.parse(body) as unknown;
+          try {
+            return JSON.parse(body) as unknown;
+          } catch (error) {
+            throw new SourceLoadError(
+              'RivalHub Manifest 格式无法读取。',
+              error,
+              'invalid_response',
+            );
+          }
         } catch (error: unknown) {
           if (error instanceof SourceLoadError) throw error;
           if (attempt === retries)
-            throw new SourceLoadError('RivalHub Manifest 暂时不可用。', error);
+            throw new SourceLoadError(
+              'RivalHub Manifest 暂时不可用。',
+              error,
+              error instanceof Error &&
+                (error.name === 'TimeoutError' || error.name === 'AbortError')
+                ? 'timeout'
+                : 'network',
+            );
         }
       }
       throw new SourceLoadError('RivalHub Manifest 暂时不可用。');

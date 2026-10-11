@@ -35,6 +35,8 @@ export interface IdentityIssue {
   readonly sourcePlayerId?: string;
   readonly steam64?: string;
   readonly canonicalPlayerId?: string;
+  /** Canonical missing-account record is an expected starter; independent of map/health state. */
+  readonly affectsExpectedLineup?: boolean;
   readonly entryId?: string;
   readonly observedSide?: SourceSide;
   readonly mapSide?: SourceSide;

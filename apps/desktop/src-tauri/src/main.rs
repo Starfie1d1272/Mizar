@@ -930,6 +930,7 @@ fn main_path_allowed(path: &str) -> bool {
         "/settings",
         "/settings?tab=gsi",
         "/settings?tab=obs",
+        "/settings?tab=rivalhub",
     ]
     .contains(&path)
 }
@@ -2287,6 +2288,7 @@ mod startup_tests {
             "/matches?tab=roster",
             "/settings?tab=obs",
             "/settings?tab=gsi",
+            "/settings?tab=rivalhub",
             "/picture?tab=overlay",
         ] {
             assert!(main_path_allowed(path));

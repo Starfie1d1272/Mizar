@@ -1,4 +1,5 @@
 import { AutomaticPreparation } from './AutomaticPreparation';
+import { SeriesBindingControls } from './SeriesBindingControls';
 import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
@@ -649,6 +650,7 @@ export function PreparationPage() {
             {tab === 'maps' && match ? (
               <>
                 <MatchDocumentView document={match} section="maps" />
+                <SeriesBindingControls />
                 <Panel>
                   <h2>BP 制作</h2>
                   <p>

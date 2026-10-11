@@ -11,6 +11,7 @@ import type { MatchContext } from '@mizar/core/match-context';
 
 import { replaceDurableJson, type DurableJsonFaultInjector } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import type { SourceFailureCode } from './source-error.js';
 
 export type ContextOrigin = 'online' | 'local' | 'fixture' | 'cache';
 export type ContextFreshness = 'fresh' | 'stale';
@@ -23,6 +24,8 @@ export interface MatchContextBinding {
   readonly context: MatchContext;
   readonly origin: ContextOrigin;
   readonly freshness: ContextFreshness;
+  /** Current acquisition failure, absent for startup cache restoration. Never raw errors. */
+  readonly sourceFailure?: SourceFailureCode | null;
   /** Acquisition metadata; never part of the provider-neutral MatchContext domain. */
   readonly localAuthoringMode?: LocalAuthoringMode;
   readonly storedAt?: string;
