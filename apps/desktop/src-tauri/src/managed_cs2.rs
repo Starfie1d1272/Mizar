@@ -513,11 +513,18 @@ impl ManagedCs2 {
         })
     }
     /// Configuration recovery only. Never closes a game or certifies production exit.
-    pub fn restore_at_startup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+    pub fn restore_at_startup(
+        &mut self,
+        confirm_steam_cancelled: bool,
+    ) -> Result<Option<String>, String> {
         self.startup_recovery_status()?
             .permits_restore(confirm_steam_cancelled)?;
         // The existing owner rechecks process identity and writeback before writes.
-        self.restore_backup(confirm_steam_cancelled)
+        self.message = None;
+        self.restore_backup(confirm_steam_cancelled)?;
+        // Core restoration can succeed while cleanup retains a warning and journal.
+        // Return the owner's actual result, without inventing another recovery state.
+        Ok(self.message.clone())
     }
 
     pub fn workspace_process(&self) -> Result<Option<WorkspaceProcess>, String> {
@@ -1100,6 +1107,30 @@ mod tests {
             std::fs::read(&video).unwrap(),
             b"original untouched settings"
         );
+        // A malformed cleanup handoff preserves the core journal as a soft warning.
+        // The offline entry must return that real cause, rather than announce success.
+        let mut warning_journal = managed
+            .store
+            .prepare_preserved(&video, &root.join("absent/cs2.exe"))
+            .unwrap();
+        warning_journal["demoPlaybackCfg"] = json!({});
+        managed.store.save(&warning_journal).unwrap();
+        let warning = managed.restore_at_startup(false).unwrap().unwrap();
+        assert!(warning.contains("清理证据转存失败"));
+        assert!(warning.contains("原启动记录仍保留"));
+        assert!(managed.startup_recovery_status().unwrap().pending);
+        assert_eq!(
+            std::fs::read(&video).unwrap(),
+            b"original untouched settings"
+        );
+        warning_journal
+            .as_object_mut()
+            .unwrap()
+            .remove("demoPlaybackCfg");
+        managed.store.save(&warning_journal).unwrap();
+        let retry = managed.restore_at_startup(false).unwrap().unwrap();
+        assert!(!retry.contains("清理证据转存失败"));
+        assert!(!managed.startup_recovery_status().unwrap().pending);
         managed
             .store
             .prepare_preserved(&video, &root.join("absent/cs2.exe"))

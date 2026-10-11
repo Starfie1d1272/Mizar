@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { Button, Checkbox, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
-import { productionAction, type Production } from './client';
-import { cs2OperationLabel, useCs2Status } from './cs2-status';
+import { openTool, productionAction, type Production } from './client';
+import {
+  cs2OperationLabel,
+  useCs2Status,
+  useWorkspaceExitStatus,
+  workspaceExitLabel,
+} from './cs2-status';
 
 /** Cross-window recovery reads the Host journal, never browser storage. */
 export function Cs2Recovery({ production }: { production: Production | null }) {
   const { status, phase, error } = useCs2Status();
+  const exit = useWorkspaceExitStatus();
   const [busy, setBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -25,6 +31,60 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
     }
   }
   if (!window.__TAURI_INTERNALS__) return null;
+  if (exit?.busy || exit?.message) {
+    const uncertain = status?.phase === 'uncertain';
+    return (
+      <StatusBanner tone={exit.busy ? 'info' : 'warning'}>
+        <div className="cs2-recovery" aria-label="工作台退出结果">
+          <strong>
+            {exit.busy ? '正在退出工作台' : '退出工作台需要处理'} · {workspaceExitLabel(exit.stage)}
+          </strong>
+          <p role="status">
+            {exit.busy ? '正在安全收尾，请等待结果。可以打开诊断查看进度。' : exit.message}
+          </p>
+          {!exit.busy ? (
+            <p>
+              {uncertain
+                ? '先取消 Steam 启动请求并确认游戏已关闭，再恢复配置备份。'
+                : '按上面的原因处理后重试；再次失败时，在运行诊断中导出诊断包反馈。'}
+            </p>
+          ) : null}
+          {uncertain && !exit.busy ? (
+            <Checkbox
+              label="已取消 Steam 启动请求，并确认 CS2 已关闭"
+              checked={cancelled}
+              onChange={(event) => setCancelled(event.target.checked)}
+            />
+          ) : null}
+          <div className="preparation-actions">
+            <Button
+              disabled={busy || exit.busy || Boolean(phase) || (uncertain && !cancelled)}
+              onClick={() =>
+                void run(async () => {
+                  await desktopInvoke(
+                    'finish_workspace',
+                    uncertain ? { confirmSteamCancelled: cancelled } : undefined,
+                  );
+                }, '')
+              }
+            >
+              {exit.busy ? '正在退出…' : uncertain ? '恢复配置并重试退出' : '重试退出工作台'}
+            </Button>
+            <Button
+              onClick={() =>
+                void openTool('diagnostics').catch((reason: unknown) =>
+                  setFeedback(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
+                )
+              }
+            >
+              运行诊断
+            </Button>
+          </div>
+          {feedback && feedback !== exit.message ? <p role="alert">{feedback}</p> : null}
+        </div>
+      </StatusBanner>
+    );
+  }
   if (error)
     return (
       <StatusBanner tone="danger">

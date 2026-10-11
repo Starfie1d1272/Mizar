@@ -42,6 +42,17 @@ fn status_message(status: &Result<StartupRecoveryStatus, String>) -> String {
         Ok(_) => "未发现待恢复记录。可以重试启动，或查看本机日志定位服务启动失败。".into(),
     }
 }
+fn restoration_feedback(
+    message: Option<String>,
+    status: &Result<StartupRecoveryStatus, String>,
+) -> String {
+    let reason = message.unwrap_or_else(|| "配置恢复检查已完成。".into());
+    match status {
+        Ok(status) if status.pending => format!("{reason}\n原始备份与待恢复记录仍保留。请按上述原因处理文件占用、目录权限或恢复记录冲突，然后重新检查并恢复；原因不明确或再次失败时，查看本机日志，服务恢复后导出脱敏诊断包反馈。"),
+        Err(error) => format!("{reason}\n恢复结果尚不能确认：{error} 原始备份仍保留。请重新检查，仍无法确认时查看本机日志。"),
+        Ok(_) => format!("{reason}\n原始备份仍保留。此操作只恢复配置，不结束制作。"),
+    }
+}
 fn choose(
     instruction: &str,
     content: &str,
@@ -166,11 +177,15 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
                     }
                 }
                 match managed.restore_at_startup(choice == Action::ConfirmSteam) {
-                    Ok(()) => {
-                        feedback =
-                            "配置恢复检查已完成，原始备份仍保留。此操作只恢复配置，不结束制作。"
-                                .into();
-                        log.event("cs2_startup_recovery", "success", None);
+                    Ok(message) => {
+                        let status = managed.startup_recovery_status();
+                        let incomplete = status.as_ref().map_or(true, |status| status.pending);
+                        feedback = restoration_feedback(message, &status);
+                        log.event(
+                            "cs2_startup_recovery",
+                            if incomplete { "failure" } else { "success" },
+                            Some(&feedback),
+                        );
                     }
                     Err(error) => {
                         log.event("cs2_startup_recovery", "failure", Some(&error));
@@ -204,6 +219,23 @@ mod tests {
             assert!(!offered.contains(&Action::Restore));
             assert!(!offered.contains(&Action::ConfirmSteam));
         }
+        let incomplete = Ok(StartupRecoveryStatus {
+            pending: true,
+            ..Default::default()
+        });
+        let feedback = restoration_feedback(
+            Some("清理证据转存失败：目录被占用，原启动记录仍保留。".into()),
+            &incomplete,
+        );
+        assert!(feedback.contains("目录被占用"));
+        assert!(feedback.contains("重新检查并恢复"));
+        assert!(feedback.contains("导出脱敏诊断包"));
+        let success = restoration_feedback(
+            Some("原设置已恢复。".into()),
+            &Ok(StartupRecoveryStatus::default()),
+        );
+        assert!(success.contains("原设置已恢复"));
+        assert!(!success.contains("待恢复记录"));
         let waiting = Ok(StartupRecoveryStatus {
             pending: true,
             uncertain: true,
