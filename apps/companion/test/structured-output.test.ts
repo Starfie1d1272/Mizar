@@ -430,7 +430,7 @@ it.each([
     const damaged = JSON.parse(await readFile(join(directory, 'outbox.json'), 'utf8')) as {
       records: { status: unknown }[];
     };
-    damaged.records[0].status = ['pending'];
+    damaged.records[0]!.status = ['pending'];
     await writeFile(join(directory, 'outbox.json'), JSON.stringify(damaged));
     await service.start();
     expect(outbox.getRecovery()?.code).toBe('outbox_recovered');

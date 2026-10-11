@@ -179,7 +179,7 @@ describe('bounded reliable output', () => {
       const committed = await readFile(path);
       expect(await readFile(`${path}.last-good`)).toEqual(committed);
       const damaged = JSON.parse(committed.toString('utf8')) as DiskOutbox;
-      damaged.records[1].status = ['pending'];
+      damaged.records[1]!.status = ['pending'];
       await writeFile(path, JSON.stringify(damaged));
       const recovered = new ReliableOutbox(path);
       await recovered.load();
@@ -334,7 +334,7 @@ describe('bounded reliable output', () => {
           scenario === 'newer-mirror'
             ? (JSON.parse(pending.toString('utf8')) as DiskOutbox)
             : primary;
-        damaged.records[0].status =
+        damaged.records[0]!.status =
           scenario === 'valid-status-corruption' ? 'pending' : ['pending'];
         await writeFile(path, JSON.stringify(damaged));
       }
@@ -401,7 +401,7 @@ describe('bounded reliable output', () => {
       });
       const expected = seed.getRecords();
       const damaged = JSON.parse(await readFile(path, 'utf8')) as DiskOutbox;
-      damaged.records[1].status = ['pending'];
+      damaged.records[1]!.status = ['pending'];
       await writeFile(path, JSON.stringify(damaged));
       const recovered = new ReliableOutbox(path);
       await recovered.load();
@@ -494,7 +494,7 @@ describe('bounded reliable output', () => {
       await restarted.load();
       expect(restarted.getRecords().map((r) => r.event.idempotencyKey)).toEqual(['committed']);
       const damaged = JSON.parse(primary.toString('utf8')) as DiskOutbox;
-      damaged.records[0].status = ['pending'];
+      damaged.records[0]!.status = ['pending'];
       await writeFile(path, JSON.stringify(damaged));
       const quarantined = new ReliableOutbox(path);
       await quarantined.load();
@@ -512,7 +512,7 @@ describe('bounded reliable output', () => {
       const seed = new ReliableOutbox(path);
       await seed.enqueue(event('pending'));
       const damaged = JSON.parse(await readFile(path, 'utf8')) as DiskOutbox;
-      damaged.records[0].status = ['pending'];
+      damaged.records[0]!.status = ['pending'];
       const bytes = Buffer.from(JSON.stringify(damaged));
       await writeFile(path, bytes);
       const evidence: unknown[] = [];
