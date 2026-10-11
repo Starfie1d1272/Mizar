@@ -756,6 +756,49 @@ mod tests {
         (root, video, convars, executable, store)
     }
     #[test]
+    fn production_safety_precedes_real_restore_and_restart_retries_failed_restore() {
+        let (root, video, machine, executable, store) = frame_setup();
+        let original_video = fs::read(&video).unwrap();
+        let original_machine = fs::read(&machine).unwrap();
+        store
+            .prepare_with_frame_rate(
+                &video,
+                &executable,
+                cs2_video::VideoSize::new(1440, 810).unwrap(),
+            )
+            .unwrap();
+        let applied_video = fs::read(&video).unwrap();
+        assert_ne!(applied_video, original_video);
+        // An unconfirmed OBS safety transaction must leave the game files alone.
+        assert!(crate::production_exit::finish_then_restore(
+            || Err("OBS 运行状态未确认".into()),
+            || store.restore().map(|_| ()),
+        )
+        .is_err());
+        assert_eq!(fs::read(&video).unwrap(), applied_video);
+        assert!(store.load().unwrap().is_some());
+        // Safety can complete while the physical restoration fails. The original
+        // journal survives, so a new Host can retry instead of losing the backup.
+        fs::remove_file(&video).unwrap();
+        fs::create_dir(&video).unwrap();
+        assert!(crate::production_exit::finish_then_restore(
+            || Ok(()),
+            || store.restore().map(|_| ()),
+        )
+        .is_err());
+        assert!(store.load().unwrap().is_some());
+        fs::remove_dir(&video).unwrap();
+        fs::write(&video, &applied_video).unwrap();
+        let restarted = SessionStore::new(root.clone());
+        crate::production_exit::finish_then_restore(|| Ok(()), || restarted.restore().map(|_| ()))
+            .unwrap();
+        assert_eq!(fs::read(&video).unwrap(), original_video);
+        assert_eq!(fs::read(&machine).unwrap(), original_machine);
+        assert!(restarted.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn changed_or_partially_written_demo_cfg_never_blocks_core_restore_and_can_retry() {
         for partial in [false, true] {
             let (root, video, machine, executable, store) = frame_setup();

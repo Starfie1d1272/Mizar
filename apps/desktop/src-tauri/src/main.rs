@@ -623,20 +623,26 @@ async fn finish_workspace(
             }
             cs2.finish()?;
         } else {
-            feedback.stage("production");
-            production_exit::finish_workspace_production(&log)?;
-            feedback.stage("restoration");
-            let _activity = activity.begin(2);
-            production_exit::finish_managed_game(&log, |requires_proof| {
-                if confirm_steam_cancelled == Some(true) {
-                    cs2.restore_backup(true)?;
-                }
-                cs2.finish()?;
-                if requires_proof {
-                    cs2.confirm_game_stopped()?;
-                }
-                Ok(())
-            })?;
+            production_exit::finish_then_restore(
+                || {
+                    feedback.stage("production");
+                    production_exit::finish_workspace_production(&log)
+                },
+                || {
+                    feedback.stage("restoration");
+                    let _activity = activity.begin(2);
+                    production_exit::finish_managed_game(&log, |requires_proof| {
+                        if confirm_steam_cancelled == Some(true) {
+                            cs2.restore_backup(true)?;
+                        }
+                        cs2.finish()?;
+                        if requires_proof {
+                            cs2.confirm_game_stopped()?;
+                        }
+                        Ok(())
+                    })
+                },
+            )?;
         }
         feedback.stage("presentation");
         presentation?;

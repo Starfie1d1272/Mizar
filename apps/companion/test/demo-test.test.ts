@@ -64,6 +64,9 @@ async function setup() {
   };
   const status = vi.spyOn(ObsAdapter.prototype, 'status').mockResolvedValue(obs);
   const switchObs = vi.spyOn(ObsAdapter.prototype, 'switchScene').mockResolvedValue();
+  vi.spyOn(ObsAdapter.prototype, 'switchToWaitingForExit').mockImplementation((options) =>
+    switchObs('waiting', options),
+  );
   const app = buildApp(options);
   apps.push(app);
   await app.ready();
