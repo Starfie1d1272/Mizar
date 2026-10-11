@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { resolveIdentity, type IdentityResolution } from '@mizar/core/identity';
 import type { MatchContext } from '@mizar/core/match-context';
 import type { ObservedPlayer } from '@mizar/core/telemetry';
-import type { OperatorPayload } from '@mizar/protocol/operator';
+import { operatorPayloadSchema, type OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './model';
 import { getProgramFixture } from '../program/fixtures';
@@ -427,3 +427,102 @@ it.each(['Nuke', ' Nuke ', 'DE_NUKE', 'de_nuke'])(
     ]);
   },
 );
+
+function parseLegacyIdentity(resolution: IdentityResolution) {
+  return operatorPayloadSchema.shape.identity.parse({
+    ...resolution,
+    resolvedCount: resolution.players.length,
+    issues: resolution.issues.map((issue) => {
+      const wire = {
+        ...issue,
+        sourcePlayerId: issue.sourcePlayerId ?? null,
+        steam64: issue.steam64 ?? null,
+        canonicalPlayerId: issue.canonicalPlayerId ?? null,
+        entryId: issue.entryId ?? null,
+        observedSide: issue.observedSide ?? null,
+        mapSide: issue.mapSide ?? null,
+      };
+      delete wire.affectsExpectedLineup;
+      return wire;
+    }),
+  });
+}
+
+it('parses an older owner missing-account plus unexpected-account wire as unscoped and requests neutral source review', () => {
+  const { context, observed } = identityFixture();
+  const missing: MatchContext = {
+    ...context,
+    entrants: {
+      ...context.entrants,
+      a: {
+        ...context.entrants.a,
+        players: context.entrants.a.players.map((player, index) =>
+          index === 0 ? { ...player, steam64: null } : player,
+        ),
+      },
+    },
+  };
+  const resolution = resolveIdentity(missing, {
+    sourceGeneration: 0,
+    mapEpoch: 1,
+    allPlayers: observed,
+    allPlayersCoverage: 'present',
+    mapName: 'de_ancient',
+    mapPhase: 'live',
+  });
+  const legacy = parseLegacyIdentity(resolution);
+  expect(legacy.issues.map((issue) => issue.code)).toEqual(
+    expect.arrayContaining(['missing_canonical_steam64', 'unexpected_human_steam64']),
+  );
+  expect(
+    legacy.issues.find((issue) => issue.code === 'missing_canonical_steam64')!
+      .affectsExpectedLineup,
+  ).toBeNull();
+  expect(workspaceIssues({ ...operator, identity: legacy })).toEqual([
+    expect.objectContaining({
+      summary: '名单资料待核对',
+      action: '核对比赛资料',
+      path: '/matches',
+    }),
+  ]);
+});
+
+it('does not turn an unscoped older bench diagnostic plus wrong map into a roster task', () => {
+  const { context, observed } = identityFixture();
+  const withBench: MatchContext = {
+    ...context,
+    entrants: {
+      ...context.entrants,
+      a: {
+        ...context.entrants.a,
+        players: [
+          ...context.entrants.a.players,
+          {
+            playerId: 'unused-bench',
+            steam64: null,
+            displayName: observed[0]!.displayName ?? null,
+            avatarUrl: null,
+            isStarter: false,
+          },
+        ],
+      },
+    },
+  };
+  const legacy = parseLegacyIdentity(
+    resolveIdentity(withBench, {
+      sourceGeneration: 0,
+      mapEpoch: 1,
+      allPlayers: observed,
+      allPlayersCoverage: 'present',
+      mapName: 'de_overpass',
+      mapPhase: 'live',
+    }),
+  );
+  expect(
+    legacy.issues.find((issue) => issue.code === 'missing_canonical_steam64')!
+      .affectsExpectedLineup,
+  ).toBeNull();
+  expect(workspaceIssues({ ...operator, identity: legacy })).toEqual([
+    expect.objectContaining({ summary: '地图不一致', action: '核对地图' }),
+  ]);
+});

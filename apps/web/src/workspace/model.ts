@@ -129,6 +129,9 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
   const steam64Missing = operator.identity.issues.some(
     (issue) => issue.code === 'missing_canonical_steam64' && issue.affectsExpectedLineup === true,
   );
+  const steam64MissingUnscoped = operator.identity.issues.some(
+    (issue) => issue.code === 'missing_canonical_steam64' && issue.affectsExpectedLineup == null,
+  );
   const rosterAmbiguous =
     identityCodes.has('duplicate_canonical_player_id') ||
     identityCodes.has('duplicate_canonical_steam64');
@@ -161,6 +164,15 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       detail: `比赛资料中的选手身份重复。修正重复身份后重新核对当前选手账号。${rosterRecovery}`,
       action: rosterAction,
       path: '/matches?tab=roster',
+    });
+  else if (steam64MissingUnscoped && identityCodes.has('unexpected_human_steam64'))
+    issues.push({
+      id: 'identity',
+      summary: '名单资料待核对',
+      detail:
+        '身份诊断未说明缺少账号的记录是否预期首发，当前资料不足以确认上场账号不匹配。核对比赛资料来源与名单，等待完整身份核验。',
+      action: '核对比赛资料',
+      path: '/matches',
     });
   else if (identityCodes.has('unexpected_human_steam64') && !rosterIncomplete && !steam64Missing)
     issues.push({
