@@ -40,7 +40,7 @@ Windows 安装版与便携版属于不同的分发形态，用户数据路径和
 | 正式晋级 | 对比候选与最终源码，验证同一套合格产物，发布前核对标签、清单、下载和许可                |
 | 发布后   | 从公开入口下载复核，与既有版本按需做升级/回退检查，记录异常和修补版本                   |
 
-资格工作流只创建一次正式 Windows 产品；portable、Full Setup 与 Core Setup 独立并行验收同源候选，汇总要求三条身份与安装恢复证据，分发 artifact 文件互不覆盖。晋级校验并发布原始合格资产，不重新编译。`cargo test --profile release` 编译原生契约测试，不能仅因它位于产品构建之后就视为重复产品构建并删掉。打包、安装、GUI、恢复与来源身份仍须分别通过。发行计时以 Qualification 触发至 Box 最后原字节核对为完整范围，包含晋级、流程间等待和 runner 排队；缓存命中情况与恢复运行单独记录，旧版本恢复及缺失计时不能作为新版本 ≤600 秒的验收。
+资格工作流只创建一次正式 Windows 产品；portable、Full Setup 与 Core Setup 独立并行验收同源候选，Full/Core Setup 复用同一准备 helper 并行安装固定 NSIS 与 Explorer 解压，等待两者成功后才执行后续恢复及安装验收，汇总要求三条身份与安装恢复证据，分发 artifact 文件互不覆盖。晋级校验并发布原始合格资产，不重新编译。`cargo test --profile release` 编译原生契约测试，不能仅因它位于产品构建之后就视为重复产品构建并删掉。打包、安装、GUI、恢复与来源身份仍须分别通过。发行计时以 Qualification 触发至 Box 最后原字节核对为完整范围，包含晋级、流程间等待和 runner 排队；缓存命中情况与恢复运行单独记录，旧版本恢复及缺失计时不能作为新版本 ≤600 秒的验收。
 
 正式 Cargo release profile 使用 Thin LTO、16 个 codegen units 与 strip；CI profile 保持独立，Cargo 缓存身份包含 compiler profile。Full 与 Core Setup 共用 NSIS Zlib，分发身份仍绑定实际安装器脚本摘要。有限 Windows 对照中，热构建平均减少约 88 秒，Host 增加约 1.47 MiB；Full 安装器增加约 14.54 MiB，编译与安装明显缩短。实际 CI artifact 下载与安装已核验，但未测 Box 跨境下载增量，GUI 采样也不能证明零启动退化。参数变更后仍须实际验证正式 Thin 构建、两种 Setup 的安装、卸载、恢复与 GUI；完整 ≤600 秒以随后明确授权的新版本发布终验，不能用历史恢复或拼接实验耗时代替。
 
@@ -112,3 +112,5 @@ v1.1.0 实际源码固定读取 GitHub 的 update-manifest.json 与 NSIS 更新�
 Promotion 对同次已成功资格任务的产品和验收证据并行下载到独立目录，两者全部完成后才校验来源与证据；任一失败阻断后续。产品各项 provenance 逐个复用原始 `qualification-provenance.json`，仍绑定 main 签发工作流、精确源码 SHA 和每个资产字节；缺失或无效 bundle 直接失败，不回退到放宽校验。CI 的 `release_provenance_benchmark` 只读比较既有 v1.3.0 原始证明的远端／随包核验，记录失败与含准备时间的总墙钟，不发布或更改线上资产；该测量不替代全流程十分钟验收。
 
 Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。只读 CI `release_profile_benchmark` 运行相同 Windows release 测试命令，不构建签发候选、不发布、不保存分支缓存；新增 runner 排队及缓存传输必须纳入墙钟比较。
+
+Core 准备的可选 `core_setup_preparation_benchmark` 固定读取成功 main Qualification 38134657329 的原 1.3.1 候选，先核对任务、固定 Core 清单及 ZIP 摘要，再在各自全新 Windows runner 对照串行／并行准备。两种路径均执行原生恢复、NSIS 编译、安装／卸载／重装、完整身份及产品／桌面启动检查；分阶段记录耗时，候选下载与实际准备分开计时。两个独立 runner 样本不等于同机对照或稳定性能；原候选归档过期时测量失败，不重建或发布替代资产。

@@ -10,6 +10,11 @@ on:
     - cron: '0 10 * * *'
   workflow_dispatch:
     inputs:
+      core_setup_preparation_benchmark:
+        description: Compare serial and parallel Core preparation using pinned successful 1.3.1 candidate; never publish
+        type: boolean
+        default: false
+
       release_extraction_benchmark:
         description: Verify and benchmark the unchanged published v1.3.0 ZIP; never publish
         type: boolean
@@ -469,6 +474,41 @@ jobs:
           name: offline-evidence-${{ matrix.name }}-${{ github.run_attempt }}
           include-hidden-files: true
           path: .agent-tmp/offline-evidence/**
+          if-no-files-found: error
+
+  core_setup_preparation_benchmark:
+    name: Core preparation / ${{ matrix.mode }} / ${{ matrix.sample }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_setup_preparation_benchmark }}
+    runs-on: windows-2025
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [serial, parallel]
+        sample: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Compare identical Core preparation and all original qualification checks
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/qualification/benchmark-core-setup-preparation.ps1 -Mode ${{ matrix.mode }} -OutputDirectory .agent-tmp/core-preparation
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: core-preparation-${{ matrix.mode }}-${{ matrix.sample }}-${{ github.run_id }}
+          path: |
+            .agent-tmp/core-preparation/report.json
+            .agent-tmp/core-preparation/product/core-setup-timings.json
+            .agent-tmp/core-preparation/product/core-setup-identity.json
+            .agent-tmp/core-preparation/product/core-desktop-smoke.json
+            .agent-tmp/core-preparation/update-recovery.log
           if-no-files-found: error
 
   release_extraction_benchmark:
