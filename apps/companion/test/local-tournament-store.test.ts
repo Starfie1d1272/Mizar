@@ -1,14 +1,122 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { deriveScheduleNeighborhood } from '@mizar/core/match-context';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
 import { toMatchDocumentV1, validateBroadcastManifest } from '@mizar/rivalhub';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { LocalTournamentStore } from '../src/match-context/local-tournament-store.js';
 import { localDocumentBindingManifest } from '../src/match-context/local-document-adapter.js';
+import * as durableJson from '../src/match-context/durable-json.js';
+
+const rc29Fixture = new URL('./fixtures/rc29/local-tournament.json', import.meta.url);
+type Rc29Library = Omit<ReturnType<LocalTournamentStore['getSnapshot']>, 'trashedMatches'>;
+
+it('recovers rc29 optional links without losing tournament facts and keeps exact original bytes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rc29-links-'));
+  try {
+    const file = join(directory, 'local-tournament.json');
+    const original = await readFile(rc29Fixture);
+    await writeFile(file, original);
+    const store = new LocalTournamentStore(file);
+    await store.load();
+    const fixture = JSON.parse(original.toString('utf8')) as Rc29Library;
+    const expected = {
+      ...fixture,
+      matches: fixture.matches.map((match) => ({
+        ...match,
+        commentators: match.commentators.map((commentator) =>
+          commentator.userId === 'legacy-relative'
+            ? { ...commentator, liveStreamUrl: null }
+            : commentator,
+        ),
+      })),
+      trashedMatches: [],
+    };
+    expect(store.getSnapshot()).toEqual(expected);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(expected);
+    const backup = (await readdir(directory)).find((name) => name !== 'local-tournament.json')!;
+    expect(await readFile(join(directory, backup))).toEqual(original);
+    const migratedBytes = await readFile(file);
+    const restarted = new LocalTournamentStore(file);
+    await restarted.load();
+    expect(restarted.getSnapshot()).toEqual(expected);
+    expect(await readFile(file)).toEqual(migratedBytes);
+    expect(await readdir(directory)).toHaveLength(2);
+
+    const legacyMatch = fixture.matches[0];
+    await expect(restarted.saveMatch(legacyMatch)).rejects.toThrow();
+    await expect(restarted.importLegacyMatch(legacyMatch)).rejects.toThrow();
+    expect(await readFile(file)).toEqual(migratedBytes);
+    await restarted.saveMatch({ ...restarted.getSnapshot().matches[0]!, matchLabel: '可继续编辑' });
+    expect(await readFile(join(directory, backup))).toEqual(original);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('does not hide unrelated schema or identity errors behind link recovery', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rc29-invalid-'));
+  try {
+    const file = join(directory, 'local-tournament.json');
+    const fixture = JSON.parse(await readFile(rc29Fixture, 'utf8')) as Rc29Library;
+    for (const invalid of [
+      { ...fixture, extra: true },
+      { ...fixture, teams: [] },
+      {
+        ...fixture,
+        matches: [
+          {
+            ...fixture.matches[0],
+            commentators: [{ ...fixture.matches[0]!.commentators[0], liveStreamUrl: 42 }],
+          },
+        ],
+      },
+    ]) {
+      const original = JSON.stringify(invalid);
+      await writeFile(file, original);
+      await expect(new LocalTournamentStore(file).load()).rejects.toThrow();
+      expect(await readFile(file, 'utf8')).toBe(original);
+      expect(await readdir(directory)).toEqual(['local-tournament.json']);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('retains the source on backup or replacement failure and can retry from preserved evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rc29-retry-'));
+  const replace = vi.spyOn(durableJson, 'replaceDurableJson');
+  try {
+    const file = join(directory, 'local-tournament.json');
+    const original = await readFile(rc29Fixture);
+    const backup = `${file}.before-live-stream-url-${createHash('sha256').update(original).digest('hex')}.json`;
+    await writeFile(file, original);
+    await writeFile(backup, 'incomplete backup');
+    await expect(new LocalTournamentStore(file).load()).rejects.toThrow(
+      'local_link_backup_invalid',
+    );
+    expect(replace).not.toHaveBeenCalled();
+    expect(await readFile(file)).toEqual(original);
+    expect(await readFile(backup, 'utf8')).toBe('incomplete backup');
+    await rm(backup);
+    replace.mockRejectedValueOnce(new Error('replacement interrupted'));
+    await expect(new LocalTournamentStore(file).load()).rejects.toThrow('replacement interrupted');
+    expect(await readFile(file)).toEqual(original);
+    expect(await readFile(backup)).toEqual(original);
+    const recovered = new LocalTournamentStore(file);
+    await recovered.load();
+    expect(recovered.getSnapshot().matches[0]!.commentators[0]!.liveStreamUrl).toBeNull();
+    expect(await readFile(backup)).toEqual(original);
+    expect(await readdir(directory)).toHaveLength(2);
+  } finally {
+    replace.mockRestore();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 describe('Mizar local tournament input', () => {
   it('creates a match without BP, reuses teams and derives event schedule after restart', async () => {

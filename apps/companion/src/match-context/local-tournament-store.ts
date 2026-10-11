@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, readFile, writeFile } from 'node:fs/promises';
 
 import type { MatchDocumentV1, ScheduleWindowV1 } from '@mizar/core/match-context';
 import {
@@ -55,6 +55,52 @@ const emptyState = (): LocalTournamentState => ({
   selectedMatchId: null,
   selectedAt: null,
 });
+
+/** Recovery is confined to persisted optional links; normal writes remain strict. */
+function recoverPersistedLinks(input: unknown): boolean {
+  const parsed = localTournamentStateV1Schema.safeParse(input);
+  if (parsed.success) return false;
+  const links: Record<string, unknown>[] = [];
+  for (const issue of parsed.error.issues) {
+    const path = issue.path;
+    const matchPath = path.length === 5 && path[0] === 'matches' && path[2] === 'commentators';
+    const trashPath =
+      path.length === 6 &&
+      path[0] === 'trashedMatches' &&
+      path[2] === 'document' &&
+      path[3] === 'commentators';
+    if ((!matchPath && !trashPath) || path.at(-1) !== 'liveStreamUrl') throw parsed.error;
+    let parent = input;
+    for (const key of path.slice(0, -1)) {
+      if (typeof parent !== 'object' || parent === null) throw parsed.error;
+      parent = (parent as Record<PropertyKey, unknown>)[key];
+    }
+    if (
+      typeof parent !== 'object' ||
+      parent === null ||
+      !('liveStreamUrl' in parent) ||
+      typeof parent.liveStreamUrl !== 'string'
+    )
+      throw parsed.error;
+    links.push(parent);
+  }
+  for (const link of links) link.liveStreamUrl = null;
+  return links.length > 0;
+}
+
+async function preserveOriginalLinks(filePath: string, bytes: Buffer): Promise<void> {
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const backupPath = `${filePath}.before-live-stream-url-${digest}.json`;
+  try {
+    await writeFile(backupPath, bytes, { flag: 'wx', mode: 0o600, flush: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  // A prior interrupted or unrelated backup never authorizes replacing the source.
+  const stat = await lstat(backupPath);
+  if (!stat.isFile() || stat.size !== bytes.length || !(await readFile(backupPath)).equals(bytes))
+    throw new Error('local_link_backup_invalid');
+}
 
 function readState(input: unknown): LocalTournamentState {
   if (Buffer.byteLength(JSON.stringify(input)) > 2_000_000)
@@ -156,14 +202,24 @@ export class LocalTournamentStore {
   constructor(private readonly filePath: string) {}
 
   async load(): Promise<void> {
-    try {
-      const bytes = await readFile(this.filePath, 'utf8');
-      if (Buffer.byteLength(bytes) > 2_000_000) throw new Error('local_store_too_large');
-      this.state = readState(JSON.parse(bytes));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
+    await this.queue.run(async () => {
+      let bytes: Buffer;
+      try {
+        bytes = await readFile(this.filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+      if (bytes.length > 2_000_000) throw new Error('local_store_too_large');
+      const input: unknown = JSON.parse(bytes.toString('utf8'));
+      const recovered = recoverPersistedLinks(input);
+      const state = readState(input);
+      if (recovered) {
+        await preserveOriginalLinks(this.filePath, bytes);
+        await replaceDurableJson(this.filePath, state);
+      }
+      this.state = state;
+    });
   }
 
   getSnapshot(): LocalTournamentState {
