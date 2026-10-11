@@ -59,6 +59,8 @@ export interface OperatorProjection {
       readonly entryBName: string;
     };
     readonly origin: ProjectionContextInput['origin'];
+    readonly rosterAuthority: ProjectionContextInput['rosterAuthority'];
+    readonly sourceFailure: ProjectionContextInput['sourceFailure'];
     readonly freshness: ProjectionContextInput['freshness'];
     readonly storedAt: string | null;
     readonly cachedFrom: ProjectionContextInput['cachedFrom'];
@@ -160,6 +162,8 @@ export function projectOperator(input: OperatorProjectionInput): OperatorProject
               entryBName: context.context.entrants.b.name,
             },
       origin: context.origin,
+      rosterAuthority: context.rosterAuthority,
+      sourceFailure: context.sourceFailure,
       freshness: context.freshness,
       storedAt: context.storedAt,
       cachedFrom: context.cachedFrom,

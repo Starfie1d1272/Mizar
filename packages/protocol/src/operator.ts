@@ -184,6 +184,20 @@ export const operatorPayloadSchema = z.object({
       })
       .nullable(),
     origin: z.enum(['online', 'local', 'fixture', 'cache']).nullable(),
+    rosterAuthority: z.enum(['local-server', 'rivalhub', 'fixture', 'unknown']).default('unknown'),
+    sourceFailure: z
+      .enum([
+        'network',
+        'timeout',
+        'authorization',
+        'not_found',
+        'unavailable',
+        'invalid_response',
+        'invalid_manifest',
+        'match_mismatch',
+      ])
+      .nullable()
+      .default(null),
     freshness: z.enum(['unbound', 'fresh', 'stale']),
     storedAt: nullableString,
     cachedFrom: z.enum(['online', 'local', 'fixture']).nullable(),
@@ -241,3 +255,15 @@ export type OperatorSnapshotInput = Omit<LocalSnapshotV1<OperatorPayload>, 'chan
 
 export const OperatorPayloadSchema = operatorPayloadSchema;
 export const OperatorSnapshotSchema = operatorSnapshotSchema;
+
+/** Safe, derived review of the existing manual map binding command. */
+export interface SeriesBindingView {
+  readonly revision: string;
+  readonly matchId: string;
+  readonly mapName: string | null;
+  readonly bindingState: 'bound' | 'unbound' | 'needs_operator';
+  readonly canBind: boolean;
+  readonly blockedReason:
+    'awaiting_data' | 'identity_unverified' | 'no_matching_map' | 'series_completed' | null;
+  readonly targets: readonly { readonly mapOrder: number; readonly mapName: string }[];
+}

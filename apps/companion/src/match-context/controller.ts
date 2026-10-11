@@ -13,7 +13,7 @@ import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
 
 import { SerialCommitQueue } from './serial-commit.js';
-import { SourceLoadError } from './source-error.js';
+import { SourceLoadError, sourceErrorEvidence, type SourceFailureCode } from './source-error.js';
 import {
   type ContextFreshness,
   type ContextOrigin,
@@ -51,6 +51,8 @@ export interface MatchContextControllerIssue {
   readonly diagnostics?: readonly ContractDiagnostic[];
   readonly stage?: 'manifest' | 'match_document';
   readonly storeIssue?: MatchContextStoreIssue;
+  readonly sourceFailure?: SourceFailureCode;
+  readonly sourceEvidence?: ReturnType<typeof sourceErrorEvidence>;
 }
 
 export interface MatchContextSelectionSuccess {
@@ -355,7 +357,10 @@ export class MatchContextController {
     } catch (error: unknown) {
       if (!(error instanceof SourceLoadError)) throw error;
       return this.useFallback(generation, requestedMatchId, [
-        controllerIssue('source_load_failed', 'Manifest source 加载失败。'),
+        controllerIssue('source_load_failed', 'Manifest source 加载失败。', {
+          sourceFailure: error.code,
+          sourceEvidence: sourceErrorEvidence(error),
+        }),
       ]);
     }
 
@@ -364,12 +369,15 @@ export class MatchContextController {
       return this.useFallback(generation, requestedMatchId, [
         controllerIssue('source_invalid', 'Manifest source 未通过 validation。', {
           diagnostics: validated.diagnostics,
+          sourceFailure: 'invalid_manifest',
         }),
       ]);
     }
     if (validated.value.match.matchId !== requestedMatchId) {
       return this.useFallback(generation, requestedMatchId, [
-        controllerIssue('source_match_mismatch', 'Manifest source matchId 与请求不一致。'),
+        controllerIssue('source_match_mismatch', 'Manifest source matchId 与请求不一致。', {
+          sourceFailure: 'match_mismatch',
+        }),
       ]);
     }
 
@@ -637,7 +645,11 @@ export class MatchContextController {
             }),
           ],
         };
-      if (isDeepStrictEqual(active.manifest, validated.value)) return result;
+      if (isDeepStrictEqual(active.manifest, validated.value)) {
+        if (active.freshness !== 'fresh' || active.sourceFailure != null)
+          this.setActive({ ...active, freshness: 'fresh', sourceFailure: null });
+        return { ...result, binding: this.activeBinding! };
+      }
       const context = toMatchDocumentV1(validated.value);
       const saved = await this.lkgStore.save(validated.value, 'local', {
         canCommit,
@@ -660,6 +672,7 @@ export class MatchContextController {
           manifest: validated.value,
           context,
           freshness: 'fresh',
+          sourceFailure: null,
           diagnostics: validated.diagnostics,
         });
       return { ok: true as const, binding: this.activeBinding!, diagnostics: result.diagnostics };
@@ -680,18 +693,30 @@ export class MatchContextController {
       );
       if (
         !result.ok &&
+        result.diagnostics.some((item) => item.sourceFailure !== undefined) &&
         generation === this.onlineCandidateGeneration &&
-        this.activeBinding?.origin === 'online' &&
-        this.activeBinding.context.matchId === requestedMatchId &&
-        this.activeBinding.freshness !== 'stale'
+        this.activeBinding !== undefined &&
+        !isStandaloneLocalMatch(this.activeBinding) &&
+        this.activeBinding.context.matchId === requestedMatchId
       ) {
         await this.commitQueue.run(() => {
           if (
             generation === this.onlineCandidateGeneration &&
-            this.activeBinding?.origin === 'online' &&
-            this.activeBinding.context.matchId === requestedMatchId
+            this.activeBinding !== undefined &&
+            !isStandaloneLocalMatch(this.activeBinding) &&
+            this.activeBinding.context.matchId === requestedMatchId &&
+            (this.activeBinding.freshness !== 'stale' ||
+              this.activeBinding.sourceFailure !==
+                (result.diagnostics.find((item) => item.sourceFailure)?.sourceFailure ??
+                  'unavailable'))
           )
-            this.setActive({ ...this.activeBinding, freshness: 'stale' });
+            this.setActive({
+              ...this.activeBinding,
+              freshness: 'stale',
+              sourceFailure:
+                result.diagnostics.find((item) => item.sourceFailure)?.sourceFailure ??
+                'unavailable',
+            });
         });
       }
       return result;
@@ -718,7 +743,10 @@ export class MatchContextController {
         ok: false,
         requestedMatchId,
         diagnostics: [
-          controllerIssue('source_load_failed', 'RivalHub BP 当前不可用，本地比赛仍保持。'),
+          controllerIssue('source_load_failed', 'RivalHub 比赛资料当前不可用，已加载资料仍保持。', {
+            sourceFailure: error.code,
+            sourceEvidence: sourceErrorEvidence(error),
+          }),
         ],
       };
     }
@@ -732,7 +760,9 @@ export class MatchContextController {
           controllerIssue(
             validated.ok ? 'source_match_mismatch' : 'source_invalid',
             'RivalHub BP 暂不可用，本地比赛仍保持。',
-            validated.ok ? {} : { diagnostics: validated.diagnostics },
+            validated.ok
+              ? { sourceFailure: 'match_mismatch' }
+              : { diagnostics: validated.diagnostics, sourceFailure: 'invalid_manifest' },
           ),
         ],
       };
@@ -749,6 +779,7 @@ export class MatchContextController {
           controllerIssue('source_conversion_failed', 'RivalHub BP 无法转换，本地比赛仍保持。', {
             diagnostics: error.diagnostics,
             stage: error.stage,
+            sourceFailure: 'invalid_manifest',
           }),
         ],
       };
@@ -773,8 +804,8 @@ export class MatchContextController {
         isDeepStrictEqual(this.activeBinding.manifest, binding.manifest)
       ) {
         this.pendingOnlineCandidate = undefined;
-        if (this.activeBinding.freshness !== 'fresh')
-          this.setActive({ ...this.activeBinding, freshness: 'fresh' });
+        if (this.activeBinding.freshness !== 'fresh' || this.activeBinding.sourceFailure != null)
+          this.setActive({ ...this.activeBinding, freshness: 'fresh', sourceFailure: null });
         return { ok: true, binding: this.activeBinding, diagnostics: [] };
       }
       if (!isDeepStrictEqual(this.pendingOnlineCandidate?.binding.manifest, binding.manifest))
@@ -803,7 +834,9 @@ export class MatchContextController {
 
       const current = this.activeBinding;
       if (current?.context.matchId === requestedMatchId) {
-        const staleBinding: MatchContextBinding = { ...current, freshness: 'stale' };
+        const sourceFailure =
+          diagnostics.find((item) => item.sourceFailure)?.sourceFailure ?? 'unavailable';
+        const staleBinding: MatchContextBinding = { ...current, freshness: 'stale', sourceFailure };
         diagnostics.push(
           controllerIssue(
             'memory_fallback',
@@ -821,8 +854,14 @@ export class MatchContextController {
         diagnostics.push(
           controllerIssue('lkg_fallback', '已使用同一 matchId 的 stale Manifest LKG。'),
         );
-        this.setActive(fallback.value);
-        return { ok: true, binding: fallback.value, diagnostics };
+        const binding = {
+          ...fallback.value,
+          sourceFailure:
+            diagnostics.find((item) => item.sourceFailure)?.sourceFailure ??
+            ('unavailable' as const),
+        };
+        this.setActive(binding);
+        return { ok: true, binding, diagnostics };
       }
       diagnostics.push(
         controllerIssue('lkg_unavailable', '没有可用于该 matchId 的 Manifest LKG。', {

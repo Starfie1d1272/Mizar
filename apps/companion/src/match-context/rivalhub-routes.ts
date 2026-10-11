@@ -1,3 +1,4 @@
+import { sourceErrorEvidence } from './source-error.js';
 import type { FastifyInstance } from 'fastify';
 import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -63,7 +64,10 @@ export function registerRivalHubConnectionRoutes(
         try {
           return await source.load();
         } catch (error) {
-          app.log.error({ err: error, matchId }, 'RivalHub manifest fetch failed');
+          app.log.error(
+            { diagnostic: sourceErrorEvidence(error), matchId },
+            'RivalHub manifest fetch failed',
+          );
           throw error;
         }
       },
@@ -81,7 +85,13 @@ export function registerRivalHubConnectionRoutes(
     refreshing = controller
       .refreshOnlineMatch(sourceFor(binding.context.matchId), options.canUpdatePlan)
       .then((result) => {
-        if (!result.ok) throw new Error(result.diagnostics.map((item) => item.message).join('；'));
+        if (!result.ok) {
+          app.log.warn(
+            { diagnostics: result.diagnostics, matchId: binding.context.matchId },
+            'RivalHub manifest refresh rejected',
+          );
+          throw new Error(result.diagnostics.map((item) => item.message).join('；'));
+        }
         lastRefreshAt = new Date().toISOString();
         refreshError = null;
         return {

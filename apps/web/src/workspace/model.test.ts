@@ -57,7 +57,7 @@ const operator = {
     requiredWins: 2,
     maps: [{ status: 'completed' }, { status: 'current' }],
   },
-  matchContext: { freshness: 'fresh' },
+  matchContext: { freshness: 'fresh', rosterAuthority: 'rivalhub', sourceFailure: null },
   identity: { state: 'matched', issues: [] },
 } as unknown as OperatorPayload;
 
@@ -108,13 +108,13 @@ it('keeps awaiting input and incomplete evidence distinct from a confirmed misma
     issues: [],
   };
   expect(workspaceIssues(payload)).toEqual([
-    expect.objectContaining({ summary: '地图执行待确认', path: '/matches?tab=maps' }),
+    expect.objectContaining({ summary: '当前地图没有可用比赛位置', path: '/debug' }),
   ]);
   payload.seriesProgress.issues = [
     { code: 'map_mismatch' } as NonNullable<OperatorPayload['seriesProgress']>['issues'][number],
   ];
   expect(workspaceIssues(payload)).toEqual([
-    expect.objectContaining({ summary: '地图执行待确认' }),
+    expect.objectContaining({ summary: '当前地图没有可用比赛位置' }),
   ]);
   payload.identity.issues = [
     { code: 'map_mismatch' } as OperatorPayload['identity']['issues'][number],
@@ -231,7 +231,7 @@ it('prioritizes incomplete canonical data over unexpected accounts from the real
     expect.arrayContaining(['missing_canonical_steam64', 'unexpected_human_steam64']),
   );
   expect(issuesFromResolution(missingResult)).toEqual([
-    expect.objectContaining({ summary: '选手 Steam64 缺失', action: '补全名单' }),
+    expect.objectContaining({ summary: '选手 Steam64 缺失', action: '核对网站名单' }),
   ]);
   const short: MatchContext = {
     ...missing,
@@ -249,7 +249,7 @@ it('prioritizes incomplete canonical data over unexpected accounts from the real
     ]),
   );
   expect(issuesFromResolution(shortResult)).toEqual([
-    expect.objectContaining({ summary: '名单不完整', action: '补全名单' }),
+    expect.objectContaining({ summary: '网站名单不完整', action: '核对网站名单' }),
   ]);
   const duplicate: MatchContext = {
     ...context,
@@ -329,4 +329,27 @@ it('does not invent a roster conflict when a real map mismatch persists without 
   );
   expect(recovered.state).toBe('matched');
   expect(issuesFromResolution(recovered)).toEqual([]);
+});
+
+it('treats startup cache restoration as recovery and routes known source failures to an actual retry or reconnect', () => {
+  const payload = structuredClone(operator);
+  payload.matchContext = {
+    ...payload.matchContext,
+    origin: 'cache',
+    cachedFrom: 'online',
+    freshness: 'stale',
+  };
+  expect(workspaceIssues(payload)).toEqual([]);
+  payload.matchContext.sourceFailure = 'network';
+  expect(workspaceIssues(payload)).toEqual([
+    expect.objectContaining({
+      summary: '网站比赛资料更新失败',
+      action: '重试更新资料',
+      run: 'refresh-rivalhub',
+    }),
+  ]);
+  payload.matchContext.sourceFailure = 'authorization';
+  expect(workspaceIssues(payload)).toEqual([
+    expect.objectContaining({ summary: '网站授权被拒绝', path: '/settings?tab=rivalhub' }),
+  ]);
 });

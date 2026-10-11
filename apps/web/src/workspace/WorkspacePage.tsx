@@ -9,7 +9,12 @@ import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
 import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
-import { workspaceCurrentPov, workspaceIssues, workspaceMatchScore } from './model';
+import {
+  workspaceCurrentPov,
+  workspaceIssues,
+  workspaceMatchScore,
+  type WorkspaceIssue,
+} from './model';
 import { useObsStatus } from './obs-client';
 import {
   useLocalRead,
@@ -56,10 +61,12 @@ function ContextPanel({
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
   const issueKey = issues.map((issue) => issue.id).join(',');
   const visibleIssueError = issueError?.key === issueKey ? issueError.message : null;
-  async function openIssue(path: string) {
+  async function openIssue(issue: WorkspaceIssue) {
+    const path = issue.path;
     setIssueError(null);
     try {
-      if (path === '/debug' && window.__TAURI_INTERNALS__) await openTool('diagnostics');
+      if (issue.run === 'refresh-rivalhub') await command('/operator/rivalhub/refresh');
+      else if (path === '/debug' && window.__TAURI_INTERNALS__) await openTool('diagnostics');
       else await openPreparation(path);
     } catch (error) {
       setIssueError({
@@ -97,16 +104,22 @@ function ContextPanel({
       {issues.length > 0 ? (
         <div className="workspace-attention" data-multiple={issues.length > 1}>
           <span role="status" title={issues.map((issue) => issue.summary).join('；')}>
-            {issues[0]!.summary}
+            <Button
+              variant="secondary"
+              className="workspace-issue-summary"
+              onClick={() => setIssuesOpen(true)}
+            >
+              {issues[0]!.summary}
+            </Button>
             {issues.length > 1 ? ` · 共 ${issues.length} 项` : ''}
           </span>
-          <Button onClick={() => void openIssue(issues[0]!.path)}>{issues[0]!.action}</Button>
+          <Button onClick={() => void openIssue(issues[0]!)}>{issues[0]!.action}</Button>
           {issues.length > 1 ? <Button onClick={() => setIssuesOpen(true)}>全部问题</Button> : null}
         </div>
       ) : null}
       {visibleIssueError && issues.length > 0 ? <p role="alert">{visibleIssueError}</p> : null}
       <Dialog
-        open={issuesOpen && issues.length > 1}
+        open={issuesOpen && issues.length > 0}
         title="本场需要处理"
         onClose={() => setIssuesOpen(false)}
       >
@@ -114,7 +127,7 @@ function ContextPanel({
           <section key={issue.id} aria-label={issue.summary}>
             <h3>{issue.summary}</h3>
             <p>{issue.detail}</p>
-            <Button onClick={() => void openIssue(issue.path)}>{issue.action}</Button>
+            <Button onClick={() => void openIssue(issue)}>{issue.action}</Button>
           </section>
         ))}
         {visibleIssueError ? <p role="alert">{visibleIssueError}</p> : null}

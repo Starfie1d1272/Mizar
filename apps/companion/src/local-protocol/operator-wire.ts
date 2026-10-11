@@ -162,6 +162,8 @@ export function mapOperatorProjection(projection: OperatorProjection): OperatorP
       state: projection.matchContext.state,
       summary: projection.matchContext.summary,
       origin: projection.matchContext.origin,
+      rosterAuthority: projection.matchContext.rosterAuthority,
+      sourceFailure: projection.matchContext.sourceFailure,
       freshness: projection.matchContext.freshness,
       storedAt: projection.matchContext.storedAt,
       cachedFrom: projection.matchContext.cachedFrom,

@@ -158,6 +158,21 @@ describe('Match Manifest last-known-good seam', () => {
       load: () => Promise.reject(new SourceLoadError('HTTP 503')),
     });
     expect(controller.getPendingOnlineCandidate()?.revision).toBe(pending?.revision);
+    expect(controller.getActiveBinding()?.sourceFailure).toBe('unavailable');
+    expect((await controller.refreshOnlineMatch(source('online', next))).ok).toBe(true);
+    expect(controller.getActiveBinding()?.origin).toBe('local');
+    expect(controller.getActiveBinding()?.manifest.veto).toEqual([]);
+    expect(controller.getActiveBinding()?.freshness).toBe('fresh');
+    expect(controller.getActiveBinding()?.sourceFailure).toBeNull();
+    await controller.refreshOnlineMatch({
+      kind: 'online',
+      load: () => Promise.reject(new SourceLoadError('HTTP 503')),
+    });
+    const newer = { ...next, revision: 'another-update', commentators: [] };
+    expect((await controller.refreshOnlineMatch(source('online', newer))).ok).toBe(true);
+    expect(controller.getActiveBinding()?.sourceFailure).toBeNull();
+    expect(controller.getActiveBinding()?.manifest.commentators).toEqual([]);
+    expect(controller.getActiveBinding()?.manifest.veto).toEqual([]);
     expect((await controller.refreshOnlineMatch(source('online', { ...next, veto: [] }))).ok).toBe(
       true,
     );

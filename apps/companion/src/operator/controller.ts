@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { canonicalizeCs2MapName } from '@mizar/core/map-name';
+import type { SeriesBindingView } from '@mizar/protocol/operator';
+import type { OperatorProjection } from '../projections/operator-projection.js';
 import type { OperatorCommand, SeriesProgress } from '@mizar/core/series-progress';
 
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -7,6 +11,10 @@ import type { SeriesOperatorCommandResult } from '../runtime/program-runtime.js'
 export interface OperatorCommandControllerOptions {
   readonly originPolicy: LocalWebOriginPolicy;
   readonly execute: (command: OperatorCommand) => SeriesOperatorCommandResult;
+  readonly getBindingState?: () => {
+    readonly contextRevision: string;
+    readonly operator: OperatorProjection;
+  } | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +55,59 @@ export function registerOperatorCommandRoutes(
   app: FastifyInstance,
   options: OperatorCommandControllerOptions,
 ): void {
+  const bindingView = (): SeriesBindingView | null => {
+    const state = options.getBindingState?.();
+    const operator = state?.operator;
+    const progress = operator?.seriesProgress;
+    const matchId = operator?.matchContext.summary?.matchId;
+    if (!state || !operator || !progress || !matchId) return null;
+    const mapName =
+      operator.runtime.mapName === null ? null : canonicalizeCs2MapName(operator.runtime.mapName);
+    const targets = progress.maps
+      .filter(
+        (map) => (map.status === 'pending' || map.status === 'current') && map.mapName === mapName,
+      )
+      .map((map) => ({ mapOrder: map.mapOrder, mapName: map.mapName }));
+    const blockedReason =
+      progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins
+        ? ('series_completed' as const)
+        : operator.runtime.telemetryFreshness !== 'fresh' || mapName === null
+          ? ('awaiting_data' as const)
+          : operator.identity.state !== 'matched'
+            ? ('identity_unverified' as const)
+            : targets.length === 0
+              ? ('no_matching_map' as const)
+              : null;
+    // The review token changes with context, execution, target availability and proof,
+    // not with every receive frame. No second state owner is introduced.
+    const revision = createHash('sha256')
+      .update(
+        JSON.stringify({
+          contextRevision: state.contextRevision,
+          matchId,
+          mapName,
+          sourceGeneration: operator.cursor.programSourceGeneration,
+          mapEpoch: operator.cursor.mapEpoch,
+          bindingState: progress.bindingState,
+          score: progress.score,
+          maps: progress.maps,
+          blockedReason,
+        }),
+      )
+      .digest('hex');
+    return {
+      revision,
+      matchId,
+      mapName,
+      bindingState: progress.bindingState,
+      canBind: blockedReason === null && progress.bindingState === 'needs_operator',
+      blockedReason,
+      targets,
+    };
+  };
+  app.get('/local/v1/series-binding', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send({ binding: bindingView() }),
+  );
   app.post('/operator/series/bind', (request, reply) => {
     if (options.originPolicy.mode !== 'loopback') {
       mutationUnavailableOnLan(reply);
@@ -72,6 +133,20 @@ export function registerOperatorCommandRoutes(
       return reply.code(400).send({ error: 'invalid_operator_series_bind_command' });
     }
 
+    if (options.getBindingState) {
+      const view = bindingView();
+      if (!view)
+        return reply
+          .code(409)
+          .send({ ok: false, code: 'series_unbound', message: '请先选择比赛并等待游戏数据。' });
+      const expectedRevision = isRecord(body) ? body.expectedRevision : undefined;
+      if (typeof expectedRevision !== 'string' || expectedRevision !== view.revision)
+        return reply.code(409).send({ message: '比赛或地图已变化，请重新核对当前图。' });
+      if (!view.canBind || !view.targets.some((target) => target.mapOrder === mapOrder))
+        return reply
+          .code(409)
+          .send({ message: '当前地图没有可确认的位置，或身份尚未核验。已有比分和记录保持不变。' });
+    }
     const result = options.execute({
       kind,
       mapOrder,

@@ -29,6 +29,7 @@ export interface WorkspaceIssue {
   readonly detail: string;
   readonly action: string;
   readonly path: string;
+  readonly run?: 'refresh-rivalhub';
 }
 
 export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssue[] {
@@ -43,10 +44,22 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       },
     ];
   const issues: WorkspaceIssue[] = [];
-  const rosterRecovery =
-    operator.matchContext.origin === 'online' || operator.matchContext.cachedFrom === 'online'
-      ? '在比赛资料页打开 RivalHub 修改名单，返回后重新加载比赛资料。'
-      : '在比赛资料页确认名单后保存。';
+  const authority = operator.matchContext.rosterAuthority ?? 'unknown';
+  const localRoster = authority === 'local-server';
+  const rosterAction = localRoster
+    ? '识别服务器首发'
+    : authority === 'rivalhub'
+      ? '核对网站名单'
+      : '核对名单';
+  const rosterRecovery = localRoster
+    ? '先确认正在观战的服务器正确，再从当前服务器识别首发，核对两队后确认保存。'
+    : authority === 'rivalhub'
+      ? '在比赛资料页打开网站本场工作台，由赛务人员修改名单，返回后刷新比赛资料。'
+      : '核对资料来源与当前上场账号，不自动覆盖名单。';
+  const serverRosterReady =
+    operator.runtime.telemetryFreshness === 'fresh' &&
+    operator.activeLineup?.state === 'complete' &&
+    operator.activeLineup.retainedCount === 0;
   const identityCodes = new Set(operator.identity.issues.map((issue) => issue.code));
   const seriesNeedsOperator = operator.seriesProgress?.bindingState === 'needs_operator';
   // Series issues retain history across recovery; only current identity evidence
@@ -60,36 +73,82 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: '核对地图',
       path: '/matches?tab=maps',
     });
-  else if (seriesNeedsOperator)
+  else if (seriesNeedsOperator) {
+    const matching = operator.seriesProgress!.maps.filter(
+      (map) =>
+        (map.status === 'pending' || map.status === 'current') &&
+        map.mapName === operator.runtime.mapName,
+    );
+    issues.push(
+      matching.length > 0
+        ? {
+            id: 'series',
+            summary:
+              matching.length === 1
+                ? `当前图尚未确认为第 ${matching[0]!.mapOrder} 图`
+                : '当前是第几图待确认',
+            detail:
+              '当前游戏地图存在可用比赛位置，需要人工确认。在地图页选择当前属于第几图并确认；已有比分保留，缺失的上一图结果不会因此补齐。',
+            action: '确认当前图',
+            path: '/matches?tab=maps',
+          }
+        : {
+            id: 'series',
+            summary: '当前地图没有可用比赛位置',
+            detail:
+              '可能存在未结束的上一图、重复已完成地图、图池或图数冲突。当前功能不能新增比赛位置或补录历史赛果；保留资料和游戏观测，导出诊断反馈。',
+            action: '导出诊断反馈',
+            path: '/debug',
+          },
+    );
+  }
+  const unfinished = operator.seriesProgress?.maps.find((map) => map.status === 'current');
+  const resultBlocked =
+    unfinished &&
+    operator.seriesProgress?.issues.some(
+      (issue) =>
+        issue.mapEpoch === unfinished.executionMapEpoch &&
+        issue.mapOrder === unfinished.mapOrder &&
+        ['final_score_unavailable', 'final_score_conflict', 'side_mapping_unproven'].includes(
+          issue.code,
+        ),
+    );
+  if (!seriesNeedsOperator && resultBlocked)
     issues.push({
-      id: 'series',
-      summary: '地图执行待确认',
+      id: 'result',
+      summary: '本图结果尚未确认',
       detail:
-        '地图顺序、上一图结果或执行绑定尚未确认。先核对本场地图与 BP，保留已观测比分；不要为继续制作重置比赛资料。',
-      action: '核对地图',
-      path: '/matches?tab=maps',
+        '地图结束数据缺少可核验的比分或双方身份。恢复完整游戏观测后会重新检查；确认地图位置不能补录结果，无法恢复观测时请保留记录并导出诊断反馈。',
+      action: '导出诊断反馈',
+      path: '/debug',
     });
   const rosterIncomplete = identityCodes.has('roster_incomplete');
-  const steam64Missing = identityCodes.has('missing_canonical_steam64');
+  // A null account on an unused substitute does not block a matched live lineup.
+  const steam64Missing =
+    identityCodes.has('missing_canonical_steam64') && operator.identity.state !== 'matched';
   const rosterAmbiguous =
     identityCodes.has('duplicate_canonical_player_id') ||
     identityCodes.has('duplicate_canonical_steam64');
   // An account absent from incomplete/ambiguous source data is not proof of
   // a player mismatch. Repair the canonical roster before checking live IDs.
-  if (rosterIncomplete)
+  if (rosterIncomplete && (!localRoster || serverRosterReady))
     issues.push({
       id: 'roster',
-      summary: '名单不完整',
-      detail: `比赛资料中至少一队的名单少于五人。补全名单及对应 Steam64 后重新核对当前选手账号。${rosterRecovery}`,
-      action: '补全名单',
+      summary: localRoster
+        ? '本地首发待确认'
+        : authority === 'rivalhub'
+          ? '网站名单不完整'
+          : '名单资料未就绪',
+      detail: `比赛资料中至少一队的名单少于五人。${rosterRecovery}`,
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
-  else if (steam64Missing)
+  else if (steam64Missing && (!localRoster || serverRosterReady))
     issues.push({
       id: 'steam64',
       summary: '选手 Steam64 缺失',
-      detail: `比赛名单中的选手缺少 Steam64。补全对应账号后重新核对当前选手，不按昵称猜测身份。${rosterRecovery}`,
-      action: '补全名单',
+      detail: `当前选手尚不能通过比赛资料核验 Steam64。${rosterRecovery}`,
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
   else if (rosterAmbiguous)
@@ -97,15 +156,15 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       id: 'roster',
       summary: '名单不一致',
       detail: `比赛资料中的选手身份重复。修正重复身份后重新核对当前选手账号。${rosterRecovery}`,
-      action: '核对名单',
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
-  else if (identityCodes.has('unexpected_human_steam64'))
+  else if (identityCodes.has('unexpected_human_steam64') && !rosterIncomplete && !steam64Missing)
     issues.push({
       id: 'steam64',
       summary: '选手 Steam64 不匹配',
-      detail: `观测到的选手 Steam64 不在本场名单中。核对所选比赛及选手账号；确认替补时更新比赛名单。${rosterRecovery}`,
-      action: '核对名单',
+      detail: `观测到的选手 Steam64 不在本场名单中。先核对比赛与服务器是否正确，再确认替补或名单变化。${rosterRecovery}`,
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
   else if (identityCodes.has('lineup_differs_from_expected'))
@@ -113,7 +172,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       id: 'roster',
       summary: '名单不一致',
       detail: `当前阵容与比赛资料中的预期首发不同。核对两队首发及替补。${rosterRecovery}`,
-      action: '核对名单',
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
   else if (identityCodes.has('side_mapping_conflict'))
@@ -121,7 +180,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       id: 'identity',
       summary: '比赛身份待核对',
       detail: '当前队伍阵营与比赛资料存在冲突。核对所选比赛、名单与双方阵营。',
-      action: '核对名单',
+      action: rosterAction,
       path: '/matches?tab=roster',
     });
   else if (
@@ -146,13 +205,34 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: '检查游戏连接',
       path: '/settings?tab=gsi',
     });
-  if (operator.matchContext.freshness === 'stale')
+  const failure = operator.matchContext.sourceFailure;
+  if (failure) {
+    const authorization = failure === 'authorization';
+    const format = ['invalid_response', 'invalid_manifest', 'match_mismatch'].includes(failure);
+    const unavailable = failure === 'not_found';
     issues.push({
-      id: 'context',
-      summary: '比赛资料使用缓存',
-      detail: '当前比赛资料来自缓存。核对比赛选择与资料来源，连接恢复后重新加载最新资料。',
-      action: '核对比赛',
-      path: '/matches',
+      id: `context-${failure}`,
+      summary: authorization
+        ? '网站授权被拒绝'
+        : format
+          ? '网站比赛资料无法加载'
+          : unavailable
+            ? '网站比赛已不可获取'
+            : '网站比赛资料更新失败',
+      detail: authorization
+        ? '网站拒绝当前授权。已加载资料会保留；重新连接 RivalHub 后刷新本场资料。'
+        : format
+          ? '网站返回的资料格式或比赛标识不符合本场要求。已加载资料会保留；刷新重试，仍失败时导出诊断反馈给赛务或维护人员。'
+          : unavailable
+            ? '网站未找到当前比赛。核对网站是否仍保留该比赛及你的访问权限，再选择有效比赛。'
+            : failure === 'network' || failure === 'timeout'
+              ? '连接网站失败或超时。检查本机网络后刷新重试；后台也会自动重试，已有比赛资料会保留。'
+              : '网站当前不可用。刷新重试；持续失败时检查网站服务并导出诊断反馈，已有比赛资料会保留。',
+      action: authorization ? '重新连接 RivalHub' : unavailable ? '选择有效比赛' : '重试更新资料',
+      path: authorization ? '/settings?tab=rivalhub' : '/matches',
+      ...(!authorization && !unavailable ? { run: 'refresh-rivalhub' as const } : {}),
     });
+  }
+  // Startup LKG restoration alone is normal recovery, not proof of network failure.
   return issues;
 }
