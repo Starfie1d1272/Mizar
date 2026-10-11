@@ -6,7 +6,7 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, reducedMotion: 'reduce' });
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
-const cases = ['playin-10','playin-00','bo3','semifinal','third-place','grand-final','long','unknown','local-missing'];
+const cases = ['playin-10','playin-00','bo3','semifinal','third-place','grand-final','long','unknown','local-missing','swiss-11','direct-bo3','upper-semifinal','lower-final','ranking'];
 const report = [];
 for (const name of cases) {
   await page.goto(`http://127.0.0.1:4197/__visual/program/default-stage-${name}`);

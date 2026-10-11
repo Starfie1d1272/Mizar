@@ -623,9 +623,359 @@
         221,
         235
       ]
+    },
+    {
+      "name": "swiss-11",
+      "caption": {
+        "text": "PLAY-IN · 1–1",
+        "box": {
+          "x": 576,
+          "y": 3,
+          "width": 768,
+          "height": 18,
+          "right": 1344,
+          "bottom": 21
+        },
+        "clipped": false
+      },
+      "shell": {
+        "x": 560,
+        "y": 24,
+        "width": 800,
+        "height": 80,
+        "right": 1360,
+        "bottom": 104
+      },
+      "names": [
+        {
+          "text": "FURIA",
+          "box": {
+            "x": 636,
+            "y": 53.546875,
+            "width": 56,
+            "height": 20.890625,
+            "right": 692,
+            "bottom": 74.4375
+          }
+        },
+        {
+          "text": "G2.Esports",
+          "box": {
+            "x": 1179,
+            "y": 53.546875,
+            "width": 105,
+            "height": 20.890625,
+            "right": 1284,
+            "bottom": 74.4375
+          }
+        }
+      ],
+      "pips": [
+        {
+          "x": 824,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 834,
+          "bottom": 76.5
+        },
+        {
+          "x": 1086,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 1096,
+          "bottom": 76.5
+        }
+      ],
+      "duplicateCaptions": 1,
+      "gaps": [
+        132,
+        83
+      ]
+    },
+    {
+      "name": "direct-bo3",
+      "caption": {
+        "text": "PLAY-IN",
+        "box": {
+          "x": 576,
+          "y": 3,
+          "width": 768,
+          "height": 18,
+          "right": 1344,
+          "bottom": 21
+        },
+        "clipped": false
+      },
+      "shell": {
+        "x": 560,
+        "y": 24,
+        "width": 800,
+        "height": 80,
+        "right": 1360,
+        "bottom": 104
+      },
+      "names": [
+        {
+          "text": "FURIA",
+          "box": {
+            "x": 636,
+            "y": 53.546875,
+            "width": 56,
+            "height": 20.890625,
+            "right": 692,
+            "bottom": 74.4375
+          }
+        },
+        {
+          "text": "G2.Esports",
+          "box": {
+            "x": 1179,
+            "y": 53.546875,
+            "width": 105,
+            "height": 20.890625,
+            "right": 1284,
+            "bottom": 74.4375
+          }
+        }
+      ],
+      "pips": [
+        {
+          "x": 824,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 834,
+          "bottom": 76.5
+        },
+        {
+          "x": 1086,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 1096,
+          "bottom": 76.5
+        }
+      ],
+      "duplicateCaptions": 1,
+      "gaps": [
+        132,
+        83
+      ]
+    },
+    {
+      "name": "upper-semifinal",
+      "caption": {
+        "text": "胜者组半决赛",
+        "box": {
+          "x": 576,
+          "y": 3,
+          "width": 768,
+          "height": 18,
+          "right": 1344,
+          "bottom": 21
+        },
+        "clipped": false
+      },
+      "shell": {
+        "x": 560,
+        "y": 24,
+        "width": 800,
+        "height": 80,
+        "right": 1360,
+        "bottom": 104
+      },
+      "names": [
+        {
+          "text": "FURIA",
+          "box": {
+            "x": 636,
+            "y": 53.546875,
+            "width": 56,
+            "height": 20.890625,
+            "right": 692,
+            "bottom": 74.4375
+          }
+        },
+        {
+          "text": "G2.Esports",
+          "box": {
+            "x": 1179,
+            "y": 53.546875,
+            "width": 105,
+            "height": 20.890625,
+            "right": 1284,
+            "bottom": 74.4375
+          }
+        }
+      ],
+      "pips": [
+        {
+          "x": 824,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 834,
+          "bottom": 76.5
+        },
+        {
+          "x": 1086,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 1096,
+          "bottom": 76.5
+        }
+      ],
+      "duplicateCaptions": 1,
+      "gaps": [
+        132,
+        83
+      ]
+    },
+    {
+      "name": "lower-final",
+      "caption": {
+        "text": "败者组决赛",
+        "box": {
+          "x": 576,
+          "y": 3,
+          "width": 768,
+          "height": 18,
+          "right": 1344,
+          "bottom": 21
+        },
+        "clipped": false
+      },
+      "shell": {
+        "x": 560,
+        "y": 24,
+        "width": 800,
+        "height": 80,
+        "right": 1360,
+        "bottom": 104
+      },
+      "names": [
+        {
+          "text": "FURIA",
+          "box": {
+            "x": 636,
+            "y": 53.546875,
+            "width": 56,
+            "height": 20.890625,
+            "right": 692,
+            "bottom": 74.4375
+          }
+        },
+        {
+          "text": "G2.Esports",
+          "box": {
+            "x": 1179,
+            "y": 53.546875,
+            "width": 105,
+            "height": 20.890625,
+            "right": 1284,
+            "bottom": 74.4375
+          }
+        }
+      ],
+      "pips": [
+        {
+          "x": 824,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 834,
+          "bottom": 76.5
+        },
+        {
+          "x": 1086,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 1096,
+          "bottom": 76.5
+        }
+      ],
+      "duplicateCaptions": 1,
+      "gaps": [
+        132,
+        83
+      ]
+    },
+    {
+      "name": "ranking",
+      "caption": {
+        "text": "排位赛",
+        "box": {
+          "x": 576,
+          "y": 3,
+          "width": 768,
+          "height": 18,
+          "right": 1344,
+          "bottom": 21
+        },
+        "clipped": false
+      },
+      "shell": {
+        "x": 560,
+        "y": 24,
+        "width": 800,
+        "height": 80,
+        "right": 1360,
+        "bottom": 104
+      },
+      "names": [
+        {
+          "text": "FURIA",
+          "box": {
+            "x": 636,
+            "y": 53.546875,
+            "width": 56,
+            "height": 20.890625,
+            "right": 692,
+            "bottom": 74.4375
+          }
+        },
+        {
+          "text": "G2.Esports",
+          "box": {
+            "x": 1179,
+            "y": 53.546875,
+            "width": 105,
+            "height": 20.890625,
+            "right": 1284,
+            "bottom": 74.4375
+          }
+        }
+      ],
+      "pips": [
+        {
+          "x": 824,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 834,
+          "bottom": 76.5
+        },
+        {
+          "x": 1086,
+          "y": 51.5,
+          "width": 10,
+          "height": 25,
+          "right": 1096,
+          "bottom": 76.5
+        }
+      ],
+      "duplicateCaptions": 1,
+      "gaps": [
+        132,
+        83
+      ]
     }
   ],
-  "sourceCommit": "9eeada74d9b4bb0e453fa13ac54a2b3e7aef9d4a",
+  "sourceCommit": "93c264fe6511d017461f8c08c79fd7a96f638e2f",
   "baseMain": "383707a35a84b9bef035c91df200990fc0a33c2b",
   "captureScript": "capture.mjs"
 }
