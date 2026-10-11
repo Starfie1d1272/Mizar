@@ -55,6 +55,8 @@ export const programSceneStateSchema = z.object({
   schemaVersion: z.literal('mizar.program-scenes.v1'),
   active: programSceneIdSchema,
   revision: z.string().min(1),
+  // Opening identity survives unrelated control revisions and leaving its source.
+  introRevision: z.string().min(1).optional(),
   preparing: z.object({ target: programSceneIdSchema, revision: z.string().min(1) }).optional(),
   available: z.array(programSceneIdSchema),
   director: z
