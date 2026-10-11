@@ -8,7 +8,11 @@ const desktopRoot = join(repositoryRoot, 'apps/desktop/src-tauri');
 
 // 保留已有原生控制入口；当前 Web UI 通过 Companion 的 overlay policy 控制显示。
 const commandsWithoutWebConsumer = ['set_program_overlay_enabled'];
-const obsConfigurationCommands = ['begin_obs_configuration', 'finish_obs_configuration'];
+const obsConfigurationCommands = [
+  'begin_obs_configuration',
+  'finish_obs_configuration',
+  'read_obs_configuration_context',
+];
 const demoCommands = ['select_demo_file', 'start_demo_test', 'enter_demo_test', 'finish_demo_test'];
 
 function webCommands(path, source) {

@@ -5,5 +5,9 @@
   "remote": {
     "urls": ["http://127.0.0.1:3000/*"]
   },
-  "permissions": ["allow-begin-obs-configuration", "allow-finish-obs-configuration"]
+  "permissions": [
+    "allow-begin-obs-configuration",
+    "allow-finish-obs-configuration",
+    "allow-read-obs-configuration-context"
+  ]
 }

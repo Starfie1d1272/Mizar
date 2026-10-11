@@ -5,7 +5,10 @@ use std::{
     collections::BTreeSet,
     path::Path,
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 
@@ -13,8 +16,24 @@ struct State {
     child: Option<Child>,
     configuration_owned: bool,
     sessions: BTreeSet<String>,
+    document: u64,
+    feedback: Option<&'static str>,
 }
 impl State {
+    fn synchronize_document(&mut self, document: u64) -> bool {
+        if self.document == document {
+            return false;
+        }
+        let abandoned_owned = self.configuration_owned;
+        self.document = document;
+        self.sessions.clear();
+        self.configuration_owned = false;
+        self.feedback = abandoned_owned.then_some(
+            "OBS 配置页面已离开，未自动关闭 OBS。如仍在运行，请核对推流与录制后手动关闭。",
+        );
+        abandoned_owned
+    }
+
     fn finish_session(&mut self, session: &str) -> &'static str {
         if !self.sessions.remove(session) {
             return "session_finished";
@@ -36,7 +55,56 @@ static STATE: Mutex<State> = Mutex::new(State {
     child: None,
     configuration_owned: false,
     sessions: BTreeSet::new(),
+    document: 0,
+    feedback: None,
 });
+static DOCUMENT: AtomicU64 = AtomicU64::new(0);
+
+/// Host calls this on Main document-start/destroy, without waiting for an old renderer.
+/// The atomic change also invalidates requests already waiting for the launch lock.
+pub fn document_changed(log: &DesktopLog) {
+    DOCUMENT.fetch_add(1, Ordering::AcqRel);
+    let log = log.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(mut state) = STATE.lock() {
+            if state.synchronize_document(DOCUMENT.load(Ordering::Acquire)) {
+                log.event("obs_configuration", "preserved", Some("document_changed"));
+            }
+        } else {
+            log.event(
+                "obs_configuration",
+                "state_failed",
+                Some("configuration_mutex_unavailable"),
+            );
+        }
+    });
+}
+
+pub fn context(log: &DesktopLog) -> Result<Value, String> {
+    let mut state = STATE.lock().map_err(|_| "OBS 配置状态未能确认。")?;
+    if state.synchronize_document(DOCUMENT.load(Ordering::Acquire)) {
+        log.event("obs_configuration", "preserved", Some("document_changed"));
+    }
+    Ok(
+        json!({ "documentGeneration": state.document.to_string(), "message": state.feedback.unwrap_or("") }),
+    )
+}
+
+fn synchronize_request(
+    state: &mut State,
+    session: Option<(&str, &str)>,
+    log: &DesktopLog,
+) -> Result<(), String> {
+    let document = DOCUMENT.load(Ordering::Acquire);
+    if state.synchronize_document(document) {
+        log.event("obs_configuration", "preserved", Some("document_changed"));
+    }
+    if session.is_some_and(|(_, requested)| requested.parse::<u64>().ok() != Some(document)) {
+        log.event("obs_configuration", "stale_begin", None);
+        return Err("OBS 配置页面已变化，请重新进入配置。".into());
+    }
+    Ok(())
+}
 
 fn session_allowed(id: &str) -> bool {
     id.len() == 36
@@ -71,11 +139,12 @@ fn reap(state: &mut State, log: &DesktopLog) -> Result<(), String> {
 }
 
 /// An explicit Open action transfers a configuration instance to user ownership.
-pub fn launch(path: &str, session: Option<&str>, log: &DesktopLog) -> Result<bool, String> {
-    if session.is_some_and(|id| !session_allowed(id)) {
+pub fn launch(path: &str, session: Option<(&str, &str)>, log: &DesktopLog) -> Result<bool, String> {
+    if session.is_some_and(|(id, _)| !session_allowed(id)) {
         return Err("OBS 配置会话无法识别。".into());
     }
     let mut state = STATE.lock().map_err(|_| "OBS 启动状态不可用。")?;
+    synchronize_request(&mut state, session, log)?;
     reap(&mut state, log)?;
     let path = Path::new(path);
     if !crate::obs_executable_allowed(path) || !path.is_file() {
@@ -104,6 +173,7 @@ pub fn launch(path: &str, session: Option<&str>, log: &DesktopLog) -> Result<boo
             })?
             > 0
     };
+    synchronize_request(&mut state, session, log)?;
     if !already_running {
         // Keep the original handle; never infer ownership from a subsequently reused PID.
         state.child = Some(
@@ -124,7 +194,8 @@ pub fn launch(path: &str, session: Option<&str>, log: &DesktopLog) -> Result<boo
         );
         state.configuration_owned = session.is_some();
     }
-    if let Some(session) = session {
+    synchronize_request(&mut state, session, log)?;
+    if let Some((session, _)) = session {
         state.sessions.insert(session.to_owned());
     } else {
         state.configuration_owned = false;
@@ -189,6 +260,7 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
         return Err("OBS 配置会话无法识别。".into());
     }
     let mut state = STATE.lock().map_err(|_| "OBS 启动状态不可用。")?;
+    synchronize_request(&mut state, None, log)?;
     let session_result = state.finish_session(session);
     if session_result != "owned" {
         return Ok(outcome(session_result));
@@ -232,6 +304,8 @@ mod tests {
             child: None,
             configuration_owned: true,
             sessions: BTreeSet::from(["first".into()]),
+            document: 0,
+            feedback: None,
         };
         assert_eq!(state.finish_session("first"), "owned");
         assert!(!state.configuration_owned);
@@ -246,6 +320,8 @@ mod tests {
             child: None,
             configuration_owned: true,
             sessions: BTreeSet::from(["old".into(), "new".into()]),
+            document: 0,
+            feedback: None,
         };
         assert_eq!(state.finish_session("old"), "configuration_in_use");
         assert!(state.configuration_owned);
@@ -253,6 +329,55 @@ mod tests {
         assert!(state.configuration_owned);
         assert_eq!(state.finish_session("new"), "owned");
         assert!(!state.configuration_owned);
+    }
+    #[test]
+    fn document_change_clears_unfinished_sessions_and_retains_feedback_for_next_document() {
+        let mut state = State {
+            child: None,
+            configuration_owned: true,
+            sessions: BTreeSet::from(["lost-document".into()]),
+            document: 1,
+            feedback: None,
+        };
+        assert!(state.synchronize_document(2));
+        assert!(state.sessions.is_empty());
+        assert!(!state.configuration_owned);
+        assert!(state.feedback.is_some());
+        // Context reads and delayed cleanup in the same new document cannot wipe feedback or its session.
+        state.sessions.insert("new-document".into());
+        assert!(!state.synchronize_document(2));
+        assert_eq!(state.finish_session("lost-document"), "session_finished");
+        assert!(state.sessions.contains("new-document"));
+        assert!(state.feedback.is_some());
+        assert!(!state.synchronize_document(3));
+        assert!(state.feedback.is_none());
+    }
+    #[test]
+    fn stale_begin_cannot_consume_current_document_sessions() {
+        let document = DOCUMENT.load(Ordering::Acquire);
+        let root = std::env::temp_dir().join(format!(
+            "mizar-obs-document-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let log = DesktopLog::new(&root, Some(root.join("state"))).unwrap();
+        let mut state = State {
+            child: None,
+            configuration_owned: true,
+            sessions: BTreeSet::from(["current-document".into()]),
+            document,
+            feedback: None,
+        };
+        let old = document.wrapping_sub(1).to_string();
+        assert!(synchronize_request(&mut state, Some(("old", &old)), &log).is_err());
+        assert!(state.configuration_owned);
+        assert!(state.sessions.contains("current-document"));
+        assert!(!state.sessions.contains("old"));
+        drop(log);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn idle_does_not_authorize_racy_close() {

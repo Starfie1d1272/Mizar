@@ -487,11 +487,12 @@ async fn launch_obs(
 async fn begin_obs_configuration(
     executable_path: String,
     session_id: String,
+    document_generation: String,
     log: tauri::State<'_, DesktopLog>,
 ) -> Result<bool, String> {
     let log = log.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        obs_configuration::launch(&executable_path, Some(&session_id), &log)
+        obs_configuration::launch(&executable_path, Some((&session_id, &document_generation)), &log)
     })
     .await
     .map_err(|_| "OBS 程序未能打开。".to_string())?
@@ -506,6 +507,13 @@ async fn finish_obs_configuration(
     tauri::async_runtime::spawn_blocking(move || obs_configuration::finish(&session_id, &log))
         .await
         .map_err(|_| "OBS 配置状态未能确认，请在 OBS 中手动核对。".to_string())?
+}
+
+#[tauri::command]
+async fn read_obs_configuration_context(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || obs_configuration::context(&log))
+        .await.map_err(|_| "OBS 配置状态未能确认。".to_string())?
 }
 
 #[tauri::command]
@@ -1591,6 +1599,7 @@ fn run_desktop(
             launch_obs,
             begin_obs_configuration,
             finish_obs_configuration,
+            read_obs_configuration_context,
             cs2_config_status,
             start_managed_cs2,
             finish_managed_cs2,
@@ -1632,6 +1641,9 @@ fn run_desktop(
                     .visible(true)
                     .on_navigation(trusted_navigation)
                     .on_page_load(move |_window, payload| {
+                        if payload.event() == tauri::webview::PageLoadEvent::Started {
+                            obs_configuration::document_changed(&page_log);
+                        }
                         if payload.event() == tauri::webview::PageLoadEvent::Finished
                             && trusted_navigation(payload.url())
                         {
@@ -1858,6 +1870,9 @@ fn run_desktop(
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                obs_configuration::document_changed(window.state::<DesktopLog>().inner());
+            }
             if matches!(event, tauri::WindowEvent::Resized(_)) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
                     let _ = window_presentation::sync_visibility(&webview);

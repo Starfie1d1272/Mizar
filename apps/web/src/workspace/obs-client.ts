@@ -128,12 +128,27 @@ function obsConfigurationTarget() {
   return configurationTarget;
 }
 
+export async function readObsConfigurationContext() {
+  const value = await desktopInvoke<{ documentGeneration: string; message: string }>(
+    'read_obs_configuration_context',
+  );
+  if (!value || typeof value.documentGeneration !== 'string' || typeof value.message !== 'string')
+    throw new Error('OBS 配置状态未能确认。');
+  return value;
+}
+
 /** Host owns instance identity. A late begin must finish its own session after unmount. */
 export function beginObsConfiguration() {
   const sessionId = crypto.randomUUID();
-  const ready = obsConfigurationTarget().then((executablePath) =>
-    desktopInvoke<boolean>('begin_obs_configuration', { executablePath, sessionId }),
-  );
+  const ready = (async () => {
+    const { documentGeneration } = await readObsConfigurationContext();
+    const executablePath = await obsConfigurationTarget();
+    return desktopInvoke<boolean>('begin_obs_configuration', {
+      executablePath,
+      sessionId,
+      documentGeneration,
+    });
+  })();
   let finished: Promise<ObsConfigurationResult> | null = null;
   return {
     ready,

@@ -9,6 +9,7 @@ fn main() {
             "launch_obs",
             "begin_obs_configuration",
             "finish_obs_configuration",
+            "read_obs_configuration_context",
             "cs2_config_status",
             "start_managed_cs2",
             "finish_managed_cs2",

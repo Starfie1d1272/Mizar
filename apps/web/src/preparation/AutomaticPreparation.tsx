@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
-import { obsCommand, useObsStatus } from '../workspace/obs-client';
+import { obsCommand, readObsConfigurationContext, useObsStatus } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
@@ -10,6 +10,23 @@ export function AutomaticPreparation() {
   const [gsiMessage, setGsiMessage] = useState('');
   const [obsMessage, setObsMessage] = useState('');
   const [configurationMessage, setConfigurationMessage] = useState('');
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let active = true;
+    void readObsConfigurationContext()
+      .then(({ message }) => {
+        if (active && message) setConfigurationMessage(message);
+      })
+      .catch(() => {
+        if (active)
+          setConfigurationMessage(
+            'OBS 配置状态未能确认。如 OBS 仍在运行，请核对推流与录制后手动关闭。',
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   useEffect(() => {
     const finished = (event: Event) => {
       const message = (event as CustomEvent<unknown>).detail;
