@@ -104,6 +104,63 @@ async function performObsCommand(
   return value;
 }
 
+export interface ObsConfigurationResult {
+  reason: string;
+  message: string;
+}
+
+let configurationTarget: Promise<string> | null = null;
+function obsConfigurationTarget() {
+  configurationTarget ??= (async () => {
+    const response = await fetch('/operator/obs/launch-target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(6000),
+    });
+    const value = (await response.json()) as { executablePath?: string; message?: string };
+    if (!response.ok || !value.executablePath)
+      throw new Error(value.message ?? '未找到 OBS，请在设置中选择 obs64.exe。');
+    return value.executablePath;
+  })().finally(() => {
+    configurationTarget = null;
+  });
+  return configurationTarget;
+}
+
+export async function readObsConfigurationContext() {
+  const value = await desktopInvoke<{ documentGeneration: string; message: string }>(
+    'read_obs_configuration_context',
+  );
+  if (!value || typeof value.documentGeneration !== 'string' || typeof value.message !== 'string')
+    throw new Error('OBS 配置状态未能确认。');
+  return value;
+}
+
+/** Host owns instance identity. A late begin must finish its own session after unmount. */
+export function beginObsConfiguration() {
+  const sessionId = crypto.randomUUID();
+  const ready = (async () => {
+    const { documentGeneration } = await readObsConfigurationContext();
+    const executablePath = await obsConfigurationTarget();
+    return desktopInvoke<boolean>('begin_obs_configuration', {
+      executablePath,
+      sessionId,
+      documentGeneration,
+    });
+  })();
+  let finished: Promise<ObsConfigurationResult> | null = null;
+  return {
+    ready,
+    finish: () => {
+      finished ??= ready.then(() =>
+        desktopInvoke<ObsConfigurationResult>('finish_obs_configuration', { sessionId }),
+      );
+      return finished;
+    },
+  };
+}
+
 export function useObsOutputs() {
   const [outputs, setOutputs] = useState<ObsOutputsStatus | null>(null);
   const [pending, setPending] = useState<ObsOutputCommand | null>(null);

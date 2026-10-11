@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
-import { obsCommand, useObsStatus } from '../workspace/obs-client';
+import { obsCommand, readObsConfigurationContext, useObsStatus } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
@@ -9,6 +9,32 @@ export function AutomaticPreparation() {
   const ensured = useRef<string | null>(null);
   const [gsiMessage, setGsiMessage] = useState('');
   const [obsMessage, setObsMessage] = useState('');
+  const [configurationMessage, setConfigurationMessage] = useState('');
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let active = true;
+    void readObsConfigurationContext()
+      .then(({ message }) => {
+        if (active && message) setConfigurationMessage(message);
+      })
+      .catch(() => {
+        if (active)
+          setConfigurationMessage(
+            'OBS 配置状态未能确认。如 OBS 仍在运行，请核对推流与录制后手动关闭。',
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    const finished = (event: Event) => {
+      const message = (event as CustomEvent<unknown>).detail;
+      if (typeof message === 'string') setConfigurationMessage(message);
+    };
+    window.addEventListener('mizar:obs-configuration-finished', finished);
+    return () => window.removeEventListener('mizar:obs-configuration-finished', finished);
+  }, []);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     let active = true;
@@ -40,6 +66,9 @@ export function AutomaticPreparation() {
   }, [obs]);
   return (
     <>
+      {configurationMessage ? (
+        <StatusBanner tone="info">{configurationMessage}</StatusBanner>
+      ) : null}
       {gsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
       {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
         <StatusBanner tone="warning">{obsMessage}</StatusBanner>

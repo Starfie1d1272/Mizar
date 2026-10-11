@@ -63,6 +63,7 @@ const stages = new Set([
   'companion_rollback',
   'supervisor_complete',
   'desktop_supervision_ready',
+  'obs_configuration',
   'artifact_verify_begin',
   'artifact_verified',
   'product_stop_begin',

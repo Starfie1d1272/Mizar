@@ -8,6 +8,11 @@ const desktopRoot = join(repositoryRoot, 'apps/desktop/src-tauri');
 
 // 保留已有原生控制入口；当前 Web UI 通过 Companion 的 overlay policy 控制显示。
 const commandsWithoutWebConsumer = ['set_program_overlay_enabled'];
+const obsConfigurationCommands = [
+  'begin_obs_configuration',
+  'finish_obs_configuration',
+  'read_obs_configuration_context',
+];
 const demoCommands = ['select_demo_file', 'start_demo_test', 'enter_demo_test', 'finish_demo_test'];
 
 function webCommands(path, source) {
@@ -56,6 +61,7 @@ describe('Desktop capability contract', () => {
       demoCapability,
       demoWorkspaceCapability,
       exitCapability,
+      obsCapability,
     ] = await Promise.all([
       readFile(join(desktopRoot, 'build.rs'), 'utf8'),
       readFile(join(desktopRoot, 'src/main.rs'), 'utf8'),
@@ -64,6 +70,7 @@ describe('Desktop capability contract', () => {
       readFile(join(desktopRoot, 'capabilities/demo-test.json'), 'utf8').then(JSON.parse),
       readFile(join(desktopRoot, 'capabilities/demo-test-workspace.json'), 'utf8').then(JSON.parse),
       readFile(join(desktopRoot, 'capabilities/workspace-exit.json'), 'utf8').then(JSON.parse),
+      readFile(join(desktopRoot, 'capabilities/obs-configuration.json'), 'utf8').then(JSON.parse),
     ]);
     const manifest = build.match(/AppManifest::new\(\)\s*\.commands\(\s*&\s*\[([^\]]*)\]/);
     expect(manifest, '必须读取 production AppManifest commands').not.toBeNull();
@@ -101,7 +108,14 @@ describe('Desktop capability contract', () => {
       'demo-test',
       'demo-test-workspace',
       'workspace-exit',
+      'obs-configuration',
     ]);
+    expect(obsCapability.identifier).toBe('obs-configuration');
+    expect(obsCapability.windows).toEqual(['main']);
+    expect(obsCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
+    expect(obsCapability.permissions.toSorted()).toEqual(
+      obsConfigurationCommands.map((command) => `allow-${command.replaceAll('_', '-')}`).toSorted(),
+    );
     expect(exitCapability.identifier).toBe('workspace-exit');
     expect(exitCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
     expect(exitCapability.windows.toSorted()).toEqual(['main', 'workspace-dock', 'workspace-left']);
@@ -135,7 +149,12 @@ describe('Desktop capability contract', () => {
     );
     expect(capability.permissions.toSorted()).toEqual(
       registered
-        .filter((command) => !demoCommands.includes(command) && command !== 'finish_workspace')
+        .filter(
+          (command) =>
+            !demoCommands.includes(command) &&
+            command !== 'finish_workspace' &&
+            !obsConfigurationCommands.includes(command),
+        )
         .map((command) => `allow-${command.replaceAll('_', '-')}`)
         .toSorted(),
     );

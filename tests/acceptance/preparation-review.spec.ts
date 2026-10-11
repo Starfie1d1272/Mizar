@@ -17,7 +17,15 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
     Object.assign(window, {
       __TAURI_INTERNALS__: {
         invoke: (command: string) => {
-          if (command === 'launch_obs') return Promise.resolve(false);
+          if (command === 'read_obs_configuration_context')
+            return Promise.resolve({ documentGeneration: '1', message: '' });
+          if (command === 'launch_obs' || command === 'begin_obs_configuration')
+            return Promise.resolve(false);
+          if (command === 'finish_obs_configuration')
+            return Promise.resolve({
+              reason: 'safe_quit_unavailable',
+              message: 'OBS 配置已结束。无法确认安全自动退出，已保留；请在 OBS 中手动关闭。',
+            });
           return Promise.resolve({ busy: false, pending: false, running: false, message: null });
         },
       },
@@ -66,6 +74,12 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   };
   await page.goto('/settings?tab=obs');
   await expect.poll(() => launches).toBe(1);
+  await page.getByRole('button', { name: '完成 OBS 配置', exact: true }).click();
+  await expect(
+    page.getByText('OBS 配置已结束。无法确认安全自动退出，已保留；请在 OBS 中手动关闭。', {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.getByText(/当前节目为全屏包装，不使用游戏采集/)).not.toBeVisible();
   await expect(page.getByText(/请在工作台重新点击要播出的场景/)).toBeVisible();
   const details = page.getByText('节目与捕获诊断', { exact: true });
@@ -122,6 +136,103 @@ test('OBS Program diagnostics distinguish packaging, capture evidence and an off
   await expect(
     page.getByText('Mizar 配置检查通过，请核对实际音画。', { exact: true }),
   ).toBeVisible();
+});
+
+test('OBS configuration abandons old document sessions on real href navigation and reload', async ({
+  page,
+}) => {
+  // Real documents/href/reload; the bridge models Host lifecycle events, not real Windows/OBS.
+  let documentGeneration = 0;
+  let owned = false;
+  let running = false;
+  let message = '';
+  const sessions = new Set<string>();
+  const finishes: string[] = [];
+  page.on('framenavigated', (frame) => {
+    if (frame !== page.mainFrame()) return;
+    documentGeneration++;
+    message = owned
+      ? 'OBS 配置页面已离开，未自动关闭 OBS。如仍在运行，请核对推流与录制后手动关闭。'
+      : '';
+    sessions.clear();
+    owned = false;
+  });
+  await page.exposeBinding(
+    'obsLifecycleInvoke',
+    (_source, command: string, args: { sessionId?: string; documentGeneration?: string } = {}) => {
+      if (command === 'read_obs_configuration_context')
+        return { documentGeneration: String(documentGeneration), message };
+      if (command === 'begin_obs_configuration') {
+        if (args.documentGeneration !== String(documentGeneration))
+          throw new Error('stale document');
+        const alreadyRunning = running;
+        if (!running) {
+          running = true;
+          owned = true;
+        }
+        sessions.add(args.sessionId!);
+        return alreadyRunning;
+      }
+      if (command === 'finish_obs_configuration') {
+        finishes.push(args.sessionId!);
+        sessions.delete(args.sessionId!);
+        if (sessions.size)
+          return { reason: 'configuration_in_use', message: '仍有 OBS 配置会话未结束。' };
+        owned = false;
+        return { reason: 'not_owned', message: '' };
+      }
+      if (command === 'ensure_gsi') return new Promise(() => {});
+      if (command === 'gsi_status')
+        return {
+          detected: true,
+          installed: true,
+          conflict: false,
+          readFailed: false,
+          issues: [],
+          conflictFiles: [],
+        };
+      return { busy: false, pending: false, running: false, message: null };
+    },
+  );
+  await page.addInitScript(() => {
+    const bridge = Reflect.get(window, 'obsLifecycleInvoke') as (
+      command: string,
+      args?: Record<string, unknown>,
+    ) => Promise<unknown>;
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: Record<string, unknown>) => bridge(command, args),
+      },
+    });
+  });
+  await page.route('**/operator/obs/*', (route) =>
+    route.fulfill({ json: { executablePath: 'C:\\OBS\\obs64.exe' } }),
+  );
+  await page.goto('/settings?tab=obs');
+  await expect.poll(() => sessions.size).toBe(1);
+  const old = [...sessions][0]!;
+  const before = documentGeneration;
+  await page.getByRole('link', { name: '总览', exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(documentGeneration).toBeGreaterThan(before);
+  expect(sessions.size).toBe(0);
+  expect(finishes).not.toContain(old); // Full document unload did not rely on React cleanup.
+  await expect(
+    page.getByText('OBS 配置页面已离开，未自动关闭 OBS。如仍在运行，请核对推流与录制后手动关闭。', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: 'OBS 连接', exact: true }).click();
+  await expect.poll(() => sessions.size).toBe(1);
+  const reentered = [...sessions][0]!;
+  await page.reload();
+  await expect.poll(() => sessions.size).toBe(1);
+  expect([...sessions][0]).not.toBe(reentered);
+  expect(sessions.has(old)).toBe(false);
+  await page.getByRole('button', { name: '完成 OBS 配置', exact: true }).click();
+  await expect.poll(() => sessions.size).toBe(0);
+  await expect(page.getByText('OBS 配置已结束，现有实例已保留。', { exact: true })).toBeVisible();
+  await expect(page.getByText('仍有 OBS 配置会话未结束。', { exact: true })).toHaveCount(0);
 });
 
 test('optional Steam avatars explain key acquisition and open the fixed official page on desktop', async ({
@@ -986,6 +1097,8 @@ test('desktop GSI reads distinguish pending and failed queries, preserve indepen
       __TAURI_INTERNALS__: {
         invoke: (command: string) => {
           const mode = sessionStorage.getItem('gsi-read-mode') ?? 'pending';
+          if (command === 'read_obs_configuration_context')
+            return Promise.resolve({ documentGeneration: '1', message: '' });
           if (command === 'launch_obs') return Promise.resolve(true);
           if (command === 'ensure_gsi') return new Promise(() => {});
           if (command === 'gsi_status') {
