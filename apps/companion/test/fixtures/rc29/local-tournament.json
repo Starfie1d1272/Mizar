@@ -1,0 +1,126 @@
+{
+  "version": "mizar.local-tournament-store.v1",
+  "events": [
+    {
+      "eventId": "local-event-1",
+      "name": "校园赛",
+      "logoUrl": null,
+      "themeColor": null,
+      "mapPool": ["de_ancient", "de_mirage"],
+      "matchIds": ["local-match-1"]
+    }
+  ],
+  "teams": [
+    {
+      "teamId": "team-a",
+      "name": "甲队",
+      "logoUrl": null,
+      "players": [
+        {
+          "playerId": "player-a",
+          "steam64": "76561198000000001",
+          "displayName": "选手甲",
+          "avatarUrl": null,
+          "isStarter": true
+        }
+      ]
+    },
+    {
+      "teamId": "team-b",
+      "name": "乙队",
+      "logoUrl": null,
+      "players": []
+    }
+  ],
+  "matches": [
+    {
+      "schemaVersion": "mizar.match-document.v1",
+      "matchId": "local-match-1",
+      "competition": {
+        "competitionId": "local-event-1",
+        "name": "校园赛",
+        "logoUrl": null,
+        "themeColor": null
+      },
+      "status": "scheduled",
+      "format": "bo3",
+      "stage": "小组赛",
+      "stageLabel": "小组赛",
+      "round": null,
+      "roundLabel": null,
+      "entryRound": null,
+      "matchLabel": null,
+      "stakesLabel": null,
+      "scheduledAt": null,
+      "startedAt": null,
+      "completedAt": null,
+      "scoreA": null,
+      "scoreB": null,
+      "resultDisposition": null,
+      "isForfeit": false,
+      "isTest": false,
+      "entrants": {
+        "a": {
+          "entryId": "team-a",
+          "name": "甲队",
+          "logoUrl": null,
+          "rosterId": null,
+          "players": [
+            {
+              "playerId": "player-a",
+              "steam64": "76561198000000001",
+              "displayName": "选手甲",
+              "avatarUrl": null,
+              "isStarter": true
+            }
+          ]
+        },
+        "b": {
+          "entryId": "team-b",
+          "name": "乙队",
+          "logoUrl": null,
+          "rosterId": null,
+          "players": []
+        }
+      },
+      "mapPool": ["de_ancient", "de_mirage"],
+      "maps": [
+        {
+          "mapId": "map-1",
+          "mapOrder": 1,
+          "mapName": "de_ancient",
+          "pickedByEntryId": "team-a",
+          "teamAStartSide": "CT",
+          "scoreA": null,
+          "scoreB": null,
+          "completedAt": null
+        }
+      ],
+      "veto": [
+        {
+          "stepOrder": 1,
+          "actionType": "pick",
+          "mapName": "de_ancient",
+          "entryId": "team-a",
+          "side": null
+        }
+      ],
+      "commentators": [
+        {
+          "userId": "legacy-relative",
+          "displayName": "旧直播地址",
+          "avatarUrl": null,
+          "liveStreamUrl": "/room/123"
+        },
+        {
+          "userId": "absolute",
+          "displayName": "有效直播地址",
+          "avatarUrl": null,
+          "liveStreamUrl": "https://example.com/room/456"
+        }
+      ]
+    }
+  ],
+  "selectedMatchId": "local-match-1",
+  "selectedAt": "2026-10-11T04:05:44.717Z"
+}
