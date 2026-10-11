@@ -391,84 +391,101 @@ it.each(['bo3', 'bo5'] as const)(
   },
 );
 
-it.each(['match', 'revision', 'session', 'generation', 'epoch', 'stale', 'score'] as const)(
-  'guards reliable delivery against changed %s',
-  async (changed) => {
-    const binding = await bindingFixture();
-    const directory = await mkdtemp(join(tmpdir(), 'mizar-retry-guard-'));
-    const runtime = createProgramRuntime('guard-process');
-    const coordinator = createProjectionCoordinator({
-      programRuntime: runtime,
-      cstvSources: createCstvSourceManagers({}),
-      matchContextBinding: binding,
-      nowMonotonicMs: () => 2000,
-    });
-    const outbox = new ReliableOutbox(join(directory, 'outbox.json'));
-    const send = vi.fn(() => Promise.resolve('accepted' as const));
-    const service = new OutputService({
-      outbox,
-      sink: { send },
-      now: () => new Date('2026-09-28T00:00:02.000Z'),
-    });
-    try {
-      await service.start();
-      coordinator.afterRuntimeMutation(
-        runtime.acceptObservation(observation(binding.manifest, 1, 'live')),
-      );
-      const result = runtime.acceptObservation(observation(binding.manifest, 2, 'gameover'));
-      const bundle = coordinator.afterRuntimeMutation(result);
-      const event = transitionReliableEventsV1({ result, bundle, binding }).find(
-        (candidate) => candidate.kind === 'map_ended',
-      )!;
-      await outbox.enqueue(event, new Date(event.observedAt));
-      const nextBinding = {
-        ...binding,
-        context: {
-          ...binding.context,
-          matchId: changed === 'match' ? 'another-match' : binding.context.matchId,
-        },
-        manifest: {
-          ...binding.manifest,
-          revision: changed === 'revision' ? 'another-revision' : binding.manifest.revision,
-        },
-        freshness: changed === 'stale' ? ('stale' as const) : ('fresh' as const),
-      };
-      service.setCurrent(
-        {
-          ...bundle,
-          program: {
-            ...bundle.program,
-            cursor: {
-              ...bundle.program.cursor,
-              liveSessionId:
-                changed === 'session' ? 'another-session' : bundle.program.cursor.liveSessionId,
-              programSourceGeneration:
-                bundle.program.cursor.programSourceGeneration + (changed === 'generation' ? 1 : 0),
-              mapEpoch: bundle.program.cursor.mapEpoch + (changed === 'epoch' ? 1 : 0),
-            },
-            map: {
-              ...bundle.program.map,
-              score: {
-                ...bundle.program.map.score,
-                ct: changed === 'score' ? 0 : bundle.program.map.score.ct,
-              },
+it.each([
+  'match',
+  'revision',
+  'producer',
+  'session',
+  'generation',
+  'epoch',
+  'stale',
+  'score',
+] as const)('guards verified recovered delivery against changed %s', async (changed) => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-retry-guard-'));
+  const runtime = createProgramRuntime('guard-process');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => 2000,
+  });
+  const outbox = new ReliableOutbox(join(directory, 'outbox.json'));
+  const send = vi.fn(() => Promise.resolve('accepted' as const));
+  const service = new OutputService({
+    outbox,
+    sink: { send },
+    now: () => new Date('2026-09-28T00:00:02.000Z'),
+  });
+  try {
+    coordinator.afterRuntimeMutation(
+      runtime.acceptObservation(observation(binding.manifest, 1, 'live')),
+    );
+    const result = runtime.acceptObservation(observation(binding.manifest, 2, 'gameover'));
+    const bundle = coordinator.afterRuntimeMutation(result);
+    const event = transitionReliableEventsV1({ result, bundle, binding }).find(
+      (candidate) => candidate.kind === 'map_ended',
+    )!;
+    await outbox.enqueue(event, new Date(event.observedAt));
+    const damaged = JSON.parse(await readFile(join(directory, 'outbox.json'), 'utf8')) as {
+      records: { status: unknown }[];
+    };
+    damaged.records[0]!.status = ['pending'];
+    await writeFile(join(directory, 'outbox.json'), JSON.stringify(damaged));
+    await service.start();
+    expect(outbox.getRecovery()?.code).toBe('outbox_recovered');
+    expect(outbox.getRecords()[0]?.event).toEqual(event);
+    const nextBinding = {
+      ...binding,
+      context: {
+        ...binding.context,
+        matchId: changed === 'match' ? 'another-match' : binding.context.matchId,
+      },
+      manifest: {
+        ...binding.manifest,
+        revision: changed === 'revision' ? 'another-revision' : binding.manifest.revision,
+      },
+      freshness: changed === 'stale' ? ('stale' as const) : ('fresh' as const),
+    };
+    service.setCurrent(
+      {
+        ...bundle,
+        program: {
+          ...bundle.program,
+          cursor: {
+            ...bundle.program.cursor,
+            producerInstanceId:
+              changed === 'producer'
+                ? 'another-producer'
+                : bundle.program.cursor.producerInstanceId,
+            liveSessionId:
+              changed === 'session' ? 'another-session' : bundle.program.cursor.liveSessionId,
+            programSourceGeneration:
+              bundle.program.cursor.programSourceGeneration + (changed === 'generation' ? 1 : 0),
+            mapEpoch: bundle.program.cursor.mapEpoch + (changed === 'epoch' ? 1 : 0),
+          },
+          map: {
+            ...bundle.program.map,
+            score: {
+              ...bundle.program.map.score,
+              ct: changed === 'score' ? 0 : bundle.program.map.score.ct,
             },
           },
         },
-        nextBinding,
-      );
-      await service.retry();
-      expect(send).not.toHaveBeenCalled();
-      expect(outbox.getRecords()[0]?.status).toBe(
-        changed === 'stale' || changed === 'score' ? 'pending' : 'superseded',
-      );
-    } finally {
-      await service.close();
-      await coordinator.close();
-      await rm(directory, { recursive: true, force: true });
-    }
-  },
-);
+      },
+      nextBinding,
+    );
+    await service.retry();
+    expect(send).not.toHaveBeenCalled();
+    expect(outbox.getRecords()[0]?.status).toBe(
+      changed === 'stale' || changed === 'score' ? 'pending' : 'superseded',
+    );
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 it('coalesces outbound snapshots and drops pending data after context becomes stale', async () => {
   const binding = await bindingFixture();
@@ -1341,6 +1358,85 @@ it('starts the local application after preserving malformed output queue and exp
     expect(response.body).not.toContain('SyntaxError');
   } finally {
     await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('recovers the complete terminal enqueue from the real runtime, projection and OutputService owner chain', async () => {
+  const original = await bindingFixture();
+  const binding: MatchContextBinding = {
+    ...original,
+    manifest: { ...original.manifest, match: { ...original.manifest.match, format: 'bo1' } },
+    context: { ...original.context, format: 'bo1', maps: original.context.maps.slice(0, 1) },
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-terminal-owner-'));
+  const path = join(dir, 'outbox.json');
+  const runtime = createProgramRuntime('terminal-owner');
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(path);
+  const service = new OutputService({
+    outbox: box,
+    sink: { send: () => Promise.resolve('accepted' as const) },
+    now: () => new Date('2026-09-28T00:00:02Z'),
+  });
+  let restored: OutputService | undefined;
+  try {
+    await service.start();
+    service.setCurrent(coordinator.getCurrent(), binding);
+    for (const [seq, phase] of [
+      [1, 'live'],
+      [2, 'gameover'],
+    ] as const) {
+      time = seq * 1000;
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation(observation(binding.manifest, seq, phase));
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+      await box.flushPending();
+      if (seq === 1) await service.retry();
+    }
+    const terminal = box
+      .getRecords()
+      .filter((r) => ['map_ended', 'series_ended'].includes(r.event.kind));
+    expect(terminal.map((r) => r.event.kind)).toEqual(['map_ended', 'series_ended']);
+    await service.close();
+    const damaged = JSON.parse(await readFile(path, 'utf8')) as {
+      records: { event: { kind: string }; status: unknown }[];
+    };
+    damaged.records.find((r) => r.event.kind === 'series_ended')!.status = ['pending'];
+    await writeFile(path, JSON.stringify(damaged));
+    const recovered = new ReliableOutbox(path);
+    const sent: unknown[] = [];
+    restored = new OutputService({
+      outbox: recovered,
+      now: () => new Date('2026-09-28T00:00:02Z'),
+      sink: {
+        send: (event) => {
+          sent.push(event);
+          return Promise.resolve('accepted' as const);
+        },
+      },
+    });
+    restored.setCurrent(coordinator.getCurrent(), binding);
+    await restored.start();
+    expect(sent).toEqual(terminal.map((r) => r.event));
+    expect(
+      recovered
+        .getRecords()
+        .filter((r) => ['map_ended', 'series_ended'].includes(r.event.kind))
+        .map((r) => r.status),
+    ).toEqual(['accepted', 'accepted']);
+    await restored.retry();
+    expect(sent).toHaveLength(2);
+  } finally {
+    await restored?.close();
+    await service.close();
+    await coordinator.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
