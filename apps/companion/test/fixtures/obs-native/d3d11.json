@@ -1,0 +1,194 @@
+[
+  {
+    "text": "  Device Removed Reason: 8007000E",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_draw (D3D11): texture is not a render target",
+    "codeHex": null
+  },
+  {
+    "text": "device_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_swapchain_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_resize_internal (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_get_size (D3D11): no active swap",
+    "codeHex": null
+  },
+  {
+    "text": "device_texture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_texture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_cubetexture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_cubetexture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_voltexture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_voltexture_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_zstencil_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_stagesurface_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_samplerstate_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_vertexshader_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_vertexshader_create (D3D11): Compile warnings/errors for Failed operation for C:\\Users\\Alice\\private.png:",
+    "codeHex": null
+  },
+  {
+    "text": "device_vertexshader_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_pixelshader_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_pixelshader_create (D3D11): Compiler warnings/errors for Failed operation for C:\\Users\\Alice\\private.png:",
+    "codeHex": null
+  },
+  {
+    "text": "device_pixelshader_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_vertexbuffer_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_vertexbuffer_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_indexbuffer_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_timer_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_timer_range_create (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_load_vertexshader (D3D11): Specified shader is not a vertex shader",
+    "codeHex": null
+  },
+  {
+    "text": "device_load_pixelshader (D3D11): Specified shader is not a pixel shader",
+    "codeHex": null
+  },
+  {
+    "text": "device_set_render_target_internal (D3D11): texture is not a 2D texture",
+    "codeHex": null
+  },
+  {
+    "text": "device_set_cube_render_target (D3D11): texture is not a cube texture",
+    "codeHex": null
+  },
+  {
+    "text": "device_copy_texture (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_draw (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "device_draw (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_vertexbuffer_flush: vertex buffer is not dynamic",
+    "codeHex": null
+  },
+  {
+    "text": "device_texture_create_gdi (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "device_texture_create_gdi (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_get_dc (D3D11): Texture is not GDI compatible",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_open_shared (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_texture_open_shared (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_open_nt_shared (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_texture_open_nt_shared (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_wrap_obj (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_texture_wrap_obj (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_create_nv12 (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_texture_create_nv12 (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_create_p010 (D3D11): Failed operation for C:\\Users\\Alice\\private.png (8007000E)",
+    "codeHex": "0x8007000E"
+  },
+  {
+    "text": "gs_texture_create_p010 (D3D11): Failed operation for C:\\Users\\Alice\\private.png",
+    "codeHex": null
+  },
+  {
+    "text": "gs_texture_release_dc (D3D11): Texture is not GDI compatible",
+    "codeHex": null
+  }
+]

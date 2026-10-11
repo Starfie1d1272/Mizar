@@ -1,0 +1,167 @@
+[
+  {
+    "text": "Game capture private.exe not found.",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Could not convert file name to wide string",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Game capture file 'private.exe' not found.",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Game capture file 'private.exe' could not be loaded.",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Game capture file 'private.exe' could not be loaded: 5.",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "could not open process: private.exe",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Failed to create keepalive mutex: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "failed to open texture mutexes: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_hook_info: get_hook_info failed: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_hook_info: failed to map data view: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_hook_info: shared texture capture unavailable",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_pipe: failed to start pipe",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "hook_direct: could not convert string",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "hook_direct: could not make absolute path",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "hook_direct: could not open process: private.exe (5)",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "hook_direct: inject failed: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "Failed to create inject helper process: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "error acquiring, failed to get window thread/process ids: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_events: failed to get hook_restart event: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_events: failed to get hook_stop event: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_events: failed to get hook_init event: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_events: failed to get hook_ready event: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_events: failed to get hook_exit event: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_capture_data: failed to open file mapping: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_capture_data: failed to map data view: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_shmem_capture: failed to create extra texrender",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_shmem_capture: failed to create texture",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_shtex_capture: failed to create extra texrender",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_shtex_capture: failed to create extra texture",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_shtex_capture: failed to open shared handle",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "cannot initialize hook, DLL hook version is 3.1, current plugin hook major version is 2.5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "inject process failed: 5",
+    "category": "hook",
+    "outcome": "failure"
+  },
+  {
+    "text": "init_capture_data failed",
+    "category": "hook",
+    "outcome": "failure"
+  }
+]

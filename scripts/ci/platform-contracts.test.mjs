@@ -26,6 +26,7 @@ describe('platform contract evidence', () => {
         expect.arrayContaining([
           'apps/companion/test/resource-store/store.test.ts',
           'apps/companion/test/resource-store/app-integration.test.ts',
+          'apps/companion/test/obs-native-evidence.test.ts',
         ]),
       );
     }
