@@ -1,9 +1,24 @@
-import { mkdtemp, mkdir, writeFile, rm, utimes, symlink } from 'node:fs/promises';
+import upstreamCaptureExamples from './fixtures/obs-native/game-capture.json' with { type: 'json' };
+import upstreamRendererExamples from './fixtures/obs-native/d3d11.json' with { type: 'json' };
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  rm,
+  utimes,
+  symlink,
+  realpath,
+  rename,
+  open,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   collectObsNativeEvidence,
+  boundObsNativeEvidence,
+  redactObsNativeText,
+  type ObsNativeEvidence,
   OBS_NATIVE_LIMITS,
   projectObsNativeLogLine,
   projectObsSavedCollection,
@@ -11,12 +26,18 @@ import {
 import { parseObsNativeProcesses } from '../src/obs/native-process.js';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from '../src/obs/desired-state.js';
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...fs, open: vi.fn(fs.open) };
+});
+
 const dirs: string[] = [];
 afterEach(async () => {
+  vi.mocked(open).mockClear();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 async function fixture() {
-  const appData = await mkdtemp(join(tmpdir(), 'mizar-native-'));
+  const appData = await mkdtemp(join(await realpath(tmpdir()), 'mizar-native-'));
   dirs.push(appData);
   const root = join(appData, 'obs-studio');
   await mkdir(join(root, 'logs'), { recursive: true });
@@ -118,6 +139,74 @@ describe('OBS native evidence', () => {
         "12:00:00.000: [game-capture: 'private-source'] hook not loaded yet, retrying..",
       ),
     ).toMatchObject({ outcome: 'retry' });
+  });
+  it('retains every failure logger branch from audited OBS game-capture sources', () => {
+    for (const sample of upstreamCaptureExamples) {
+      const event = projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] " + sample.text,
+      );
+      expect(event, sample.text).toMatchObject({
+        category: sample.category,
+        outcome: sample.outcome,
+      });
+      expect(JSON.stringify(event)).not.toContain('private');
+    }
+    expect(
+      projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] init_hook_info: user is forcing shared memory (multi-adapter compatibility mode)",
+      ),
+    ).toBeNull();
+  });
+  it('retains all audited D3D11 backend error logger formats without depending on English failure keywords', () => {
+    for (const sample of upstreamRendererExamples) {
+      const event = projectObsNativeLogLine('12:00:00.000: ' + sample.text);
+      expect(event, sample.text).toMatchObject({
+        category: 'renderer',
+        outcome: 'failure',
+        reason: 'renderer_failure',
+      });
+      if (sample.codeHex) expect(event).toMatchObject({ codeHex: sample.codeHex });
+      expect(JSON.stringify(event)).not.toMatch(/private|Alice/);
+    }
+    expect(
+      projectObsNativeLogLine(
+        '12:00:00.000: Hardware-Accelerated GPU Scheduling enabled on adapter!',
+      ),
+    ).toBeNull();
+  });
+  it('projects helper exit codes, incompatible hook versions and HRESULTs in their actual numeric bases', () => {
+    expect(
+      projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] inject process failed: -1073741819",
+      ),
+    ).toMatchObject({ reason: 'inject_helper_failed', code: -1073741819, codeHex: null });
+    expect(
+      projectObsNativeLogLine(
+        "12:00:00.000: [game-capture: 'private-source'] cannot initialize hook, DLL hook version is 3.1, current plugin hook major version is 2.5",
+      ),
+    ).toMatchObject({
+      reason: 'hook_version_incompatible',
+      code: null,
+      hookVersions: { dll: '3.1', plugin: '2.5' },
+    });
+    expect(
+      projectObsNativeLogLine(
+        '12:00:00.000: device_texture_create (D3D11): Failed to create 2D texture (8007000E)',
+      ),
+    ).toMatchObject({
+      category: 'renderer',
+      reason: 'renderer_failure',
+      code: 2147942414,
+      codeHex: '0x8007000E',
+    });
+    expect(
+      projectObsNativeLogLine('12:00:00.000:   Device Removed Reason: 887A0005'),
+    ).toMatchObject({ category: 'renderer', code: 2289696773, codeHex: '0x887A0005' });
+    const event = projectObsNativeLogLine(
+      '12:00:00.000: device_texture_create (D3D11): Failed C:\\Users\\Alice\\private.png (8007000E)',
+    );
+    expect(event).toMatchObject({ codeHex: '0x8007000E' });
+    expect(JSON.stringify(event)).not.toMatch(/Alice|private.png/);
   });
   it('collects bounded native evidence and keeps absence/credentials out of conclusions', async () => {
     const { appData, root } = await fixture();
@@ -242,9 +331,149 @@ describe('OBS native evidence', () => {
     expect(JSON.stringify(result)).not.toContain(installation);
     expect(JSON.stringify(result)).not.toContain(root);
   });
+  it.each(['portable_mode', 'obs_portable_mode', 'portable_mode.txt', 'obs_portable_mode.txt'])(
+    'recognizes the official portable marker %s',
+    async (marker) => {
+      const { appData } = await fixture();
+      const installation = join(appData, 'private-installation');
+      await mkdir(join(installation, 'config', 'obs-studio'), { recursive: true });
+      await writeFile(join(installation, marker), '');
+      const processes = parseObsNativeProcesses(
+        JSON.stringify([
+          {
+            role: 'obs',
+            pid: 42,
+            portable: false,
+            executablePath: join(installation, 'bin', '64bit', 'obs64.exe'),
+          },
+        ]),
+      );
+      const result = await collectObsNativeEvidence({
+        platform: 'win32',
+        appData,
+        readProcesses: () => Promise.resolve(processes),
+      });
+      expect(result.roots.map((r) => r.location)).toContain('portable_process');
+      expect(JSON.stringify(result)).not.toContain(installation);
+    },
+  );
+  it('rejects an APPDATA ancestor directory junction, including on Windows without symlink privilege', async () => {
+    const actual = await fixture();
+    const parent = await fixture();
+    const link = join(parent.appData, 'linked-appdata');
+    await symlink(actual.appData, link, 'junction');
+    await writeFile(join(actual.root, 'user.ini'), '[Basic]\nProfileDir=private-profile');
+    const result = await collectObsNativeEvidence({
+      platform: 'win32',
+      appData: link,
+      readProcesses: () => Promise.resolve([]),
+    });
+    expect(result.roots[0]?.fileStatus.user).toBe('failed');
+    expect(result.roots[0]?.logsStatus).toBe('failed');
+    expect(result.errors).toContainEqual(expect.objectContaining({ code: 'EUNSAFE' }));
+    expect(vi.mocked(open)).not.toHaveBeenCalled();
+  });
+  it('rejects a file replaced between lstat and open before reading it', async () => {
+    const { appData, root } = await fixture();
+    await writeFile(join(root, 'user.ini'), '[Basic]\n');
+    vi.mocked(open).mockImplementationOnce(async (path, flags, mode) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      await rename(String(path), String(path) + '.original');
+      await writeFile(String(path), 'private-secret');
+      return actual.open(path, flags, mode);
+    });
+    const result = await collectObsNativeEvidence({
+      platform: 'win32',
+      appData,
+      readProcesses: () => Promise.resolve([]),
+    });
+    expect(result.roots[0]?.fileStatus.user).toBe('failed');
+    expect(result.errors).toContainEqual(expect.objectContaining({ code: 'ECHANGED' }));
+    expect(JSON.stringify(result)).not.toContain('private-secret');
+  });
+  it('redacts Unicode executable names, spaced process targets and streaming-key aliases', () => {
+    for (const text of [
+      'hook_direct: could not open process: 私人项目.exe (5)',
+      'could not open process: 私人 项目.exe (5)',
+      'cannot capture 私人 项目.exe due to being blacklisted',
+      'failed to open 私人项目.exe',
+    ]) {
+      expect(redactObsNativeText(text)).not.toMatch(/私人|项目/);
+    }
+    for (const alias of ['streamKey', 'stream_key', 'stream-key']) {
+      const text = 'hook_direct: inject failed: 5 ' + alias + '=synthetic-fixture-value';
+      expect(redactObsNativeText(text)).not.toContain('synthetic-fixture-value');
+    }
+  });
+  it('falls back explicitly when protected evidence still exceeds the final UTF-8 JSON byte budget', () => {
+    const event = {
+      localTime: '12:00:00.000',
+      category: 'hook' as const,
+      outcome: 'failure' as const,
+      source: null,
+      target: null,
+      message: '\u0000'.repeat(320),
+      reason: 'capture_failure' as const,
+      code: 5,
+      codeHex: null,
+      hookVersions: null,
+    };
+    const collection = projectObsSavedCollection(saved());
+    const evidence: ObsNativeEvidence = {
+      collectionStatus: 'available',
+      processStatus: 'available',
+      processes: [],
+      errors: [],
+      limits: OBS_NATIVE_LIMITS,
+      exportTruncated: false,
+      interpretation: 'read_only_evidence_not_black_screen_root_cause',
+      roots: Array.from({ length: 2 }, () => ({
+        location: 'appdata_candidate',
+        fileStatus: {},
+        directoryTruncated: false,
+        logsStatus: 'available',
+        config: {
+          collection: {
+            ...collection,
+            captureSources: Array.from({ length: 8 }, () => ({
+              ...collection.captureSources[0],
+              role: 'capture_1',
+            })),
+          },
+        },
+        logs: Array.from({ length: 2 }, () => ({
+          slot: 0,
+          modifiedAt: '2026-10-11T12:30:00Z',
+          sessionStartedAt: '2026-10-11T12:00:00Z',
+          processAssociation: 'unverified',
+          processPid: null,
+          obsVersion: '31.1.2',
+          runningAsAdministrator: null,
+          portable: null,
+          renderer: null,
+          truncated: false,
+          omittedLines: 0,
+          events: [{ ...event }, { ...event }],
+        })),
+      })),
+    };
+    expect(Buffer.byteLength(JSON.stringify(evidence, null, 2))).toBeGreaterThan(
+      OBS_NATIVE_LIMITS.exportBytes,
+    );
+    const result = boundObsNativeEvidence(evidence);
+    expect(Buffer.byteLength(JSON.stringify(result, null, 2))).toBeLessThanOrEqual(
+      OBS_NATIVE_LIMITS.exportBytes,
+    );
+    expect(result).toMatchObject({
+      collectionStatus: 'failed',
+      exportTruncated: true,
+      errors: [{ phase: 'export_budget' }],
+    });
+    expect(evidence.exportTruncated).toBe(false);
+  });
   it('reports unreadable config and excludes symlink targets and stale logs', async () => {
     const { appData, root } = await fixture();
-    await symlink(join(appData, 'outside'), join(root, 'user.ini'));
+    await symlink(join(appData, 'outside'), join(root, 'user.ini'), 'junction');
     const file = join(root, 'logs', '2020-01-01 12-00-00.txt');
     await writeFile(file, '12:00:00.000: D3D11 device removed error 5');
     await utimes(file, new Date(0), new Date(0));

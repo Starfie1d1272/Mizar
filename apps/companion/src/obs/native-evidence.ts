@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
 import { readObsNativeProcesses, type ObsNativeProcess } from './native-process.js';
@@ -44,13 +44,25 @@ const target = (v: unknown) =>
       : 'other';
 
 export function redactObsNativeText(text: string): string {
-  return redactDiagnosticText(text)
-    .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
+  return redactDiagnosticText(
+    text.replace(/^.*\bstream[_-]?key["']?\s*[:=].*$/gim, '[credential-bearing line redacted]'),
+  )
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, '[url]')
     .replace(/\[(?:game|window|monitor)-capture:.*?\]\s*/gi, '[capture] ')
     .replace(/(['"])[^'"\r\n]*\1/g, '[quoted value]')
     .replace(/(?:[a-z]:[\\/]|\\\\)[^\r\n,;)]*/gi, '[path]')
     .replace(/\/(?:home|Users|tmp|var|etc)\/[^\s,;)]*/g, '[path]')
-    .replace(/\b(?!cs2\.exe\b|obs(?:32|64)\.exe\b)[\w.-]+\.exe\b/gi, '[executable]')
+    .replace(
+      /^((?:hook_direct:\s*)?could not open process:\s*)(.*?)(\s+\(-?\d+\))?$/i,
+      (_match, prefix: string, executable: string, suffix: string | undefined) =>
+        prefix +
+        (/^(?:cs2|obs32|obs64)\.exe$/i.test(executable) ? executable : '[executable]') +
+        (suffix ?? ''),
+    )
+    .replace(/^(cannot capture )(.+)( due to being blacklisted)$/i, '$1[executable]$3')
+    .replace(/[\p{L}\p{N}\p{M}_.-]+\.exe\b/giu, (executable) =>
+      /^(?:cs2|obs32|obs64)\.exe$/i.test(executable) ? executable : '[executable]',
+    )
     .slice(0, 320);
 }
 function failure(phase: string, error: unknown) {
@@ -169,6 +181,19 @@ export interface ObsNativeLogEvent {
   readonly source: 'mizar_capture' | 'other_capture' | null;
   readonly target: 'cs2.exe' | 'other' | null;
   readonly message: string;
+  readonly reason:
+    | 'inject_helper_failed'
+    | 'hook_version_incompatible'
+    | 'capture_failure'
+    | 'renderer_failure'
+    | null;
+  readonly code: number | null;
+  readonly codeHex: string | null;
+  readonly hookVersions: { dll: string; plugin: string } | null;
+}
+function nativeErrorCode(value: string | undefined): number | null {
+  const code = value === undefined ? NaN : Number(value);
+  return Number.isSafeInteger(code) && code >= -2147483648 && code <= 4294967295 ? code : null;
 }
 export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
@@ -177,12 +202,34 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   const text = capture?.[3] ?? stamp[2]!;
   const hook = capture?.[1] === 'game-capture';
   const attempt = /^attempting to hook (?:fullscreen )?process: (.+)$/i.exec(text);
+  const helperFailure = /^inject process failed:\s*(-?\d{1,11})$/i.exec(text);
+  const versionFailure =
+    /^cannot initialize hook, DLL hook version is (\d{1,5}\.\d{1,5}), current plugin hook major version is (\d{1,5}\.\d{1,5})$/i.exec(
+      text,
+    );
+  const rendererFailure =
+    !capture &&
+    /^(?:(?:device|gs)_[a-z0-9_]+ \(D3D11\):|Device Removed Reason:|HasBadNV12Output failed:|Failed (?:querying WDDM|enumerating devices)|IDXGIOutput6::GetDesc1 failed:|gs_vertexbuffer_flush:)/i.test(
+      text,
+    );
+  const hresult = rendererFailure
+    ? /(?:\((?:0x)?([a-f0-9]{8})\)|(?:Reason:|failed:|caps:)\s*(?:0x)?([a-f0-9]{8}))\s*$/i.exec(
+        text,
+      )
+    : null;
+  const codeHex = hresult ? `0x${(hresult[1] ?? hresult[2])!.toUpperCase()}` : null;
   let outcome: ObsNativeLogEvent['outcome'];
   if (hook && attempt) outcome = 'attempt';
   else if (hook && /^(?:memory|shared texture) capture successful$/i.test(text))
     outcome = 'success';
-  else if (hook && /^capture stopped$/i.test(text)) outcome = 'stopped';
+  else if (
+    hook &&
+    /^(?:capture stopped|capture window no longer exists, terminating capture)$/i.test(text)
+  )
+    outcome = 'stopped';
   else if (hook && /^hook not loaded yet, retrying\.\.$/i.test(text)) outcome = 'retry';
+  else if (hook && (helperFailure || versionFailure || /^init_capture_data failed$/i.test(text)))
+    outcome = 'failure';
   else if (
     capture &&
     /^(?:hook_direct:|hook:|init_[a-z_]+:|error acquiring|cannot capture|Failed to|failed to|could not|Game capture file|Game capture .*not found|\[WGC\])/i.test(
@@ -191,6 +238,7 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     /fail|error|not found|could not|unavailable|blacklisted/i.test(text)
   )
     outcome = 'failure';
+  else if (rendererFailure) outcome = 'failure';
   else if (
     !capture &&
     /^(?:D3D11|DXGI|Failed to create D3D|Failed to initialize video|gs_create|device_create)/i.test(
@@ -206,6 +254,23 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     outcome,
     source: capture ? (capture[2] === OBS_CAPTURE_INPUT ? 'mizar_capture' : 'other_capture') : null,
     target: attempt ? target(attempt[1]) : null,
+    reason:
+      outcome !== 'failure'
+        ? null
+        : helperFailure
+          ? 'inject_helper_failed'
+          : versionFailure
+            ? 'hook_version_incompatible'
+            : !capture
+              ? 'renderer_failure'
+              : 'capture_failure',
+    codeHex,
+    code: codeHex
+      ? Number.parseInt(codeHex.slice(2), 16)
+      : outcome === 'failure' && !versionFailure
+        ? nativeErrorCode(helperFailure?.[1] ?? /[:(]\s*(-?\d{1,11})\)?\.?$/.exec(text)?.[1])
+        : null,
+    hookVersions: versionFailure ? { dll: versionFailure[1]!, plugin: versionFailure[2]! } : null,
     message: attempt
       ? `attempting to hook process: ${target(attempt[1]) === 'cs2.exe' ? 'cs2.exe' : '[other executable]'}`
       : redactObsNativeText(text),
@@ -289,21 +354,60 @@ export async function collectObsNativeEvidence(
     check();
     if (evidence.errors.length < 8) evidence.errors.push(failure(phase, e));
   };
+  async function guardedPath(path: string) {
+    if (!isAbsolute(path))
+      throw Object.assign(new Error('OBS evidence path is not absolute'), { code: 'EUNSAFE' });
+    const paths: string[] = [];
+    for (let current = path; ; current = dirname(current)) {
+      if (paths.length >= 64)
+        throw Object.assign(new Error('OBS evidence path depth exceeds limit'), {
+          code: 'ETOOBIG',
+        });
+      paths.unshift(current);
+      if (dirname(current) === current) break;
+    }
+    const chain = [];
+    for (const current of paths) {
+      const stat = await lstat(current);
+      check();
+      if (stat.isSymbolicLink() || (current !== path && !stat.isDirectory()))
+        throw Object.assign(new Error('OBS evidence ancestor is not a regular directory'), {
+          code: 'EUNSAFE',
+        });
+      chain.push({ path: current, stat });
+    }
+    return chain;
+  }
+  async function unchanged(chain: Awaited<ReturnType<typeof guardedPath>>) {
+    for (const previous of chain) {
+      const current = await lstat(previous.path);
+      check();
+      if (
+        current.isSymbolicLink() ||
+        current.ino !== previous.stat.ino ||
+        current.dev !== previous.stat.dev
+      )
+        throw Object.assign(new Error('OBS evidence path changed during read'), {
+          code: 'ECHANGED',
+        });
+    }
+  }
   async function read(root: string, parts: string[], limit: number, tail = false, header = false) {
     check();
-    let path = root;
-    // Reject reparse/symlink components, including the OBS root itself.
-    for (const part of ['', ...parts]) {
-      path = part ? join(path, part) : path;
-      const stat = await lstat(path);
-      check();
-      if (stat.isSymbolicLink())
-        throw Object.assign(new Error('OBS evidence path is a symbolic link'), { code: 'EUNSAFE' });
-    }
+    const path = join(root, ...parts);
+    const chain = await guardedPath(path);
+    const before = chain[chain.length - 1]!.stat;
+    if (!before.isFile())
+      throw Object.assign(new Error('OBS evidence is not a regular file'), { code: 'EUNSAFE' });
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       const stat = await handle.stat();
       check();
+      if (stat.ino !== before.ino || stat.dev !== before.dev)
+        throw Object.assign(new Error('OBS evidence file changed before open'), {
+          code: 'ECHANGED',
+        });
+      await unchanged(chain);
       if (!stat.isFile())
         throw Object.assign(new Error('OBS evidence is not a regular file'), { code: 'EUNSAFE' });
       if (!tail && !header && stat.size > limit)
@@ -374,9 +478,17 @@ export async function collectObsNativeEvidence(
       )
         continue;
       const portableRoot = dirname(dirname(dirname(p.executablePath)));
-      const marker = await optional(portableRoot, ['portable_mode.txt'], 4096);
-      if (p.portable === true || marker)
-        roots.set(join(portableRoot, 'config', 'obs-studio'), 'portable_process');
+      let portable = p.portable === true;
+      for (const marker of [
+        'portable_mode',
+        'obs_portable_mode',
+        'portable_mode.txt',
+        'obs_portable_mode.txt',
+      ]) {
+        if (portable) break;
+        portable = !!(await optional(portableRoot, [marker], 4096));
+      }
+      if (portable) roots.set(join(portableRoot, 'config', 'obs-studio'), 'portable_process');
     }
     for (const [root, location] of [...roots].slice(0, OBS_NATIVE_LIMITS.roots)) {
       check();
@@ -450,16 +562,12 @@ export async function collectObsNativeEvidence(
         collection: saved,
       };
       try {
-        const dirPath = join(root, 'logs'),
-          stat = await lstat(root);
-        check();
-        if (stat.isSymbolicLink() || (await lstat(dirPath)).isSymbolicLink())
-          throw Object.assign(new Error('OBS log directory is a symbolic link'), {
-            code: 'EUNSAFE',
-          });
+        const dirPath = join(root, 'logs');
+        const directoryChain = await guardedPath(dirPath);
         const directory = await opendir(dirPath);
         const names: string[] = [];
         try {
+          await unchanged(directoryChain);
           for (let n = 0; n < OBS_NATIVE_LIMITS.directoryEntries; n++) {
             const entry = await directory.read();
             check();
@@ -564,6 +672,10 @@ export async function collectObsNativeEvidence(
   ]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+  return boundObsNativeEvidence(result);
+}
+
+export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvidence {
   const exported = structuredClone(result);
   while (Buffer.byteLength(JSON.stringify(exported, null, 2)) > OBS_NATIVE_LIMITS.exportBytes) {
     const logs = exported.roots
@@ -579,6 +691,21 @@ export async function collectObsNativeEvidence(
     log.omittedLines++;
     log.truncated = true;
     exported.exportTruncated = true;
+  }
+  if (Buffer.byteLength(JSON.stringify(exported, null, 2)) > OBS_NATIVE_LIMITS.exportBytes) {
+    const fallback = failedObsNativeEvidence(
+      new Error('OBS native evidence exceeded export budget; details omitted'),
+    );
+    return {
+      ...fallback,
+      exportTruncated: true,
+      errors: [
+        failure(
+          'export_budget',
+          new Error('OBS native evidence exceeded export budget; details omitted'),
+        ),
+      ],
+    };
   }
   return exported;
 }
