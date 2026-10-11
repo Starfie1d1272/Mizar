@@ -1,4 +1,7 @@
 import { request as httpsRequest } from 'node:https';
+import { Buffer } from 'node:buffer';
+
+const { Request, Response, performance } = globalThis;
 
 // Native HTTPS respects the caller's total deadline without fetch's separate
 // 300-second response-header deadline. No retries or redirects for mutations.

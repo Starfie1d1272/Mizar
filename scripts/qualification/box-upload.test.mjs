@@ -1,7 +1,11 @@
 import { createServer, request } from 'node:http';
 import { once } from 'node:events';
+import { Buffer, Blob } from 'node:buffer';
+import { setTimeout } from 'node:timers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { multipartUpload } from './box-upload.mjs';
+
+const { AbortSignal, FormData } = globalThis;
 
 const servers = [];
 afterEach(async () => {
