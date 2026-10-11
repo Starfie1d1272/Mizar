@@ -4,6 +4,7 @@ import { Buffer, Blob } from 'node:buffer';
 import { setTimeout } from 'node:timers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { multipartUpload } from './box-upload.mjs';
+import { BoxClient } from './box-sync.mjs';
 
 const { AbortSignal, FormData } = globalThis;
 
@@ -78,3 +79,45 @@ it('bounds the receipt body independently of the uploaded file size', async () =
   });
   await expect(multipartUpload(url, options(), request)).rejects.toThrow('exceeds limit');
 });
+it.each([204, 205, 304])(
+  'represents an empty HTTP %s response without an uncaught conversion error',
+  async (status) => {
+    const url = await endpoint((incoming, response) => {
+      incoming.resume();
+      response.writeHead(status);
+      response.end();
+    });
+    const result = await multipartUpload(url, options(), request);
+    expect(result.status).toBe(status);
+    expect(await result.text()).toBe('');
+  },
+);
+it('rejects an invalid response status through the upload promise', async () => {
+  const url = await endpoint((incoming, response) => {
+    incoming.resume();
+    response.writeHead(700);
+    response.end();
+  });
+  await expect(multipartUpload(url, options(), request)).rejects.toThrow('status invalid');
+});
+it.each([200, 204, 304, 503])(
+  'does not accept an empty or rejected HTTP %s as a successful upload',
+  async (status) => {
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let calls = 0;
+    const url = await endpoint((incoming, response) => {
+      calls++;
+      incoming.resume();
+      response.writeHead(status);
+      response.end(status === 503 ? 'private server response' : undefined);
+    });
+    const client = new BoxClient('private-token', (_url, settings) =>
+      multipartUpload(url, settings, request),
+    );
+    client.api = async () => 'https://box.nju.edu.cn/seafhttp/upload-api/private-url';
+    const failed = client.upload('/Runtime/v1.3.0', 'original.exe', Buffer.from('original'));
+    await expect(failed).rejects.toThrow(status >= 300 ? `HTTP ${status}` : 'JSON');
+    expect(calls).toBe(1);
+    expect(logs.mock.calls.flat().join('\n')).not.toMatch(/private|http:\/\//);
+  },
+);

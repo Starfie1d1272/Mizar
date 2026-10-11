@@ -34,10 +34,18 @@ export async function multipartUpload(url, options, request = httpsRequest) {
         });
         incoming.on('error', reject);
         incoming.on('end', () => {
-          console.log(
-            `Box 上传响应 HTTP ${incoming.statusCode}（${Math.round(performance.now() - started)}ms）`,
-          );
-          resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode }));
+          try {
+            const status = incoming.statusCode;
+            if (!Number.isInteger(status) || status < 200 || status > 599)
+              throw new Error('Box upload response status invalid');
+            const response = new Response(size ? Buffer.concat(chunks) : null, { status });
+            console.log(
+              `Box 上传响应 HTTP ${status}（${Math.round(performance.now() - started)}ms）`,
+            );
+            resolve(response);
+          } catch (error) {
+            reject(error);
+          }
         });
       },
     );
