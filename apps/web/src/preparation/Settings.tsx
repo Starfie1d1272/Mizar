@@ -49,9 +49,11 @@ export function Settings({ tab }: { tab: string }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const configuration = useRef<ReturnType<typeof beginObsConfiguration> | null>(null);
+  const configurationRevision = useRef(0);
   useEffect(() => {
     if (tab !== 'obs' || !window.__TAURI_INTERNALS__) return;
     let active = true;
+    const revision = ++configurationRevision.current;
     let opened = false;
     const session = beginObsConfiguration();
     configuration.current = session;
@@ -69,13 +71,23 @@ export function Settings({ tab }: { tab: string }) {
       void session
         .finish()
         .then((result) => {
-          if (notify && result.message && configuration.current === null)
+          if (
+            notify &&
+            result.message &&
+            configuration.current === null &&
+            revision === configurationRevision.current
+          )
             window.dispatchEvent(
               new CustomEvent('mizar:obs-configuration-finished', { detail: result.message }),
             );
         })
         .catch(() => {
-          if (notify && opened && configuration.current === null)
+          if (
+            notify &&
+            opened &&
+            configuration.current === null &&
+            revision === configurationRevision.current
+          )
             window.dispatchEvent(
               new CustomEvent('mizar:obs-configuration-finished', {
                 detail:

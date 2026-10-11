@@ -55,16 +55,18 @@ describe('Desktop capability contract', () => {
       config,
       capability,
       demoCapability,
-      obsCapability,
       demoWorkspaceCapability,
+      exitCapability,
+      obsCapability,
     ] = await Promise.all([
       readFile(join(desktopRoot, 'build.rs'), 'utf8'),
       readFile(join(desktopRoot, 'src/main.rs'), 'utf8'),
       readFile(join(desktopRoot, 'tauri.conf.json'), 'utf8').then(JSON.parse),
       readFile(join(desktopRoot, 'capabilities/workspace.json'), 'utf8').then(JSON.parse),
       readFile(join(desktopRoot, 'capabilities/demo-test.json'), 'utf8').then(JSON.parse),
-      readFile(join(desktopRoot, 'capabilities/obs-configuration.json'), 'utf8').then(JSON.parse),
       readFile(join(desktopRoot, 'capabilities/demo-test-workspace.json'), 'utf8').then(JSON.parse),
+      readFile(join(desktopRoot, 'capabilities/workspace-exit.json'), 'utf8').then(JSON.parse),
+      readFile(join(desktopRoot, 'capabilities/obs-configuration.json'), 'utf8').then(JSON.parse),
     ]);
     const manifest = build.match(/AppManifest::new\(\)\s*\.commands\(\s*&\s*\[([^\]]*)\]/);
     expect(manifest, '必须读取 production AppManifest commands').not.toBeNull();
@@ -101,6 +103,7 @@ describe('Desktop capability contract', () => {
       'workspace',
       'demo-test',
       'demo-test-workspace',
+      'workspace-exit',
       'obs-configuration',
     ]);
     expect(obsCapability.identifier).toBe('obs-configuration');
@@ -109,6 +112,10 @@ describe('Desktop capability contract', () => {
     expect(obsCapability.permissions.toSorted()).toEqual(
       obsConfigurationCommands.map((command) => `allow-${command.replaceAll('_', '-')}`).toSorted(),
     );
+    expect(exitCapability.identifier).toBe('workspace-exit');
+    expect(exitCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
+    expect(exitCapability.windows.toSorted()).toEqual(['main', 'workspace-dock', 'workspace-left']);
+    expect(exitCapability.permissions).toEqual(['allow-finish-workspace']);
     expect(demoCapability.identifier).toBe('demo-test');
     expect(demoCapability.remote.urls).toEqual(['http://127.0.0.1:3000/*']);
     expect(demoCapability.windows).toEqual(['main']);
@@ -140,7 +147,9 @@ describe('Desktop capability contract', () => {
       registered
         .filter(
           (command) =>
-            !demoCommands.includes(command) && !obsConfigurationCommands.includes(command),
+            !demoCommands.includes(command) &&
+            command !== 'finish_workspace' &&
+            !obsConfigurationCommands.includes(command),
         )
         .map((command) => `allow-${command.replaceAll('_', '-')}`)
         .toSorted(),

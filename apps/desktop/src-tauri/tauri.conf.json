@@ -9,7 +9,13 @@
   "app": {
     "windows": [],
     "security": {
-      "capabilities": ["workspace", "demo-test", "demo-test-workspace", "obs-configuration"]
+      "capabilities": [
+        "workspace",
+        "demo-test",
+        "demo-test-workspace",
+        "workspace-exit",
+        "obs-configuration"
+      ]
     }
   },
   "bundle": {

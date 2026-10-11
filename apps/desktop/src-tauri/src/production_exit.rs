@@ -2,7 +2,8 @@
 use crate::startup_log::DesktopLog;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -19,10 +20,17 @@ impl VerifiedStop {
 #[derive(Default)]
 pub struct ExitGate {
     active: AtomicBool,
+    generation: AtomicU64,
+    publication: Mutex<()>,
 }
 impl ExitGate {
     pub fn begin(&self) -> bool {
-        !self.active.swap(true, Ordering::AcqRel)
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        if self.active.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        true
     }
     pub fn check(&self) -> Result<(), String> {
         if self.active.load(Ordering::Acquire) {
@@ -31,8 +39,62 @@ impl ExitGate {
             Ok(())
         }
     }
+    /// Capture before readiness/window creation. Even a completed exit invalidates this entry.
+    pub fn presentation_ticket(&self) -> Result<u64, String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check()?;
+        Ok(self.generation.load(Ordering::Acquire))
+    }
+    /// Serialize the actual main-thread window publication with starting an exit.
+    pub fn publish(&self, ticket: u64, present: impl FnOnce()) -> Result<(), String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check()?;
+        if self.generation.load(Ordering::Acquire) != ticket {
+            return Err("此前的进入操作已因退出而取消，请在准备中心重新进入工作台。".into());
+        }
+        present();
+        Ok(())
+    }
     pub fn cancel(&self) {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
         self.active.store(false, Ordering::Release);
+    }
+}
+
+/// UI feedback only; production and restoration facts remain with their owners.
+#[derive(Clone, Default)]
+pub struct WorkspaceExitStatus {
+    pub busy: bool,
+    pub stage: String,
+    pub message: Option<String>,
+}
+#[derive(Default)]
+pub struct WorkspaceExit(std::sync::Mutex<WorkspaceExitStatus>);
+impl WorkspaceExit {
+    pub fn status(&self) -> WorkspaceExitStatus {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    pub fn stage(&self, stage: &str) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = WorkspaceExitStatus {
+            busy: true,
+            stage: stage.into(),
+            message: None,
+        };
+    }
+    pub fn complete(&self, result: &Result<(), String>) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.busy = false;
+        state.message = result.as_ref().err().cloned();
+        if result.is_ok() {
+            state.stage.clear();
+        }
+    }
+}
+/// Releasing a failed or completed workspace operation must also allow retry.
+pub struct WorkspaceExitGuard<'a>(pub &'a ExitGate);
+impl Drop for WorkspaceExitGuard<'_> {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -359,6 +421,14 @@ pub fn finish_managed_game(
 }
 
 pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
+    finish_production(log, "shutdown")
+}
+
+pub fn finish_workspace_production(log: &DesktopLog) -> Result<(), String> {
+    finish_production(log, "finish")
+}
+
+fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     for _ in 0..3 {
         let (status, state) = request(log, "GET", "/local/v1/production", "", deadline)?;
@@ -371,8 +441,7 @@ pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
             return Err("无法读取制作状态，游戏仍保留。".into());
         }
         let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-        let body =
-            serde_json::json!({"action": "shutdown", "expectedRevision": revision}).to_string();
+        let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
         let (status, result) = request(log, "POST", "/operator/production", &body, deadline)?;
         if status == 200 && result["mode"] == "preparation" {
             return Ok(());
@@ -396,6 +465,65 @@ pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_feedback_keeps_failure_without_sticking_busy_and_retry_replaces_it() {
+        let feedback = WorkspaceExit::default();
+        let gate = ExitGate::default();
+        assert!(gate.begin());
+        {
+            let _guard = WorkspaceExitGuard(&gate);
+            feedback.stage("production");
+            assert!(feedback.status().busy);
+            assert!(!gate.begin());
+            feedback.stage("restoration");
+            feedback.complete(&Err("CS2 尚未退出，请手动退出游戏后重试恢复。".into()));
+        }
+        let result = feedback.status();
+        assert!(!result.busy);
+        assert_eq!(result.stage, "restoration");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("CS2 尚未退出，请手动退出游戏后重试恢复。")
+        );
+        assert!(gate.begin());
+        {
+            let _guard = WorkspaceExitGuard(&gate);
+            feedback.stage("production");
+            assert!(feedback.status().message.is_none());
+            feedback.complete(&Ok(()));
+        }
+        assert!(gate.check().is_ok());
+        assert!(!feedback.status().busy);
+        assert!(feedback.status().message.is_none());
+    }
+
+    #[test]
+    fn completed_exit_invalidates_old_entry_without_clearing_failure_or_hiding_main() {
+        let gate = ExitGate::default();
+        let feedback = WorkspaceExit::default();
+        let old_entry = gate.presentation_ticket().unwrap();
+        assert!(gate.begin());
+        feedback.stage("restoration");
+        feedback.complete(&Err("CS2 仍在运行，原配置尚未恢复。".into()));
+        gate.cancel();
+        let published = std::cell::Cell::new(false);
+        assert!(gate
+            .publish(old_entry, || {
+                published.set(true); // Represents showing panels and hiding the preparation window.
+                feedback.complete(&Ok(()));
+            })
+            .is_err());
+        assert!(!published.get());
+        assert_eq!(
+            feedback.status().message.as_deref(),
+            Some("CS2 仍在运行，原配置尚未恢复。")
+        );
+        let new_entry = gate.presentation_ticket().unwrap();
+        gate.publish(new_entry, || feedback.complete(&Ok(())))
+            .unwrap();
+        assert!(feedback.status().message.is_none());
+    }
+
     fn qualification() -> serde_json::Value {
         serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"})
     }

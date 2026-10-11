@@ -530,6 +530,7 @@ async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
 ) -> Result<bool, String> {
+    app.state::<production_exit::ExitGate>().check()?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
@@ -569,6 +570,95 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
+}
+
+#[tauri::command]
+fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
+    let state = app.state::<production_exit::WorkspaceExit>().status();
+    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message })
+}
+
+#[tauri::command]
+async fn finish_workspace(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    confirm_steam_cancelled: Option<bool>,
+) -> Result<(), String> {
+    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
+        return Err("请在准备中心或工作台退出本次制作。".into());
+    }
+    let gate = app.state::<production_exit::ExitGate>();
+    if !gate.begin() {
+        return Err("正在退出，请等待收尾结果。".into());
+    }
+    let _gate = production_exit::WorkspaceExitGuard(&gate);
+    let feedback = app.state::<production_exit::WorkspaceExit>();
+    feedback.stage("checking");
+    // This task belongs to Host, so hiding or closing a WebView cannot lose it.
+    let host = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let feedback = host.state::<production_exit::WorkspaceExit>();
+        let log = host.state::<DesktopLog>();
+        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let activity = host.state::<cs2_activity::Activity>();
+        // Open the visible recovery owner before any potentially slow cleanup.
+        // A presentation failure cannot skip safe production or game cleanup.
+        let presentation = open_main(host.clone(), None);
+        let trial = demo_test::status(&log)?;
+        if trial["active"] == true || cs2.has_demo_journal()? {
+            feedback.stage("restoration");
+            let _activity = activity.begin(2);
+            if confirm_steam_cancelled == Some(true) {
+                cs2.restore_backup(true)?;
+            }
+            cs2.finish()?;
+        } else {
+            feedback.stage("production");
+            production_exit::finish_workspace_production(&log)?;
+            feedback.stage("restoration");
+            let _activity = activity.begin(2);
+            production_exit::finish_managed_game(&log, |requires_proof| {
+                if confirm_steam_cancelled == Some(true) {
+                    cs2.restore_backup(true)?;
+                }
+                cs2.finish()?;
+                if requires_proof {
+                    cs2.confirm_game_stopped()?;
+                }
+                Ok(())
+            })?;
+        }
+        feedback.stage("presentation");
+        presentation?;
+        present_production_inner(&host, false)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        app.state::<DesktopLog>().event(
+            "production_finish",
+            "failure",
+            Some(&format!("phase=workspace_task; cause={error}")),
+        );
+        Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
+    });
+    if let Err(error) = &result {
+        app.state::<DesktopLog>().event(
+            "production_finish",
+            "failure",
+            Some(&format!(
+                "phase=workspace_{}; cause={error}",
+                feedback.status().stage
+            )),
+        );
+    }
+    feedback.complete(&result);
+    if result.is_err() {
+        // Keep the original local failure; never replace it with window errors.
+        let _ = open_main(app.clone(), None);
+    }
+    // Preserve the command result too; callers must not announce false success.
+    result
 }
 
 fn demo_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -616,6 +706,7 @@ async fn start_demo_test(
     preserve_settings: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     demo_main_window(&window)?;
+    app.state::<production_exit::ExitGate>().check()?;
     tauri::async_runtime::spawn_blocking(move || {
         let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
@@ -856,6 +947,7 @@ async fn present_production(app: tauri::AppHandle, live: bool) -> Result<(), Str
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
     if live {
+        let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
         // Capture before window creation/layout work. A later foreground change
         // cancels this one-shot intent; showing the panels must not select them.
         let source = app.get_webview_window("main")
@@ -908,28 +1000,26 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         ensure_live_windows(&app).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
-        let state = app.state::<HostState>();
-        let layout = state
-            .tracker
-            .lock()
-            .ok()
-            .and_then(|mut tracker| tracker.restore_layout());
-        if let Some(layout) = layout {
-            apply_layout(&app, layout);
-        }
-        show_workspace(&app);
         let host = app.clone();
+        let (published, completion) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
-            if !host.state::<HostState>().visible.load(Ordering::Acquire) { return; }
-            if let Some(request) = request {
-                let focused = attempt_game_focus(&host, request);
-                host.state::<DesktopLog>().event("workspace_entry_focus",
-                    if focused { "focused" } else { "not_focused" }, None);
-            }
-            if let Some(main) = host.get_webview_window("main") {
-                let _ = window_presentation::set_visible(&main, false);
-            }
+            // Check and publish under the same gate on the actual UI thread.
+            // An exit begun during readiness invalidates this callback even after it finishes.
+            let result = host.state::<production_exit::ExitGate>().publish(ticket, || {
+                host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
+                show_workspace(&host);
+                if let Some(request) = request {
+                    let focused = attempt_game_focus(&host, request);
+                    host.state::<DesktopLog>().event("workspace_entry_focus",
+                        if focused { "focused" } else { "not_focused" }, None);
+                }
+                if let Some(main) = host.get_webview_window("main") {
+                    let _ = window_presentation::set_visible(&main, false);
+                }
+            });
+            let _ = published.send(result);
         }).map_err(|error| error.to_string())?;
+        completion.recv().map_err(|_| "现场窗口呈现未能完成，请在准备中心重新进入工作台。".to_string())??;
     } else {
         open_main(app.clone(), None)?;
         hide_workspace(&app);
@@ -957,7 +1047,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .decorations(false)
                 .shadow(false)
                 .resizable(false)
-                .visible(true)
+                .visible(false)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
@@ -968,7 +1058,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
                 .decorations(false)
                 .shadow(false)
                 .resizable(false)
-                .visible(true)
+                .visible(false)
                 .focused(false)
                 .on_navigation(trusted_navigation)
                 .build()
@@ -1017,7 +1107,10 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn open_tool(app: tauri::AppHandle, tool: String) -> Result<(), String> {
-    app.state::<production_exit::ExitGate>().check()?;
+    // Diagnostics must remain available while an exit is blocked or in progress.
+    if tool != "diagnostics" {
+        app.state::<production_exit::ExitGate>().check()?;
+    }
     app.state::<updates::PendingUpdate>().check()?;
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
@@ -1486,6 +1579,7 @@ fn run_desktop(
         .manage(Mutex::new(demo_test::Selection::default()))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
+        .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(tauri::generate_handler![
@@ -1500,6 +1594,8 @@ fn run_desktop(
             cs2_config_status,
             start_managed_cs2,
             finish_managed_cs2,
+            finish_workspace,
+            workspace_exit_status,
             select_demo_file,
             start_demo_test,
             enter_demo_test,

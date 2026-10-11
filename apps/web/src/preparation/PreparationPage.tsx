@@ -25,6 +25,7 @@ import { UpdateNotification } from './UpdateNotification';
 import { ProgramPreview } from './ProgramPreview';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
+import { useWorkspaceExitStatus } from './cs2-status';
 import { SpectatorWorkflow } from './SpectatorWorkflow';
 import './preparation.css';
 
@@ -100,6 +101,7 @@ export function PreparationPage() {
   const { view, refresh } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const scenes = useProgramScenes();
+  const exit = useWorkspaceExitStatus();
   const hud = useHudConfigClient();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
@@ -207,7 +209,7 @@ export function PreparationPage() {
           </div>
           <Button
             variant={match ? 'primary' : 'secondary'}
-            disabled={busy || !production?.canEnter}
+            disabled={busy || Boolean(exit?.busy) || !production?.canEnter}
             onClick={() => production && void action(() => productionAction('enter', production))}
           >
             {production?.mode === 'hidden' || production?.mode === 'live'
