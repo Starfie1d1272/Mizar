@@ -1,3 +1,4 @@
+import * as nativeObs from '../src/obs/native-evidence.js';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +42,32 @@ const request = {
 };
 
 describe('support export', () => {
+  it('retains the ordinary bundle when optional native evidence fails', async () => {
+    const collector = vi
+      .spyOn(nativeObs, 'collectObsNativeEvidence')
+      .mockRejectedValue(
+        Object.assign(new Error('access denied C:\\Users\\Alice\\private'), { code: 'EACCES' }),
+      );
+    const app = buildApp();
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(
+        response.json<{ snapshot: { nativeObs: unknown } }>().snapshot.nativeObs,
+      ).toMatchObject({
+        collectionStatus: 'failed',
+        errors: [{ code: 'EACCES' }],
+      });
+      expect(
+        response.json<{ snapshot: { program: { active: string } } }>().snapshot.program.active,
+      ).toBe('waiting');
+      expect(response.body).not.toMatch(/Alice|private/);
+    } finally {
+      await app.close();
+      collector.mockRestore();
+    }
+  });
+
   it('exports Program alignment and safe source evidence without arbitrary scene names or credentials', async () => {
     const dir = await directory();
     const status = vi.spyOn(ObsAdapter.prototype, 'status').mockResolvedValue({

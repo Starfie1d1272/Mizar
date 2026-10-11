@@ -487,7 +487,7 @@ async function readLog(directory: string, name: string, salt: string) {
   }
 }
 
-export async function readSupportLogs(directory: string | undefined) {
+export async function readSupportLogs(directory: string | undefined, maxBytes = 192 * 1024) {
   if (directory === undefined) return [];
   const salt = randomBytes(32).toString('hex');
   const files = names.flatMap((name) => [
@@ -507,7 +507,7 @@ export async function readSupportLogs(directory: string | undefined) {
     results.push(result);
   }
   // Reserve 64 KiB for the manifest/current snapshot. Keep each file's latest failure.
-  while (Buffer.byteLength(JSON.stringify(results, null, 2)) > 192 * 1024) {
+  while (Buffer.byteLength(JSON.stringify(results, null, 2)) > maxBytes) {
     const file = results
       .filter((item) => item.events.length > 1)
       .sort((left, right) => right.events.length - left.events.length)[0];
