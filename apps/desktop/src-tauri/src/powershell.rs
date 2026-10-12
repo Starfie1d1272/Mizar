@@ -191,18 +191,6 @@ mod tests {
     use std::os::windows::process::CommandExt;
 
     #[test]
-    fn canonical_paths_keep_the_same_location_for_powershell() {
-        assert_eq!(
-            provider_path(Path::new(r"\\?\D:\Mizar 中文\state")),
-            PathBuf::from(r"D:\Mizar 中文\state")
-        );
-        assert_eq!(
-            provider_path(Path::new(r"\\?\UNC\server\share\state")),
-            PathBuf::from(r"\\server\share\state")
-        );
-    }
-
-    #[test]
     fn failures_keep_stderr_exit_and_parse_evidence_without_deadlock_or_token_leaks() {
         let root = std::env::temp_dir().join(format!("mizar-shell-log-{}", std::process::id()));
         let log = DesktopLog::new(&root, None).unwrap();

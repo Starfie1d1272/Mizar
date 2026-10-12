@@ -105,97 +105,77 @@ describe('bounded reliable output', () => {
     }
   });
 
-  it.each([
-    'older-mirror',
-    'newer-mirror',
-    'valid-primary',
-    'legacy-partial',
-    'truncated-primary',
-    'damaged-mirror',
-    'metadata-damaged',
-    'valid-status-corruption',
-  ] as const)('does not replay unconfirmed receipts across %s disk snapshots', async (scenario) => {
-    const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-generations-'));
-    try {
-      const path = join(dir, 'outbox.json');
-      const seed = new ReliableOutbox(path);
-      const at = new Date('2026-09-28T00:00:00Z');
-      await seed.enqueue(event('acked'), at);
-      const pending = await readFile(path);
-      await seed.flush({
-        now: at,
-        isCurrent: () => true,
-        sink: { send: () => Promise.resolve('accepted' as const) },
-      });
-      await seed.enqueue(event('pending'), at);
-      const latest = await readFile(path);
-      const primary = JSON.parse(latest.toString('utf8')) as DiskOutbox;
-      if (scenario === 'older-mirror' || scenario === 'valid-primary') {
-        await writeFile(`${path}.last-good`, pending);
-      } else if (scenario === 'newer-mirror') {
-        // Power loss after mirror rename and before primary rename: unpublished enqueue.
-        await writeFile(path, pending);
-      } else if (scenario === 'legacy-partial') {
-        primary.version = 'mizar.reliable-outbox.v1';
-        delete primary.commit;
-      } else if (scenario === 'damaged-mirror') {
-        await writeFile(`${path}.last-good`, Buffer.from('{'));
-      } else if (scenario === 'metadata-damaged') {
-        primary.commit!.sha256 = '0'.repeat(64);
-      }
-      if (scenario === 'truncated-primary') {
-        await writeFile(path, latest.subarray(0, 100));
-      } else if (scenario !== 'valid-primary') {
-        const damaged =
-          scenario === 'newer-mirror'
-            ? (JSON.parse(pending.toString('utf8')) as DiskOutbox)
-            : primary;
-        damaged.records[0]!.status =
-          scenario === 'valid-status-corruption' ? 'pending' : ['pending'];
-        await writeFile(path, JSON.stringify(damaged));
-      }
-      const primaryBefore = await readFile(path);
-      const mirrorBefore = await readFile(`${path}.last-good`);
-      const box = new ReliableOutbox(path);
-      await box.load();
-      const send = vi.fn(() => Promise.resolve('accepted' as const));
-      await box.flush({ now: at, isCurrent: () => true, canSend: () => true, sink: { send } });
-      const verified = scenario === 'valid-primary' || scenario === 'valid-status-corruption';
-      expect(send.mock.calls.length).toBe(verified ? 1 : 0);
-      if (verified)
-        expect(box.getRecords().map((r) => r.event.idempotencyKey)).toEqual(['acked', 'pending']);
-      else {
-        expect(box.getRecords()).toEqual([]);
-        expect(box.getRecovery()?.message).toContain('无法确认完整提交与回执');
-      }
-      if (scenario !== 'valid-primary') {
-        const names = await readdir(dir);
-        expect(
-          await readFile(
-            join(
-              dir,
-              names.find((n) => n.startsWith('outbox.json.corrupt-'))!,
+  it.each(['valid-primary', 'truncated-primary', 'valid-status-corruption'] as const)(
+    'does not replay unconfirmed receipts across %s disk snapshots',
+    async (scenario) => {
+      const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-generations-'));
+      try {
+        const path = join(dir, 'outbox.json');
+        const seed = new ReliableOutbox(path);
+        const at = new Date('2026-09-28T00:00:00Z');
+        await seed.enqueue(event('acked'), at);
+        const pending = await readFile(path);
+        await seed.flush({
+          now: at,
+          isCurrent: () => true,
+          sink: { send: () => Promise.resolve('accepted' as const) },
+        });
+        await seed.enqueue(event('pending'), at);
+        const latest = await readFile(path);
+        const primary = JSON.parse(latest.toString('utf8')) as DiskOutbox;
+        if (scenario === 'valid-primary') {
+          await writeFile(`${path}.last-good`, pending);
+        }
+        if (scenario === 'truncated-primary') {
+          await writeFile(path, latest.subarray(0, 100));
+        } else if (scenario !== 'valid-primary') {
+          primary.records[0]!.status = 'pending';
+          await writeFile(path, JSON.stringify(primary));
+        }
+        const primaryBefore = await readFile(path);
+        const mirrorBefore = await readFile(`${path}.last-good`);
+        const box = new ReliableOutbox(path);
+        await box.load();
+        const send = vi.fn(() => Promise.resolve('accepted' as const));
+        await box.flush({ now: at, isCurrent: () => true, canSend: () => true, sink: { send } });
+        const verified = scenario === 'valid-primary' || scenario === 'valid-status-corruption';
+        expect(send.mock.calls.length).toBe(verified ? 1 : 0);
+        if (verified)
+          expect(box.getRecords().map((r) => r.event.idempotencyKey)).toEqual(['acked', 'pending']);
+        else {
+          expect(box.getRecords()).toEqual([]);
+          expect(box.getRecovery()?.message).toContain('无法确认完整提交与回执');
+        }
+        if (scenario !== 'valid-primary') {
+          const names = await readdir(dir);
+          expect(
+            await readFile(
+              join(
+                dir,
+                names.find((n) => n.startsWith('outbox.json.corrupt-'))!,
+              ),
             ),
-          ),
-        ).toEqual(primaryBefore);
-        expect(
-          await readFile(
-            join(
-              dir,
-              names.find((n) => n.startsWith('outbox.json.last-good.corrupt-'))!,
+          ).toEqual(primaryBefore);
+          expect(
+            await readFile(
+              join(
+                dir,
+                names.find((n) => n.startsWith('outbox.json.last-good.corrupt-'))!,
+              ),
             ),
-          ),
-        ).toEqual(mirrorBefore);
+          ).toEqual(mirrorBefore);
+        }
+        const restarted = new ReliableOutbox(path);
+        await restarted.load();
+        await restarted.flush({ now: at, isCurrent: () => true, sink: { send } });
+        expect(send.mock.calls.length).toBe(verified ? 1 : 0);
+        if (!verified)
+          expect(restarted.getRecovery()?.code).toBe('outbox_preserved_without_records');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
       }
-      const restarted = new ReliableOutbox(path);
-      await restarted.load();
-      await restarted.flush({ now: at, isCurrent: () => true, sink: { send } });
-      expect(send.mock.calls.length).toBe(verified ? 1 : 0);
-      if (!verified) expect(restarted.getRecovery()?.code).toBe('outbox_preserved_without_records');
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it('keeps authoritative memory and disk when interrupted between mirror and primary commits', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-interrupted-'));

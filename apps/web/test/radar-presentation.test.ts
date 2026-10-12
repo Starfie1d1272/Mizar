@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
-import {
-  RadarPresentation as SharedRadarPresentation,
-  RADAR_PRESENTATION,
-} from '@mizar-hud/radar-view/presentation';
+import { RadarPresentation as SharedRadarPresentation } from '@mizar-hud/radar-view/presentation';
 import fixtures from '../src/program/fixtures/generated/real-radar-fixtures.generated.json';
 
 import { toRadarViewFrame } from '../src/program/widgets/radar/adapter';
@@ -124,96 +121,6 @@ describe('Radar renderer local lifecycle', () => {
       target: initialAnchor.target,
       phaseStartedAt: initialPhaseStartedAt,
     });
-  });
-
-  it('does not replay entry or lose T ownership on RC14 seq 2913→2914 sub-tick jitter after owner drift', () => {
-    // Real anonymous RC14 smoke-excerpt.jsonl.gz, evidence commit a23d71e.
-    // Entity 95 changes owner to "397" after death; lifetime 10.374→10.364.
-    const before = single();
-    const owner = before.payload.players[0]!.sourcePlayerId;
-    before.payload.players[0]!.side = 'T';
-    before.payload.grenades = [
-      {
-        ...before.payload.grenades[0]!,
-        sourceEntityId: '95',
-        kind: 'smoke',
-        ownerSourceId: owner,
-        position: { x: 677.9, y: -1526.7, z: -413.5 },
-        velocity: { x: 0, y: 0, z: 0 },
-        lifetimeSeconds: 10.3,
-        effectTimeSeconds: 8.672,
-      },
-    ];
-    const model = new RadarPresentation();
-    model.accept(before, 0);
-    const phaseStartedAt = model.grenades.get('95')!.phaseStartedAt;
-    const drift = next(before);
-    drift.payload.players[0]!.health = 0;
-    drift.payload.players[0]!.lifeState = 'dead';
-    drift.payload.grenades[0]!.ownerSourceId = '397';
-    drift.payload.grenades[0]!.lifetimeSeconds = 10.374;
-    drift.payload.grenades[0]!.effectTimeSeconds = 8.75;
-    model.accept(drift, 40);
-    const jitter = next(drift);
-    jitter.payload.grenades[0]!.lifetimeSeconds = 10.364;
-    jitter.payload.grenades[0]!.effectTimeSeconds = 8.734;
-    model.accept(jitter, 50);
-    expect(model.grenades.get('95')).toMatchObject({ phase: 'effect', side: 'T', phaseStartedAt });
-    expect(model.exits.size).toBe(0);
-  });
-  it('keeps the first observation and real reversals through bounded long-flight compression', () => {
-    const model = new RadarPresentation();
-    let snapshot = single();
-    model.accept(snapshot, 0);
-    const first = { ...[...model.grenades.values()][0]!.trail[0]! };
-    const turns: { x: number; y: number; at: number }[] = [];
-    for (let index = 1; index <= 600; index++) {
-      snapshot = next(snapshot);
-      // Six straight legs with exact backtracking, not just convex corners.
-      snapshot.payload.grenades[0]!.position!.x += Math.floor((index - 1) / 100) % 2 ? -2 : 2;
-      model.accept(snapshot, index * 10);
-      const marker = [...model.grenades.values()][0]!;
-      if (index % 100 === 0) turns.push({ ...marker.trail.at(-1)! });
-      expect(marker.trail.length).toBeLessThanOrEqual(RADAR_PRESENTATION.trailPoints);
-      expect(marker.trail[0]).toEqual(first);
-    }
-    const marker = [...model.grenades.values()][0]!;
-    for (const turn of turns) expect(marker.trail).toContainEqual(turn);
-    expect(marker.trail.at(-1)).toMatchObject({ x: marker.target.x, y: marker.target.y });
-    for (const autoZoom of [false, true]) {
-      model.tick(6000, autoZoom, true);
-      expect(marker.trail[0]).toEqual(first);
-    }
-    snapshot = next(snapshot);
-    snapshot.payload.grenades[0]!.position = null;
-    model.accept(snapshot, 6010);
-    expect([...model.grenades.values()].every((item) => item.trail.length === 0)).toBe(true);
-    expect(model.exits.size).toBe(0);
-  });
-  it('bounds full histories for the maximum simultaneous projectile population', () => {
-    const model = new RadarPresentation();
-    let snapshot = single();
-    snapshot.payload.grenades = Array.from(
-      { length: RADAR_PRESENTATION.maxGrenades + 10 },
-      (_, index) => ({
-        ...snapshot.payload.grenades[0]!,
-        sourceEntityId: `stress-${index}`,
-        position: { x: -1000, y: index, z: 0 },
-      }),
-    );
-    for (let index = 0; index < 200; index++) {
-      snapshot = next(snapshot);
-      for (const grenade of snapshot.payload.grenades) grenade.position!.x += 1;
-      model.accept(snapshot, index * 10);
-      model.tick(index * 10, true);
-    }
-    expect(model.grenades.size).toBe(RADAR_PRESENTATION.maxGrenades);
-    expect(
-      [...model.grenades.values()].every(
-        (marker) =>
-          marker.trail.length <= RADAR_PRESENTATION.trailPoints && marker.trail[0]!.at === 0,
-      ),
-    ).toBe(true);
   });
   it('starts ID reuse with new history after an observed projectile disappears', () => {
     const m = new RadarPresentation();

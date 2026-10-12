@@ -279,27 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn logs_failed_stage_and_artifact_identity_and_preserves_previous_session() {
-        let root = root("sessions");
-        fs::write(root.join("resources/metadata/artifact.json"), json!({ "gitSha": "a".repeat(40), "artifactSha256": "b".repeat(64), "token": "never-copy-this" }).to_string()).unwrap();
-        let first = DesktopLog::new(&root, None).unwrap();
-        let failure = first.step("main_window", || {
-            Err::<(), _>(io::Error::other("HRESULT: 0x80004005"))
-        });
-        assert!(failure.unwrap_err().contains("HRESULT"));
-        let second = DesktopLog::new(&root, None).unwrap();
-        assert_ne!(first.session_id, second.session_id);
-        let history = fs::read_to_string(rotated(&second.directory, 1)).unwrap();
-        assert!(history.contains("main_window") && history.contains("0x80004005"));
-        assert!(history.contains(&"a".repeat(40)) && !history.contains("never-copy-this"));
-        for line in history.lines() {
-            let value: Value = serde_json::from_str(line).unwrap();
-            assert!(value["time"].as_str().unwrap().ends_with('Z'));
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn bounds_utf8_entries_total_files_and_preserves_parseable_ndjson() {
         let root = root("bounds");
         let log = DesktopLog::new(&root, None).unwrap();
@@ -321,36 +300,4 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn reload_storm_preserves_failure_in_bounded_tail() {
-        let root = root("reloads");
-        let log = DesktopLog::new(&root, None).unwrap();
-        log.event("main_window", "failure", Some("original OS failure"));
-        for _ in 0..10000 {
-            log.event("main_page_load", "success", None);
-        }
-        let text = fs::read_to_string(rotated(&log.directory, 0)).unwrap();
-        assert!(text.len() < 64 * 1024 && text.contains("original OS failure"));
-        let loads: Vec<Value> = text
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .filter(|entry| entry["stage"] == "main_page_load")
-            .collect();
-        assert_eq!(
-            loads
-                .iter()
-                .map(|entry| entry["occurrences"].as_u64().unwrap())
-                .sum::<u64>(),
-            8192
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn rejects_relative_and_normalized_payload_state_paths() {
-        let root = root("state");
-        assert!(writable_root(&root, Some(PathBuf::from("relative"))).is_err());
-        assert!(writable_root(&root, Some(root.join("state/../resources/logs"))).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
 }

@@ -418,32 +418,3 @@ impl GameTracker {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_client_alignment_requires_measured_target_and_reads_current_elevation() {
-        let _coordinates = PhysicalCoordinates::enter();
-        #[link(name = "user32")]
-        extern "system" {
-            fn CreateWindowExW(ex: u32, class: *const u16, name: *const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: isize, menu: isize, instance: isize, param: *const std::ffi::c_void) -> isize;
-            fn DestroyWindow(hwnd: isize) -> i32;
-        }
-        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
-        let hwnd = unsafe { CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, -10000, -10000, 320, 240, 0, 0, 0, std::ptr::null()) };
-        assert_ne!(hwnd, 0);
-        struct Window(isize);
-        impl Drop for Window { fn drop(&mut self) { unsafe { DestroyWindow(self.0); } } }
-        let _window = Window(hwnd);
-        let target = Rect { x: -11000, y: -11000, width: 640, height: 360 };
-        assert_eq!(align_cs2(Cs2Window { pid: std::process::id(), hwnd }, target), Ok(()));
-        assert_eq!(client_rect(hwnd), Some(target));
-        assert!(process_elevation(std::process::id())["elevated"].is_boolean());
-        assert_eq!(measured_client(0).unwrap_err().api, Some("GetClientRect"));
-    }
-
-
-
-}

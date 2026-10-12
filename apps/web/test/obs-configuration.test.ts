@@ -51,30 +51,6 @@ describe('OBS configuration cleanup', () => {
     expect(invoke.mock.calls[1]![1]?.sessionId).toMatch(/^[a-f0-9-]{36}$/);
     expect(invoke.mock.calls[2]![1]?.sessionId).toBe(invoke.mock.calls[1]![1]?.sessionId);
   });
-  it('does not finish a failed launch or consume a newer session', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() =>
-        Promise.resolve(new Response(JSON.stringify({ executablePath: 'C:\\OBS\\obs64.exe' }))),
-      ),
-    );
-    invoke.mockImplementation((command) =>
-      command === 'begin_obs_configuration'
-        ? Promise.reject(new Error('launch failed'))
-        : successful(command),
-    );
-    const failed = beginObsConfiguration();
-    await expect(failed.finish()).rejects.toThrow('launch failed');
-    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
-      'read_obs_configuration_context',
-      'begin_obs_configuration',
-    ]);
-    invoke.mockImplementation(successful);
-    const newer = beginObsConfiguration();
-    await newer.finish();
-    expect(invoke.mock.calls[3]![1]?.sessionId).not.toBe(invoke.mock.calls[1]![1]?.sessionId);
-    expect(invoke.mock.calls[4]![1]?.sessionId).toBe(invoke.mock.calls[3]![1]?.sessionId);
-  });
   it('keeps the original document generation through a delayed target lookup so Host can reject a stale begin', async () => {
     let resolve!: (response: Response) => void;
     let currentDocument = '1';

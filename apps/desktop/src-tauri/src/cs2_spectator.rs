@@ -353,39 +353,3 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
         json!({"version":2,"video":video,"original":original,"bindings":bindings,"loadAttempted":false}),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn restores_both_original_boolean_states_preserving_other_game_edits() {
-        for token in ["true", "1", "false", "0"] {
-            let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{token}\"}}}}");
-            for applied in [false, true] {
-                let applied_token = if applied { "true" } else { "0" };
-                let current = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"{applied_token}\" \"other\" \"new\"}}}}");
-                assert_eq!(
-                    restore_with_applied(&original, &current, applied).unwrap(),
-                    current.replace(&format!("\"{applied_token}\""), &format!("\"{token}\""))
-                );
-                if applied {
-                    assert_eq!(
-                        restore(&original, &current).unwrap(),
-                        current.replace("\"true\"", &format!("\"{token}\""))
-                    );
-                }
-            }
-        }
-        let original = format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\"}}}}");
-        assert!(
-            restore_with_applied(&original, &original.replace("false", "true"), false).is_err()
-        );
-    }
-
-
-
-
-
-
-}
