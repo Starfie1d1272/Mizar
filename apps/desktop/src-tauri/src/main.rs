@@ -2197,20 +2197,12 @@ fn main() {
         }
         return;
     }
-    // A writer protects GUI and headless starts; --stop above remains available.
-    match windows_startup::update_in_progress() {
+    // Rejection exits this image promptly; feedback belongs to the update tool.
+    match windows_startup::reject_update_start(headless) {
         Ok(false) => (),
-        state => {
-            let message = match state {
-                Ok(true) => "Mizar 正在安装更新或恢复旧版，请等待完成后再启动。".to_string(),
-                Err(error) => format!("无法核对更新状态，暂未启动 Mizar：{error}"),
-                Ok(false) => unreachable!(),
-            };
-            if !headless {
-                // Do not pin the product EXE in a duplicate-start dialog.
-                windows_startup::focus_update_window();
-            }
-            eprintln!("{message}");
+        Ok(true) => std::process::exit(1),
+        Err(error) => {
+            eprintln!("无法核对更新状态，暂未启动 Mizar：{error}");
             std::process::exit(1);
         }
     }
@@ -2238,10 +2230,7 @@ fn main() {
     let _mutex = match DesktopMutex::acquire() {
         Ok(Some(mutex)) => mutex,
         Ok(None) => {
-            if matches!(windows_startup::update_in_progress(), Ok(true)) {
-                windows_startup::focus_update_window();
-                eprintln!("Mizar 正在安装更新或恢复旧版，请等待完成后再启动。");
-            } else {
+            if !matches!(windows_startup::reject_update_start(false), Ok(true)) {
                 windows_startup::ActivationSignal::notify();
             }
             return;

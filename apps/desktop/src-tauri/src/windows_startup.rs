@@ -59,6 +59,15 @@ extern "system" {
     fn FindWindowW(class: *const u16, title: *const u16) -> isize;
     fn ShowWindow(hwnd: isize, command: i32) -> i32;
     fn SetForegroundWindow(hwnd: isize) -> i32;
+    fn FlashWindowEx(info: *const FlashInfo) -> i32;
+}
+#[repr(C)]
+struct FlashInfo {
+    size: u32,
+    window: isize,
+    flags: u32,
+    count: u32,
+    timeout: u32,
 }
 #[link(name = "shell32")]
 extern "system" {
@@ -216,8 +225,31 @@ pub fn focus_update_window() -> bool {
     }
     unsafe {
         ShowWindow(handle, 9);
-        SetForegroundWindow(handle) != 0
+        if SetForegroundWindow(handle) != 0 {
+            return true;
+        }
+        FlashWindowEx(&FlashInfo {
+            size: std::mem::size_of::<FlashInfo>() as u32,
+            window: handle,
+            flags: 2,
+            count: 3,
+            timeout: 0,
+        });
+        false
     }
+}
+
+/// Never keep a rejected product image mapped while the writer replaces it.
+/// The tool's own window provides feedback even if Windows refuses focus.
+pub fn reject_update_start(headless: bool) -> io::Result<bool> {
+    if !update_in_progress()? {
+        return Ok(false);
+    }
+    if !headless {
+        focus_update_window();
+    }
+    eprintln!("Mizar 正在安装更新或恢复旧版，请等待完成后再启动。");
+    Ok(true)
 }
 #[derive(Clone)]
 pub struct ExitSignal(Arc<EventHandle>);
@@ -579,6 +611,55 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn rejected_production_start_unmaps_gui_and_headless_images_without_a_modal_wait() {
+        const CHILD: &str = "MIZAR_REJECTED_START_TEST";
+        if let Ok(mode) = std::env::var(CHILD) {
+            assert!(reject_update_start(mode == "headless").unwrap());
+            return;
+        }
+        let name: Vec<u16> = "Global\\MizarUpdateActive\0".encode_utf16().collect();
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+        assert_ne!(handle, 0);
+        let _active = EventHandle(handle);
+        let root =
+            std::env::temp_dir().join(format!("mizar-rejected-start-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let image = root.join("Mizar.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &image).unwrap();
+        for mode in ["gui", "headless"] {
+            let mut child = Command::new(&image)
+                .args(["--exact", "windows_startup::tests::rejected_production_start_unmaps_gui_and_headless_images_without_a_modal_wait", "--nocapture"])
+                .env(CHILD, mode)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("rejected {mode} start kept the product image mapped");
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            assert!(status.success());
+            use std::os::windows::fs::OpenOptionsExt;
+            let gate = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(4)
+                .open(&image)
+                .unwrap();
+            drop(gate);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn helper_acknowledgement_precedes_desktop_handle_release() {
         let handoff = UpdateHandoff::new().unwrap();
