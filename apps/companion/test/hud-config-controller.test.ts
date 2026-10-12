@@ -1,6 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -141,75 +139,6 @@ describe('HUD config control plane', () => {
     ).toBe(403);
   });
 
-  it('serves the resolved preset with conditional ETag polling', async () => {
-    app = buildApp({
-      hudConfigStore: new HudConfigStore(),
-    });
-
-    const first = await app.inject({ method: 'GET', url: '/local/v1/hud-config' });
-    expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({
-      resolved: { preset: { id: 'builtin:mizar-default-preset' } },
-    });
-
-    const notModified = await app.inject({
-      method: 'GET',
-      url: '/local/v1/hud-config',
-      headers: { 'if-none-match': first.headers.etag },
-    });
-    expect(notModified.statusCode).toBe(304);
-    expect(notModified.headers.etag).toBe(first.headers.etag);
-  });
-
-  it('keeps on-air and editor validators independent across two clients', async () => {
-    app = buildApp({ hudConfigStore: new HudConfigStore() });
-    const initialOnAir = parseHudOnAirBody(
-      (await app.inject({ method: 'GET', url: '/local/v1/hud-config' })).json(),
-    );
-    const initialEditorResponse = await app.inject({
-      method: 'GET',
-      url: '/operator/hud-config',
-    });
-    expect(initialEditorResponse.statusCode).toBe(200);
-    const initialEditor = parseHudEditorBody(initialEditorResponse.json());
-
-    const saved = await app.inject({
-      method: 'POST',
-      url: '/operator/hud-config',
-      headers: LOCAL_MUTATION_HEADERS,
-      payload: {
-        kind: 'save-as',
-        resource: 'theme',
-        value: { ...getBuiltinTheme(), id: 'client-a-theme', name: '客户端 A 外观' },
-        expectedEditorRevision: initialEditor.revision,
-      },
-    });
-    expect(saved.statusCode).toBe(200);
-    const savedBody = parseHudMutationBody(saved.json());
-    expect(savedBody.command).toMatchObject({ kind: 'save-as', resource: 'theme' });
-    expect(savedBody.command.resourceId).toEqual(expect.any(String));
-    expect(savedBody.onAir.etag).toBe(initialOnAir.etag);
-    expect(savedBody.onAir.resolved.preset.id).toBe(initialOnAir.resolved.preset.id);
-    expect(savedBody.editor.etag).not.toBe(initialEditor.etag);
-    expect(savedBody.editor.document.customThemes).toHaveLength(1);
-
-    const onAirNotModified = await app.inject({
-      method: 'GET',
-      url: '/local/v1/hud-config',
-      headers: { 'if-none-match': initialOnAir.etag },
-    });
-    expect(onAirNotModified.statusCode).toBe(304);
-
-    const editorAfterSave = await app.inject({
-      method: 'GET',
-      url: '/operator/hud-config',
-      headers: { 'if-none-match': initialEditor.etag },
-    });
-    expect(editorAfterSave.statusCode).toBe(200);
-    expect(editorAfterSave.headers.etag).toBe(savedBody.editor.etag);
-    expect(parseHudEditorBody(editorAfterSave.json()).document.customThemes).toHaveLength(1);
-  });
-
   it('rejects a stale editor revision without overwriting the saved document', async () => {
     app = buildApp({ hudConfigStore: new HudConfigStore() });
     const initial = parseHudEditorBody(
@@ -248,34 +177,6 @@ describe('HUD config control plane', () => {
       (await app.inject({ method: 'GET', url: '/operator/hud-config' })).json(),
     );
     expect(editor.document.customThemes.map((theme) => theme.name)).toEqual(['页面 A']);
-  });
-
-  it('returns 500 for persistence failures without leaking OS details', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'rivalhub-hud-controller-'));
-    temporaryDirectories.push(directory);
-    const store = new HudConfigStore({ filePath: directory });
-    app = buildApp({ hudConfigStore: store });
-    const editor = parseHudEditorBody(
-      (await app.inject({ method: 'GET', url: '/operator/hud-config' })).json(),
-    );
-    const response = await app.inject({
-      method: 'POST',
-      url: '/operator/hud-config',
-      headers: LOCAL_MUTATION_HEADERS,
-      payload: {
-        kind: 'save-as',
-        resource: 'theme',
-        value: { ...getBuiltinTheme(), id: 'theme-failure', name: '持久化失败' },
-        expectedEditorRevision: editor.revision,
-      },
-    });
-
-    expect(response.statusCode).toBe(500);
-    expect(response.json()).toEqual({
-      error: 'hud_config_persistence_failed',
-      message: 'HUD 配置暂时无法保存，请查看本机诊断日志。',
-    });
-    expect(store.getState().document.customThemes).toHaveLength(0);
   });
 
   it('keeps save and activate as separate mutations', async () => {

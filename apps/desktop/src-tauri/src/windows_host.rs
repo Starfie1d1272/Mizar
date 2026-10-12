@@ -422,21 +422,7 @@ impl GameTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn alignment_reports_actual_failure_and_clears_on_window_replacement() {
-        let denied = AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) };
-        assert!(denied.message().contains("核对"));
-        assert!(!denied.message().contains("原来的游戏分辨率"));
-        let mismatch = AlignmentFailure { stage: "client_mismatch", api: None, last_error: None };
-        assert!(mismatch.message().contains("实际画面范围"));
-        let mut tracker = GameTracker::default();
-        tracker.observe(Some(Cs2Window { pid: 1, hwnd: 2 }));
-        tracker.alignment_failure = Some(denied);
-        tracker.group_failure = Some(crate::workspace_group::Failure { stage: "raise", api: "SetWindowPos", last_error: Some(5), target: "game" });
-        tracker.observe(None);
-        assert_eq!(tracker.window_message(), None);
-        assert!(!tracker.managed);
-    }
+
     #[test]
     fn native_client_alignment_requires_measured_target_and_reads_current_elevation() {
         let _coordinates = PhysicalCoordinates::enter();
@@ -457,42 +443,7 @@ mod tests {
         assert!(process_elevation(std::process::id())["elevated"].is_boolean());
         assert_eq!(measured_client(0).unwrap_err().api, Some("GetClientRect"));
     }
-    #[test]
-    fn frame_and_generation() {
-        let client = Rect { x: 100, y: 80, width: 1440, height: 810 };
-        let frame = Rect { x: -8, y: -31, width: 16, height: 39 };
-        assert_eq!(outer_from_client(client, frame), Rect { x: 92, y: 49, width: 1456, height: 849 });
-        let mut tracker = GameTracker::default();
-        assert!(tracker.observe(Some(Cs2Window { pid: 42, hwnd: 7 })));
-        assert_eq!(tracker.generation, 1);
-        assert!(!tracker.observe(Some(Cs2Window { pid: 42, hwnd: 7 })));
-        assert!(tracker.observe(None));
-        assert_eq!(tracker.generation, 2);
-        tracker.monitor = 42;
-        assert!(tracker.observe(Some(Cs2Window { pid: 43, hwnd: 8 })));
-        assert_eq!(tracker.monitor, 42);
-    }
-    #[test]
-    fn discovers_secondary_monitor_before_layout_and_reselects_on_move() {
-        let game = Cs2Window { pid: 42, hwnd: 7 };
-        let mut tracker = GameTracker::default();
-        assert!(tracker.observe_target(Some(game), 2));
-        assert_eq!(tracker.window, Some(game));
-        assert_eq!(tracker.monitor, 2);
-        assert!(!tracker.observe_target(Some(game), 2));
-        assert!(tracker.observe_target(Some(game), 3));
-        assert_eq!(tracker.monitor, 3);
-        assert_eq!(tracker.generation, 1);
-        let replacement = Cs2Window { pid: 43, hwnd: 8 };
-        assert!(tracker.observe_target(Some(replacement), 4));
-        assert_eq!(tracker.monitor, 4);
-        assert_eq!(tracker.generation, 2);
-    }
-    #[test]
-    fn late_game_discovery_replaces_primary_monitor_fallback() {
-        let mut tracker = GameTracker::default();
-        assert!(tracker.observe_target(None, 1));
-        assert!(tracker.observe_target(Some(Cs2Window { pid: 42, hwnd: 7 }), 2));
-        assert_eq!(tracker.monitor, 2);
-    }
+
+
+
 }

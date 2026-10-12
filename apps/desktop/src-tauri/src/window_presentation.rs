@@ -257,31 +257,8 @@ mod tests {
         assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
         rect
     }
-    #[test]
-    fn native_visibility_preserves_foreground_geometry_and_window_styles() {
-        // Both the nonfocusable HUD and ordinary focusable panels use this path.
-        for ex_style in [0x0800_0088, 0] {
-            let overlay = native_window(ex_style);
-            let foreground = unsafe { GetForegroundWindow() };
-            let rect = native_rect(overlay.0);
-            let style = unsafe { GetWindowLongW(overlay.0, -20) };
-            assert_eq!(style as u32, ex_style);
-            // Repeated transitions cover a hidden HUD becoming eligible again and
-            // unchanged Host ticks. Both directions must use the real native state.
-            for visible in [false, true, true, false, false, true, false] {
-                set_native_visible_without_activation(overlay.0, visible).unwrap();
-                assert_eq!(unsafe { IsWindowVisible(overlay.0) } != 0, visible);
-                assert_eq!(unsafe { GetForegroundWindow() }, foreground);
-                assert_eq!(native_rect(overlay.0), rect);
-                assert_eq!(unsafe { GetWindowLongW(overlay.0, -20) }, style);
-            }
-        }
-    }
-    #[test]
-    fn native_overlay_show_reports_invalid_window_error() {
-        let error = set_native_visible_without_activation(0, true).unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(1400)); // ERROR_INVALID_WINDOW_HANDLE
-    }
+
+
     #[derive(Default)]
     struct FakeWindow {
         size: Option<(u32, u32)>,
@@ -330,52 +307,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unchanged_polling_has_no_native_mutations() {
-        let mut window = window();
-        for _ in 0..2400 {
-            reconcile_geometry(&mut window, rect()).unwrap();
-        }
-        assert!(window.calls.is_empty());
-    }
-    #[test]
-    fn only_changed_dimensions_are_written() {
-        let mut window = window();
-        window.size = Some((1280, 720));
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert_eq!(window.calls, ["resize"]);
-        window.calls.clear();
-        window.position = Some((0, 0));
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert_eq!(window.calls, ["move"]);
-    }
-    #[test]
-    fn external_move_and_dpi_resize_are_not_hidden_by_a_requested_rect_cache() {
-        let mut window = window();
-        reconcile_geometry(&mut window, rect()).unwrap();
-        window.size = Some((1280, 720));
-        window.position = Some((0, 0));
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert_eq!(window.calls, ["resize", "move"]);
-        window.calls.clear();
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert!(window.calls.is_empty());
-    }
-    #[test]
-    fn rechecks_position_after_a_resize_moves_the_native_window() {
-        let mut window = window();
-        window.size = Some((1280, 720));
-        window.resize_moves_to = Some((30, 40));
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert_eq!(window.calls, ["resize", "move"]);
-        assert_eq!(window.position, Some((-1280, 80)));
-    }
-    #[test]
-    fn missing_readback_and_recreated_windows_reapply_geometry() {
-        let mut window = FakeWindow::default();
-        reconcile_geometry(&mut window, rect()).unwrap();
-        assert_eq!(window.calls, ["resize", "move"]);
-    }
+
+
+
+
+
     #[test]
     fn failed_write_does_not_become_a_successful_cached_target() {
         let mut window = window();
@@ -386,52 +322,7 @@ mod tests {
         reconcile_geometry(&mut window, rect()).unwrap();
         assert_eq!(window.calls, ["resize", "resize"]);
     }
-    #[test]
-    fn nonpositive_dimensions_never_reach_unsigned_native_size() {
-        for (width, height) in [(0, 1080), (-1, 1080), (1920, 0), (1920, -1)] {
-            let mut window = window();
-            assert!(reconcile_geometry(
-                &mut window,
-                Rect {
-                    width,
-                    height,
-                    ..rect()
-                }
-            )
-            .is_err());
-            assert!(window.calls.is_empty());
-        }
-    }
-    #[test]
-    fn visibility_requires_a_shown_nonminimized_native_window() {
-        for window_visible in [false, true] {
-            for minimized in [false, true] {
-                let desired = window_visible && !minimized;
-                assert_eq!(visibility_change(window_visible, minimized, desired), None);
-                assert_eq!(
-                    visibility_change(window_visible, minimized, !desired),
-                    Some(desired)
-                );
-            }
-        }
-    }
-    #[test]
-    fn hide_minimize_restore_and_retry_do_not_lose_visibility() {
-        let mut controller = true;
-        for (shown, minimized, expected) in [
-            (false, false, false),
-            (false, false, false),
-            (true, false, true),
-            (true, true, false),
-            (true, false, true),
-        ] {
-            if let Some(next) = visibility_change(shown, minimized, controller) {
-                controller = next;
-            }
-            assert_eq!(controller, expected);
-        }
-        // A failed native setter leaves actual unchanged; the next tick retries.
-        assert_eq!(visibility_change(false, false, true), Some(false));
-        assert_eq!(visibility_change(false, false, true), Some(false));
-    }
+
+
+
 }

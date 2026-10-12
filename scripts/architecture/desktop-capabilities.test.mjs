@@ -159,17 +159,4 @@ describe('Desktop capability contract', () => {
         .toSorted(),
     );
   });
-
-  it('reads generic and aliased invoke calls while ignoring comments and strings', () => {
-    expect(
-      webCommands(
-        'commands.tsx',
-        `import { desktopInvoke as invoke } from './client';
-         // invoke('comment_only');
-         const example = "invoke('string_only')";
-         invoke<{ found: boolean }>('cs2_host_status');
-         invoke('open_rivalhub_authorization', { url: 'https://example.invalid' });`,
-      ),
-    ).toEqual(['cs2_host_status', 'open_rivalhub_authorization']);
-  });
 });

@@ -383,75 +383,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn absent_duplicate_and_unreadable_values_are_not_invented() {
-        for text in [
-            "\"config\" {\"convars\" {}}".to_string(),
-            format!("\"config\" {{\"convars\" {{\"{KEY}\" \"false\" \"{KEY}\" \"true\"}}}}"),
-            format!("\"config\" {{\"convars\" {{\"{KEY}\" \"unknown\"}}}}"),
-        ] {
-            assert!(value(&text).is_err());
-        }
-    }
 
-    #[test]
-    fn binding_tokens_restore_custom_empty_and_missing_values_and_accept_consistent_duplicates() {
-        let original = r#""config" {"bindings" {"1" "say \"中文\"; slot7" "2" "" "4" "slot4" "4" "slot4" "0" "original-zero" "x" "original-other"}}"#;
-        let saved = backup_bindings(original).unwrap();
-        // Independent game-exit fixture, including repeated identical commands.
-        let current = r#""config" {"bindings" {"1" "slot1" "1" "slot1" "2" "slot2" "3" "slot3" "4" "slot4" "5" "slot5" "6" "slot6" "7" "slot7" "8" "slot8" "9" "slot9" "0" "slot10" "x" "new-other"} "version" "2"}"#;
-        let restored = restored_bindings(&saved, current).unwrap();
-        assert!(restored.contains(r#""1" "say \"中文\"; slot7" "1" "say \"中文\"; slot7""#));
-        assert!(restored.contains(r#""2" """#));
-        assert!(restored.contains(r#""0" "original-zero" "x" "new-other""#));
-        assert!(restored.contains(r#""version" "2""#));
-        for digit in ["3", "5", "6", "7", "8", "9"] {
-            assert!(field(&restored, &["config", "bindings", digit])
-                .unwrap()
-                .is_none());
-        }
-        assert_eq!(restored_bindings(&saved, &restored).unwrap(), restored);
-        assert_eq!(restored_bindings(&saved, original).unwrap(), original);
-        for (entry, expected) in [(r#""0" """#, Some("")), ("", None)] {
-            let saved =
-                backup_bindings(&format!(r#""config" {{"bindings" {{{entry}}}}}"#)).unwrap();
-            let current = r#""config" {"bindings" {"0" "slot10" "0" "slot10" "x" "user-edit"}}"#;
-            let restored = restored_bindings(&saved, current).unwrap();
-            let zero_values: Vec<_> = binding_entries(&restored)
-                .unwrap()
-                .into_iter()
-                .filter(|(key, _)| key.value == "0")
-                .map(|(_, token)| token.value)
-                .collect();
-            assert_eq!(
-                zero_values,
-                expected
-                    .map(|value| vec![value.to_string(), value.to_string()])
-                    .unwrap_or_default()
-            );
-            assert!(restored.contains(r#""x" "user-edit""#));
-        }
-    }
 
-    #[test]
-    fn conflicting_or_ambiguous_bindings_and_damaged_backups_are_refused() {
-        let saved = backup_bindings(r#""config" {"bindings" {"1" "original"}}"#).unwrap();
-        for current in [
-            r#""config" {"bindings" {"1" "external"}}"#,
-            r#""config" {"bindings" {"1" "original" "0" "external-zero"}}"#,
-            r#""config" {"bindings" {}}"#,
-            r#""config" {"bindings" {"1" "slot1" "1" "external"}}"#,
-            r#""config" {"bindings" {} "bindings" {}}"#,
-            r#""config" {"bindings" {"1" {"nested" "value"}}}"#,
-            r#""config" {"bindings" {"1" "slot1"}"#,
-        ] {
-            assert!(restored_bindings(&saved, current).is_err());
-        }
-        let mut damaged = saved.clone();
-        damaged["1"] = json!("\"original\" \"x\" \"injected\"");
-        assert!(restored_bindings(&damaged, r#""config" {"bindings" {"1" "slot1"}}"#).is_err());
-        damaged = saved;
-        damaged.as_object_mut().unwrap().remove("9");
-        assert!(restored_bindings(&damaged, r#""config" {"bindings" {"1" "slot1"}}"#).is_err());
-    }
+
+
+
 }

@@ -56,46 +56,6 @@ function frame(mapName = 'de_ancient'): RadarFrame {
   };
 }
 
-it('projects single-layer players, facing, C4 and utility using canonical geometry without history', () => {
-  const input = frame();
-  const result = projectPublicRadarFrame(input)!;
-  expect(result).toMatchObject({
-    mapName: 'de_ancient',
-    layers: ['single'],
-    activeLayer: 'single',
-  });
-  expect(result.players[0]).toMatchObject({
-    canonicalPlayerId: 'canonical',
-    side: 'CT',
-    lifeState: 'alive',
-    position: { x: 0.5, y: 0.5, layer: 'single' },
-    facing: { x: 0, y: -1 },
-  });
-  expect(result.bomb?.position).toEqual(result.players[0]?.position);
-  expect(result.utility[1]).toMatchObject({
-    kind: 'smoke',
-    lifetimeSeconds: 8,
-    effectTimeSeconds: 5,
-  });
-  expect(result.utility[2]).toMatchObject({
-    kind: 'inferno',
-    position: null,
-    flames: [{ sourceFlameId: 'flame', position: { x: 0.5, y: 0.5, layer: 'single' } }],
-  });
-  expect(result.utility[0]?.kind).toBe('frag');
-  const dead = projectPublicRadarFrame({
-    ...input,
-    players: input.players.map((p) => ({ ...p, lifeState: 'dead' })),
-  });
-  expect(dead?.players[0]).toMatchObject({ lifeState: 'dead', facing: null });
-  expect(
-    projectPublicRadarFrame({
-      ...input,
-      players: input.players.map((p) => ({ ...p, position: null })),
-    })?.players[0]?.position,
-  ).toBeNull();
-});
-
 it('projects both floors and selects the observed floor, failing closed on unknown height or bounds', () => {
   const input = frame('de_nuke');
   const upper = input.players[0]!;

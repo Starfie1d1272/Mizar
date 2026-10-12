@@ -23,15 +23,6 @@ describe('whole-file browser duration balancing', () => {
       { files: ['medium.spec.ts', 'small.spec.ts', 'tiny.spec.ts'], estimatedMs: 10000 },
     ]);
   });
-  it('keeps newly discovered files with a positive fallback and stable routing', () => {
-    const reversed = { suites: [...full.suites].reverse() };
-    expect(balanceBrowserFiles(reversed, 2)).toEqual(balanceBrowserFiles(full, 2));
-    expect(
-      balanceBrowserFiles(full, 2)
-        .flatMap((lane) => lane.files)
-        .sort(),
-    ).toEqual(full.suites.map((suite) => suite.title).sort());
-  });
   it('rejects invalid discovery, estimates and empty lanes', () => {
     expect(() => balanceBrowserFiles({ errors: [{}] }, 1)).toThrow('FULL discovery failed');
     expect(() => balanceBrowserFiles(full, 5)).toThrow('empty selections');

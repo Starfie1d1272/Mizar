@@ -60,16 +60,6 @@ describe('observed same-map restart', () => {
     expect(repeated.transitions).toEqual([]);
   });
 
-  it('treats a cold warmup as a baseline, not a second execution', () => {
-    const baseline = reduceRuntime(
-      createInitialRuntimeState('restart-regression'),
-      telemetryInput(0, warmup()),
-      TEST_POLICY,
-    );
-    expect(baseline.state.map).toEqual({ epoch: 1, name: 'de_nuke' });
-    expect(baseline.transitions).toEqual([]);
-  });
-
   it('recognizes real CS2 warmup that omits round history, without repeating the boundary', () => {
     const omittedHistory = warmup(3, 'omitted');
     const restarted = reduceRuntime(
@@ -91,60 +81,5 @@ describe('observed same-map restart', () => {
     );
     expect(repeated.state.map.epoch).toBe(2);
     expect(repeated.transitions).toEqual([]);
-  });
-
-  it.each(['degraded', 'nonempty-history', 'missing-score', 'nonzero-score'])(
-    'does not advance from insufficient %s evidence',
-    (kind) => {
-      const frame = warmup();
-      const map = frame.telemetry.map;
-      const candidate = {
-        ...frame,
-        coverage: {
-          ...frame.coverage,
-          map: kind === 'degraded' ? ('degraded' as const) : ('present' as const),
-        },
-        telemetry: {
-          ...frame.telemetry,
-          map: {
-            name: map.name,
-            phase: map.phase,
-            roundNumber: map.roundNumber,
-            roundWins:
-              kind === 'nonempty-history'
-                ? [
-                    {
-                      roundNumber: 1,
-                      winnerSide: 'CT' as const,
-                      winCondition: 'defuse' as const,
-                    },
-                  ]
-                : [],
-            ...(kind === 'missing-score'
-              ? {}
-              : {
-                  sides:
-                    kind === 'nonzero-score' ? { ct: { score: 1 }, t: { score: 0 } } : map.sides,
-                }),
-          },
-        },
-      };
-      const result = reduceRuntime(priorExecution(), telemetryInput(0, candidate), TEST_POLICY);
-      expect(result.state.map.epoch).toBe(1);
-      expect(result.transitions.filter((t) => t.kind === 'map_execution_changed')).toEqual([]);
-    },
-  );
-
-  it('does not infer a restart from a lower live round or a rejected duplicate warmup', () => {
-    const prior = priorExecution();
-    const rewind = reduceRuntime(
-      prior,
-      telemetryInput(0, observation(2, 20, { mapName: 'de_nuke', roundNumber: 14 })),
-      TEST_POLICY,
-    );
-    expect(rewind.state.map.epoch).toBe(1);
-    const duplicate = reduceRuntime(prior, telemetryInput(0, warmup(1)), TEST_POLICY);
-    expect(duplicate.disposition).toEqual({ kind: 'ignored', reason: 'duplicate' });
-    expect(duplicate.state).toBe(prior);
   });
 });

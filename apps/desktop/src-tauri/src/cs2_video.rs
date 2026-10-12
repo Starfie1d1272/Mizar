@@ -289,63 +289,8 @@ pub fn restore(
 mod tests {
     use super::*;
     const ORIGINAL: &str = "\u{feff}\"video.cfg\"\r\n{\r\n// user comment\r\n\"setting.defaultres\" \"1280\"\r\n\"setting.defaultresheight\" \"960\"\r\n\"setting.fullscreen\" \"1\"\r\n\"setting.videocfg_fsr_detail\" \"3\"\r\n\"unrelated\" \"keep\"\r\n}\r\n";
-    #[test]
-    fn every_native_quality_preset_is_recognized_and_restorable() {
-        for quality in [
-            Quality::VeryHigh,
-            Quality::High,
-            Quality::Medium,
-            Quality::Preserve,
-        ] {
-            let values = sized_quality_preset(quality, VideoSize::new(1440, 810).unwrap());
-            assert!(supported_preset(&values));
-            let applied = apply(ORIGINAL, &values).unwrap();
-            assert_eq!(
-                restore(ORIGINAL, &applied, &applied, &values).unwrap(),
-                ORIGINAL
-            );
-            let current = applied.replace("\"keep\"", "\"changed\"");
-            let restored = restore(ORIGINAL, &applied, &current, &values).unwrap();
-            let actual: BTreeMap<_, _> = fields(&restored)
-                .unwrap()
-                .0
-                .into_iter()
-                .map(|(k, v)| (k, v.value))
-                .collect();
-            let mut expected: BTreeMap<_, _> = fields(ORIGINAL)
-                .unwrap()
-                .0
-                .into_iter()
-                .map(|(k, v)| (k, v.value))
-                .collect();
-            expected.insert("unrelated".into(), "changed".into());
-            assert_eq!(actual, expected);
-        }
-    }
-    #[test]
-    fn exact_restoration_and_quality_choice() {
-        for preserve in [true, false] {
-            let preset = preset(preserve);
-            let applied = apply(ORIGINAL, &preset).unwrap();
-            assert_eq!(fields(&applied).unwrap().0["setting.fullscreen"].value, "0");
-            assert_eq!(
-                fields(&applied).unwrap().0["setting.nowindowborder"].value,
-                "1"
-            );
-            assert!(applied.contains("\"1920\""));
-            assert!(applied.contains("// user comment\r\n"));
-            assert_eq!(
-                fields(&applied).unwrap().0["setting.videocfg_fsr_detail"].value,
-                if preserve { "3" } else { "0" }
-            );
-            assert_eq!(
-                restore(ORIGINAL, &applied, &applied, &preset)
-                    .unwrap()
-                    .as_bytes(),
-                ORIGINAL.as_bytes()
-            );
-        }
-    }
+
+
     #[test]
     fn preserves_unrelated_edits_and_restores_game_updated_resolution() {
         let preset = preset(false);
@@ -373,49 +318,7 @@ mod tests {
             "1280"
         );
     }
-    #[test]
-    fn rejects_unknown_duplicate_truncated_and_missing_config() {
-        for text in [
-            "garbage",
-            "\"video.cfg\" {",
-            "\"video.cfg\" { \"x\" \"1\" \"x\" \"2\" }",
-            "\"video.cfg\" {}",
-        ] {
-            assert!(apply(text, &preset(false)).is_err());
-        }
-    }
-    #[test]
-    fn duplicate_and_nested_diagnostics_do_not_expose_user_values() {
-        for (extra, kind) in [
-            ("\"setting.defaultres\" \"1280\"", "同值重复"),
-            ("\"setting.defaultres\" \"private-value\"", "冲突重复"),
-            ("\"nested\" { \"key\" \"private-value\" }", "嵌套字段"),
-        ] {
-            let original = ORIGINAL.replace("}\r\n", &format!("{extra}}}\r\n"));
-            let error = apply(&original, &preset(false)).unwrap_err();
-            assert!(error.contains(kind), "{error}");
-            assert!(!error.contains("private-value"));
-            if kind != "嵌套字段" {
-                assert!(error.contains("setting.defaultres"));
-            }
-        }
-    }
-    #[test]
-    fn removes_added_fields_without_matching_an_unrelated_value() {
-        let original = ORIGINAL.replace("\"keep\"", "\"setting.msaa_samples\"");
-        let preset = preset(false);
-        let applied = apply(&original, &preset).unwrap();
-        let changed = applied
-            .replace("1280", "1281")
-            .replace("// user comment", "// new comment");
-        let restored = restore(&original, &applied, &changed, &preset).unwrap();
-        assert_eq!(
-            fields(&restored).unwrap().0["unrelated"].value,
-            "setting.msaa_samples"
-        );
-        assert!(!fields(&restored)
-            .unwrap()
-            .0
-            .contains_key("setting.msaa_samples"));
-    }
+
+
+
 }

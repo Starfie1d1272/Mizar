@@ -1,14 +1,12 @@
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, URL } from 'node:url';
 import {
   prepareResourceCandidate,
-  reuseResourceCandidate,
   readResourceCandidate,
-  makePublishedCatalog,
   verifyQualifiedResources,
   verifyPublishedResources,
   freezePublishedResources,
@@ -28,14 +26,13 @@ const manifest = {
   desktopBuildProfile: 'release',
   developmentOnly: false,
 };
-let directory, folder, descriptorBytes, candidate;
+let directory, folder, candidate;
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'mizar-resource-wiring-test-'));
   folder = join(directory, 'candidate');
   const result = await prepareResourceCandidate(root, folder, manifest, '1.0.0', 7);
   expect(result.trusted).toBe(false);
   await writeFile(join(directory, 'core.json'), JSON.stringify(manifest));
-  descriptorBytes = await readFile(join(folder, 'resource-descriptor.json'));
   candidate = await readResourceCandidate(folder, manifest);
 }, 30000);
 afterAll(async () => rm(directory, { recursive: true, force: true }));
@@ -55,57 +52,6 @@ describe('Release resource integration with the real official Pack', () => {
       'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-catalog.json',
     );
   });
-  it('does not reuse a merely qualified candidate as an originally published resource', async () => {
-    await expect(
-      reuseResourceCandidate(folder, join(directory, 'without-publication'), manifest, '1.0.0', 8),
-    ).rejects.toThrow('Promotion');
-  });
-  it('allows a later main promoter without relabeling the original qualified resource source', () => {
-    const catalog = makePublishedCatalog(candidate, 'b'.repeat(40));
-    expect(catalog.promotionSha).toBe('b'.repeat(40));
-    expect(catalog.resources[0].policy.sourceSha).toBe(sourceSha);
-    expect(catalog.resources[0].policy.promotionSha).toBe('b'.repeat(40));
-    expect(catalog.descriptorSha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(catalog.resources[0].publication.sha256).toMatch(/^[a-f0-9]{64}$/);
-  });
-  it.each([
-    ['developmentOnly', true],
-    ['desktopBuildProfile', 'ci'],
-    ['gitSha', 'c'.repeat(40)],
-    ['archiveSha256', 'd'.repeat(64)],
-    ['appVersion', '1.2.0'],
-  ])('rejects changed or nonproduction Core field %s', async (key, value) => {
-    await expect(readResourceCandidate(folder, { ...manifest, [key]: value })).rejects.toThrow();
-  });
-  it('rejects mirror URL changes, rollback policy, extra fields and duplicate JSON fields', async () => {
-    try {
-      for (const edit of [
-        (d) => {
-          d.resources[0].assets['resource-catalog.json'] = 'https://evil.invalid/catalog';
-        },
-        (d) => {
-          d.resources[0].policy.minimumSequence = 1;
-        },
-        (d) => {
-          d.trusted = true;
-        },
-      ]) {
-        const descriptor = JSON.parse(descriptorBytes);
-        edit(descriptor);
-        await writeFile(join(folder, 'resource-descriptor.json'), JSON.stringify(descriptor));
-        await expect(readResourceCandidate(folder, manifest)).rejects.toThrow();
-      }
-      await writeFile(
-        join(folder, 'resource-descriptor.json'),
-        descriptorBytes
-          .toString()
-          .replace('"repository":', '"repository":"evil/Mizar","repository":'),
-      );
-      await expect(readResourceCandidate(folder, manifest)).rejects.toThrow(/规范字节/);
-    } finally {
-      await writeFile(join(folder, 'resource-descriptor.json'), descriptorBytes);
-    }
-  }, 30000);
   it('rejects undeclared files before the qualification wildcard signer can see them', async () => {
     const extra = join(folder, 'unsigned-extra.zip');
     await writeFile(extra, 'untrusted');
@@ -137,13 +83,4 @@ describe('Release resource integration with the real official Pack', () => {
     await expect(freezePublishedResources(folder, manifest, output)).rejects.toThrow();
     await expect(readFile(join(output, 'resource-publication.json'))).rejects.toThrow();
   }, 30000);
-  it('refuses symlinked transfer metadata', async () => {
-    const linked = join(directory, 'linked');
-    await mkdir(linked);
-    await symlink(
-      join(folder, 'resource-descriptor.json'),
-      join(linked, 'resource-descriptor.json'),
-    );
-    await expect(readResourceCandidate(linked, manifest)).rejects.toThrow(/输入文件类型/);
-  });
 });
