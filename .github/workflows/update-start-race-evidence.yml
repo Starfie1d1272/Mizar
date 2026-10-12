@@ -1,0 +1,22 @@
+name: Update start race evidence
+on:
+  push:
+    branches: [evidence/update-start-race]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Fetch original released updater
+        run: git fetch --depth=1 origin tag v1.3.0
+      - name: Reproduce original updater scheduling window
+        run: node scripts/qualification/investigate-update-start-race.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: update-start-race-evidence
+          path: .agent-tmp/update-start-race
+          retention-days: 7
