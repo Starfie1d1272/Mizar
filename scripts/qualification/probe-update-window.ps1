@@ -59,7 +59,6 @@ function Invoke-Button($caption) {
  @{ name=$button.Current.Name; controlType=$button.Current.ControlType.ProgrammaticName; patterns=$patterns; nativeHandle=[long]$handle } | ConvertTo-Json -Compress | Write-Output
  $pattern = $null
  if ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.InvokePattern]$pattern).Invoke(); return }
- if ($button.TryGetCurrentPattern([Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.LegacyIAccessiblePattern]$pattern).DoDefaultAction(); return }
  # BM_CLICK is the native button action, not a bypass of the handler or transaction.
  $result = [IntPtr]::Zero
  if ([UpdateWindowProbe]::SendMessageTimeout($handle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero,2,1000,[ref]$result) -eq [IntPtr]::Zero) { throw 'Native button action did not complete' }

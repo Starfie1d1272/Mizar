@@ -56,7 +56,7 @@ async function windowProbe(stage, action, name) {
   assert.match(helperPid, /^[1-9][0-9]*$/);
   const output = resolve('.agent-tmp/update-window');
   await mkdir(output, { recursive: true });
-  return run([
+  const result = await run([
     '-File',
     resolve('scripts/qualification/probe-update-window.ps1'),
     '-ProcessId',
@@ -66,6 +66,8 @@ async function windowProbe(stage, action, name) {
     '-OutputPath',
     join(output, `${name}.png`),
   ]);
+  if (result.output) console.log(result.output);
+  return result;
 }
 async function installWithHost(binaryPath, stage, env = {}) {
   // Keep a fresh, exact Host alive while Install starts; never reuse an old PID.
