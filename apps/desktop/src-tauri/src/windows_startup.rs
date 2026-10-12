@@ -56,6 +56,9 @@ extern "system" {
 #[link(name = "user32")]
 extern "system" {
     fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn SetForegroundWindow(hwnd: isize) -> i32;
 }
 #[link(name = "shell32")]
 extern "system" {
@@ -153,6 +156,67 @@ impl Drop for EventHandle {
         unsafe {
             CloseHandle(self.0);
         }
+    }
+}
+
+/// The Host retains DesktopMutex until the helper acknowledges its own handle.
+/// This event only coordinates that handoff; it never authorizes installation.
+pub struct UpdateHandoff {
+    event: EventHandle,
+    name: String,
+}
+impl UpdateHandoff {
+    pub fn new() -> io::Result<Self> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos();
+        let name = format!("Global\\MizarUpdateReady-{}-{nonce}", std::process::id());
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
+        if handle == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            event: EventHandle(handle),
+            name,
+        })
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn ready(&self) -> io::Result<bool> {
+        match unsafe { WaitForSingleObject(self.event.0, 0) } {
+            0 => Ok(true),
+            258 => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
+pub fn update_in_progress() -> io::Result<bool> {
+    let name: Vec<u16> = "Global\\MizarUpdateActive\0".encode_utf16().collect();
+    let handle = unsafe { OpenEventW(0x00100000, 0, name.as_ptr()) };
+    if handle == 0 {
+        return if unsafe { GetLastError() } == 2 {
+            Ok(false)
+        } else {
+            Err(io::Error::last_os_error())
+        };
+    }
+    drop(EventHandle(handle));
+    Ok(true)
+}
+
+pub fn focus_update_window() -> bool {
+    let title: Vec<u16> = "Mizar 应用更新\0".encode_utf16().collect();
+    let handle = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if handle == 0 {
+        return false;
+    }
+    unsafe {
+        ShowWindow(handle, 9);
+        SetForegroundWindow(handle) != 0
     }
 }
 #[derive(Clone)]
@@ -515,6 +579,26 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn helper_acknowledgement_precedes_desktop_handle_release() {
+        let handoff = UpdateHandoff::new().unwrap();
+        assert!(!handoff.ready().unwrap());
+        let desktop = DesktopMutex::acquire()
+            .unwrap()
+            .expect("isolated native runner");
+        let wide: Vec<u16> = "Global\\MizarDesktop\0".encode_utf16().collect();
+        let retained = unsafe { CreateMutexW(std::ptr::null_mut(), 0, wide.as_ptr()) };
+        assert_ne!(retained, 0);
+        assert!(DesktopMutex::acquire().unwrap().is_none());
+        assert_ne!(unsafe { SetEvent(handoff.event.0) }, 0);
+        assert!(handoff.ready().unwrap());
+        drop(desktop);
+        assert!(DesktopMutex::acquire().unwrap().is_none());
+        unsafe {
+            CloseHandle(retained);
+        }
+        assert!(DesktopMutex::acquire().unwrap().is_some());
+    }
     #[test]
     fn exit_requests_are_scoped_consumed_once_and_removed_with_the_host() {
         let scope = format!(

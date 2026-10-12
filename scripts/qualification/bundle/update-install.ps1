@@ -1,9 +1,11 @@
-param(
+﻿param(
   [ValidateSet('Prepare', 'Install', 'Recover', 'Rollback')][string]$Mode,
   [string]$PlanPath,
   [string]$StageRoot,
   [int]$HostProcessId = 0,
+  [string]$ReadyEvent,
   [switch]$NoLaunch,
+  [switch]$NoStatusWindow,
   [switch]$KeepBackup
 )
 $ErrorActionPreference = 'Stop'
@@ -16,6 +18,9 @@ function Write-JsonAtomic($path, $value) {
 }
 # Optional qualification timing never changes the transaction's decision or order.
 function Measure-UpdatePhase([string]$Name, [scriptblock]$Operation) {
+  if (Test-UpdateCancellation) { throw 'update_cancelled_before_install' }
+  Update-WindowPhase $Name
+  Record-UpdateActivity $Name
   if ($env:MIZAR_MEASURE_UPDATE -ne '1') { & $Operation; return }
   $clock = [Diagnostics.Stopwatch]::StartNew()
   $status = 'failure'
@@ -63,6 +68,122 @@ public static class MizarUpdateFiles {
   }
 }
 '@
+$script:updateWindowAvailable = !$NoStatusWindow -and $Mode -and $Mode -ne 'Prepare'
+# A native status window shares this helper's lifetime, not a second updater.
+if ($script:updateWindowAvailable) {
+Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+using System.Threading;
+using System.Diagnostics;
+public static class MizarUpdateWindow {
+  static readonly object gate = new object();
+  static readonly ManualResetEvent ready = new ManualResetEvent(false), closed = new ManualResetEvent(false);
+  static Form window;
+  static Label heading, detail, hint;
+  static Button cancel, logs, close;
+  static ProgressBar activity;
+  static bool cancellable, cancelled, finished;
+  static Exception startupError;
+  static Thread thread;
+  static string directory;
+  public static bool CancellationRequested { get { lock(gate) { return cancelled; } } }
+  static void RequestCancel() {
+    lock(gate) { if (!cancellable || finished) return; cancelled=true; cancellable=false; }
+    cancel.Enabled=false; hint.Text="正在取消更新，请等待工具安全结束。";
+  }
+  public static void Start(string stage, bool canCancel) {
+    directory=stage; cancellable=canCancel;
+    thread=new Thread(delegate() {
+      try {
+        Application.EnableVisualStyles();
+        window=new Form { Text="Mizar 应用更新", ClientSize=new Size(590,300), StartPosition=FormStartPosition.CenterScreen, Font=new Font("Microsoft YaHei UI",9F), BackColor=Color.White, AutoScaleMode=AutoScaleMode.Dpi, MaximizeBox=false, MinimizeBox=true, ShowInTaskbar=true };
+        window.MinimumSize=window.Size;
+        var banner=new Panel { Dock=DockStyle.Top, Height=72, BackColor=Color.FromArgb(14,24,41) };
+        banner.Controls.Add(new Label { Text="Mizar", ForeColor=Color.White, Font=new Font("Segoe UI",24F), AutoSize=true, Location=new Point(32,12) });
+        heading=new Label { Text=canCancel ? "正在等待 Mizar 安全退出" : "正在恢复 Mizar", Location=new Point(32,94), Size=new Size(526,34), Font=new Font(window.Font.FontFamily,15F) };
+        detail=new Label { Text="工具将核对程序和备份，再完成当前操作。", Location=new Point(32,139), Size=new Size(526,45) };
+        activity=new ProgressBar { Location=new Point(32,191), Size=new Size(526,12), Style=ProgressBarStyle.Marquee, MarqueeAnimationSpeed=0 };
+        hint=new Label { Text="请等待本窗口完成，不要重复打开 Mizar。", Location=new Point(32,217), Size=new Size(526,30), ForeColor=Color.FromArgb(80,92,110) };
+        logs=new Button { Text="查看日志", Location=new Point(32,255), Size=new Size(100,30), TabIndex=0 };
+        logs.Click+=delegate { try { Process.Start(new ProcessStartInfo { FileName=directory, UseShellExecute=true }); } catch { hint.Text="日志目录无法打开，请保留更新记录并反馈。"; } };
+        cancel=new Button { Text="取消更新", Location=new Point(347,255), Size=new Size(100,30), Enabled=canCancel, TabIndex=1 };
+        cancel.Click+=delegate { RequestCancel(); };
+        close=new Button { Text="关闭", Location=new Point(458,255), Size=new Size(100,30), Enabled=false, TabIndex=2 };
+        close.Click+=delegate { window.Close(); };
+        window.Controls.AddRange(new Control[] {banner,heading,detail,activity,hint,logs,cancel,close});
+        window.FormClosing+=delegate(object sender,FormClosingEventArgs args) {
+          if (!finished) { args.Cancel=true; if (cancellable) RequestCancel(); else hint.Text="安装或恢复已开始，请等待完成后再关闭。"; }
+        };
+        window.Shown+=delegate { ready.Set(); };
+        window.FormClosed+=delegate { closed.Set(); };
+        Application.Run(window);
+      } catch(Exception error) { startupError=error; ready.Set(); closed.Set(); }
+    });
+    thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
+    if (!ready.WaitOne(10000) || startupError!=null) throw new InvalidOperationException("update_status_window_unavailable",startupError);
+  }
+  static void Apply(Action operation) {
+    var form=window;
+    if (form==null || form.IsDisposed) return;
+    try { form.Invoke(operation); } catch(ObjectDisposedException) { } catch(InvalidOperationException) { }
+  }
+  public static bool BeginMutation() {
+    lock(gate) { if(cancelled) return false; cancellable=false; }
+    Apply(delegate { cancel.Enabled=false; hint.Text="安装或恢复进行中，请勿重新打开 Mizar。"; });
+    return true;
+  }
+  public static void Phase(string phase) {
+    string text;
+    switch(phase) {
+      case "waiting-host": text="正在等待 Mizar 安全退出"; break;
+      case "stopped-and-installer": text="正在核对安装工具"; break;
+      case "previous-payload": text="正在核对原程序"; break;
+      case "reparse-and-registration": text="正在保存安装登记"; break;
+      case "backup-copy": text="正在备份原程序"; break;
+      case "backup-payload": text="正在核对备份"; break;
+      case "remove-previous-files": text="正在准备替换程序"; break;
+      case "nsis-install": text="正在安装新版 Mizar"; break;
+      case "installed-payload": text="正在核对新版完整性"; break;
+      case "resources": text="正在核对并准备素材"; break;
+      case "restore-check": text="正在核对恢复条件"; break;
+      case "restore-copy": text="正在准备恢复旧版"; break;
+      case "restore-swap": text="正在恢复原程序"; break;
+      case "restore-verify": text="正在核对恢复结果"; break;
+      default: text="正在处理更新，请稍候"; break;
+    }
+    Apply(delegate { heading.Text=text; detail.Text="当前阶段完成后会继续；耗时取决于磁盘、安装器和素材准备。"; });
+  }
+  public static void Complete(string status, string code, bool relaunch) {
+    Apply(delegate {
+      finished=true; cancellable=false; window.Text="Mizar 更新结果"; activity.Visible=false; cancel.Visible=false; close.Enabled=true;
+      if(status=="installed") { heading.Text="更新已完成"; detail.Text="新版程序已核验。"; hint.Text=relaunch ? "正在重新打开 Mizar。" : "可以关闭本窗口后重新打开 Mizar。"; }
+      else if(status=="restored") { heading.Text="旧版已恢复"; detail.Text="本次更新未完成，原程序与资料已保留。"; hint.Text="关闭本窗口后可重新打开 Mizar，再查看诊断。"; }
+      else if(status=="cancelled") { heading.Text="更新未启动"; detail.Text="原程序未被替换，可以重新打开 Mizar。"; hint.Text="请查看日志了解原因，或使用正式安装包。"; }
+      else { heading.Text="需要恢复"; detail.Text="当前程序尚未核验，备份与恢复记录已保留。"; hint.Text="请勿删除目录；查看日志并核对恢复记录后再继续。"; }
+      if(!String.IsNullOrEmpty(code)) detail.Text+="\r\n诊断代码："+code;
+      window.AcceptButton=close; window.CancelButton=close; close.Focus();
+    });
+  }
+  public static void LaunchFailed() { Apply(delegate { heading.Text="更新已完成，但未能重新打开"; hint.Text="程序已核验，请关闭本窗口后手动启动；失败时查看日志。"; }); }
+  public static void CloseCompleted() { Apply(delegate { if(finished) window.Close(); }); }
+  public static void WaitForClose() { if(thread!=null) { closed.WaitOne(); thread.Join(); } }
+}
+'@
+}
+function Update-WindowPhase([string]$phase) { if ($script:updateWindowAvailable) { [MizarUpdateWindow]::Phase($phase) } }
+function Test-UpdateCancellation { if ($script:updateWindowAvailable) { return [MizarUpdateWindow]::CancellationRequested }; return $false }
+function Start-UpdateMutation { if ($script:updateWindowAvailable) { return [MizarUpdateWindow]::BeginMutation() }; return $true }
+function Record-UpdateActivity([string]$phase, [string]$detail = '') {
+  try {
+    $text = $detail
+    $text = [regex]::Replace($text, '(?im)^.*(?:authorization|token|password|credential|secret|api[_-]?key)["'']?\s*[:=].*$', '[credential-bearing line redacted]')
+    if ($text.Length -gt 8192) { $text = $text.Substring(0,8192) + ' [truncated]' }
+    $record = @{ phase=$phase; time=[DateTime]::UtcNow.ToString('o'); detail=$text } | ConvertTo-Json -Compress
+    [IO.File]::AppendAllText((Join-Path $StageRoot 'update-activity.ndjson'), $record + "`n", (New-Object Text.UTF8Encoding($false)))
+  } catch { }
+}
 function Assert-PlainPath([string]$path) { [MizarUpdateFiles]::PlainPath($path) }
 
 function Assert-Plan($plan) {
@@ -175,6 +296,9 @@ function Record-Result([string]$status, [string]$code) {
   Write-JsonAtomic (Join-Path $plan.stateRoot 'updates\result.json') $result
 }
 function Restore-Previous {
+  [void](Start-UpdateMutation)
+  Update-WindowPhase 'restore-check'
+  Record-UpdateActivity 'restore-check'
   Assert-Stopped
   # Windows refuses write access to an executable image while it is mapped.
   # Check the actual file, avoiding PID gaps and short/Unicode path aliases.
@@ -194,13 +318,19 @@ function Restore-Previous {
   }
   # Check an already restored payload before materializing another full restore copy.
   # The backup and current payload remain independently verified above.
+  Update-WindowPhase 'restore-copy'
+  Record-UpdateActivity 'restore-copy'
   if (!(Test-Path -LiteralPath $restore)) { Copy-Item -LiteralPath $backup -Destination $restore -Recurse }
   Assert-Payload $restore $plan.previousContentDigest
+  Update-WindowPhase 'restore-swap'
+  Record-UpdateActivity 'restore-swap'
   if (Test-Path -LiteralPath $plan.bundleRoot) {
     if (Test-Path -LiteralPath $failed) { throw 'update_recovery_conflict' }
     Move-Item -LiteralPath $plan.bundleRoot -Destination $failed
   }
   Move-Item -LiteralPath $restore -Destination $plan.bundleRoot
+  Update-WindowPhase 'restore-verify'
+  Record-UpdateActivity 'restore-verify'
   Assert-Payload $plan.bundleRoot $plan.previousContentDigest
   Restore-Registration
   Record-Result 'restored' 'update_rolled_back'
@@ -230,8 +360,31 @@ Assert-Plan $plan
 $StageRoot = [IO.Path]::GetFullPath($StageRoot).TrimEnd('\')
 if ((Split-Path -Parent $StageRoot) -ne [IO.Path]::GetFullPath((Join-Path $plan.stateRoot 'updates')).TrimEnd('\') -or
   (Split-Path -Leaf $StageRoot) -notmatch '^install-[a-f0-9]{32}$') { throw 'update_stage_invalid' }
+$script:updateExitCode = 0
+$script:updateFailureCode = ''
+$script:launchAfterCommit = $false
+function Invoke-UpdateTransaction {
+# One writer spans Install/Recover/Rollback, including all failure preservation.
+# Retaining the existing desktop object also blocks older Hosts which check its existence.
+$writer = New-Object Threading.Mutex($false, 'Global\MizarUpdateWriter')
+$writerOwned = $false
+$desktop = $null
+$active = $null
+$windowOpened = $false
 try {
-  if ($Mode -eq 'Rollback') { Restore-Previous; exit 0 }
+  try { $writerOwned = $writer.WaitOne(0) }
+  catch [Threading.AbandonedMutexException] { $writerOwned = $true }
+  if (!$writerOwned) { throw 'update_transaction_busy' }
+  $desktop = New-Object Threading.Mutex($false, 'Global\MizarDesktop')
+  $active = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, 'Global\MizarUpdateActive')
+  if (!$NoStatusWindow) { [MizarUpdateWindow]::Start($StageRoot, ($Mode -eq 'Install')); $windowOpened = $true }
+  if ($ReadyEvent) {
+    if ($Mode -ne 'Install' -or $ReadyEvent -notmatch '^Global\\MizarUpdateReady-[0-9]+-[0-9]+$') { throw 'update_handoff_invalid' }
+    $ready = [Threading.EventWaitHandle]::OpenExisting($ReadyEvent)
+    try { [void]$ready.Set() } finally { $ready.Dispose() }
+  }
+try {
+  if ($Mode -eq 'Rollback') { Restore-Previous; return }
   if ($Mode -eq 'Recover') {
     Recovery-Registration $true
     $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
@@ -244,11 +397,14 @@ try {
       Recovery-Registration $false
       Record-Result 'cancelled' 'update_not_started'
     } else { Restore-Previous }
-    exit 0
+    return
   }
   if ($Mode -ne 'Install' -or $HostProcessId -le 0) { throw 'update_host_invalid' }
+  Update-WindowPhase 'waiting-host'
+  Record-UpdateActivity 'waiting-host'
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   while (Get-Process -Id $HostProcessId -ErrorAction SilentlyContinue) {
+    if (Test-UpdateCancellation) { throw 'update_cancelled_before_install' }
     if ([DateTime]::UtcNow -gt $deadline) { throw 'update_host_exit_timeout' }
     Start-Sleep -Milliseconds 200
   }
@@ -263,6 +419,7 @@ try {
   }
   Measure-UpdatePhase 'backup-copy' { Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse }
   Measure-UpdatePhase 'backup-payload' { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest }
+  if (!(Start-UpdateMutation)) { throw 'update_cancelled_before_install' }
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
   # Remove only the verified previous product files; preserve state and every untracked file.
@@ -283,6 +440,8 @@ try {
   if ($plan.coreArchiveSha256) {
     # Complete resources through the verified deployed App/SDK before committing.
     # Failure retains the existing program backup and enters the normal rollback.
+    Update-WindowPhase 'resources'
+    Record-UpdateActivity 'resources'
     $node = Join-Path $plan.bundleRoot 'resources/runtime/node.exe'
     $bridge = Join-Path $plan.bundleRoot 'resources/app/dist/web-installer/installed-entry.mjs'
     $env:MIZAR_STATE_ROOT = $plan.stateRoot
@@ -306,8 +465,9 @@ try {
   if (!$KeepBackup) { Remove-Item -LiteralPath (Join-Path $StageRoot 'previous') -Recurse -Force }
   if (!$KeepBackup) { Remove-Item -LiteralPath (Join-Path $StageRoot 'Installer.exe') -Force }
   $env:MIZAR_STATE_ROOT = $plan.stateRoot
-  if (!$NoLaunch) { Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot }
+  $script:launchAfterCommit = !$NoLaunch
 } catch {
+  Record-UpdateActivity 'failure' ($_.ToString() + "`n" + $_.ScriptStackTrace)
   [Console]::Error.WriteLine($_.ToString())
   [Console]::Error.WriteLine($_.ScriptStackTrace)
   # Static file operations preserve the original named failure through invocation wrappers.
@@ -315,6 +475,7 @@ try {
   while ($cause.InnerException) { $cause = $cause.InnerException }
   $code = [string]$cause.Message
   if ($code -notmatch '^update_[a-z_]+$') { $code = 'update_installation_failed' }
+  $script:updateFailureCode = $code
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
   if ($journal.phase -eq 'installing') {
     try { Restore-Previous }
@@ -333,5 +494,32 @@ try {
     }
   }
   else { Record-Result 'cancelled' $code; Recovery-Registration $false }
-  exit 1
+  $script:updateExitCode = 1
+  return
 }
+} finally {
+  if ($null -ne $desktop) { $desktop.Dispose() }
+  if ($null -ne $active) { $active.Dispose() }
+  if ($writerOwned) { $writer.ReleaseMutex() }
+  $writer.Dispose()
+}
+}
+try { Invoke-UpdateTransaction }
+catch {
+  $script:updateExitCode = 1
+  Record-UpdateActivity 'transaction_entry_failed' $_.ToString()
+  [Console]::Error.WriteLine($_.ToString())
+}
+$result = $null
+try { $result = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $plan.stateRoot 'updates/result.json') -Raw | ConvertFrom-Json } catch { }
+$status = if ($null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)) { [string]$result.status } else { 'cancelled' }
+$code = if ($null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)) { [string]$result.code } else { 'update_not_started' }
+if ($script:updateFailureCode) { $code = $script:updateFailureCode + ' / ' + $code }
+if ($script:updateWindowAvailable) { [MizarUpdateWindow]::Complete($status, $code, $script:launchAfterCommit) }
+# No protected writes remain; the new Host can now acquire its desktop object.
+if ($script:launchAfterCommit) {
+  try { Start-Process -FilePath (Join-Path $plan.bundleRoot 'Mizar.exe') -WorkingDirectory $plan.bundleRoot; if ($script:updateWindowAvailable) { [MizarUpdateWindow]::CloseCompleted() } }
+  catch { Record-UpdateActivity 'launch_failed' $_.ToString(); if ($script:updateWindowAvailable) { [MizarUpdateWindow]::LaunchFailed() }; $script:updateExitCode = 1 }
+} elseif ($status -eq 'installed' -and $NoLaunch -and $script:updateWindowAvailable) { [MizarUpdateWindow]::CloseCompleted() }
+if ($script:updateWindowAvailable) { [MizarUpdateWindow]::WaitForClose() }
+exit $script:updateExitCode
