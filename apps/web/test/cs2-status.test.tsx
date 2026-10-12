@@ -16,6 +16,7 @@ vi.mock('../src/preparation/client', () => ({
 }));
 
 import { Cs2LaunchSettings } from '../src/preparation/Cs2LaunchSettings';
+import { Cs2Recovery } from '../src/preparation/Cs2Recovery';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -67,6 +68,28 @@ async function render() {
 }
 
 describe('CS2 configuration progress', () => {
+  it('shows Host window control failures in the recovery owner and clears only on a new confirmed outcome', async () => {
+    let windowMessage: string | null = 'CS2 窗口定位被系统拒绝，请核对运行权限后重试恢复布局。';
+    mocks.invoke.mockImplementation((command) =>
+      Promise.resolve(
+        command === 'workspace_exit_status'
+          ? { busy: false, stage: '', message: null, windowMessage }
+          : idle,
+      ),
+    );
+    await act(async () => {
+      root.render(<Cs2Recovery production={null} />);
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('核对运行权限');
+    expect(container.textContent).not.toContain('原来的游戏分辨率');
+    windowMessage = null;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(container.textContent).not.toContain('系统拒绝');
+  });
+
   it('keeps core settings available while optional spectator recovery remains pending and permits retry', async () => {
     await render();
     await poll({

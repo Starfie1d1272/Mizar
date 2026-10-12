@@ -107,7 +107,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
     !status?.demoCleanupPending &&
     !phase &&
     !feedback &&
-    !status?.message
+    !status?.message &&
+    !exit?.windowMessage
   )
     return null;
   const uncertain = status?.phase === 'uncertain';
@@ -115,6 +116,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   return (
     <StatusBanner
       tone={
+        exit?.windowMessage ||
         status?.spectatorRecoveryPending ||
         status?.demoCleanupPending ||
         status?.canPreserve ||
@@ -131,24 +133,27 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         <strong>
           {phase
             ? cs2OperationLabel(phase)
-            : status?.pending
-              ? uncertain
-                ? '正在等待 Steam 启动 CS2'
-                : status.running
-                  ? status.preserveSettings
-                    ? 'CS2 正在运行，已保持原游戏设置'
-                    : 'CS2 正在运行，原配置已备份'
-                  : status.preserveSettings
-                    ? '等待清理本次启动记录'
-                    : 'CS2 原配置尚未恢复'
-              : status?.spectatorRecoveryPending
-                ? '观战原值尚未恢复'
-                : status?.demoCleanupPending
-                  ? '原设置已恢复，试播文件待清理'
-                  : status?.canPreserve
-                    ? '未应用游戏设置，原始配置已备份'
-                    : '原设置已恢复'}
+            : exit?.windowMessage
+              ? '窗口控制需要处理'
+              : status?.pending
+                ? uncertain
+                  ? '正在等待 Steam 启动 CS2'
+                  : status.running
+                    ? status.preserveSettings
+                      ? 'CS2 正在运行，已保持原游戏设置'
+                      : 'CS2 正在运行，原配置已备份'
+                    : status.preserveSettings
+                      ? '等待清理本次启动记录'
+                      : 'CS2 原配置尚未恢复'
+                : status?.spectatorRecoveryPending
+                  ? '观战原值尚未恢复'
+                  : status?.demoCleanupPending
+                    ? '原设置已恢复，试播文件待清理'
+                    : status?.canPreserve
+                      ? '未应用游戏设置，原始配置已备份'
+                      : '原设置已恢复'}
         </strong>
+        {exit?.windowMessage ? <p role="alert">{exit.windowMessage}</p> : null}
         {status?.canPreserve ? (
           <p>
             {status.message} 保持原设置继续时，不应用自动画质、帧率和游戏窗口布局，本机 HUD

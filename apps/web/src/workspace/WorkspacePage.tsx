@@ -256,7 +256,7 @@ export function WorkspaceDock() {
   const production = useLocalRead<Production>('/local/v1/production');
   const { status: cs2 } = useCs2Status();
   const exit = useWorkspaceExitStatus();
-  const visibleError = exit?.message || errorMessage || '';
+  const visibleError = exit?.message || errorMessage || exit?.windowMessage || '';
   useEffect(() => {
     const hide = () => {
       void fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
@@ -376,6 +376,9 @@ export function WorkspaceDock() {
         </div>
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
+        {exit?.windowMessage ? (
+          <Button onClick={() => setDetailsOpen(true)}>窗口控制需要处理</Button>
+        ) : null}
         <div className="workspace-section-heading">
           <small>观战 · 本机</small>
           <Button
@@ -498,7 +501,9 @@ export function WorkspaceDock() {
         <p>
           {exit?.message
             ? `${workspaceExitLabel(exit.stage)}：按原因处理后，在准备中心重试；再次失败时导出诊断包反馈。`
-            : sceneState?.director?.reason}
+            : exit?.windowMessage
+              ? '按上面的窗口控制原因处理，再点恢复布局或切回工作台重试；正常退出本次游戏后，在准备中心完成恢复。'
+              : sceneState?.director?.reason}
         </p>
         {exit?.message ? (
           <Button

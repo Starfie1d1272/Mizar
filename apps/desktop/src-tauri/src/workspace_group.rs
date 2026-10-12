@@ -12,6 +12,9 @@ impl Members {
     fn handles(self) -> [isize; 3] {
         [self.left, self.dock, self.game]
     }
+    fn role(self, hwnd: isize) -> &'static str {
+        if hwnd == self.left { "left" } else if hwnd == self.dock { "dock" } else { "game" }
+    }
     fn contains(self, hwnd: isize) -> bool {
         hwnd != 0 && self.handles().contains(&hwnd)
     }
@@ -28,7 +31,22 @@ pub struct Failure {
     pub stage: &'static str,
     pub api: &'static str,
     pub last_error: Option<u32>,
+    pub target: &'static str,
 }
+impl Failure {
+    pub fn diagnostic(self) -> serde_json::Value {
+        serde_json::json!({"stage": self.stage, "api": self.api, "lastError": self.last_error, "target": self.target})
+    }
+    pub fn message(self) -> String {
+        let target = match self.target { "left" => "工作台左侧", "dock" => "工作台底栏", "game" => "CS2", _ => "工作台窗口组" };
+        if self.last_error == Some(5) {
+            format!("{target}窗口层级恢复被系统拒绝。请核对 Mizar 与 Steam／CS2 的运行权限，切回工作台重试；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。")
+        } else {
+            format!("{target}窗口层级恢复未完成。请还原窗口并切回工作台重试；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。")
+        }
+    }
+}
+
 trait Windows {
     fn now(&self) -> std::time::Instant {
         std::time::Instant::now()
@@ -47,9 +65,11 @@ pub struct Group {
     last_foreground: isize,
     // One transaction and a monotonic deadline, independent of worker delays.
     pending: Option<(isize, std::time::Instant, bool)>,
+    pub restored: bool,
 }
 impl Group {
     fn tick(&mut self, windows: &mut impl Windows, members: Option<Members>) -> Option<Failure> {
+        self.restored = false;
         let selected = windows.foreground();
         if self.members != members {
             self.members = members;
@@ -85,6 +105,7 @@ impl Group {
                 stage: "restore_timeout",
                 api: "ShowWindowAsync",
                 last_error: None,
+                target: "group",
             });
         }
         let mut waiting = false;
@@ -102,6 +123,7 @@ impl Group {
                                 stage: "restore",
                                 api: "ShowWindowAsync",
                                 last_error: Some(code),
+                                target: members.role(hwnd),
                             })
                         }
                     }
@@ -125,10 +147,12 @@ impl Group {
                         stage: "raise",
                         api: "SetWindowPos",
                         last_error: Some(code),
+                        target: members.role(hwnd),
                     })
                 }
             }
         }
+        self.restored = true;
         None
     }
 }
@@ -282,6 +306,7 @@ mod native {
         panels: Option<[isize; 2]>,
         allowed: &dyn Fn() -> bool,
     ) -> Option<Failure> {
+        group.restored = false;
         let members = process.zip(panels).and_then(|(process, panels)| {
             find_game(process).map(|game| Members {
                 left: panels[0],
@@ -642,12 +667,14 @@ mod tests {
                     stage: "restore",
                     api: "ShowWindowAsync",
                     last_error: Some(5),
+                    target: "game",
                 }
             } else {
                 Failure {
                     stage: "restore_timeout",
                     api: "ShowWindowAsync",
                     last_error: None,
+                    target: "group",
                 }
             };
             assert_eq!(first.or(second), Some(expected));
@@ -693,13 +720,23 @@ mod tests {
             Some(Failure {
                 stage: "raise",
                 api: "SetWindowPos",
-                last_error: Some(87)
+                last_error: Some(87),
+                target: "dock"
             })
         );
         for _ in 0..20 {
             assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
         }
         assert_eq!(desktop.raises, [(2, 1)]);
+        assert!(!group.restored);
+        desktop.foreground = 99;
+        group.tick(&mut desktop, Some(MEMBERS));
+        desktop.foreground = 1;
+        desktop.reject_raise = false;
+        assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
+        assert!(group.restored);
+        assert_eq!(group.tick(&mut desktop, Some(MEMBERS)), None);
+        assert!(!group.restored); // no new successful transaction to clear a later error
     }
     #[test]
     fn hidden_disabled_invalid_or_topmost_member_blocks_the_transaction() {

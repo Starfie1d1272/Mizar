@@ -354,7 +354,11 @@ fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> 
         return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
     }
     if !tracker.managed {
-        return Err("工作区已恢复，但 CS2 仍使用原来的游戏分辨率。请退出工作台后重新进入，让游戏按当前屏幕尺寸启动。".into());
+        return Err(if tracker.preserve_settings {
+            "本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。".into()
+        } else {
+            tracker.window_message().unwrap_or_else(|| "工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。".into())
+        });
     }
     Ok(())
 }
@@ -426,7 +430,7 @@ fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
     match state.tracker.lock() {
         Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics() })
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() })
         }
         Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
     }
@@ -584,7 +588,8 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
     let state = app.state::<production_exit::WorkspaceExit>().status();
-    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message })
+    let window_message = app.state::<HostState>().tracker.lock().ok().and_then(|tracker| tracker.window_message());
+    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message, "windowMessage": window_message })
 }
 
 #[tauri::command]
@@ -1769,21 +1774,23 @@ fn run_desktop(
                         .and_then(|(left, dock)| left.hwnd().ok().zip(dock.hwnd().ok()))
                         .map(|(left, dock)| [left.0 as isize, dock.0 as isize]);
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
-                        if let Some(failure) = workspace_group::synchronize(
+                        let failure = workspace_group::synchronize(
                             &mut group, process.as_ref(), panels, &allowed,
-                        ) {
+                        );
+                        if group.restored {
+                            if let Ok(mut tracker) = worker_tracker.lock() { tracker.group_failure = None; }
+                        }
+                        if let Some(failure) = failure {
+                            if let Ok(mut tracker) = worker_tracker.lock() { tracker.group_failure = Some(failure); }
                             if let Some(process) = &process {
-                                host.state::<DesktopLog>().event(
-                                    "workspace_group_restore", "failure",
-                                    Some(&serde_json::json!({
-                                        "stage": failure.stage, "api": failure.api,
-                                        "lastError": failure.last_error,
-                                        "gamePid": process.pid, "created": process.created
-                                    }).to_string()),
-                                );
+                                let mut detail = failure.diagnostic();
+                                detail["gamePid"] = serde_json::json!(process.pid);
+                                detail["created"] = serde_json::json!(process.created);
+                                host.state::<DesktopLog>().event("workspace_group_restore", "failure", Some(&detail.to_string()));
                             }
                         }
                     }
+
                     // Cross-process CS2 calls stay off the Tauri main loop.
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
@@ -1801,6 +1808,9 @@ fn run_desktop(
                                 } else {
                                     tracker.tick()
                                 };
+                                if let Some(failure) = tracker.alignment_event() {
+                                    host.state::<DesktopLog>().event("cs2_window_alignment", "failure", Some(&failure.diagnostic().to_string()));
+                                }
                                 (layout, tracker.overlay_rect())
                             })
                             .unwrap_or((None, None))

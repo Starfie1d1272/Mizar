@@ -28,6 +28,12 @@ function booleans(value: unknown, keys: readonly string[]) {
   );
 }
 
+function supportCs2(value: unknown) {
+  const input =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return { ...booleans(value, ['found', 'managed']), geometry: input.geometry ?? null };
+}
+
 function supportGsi(value: unknown) {
   const input =
     typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
@@ -90,7 +96,7 @@ export function SupportExport() {
                     ? null
                     : {
                         collectionStatus: cs2.collectionStatus,
-                        ...booleans(cs2.value, ['found', 'managed']),
+                        ...supportCs2(cs2.value),
                       },
               }
             : null,

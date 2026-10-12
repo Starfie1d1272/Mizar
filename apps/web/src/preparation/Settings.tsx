@@ -113,7 +113,11 @@ export function Settings({ tab }: { tab: string }) {
     conflictFiles: readonly string[];
     lastOperation: { code: string; stage: string } | null;
   } | null>(null);
-  const [cs2, setCs2] = useState<{ found: boolean; managed: boolean } | null>(null);
+  const [cs2, setCs2] = useState<{
+    found: boolean;
+    managed: boolean;
+    message?: string | null;
+  } | null>(null);
   const [gsiPhase, setGsiPhase] = useState<ReadPhase>(
     window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
   );
@@ -620,6 +624,7 @@ export function Settings({ tab }: { tab: string }) {
                         : '已检测到 CS2，打开工作台后安排窗口'
                       : '等待 CS2 窗口'}
             </p>
+            {cs2?.message ? <p role="alert">{cs2.message}</p> : null}
             {gsiError ? (
               <StatusBanner tone="warning">
                 GSI 读取失败：{gsiError} 点击「重新检查 CS2 与

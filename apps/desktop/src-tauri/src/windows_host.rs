@@ -1,4 +1,4 @@
-use crate::geometry::{avoid_game_frame, overlap, overlay_visible, workspace_layout, Layout, Rect};
+use crate::geometry::{avoid_game_frame, overlay_visible, workspace_layout, Layout, Rect};
 
 pub fn foreground() -> isize { unsafe { GetForegroundWindow() } }
 
@@ -40,6 +40,29 @@ extern "system" {
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
     fn QueryFullProcessImageNameW(process: isize, flags: u32, buffer: *mut u16, size: *mut u32) -> i32;
     fn CloseHandle(handle: isize) -> i32;
+}
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn OpenProcessToken(process: isize, access: u32, token: *mut isize) -> i32;
+    fn GetTokenInformation(token: isize, class: u32, value: *mut u32, size: u32, length: *mut u32) -> i32;
+}
+fn process_elevation(pid: u32) -> serde_json::Value {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process == 0 { return serde_json::json!({"elevated": null, "lastError": std::io::Error::last_os_error().raw_os_error()}); }
+        let mut token = 0;
+        let opened = OpenProcessToken(process, 8, &mut token);
+        let open_error = if opened == 0 { std::io::Error::last_os_error().raw_os_error() } else { None };
+        CloseHandle(process);
+        if opened == 0 { return serde_json::json!({"elevated": null, "lastError": open_error}); }
+        let mut elevated = 0;
+        let mut length = 0;
+        let read = GetTokenInformation(token, 20, &mut elevated, 4, &mut length);
+        let error = if read == 0 { std::io::Error::last_os_error().raw_os_error() } else { None };
+        CloseHandle(token);
+        serde_json::json!({"elevated": if read != 0 { Some(elevated != 0) } else { None }, "lastError": error})
+    }
 }
 
 const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
@@ -142,34 +165,70 @@ pub fn outer_from_client(client: Rect, frame: Rect) -> Rect {
     Rect { x: client.x + frame.x, y: client.y + frame.y, width: client.width + frame.width, height: client.height + frame.height }
 }
 
-fn align_cs2(window: Cs2Window, target: Rect) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlignmentFailure {
+    pub stage: &'static str,
+    pub api: Option<&'static str>,
+    pub last_error: Option<u32>,
+}
+impl AlignmentFailure {
+    fn win32(stage: &'static str, api: &'static str) -> Self {
+        Self { stage, api: Some(api), last_error: std::io::Error::last_os_error().raw_os_error().map(|code| code as u32) }
+    }
+    pub fn diagnostic(self) -> serde_json::Value {
+        serde_json::json!({"stage": self.stage, "api": self.api, "lastError": self.last_error, "target": "game"})
+    }
+    pub fn message(self) -> String {
+        let phase = match self.stage { "measure" | "empty_client" => "画面范围读取", "dpi" => "显示缩放读取", "frame" => "边框尺寸计算", "correction" => "尺寸修正", _ => "定位" };
+        if self.last_error == Some(5) {
+            return format!("CS2 窗口{phase}被系统拒绝。请核对 Mizar 与 Steam／CS2 的运行权限，再点恢复布局；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。");
+        }
+        match self.stage {
+            "client_mismatch" => "CS2 窗口已接受定位，但实际画面范围与工作台不一致。请先点恢复布局；仍不一致时正常退出本次游戏，在准备中心完成恢复后按当前屏幕重新启动。".into(),
+            "minimized" => "CS2 已最小化，尚未对齐。请还原游戏窗口，再点恢复布局。".into(),
+            _ => format!("CS2 窗口{phase}未完成。请确认游戏窗口可见，再点恢复布局；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。"),
+        }
+    }
+}
+
+fn measured_client(hwnd: Hwnd) -> Result<Rect, AlignmentFailure> {
     unsafe {
-        if IsIconic(window.hwnd) != 0 { return false; }
+        let mut size = WinRect::default();
+        let mut origin = Point::default();
+        if GetClientRect(hwnd, &mut size) == 0 { return Err(AlignmentFailure::win32("measure", "GetClientRect")); }
+        if ClientToScreen(hwnd, &mut origin) == 0 { return Err(AlignmentFailure::win32("measure", "ClientToScreen")); }
+        if size.right <= 0 || size.bottom <= 0 { return Err(AlignmentFailure { stage: "empty_client", api: None, last_error: None }); }
+        Ok(Rect { x: origin.x, y: origin.y, width: size.right, height: size.bottom })
+    }
+}
+
+fn align_cs2(window: Cs2Window, target: Rect) -> Result<(), AlignmentFailure> {
+    unsafe {
+        if IsIconic(window.hwnd) != 0 { return Err(AlignmentFailure { stage: "minimized", api: None, last_error: None }); }
         let style = GetWindowLongW(window.hwnd, -16) as u32;
         let ex_style = GetWindowLongW(window.hwnd, -20) as u32;
         let dpi = GetDpiForWindow(window.hwnd);
-        if dpi == 0 { return false; }
+        if dpi == 0 { return Err(AlignmentFailure { stage: "dpi", api: Some("GetDpiForWindow"), last_error: None }); }
         let mut border = WinRect::default();
         border.right = target.width;
         border.bottom = target.height;
-        if AdjustWindowRectExForDpi(&mut border, style, 0, ex_style, dpi) == 0 { return false; }
+        if AdjustWindowRectExForDpi(&mut border, style, 0, ex_style, dpi) == 0 { return Err(AlignmentFailure::win32("frame", "AdjustWindowRectExForDpi")); }
         let frame = Rect { x: border.left, y: border.top, width: border.right - border.left - target.width, height: border.bottom - border.top - target.height };
         let outer = outer_from_client(target, frame);
-        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
-        let Some(actual) = client_rect(window.hwnd) else { return false; };
-        if actual == target { return true; }
-        // CS2 can keep its launch-time render client despite accepting the outer
-        // window resize. Shrinking a borderless outer a second time crops it;
-        // it cannot change the engine's video mode. Keep the intended viewport.
-        if frame.width == 0 && frame.height == 0 { return false; }
+        if SetWindowPos(window.hwnd, 0, outer.x, outer.y, outer.width, outer.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return Err(AlignmentFailure::win32("position", "SetWindowPos")); }
+        let actual = measured_client(window.hwnd)?;
+        if actual == target { return Ok(()); }
+        // A borderless resize cannot change the engine's video mode by cropping.
+        if frame.width == 0 && frame.height == 0 { return Err(AlignmentFailure { stage: "client_mismatch", api: None, last_error: None }); }
         let correction = Rect {
             x: outer.x + target.x - actual.x,
             y: outer.y + target.y - actual.y,
             width: outer.width + target.width - actual.width,
             height: outer.height + target.height - actual.height,
         };
-        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return false; }
-        client_rect(window.hwnd).is_some_and(|measured| overlap(measured, target) == (target.width as i64 * target.height as i64) && measured.width == target.width && measured.height == target.height)
+        if SetWindowPos(window.hwnd, 0, correction.x, correction.y, correction.width, correction.height, SWP_NOZORDER | SWP_NOACTIVATE) == 0 { return Err(AlignmentFailure::win32("correction", "SetWindowPos")); }
+        if measured_client(window.hwnd)? == target { Ok(()) }
+        else { Err(AlignmentFailure { stage: "client_mismatch", api: None, last_error: None }) }
     }
 }
 
@@ -188,28 +247,46 @@ pub struct GameTracker {
     last_dpi: u32,
     alignment_retries: u8,
     last_alignment: Option<std::time::Instant>,
+    pub alignment_failure: Option<AlignmentFailure>,
+    reported_alignment_failure: Option<AlignmentFailure>,
+    pub group_failure: Option<crate::workspace_group::Failure>,
 }
 
 impl GameTracker {
+    pub fn alignment_event(&mut self) -> Option<AlignmentFailure> {
+        let changed = self.alignment_failure != self.reported_alignment_failure;
+        self.reported_alignment_failure = self.alignment_failure;
+        changed.then_some(self.alignment_failure).flatten()
+    }
+    pub fn window_message(&self) -> Option<String> {
+        self.alignment_failure.map(AlignmentFailure::message)
+            .or_else(|| self.group_failure.map(crate::workspace_group::Failure::message))
+    }
     pub fn geometry_diagnostics(&self) -> serde_json::Value {
         let _coordinates = PhysicalCoordinates::enter();
-        let Some(window) = self.window else { return serde_json::Value::Null; };
-        let mut size = WinRect::default();
-        let mut outer = WinRect::default();
-        let mut origin = Point::default();
-        unsafe {
-            if GetClientRect(window.hwnd, &mut size) == 0 || GetWindowRect(window.hwnd, &mut outer) == 0 || ClientToScreen(window.hwnd, &mut origin) == 0 { return serde_json::Value::Null; }
-            let mut end = Point { x: size.right, y: size.bottom };
-            let end_valid = ClientToScreen(window.hwnd, &mut end) != 0;
-            serde_json::json!({
-                "dpi": GetDpiForWindow(window.hwnd),
-                "clientSize": [size.right, size.bottom],
-                "screenOrigin": [origin.x, origin.y],
-                "screenEnd": end_valid.then_some([end.x, end.y]),
-                "outer": [outer.left, outer.top, outer.right, outer.bottom],
-                "alignmentRetries": self.alignment_retries
-            })
-        }
+        let area = |value: Rect| [value.x, value.y, value.width, value.height];
+        let monitor_bounds = monitor_layout_area(self.monitor, true);
+        let work_area = monitor_layout_area(self.monitor, false);
+        let layout_area = self.last_work_area;
+        let target = layout_area.map(|work| workspace_layout(work).game);
+        let client = self.window.and_then(|window| client_rect(window.hwnd));
+        let outer = self.window.and_then(|window| unsafe {
+            let mut value = WinRect::default();
+            (GetWindowRect(window.hwnd, &mut value) != 0).then(|| rect(value))
+        });
+        serde_json::json!({
+            "dpi": self.window.map(|window| unsafe { GetDpiForWindow(window.hwnd) }).filter(|dpi| *dpi != 0),
+            "client": client.map(area), "outer": outer.map(area),
+            "monitorBounds": monitor_bounds.map(area), "workArea": work_area.map(area),
+            "layoutArea": layout_area.map(area), "target": target.map(area),
+            "alignmentRetries": self.alignment_retries,
+            "preserveSettings": self.preserve_settings,
+            "fullscreenLayout": self.fullscreen_layout,
+            "alignmentFailure": self.alignment_failure.map(AlignmentFailure::diagnostic),
+            "groupFailure": self.group_failure.map(crate::workspace_group::Failure::diagnostic),
+            "hostElevation": process_elevation(std::process::id()),
+            "gameElevation": self.window.map(|window| process_elevation(window.pid))
+        })
     }
     pub fn observe(&mut self, found: Option<Cs2Window>) -> bool {
         if self.window == found { return false; }
@@ -217,6 +294,9 @@ impl GameTracker {
         self.window = found;
         self.generation += 1;
         self.managed = false;
+        self.alignment_failure = None;
+        self.reported_alignment_failure = None;
+        self.group_failure = None;
         self.last_client = None;
         self.last_dpi = 0;
         self.alignment_retries = 30;
@@ -253,6 +333,7 @@ impl GameTracker {
         if self.preserve_settings {
             self.managed = false;
             self.alignment_retries = 0;
+            self.alignment_failure = None;
             self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
             return Some(layout);
         }
@@ -262,7 +343,9 @@ impl GameTracker {
             }
             if let Some(frame) = &self.frame { frame.apply(); }
         }
-        self.managed = self.window.is_some_and(|window| align_cs2(window, layout.game));
+        let alignment = self.window.map(|window| align_cs2(window, layout.game));
+        self.managed = matches!(alignment, Some(Ok(())));
+        self.alignment_failure = alignment.and_then(Result::err);
         if let Some(window) = self.window.filter(|_| self.managed) {
             let mut outer = WinRect::default();
             if unsafe { GetWindowRect(window.hwnd, &mut outer) } != 0 {
@@ -328,6 +411,41 @@ impl GameTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn alignment_reports_actual_failure_and_clears_on_window_replacement() {
+        let denied = AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) };
+        assert!(denied.message().contains("核对"));
+        assert!(!denied.message().contains("原来的游戏分辨率"));
+        let mismatch = AlignmentFailure { stage: "client_mismatch", api: None, last_error: None };
+        assert!(mismatch.message().contains("实际画面范围"));
+        let mut tracker = GameTracker::default();
+        tracker.observe(Some(Cs2Window { pid: 1, hwnd: 2 }));
+        tracker.alignment_failure = Some(denied);
+        tracker.group_failure = Some(crate::workspace_group::Failure { stage: "raise", api: "SetWindowPos", last_error: Some(5), target: "game" });
+        tracker.observe(None);
+        assert_eq!(tracker.window_message(), None);
+        assert!(!tracker.managed);
+    }
+    #[test]
+    fn native_client_alignment_requires_measured_target_and_reads_current_elevation() {
+        let _coordinates = PhysicalCoordinates::enter();
+        #[link(name = "user32")]
+        extern "system" {
+            fn CreateWindowExW(ex: u32, class: *const u16, name: *const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: isize, menu: isize, instance: isize, param: *const std::ffi::c_void) -> isize;
+            fn DestroyWindow(hwnd: isize) -> i32;
+        }
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let hwnd = unsafe { CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, -10000, -10000, 320, 240, 0, 0, 0, std::ptr::null()) };
+        assert_ne!(hwnd, 0);
+        struct Window(isize);
+        impl Drop for Window { fn drop(&mut self) { unsafe { DestroyWindow(self.0); } } }
+        let _window = Window(hwnd);
+        let target = Rect { x: -11000, y: -11000, width: 640, height: 360 };
+        assert_eq!(align_cs2(Cs2Window { pid: std::process::id(), hwnd }, target), Ok(()));
+        assert_eq!(client_rect(hwnd), Some(target));
+        assert!(process_elevation(std::process::id())["elevated"].is_boolean());
+        assert_eq!(measured_client(0).unwrap_err().api, Some("GetClientRect"));
+    }
     #[test]
     fn frame_and_generation() {
         let client = Rect { x: 100, y: 80, width: 1440, height: 810 };

@@ -51,6 +51,81 @@ const cs2IssueCodes = [
 const cs2Stages = ['status', 'selection', 'install', 'restore'];
 const collectionStates = ['available', 'failed', 'timeout'];
 
+const rectangle = {
+  type: ['array', 'null'],
+  minItems: 4,
+  maxItems: 4,
+  items: { type: 'integer', minimum: -100000, maximum: 100000 },
+};
+const windowFailure = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  properties: {
+    stage: {
+      type: ['string', 'null'],
+      enum: [
+        'restore',
+        'restore_timeout',
+        'raise',
+        'measure',
+        'empty_client',
+        'minimized',
+        'dpi',
+        'frame',
+        'position',
+        'correction',
+        'client_mismatch',
+        null,
+      ],
+    },
+    api: {
+      type: ['string', 'null'],
+      enum: [
+        'ShowWindowAsync',
+        'SetWindowPos',
+        'GetClientRect',
+        'ClientToScreen',
+        'GetDpiForWindow',
+        'AdjustWindowRectExForDpi',
+        null,
+      ],
+    },
+    lastError: { type: ['integer', 'null'], minimum: 0, maximum: 4294967295 },
+    target: { type: ['string', 'null'], enum: ['left', 'dock', 'game', 'group', null] },
+  },
+};
+const elevation = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  properties: {
+    elevated: { type: ['boolean', 'null'] },
+    lastError: { type: ['integer', 'null'], minimum: 0, maximum: 4294967295 },
+  },
+};
+const windowGeometryProperties = {
+  ...Object.fromEntries(
+    ['client', 'outer', 'monitorBounds', 'workArea', 'layoutArea', 'target'].map((key) => [
+      key,
+      rectangle,
+    ]),
+  ),
+  dpi: { type: ['integer', 'null'], minimum: 1, maximum: 10000 },
+  alignmentRetries: { type: 'integer', minimum: 0, maximum: 30 },
+  preserveSettings: { type: 'boolean' },
+  fullscreenLayout: { type: 'boolean' },
+  alignmentFailure: windowFailure,
+  groupFailure: windowFailure,
+  hostElevation: elevation,
+  gameElevation: elevation,
+};
+function windowGeometry(value: unknown) {
+  if (value === null || value === undefined) return null;
+  const input = record(value);
+  return Object.fromEntries(
+    Object.keys(windowGeometryProperties).map((key) => [key, input[key] ?? null]),
+  );
+}
+
 export function registerSupportRoutes(
   app: FastifyInstance,
   options: {
@@ -76,7 +151,7 @@ export function registerSupportRoutes(
   app.post(
     '/debug/support-bundle',
     {
-      bodyLimit: 2048,
+      bodyLimit: 4096,
       schema: {
         body: {
           type: 'object',
@@ -126,6 +201,11 @@ export function registerSupportRoutes(
                     collectionStatus: { type: 'string', enum: collectionStates },
                     found: { type: 'boolean' },
                     managed: { type: 'boolean' },
+                    geometry: {
+                      type: ['object', 'null'],
+                      additionalProperties: false,
+                      properties: windowGeometryProperties,
+                    },
                   },
                 },
               },
@@ -252,6 +332,7 @@ export function registerSupportRoutes(
               collectionStatus: choice(cs2.collectionStatus, collectionStates),
               found: bool(cs2.found),
               managed: bool(cs2.managed),
+              geometry: windowGeometry(cs2.geometry),
             },
             obs:
               obs === undefined
