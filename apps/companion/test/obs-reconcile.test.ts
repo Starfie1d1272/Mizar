@@ -347,6 +347,160 @@ it('measures owned Program sources without claiming captured frames or reading i
   expect((await readObsProgramEvidence(obs, baseUrl, obs.currentScene)).state).toBe('changed');
 });
 
+it('captures live Studio separation and bounded layer geometry without names or settings', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.currentScene = 'Mizar · 比赛中';
+  const original = obs.call.bind(obs);
+  vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+    if (type === 'GetSceneList')
+      return {
+        currentProgramSceneName: obs.currentScene,
+        currentPreviewSceneName: 'Mizar · 赛前等待',
+      };
+    if (type === 'GetSceneItemList')
+      return {
+        sceneItems: [
+          {
+            sourceName: 'Mizar · CS2 Game Capture',
+            sceneItemId: 1,
+            sceneItemIndex: 0,
+            sceneItemEnabled: true,
+            sceneItemTransform: {
+              positionX: -2000,
+              positionY: 50,
+              scaleX: 0,
+              cropLeft: 1920,
+              boundsType: 'OBS_BOUNDS_STRETCH',
+              boundsWidth: 1920,
+              privateSetting: 'private-password',
+            },
+          },
+          {
+            sourceName: 'Mizar · gameplay · Program',
+            sceneItemIndex: 1,
+            sceneItemEnabled: true,
+            sceneItemTransform: { scaleX: 1, scaleY: 1 },
+          },
+          ...Array.from({ length: 33 }, (_, i) => ({
+            sourceName: 'private-source-' + i,
+            sceneItemIndex: i + 2,
+            sceneItemEnabled: true,
+            isGroup: i === 0,
+          })),
+        ],
+      };
+    return original(type, data);
+  });
+  obs.calls = [];
+  const result = await readObsProgramEvidence(obs, baseUrl, obs.currentScene);
+  expect(result.studio).toEqual({
+    enabled: true,
+    previewSceneId: 'waiting',
+    previewMatchesProgram: false,
+  });
+  expect(result.layersTruncated).toBe(true);
+  expect(result.layers).toHaveLength(32);
+  expect(result.layers?.[0]).toMatchObject({
+    role: 'capture',
+    enabled: true,
+    index: 0,
+    transform: { positionX: -2000, scaleX: 0, cropLeft: 1920, boundsType: 'OBS_BOUNDS_STRETCH' },
+  });
+  expect(result.layers?.[1]).toMatchObject({ role: 'browser', index: 1 });
+  expect(result.layers?.[2]).toMatchObject({ role: 'group', index: 2 });
+  expect(JSON.stringify(result)).not.toMatch(/private-|privateSetting/);
+  expect(obs.calls.every((type) => type.startsWith('Get'))).toBe(true);
+});
+
+it.each([
+  { value: true, expected: true },
+  { value: false, expected: false },
+  { value: undefined, expected: null },
+  { value: 'true', expected: null },
+])(
+  'preserves crop-to-bounds $value as $expected without inferring missing flags',
+  async ({ value, expected }) => {
+    const obs = new FakeObs();
+    await repairObsConfiguration(obs, baseUrl);
+    obs.currentScene = 'Mizar · 比赛中';
+    const original = obs.call.bind(obs);
+    vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+      const result = await original(type, data);
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: (result.sceneItems as Record<string, unknown>[]).map((item) => ({
+            ...item,
+            sceneItemTransform: { boundsType: 'OBS_BOUNDS_SCALE_OUTER', cropToBounds: value },
+          })),
+        };
+      return result;
+    });
+    const result = await readObsProgramEvidence(obs, baseUrl, obs.currentScene);
+    expect(result.layers?.find((layer) => layer.role === 'capture')?.transform).toMatchObject({
+      boundsType: 'OBS_BOUNDS_SCALE_OUTER',
+      cropToBounds: expected,
+    });
+  },
+);
+
+it('distinguishes disabled Studio Mode from an unreadable live scene list', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  obs.currentScene = 'Mizar · 赛前等待';
+  const original = obs.call.bind(obs);
+  const call = vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+    if (type === 'GetSceneList') return { currentPreviewSceneName: null };
+    return original(type, data);
+  });
+  expect((await readObsProgramEvidence(obs, baseUrl, obs.currentScene)).studio).toEqual({
+    enabled: false,
+    previewSceneId: null,
+    previewMatchesProgram: null,
+  });
+  call.mockImplementation(async (type, data) => {
+    if (type === 'GetSceneList') throw new Error('unreadable');
+    return original(type, data);
+  });
+  expect(await readObsProgramEvidence(obs, baseUrl, obs.currentScene)).toMatchObject({
+    state: 'measured',
+    studio: { enabled: null },
+    sceneId: 'waiting',
+  });
+});
+
+it.each([
+  { initial: 'private-user-scene', next: 'Mizar · 比赛中', previewId: 'gameplay' },
+  { initial: 'Mizar · 比赛中', next: 'Mizar · 赛前等待', previewId: 'waiting' },
+])(
+  'marks Program changes from $initial and compares Preview within the same response',
+  async ({ initial, next, previewId }) => {
+    const obs = new FakeObs();
+    await repairObsConfiguration(obs, baseUrl);
+    obs.currentScene = initial;
+    const original = obs.call.bind(obs);
+    vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+      if (type === 'GetSceneList')
+        return {
+          currentProgramSceneName: next,
+          currentPreviewSceneName: next,
+        };
+      // A late return to the initial Program must not erase the observed change.
+      return original(type, data);
+    });
+    const result = await readObsProgramEvidence(obs, baseUrl, initial);
+    expect(result).toMatchObject({
+      state: 'changed',
+      studio: {
+        enabled: true,
+        previewSceneId: previewId,
+        previewMatchesProgram: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-user-scene');
+  },
+);
+
 it('refuses collection mutations during output and protects user source names', async () => {
   const obs = new FakeObs();
   obs.outputActive = true;

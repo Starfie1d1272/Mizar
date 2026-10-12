@@ -85,6 +85,9 @@ describe('support export', () => {
         collection: 'other',
         sceneId: null,
         composition: null,
+        studio: { enabled: true, previewSceneId: 'gameplay', previewMatchesProgram: false },
+        layers: [],
+        layersTruncated: false,
         sources: [],
         capture: null,
       },
@@ -118,7 +121,16 @@ describe('support export', () => {
           mode: 'preparation',
           gameplayAvailable: false,
         },
-        obs: { currentScene: null, sceneAligned: false, programEvidence: { collection: 'other' } },
+        obs: {
+          currentScene: null,
+          sceneAligned: false,
+          programEvidence: {
+            collection: 'other',
+            studio: { enabled: true, previewSceneId: 'gameplay', previewMatchesProgram: false },
+            layers: [],
+            layersTruncated: false,
+          },
+        },
       });
       expect(bundle.logs.find((log) => log.name === 'companion.log')!.events[0]).toMatchObject({
         stage: 'obs_program_check',
