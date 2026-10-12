@@ -347,6 +347,8 @@ test('map-pool saving reaches the real tournament service', async ({ page, conte
     await page.reload();
     await expect(train).toBeChecked();
   } finally {
+    await page.close();
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
