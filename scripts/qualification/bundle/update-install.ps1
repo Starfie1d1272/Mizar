@@ -18,9 +18,6 @@ function Write-JsonAtomic($path, $value) {
 }
 # Optional qualification timing never changes the transaction's decision or order.
 function Measure-UpdatePhase([string]$Name, [scriptblock]$Operation) {
-  if (Test-UpdateCancellation) { throw 'update_cancelled_before_install' }
-  Update-WindowPhase $Name
-  Record-UpdateActivity $Name
   if ($env:MIZAR_MEASURE_UPDATE -ne '1') { & $Operation; return }
   $clock = [Diagnostics.Stopwatch]::StartNew()
   $status = 'failure'
@@ -175,6 +172,12 @@ public static class MizarUpdateWindow {
 function Update-WindowPhase([string]$phase) { if ($script:updateWindowAvailable) { [MizarUpdateWindow]::Phase($phase) } }
 function Test-UpdateCancellation { if ($script:updateWindowAvailable) { return [MizarUpdateWindow]::CancellationRequested }; return $false }
 function Start-UpdateMutation { if ($script:updateWindowAvailable) { return [MizarUpdateWindow]::BeginMutation() }; return $true }
+function Invoke-UpdatePhase([string]$Name, [scriptblock]$Operation) {
+  if (Test-UpdateCancellation) { throw 'update_cancelled_before_install' }
+  Update-WindowPhase $Name
+  Record-UpdateActivity $Name
+  Measure-UpdatePhase $Name $Operation
+}
 function Record-UpdateActivity([string]$phase, [string]$detail = '') {
   try {
     $text = $detail
@@ -410,22 +413,22 @@ try {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'update_host_exit_timeout' }
     Start-Sleep -Milliseconds 200
   }
-  Measure-UpdatePhase 'stopped-and-installer' {
+  Invoke-UpdatePhase 'stopped-and-installer' {
     Assert-Stopped
     Assert-Installer $plan (Join-Path $StageRoot 'Installer.exe')
   }
-  Measure-UpdatePhase 'previous-payload' { Assert-Payload $plan.bundleRoot $plan.previousContentDigest }
-  Measure-UpdatePhase 'reparse-and-registration' {
+  Invoke-UpdatePhase 'previous-payload' { Assert-Payload $plan.bundleRoot $plan.previousContentDigest }
+  Invoke-UpdatePhase 'reparse-and-registration' {
     if (Get-ChildItem -LiteralPath $plan.bundleRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
     Save-Registration
   }
-  Measure-UpdatePhase 'backup-copy' { Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse }
-  Measure-UpdatePhase 'backup-payload' { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest }
+  Invoke-UpdatePhase 'backup-copy' { Copy-Item -LiteralPath $plan.bundleRoot -Destination (Join-Path $StageRoot 'previous') -Recurse }
+  Invoke-UpdatePhase 'backup-payload' { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest }
   if (!(Start-UpdateMutation)) { throw 'update_cancelled_before_install' }
   Recovery-Registration $true
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'installing' }
   # Remove only the verified previous product files; preserve state and every untracked file.
-  Measure-UpdatePhase 'remove-previous-files' {
+  Invoke-UpdatePhase 'remove-previous-files' {
     foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'previous/resources/metadata/SHA256SUMS'))) {
       $name = $line.Substring(66)
       if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)|//|^state/') { throw 'update_payload_path_invalid' }
@@ -433,12 +436,12 @@ try {
       [MizarUpdateFiles]::Delete($file)
     }
   }
-  Measure-UpdatePhase 'nsis-install' {
+  Invoke-UpdatePhase 'nsis-install' {
     $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/D=' + $plan.bundleRoot)) -PassThru
     $installer.WaitForExit()
     if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
   }
-  Measure-UpdatePhase 'installed-payload' { Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha }
+  Invoke-UpdatePhase 'installed-payload' { Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha }
   if ($plan.coreArchiveSha256) {
     # Complete resources through the verified deployed App/SDK before committing.
     # Failure retains the existing program backup and enters the normal rollback.
