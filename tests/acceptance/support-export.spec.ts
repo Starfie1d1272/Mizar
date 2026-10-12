@@ -112,7 +112,26 @@ test('desktop save reports cancellation, failure and success, omitting private H
               token: 'secret',
             } as T;
           if (command === 'cs2_host_status')
-            return { found: true, managed: false, title: 'private' } as T;
+            return {
+              found: true,
+              managed: false,
+              title: 'private',
+              geometry: {
+                dpi: 120,
+                client: [100, 100, 1920, 1080],
+                target: [640, 0, 1920, 1080],
+                alignmentFailure: {
+                  stage: 'position',
+                  api: 'SetWindowPos',
+                  lastError: 5,
+                  target: 'game',
+                  path: 'private',
+                },
+                hostElevation: { elevated: false, lastError: null, user: 'private' },
+                title: 'private',
+                hwnd: 123,
+              },
+            } as T;
           if (command === 'save_support_bundle') {
             if (
               typeof args?.contents !== 'string' ||
@@ -142,10 +161,29 @@ test('desktop save reports cancellation, failure and success, omitting private H
   await button.click();
   await expect(page.getByRole('status').filter({ hasText: '诊断包已保存' })).toBeVisible();
   expect(payloads).toHaveLength(3);
+  expect(JSON.stringify(payloads)).not.toContain('private');
   expect(payloads[0]).toEqual({
     desktop: {
       gsi: { collectionStatus: 'available', installed: true, issueCodes: [], lastOperation: null },
-      cs2: { collectionStatus: 'available', found: true, managed: false },
+      cs2: {
+        collectionStatus: 'available',
+        found: true,
+        managed: false,
+        geometry: {
+          dpi: 120,
+          client: [100, 100, 1920, 1080],
+          target: [640, 0, 1920, 1080],
+          alignmentFailure: {
+            stage: 'position',
+            api: 'SetWindowPos',
+            lastError: 5,
+            target: 'game',
+          },
+          groupFailure: null,
+          hostElevation: { elevated: false, lastError: null },
+          gameElevation: null,
+        },
+      },
     },
   });
 });

@@ -62,6 +62,7 @@ export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
 }
 
 export interface WorkspaceExitStatus {
+  windowMessage?: string | null;
   busy: boolean;
   stage: 'checking' | 'production' | 'restoration' | 'presentation' | '';
   message: string | null;

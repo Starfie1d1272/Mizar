@@ -340,21 +340,28 @@ fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
 }
 
 #[tauri::command]
-fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> Result<(), String> {
+fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> Result<(), serde_json::Value> {
     let layout = state
         .tracker
         .lock()
-        .map_err(|_| "桌面窗口状态不可用。")?
+        .map_err(|_| serde_json::json!("桌面窗口状态不可用。"))?
         .restore_layout()
-        .ok_or_else(|| "无法读取显示器工作区。".to_string())?;
+        .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
     apply_layout(&app, layout);
     update_overlay(&app, &state);
-    let tracker = state.tracker.lock().map_err(|_| "桌面窗口状态不可用。")?;
+    let tracker = state.tracker.lock().map_err(|_| serde_json::json!("桌面窗口状态不可用。"))?;
     if tracker.window.is_none() {
-        return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
+        return Err(serde_json::json!("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"));
     }
     if !tracker.managed {
-        return Err("工作区已恢复，但 CS2 仍使用原来的游戏分辨率。请退出工作台后重新进入，让游戏按当前屏幕尺寸启动。".into());
+        return Err(if tracker.preserve_settings {
+            serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
+        } else {
+            match tracker.window_message() {
+                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
+                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
+            }
+        });
     }
     Ok(())
 }
@@ -426,7 +433,7 @@ fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
     match state.tracker.lock() {
         Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics() })
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() })
         }
         Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
     }
@@ -562,6 +569,14 @@ async fn start_managed_cs2(
     .map_err(|_| "CS2 启动未完成。".to_string())?
 }
 
+fn refresh_finished_window_feedback(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
+    if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+        // Failed/unknown restoration preserves feedback. SessionStore and the
+        // machine-wide process check, rather than panel visibility, own this fact.
+        let _ = tracker.finish_session_feedback(cs2);
+    }
+}
+
 #[tauri::command]
 async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -575,7 +590,9 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
                 cs2.confirm_game_stopped()?;
             }
             Ok(())
-        })
+        })?;
+        refresh_finished_window_feedback(&app, &cs2);
+        Ok(())
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
@@ -584,7 +601,8 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
     let state = app.state::<production_exit::WorkspaceExit>().status();
-    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message })
+    let window_message = app.state::<HostState>().tracker.lock().ok().and_then(|tracker| tracker.window_message());
+    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message, "windowMessage": window_message })
 }
 
 #[tauri::command]
@@ -644,6 +662,7 @@ async fn finish_workspace(
                 },
             )?;
         }
+        refresh_finished_window_feedback(&host, &cs2);
         feedback.stage("presentation");
         presentation?;
         present_production_inner(&host, false)
@@ -815,6 +834,7 @@ async fn finish_demo_test(
             return Err("Demo 试播状态已变化，请刷新后重试。".into());
         }
         cs2.finish()?;
+        refresh_finished_window_feedback(&host, &cs2);
         present_production_inner(&host, false)
     })
     .await
@@ -850,7 +870,9 @@ async fn restore_cs2_backup(
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(2);
-        cs2.restore_backup(confirm_steam_cancelled)
+        cs2.restore_backup(confirm_steam_cancelled)?;
+        refresh_finished_window_feedback(&app, &cs2);
+        Ok(())
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
@@ -1739,6 +1761,7 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
                             }
@@ -1768,22 +1791,22 @@ fn run_desktop(
                         .zip(host.get_webview_window("workspace-dock"))
                         .and_then(|(left, dock)| left.hwnd().ok().zip(dock.hwnd().ok()))
                         .map(|(left, dock)| [left.0 as isize, dock.0 as isize]);
+                    let mut group_outcome = None;
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
-                        if let Some(failure) = workspace_group::synchronize(
+                        let failure = workspace_group::synchronize(
                             &mut group, process.as_ref(), panels, &allowed,
-                        ) {
+                        );
+                        group_outcome = Some((group.restored, failure));
+                        if let Some(failure) = failure {
                             if let Some(process) = &process {
-                                host.state::<DesktopLog>().event(
-                                    "workspace_group_restore", "failure",
-                                    Some(&serde_json::json!({
-                                        "stage": failure.stage, "api": failure.api,
-                                        "lastError": failure.last_error,
-                                        "gamePid": process.pid, "created": process.created
-                                    }).to_string()),
-                                );
+                                let mut detail = failure.diagnostic();
+                                detail["gamePid"] = serde_json::json!(process.pid);
+                                detail["created"] = serde_json::json!(process.created);
+                                host.state::<DesktopLog>().event("workspace_group_restore", "failure", Some(&detail.to_string()));
                             }
                         }
                     }
+
                     // Cross-process CS2 calls stay off the Tauri main loop.
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
@@ -1801,12 +1824,23 @@ fn run_desktop(
                                 } else {
                                     tracker.tick()
                                 };
+                                if let Some(failure) = tracker.alignment_event() {
+                                    host.state::<DesktopLog>().event("cs2_window_alignment", "failure", Some(&failure.diagnostic().to_string()));
+                                }
                                 (layout, tracker.overlay_rect())
                             })
                             .unwrap_or((None, None))
                     } else {
                         (None, None)
                     };
+                    // Apply the outcome after discovery; discovering this same new game
+                    // must not erase a group failure observed earlier in this tick.
+                    if let Some((restored, failure)) = group_outcome {
+                        if let Ok(mut tracker) = worker_tracker.lock() {
+                            if restored { tracker.group_failure = None; }
+                            if let Some(failure) = failure { tracker.group_failure = Some(failure); }
+                        }
+                    }
                     let Ok(_dispatch) = setup_dispatch.lock() else {
                         break;
                     };

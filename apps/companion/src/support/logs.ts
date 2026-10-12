@@ -37,6 +37,7 @@ const stages = new Set([
   'workspace_left',
   'workspace_dock',
   'workspace_group_restore',
+  'cs2_window_alignment',
   'program_overlay',
   'content_protection',
   'tray',
@@ -199,8 +200,28 @@ function updateCauses(value: unknown, depth = 0): unknown[] {
 function windowRestoreDetail(value: string) {
   const detail = parse(value);
   return {
-    stage: choice(detail.stage, ['restore', 'restore_timeout', 'raise']),
-    api: choice(detail.api, ['ShowWindowAsync', 'SetWindowPos']),
+    stage: choice(detail.stage, [
+      'restore',
+      'restore_timeout',
+      'raise',
+      'measure',
+      'empty_client',
+      'minimized',
+      'dpi',
+      'frame',
+      'position',
+      'correction',
+      'client_mismatch',
+    ]),
+    target: choice(detail.target, ['left', 'dock', 'game', 'group']),
+    api: choice(detail.api, [
+      'ShowWindowAsync',
+      'SetWindowPos',
+      'GetClientRect',
+      'ClientToScreen',
+      'GetDpiForWindow',
+      'AdjustWindowRectExForDpi',
+    ]),
     lastError:
       typeof detail.lastError === 'number' &&
       Number.isInteger(detail.lastError) &&
@@ -382,8 +403,13 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       ? {}
       : spectator
         ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
-        : stage === 'workspace_group_restore' && typeof entry.detail === 'string'
-          ? { localDiagnostic: windowRestoreDetail(entry.detail) }
+        : ['workspace_group_restore', 'cs2_window_alignment'].includes(stage ?? '') &&
+            (typeof entry.detail === 'string' || typeof entry.error === 'string')
+          ? {
+              localDiagnostic: windowRestoreDetail(
+                typeof entry.error === 'string' ? entry.error : String(entry.detail),
+              ),
+            }
           : !update && !live && !demo && stage !== 'demo_test' && typeof entry.error === 'string'
             ? { localDiagnostic: boundDiagnostic(redactDiagnosticText(entry.error), 8 * 1024) }
             : !update &&

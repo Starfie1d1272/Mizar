@@ -43,6 +43,80 @@ const request = {
 };
 
 describe('support export', () => {
+  it('exports bounded window measurements and unknown permission reads without private identifiers', async () => {
+    const collector = vi
+      .spyOn(nativeObs, 'collectObsNativeEvidence')
+      .mockResolvedValue(
+        nativeObs.failedObsNativeEvidence(
+          new Error('native_evidence_not_part_of_window_projection_contract'),
+        ),
+      );
+    const app = buildApp();
+    const geometry = {
+      dpi: 144,
+      client: [200, 100, 1280, 720],
+      target: [480, 0, 1440, 810],
+      monitorBounds: [0, 0, 1920, 1080],
+      workArea: [0, 0, 1920, 1040],
+      alignmentRetries: 0,
+      preserveSettings: false,
+      fullscreenLayout: true,
+      alignmentFailure: { stage: 'position', api: 'SetWindowPos', lastError: 5, target: 'game' },
+      hostElevation: { elevated: false, lastError: null },
+      gameElevation: { elevated: null, lastError: 5 },
+    };
+    try {
+      const response = await app.inject({
+        ...request,
+        payload: {
+          desktop: {
+            cs2: { collectionStatus: 'available', found: true, managed: false, geometry },
+          },
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ snapshot: { cs2: unknown } }>().snapshot.cs2).toMatchObject({
+        found: true,
+        managed: false,
+        geometry,
+      });
+      const unknown = await app.inject({
+        ...request,
+        payload: { desktop: { cs2: { geometry: null } } },
+      });
+      expect(
+        unknown.json<{ snapshot: { cs2: { geometry: unknown } } }>().snapshot.cs2.geometry,
+      ).toBeNull();
+      for (const invalid of [
+        { dpi: 10001 },
+        { client: [0, 0, 1] },
+        { alignmentFailure: { api: 'private-command' } },
+      ]) {
+        const rejected = await app.inject({
+          ...request,
+          payload: { desktop: { cs2: { geometry: invalid } } },
+        });
+        expect(rejected.statusCode).toBe(400);
+        expect(rejected.body).not.toContain('private-path');
+      }
+      const scrubbed = await app.inject({
+        ...request,
+        payload: {
+          desktop: { cs2: { geometry: { hostElevation: { executable: 'private-path' } } } },
+        },
+      });
+      expect(scrubbed.statusCode).toBe(200);
+      expect(
+        scrubbed.json<{ snapshot: { cs2: { geometry: { hostElevation: unknown } } } }>().snapshot
+          .cs2.geometry.hostElevation,
+      ).toEqual({});
+      expect(scrubbed.body).not.toContain('private-path');
+    } finally {
+      await app.close();
+      collector.mockRestore();
+    }
+  });
+
   it('retains the ordinary bundle when optional native evidence fails', async () => {
     const collector = vi
       .spyOn(nativeObs, 'collectObsNativeEvidence')
@@ -735,10 +809,11 @@ describe('support export', () => {
         {
           stage: 'workspace_group_restore',
           result: 'failure',
-          detail: JSON.stringify({
+          error: JSON.stringify({
             stage: 'restore',
             api: 'ShowWindowAsync',
             lastError: 5,
+            target: 'game',
             gamePid: 1234,
             created: 'private-process-identity',
             path: 'C:\\Users\\private-user\\private-installation\\cs2.exe',
@@ -757,7 +832,7 @@ describe('support export', () => {
         .join('\n'),
     );
     const history = (await readSupportLogs(dir)).find((file) => file.name === 'desktop.1.ndjson')!;
-    expect(history.events.filter((event) => event.hasLocalError)).toHaveLength(2);
+    expect(history.events.filter((event) => event.hasLocalError)).toHaveLength(3);
     expect(JSON.stringify(history.events)).toContain('OS access denied');
     expect(JSON.stringify(history.events)).toContain('window not ready');
     const recovery = history.events.find((event) => event.stage === 'cs2_startup_recovery');
@@ -770,7 +845,7 @@ describe('support export', () => {
     expect(history.events.find((event) => event.stage === 'workspace_group_restore')).toMatchObject(
       {
         result: 'failure',
-        localDiagnostic: { stage: 'restore', api: 'ShowWindowAsync', lastError: 5 },
+        localDiagnostic: { stage: 'restore', api: 'ShowWindowAsync', lastError: 5, target: 'game' },
       },
     );
     expect(JSON.stringify(history.events)).not.toMatch(

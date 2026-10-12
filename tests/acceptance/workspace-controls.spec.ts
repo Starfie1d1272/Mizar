@@ -796,3 +796,63 @@ test('exit recovery requires explicit Steam cancellation confirmation and permit
   expect(requests).toEqual([{ confirmSteamCancelled: true }]);
   await expect(result).toHaveCount(0);
 });
+
+test('manual layout failure remains Host-owned through background recovery and an early recovery race', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const state = { windowMessage: null as string | null, mode: 'host' };
+    Object.assign(window, {
+      layoutOutcome: state,
+      __TAURI_INTERNALS__: {
+        invoke: (command: string) => {
+          if (command === 'cs2_config_status')
+            return Promise.resolve({ pending: true, running: true, phase: 'running' });
+          if (command === 'workspace_exit_status')
+            return Promise.resolve({
+              busy: false,
+              stage: '',
+              message: null,
+              windowMessage: state.windowMessage,
+            });
+          if (command === 'restore_layout') {
+            if (state.mode === 'transport')
+              return Promise.reject(new Error('桌面窗口状态不可用。'));
+            const message = 'CS2 窗口定位被系统拒绝，请核对权限后重试恢复布局。';
+            state.windowMessage = state.mode === 'recovered_before_response' ? null : message;
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri serializes Host-owned Result errors as JSON values.
+            return Promise.reject({ kind: 'window_control', message });
+          }
+          return Promise.resolve(null);
+        },
+      },
+    });
+  });
+  await page.goto('/workspace/dock');
+  const restore = page.getByRole('button', { name: '恢复布局', exact: true });
+  await restore.click();
+  await expect(page.getByRole('alert')).toContainText('核对权限');
+  await page.getByRole('button', { name: '窗口控制需要处理', exact: true }).focus();
+  await page.getByRole('button', { name: '窗口控制需要处理', exact: true }).press('Enter');
+  await expect(page.getByRole('dialog')).toContainText('核对权限');
+  await page.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await page.evaluate(() => {
+    (
+      window as unknown as { layoutOutcome: { windowMessage: string | null } }
+    ).layoutOutcome.windowMessage = null;
+  });
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '窗口控制需要处理', exact: true })).toHaveCount(0);
+  await page.evaluate(() => {
+    (window as unknown as { layoutOutcome: { mode: string } }).layoutOutcome.mode =
+      'recovered_before_response';
+  });
+  await restore.click();
+  await expect(restore).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => {
+    (window as unknown as { layoutOutcome: { mode: string } }).layoutOutcome.mode = 'transport';
+  });
+  await restore.click();
+  await expect(page.getByRole('alert')).toContainText('桌面窗口状态不可用');
+});
