@@ -8,6 +8,9 @@ public static class InstallerCapture {
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="SendMessageW")] public static extern IntPtr SetText(IntPtr hwnd,uint message,IntPtr unused,string text);
+ [DllImport("user32.dll",EntryPoint="SendMessageW")] public static extern IntPtr Click(IntPtr hwnd,uint message,IntPtr unused,IntPtr empty);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint processId);
 }
 '@
 $process=Start-Process -FilePath $Installer -PassThru
@@ -39,26 +42,31 @@ $names=@()
 try {
  $deadline=[DateTime]::UtcNow.AddSeconds(30)
  do {
-  $window=Window;$value=$null;$invoke=$null
+  $window=Window;$entry=$null;$button=$null
   if($window) {
    $editable=@()
    $tree=@()
    foreach($element in (Elements $window)) {
-    $pattern=$null
-    if($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern) -and !$pattern.Current.IsReadOnly) { $editable+=,$pattern }
+    # This hosted WinForms provider reports every control as Pane and exposes
+    # no UIA patterns. Use the real native EDIT/BUTTON controls, scoped to PID.
+    if($element.Current.ClassName -like 'WindowsForms10.EDIT.*') { $editable+=,$element }
     $tree += [ordered]@{name=$element.Current.Name;type=$element.Current.ControlType.ProgrammaticName;class=$element.Current.ClassName}
-    $pattern=$null
-    if($element.Current.Name -eq '安装' -and $element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { $invoke=$pattern }
+    if($element.Current.Name -eq '安装' -and $element.Current.ClassName -like 'WindowsForms10.BUTTON.*') { $button=$element }
    }
    $tree | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Evidence 'installer-controls.json') -Encoding UTF8
-   if($editable.Count -eq 1) { $value=$editable[0] }
+   if($editable.Count -eq 1) { $entry=$editable[0] }
   }
-  if(!$value -or !$invoke) { Start-Sleep -Milliseconds 100 }
- } while((!$value -or !$invoke) -and [DateTime]::UtcNow -lt $deadline)
- if(!$value -or !$invoke) { throw 'Actual installer editable destination/action unavailable' }
- $value.SetValue($Destination)
+  if(!$entry -or !$button) { Start-Sleep -Milliseconds 100 }
+ } while((!$entry -or !$button) -and [DateTime]::UtcNow -lt $deadline)
+ if(!$entry -or !$button) { throw 'Actual installer editable destination/action unavailable' }
+ foreach($control in @($entry,$button)) {
+  $owner=[uint32]0
+  [InstallerCapture]::GetWindowThreadProcessId([IntPtr]$control.Current.NativeWindowHandle,[ref]$owner) | Out-Null
+  if($owner -ne $process.Id) { throw 'Refusing control from another process' }
+ }
+ if([InstallerCapture]::SetText([IntPtr]$entry.Current.NativeWindowHandle,0x000C,[IntPtr]::Zero,$Destination).ToInt64() -eq 0) { throw 'Native edit rejected destination' }
  Capture 'published-installer-before.png'
- $invoke.Invoke()
+ [InstallerCapture]::Click([IntPtr]$button.Current.NativeWindowHandle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
  $deadline=[DateTime]::UtcNow.AddMinutes(12)
  $complete=$false
  do {
