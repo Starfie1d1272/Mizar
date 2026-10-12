@@ -36,8 +36,19 @@ while ($window -eq [IntPtr]::Zero) {
  Start-Sleep -Milliseconds 50
 }
 if (![UpdateWindowProbe]::IsWindowVisible($window)) { throw 'Update window is hidden' }
+function Invoke-Button($button) {
+ if ($null -eq $button -or $button.Current.ControlType -ne [Windows.Automation.ControlType]::Button -or !$button.Current.IsEnabled) { throw 'Expected an enabled native button' }
+ $patterns = @($button.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName })
+ @{ name=$button.Current.Name; controlType=$button.Current.ControlType.ProgrammaticName; patterns=$patterns } | ConvertTo-Json -Compress | Write-Output
+ $pattern = $null
+ if ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.InvokePattern]$pattern).Invoke(); return }
+ if ($button.TryGetCurrentPattern([Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.LegacyIAccessiblePattern]$pattern).DoDefaultAction(); return }
+ throw 'Native button has no supported invoke or accessibility action'
+}
 $element = [Windows.Automation.AutomationElement]::FromHandle($window)
-$condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'取消更新')
+$nameCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'取消更新')
+$buttonCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button)
+$condition = New-Object Windows.Automation.AndCondition($nameCondition,$buttonCondition)
 $cancel = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
 if ($Action -eq 'restore') { $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版'); $restore = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition); if ($null -eq $restore -or !$restore.Current.IsEnabled) { throw 'Verified recovery action is unavailable' } }
 if ($Action -eq 'backup-unavailable') {
@@ -67,8 +78,8 @@ $graphics = [Drawing.Graphics]::FromImage($bitmap)
 try { $graphics.CopyFromScreen($rectangle.Left,$rectangle.Top,0,0,$bitmap.Size); $bitmap.Save($OutputPath,[Drawing.Imaging.ImageFormat]::Png) }
 finally { $graphics.Dispose(); $bitmap.Dispose() }
 @{ realNativeWindow=$true; source='production update helper'; syntheticInstaller=$true; actualNSIS=$false; action=$Action; title=$title; names=$names } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($OutputPath+'.json') -Encoding UTF8
-if ($Action -eq 'cancel') { ([Windows.Automation.InvokePattern]$cancel.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke() }
-if ($Action -eq 'restore') { ([Windows.Automation.InvokePattern]$restore.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke() }
+if ($Action -eq 'cancel') { Invoke-Button $cancel }
+if ($Action -eq 'restore') { Invoke-Button $restore }
 if ($Action -eq 'close-completed') {
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  $deadline = [DateTime]::UtcNow.AddSeconds(5)
