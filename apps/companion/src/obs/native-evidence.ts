@@ -178,6 +178,8 @@ export function projectObsSavedCollection(value: unknown) {
 
 export interface ObsNativeLogEvent {
   readonly localTime: string;
+  readonly occurredAt?: string | null;
+  readonly operation?: string | null;
   readonly category: 'hook' | 'renderer' | 'window_capture';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
   readonly source: 'mizar_capture' | 'other_capture' | null;
@@ -189,6 +191,13 @@ export interface ObsNativeLogEvent {
     | 'process_open_failed'
     | 'hook_file_locked'
     | 'hook_file_update_failed'
+    | 'target_blacklisted'
+    | 'hook_file_missing'
+    | 'hook_file_load_failed'
+    | 'mutex_create_failed'
+    | 'mutex_open_failed'
+    | 'window_process_query_failed'
+    | 'hook_event_open_failed'
     | 'capture_failure'
     | 'renderer_failure'
     | null;
@@ -200,6 +209,63 @@ function nativeErrorCode(value: string | undefined): number | null {
   const code = value === undefined ? NaN : Number(value);
   return Number.isSafeInteger(code) && code >= -2147483648 && code <= 4294967295 ? code : null;
 }
+// Fixed OBS logger text carries operations and reasons; suffixes can contain private paths/body.
+const CAPTURE_FAILURE_OPERATIONS = [
+  ['Failed to create keepalive mutex', 'keepalive_mutex_create', 'mutex_create_failed'],
+  ['failed to open texture mutexes', 'texture_mutex_open', 'mutex_open_failed'],
+  [
+    'error acquiring, failed to get window thread/process ids',
+    'window_thread_process_ids',
+    'window_process_query_failed',
+  ],
+  ['error acquiring, failed to get window information', 'window_information', 'capture_failure'],
+  ['Failed to create inject helper process', 'inject_helper_create', 'capture_failure'],
+  ['Could not convert file name to wide string', 'hook_file_name_convert', 'capture_failure'],
+  ['init_hook_info: get_hook_info failed', 'hook_info_open', 'capture_failure'],
+  ['init_hook_info: failed to map data view', 'hook_info_map_view', 'capture_failure'],
+  [
+    'init_hook_info: shared texture capture unavailable',
+    'shared_texture_support',
+    'capture_failure',
+  ],
+  ['init_pipe: failed to start pipe', 'hook_pipe_start', 'capture_failure'],
+  ['hook_direct: could not convert string', 'hook_target_string_convert', 'capture_failure'],
+  ['hook_direct: could not make absolute path', 'hook_target_path_resolve', 'capture_failure'],
+  ['hook_direct: inject failed', 'hook_direct_inject', 'capture_failure'],
+  ...['restart', 'stop', 'init', 'ready', 'exit'].map(
+    (name) =>
+      [
+        `init_events: failed to get hook_${name} event`,
+        `hook_${name}_event_open`,
+        'hook_event_open_failed',
+      ] as const,
+  ),
+  ['init_capture_data: failed to open file mapping', 'capture_mapping_open', 'capture_failure'],
+  ['init_capture_data: failed to map data view', 'capture_mapping_view', 'capture_failure'],
+  [
+    'init_shmem_capture: failed to create extra texrender',
+    'shmem_extra_texrender_create',
+    'capture_failure',
+  ],
+  ['init_shmem_capture: failed to create texture', 'shmem_texture_create', 'capture_failure'],
+  [
+    'init_shtex_capture: failed to create extra texrender',
+    'shtex_extra_texrender_create',
+    'capture_failure',
+  ],
+  [
+    'init_shtex_capture: failed to create extra texture',
+    'shtex_extra_texture_create',
+    'capture_failure',
+  ],
+  [
+    'init_shtex_capture: failed to open shared handle',
+    'shtex_shared_handle_open',
+    'capture_failure',
+  ],
+  ['init_capture_data failed', 'capture_data_initialize', 'capture_failure'],
+] as const;
+
 export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
@@ -261,6 +327,33 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   )
     outcome = 'failure';
   else return null;
+  const fixed = capture
+    ? CAPTURE_FAILURE_OPERATIONS.find(([prefix]) => {
+        if (!text.toLowerCase().startsWith(prefix.toLowerCase())) return false;
+        return /^(?:$|[:.\s])/.test(text.slice(prefix.length));
+      })
+    : undefined;
+  const blacklist = /^cannot capture .+ due to being blacklisted$/i.test(text);
+  const missingFile = /^Game capture (?:file )?.+ not found\.?$/i.test(text);
+  const loadFile = /^Game capture file .+ could not be loaded(?:[.:]|$)/i.test(text);
+  const operation = attempt
+    ? 'process_hook_attempt'
+    : openFailure
+      ? 'process_open'
+      : updateFailure
+        ? 'hook_file_update'
+        : blacklist
+          ? 'capture_target_policy'
+          : missingFile
+            ? 'hook_file_lookup'
+            : loadFile
+              ? 'hook_file_load'
+              : (fixed?.[1] ??
+                (helperFailure
+                  ? 'inject_helper_exit'
+                  : versionFailure
+                    ? 'hook_version_check'
+                    : null));
   let message: string;
   if (attempt)
     message = `attempting to hook process: ${target(attempt[1]) === 'cs2.exe' ? 'cs2.exe' : '[other executable]'}`;
@@ -270,22 +363,24 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     message = redactObsNativeText(
       `${text.startsWith('hook_direct:') ? 'hook_direct: ' : ''}could not open process: ${openFailure[1]}${openFailure[2] ? ` (${openFailure[2]})` : ''}`,
     );
-  else if (outcome === 'failure') {
-    // Preserve known logger names and numeric fields, never arbitrary failure suffixes.
-    const operation =
-      /^(hook_direct|hook|init_events|init_capture_data|init_hook_info|init_pipe|init_shmem_capture|init_shtex_capture|device_texture_create|gs_vertexbuffer_flush)(?=[:\s])/i.exec(
-        text,
-      )?.[1];
-    const numeric = /[:(]\s*(-?\d{1,11})/.exec(text)?.[1];
-    message = `${operation ?? (!capture ? 'renderer' : 'capture')} failure`;
-    if (helperFailure) message += `; inject helper exit: ${helperFailure[1]}`;
+  else if (blacklist) message = 'cannot capture [executable] due to being blacklisted';
+  else if (missingFile) message = 'Game capture [hook file] not found.';
+  else if (loadFile) message = 'Game capture [hook file] could not be loaded.';
+  else if (fixed) {
+    message = fixed[0];
+    const numeric = /^:\s*(-?\d{1,11})(?=[.\s]|$)/.exec(text.slice(fixed[0].length))?.[1];
+    if (numeric) message += `: ${numeric}`;
+  } else if (outcome === 'failure') {
+    const logger = /^(device_texture_create|gs_vertexbuffer_flush)(?=[:\s])/i.exec(text)?.[1];
+    message = `${logger ?? (!capture ? 'renderer' : 'capture')} failure`;
+    if (helperFailure) message = `inject process failed: ${helperFailure[1]}`;
     else if (versionFailure)
-      message += `; hook DLL ${versionFailure[1]}, plugin ${versionFailure[2]}`;
+      message = `cannot initialize hook, DLL hook version is ${versionFailure[1]}, current plugin hook major version is ${versionFailure[2]}`;
     else if (codeHex) message += `; HRESULT ${codeHex}`;
-    else if (numeric) message += `; reported numeric field: ${numeric}`;
   } else message = redactObsNativeText(text);
   return {
     localTime: stamp[1]!,
+    operation,
     category:
       hook || updateFailure || globalSuccess ? 'hook' : capture ? 'window_capture' : 'renderer',
     outcome,
@@ -298,15 +393,23 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
           ? nativeErrorCode(updateFailure[1]) === 32
             ? 'hook_file_locked'
             : 'hook_file_update_failed'
-          : openFailure
-            ? 'process_open_failed'
-            : helperFailure
-              ? 'inject_helper_failed'
-              : versionFailure
-                ? 'hook_version_incompatible'
-                : !capture
-                  ? 'renderer_failure'
-                  : 'capture_failure',
+          : blacklist
+            ? 'target_blacklisted'
+            : missingFile
+              ? 'hook_file_missing'
+              : loadFile
+                ? 'hook_file_load_failed'
+                : fixed
+                  ? fixed[2]
+                  : openFailure
+                    ? 'process_open_failed'
+                    : helperFailure
+                      ? 'inject_helper_failed'
+                      : versionFailure
+                        ? 'hook_version_incompatible'
+                        : !capture
+                          ? 'renderer_failure'
+                          : 'capture_failure',
     codeHex,
     code: codeHex
       ? Number.parseInt(codeHex.slice(2), 16)
@@ -327,6 +430,7 @@ interface LogEvidence {
   slot: number;
   modifiedAt: string;
   sessionStartedAt: string;
+  timestampStatus?: 'ordered' | 'uncertain';
   processAssociation: 'time_correlated' | 'unverified';
   processPid: number | null;
   obsVersion: string | null;
@@ -765,6 +869,40 @@ export async function collectObsNativeEvidence(
           log.failureCounts = {};
           log.latestCaptureEvent = null;
           log.latestCaptureFailure = null;
+          const clockDate = new Date(sessionDate);
+          let previousClock =
+            sessionDate.getHours() * 3600000 +
+            sessionDate.getMinutes() * 60000 +
+            sessionDate.getSeconds() * 1000;
+          let chronologyKnown = true;
+          const lineDate = (line: string) => {
+            const stamp = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?:/.exec(line);
+            if (!stamp) return null;
+            const hour = Number(stamp[1]),
+              minute = Number(stamp[2]),
+              second = Number(stamp[3]),
+              millis = Number((stamp[4] ?? '').padEnd(3, '0'));
+            if (hour > 23 || minute > 59 || second > 59) {
+              chronologyKnown = false;
+              return null;
+            }
+            const clock = hour * 3600000 + minute * 60000 + second * 1000 + millis;
+            if (clock < previousClock - 1000) {
+              if (previousClock >= 20 * 3600000 && clock <= 4 * 3600000)
+                clockDate.setDate(clockDate.getDate() + 1);
+              else chronologyKnown = false;
+            }
+            previousClock = clock;
+            clockDate.setHours(hour, minute, second, millis);
+            if (clockDate.getHours() !== hour || clockDate.getMinutes() !== minute)
+              chronologyKnown = false;
+            if (
+              clockDate.getTime() < sessionDate.getTime() - 1000 ||
+              clockDate.getTime() > tail.mtime + 60000
+            )
+              chronologyKnown = false;
+            return chronologyKnown ? clockDate.toISOString() : null;
+          };
           const scan = await read(
             root,
             ['logs', name],
@@ -772,14 +910,16 @@ export async function collectObsNativeEvidence(
             false,
             true,
             (line) => {
-              const event = projectObsNativeLogLine(line);
+              const occurredAt = lineDate(line);
+              const parsed = projectObsNativeLogLine(line);
+              const event = parsed ? { ...parsed, occurredAt } : null;
               if (!event) {
                 log.omittedLines++;
                 return;
               }
               eventCount++;
               if (event.outcome === 'failure') {
-                const key = `${event.reason}:${event.code}:${event.source}:${event.target}`;
+                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}`;
                 if (Object.keys(log.failureCounts!).length < 64 || key in log.failureCounts!)
                   log.failureCounts![key] = (log.failureCounts![key] ?? 0) + 1;
                 failures.delete(key);
@@ -796,6 +936,7 @@ export async function collectObsNativeEvidence(
               ) {
                 log.latestCaptureEvent = event;
                 if (event.outcome === 'failure') log.latestCaptureFailure = event;
+                else if (event.outcome === 'success') log.latestCaptureFailure = null;
               }
               log.events.push(event);
               if (log.events.length > OBS_NATIVE_LIMITS.eventsPerLog) log.events.shift();
@@ -817,6 +958,7 @@ export async function collectObsNativeEvidence(
               }
             },
           );
+          log.timestampStatus = chronologyKnown ? 'ordered' : 'uncertain';
           const protectedEvents = [...failures.values()];
           const recent = log.events
             .filter((e) => !protectedEvents.includes(e))

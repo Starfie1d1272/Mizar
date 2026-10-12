@@ -279,7 +279,7 @@ export function registerSupportRoutes(
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
             'nativeObs 只读取本机 OBS 配置、近期日志和进程元数据；配置来自已保存文件，不等同于当前节目画面。日志成功不证明当前画面正常，进程时间关联不证明实际 hook PID；缺失或未知均不能判为黑屏根因。',
-            'OBS 摘要保留分类故障与最新状态，附件包含扫描范围内全部允许的技术事件，不含原始私人正文；scan 标明读取字节和缺失范围，附件 omittedEvents 与时间范围标明附件限额遗漏。',
+            'OBS 摘要保留分类故障与最新状态，附件包含扫描范围内全部允许的技术事件与固定操作原因，不是完整 OBS 原日志，不含原始私人正文；scan 标明读取字节和缺失范围，附件 omittedEvents 与时间范围标明附件限额遗漏。',
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {

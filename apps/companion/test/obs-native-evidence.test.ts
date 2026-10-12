@@ -141,6 +141,35 @@ describe('OBS native evidence', () => {
     expect(
       projectObsNativeLogLine('12:29:59.000: d3d11 shared texture capture successful'),
     ).toMatchObject({ outcome: 'success', category: 'hook' });
+    for (const [text, operation, reason] of [
+      [
+        'cannot capture private.exe due to being blacklisted',
+        'capture_target_policy',
+        'target_blacklisted',
+      ],
+      ['Failed to create keepalive mutex: 5', 'keepalive_mutex_create', 'mutex_create_failed'],
+      [
+        "Game capture file 'private.dll' could not be loaded: 5.",
+        'hook_file_load',
+        'hook_file_load_failed',
+      ],
+      [
+        'error acquiring, failed to get window thread/process ids: 5',
+        'window_thread_process_ids',
+        'window_process_query_failed',
+      ],
+      [
+        'init_events: failed to get hook_ready event: 5',
+        'hook_ready_event_open',
+        'hook_event_open_failed',
+      ],
+      [
+        'init_events: failed to get hook_stop event: 5',
+        'hook_stop_event_open',
+        'hook_event_open_failed',
+      ],
+    ] as const)
+      expect(line(text)).toMatchObject({ operation, reason });
   });
   it('clears current alarms after capture succeeds, retains history, and shares repeated read-only checks', async () => {
     const { appData, root } = await fixture();
@@ -176,6 +205,23 @@ describe('OBS native evidence', () => {
       reason: null,
       lastFailure: null,
     });
+    await writeFile(
+      file,
+      failure +
+        '12:29:58.100: update_hook_file: failed to update C:\\ProgramData\\obs-studio-hook\\graphics-hook64.dll (32)\n' +
+        `12:29:58.500: [game-capture: '${OBS_CAPTURE_INPUT}'] shared texture capture successful\n` +
+        `12:29:59.000: [game-capture: '${OBS_CAPTURE_INPUT}'] hook not loaded yet, retrying..\n`,
+    );
+    await utimes(file, new Date(now), new Date(now));
+    const pendingAgain = await collect();
+    expect(projectObsCaptureDiagnostic(pendingAgain, now)).toMatchObject({
+      state: 'needs_attention',
+      reason: 'hook_pending',
+      lastFailure: null,
+    });
+    expect(
+      pendingAgain.roots[0]!.logs[0]!.events.some((event) => event.reason === 'hook_file_locked'),
+    ).toBe(true);
     expect(
       projectObsCaptureDiagnostic({ ...recovered, collectionStatus: 'timeout' }, now),
     ).toMatchObject({ state: 'unknown' });
@@ -189,6 +235,48 @@ describe('OBS native evidence', () => {
     expect(read).toHaveBeenCalledTimes(1);
     await reader(true);
     expect(read).toHaveBeenCalledTimes(2);
+  });
+  it('dates overnight events from the session and log order instead of assigning old failures the file modification date', async () => {
+    const { appData, root } = await fixture();
+    const start = new Date(2026, 9, 11, 0, 0, 0);
+    const now = new Date(2026, 9, 12, 0, 0, 20).getTime();
+    const file = join(root, 'logs', '2026-10-11 00-00-00.txt');
+    const history = `00:00:05.000: [game-capture: '${OBS_CAPTURE_INPUT}'] could not open process: cs2.exe (5)\n23:59:59.000: normal polling\n00:00:15.000: normal polling\n`;
+    const collect = () =>
+      collectObsNativeEvidence({
+        platform: 'win32',
+        appData,
+        now: () => now,
+        readProcesses: () =>
+          Promise.resolve(
+            parseObsNativeProcesses(
+              JSON.stringify([{ role: 'obs', pid: 42, startedAt: start.toISOString() }]),
+            ),
+          ),
+      });
+    await writeFile(file, history);
+    await utimes(file, new Date(now), new Date(now));
+    const old = await collect();
+    expect(old.roots[0]!.logs[0]!.latestCaptureEvent?.occurredAt).toBe(
+      new Date(2026, 9, 11, 0, 0, 5).toISOString(),
+    );
+    expect(projectObsCaptureDiagnostic(old, now).state).toBe('unknown');
+    await writeFile(
+      file,
+      history +
+        `00:00:19.000: [game-capture: '${OBS_CAPTURE_INPUT}'] could not open process: cs2.exe (5)\n`,
+    );
+    await utimes(file, new Date(now), new Date(now));
+    expect(projectObsCaptureDiagnostic(await collect(), now)).toMatchObject({
+      state: 'needs_attention',
+      reason: 'access_denied',
+    });
+    await writeFile(
+      file,
+      `03:00:00.000: normal polling\n02:00:00.000: [game-capture: '${OBS_CAPTURE_INPUT}'] could not open process: cs2.exe (5)\n`,
+    );
+    await utimes(file, new Date(now), new Date(now));
+    expect(projectObsCaptureDiagnostic(await collect(), now).state).toBe('unknown');
   });
   it('reports bounded scan and attachment omissions separately without retaining arbitrary failure bodies', async () => {
     const { appData, root } = await fixture();
@@ -306,6 +394,8 @@ describe('OBS native evidence', () => {
         category: sample.category,
         outcome: sample.outcome,
       });
+      expect(event?.operation, sample.text).toBeTruthy();
+      expect(event?.message, sample.text).not.toMatch(/^capture failure/);
       expect(JSON.stringify(event)).not.toContain('private');
     }
     expect(
@@ -456,8 +546,8 @@ describe('OBS native evidence', () => {
     expect(result.roots[0]?.logs.every((log) => log.obsVersion === '31.1.2' && log.truncated)).toBe(
       true,
     );
-    // Arbitrary suffixes are omitted; summary thinning is distinct from the final byte budget.
-    expect(result.exportTruncated).toBe(false);
+    // Detailed technical operations remain bounded by the final summary byte budget.
+    expect(result.exportTruncated).toBe(true);
     expect(result.roots[0]!.logs[0]!.scan!.reasons).toContain('summary_event_limit');
     expect(Buffer.byteLength(JSON.stringify(result, null, 2))).toBeLessThanOrEqual(
       OBS_NATIVE_LIMITS.exportBytes,

@@ -29,7 +29,14 @@ export function ObsCaptureGuidance({
       <StatusBanner tone="warning">{message}</StatusBanner>
       <details className="obs-setup__help">
         <summary>处理捕获问题</summary>
-        {locked ? (
+        {diagnostic.reason === 'access_denied' ? (
+          <p>
+            打开 Windows「任务管理器 → 详细信息」，右键列标题，在「选择列」中勾选「已提升」，核对
+            obs64.exe 与 cs2.exe。若 CS2 已提升而 OBS 未提升，先保存工作并停止输出，正常退出
+            OBS，再由你手动选择「以管理员身份运行」并重新检测；Mizar
+            不会自动提权。权限一致仍失败时导出诊断包，继续核对具体拒绝原因。
+          </p>
+        ) : locked ? (
           <p>
             最近日志报告捕获文件被占用，占用程序未知。保存工作，正常退出可能使用捕获功能的程序，再正常退出并重开
             OBS。

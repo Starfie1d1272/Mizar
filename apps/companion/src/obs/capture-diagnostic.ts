@@ -36,18 +36,16 @@ export function projectObsCaptureDiagnostic(
   if (logs.length !== 1) return unknown;
   const log = logs[0]!;
   if (
+    log.timestampStatus !== 'ordered' ||
     log.scan?.missingByteRange ||
     log.scan?.reasons.includes('oversized_lines') ||
     !log.latestCaptureEvent
   )
     return unknown;
   const event = log.latestCaptureEvent;
-  const eventDate = new Date(log.modifiedAt);
-  const [hh, mm, ss] = event.localTime.split(':').map(Number);
-  eventDate.setHours(hh!, mm, ss, 0);
-  if (eventDate.getTime() > Date.parse(log.modifiedAt) + 60000)
-    eventDate.setDate(eventDate.getDate() - 1);
-  if (now - eventDate.getTime() > 30000 || eventDate.getTime() > now + 60000) return unknown;
+  const eventTime = event.occurredAt ? Date.parse(event.occurredAt) : NaN;
+  if (!Number.isFinite(eventTime) || now - eventTime > 30000 || eventTime > now + 60000)
+    return unknown;
   const lastFailure = log.latestCaptureFailure;
   if (event.outcome === 'success')
     return event.source === 'mizar_capture' ? { ...unknown, state: 'reported_success' } : unknown;
@@ -67,10 +65,23 @@ export function createObsCaptureDiagnosticReader(
   now = Date.now,
 ) {
   let pending: Promise<ObsCaptureDiagnostic> | null = null;
+  let refreshPending: Promise<ObsCaptureDiagnostic> | null = null;
   let cached: ObsCaptureDiagnostic | null = null;
   let expires = 0;
-  return (refresh = false) => {
-    if (!refresh && cached && now() < expires) return Promise.resolve(cached);
+  const read = (refresh = false): Promise<ObsCaptureDiagnostic> => {
+    if (refresh) {
+      // A manual recheck must read after any earlier poll, not consume its older snapshot.
+      refreshPending ??= (pending ?? Promise.resolve())
+        .then(() => {
+          expires = 0;
+          return read();
+        })
+        .finally(() => {
+          refreshPending = null;
+        });
+      return refreshPending;
+    }
+    if (cached && now() < expires) return Promise.resolve(cached);
     pending ??= collect({ budgetMs: 3500 })
       .then((e) => projectObsCaptureDiagnostic(e, now()))
       .catch(
@@ -93,4 +104,5 @@ export function createObsCaptureDiagnosticReader(
       });
     return pending;
   };
+  return read;
 }
