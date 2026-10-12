@@ -20,7 +20,7 @@ function ps(args) {
   child.stderr.on('data', (b) => { stderr += b; });
   return new Promise((done, reject) => { child.on('error', reject); child.on('close', (code) => done({ code, stdout, stderr })); });
 }
-const pristine = await ps(['-Command', "if ((Get-Process -Name Mizar -ErrorAction SilentlyContinue) -or (Test-Path 'HKCU:\\Software\\Mizar') -or (Test-Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar')) { exit 1 }"]);
+const pristine = await ps(['-Command', "if ((Get-Process -Name Mizar -ErrorAction SilentlyContinue) -or (Test-Path 'HKCU:\Software\Mizar') -or (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar')) { exit 1 }"]);
 assert.equal(pristine.code, 0, 'Disposable runner must have no existing Mizar');
 const oldScript = execFileSync('git', ['show', 'v1.3.0:scripts/qualification/bundle/update-install.ps1'], { encoding: 'utf8' });
 const script = join(root, 'original-update-install.ps1');
