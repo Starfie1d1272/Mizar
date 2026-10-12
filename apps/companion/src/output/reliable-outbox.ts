@@ -185,6 +185,7 @@ export function outboxLocalError(error: unknown, depth = 0): unknown {
   const code = (error as NodeJS.ErrnoException).code;
   return {
     type: error.name,
+    name: error.name,
     message: error.message,
     stack: error.stack,
     ...(code === undefined ? {} : { code }),
