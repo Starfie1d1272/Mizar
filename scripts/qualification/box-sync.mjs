@@ -846,17 +846,10 @@ export async function syncStableRelease({
       await syncOffline({ box, ...offline });
       return syncStable({ box, identity, bytes, resolveIdentity });
     }
-    const stable = await box.list('/Stable');
-    // First migration touches the legacy root; retain its ordered rollback contract.
-    if (stable.some((e) => bootstrapPattern.test(e.name))) {
-      const result = await syncStable({ box, identity, bytes, resolveIdentity });
-      await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
-      return result;
-    }
-    const [result] = await settle([
-      syncStable({ box, identity, bytes, resolveIdentity }),
-      syncUserDownloads({ box, offline, bootstrap, resolveIdentity }),
-    ]);
+    // Both operations read Stable. Finish Full verification and archival before
+    // mutating its user Downloads, including the existing legacy migration path.
+    const result = await syncStable({ box, identity, bytes, resolveIdentity });
+    await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
     return result;
   };
   const [, , result] = await settle([

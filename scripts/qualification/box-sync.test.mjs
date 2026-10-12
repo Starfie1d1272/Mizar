@@ -716,6 +716,137 @@ describe('independent mirror transports before one final publication boundary', 
       updateIndex: Buffer.from('already authenticated new pointer fixture'),
     };
   }
+  function userTransports(box) {
+    const options = transports(box);
+    const identity = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
+    return {
+      ...options,
+      bootstrap: { identity, bytes: identity.bytes, resolveIdentity: async () => undefined },
+    };
+  }
+  async function withAnonymousDownloads(options, check) {
+    vi.stubGlobal('fetch', async (url) => {
+      const files = [options.bootstrap.identity, options.offline.identity];
+      if (new URL(url).pathname.includes('dirents'))
+        return new Response(
+          JSON.stringify({
+            dir_path: '/Stable/Downloads/',
+            dirent_list: files.map((file) => ({
+              is_dir: false,
+              file_name: file.name,
+              file_path: '/Downloads/' + file.name,
+              size: file.size,
+            })),
+          }),
+        );
+      const file = new URL(url).searchParams.get('p').endsWith('.zip')
+        ? options.offline
+        : options.bootstrap;
+      return new Response(file.bytes, { headers: { 'content-length': String(file.bytes.length) } });
+    });
+    vi.resetModules();
+    try {
+      const { syncStableRelease: sync } = await import('./box-sync.mjs');
+      await check(sync);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  }
+  it('finishes Stable verification before user Downloads while independent transports remain concurrent', async () => {
+    const oldIndex = Buffer.from('old pointer');
+    const box = fakeBox({
+      ['/Stable/Downloads/' + offlinePrevious.name]: offlinePrevious.bytes,
+      '/Updates/latest.json': oldIndex,
+    });
+    const options = userTransports(box);
+    const upload = box.upload,
+      hash = box.hash;
+    const listed = vi.spyOn(box, 'list');
+    let releaseStable,
+      releaseIndependent,
+      stableReadStarted = false;
+    const stableGate = new Promise((resolve) => {
+      releaseStable = resolve;
+    });
+    const independentGate = new Promise((resolve) => {
+      releaseIndependent = resolve;
+    });
+    const started = new Set();
+    box.upload = async (folder, ...args) => {
+      started.add(folder.split('/')[1]);
+      if (folder.startsWith('/Runtime/') || folder.startsWith('/Resources/')) await independentGate;
+      return upload.call(box, folder, ...args);
+    };
+    box.hash = async (path) => {
+      if (path === '/Stable/' + next.name && !stableReadStarted) {
+        stableReadStarted = true;
+        await stableGate;
+      }
+      return hash.call(box, path);
+    };
+    const readback = vi.spyOn(box, 'hash');
+    await withAnonymousDownloads(options, async (sync) => {
+      const task = sync(options);
+      try {
+        await vi.waitFor(() => expect(stableReadStarted).toBe(true));
+        await new Promise((resolve) => globalThis.setImmediate(resolve));
+        expect([...started].sort()).toEqual(['Resources', 'Runtime', 'Stable']);
+        expect(listed.mock.calls.some(([folder]) => folder === '/Stable/Downloads')).toBe(false);
+        expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+        releaseStable();
+        await vi.waitFor(() =>
+          expect(box.stored.has('/Stable/Downloads/' + options.offline.identity.name)).toBe(true),
+        );
+        expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+      } finally {
+        releaseStable();
+        releaseIndependent();
+        await task;
+      }
+    });
+    expect(box.stored.get('/Updates/latest.json')).toEqual(options.updateIndex);
+    for (const path of [
+      '/Stable/' + next.name,
+      '/Stable/Downloads/' + options.offline.identity.name,
+      '/Stable/Downloads/' + options.bootstrap.identity.name,
+      ...options.runtime.map((file) => '/Runtime/v1.0.1/' + file.name),
+      ...options.resources.map((file) => '/Resources/v1.0.1/' + file.name),
+    ])
+      expect(readback.mock.calls.filter(([read]) => read === path)).toHaveLength(2);
+  });
+  it.each(['Stable', 'Downloads'])(
+    'keeps the pointer unchanged after %s verification fails',
+    async (stage) => {
+      const oldIndex = Buffer.from('old pointer');
+      const box = fakeBox({
+        ['/Stable/Downloads/' + offlinePrevious.name]: offlinePrevious.bytes,
+        '/Updates/latest.json': oldIndex,
+      });
+      const options = userTransports(box),
+        hash = box.hash;
+      const listed = vi.spyOn(box, 'list');
+      const target =
+        stage === 'Stable'
+          ? '/Stable/' + next.name
+          : '/Stable/Downloads/' + options.offline.identity.name;
+      box.hash = async (path) => {
+        if (path === target) throw Error(stage + ' readback timeout');
+        return hash.call(box, path);
+      };
+      await withAnonymousDownloads(options, async (sync) => {
+        await expect(sync(options)).rejects.toThrow(stage + ' readback timeout');
+      });
+      expect(box.stored.get('/Updates/latest.json')).toEqual(oldIndex);
+      expect(box.stored.get('/Stable/Downloads/' + offlinePrevious.name)).toEqual(
+        offlinePrevious.bytes,
+      );
+      if (stage === 'Stable')
+        expect(listed.mock.calls.some(([folder]) => folder === '/Stable/Downloads')).toBe(false);
+      for (const file of options.runtime)
+        expect(box.stored.get('/Runtime/v1.0.1/' + file.name)).toEqual(file.bytes);
+    },
+  );
   it('archives distinct package kinds safely after concurrent Archive snapshots without creating the shared directory', async () => {
     const oldBootstrap = { ...previous, name: 'Mizar-v1.0.0-Windows-x64-WebInstaller.exe' };
     const bootstrap = { ...next, name: 'Mizar-v1.0.1-Windows-x64-WebInstaller.exe' };
