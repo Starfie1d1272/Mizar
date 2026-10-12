@@ -42,6 +42,7 @@ async function run(args, overrides = {}) {
   });
   child.stderr.on('data', (b) => {
     errors += b;
+    if (overrides.MIZAR_UPDATE_TEST_UI === '1') process.stderr.write(safeLogText(b.toString()));
   });
   const code = await new Promise((done, reject) => {
     child.on('error', reject);
@@ -109,11 +110,13 @@ async function installWithHost(binaryPath, stage, env = {}) {
       assert(Date.now() < deadline && !settled, 'Install PowerShell did not become ready');
       await new Promise((done) => setTimeout(done, 50));
     }
+    console.log('Native update: awaiting helper handoff');
     const acknowledged = await run([
       '-Command',
       `$event = [Threading.EventWaitHandle]::OpenExisting(${literal(readyEvent)}); try { if (!$event.WaitOne(10000)) { exit 1 } } finally { $event.Dispose() }`,
     ]);
     assert.equal(acknowledged.code, 0, acknowledged.errors);
+    console.log('Native update: helper acknowledged');
     const desktopBlocked = await run([
       '-Command',
       `$created = $false; $mutex = New-Object Threading.Mutex($false, 'Global\\MizarDesktop', [ref]$created); try { if ($created) { exit 1 }; $active = [Threading.EventWaitHandle]::OpenExisting('Global\\MizarUpdateActive'); $active.Dispose() } finally { $mutex.Dispose() }`,
@@ -130,9 +133,11 @@ async function installWithHost(binaryPath, stage, env = {}) {
       const cancelled = await windowProbe(stage, 'cancel', 'waiting-cancel');
       assert.equal(cancelled.code, 0, cancelled.errors);
     }
+    console.log('Native update: releasing original Host');
     host.stdin.end('exit\n');
     assert.equal(await exited, 0, 'Host exits normally, without killing a writer');
     if (env.MIZAR_UPDATE_TEST_HOLD === '1') {
+      console.log('Native update: awaiting controlled installer');
       const writerReady = join(stage, 'writer-ready.txt');
       for (let count = 0; !(await readFile(writerReady, 'utf8').catch(() => '')); count++) {
         assert(
@@ -200,10 +205,26 @@ async function installWithHost(binaryPath, stage, env = {}) {
       assert.equal(await readFile(env.MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE, 'utf8'), 'allowed');
     }
     return result;
+  } catch (error) {
+    console.error('Native update original failure before cleanup:', error);
+    for (const file of ['journal.json', 'update-activity.ndjson']) {
+      const text = await readFile(join(stage, file), 'utf8').catch(() => '[unavailable]');
+      console.error(file, safeLogText(text.slice(-8192)));
+    }
+    throw error;
   } finally {
     host.stdin.end();
     await exited;
-    await installation; // Even a failed assertion must leave no update writer running.
+    // Release only this fixture's scheduling gates; never stop a production writer.
+    await writeFile(join(stage, 'writer-release.txt'), 'release');
+    if (installation && !settled && env.MIZAR_UPDATE_TEST_UI === '1') {
+      const close = await windowProbe(stage, 'close-completed', 'cleanup-result').catch(
+        (error) => ({ code: 1, errors: String(error) }),
+      );
+      if (close.code !== 0)
+        console.error('Native cleanup could not close a terminal window:', close.errors);
+    }
+    await installation;
   }
 }
 async function payload(path, version, binary) {
@@ -435,6 +456,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     };
     const planPath = join(area, 'plan.json');
     await writeFile(planPath, JSON.stringify(plan));
+    console.log(`Native recovery ${scenario}: preparing`);
     const prepared = await run(['-File', script, '-Mode', 'Prepare', '-PlanPath', planPath]);
     assert.equal(prepared.code, 0, prepared.errors);
     const stage = JSON.parse(prepared.output).stageRoot;

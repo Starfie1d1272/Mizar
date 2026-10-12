@@ -2206,8 +2206,9 @@ fn main() {
                 Err(error) => format!("无法核对更新状态，暂未启动 Mizar：{error}"),
                 Ok(false) => unreachable!(),
             };
-            if !headless && !windows_startup::focus_update_window() {
-                failure_dialog(&message, None);
+            if !headless {
+                // Do not pin the product EXE in a duplicate-start dialog.
+                windows_startup::focus_update_window();
             }
             eprintln!("{message}");
             std::process::exit(1);
@@ -2238,9 +2239,8 @@ fn main() {
         Ok(Some(mutex)) => mutex,
         Ok(None) => {
             if matches!(windows_startup::update_in_progress(), Ok(true)) {
-                if !windows_startup::focus_update_window() {
-                    failure_dialog("Mizar 正在安装更新或恢复旧版，请等待完成后再启动。", None);
-                }
+                windows_startup::focus_update_window();
+                eprintln!("Mizar 正在安装更新或恢复旧版，请等待完成后再启动。");
             } else {
                 windows_startup::ActivationSignal::notify();
             }
