@@ -340,24 +340,27 @@ fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
 }
 
 #[tauri::command]
-fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> Result<(), String> {
+fn restore_layout(app: tauri::AppHandle, state: tauri::State<'_, HostState>) -> Result<(), serde_json::Value> {
     let layout = state
         .tracker
         .lock()
-        .map_err(|_| "桌面窗口状态不可用。")?
+        .map_err(|_| serde_json::json!("桌面窗口状态不可用。"))?
         .restore_layout()
-        .ok_or_else(|| "无法读取显示器工作区。".to_string())?;
+        .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
     apply_layout(&app, layout);
     update_overlay(&app, &state);
-    let tracker = state.tracker.lock().map_err(|_| "桌面窗口状态不可用。")?;
+    let tracker = state.tracker.lock().map_err(|_| serde_json::json!("桌面窗口状态不可用。"))?;
     if tracker.window.is_none() {
-        return Err("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。".into());
+        return Err(serde_json::json!("工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"));
     }
     if !tracker.managed {
         return Err(if tracker.preserve_settings {
-            "本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。".into()
+            serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
         } else {
-            tracker.window_message().unwrap_or_else(|| "工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。".into())
+            match tracker.window_message() {
+                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
+                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
+            }
         });
     }
     Ok(())
@@ -566,6 +569,14 @@ async fn start_managed_cs2(
     .map_err(|_| "CS2 启动未完成。".to_string())?
 }
 
+fn refresh_finished_window_feedback(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
+    if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+        // Failed/unknown restoration preserves feedback. SessionStore and the
+        // machine-wide process check, rather than panel visibility, own this fact.
+        let _ = tracker.finish_session_feedback(cs2);
+    }
+}
+
 #[tauri::command]
 async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -579,7 +590,9 @@ async fn finish_managed_cs2(app: tauri::AppHandle) -> Result<(), String> {
                 cs2.confirm_game_stopped()?;
             }
             Ok(())
-        })
+        })?;
+        refresh_finished_window_feedback(&app, &cs2);
+        Ok(())
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
@@ -649,6 +662,7 @@ async fn finish_workspace(
                 },
             )?;
         }
+        refresh_finished_window_feedback(&host, &cs2);
         feedback.stage("presentation");
         presentation?;
         present_production_inner(&host, false)
@@ -820,6 +834,7 @@ async fn finish_demo_test(
             return Err("Demo 试播状态已变化，请刷新后重试。".into());
         }
         cs2.finish()?;
+        refresh_finished_window_feedback(&host, &cs2);
         present_production_inner(&host, false)
     })
     .await
@@ -855,7 +870,9 @@ async fn restore_cs2_backup(
         let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(2);
-        cs2.restore_backup(confirm_steam_cancelled)
+        cs2.restore_backup(confirm_steam_cancelled)?;
+        refresh_finished_window_feedback(&app, &cs2);
+        Ok(())
     })
     .await
     .map_err(|_| "CS2 原配置恢复未完成。".to_string())?
@@ -1744,6 +1761,7 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
                             }

@@ -8,7 +8,12 @@ import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
 import { Radar } from '../program/widgets/radar/Radar';
 import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
-import { desktopInvoke, selectProgramScene, useProgramScenes } from './client';
+import {
+  desktopInvoke,
+  HostWindowControlError,
+  selectProgramScene,
+  useProgramScenes,
+} from './client';
 import {
   workspaceCurrentPov,
   workspaceIssues,
@@ -282,6 +287,7 @@ export function WorkspaceDock() {
     try {
       await run();
     } catch (error) {
+      if (error instanceof HostWindowControlError) return;
       const detail = error instanceof Error ? error.message : '操作未完成。';
       const shared = reportsExit
         ? await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status').catch(() => null)
@@ -376,11 +382,18 @@ export function WorkspaceDock() {
         </div>
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
-        {exit?.windowMessage ? (
-          <Button onClick={() => setDetailsOpen(true)}>窗口控制需要处理</Button>
-        ) : null}
         <div className="workspace-section-heading">
-          <small>观战 · 本机</small>
+          {exit?.windowMessage ? (
+            <Button
+              className="workspace-window-warning"
+              aria-label="窗口控制需要处理"
+              onClick={() => setDetailsOpen(true)}
+            >
+              窗口告警
+            </Button>
+          ) : (
+            <small>观战 · 本机</small>
+          )}
           <Button
             disabled={busy || !window.__TAURI_INTERNALS__}
             aria-busy={busy}

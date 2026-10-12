@@ -350,3 +350,65 @@ for (const gsi of [
     await expect(page).toHaveURL(/settings\?tab=gsi&prepare=1$/);
   });
 }
+
+for (const [width, height] of [
+  [1024, 192],
+  [960, 180],
+] as const) {
+  test(`window warning preserves HUD controls within the footer boundary at ${width}×${height}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const state = { windowMessage: null as string | null };
+      Object.assign(window, {
+        windowWarning: state,
+        __TAURI_INTERNALS__: {
+          invoke: (command: string) =>
+            Promise.resolve(
+              command === 'workspace_exit_status'
+                ? { busy: false, stage: '', message: null, windowMessage: state.windowMessage }
+                : { pending: true, running: true, phase: 'running' },
+            ),
+        },
+      });
+    });
+    await page.setViewportSize({ width, height });
+    await page.goto('/workspace/dock');
+    const controls = page.getByLabel('本机 HUD 显示', { exact: true });
+    await expect(controls.getByRole('button', { name: '雷达', exact: true })).toBeVisible();
+    const measure = () =>
+      controls.evaluate((element) => {
+        const section = element.closest('section')!.getBoundingClientRect();
+        const footer = document.querySelector('footer')!.getBoundingClientRect();
+        const bounds = element.getBoundingClientRect();
+        return {
+          top: bounds.top,
+          clipped: Array.from(element.querySelectorAll('button'))
+            .filter((button) => {
+              const r = button.getBoundingClientRect();
+              return (
+                r.top < section.top ||
+                r.bottom > section.bottom + 1 ||
+                r.bottom > footer.top + 1 ||
+                r.left < section.left ||
+                r.right > section.right + 1
+              );
+            })
+            .map((button) => button.textContent),
+        };
+      });
+    const before = await measure();
+    expect(before.clipped).toEqual([]);
+    await page.evaluate(() => {
+      (
+        window as unknown as { windowWarning: { windowMessage: string | null } }
+      ).windowWarning.windowMessage =
+        'CS2 窗口层级恢复被系统拒绝，请核对运行权限后切回工作台重试。';
+    });
+    await expect(page.getByRole('button', { name: '窗口控制需要处理', exact: true })).toBeVisible();
+    const after = await measure();
+    expect(after.clipped).toEqual([]);
+    expect(after.top).toBe(before.top);
+    await expect(controls.getByRole('button', { name: '其他 HUD', exact: true })).toBeVisible();
+  });
+}

@@ -253,6 +253,17 @@ pub struct GameTracker {
 }
 
 impl GameTracker {
+    pub fn finish_session_feedback(&mut self, cs2: &crate::managed_cs2::ManagedCs2) -> Result<bool, String> {
+        if self.window.is_none() && self.alignment_failure.is_none() && self.group_failure.is_none() { return Ok(false); }
+        if !cs2.window_session_finished()? { return Ok(false); }
+        self.observe(None);
+        // Hidden panels may already have no HWND yet retain the last failure.
+        self.alignment_failure = None;
+        self.reported_alignment_failure = None;
+        self.group_failure = None;
+        self.managed = false;
+        Ok(true)
+    }
     pub fn alignment_event(&mut self) -> Option<AlignmentFailure> {
         let changed = self.alignment_failure != self.reported_alignment_failure;
         self.reported_alignment_failure = self.alignment_failure;

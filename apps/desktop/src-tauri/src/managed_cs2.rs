@@ -975,6 +975,11 @@ impl ManagedCs2 {
         Ok(())
     }
 
+    /// Read-only feedback retirement; absent journal alone is not a stop proof.
+    pub fn window_session_finished(&self) -> Result<bool, String> {
+        Ok(self.store.load()?.is_none() && !any_cs2_running(&self.log)?)
+    }
+
     pub fn finish(&mut self) -> Result<(), String> {
         let journal = self.store.load()?;
         let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref())?;
@@ -1067,12 +1072,20 @@ mod tests {
             .contains("CS2 正在运行"));
         assert!(external.child.try_wait().unwrap().is_none());
         managed.finish().unwrap();
+        let mut tracker = crate::windows_host::GameTracker::default();
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
+        tracker.group_failure = Some(crate::workspace_group::Failure { stage: "raise", api: "SetWindowPos", last_error: Some(5), target: "game" });
+        assert!(!tracker.finish_session_feedback(&managed).unwrap());
+        assert!(tracker.window_message().is_some());
         assert!(managed.confirm_game_stopped().is_err());
         // An unrelated process must never be closed by the cleanup operation.
         assert!(external.child.try_wait().unwrap().is_none());
         external.child.kill().unwrap();
         external.child.wait().unwrap();
         managed.confirm_game_stopped().unwrap();
+        assert!(tracker.finish_session_feedback(&managed).unwrap());
+        assert_eq!(tracker.window_message(), None);
+        assert!(!tracker.managed);
     }
 
     #[test]
@@ -1349,10 +1362,21 @@ $context = Get-SteamLaunchContext -NativeIdentity $nativeSteam
         assert!(!managed.preserve_settings());
         assert!(managed.store.load().unwrap().is_some());
         assert!(managed.finish().is_err());
+        let mut tracker = crate::windows_host::GameTracker::default();
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
+        assert!(!tracker.finish_session_feedback(&managed).unwrap());
+        assert!(tracker.window_message().is_some());
         assert_ne!(std::fs::read(&video).unwrap(), original);
         managed.restore_backup(true).unwrap();
         assert_eq!(std::fs::read(&video).unwrap(), original);
         assert!(managed.store.load().unwrap().is_none());
+        assert!(tracker.finish_session_feedback(&managed).unwrap());
+        assert_eq!(tracker.window_message(), None);
+        // A damaged core record leaves restoration unknown, even with no game.
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
+        std::fs::write(managed.store.backup_directory().join("pending.json"), b"{").unwrap();
+        assert!(tracker.finish_session_feedback(&managed).is_err());
+        assert!(tracker.window_message().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

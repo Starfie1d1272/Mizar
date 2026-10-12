@@ -511,7 +511,8 @@
   }
 }
 
-.workspace-production > .workspace-section-heading .mizar-button {
+.workspace-production > .workspace-section-heading .mizar-button,
+.workspace-spectator > .workspace-section-heading .workspace-window-warning {
   min-height: 0;
   padding-block: 0;
   font-size: var(--mizar-type-size-small);

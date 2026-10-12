@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { desktopInvoke } from '../src/workspace/client';
+import { desktopInvoke, HostWindowControlError } from '../src/workspace/client';
 import { obsCommand } from '../src/workspace/obs-client';
 
 afterEach(() => {
@@ -32,6 +32,17 @@ describe('desktop command errors', () => {
     await expect(desktopInvoke('configure_gsi', { restore: false, choose: false })).rejects.toThrow(
       'GSI 配置未完成；请核对安装目录与配置冲突后重试。',
     );
+  });
+
+  it('preserves Host window outcome ownership while keeping other failures local', async () => {
+    window.__TAURI_INTERNALS__ = {
+      invoke: vi
+        .fn()
+        .mockRejectedValueOnce({ kind: 'window_control', message: 'CS2 窗口定位被系统拒绝。' })
+        .mockRejectedValueOnce('桌面窗口状态不可用。'),
+    };
+    await expect(desktopInvoke('restore_layout')).rejects.toBeInstanceOf(HostWindowControlError);
+    await expect(desktopInvoke('restore_layout')).rejects.toThrow('桌面窗口状态不可用。');
   });
 
   it('keeps an existing Error and supplies a readable fallback for an unknown rejection', async () => {

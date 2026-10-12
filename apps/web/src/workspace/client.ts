@@ -62,6 +62,9 @@ declare global {
   }
 }
 
+/** The Host retains this outcome; UI commands must not copy it into local state. */
+export class HostWindowControlError extends Error {}
+
 export async function desktopInvoke<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -70,6 +73,16 @@ export async function desktopInvoke<T>(
   try {
     return await window.__TAURI_INTERNALS__.invoke<T>(command, args);
   } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'kind' in error &&
+      error.kind === 'window_control' &&
+      'message' in error &&
+      typeof error.message === 'string'
+    ) {
+      throw new HostWindowControlError(error.message);
+    }
     // Tauri commands returning Result<T, String> reject with a string.
     throw error instanceof Error
       ? error
