@@ -1,4 +1,5 @@
 import { constants } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
@@ -12,9 +13,10 @@ export const OBS_NATIVE_LIMITS = {
   directoryEntries: 128,
   logFiles: 2,
   logAgeMs: 24 * 60 * 60 * 1000,
-  eventAgeMs: 2 * 60 * 60 * 1000,
   logHeaderBytes: 8192,
-  logTailBytes: 65536,
+  logScanBytes: 8 * 1024 * 1024,
+  lineBytes: 8192,
+  attachmentBytesPerLog: 128 * 1024,
   configBytes: 1024 * 1024,
   eventsPerLog: 24,
   captures: 8,
@@ -176,6 +178,8 @@ export function projectObsSavedCollection(value: unknown) {
 
 export interface ObsNativeLogEvent {
   readonly localTime: string;
+  readonly occurredAt?: string | null;
+  readonly operation?: string | null;
   readonly category: 'hook' | 'renderer' | 'window_capture';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
   readonly source: 'mizar_capture' | 'other_capture' | null;
@@ -184,6 +188,16 @@ export interface ObsNativeLogEvent {
   readonly reason:
     | 'inject_helper_failed'
     | 'hook_version_incompatible'
+    | 'process_open_failed'
+    | 'hook_file_locked'
+    | 'hook_file_update_failed'
+    | 'target_blacklisted'
+    | 'hook_file_missing'
+    | 'hook_file_load_failed'
+    | 'mutex_create_failed'
+    | 'mutex_open_failed'
+    | 'window_process_query_failed'
+    | 'hook_event_open_failed'
     | 'capture_failure'
     | 'renderer_failure'
     | null;
@@ -195,6 +209,63 @@ function nativeErrorCode(value: string | undefined): number | null {
   const code = value === undefined ? NaN : Number(value);
   return Number.isSafeInteger(code) && code >= -2147483648 && code <= 4294967295 ? code : null;
 }
+// Fixed OBS logger text carries operations and reasons; suffixes can contain private paths/body.
+const CAPTURE_FAILURE_OPERATIONS = [
+  ['Failed to create keepalive mutex', 'keepalive_mutex_create', 'mutex_create_failed'],
+  ['failed to open texture mutexes', 'texture_mutex_open', 'mutex_open_failed'],
+  [
+    'error acquiring, failed to get window thread/process ids',
+    'window_thread_process_ids',
+    'window_process_query_failed',
+  ],
+  ['error acquiring, failed to get window information', 'window_information', 'capture_failure'],
+  ['Failed to create inject helper process', 'inject_helper_create', 'capture_failure'],
+  ['Could not convert file name to wide string', 'hook_file_name_convert', 'capture_failure'],
+  ['init_hook_info: get_hook_info failed', 'hook_info_open', 'capture_failure'],
+  ['init_hook_info: failed to map data view', 'hook_info_map_view', 'capture_failure'],
+  [
+    'init_hook_info: shared texture capture unavailable',
+    'shared_texture_support',
+    'capture_failure',
+  ],
+  ['init_pipe: failed to start pipe', 'hook_pipe_start', 'capture_failure'],
+  ['hook_direct: could not convert string', 'hook_target_string_convert', 'capture_failure'],
+  ['hook_direct: could not make absolute path', 'hook_target_path_resolve', 'capture_failure'],
+  ['hook_direct: inject failed', 'hook_direct_inject', 'capture_failure'],
+  ...['restart', 'stop', 'init', 'ready', 'exit'].map(
+    (name) =>
+      [
+        `init_events: failed to get hook_${name} event`,
+        `hook_${name}_event_open`,
+        'hook_event_open_failed',
+      ] as const,
+  ),
+  ['init_capture_data: failed to open file mapping', 'capture_mapping_open', 'capture_failure'],
+  ['init_capture_data: failed to map data view', 'capture_mapping_view', 'capture_failure'],
+  [
+    'init_shmem_capture: failed to create extra texrender',
+    'shmem_extra_texrender_create',
+    'capture_failure',
+  ],
+  ['init_shmem_capture: failed to create texture', 'shmem_texture_create', 'capture_failure'],
+  [
+    'init_shtex_capture: failed to create extra texrender',
+    'shtex_extra_texrender_create',
+    'capture_failure',
+  ],
+  [
+    'init_shtex_capture: failed to create extra texture',
+    'shtex_extra_texture_create',
+    'capture_failure',
+  ],
+  [
+    'init_shtex_capture: failed to open shared handle',
+    'shtex_shared_handle_open',
+    'capture_failure',
+  ],
+  ['init_capture_data failed', 'capture_data_initialize', 'capture_failure'],
+] as const;
+
 export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
@@ -202,6 +273,10 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   const text = capture?.[3] ?? stamp[2]!;
   const hook = capture?.[1] === 'game-capture';
   const attempt = /^attempting to hook (?:fullscreen )?process: (.+)$/i.exec(text);
+  const openFailure =
+    /^(?:hook_direct:\s*)?could not open process:\s*(.*?)(?:\s+\((-?\d{1,11})\))?$/i.exec(text);
+  const updateFailure = /^update_hook_file:\s*failed to update .+ \((-?\d{1,11})\)$/i.exec(text);
+  const globalSuccess = !capture && /^d3d11 shared texture capture successful$/i.test(text);
   const helperFailure = /^inject process failed:\s*(-?\d{1,11})$/i.exec(text);
   const versionFailure =
     /^cannot initialize hook, DLL hook version is (\d{1,5}\.\d{1,5}), current plugin hook major version is (\d{1,5}\.\d{1,5})$/i.exec(
@@ -220,7 +295,10 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   const codeHex = hresult ? `0x${(hresult[1] ?? hresult[2])!.toUpperCase()}` : null;
   let outcome: ObsNativeLogEvent['outcome'];
   if (hook && attempt) outcome = 'attempt';
-  else if (hook && /^(?:memory|shared texture) capture successful$/i.test(text))
+  else if (
+    globalSuccess ||
+    (hook && /^(?:d3d11 )?(?:memory|shared texture) capture successful$/i.test(text))
+  )
     outcome = 'success';
   else if (
     hook &&
@@ -238,6 +316,7 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     /fail|error|not found|could not|unavailable|blacklisted/i.test(text)
   )
     outcome = 'failure';
+  else if (updateFailure) outcome = 'failure';
   else if (rendererFailure) outcome = 'failure';
   else if (
     !capture &&
@@ -248,32 +327,102 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   )
     outcome = 'failure';
   else return null;
+  const fixed = capture
+    ? CAPTURE_FAILURE_OPERATIONS.find(([prefix]) => {
+        if (!text.toLowerCase().startsWith(prefix.toLowerCase())) return false;
+        return /^(?:$|[:.\s])/.test(text.slice(prefix.length));
+      })
+    : undefined;
+  const blacklist = /^cannot capture .+ due to being blacklisted$/i.test(text);
+  const missingFile = /^Game capture (?:file )?.+ not found\.?$/i.test(text);
+  const loadFile = /^Game capture file .+ could not be loaded(?:[.:]|$)/i.test(text);
+  const operation = attempt
+    ? 'process_hook_attempt'
+    : openFailure
+      ? 'process_open'
+      : updateFailure
+        ? 'hook_file_update'
+        : blacklist
+          ? 'capture_target_policy'
+          : missingFile
+            ? 'hook_file_lookup'
+            : loadFile
+              ? 'hook_file_load'
+              : (fixed?.[1] ??
+                (helperFailure
+                  ? 'inject_helper_exit'
+                  : versionFailure
+                    ? 'hook_version_check'
+                    : null));
+  let message: string;
+  if (attempt)
+    message = `attempting to hook process: ${target(attempt[1]) === 'cs2.exe' ? 'cs2.exe' : '[other executable]'}`;
+  else if (updateFailure)
+    message = `update_hook_file: failed to update [hook file] (${updateFailure[1]})`;
+  else if (openFailure)
+    message = redactObsNativeText(
+      `${text.startsWith('hook_direct:') ? 'hook_direct: ' : ''}could not open process: ${openFailure[1]}${openFailure[2] ? ` (${openFailure[2]})` : ''}`,
+    );
+  else if (blacklist) message = 'cannot capture [executable] due to being blacklisted';
+  else if (missingFile) message = 'Game capture [hook file] not found.';
+  else if (loadFile) message = 'Game capture [hook file] could not be loaded.';
+  else if (fixed) {
+    message = fixed[0];
+    const numeric = /^:\s*(-?\d{1,11})(?=[.\s]|$)/.exec(text.slice(fixed[0].length))?.[1];
+    if (numeric) message += `: ${numeric}`;
+  } else if (outcome === 'failure') {
+    const logger = /^(device_texture_create|gs_vertexbuffer_flush)(?=[:\s])/i.exec(text)?.[1];
+    message = `${logger ?? (!capture ? 'renderer' : 'capture')} failure`;
+    if (helperFailure) message = `inject process failed: ${helperFailure[1]}`;
+    else if (versionFailure)
+      message = `cannot initialize hook, DLL hook version is ${versionFailure[1]}, current plugin hook major version is ${versionFailure[2]}`;
+    else if (codeHex) message += `; HRESULT ${codeHex}`;
+  } else message = redactObsNativeText(text);
   return {
     localTime: stamp[1]!,
-    category: hook ? 'hook' : capture ? 'window_capture' : 'renderer',
+    operation,
+    category:
+      hook || updateFailure || globalSuccess ? 'hook' : capture ? 'window_capture' : 'renderer',
     outcome,
     source: capture ? (capture[2] === OBS_CAPTURE_INPUT ? 'mizar_capture' : 'other_capture') : null,
-    target: attempt ? target(attempt[1]) : null,
+    target: attempt ? target(attempt[1]) : openFailure ? target(openFailure[1]) : null,
     reason:
       outcome !== 'failure'
         ? null
-        : helperFailure
-          ? 'inject_helper_failed'
-          : versionFailure
-            ? 'hook_version_incompatible'
-            : !capture
-              ? 'renderer_failure'
-              : 'capture_failure',
+        : updateFailure
+          ? nativeErrorCode(updateFailure[1]) === 32
+            ? 'hook_file_locked'
+            : 'hook_file_update_failed'
+          : blacklist
+            ? 'target_blacklisted'
+            : missingFile
+              ? 'hook_file_missing'
+              : loadFile
+                ? 'hook_file_load_failed'
+                : fixed
+                  ? fixed[2]
+                  : openFailure
+                    ? 'process_open_failed'
+                    : helperFailure
+                      ? 'inject_helper_failed'
+                      : versionFailure
+                        ? 'hook_version_incompatible'
+                        : !capture
+                          ? 'renderer_failure'
+                          : 'capture_failure',
     codeHex,
     code: codeHex
       ? Number.parseInt(codeHex.slice(2), 16)
       : outcome === 'failure' && !versionFailure
-        ? nativeErrorCode(helperFailure?.[1] ?? /[:(]\s*(-?\d{1,11})\)?\.?$/.exec(text)?.[1])
+        ? nativeErrorCode(
+            updateFailure?.[1] ??
+              openFailure?.[2] ??
+              helperFailure?.[1] ??
+              /[:(]\s*(-?\d{1,11})\)?\.?$/.exec(text)?.[1],
+          )
         : null,
     hookVersions: versionFailure ? { dll: versionFailure[1]!, plugin: versionFailure[2]! } : null,
-    message: attempt
-      ? `attempting to hook process: ${target(attempt[1]) === 'cs2.exe' ? 'cs2.exe' : '[other executable]'}`
-      : redactObsNativeText(text),
+    message,
   };
 }
 
@@ -281,6 +430,7 @@ interface LogEvidence {
   slot: number;
   modifiedAt: string;
   sessionStartedAt: string;
+  timestampStatus?: 'ordered' | 'uncertain';
   processAssociation: 'time_correlated' | 'unverified';
   processPid: number | null;
   obsVersion: string | null;
@@ -290,6 +440,19 @@ interface LogEvidence {
   truncated: boolean;
   omittedLines: number;
   events: ObsNativeLogEvent[];
+  scan?: {
+    fileBytes: number;
+    readBytes: number;
+    missingByteRange: [number, number] | null;
+    reasons: string[];
+    ignoredLines: number;
+    oversizedLines: number;
+    retainedEvents: number;
+    omittedEvents: number;
+  };
+  latestCaptureEvent?: ObsNativeLogEvent | null;
+  latestCaptureFailure?: ObsNativeLogEvent | null;
+  failureCounts?: Record<string, number>;
 }
 interface RootEvidence {
   location: 'appdata_candidate' | 'portable_process';
@@ -307,6 +470,15 @@ export interface ObsNativeEvidence {
   errors: ReturnType<typeof failure>[];
   limits: typeof OBS_NATIVE_LIMITS;
   exportTruncated: boolean;
+  logAttachments?: {
+    root: number;
+    slot: number;
+    format: 'allowlisted-technical-events/1';
+    events: ObsNativeLogEvent[];
+    omittedEvents: number;
+    firstOmittedLocalTime: string | null;
+    lastOmittedLocalTime: string | null;
+  }[];
   interpretation: 'read_only_evidence_not_black_screen_root_cause';
 }
 export function failedObsNativeEvidence(error: unknown): ObsNativeEvidence {
@@ -327,6 +499,7 @@ export interface ObsNativeOptions {
   readonly now?: () => number;
   readonly readProcesses?: () => Promise<readonly ObsNativeProcess[]>;
   readonly budgetMs?: number;
+  readonly includeRelatedLogs?: boolean;
 }
 
 /** Fixed local OBS roots only. No browser paths, network, settings mutations or arbitrary profile export. */
@@ -392,7 +565,14 @@ export async function collectObsNativeEvidence(
         });
     }
   }
-  async function read(root: string, parts: string[], limit: number, tail = false, header = false) {
+  async function read(
+    root: string,
+    parts: string[],
+    limit: number,
+    tail = false,
+    header = false,
+    visit?: (line: string) => void,
+  ) {
     check();
     const path = join(root, ...parts);
     const chain = await guardedPath(path);
@@ -412,6 +592,53 @@ export async function collectObsNativeEvidence(
         throw Object.assign(new Error('OBS evidence is not a regular file'), { code: 'EUNSAFE' });
       if (!tail && !header && stat.size > limit)
         throw Object.assign(new Error('OBS evidence exceeds the read limit'), { code: 'ETOOBIG' });
+      if (visit) {
+        const decoder = new StringDecoder('utf8');
+        const buffer = Buffer.alloc(65536);
+        const end = Math.min(stat.size, limit);
+        let position = 0,
+          pending = '',
+          dropping = false,
+          oversizedLines = 0;
+        const lines = (text: string) => {
+          for (const part of text.split(/(?<=\n)/)) {
+            if (!dropping) pending += part;
+            if (pending.length > OBS_NATIVE_LIMITS.lineBytes) {
+              pending = '';
+              dropping = true;
+            }
+            if (part.endsWith('\n')) {
+              if (dropping) oversizedLines++;
+              else visit(pending.replace(/\r?\n$/, ''));
+              pending = '';
+              dropping = false;
+            }
+          }
+        };
+        while (position < end) {
+          check();
+          const { bytesRead } = await handle.read(
+            buffer,
+            0,
+            Math.min(buffer.length, end - position),
+            position,
+          );
+          if (!bytesRead) break;
+          position += bytesRead;
+          lines(decoder.write(buffer.subarray(0, bytesRead)));
+        }
+        lines(decoder.end());
+        if (position === stat.size && pending && !dropping) visit(pending);
+        else if (position === stat.size && dropping) oversizedLines++;
+        await unchanged(chain);
+        return {
+          text: '',
+          size: stat.size,
+          mtime: stat.mtimeMs,
+          readBytes: position,
+          oversizedLines,
+        };
+      }
       const size = Math.min(stat.size, limit),
         buffer = Buffer.alloc(size);
       const { bytesRead } = await handle.read(
@@ -504,7 +731,7 @@ export async function collectObsNativeEvidence(
       const global = await optional(root, ['global.ini'], 65536, result.fileStatus, 'global'),
         user = await optional(root, ['user.ini'], 65536, result.fileStatus, 'user');
       const settings = { ...(global ? ini(global.text) : {}), ...(user ? ini(user.text) : {}) };
-      const basic = settings.Basic ?? settings.BasicWindow ?? {};
+      const basic = { ...settings.BasicWindow, ...settings.Basic };
       const profile = component(basic.ProfileDir)
         ? await optional(
             root,
@@ -517,7 +744,7 @@ export async function collectObsNativeEvidence(
       const collection = component(basic.SceneCollectionFile)
         ? await optional(
             root,
-            ['basic', 'scenes', basic.SceneCollectionFile + '.json'],
+            ['basic', 'scenes', basic.SceneCollectionFile.replace(/\.json$/i, '') + '.json'],
             OBS_NATIVE_LIMITS.configBytes,
             result.fileStatus,
             'collection',
@@ -581,7 +808,13 @@ export async function collectObsNativeEvidence(
         }
         result.logsStatus = 'available';
         for (const name of names.sort().reverse().slice(0, OBS_NATIVE_LIMITS.logFiles)) {
-          const tail = await read(root, ['logs', name], OBS_NATIVE_LIMITS.logTailBytes, true);
+          const tail = await read(
+            root,
+            ['logs', name],
+            OBS_NATIVE_LIMITS.logHeaderBytes,
+            false,
+            true,
+          );
           if (tail.mtime > now() + 60000 || now() - tail.mtime > OBS_NATIVE_LIMITS.logAgeMs)
             continue;
           const header = (
@@ -617,36 +850,141 @@ export async function collectObsNativeEvidence(
               : /OpenGL/i.test(header)
                 ? 'opengl'
                 : null,
-            truncated: tail.size > OBS_NATIVE_LIMITS.logTailBytes,
+            truncated: false,
             omittedLines: 0,
             events: [],
           };
-          for (const line of tail.text.split(/\r?\n/)) {
-            const event = projectObsNativeLogLine(line);
-            if (!event) {
-              log.omittedLines++;
-              continue;
+          const attachment: NonNullable<ObsNativeEvidence['logAttachments']>[number] = {
+            root: evidence.roots.length - 1,
+            slot: log.slot,
+            format: 'allowlisted-technical-events/1',
+            events: [],
+            omittedEvents: 0,
+            firstOmittedLocalTime: null,
+            lastOmittedLocalTime: null,
+          };
+          let attachmentBytes = 0,
+            eventCount = 0;
+          const failures = new Map<string, ObsNativeLogEvent>();
+          log.failureCounts = {};
+          log.latestCaptureEvent = null;
+          log.latestCaptureFailure = null;
+          const clockDate = new Date(sessionDate);
+          let previousClock =
+            sessionDate.getHours() * 3600000 +
+            sessionDate.getMinutes() * 60000 +
+            sessionDate.getSeconds() * 1000;
+          let chronologyKnown = true;
+          const lineDate = (line: string) => {
+            const stamp = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?:/.exec(line);
+            if (!stamp) return null;
+            const hour = Number(stamp[1]),
+              minute = Number(stamp[2]),
+              second = Number(stamp[3]),
+              millis = Number((stamp[4] ?? '').padEnd(3, '0'));
+            if (hour > 23 || minute > 59 || second > 59) {
+              chronologyKnown = false;
+              return null;
             }
-            const date = new Date(tail.mtime),
-              [hh, mm, ss] = event.localTime.split(':').map(Number);
-            date.setHours(hh!, mm, ss, 0);
-            if (date.getTime() > tail.mtime + 60000) date.setDate(date.getDate() - 1);
+            const clock = hour * 3600000 + minute * 60000 + second * 1000 + millis;
+            if (clock < previousClock - 1000) {
+              if (previousClock >= 20 * 3600000 && clock <= 4 * 3600000)
+                clockDate.setDate(clockDate.getDate() + 1);
+              else chronologyKnown = false;
+            }
+            previousClock = clock;
+            clockDate.setHours(hour, minute, second, millis);
+            if (clockDate.getHours() !== hour || clockDate.getMinutes() !== minute)
+              chronologyKnown = false;
             if (
-              now() - date.getTime() > OBS_NATIVE_LIMITS.eventAgeMs ||
-              date.getTime() > now() + 60000
-            ) {
-              log.omittedLines++;
-              continue;
-            }
-            log.events.push(event);
-          }
-          if (log.events.length > OBS_NATIVE_LIMITS.eventsPerLog) {
-            log.omittedLines += log.events.length - OBS_NATIVE_LIMITS.eventsPerLog;
-            const lastFailure = [...log.events].reverse().find((e) => e.outcome === 'failure');
-            log.events = log.events.slice(-OBS_NATIVE_LIMITS.eventsPerLog);
-            if (lastFailure && !log.events.includes(lastFailure)) log.events[0] = lastFailure;
-            log.truncated = true;
-          }
+              clockDate.getTime() < sessionDate.getTime() - 1000 ||
+              clockDate.getTime() > tail.mtime + 60000
+            )
+              chronologyKnown = false;
+            return chronologyKnown ? clockDate.toISOString() : null;
+          };
+          const scan = await read(
+            root,
+            ['logs', name],
+            OBS_NATIVE_LIMITS.logScanBytes,
+            false,
+            true,
+            (line) => {
+              const occurredAt = lineDate(line);
+              const parsed = projectObsNativeLogLine(line);
+              const event = parsed ? { ...parsed, occurredAt } : null;
+              if (!event) {
+                log.omittedLines++;
+                return;
+              }
+              eventCount++;
+              if (event.outcome === 'failure') {
+                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}`;
+                if (Object.keys(log.failureCounts!).length < 64 || key in log.failureCounts!)
+                  log.failureCounts![key] = (log.failureCounts![key] ?? 0) + 1;
+                failures.delete(key);
+                failures.set(key, event);
+                if (failures.size > 12) failures.delete(failures.keys().next().value!);
+              }
+              // Unrelated custom capture sources cannot alarm or recover Mizar capture.
+              if (
+                event.category === 'hook' &&
+                (event.source === 'mizar_capture' ||
+                  event.reason === 'hook_file_locked' ||
+                  event.reason === 'hook_file_update_failed' ||
+                  (event.source === null && event.outcome === 'success'))
+              ) {
+                log.latestCaptureEvent = event;
+                if (event.outcome === 'failure') log.latestCaptureFailure = event;
+                else if (event.outcome === 'success') log.latestCaptureFailure = null;
+              }
+              log.events.push(event);
+              if (log.events.length > OBS_NATIVE_LIMITS.eventsPerLog) log.events.shift();
+              if (options.includeRelatedLogs) {
+                // The parser's canonical technical messages exclude arbitrary raw bodies.
+                const technical = event;
+                const bytes =
+                  Buffer.byteLength(
+                    JSON.stringify(technical, null, 2).replace(/^/gm, '          '),
+                  ) + 2;
+                if (attachmentBytes + bytes <= OBS_NATIVE_LIMITS.attachmentBytesPerLog) {
+                  attachment.events.push(technical);
+                  attachmentBytes += bytes;
+                } else {
+                  attachment.omittedEvents++;
+                  attachment.firstOmittedLocalTime ??= event.localTime;
+                  attachment.lastOmittedLocalTime = event.localTime;
+                }
+              }
+            },
+          );
+          log.timestampStatus = chronologyKnown ? 'ordered' : 'uncertain';
+          const protectedEvents = [...failures.values()];
+          const recent = log.events
+            .filter((e) => !protectedEvents.includes(e))
+            .slice(-(OBS_NATIVE_LIMITS.eventsPerLog - protectedEvents.length));
+          log.events = [...protectedEvents, ...recent];
+          log.truncated =
+            scan.size > (scan.readBytes ?? 0) ||
+            eventCount > log.events.length ||
+            !!scan.oversizedLines;
+          log.scan = {
+            fileBytes: scan.size,
+            readBytes: scan.readBytes ?? 0,
+            missingByteRange:
+              scan.size > (scan.readBytes ?? 0) ? [scan.readBytes ?? 0, scan.size] : null,
+            reasons: [
+              ...(scan.size > (scan.readBytes ?? 0) ? ['scan_byte_limit'] : []),
+              ...(eventCount > log.events.length ? ['summary_event_limit'] : []),
+              ...(scan.oversizedLines ? ['oversized_lines'] : []),
+            ],
+            ignoredLines: log.omittedLines,
+            oversizedLines: scan.oversizedLines ?? 0,
+            retainedEvents: log.events.length,
+            omittedEvents: eventCount - log.events.length,
+          };
+          log.omittedLines += eventCount - log.events.length;
+          if (options.includeRelatedLogs) (evidence.logAttachments ??= []).push(attachment);
           result.logs.push(log);
         }
       } catch (e) {
@@ -677,6 +1015,8 @@ export async function collectObsNativeEvidence(
 
 export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvidence {
   const exported = structuredClone(result);
+  const attachments = exported.logAttachments;
+  delete exported.logAttachments;
   while (Buffer.byteLength(JSON.stringify(exported, null, 2)) > OBS_NATIVE_LIMITS.exportBytes) {
     const logs = exported.roots
       .flatMap((r) => r.logs)
@@ -689,6 +1029,12 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
     if (index < 0) break;
     log.events.splice(index, 1);
     log.omittedLines++;
+    if (log.scan) {
+      log.scan.omittedEvents++;
+      log.scan.retainedEvents--;
+      if (!log.scan.reasons.includes('export_byte_limit'))
+        log.scan.reasons.push('export_byte_limit');
+    }
     log.truncated = true;
     exported.exportTruncated = true;
   }
@@ -698,6 +1044,7 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
     );
     return {
       ...fallback,
+      ...(attachments ? { logAttachments: attachments } : {}),
       exportTruncated: true,
       errors: [
         failure(
@@ -707,5 +1054,5 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
       ],
     };
   }
-  return exported;
+  return attachments ? { ...exported, logAttachments: attachments } : exported;
 }

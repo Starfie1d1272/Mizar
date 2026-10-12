@@ -47,6 +47,7 @@ import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
+import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -155,6 +156,7 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
   readonly qualificationHostCheckpointsPath?: string;
@@ -538,6 +540,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
       configStore: obsConfigStore,
       adapter: obsAdapter,
+      ...(options.readObsCaptureEvidence
+        ? { readCaptureEvidence: options.readObsCaptureEvidence }
+        : {}),
       activeScene: () => sceneController.get().active,
     });
   }

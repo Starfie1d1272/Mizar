@@ -1,8 +1,14 @@
+import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
 import { obsOutputCommandSchema } from '@mizar/protocol/obs';
 import { ObsOutputError } from './outputs.js';
-import type { FastifyInstance } from 'fastify';
+import type { ObsNativeEvidence } from './native-evidence.js';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
+import {
+  checkLocalWebOrigin,
+  isLoopbackBindHost,
+  type LocalWebOriginPolicy,
+} from '../local-web/origin-policy.js';
 import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { obsSceneName } from './desired-state.js';
@@ -14,11 +20,30 @@ export function registerObsRoutes(
     readonly configStore: ObsConfigStore;
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
+    readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
+  const captureDiagnostic = createObsCaptureDiagnosticReader(options.readCaptureEvidence);
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
+  const allowedRead = (request: FastifyRequest) => {
+    if (request.headers.origin !== undefined) return allowed(request.headers.origin);
+    // Browser GETs omit Origin. Require same-origin Fetch Metadata and a local
+    // referrer, socket and Host; absence alone never authorizes native reads.
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      request.headers['sec-fetch-site'] !== 'same-origin' ||
+      !isLoopbackBindHost(request.ip) ||
+      !isLoopbackBindHost(request.hostname)
+    )
+      return false;
+    try {
+      return allowed(new URL(request.headers.referer ?? '').origin);
+    } catch {
+      return false;
+    }
+  };
   app.get('/local/v1/obs/outputs', async (_request, reply) =>
     reply.header('cache-control', 'no-store').send(await options.adapter.outputStatus()),
   );
@@ -44,9 +69,11 @@ export function registerObsRoutes(
       .send({ preview: await options.adapter.confidencePreview() }),
   );
   app.get('/local/v1/obs', async (_request, reply) => {
+    const diagnostic = allowedRead(_request) ? captureDiagnostic() : Promise.resolve(null);
     const status = await options.adapter.status();
     return reply.header('cache-control', 'no-store').send({
       ...status,
+      captureDiagnostic: await diagnostic,
       expectedScene: obsSceneName(options.activeScene()),
       sceneAligned:
         status.connection === 'connected'
@@ -107,7 +134,7 @@ export function registerObsRoutes(
             },
             'OBS preparation checked',
           );
-          return { ok: true, findings };
+          return { ok: true, findings, captureDiagnostic: await captureDiagnostic(true) };
         }
         if (action === 'audio-setup') {
           await options.adapter.setupAudio();

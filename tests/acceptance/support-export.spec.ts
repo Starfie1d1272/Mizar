@@ -147,10 +147,28 @@ test('desktop save reports cancellation, failure and success, omitting private H
       },
     });
   });
+  const attachmentBundle = {
+    ...bundle,
+    attachments: {
+      obsLogs: [
+        {
+          events: Array.from({ length: 6000 }, () => ({
+            localTime: '12:00:00',
+            reason: 'hook_file_locked',
+            code: 32,
+          })),
+        },
+      ],
+    },
+  };
+  expect(Buffer.byteLength(JSON.stringify(attachmentBundle))).toBeGreaterThan(256 * 1024);
   const payloads: unknown[] = [];
   await page.route('**/debug/support-bundle', (route) => {
     payloads.push(route.request().postDataJSON());
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(bundle) });
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(attachmentBundle),
+    });
   });
   await page.goto('/debug');
   const button = page.getByRole('button', { name: '导出诊断包', exact: true });

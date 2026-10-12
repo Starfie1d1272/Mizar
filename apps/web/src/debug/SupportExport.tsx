@@ -136,7 +136,7 @@ export function SupportExport() {
       if (!response.ok) throw new Error('export_failed');
       const text = await response.text();
       if (
-        new TextEncoder().encode(text).length > 256 * 1024 ||
+        new TextEncoder().encode(text).length > 1024 * 1024 ||
         (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
       )
         throw new Error('invalid_bundle');
