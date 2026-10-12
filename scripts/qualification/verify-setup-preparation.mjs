@@ -79,6 +79,89 @@ elseif ($env:SETUP_CASE -eq 'extract-failure' -and $failure -notmatch 'Candidate
     assert.match(output, /SETUP_PREPARATION extract:/);
     console.log(`Setup preparation overlap and joined failure ${mode}: PASS`);
   }
+  // Exercise the actual installer orchestrator with controlled branch failures.
+  for (const mode of ['dependency-failure', 'ui-failure', 'second-start-failure']) {
+    const fixture = join(root, mode);
+    await mkdir(fixture);
+    await cp(join(import.meta.dirname, '../web-installer/verify.ps1'), join(fixture, 'verify.ps1'));
+    await writeFile(
+      join(fixture, 'test-nsis.ps1'),
+      `
+param([string]$OutputDirectory, [string]$DownloadCache, [switch]$PrepareDownloadOnly, [string]$CaseGroup)
+$ErrorActionPreference = 'Stop'
+if (!$PrepareDownloadOnly) { Set-Content (Join-Path $env:SETUP_FIXTURE 'nsis-started') 'started'; throw 'Unexpected NSIS write' }
+Set-Content (Join-Path $env:SETUP_FIXTURE 'download-started') 'started'
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+while (!(Test-Path (Join-Path $env:SETUP_FIXTURE 'release-download'))) {
+  if ([DateTime]::UtcNow -gt $deadline) { throw 'Download branch was not released' }
+  Start-Sleep -Milliseconds 25
+}
+Set-Content (Join-Path $env:SETUP_FIXTURE 'download-ended') 'ended'
+`,
+    );
+    await writeFile(
+      join(fixture, 'test-native.ps1'),
+      `
+param([string]$OutputDirectory)
+$ErrorActionPreference = 'Stop'
+Set-Content (Join-Path $env:SETUP_FIXTURE 'release-download') 'released'
+if ($env:SETUP_CASE -eq 'ui-failure') { throw 'Controlled native UI failure' }
+`,
+    );
+    await writeFile(join(fixture, 'capture-ui.ps1'), 'param([string]$OutputDirectory)\n');
+    await writeFile(
+      join(fixture, 'pnpm.ps1'),
+      `
+if ($env:SETUP_CASE -eq 'dependency-failure' -and $args[0] -eq 'install') {
+  Set-Content (Join-Path $env:SETUP_FIXTURE 'release-download') 'released'
+  exit 23
+}
+exit 0
+`,
+    );
+    await writeFile(join(fixture, 'node.ps1'), 'exit 0\n');
+    execFileSync(
+      process.platform === 'win32' ? 'powershell.exe' : shell,
+      [
+        '-NoProfile',
+        '-Command',
+        `
+$ErrorActionPreference = 'Stop'
+$global:fixtureStarts = 0
+function Start-Job {
+  param([object[]]$ArgumentList, [scriptblock]$ScriptBlock)
+  $global:fixtureStarts++
+  if ($env:SETUP_CASE -eq 'second-start-failure' -and $global:fixtureStarts -eq 2) {
+    Set-Content (Join-Path $env:SETUP_FIXTURE 'release-download') 'released'
+    throw 'Controlled second branch startup failure'
+  }
+  Microsoft.PowerShell.Core\\Start-Job -ArgumentList $ArgumentList -ScriptBlock $ScriptBlock
+}
+$failure = $null
+try { & ${literal(join(fixture, 'verify.ps1'))} -OutputDirectory ${literal(join(fixture, 'output'))} -CaseGroup faults }
+catch { $failure = $_.Exception.Message }
+if (!$failure) { throw 'Orchestrator ignored branch failure' }
+if (@(Get-Job).Count -ne 0) { throw 'Orchestrator left a branch job behind' }
+if (!(Test-Path (Join-Path $env:SETUP_FIXTURE 'download-ended'))) { throw 'Orchestrator returned before download joined' }
+if (Test-Path (Join-Path $env:SETUP_FIXTURE 'nsis-started')) { throw 'Failure entered NSIS mutation' }
+if ($env:SETUP_CASE -eq 'dependency-failure' -and $failure -notmatch 'Dependency installation failed') { throw $failure }
+if ($env:SETUP_CASE -eq 'ui-failure' -and $failure -notmatch 'Native UI checks did not complete') { throw $failure }
+if ($env:SETUP_CASE -eq 'second-start-failure' -and $failure -notmatch 'Controlled second branch startup failure') { throw $failure }
+`,
+      ],
+      {
+        env: {
+          ...process.env,
+          PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          SETUP_FIXTURE: fixture,
+          SETUP_CASE: mode,
+        },
+        encoding: 'utf8',
+        timeout: 30000,
+      },
+    );
+    console.log(`Installer verification joined failure ${mode}: PASS`);
+  }
   const output = execFileSync(
     shell,
     [
