@@ -8,16 +8,26 @@ if ($CaseGroup -eq 'update') {
   & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup
   exit 0
 }
-# Download owns only its cache; it never reads or mutates installation state.
-$downloadCache = Join-Path $output 'nsis-download-cache'
-$downloadChecks = Start-Job -ArgumentList $PSScriptRoot, $output, $downloadCache -ScriptBlock {
-  param($scripts, $directory, $cache)
-  $ErrorActionPreference = 'Stop'
-  & "$scripts/test-nsis.ps1" -OutputDirectory $directory -DownloadCache $cache -PrepareDownloadOnly
-}
+$downloadChecks = $null
+$nativeChecks = $null
 $resourceChecks = $null
 $nativeFailure = $null
 try {
+  # Download owns only its cache; it never reads or mutates installation state.
+  $downloadCache = Join-Path $output 'nsis-download-cache'
+  $downloadChecks = Start-Job -ArgumentList $PSScriptRoot, $output, $downloadCache -ScriptBlock {
+    param($scripts, $directory, $cache)
+    $ErrorActionPreference = 'Stop'
+    & "$scripts/test-nsis.ps1" -OutputDirectory $directory -DownloadCache $cache -PrepareDownloadOnly
+  }
+  # Native UI owns no Node dependencies. Finish it before any NSIS state mutation.
+  $nativeChecks = Start-Job -ArgumentList (Get-Location).Path, $PSScriptRoot, $output -ScriptBlock {
+    param($repository, $scripts, $directory)
+    $ErrorActionPreference = 'Stop'
+    Set-Location -LiteralPath $repository
+    & "$scripts/test-native.ps1" -OutputDirectory $directory
+    & "$scripts/capture-ui.ps1" -OutputDirectory $directory
+  }
   # Production dependencies, the existing App and its sole persistent Store.
   pnpm install --frozen-lockfile
   if ($LASTEXITCODE) { throw 'Dependency installation failed' }
@@ -46,8 +56,8 @@ try {
     node "$scripts/test-pack-cache-boundary.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/install-official-pack.mjs')
     if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
   }
-  & "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
-  & "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
+  $nativeChecks | Wait-Job | Receive-Job -ErrorAction Continue
+  if ($nativeChecks.State -ne 'Completed') { throw 'Native UI checks did not complete' }
   if ($resourceChecks.State -eq 'Failed') { throw 'Windows resource checks failed before NSIS' }
   $previous = @{}
   foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
@@ -63,21 +73,20 @@ try {
     foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key,$previous[$key]) }
   }
 } catch { $nativeFailure = $_ }
-# Join all checks, including after native failure; no test process outlives the gate.
+# Join every started branch before surfacing failure; startup failure is included.
+$joinFailure = $null
 try {
-  # Join the download even when dependency/native preparation failed.
-  $downloadChecks | Wait-Job | Out-Null
-  if ($downloadChecks.State -ne 'Completed' -and !$nativeFailure) { throw 'Verified NSIS download failed' }
-  if ($resourceChecks) {
-    # Expected native stderr (for example mirror fallback) is diagnostic output.
-    # Every native exit code is checked in the job; terminating failures leave it Failed.
-    $resourceChecks | Wait-Job | Receive-Job -ErrorAction Continue
-    if ($resourceChecks.State -ne 'Completed') { throw 'Windows resource checks did not complete' }
+  foreach ($job in @($nativeChecks, $downloadChecks, $resourceChecks)) {
+    if (!$job) { continue }
+    $job | Wait-Job | Receive-Job -ErrorAction Continue
+    if ($job.State -ne 'Completed' -and !$joinFailure) { $joinFailure = 'Installer verification branch did not complete' }
   }
 } finally {
-  Remove-Job -Job $downloadChecks
-  if ($resourceChecks) { Remove-Job -Job $resourceChecks }
+  foreach ($job in @($nativeChecks, $downloadChecks, $resourceChecks)) {
+    if ($job) { Remove-Job -Job $job }
+  }
 }
 if ($nativeFailure) { throw $nativeFailure }
+if ($joinFailure) { throw $joinFailure }
 $clock.Stop()
 [ordered]@{ schemaVersion=1; sourceSha=(& git rev-parse HEAD); wallTimeSeconds=$clock.Elapsed.TotalSeconds; nativeUi=$true; realNsisRegression=($CaseGroup -eq 'all'); nsisGroup=$CaseGroup; productionDependencies=$true; productionCompletionEvidence=$false; missingEvidence=@('new trusted Core and official resource publication','cold-cache first installation','offline default EPL','installed desktop launch') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'verification.json') -Encoding UTF8
