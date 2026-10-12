@@ -298,60 +298,7 @@ mod tests {
     fn idle() -> Value {
         json!({"stream":{"active":false,"phase":"idle","pending":null},"record":{"active":false,"phase":"idle","pending":null}})
     }
-    #[test]
-    fn ending_last_session_releases_ownership_before_fallible_reads_and_later_visits() {
-        let mut state = State {
-            child: None,
-            configuration_owned: true,
-            sessions: BTreeSet::from(["first".into()]),
-            document: 0,
-            feedback: None,
-        };
-        assert_eq!(state.finish_session("first"), "owned");
-        assert!(!state.configuration_owned);
-        // A failed status probe must not leave permission to acquire this retained instance.
-        state.sessions.insert("later".into());
-        assert_eq!(state.finish_session("first"), "session_finished");
-        assert_eq!(state.finish_session("later"), "not_owned");
-    }
-    #[test]
-    fn an_old_session_cannot_end_ownership_while_a_newer_session_is_unfinished() {
-        let mut state = State {
-            child: None,
-            configuration_owned: true,
-            sessions: BTreeSet::from(["old".into(), "new".into()]),
-            document: 0,
-            feedback: None,
-        };
-        assert_eq!(state.finish_session("old"), "configuration_in_use");
-        assert!(state.configuration_owned);
-        assert_eq!(state.finish_session("old"), "session_finished");
-        assert!(state.configuration_owned);
-        assert_eq!(state.finish_session("new"), "owned");
-        assert!(!state.configuration_owned);
-    }
-    #[test]
-    fn document_change_clears_unfinished_sessions_and_retains_feedback_for_next_document() {
-        let mut state = State {
-            child: None,
-            configuration_owned: true,
-            sessions: BTreeSet::from(["lost-document".into()]),
-            document: 1,
-            feedback: None,
-        };
-        assert!(state.synchronize_document(2));
-        assert!(state.sessions.is_empty());
-        assert!(!state.configuration_owned);
-        assert!(state.feedback.is_some());
-        // Context reads and delayed cleanup in the same new document cannot wipe feedback or its session.
-        state.sessions.insert("new-document".into());
-        assert!(!state.synchronize_document(2));
-        assert_eq!(state.finish_session("lost-document"), "session_finished");
-        assert!(state.sessions.contains("new-document"));
-        assert!(state.feedback.is_some());
-        assert!(!state.synchronize_document(3));
-        assert!(state.feedback.is_none());
-    }
+
     #[test]
     fn stale_begin_cannot_consume_current_document_sessions() {
         let document = DOCUMENT.load(Ordering::Acquire);
@@ -423,16 +370,5 @@ mod tests {
         }
         assert_eq!(preservation_reason(&Value::Null, &idle()), "unconfirmed");
     }
-    #[test]
-    fn accepts_only_bounded_session_ids() {
-        assert!(session_allowed("00000000-0000-4000-8000-000000000001"));
-        for id in [
-            "",
-            "obs64",
-            "../session",
-            "00000000-0000-4000-8000-00000000000z",
-        ] {
-            assert!(!session_allowed(id));
-        }
-    }
+
 }

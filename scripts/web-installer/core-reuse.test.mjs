@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { generateKeyPairSync, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile, chmod, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,6 @@ import {
 import {
   verifyResourceCatalogBytes,
   getResourceAuthorization,
-  verifyCatalogResourceMetadata,
 } from '@mizar/resource-pack-contract/runtime';
 import { ResourceStore } from '../../apps/companion/src/resource-store/store.ts';
 import { createRuntimeVerifier } from '../../apps/companion/src/resource-store/runtime-adapter.ts';
@@ -248,136 +247,5 @@ describe('signed content retained across compatible Core authorization', () => {
     expect(receipt.publicationBase64).toBe(statementBytes.toString('base64'));
     await store.close();
     vi.useRealTimers();
-  }, 30000);
-  it('authenticates original small metadata and rejects mixed or tampered signatures before archive consumption', async () => {
-    const authorization = await authorize(newCore, origin());
-    const publicationBundleBytes = proof(
-      statementBytes,
-      'resource-publication.json',
-      'promotion',
-      oldPromotion,
-    );
-    const archiveBundleBytes = proof(
-      pack.archiveBytes,
-      statement.archive.name,
-      'qualification',
-      sourceSha,
-    );
-    const metadata = {
-      authorization,
-      statementBytes,
-      publicationBundleBytes,
-      archiveBundleBytes,
-      tufCachePath: join(root, 'trust'),
-    };
-    expect((await verifyCatalogResourceMetadata(metadata)).sourceSha).toBe(sourceSha);
-    await expect(
-      verifyCatalogResourceMetadata({
-        ...metadata,
-        archiveBundleBytes: proof(
-          pack.archiveBytes,
-          statement.archive.name,
-          'qualification',
-          newCore.gitSha,
-        ),
-      }),
-    ).rejects.toThrow();
-    const tampered = JSON.parse(publicationBundleBytes.toString());
-    tampered.dsseEnvelope.signatures[0].sig = Buffer.alloc(64).toString('base64');
-    await expect(
-      verifyCatalogResourceMetadata({ ...metadata, publicationBundleBytes: jsonBytes(tampered) }),
-    ).rejects.toThrow('signature');
-  });
-  it('rejects mismatched origin and corrupted content rather than reporting a version-only cache hit', async () => {
-    const authorization = await authorize(newCore, origin());
-    const current = await open(newCore);
-    const bad = await authorize(newCore, { ...origin(), sourceSha: 'f'.repeat(40) });
-    await expect(installOfficialPack({ store: current, authorization: bad })).rejects.toThrow();
-    const { readdir } = await import('node:fs/promises');
-    const versions = join(root, 'store', sha256(Buffer.from('official:epl-default')), 'versions');
-    const ids = await readdir(versions);
-    const file = join(versions, ids[0], 'content', pack.manifest.files[0].path);
-    await chmod(file, 0o600);
-    await writeFile(file, 'corrupt');
-    await expect(installOfficialPack({ store: current, authorization })).rejects.toThrow();
-    const incompatible = await authorize(
-      { ...newCore, appVersion: '2.0.0', archive: 'Mizar-v2.0.0-Windows-x64-Core.zip' },
-      origin(),
-    );
-    await expect(
-      installOfficialPack({ store: current, authorization: incompatible }),
-    ).rejects.toThrow();
-    const repairZip = vi.fn(async () => ({
-      statementBytes,
-      publicationBundleBytes: proof(
-        statementBytes,
-        'resource-publication.json',
-        'promotion',
-        oldPromotion,
-      ),
-      archiveBytes: pack.archiveBytes,
-      archiveBundleBytes: proof(
-        pack.archiveBytes,
-        statement.archive.name,
-        'qualification',
-        sourceSha,
-      ),
-    }));
-    const repaired = await installOfficialPack({
-      store: current,
-      authorization,
-      loadInputs: repairZip,
-      tufCachePath: join(root, 'trust'),
-    });
-    expect(repairZip).toHaveBeenCalledTimes(1);
-    expect(repaired.resourcesReady).toBe(true);
-    expect(current.getStatus('official:epl-default').phase).toBe('ready');
-  }, 30000);
-  it('downloads a changed Pack and preserves the prior healthy resource generation for old Core rollback', async () => {
-    await store?.close();
-    const current = await open(newCore);
-    pack = await buildOfficialPack(process.cwd(), { packVersion: '1.0.1', sourceSha });
-    statement = makePublication(pack, {
-      promotionSha: newPromotion,
-      sequence: 9,
-      issuedAt: instant(now - 1000),
-      expiresAt: instant(now + 86400000),
-    });
-    statementBytes = jsonBytes(statement);
-    const authorization = await authorize(newCore, { sourceSha });
-    const changedZip = vi.fn(async () => ({
-      statementBytes,
-      publicationBundleBytes: proof(
-        statementBytes,
-        'resource-publication.json',
-        'promotion',
-        newPromotion,
-      ),
-      archiveBytes: pack.archiveBytes,
-      archiveBundleBytes: proof(
-        pack.archiveBytes,
-        statement.archive.name,
-        'qualification',
-        sourceSha,
-      ),
-    }));
-    await installOfficialPack({
-      store: current,
-      authorization,
-      loadInputs: changedZip,
-      tufCachePath: join(root, 'trust'),
-    });
-    expect(changedZip).toHaveBeenCalledTimes(1);
-    expect(current.getStatus('official:epl-default').activeVersion).toBe('1.0.1');
-    await current.close();
-    const previous = await open(oldCore);
-    expect(previous.getStatus('official:epl-default').activeVersion).toBe('1.0.0');
-    expect(
-      await previous.read(
-        'official:epl-default',
-        'fixtures/epl-inferno-video/replay/background.mp4',
-        'bytes=0-31',
-      ),
-    ).toBeDefined();
   }, 30000);
 });

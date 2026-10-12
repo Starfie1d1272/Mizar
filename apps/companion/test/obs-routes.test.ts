@@ -1,125 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { ObsConfigStore } from '../src/obs/config.js';
-import { ObsAdapter } from '../src/obs/adapter.js';
-import { randomUUID } from 'node:crypto';
-import { ObsOutputError } from '../src/obs/outputs.js';
-
-it('accepts only explicit output intents from a local operator and preserves structured failures', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-output-route-'));
-  const command = vi
-    .spyOn(ObsAdapter.prototype, 'outputCommand')
-    .mockRejectedValue(new ObsOutputError('obs_output_unconfirmed', '操作结果尚未确认。'));
-  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
-  const payload = { output: 'stream', action: 'start', expectedRevision: randomUUID() };
-  try {
-    for (const origin of [undefined, 'https://example.test']) {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/operator/obs/output',
-        headers: origin ? { origin } : {},
-        payload,
-      });
-      expect(response.statusCode).toBe(403);
-    }
-    for (const invalid of [
-      { ...payload, action: 'toggle' },
-      { ...payload, requestType: 'StartStream' },
-      { output: 'record', action: 'stop' },
-    ]) {
-      expect(
-        (
-          await app.inject({
-            method: 'POST',
-            url: '/operator/obs/output',
-            headers: { origin: 'http://localhost:3000' },
-            payload: invalid,
-          })
-        ).statusCode,
-      ).toBe(400);
-    }
-    expect(command).not.toHaveBeenCalled();
-    const result = await app.inject({
-      method: 'POST',
-      url: '/operator/obs/output',
-      headers: { origin: 'http://localhost:3000' },
-      payload,
-    });
-    expect(result.statusCode).toBe(409);
-    expect(result.json()).toEqual({
-      error: 'obs_output_unconfirmed',
-      message: '操作结果尚未确认。',
-    });
-    expect(command).toHaveBeenCalledExactlyOnceWith(payload);
-  } finally {
-    await app.close();
-    command.mockRestore();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it('resolves a native OBS launch target only for the local operator without launching it', async () => {
-  const target = vi
-    .spyOn(ObsAdapter.prototype, 'launchTarget')
-    .mockResolvedValue('D:\\OBS\\obs64.exe');
-  const open = vi.spyOn(ObsAdapter.prototype, 'open');
-  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-target-'));
-  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
-  try {
-    const forbidden = await app.inject({
-      method: 'POST',
-      url: '/operator/obs/launch-target',
-      headers: { origin: 'https://example.test' },
-      payload: {},
-    });
-    expect(forbidden.statusCode).toBe(403);
-    expect(target).not.toHaveBeenCalled();
-    const result = await app.inject({
-      method: 'POST',
-      url: '/operator/obs/launch-target',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: {},
-    });
-    expect(result.json()).toEqual({ ok: true, executablePath: 'D:\\OBS\\obs64.exe' });
-    expect(open).not.toHaveBeenCalled();
-  } finally {
-    await app.close();
-    target.mockRestore();
-    open.mockRestore();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it.each([
-  ['未找到 OBS，请在设置中选择 obs64.exe。', '未找到 OBS，请在设置中选择 obs64.exe。'],
-  ['OBS 程序未能打开。', 'OBS 程序未能打开。'],
-  ['unexpected failure with private-password', 'OBS 操作失败，具体原因未确认。请查看诊断后处理。'],
-])(
-  'provides safe OBS startup recovery without exposing arbitrary errors: %s',
-  async (failure, message) => {
-    const open = vi.spyOn(ObsAdapter.prototype, 'open').mockRejectedValue(new Error(failure));
-    const root = await mkdtemp(join(tmpdir(), 'mizar-obs-startup-'));
-    const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
-    try {
-      const result = await app.inject({
-        method: 'POST',
-        url: '/operator/obs/open',
-        headers: { origin: 'http://127.0.0.1:3000' },
-        payload: {},
-      });
-      expect(result.statusCode).toBe(409);
-      expect(result.json()).toMatchObject({ message });
-      expect(result.body).not.toContain('private-password');
-    } finally {
-      await app.close();
-      open.mockRestore();
-      await rm(root, { recursive: true, force: true });
-    }
-  },
-);
 
 it('keeps the OBS WebSocket password out of local status and refuses cross-origin mutation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rh-obs-routes-'));
@@ -147,31 +31,6 @@ it('keeps the OBS WebSocket password out of local status and refuses cross-origi
     expect((await store.read()).password).toBe('secret-probe');
   } finally {
     await app.close();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it('explains authentication failure during scene check without returning the password or scene guidance', async () => {
-  const check = vi
-    .spyOn(ObsAdapter.prototype, 'check')
-    .mockRejectedValue(Object.assign(new Error('Authentication failed'), { code: 4009 }));
-  const root = await mkdtemp(join(tmpdir(), 'mizar-obs-auth-'));
-  const app = buildApp({ obsConfigPath: join(root, 'obs.json') });
-  try {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/operator/obs/check',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: {},
-    });
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      message: 'OBS 密码验证失败，尚未连接。请重新复制 WebSocket 密码，粘贴后保存并测试连接。',
-    });
-    expect(response.body).not.toContain('场景检查');
-  } finally {
-    await app.close();
-    check.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
 });

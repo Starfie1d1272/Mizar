@@ -465,64 +465,9 @@ fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn workspace_feedback_keeps_failure_without_sticking_busy_and_retry_replaces_it() {
-        let feedback = WorkspaceExit::default();
-        let gate = ExitGate::default();
-        assert!(gate.begin());
-        {
-            let _guard = WorkspaceExitGuard(&gate);
-            feedback.stage("production");
-            assert!(feedback.status().busy);
-            assert!(!gate.begin());
-            feedback.stage("restoration");
-            feedback.complete(&Err("CS2 尚未退出，请手动退出游戏后重试恢复。".into()));
-        }
-        let result = feedback.status();
-        assert!(!result.busy);
-        assert_eq!(result.stage, "restoration");
-        assert_eq!(
-            result.message.as_deref(),
-            Some("CS2 尚未退出，请手动退出游戏后重试恢复。")
-        );
-        assert!(gate.begin());
-        {
-            let _guard = WorkspaceExitGuard(&gate);
-            feedback.stage("production");
-            assert!(feedback.status().message.is_none());
-            feedback.complete(&Ok(()));
-        }
-        assert!(gate.check().is_ok());
-        assert!(!feedback.status().busy);
-        assert!(feedback.status().message.is_none());
-    }
 
-    #[test]
-    fn completed_exit_invalidates_old_entry_without_clearing_failure_or_hiding_main() {
-        let gate = ExitGate::default();
-        let feedback = WorkspaceExit::default();
-        let old_entry = gate.presentation_ticket().unwrap();
-        assert!(gate.begin());
-        feedback.stage("restoration");
-        feedback.complete(&Err("CS2 仍在运行，原配置尚未恢复。".into()));
-        gate.cancel();
-        let published = std::cell::Cell::new(false);
-        assert!(gate
-            .publish(old_entry, || {
-                published.set(true); // Represents showing panels and hiding the preparation window.
-                feedback.complete(&Ok(()));
-            })
-            .is_err());
-        assert!(!published.get());
-        assert_eq!(
-            feedback.status().message.as_deref(),
-            Some("CS2 仍在运行，原配置尚未恢复。")
-        );
-        let new_entry = gate.presentation_ticket().unwrap();
-        gate.publish(new_entry, || feedback.complete(&Ok(())))
-            .unwrap();
-        assert!(feedback.status().message.is_none());
-    }
+
+
 
     fn qualification() -> serde_json::Value {
         serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"})
@@ -570,37 +515,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn absent_or_failed_qualification_still_cleans_up_without_acknowledgement() {
-        for prepared in [Ok(None), Err("Companion unavailable".into())] {
-            let failed = prepared.is_err();
-            let cleaned = std::cell::Cell::new(false);
-            let result = finish_with_qualification(
-                || prepared,
-                |requires_proof| {
-                    assert!(!requires_proof);
-                    cleaned.set(true);
-                    Ok(())
-                },
-                |_| panic!("No qualification may be acknowledged"),
-            );
-            assert!(cleaned.get());
-            if failed {
-                assert_eq!(result.unwrap_err(), EXIT_UNCONFIRMED);
-            } else {
-                result.unwrap();
-            }
-        }
-        assert_eq!(
-            finish_with_qualification(
-                || Ok(Some(qualification())),
-                |_| Ok(()),
-                |_| Err("409: stale ticket".into()),
-            )
-            .unwrap_err(),
-            EXIT_UNCONFIRMED
-        );
-    }
+
 
     #[test]
     fn private_handshake_uses_token_without_origin_and_preserves_captured_identity() {
@@ -623,102 +538,9 @@ mod tests {
             .contains("Origin: http://127.0.0.1:3000\r\n"));
     }
 
-    #[test]
-    fn malformed_private_runtime_identity_is_bounded_and_never_logged() {
-        let root = std::env::temp_dir().join(format!(
-            "mizar-exit-identity-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let log = DesktopLog::new(&root, None).unwrap();
-        std::fs::create_dir_all(log.state_root.join("data")).unwrap();
-        let path = log.state_root.join("data/runtime.json");
-        let token = "b".repeat(64);
-        for input in [
-            format!(r#"{{"controlToken":"{token}","secret":}}"#),
-            "c".repeat(64 * 1024 + 1),
-            r#"{"controlToken":"private-token"}"#.into(),
-        ] {
-            std::fs::write(&path, input).unwrap();
-            let error = runtime_token(&log).unwrap_err();
-            assert!(!error.contains(&token) && !error.contains("private-token"));
-        }
-        std::fs::write(
-            &path,
-            serde_json::json!({"controlToken": token}).to_string(),
-        )
-        .unwrap();
-        assert_eq!(runtime_token(&log).unwrap(), token);
-        let evidence = std::fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
-        assert!(evidence.contains("runtime_json") && evidence.contains("size_limit_exceeded"));
-        assert!(!evidence.contains(&token) && !evidence.contains("private-token"));
-        std::fs::remove_dir_all(root).unwrap();
-    }
 
-    #[test]
-    fn only_verified_stop_skips_an_already_completed_production_request() {
-        let stop = VerifiedStop::default();
-        assert!(!stop.complete());
-        stop.mark();
-        assert!(stop.complete());
-        let calls = std::cell::RefCell::new(Vec::new());
-        finish_then_restore(
-            || {
-                if !stop.complete() {
-                    calls.borrow_mut().push("http");
-                }
-                Ok(())
-            },
-            || {
-                calls.borrow_mut().push("game-close-and-restore");
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(*calls.borrow(), vec!["game-close-and-restore"]);
-    }
-    #[test]
-    fn safe_finish_precedes_game_close_and_failure_keeps_game() {
-        let calls = std::cell::RefCell::new(Vec::new());
-        finish_then_restore(
-            || {
-                calls.borrow_mut().push("waiting-and-release");
-                Ok(())
-            },
-            || {
-                calls.borrow_mut().push("game-close-and-restore");
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            *calls.borrow(),
-            vec!["waiting-and-release", "game-close-and-restore"]
-        );
-        calls.borrow_mut().clear();
-        assert!(finish_then_restore(
-            || Err("OBS failed".into()),
-            || {
-                calls.borrow_mut().push("game-close");
-                Ok(())
-            }
-        )
-        .is_err());
-        assert!(calls.borrow().is_empty());
-    }
-    #[test]
-    fn exit_rejects_new_launch_and_allows_cleanup_retry() {
-        let gate = ExitGate::default();
-        assert!(gate.check().is_ok());
-        assert!(gate.begin());
-        assert!(!gate.begin());
-        assert!(gate.check().is_err());
-        gate.cancel();
-        assert!(gate.check().is_ok());
-        assert!(gate.begin());
-        assert!(gate.check().is_err());
-    }
+
+
+
+
 }

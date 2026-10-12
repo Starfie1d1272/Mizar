@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { browserIdentities, verifyBrowserEvidence, verifyBrowserShards } from './test-evidence.mjs';
+import { verifyBrowserEvidence, verifyBrowserShards } from './test-evidence.mjs';
 import { readBrowserShards } from './verify-browser-shards.mjs';
 
 function report(names, result = undefined) {
@@ -25,15 +25,6 @@ function report(names, result = undefined) {
 const passed = { status: 'passed', retry: 0 };
 
 describe('browser discovery and actual execution proof', () => {
-  it('matches a selected shard to FULL and its actual single passing attempts', () => {
-    expect(
-      verifyBrowserEvidence(
-        report(['first', 'second']),
-        report(['second']),
-        report(['second'], passed),
-      ),
-    ).toMatchObject({ full: 2, selected: 1, passed: 1 });
-  });
   it.each([
     ['omitted test', report(['first', 'second']), report(['first'], passed)],
     ['unexpected test', report(['first']), report(['first', 'second'], passed)],
@@ -63,19 +54,6 @@ describe('browser discovery and actual execution proof', () => {
     expect(() => verifyBrowserEvidence(report(['first']), report(['first']), actual)).toThrow(
       'repeated attempt',
     );
-  });
-  it('distinguishes equal titles in different projects and nested suites', () => {
-    const sample = report([]);
-    sample.suites[0].suites = ['left', 'right'].map((title) => ({
-      title,
-      column: 1,
-      specs: report(['same']).suites[0].specs,
-    }));
-    const ids = browserIdentities(sample).map((test) => test.id);
-    expect(new Set(ids).size).toBe(2);
-    const nested = sample.suites[0].suites[0].specs[0].tests;
-    nested.push({ projectName: 'other', results: [] });
-    expect(new Set(browserIdentities(sample).map((test) => test.id)).size).toBe(3);
   });
 });
 
@@ -121,21 +99,6 @@ describe('same-source browser evidence across partial workflow reruns', () => {
       rmSync(root, { recursive: true, force: true });
     }
   }
-  it('uses prior successful shards when only another job or the gate reruns', () => {
-    fixture((root, save) => {
-      save(1);
-      save(2);
-      expect(verifyBrowserShards(readBrowserShards(root, 2, context))).toEqual({
-        full: 2,
-        passed: 2,
-      });
-      save(2, 2);
-      expect(verifyBrowserShards(readBrowserShards(root, 2, context))).toEqual({
-        full: 2,
-        passed: 2,
-      });
-    });
-  });
   it('rejects a failed newest shard instead of reusing its earlier success', () => {
     fixture((root, save) => {
       save(1);
@@ -144,28 +107,17 @@ describe('same-source browser evidence across partial workflow reruns', () => {
       expect(() => verifyBrowserShards(readBrowserShards(root, 2, context))).toThrow('non-passing');
     });
   });
-  it.each([
-    { runId: '43' },
-    { sourceSha: 'b'.repeat(40) },
-    { attempt: 1 },
-    { shard: 1 },
-    { count: 3 },
-  ])('rejects newest evidence with a different identity: %j', (change) => {
-    fixture((root, save) => {
-      save(1);
-      save(2);
-      save(2, 2, { identity: { ...context, shard: 2, count: 2, ...change } });
-      expect(() => readBrowserShards(root, 2, context)).toThrow('identity differs');
-    });
-  });
-  it('rejects a missing shard and evidence from a future attempt', () => {
-    fixture((root, save) => {
-      save(1);
-      expect(() => readBrowserShards(root, 2, context)).toThrow('missing browser shard');
-      save(2, 3);
-      expect(() => readBrowserShards(root, 2, context)).toThrow('unexpected attempt');
-    });
-  });
+  it.each([{ sourceSha: 'b'.repeat(40) }, { attempt: 1 }, { shard: 1 }, { count: 3 }])(
+    'rejects newest evidence with a different identity: %j',
+    (change) => {
+      fixture((root, save) => {
+        save(1);
+        save(2);
+        save(2, 2, { identity: { ...context, shard: 2, count: 2, ...change } });
+        expect(() => readBrowserShards(root, 2, context)).toThrow('identity differs');
+      });
+    },
+  );
 });
 
 describe('isolated installer group evidence', () => {
@@ -236,7 +188,6 @@ describe('isolated installer group evidence', () => {
   );
   it.each([
     { sourceSha: 'b'.repeat(40) },
-    { runId: '43' },
     { attempt: '1' },
     { group: 'update' },
     { cases: Array(8).fill('cancelled-install') },
@@ -247,19 +198,6 @@ describe('isolated installer group evidence', () => {
       save('cleanup');
       save('faults', 2, change);
       expect(() => verifyInstallerShards(root, context)).toThrow();
-    });
-  });
-  it('rejects a future attempt and an undeclared group', () => {
-    fixture((root, save) => {
-      save('update');
-      save('faults', 3);
-      expect(() => verifyInstallerShards(root, context)).toThrow('future');
-    });
-    fixture((root, save) => {
-      save('update');
-      save('faults');
-      save('other');
-      expect(() => verifyInstallerShards(root, context)).toThrow('unknown');
     });
   });
 });

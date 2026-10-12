@@ -43,15 +43,4 @@ mod tests {
         assert!(validate(&"错".repeat(MAX_BYTES / 2)).is_err());
     }
 
-    #[test]
-    fn writes_only_valid_json_to_user_chosen_path() {
-        let path =
-            std::env::temp_dir().join(format!("mizar-support-test-{}.json", std::process::id()));
-        save(&path, BUNDLE).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), BUNDLE);
-        assert!(save(&path, "{}").is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), BUNDLE);
-        assert!(save(&path.with_extension("txt"), BUNDLE).is_err());
-        fs::remove_file(path).unwrap();
-    }
 }

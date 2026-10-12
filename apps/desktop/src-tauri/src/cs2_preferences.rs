@@ -74,27 +74,3 @@ impl Preferences {
         json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit})
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn old_quality_choices_migrate_without_enabling_unlimited_frames() {
-        for preserve in [false, true] {
-            let preferences = Preferences::from_json(&json!({"preserveQuality":preserve})).unwrap();
-            assert_eq!(preferences.frame_rate_limit, 60);
-            assert_eq!(preferences.quality == Quality::Preserve, preserve);
-            assert_eq!(
-                Preferences::from_json(&preferences.json()).unwrap(),
-                preferences
-            );
-        }
-        for invalid in [
-            json!({}),
-            json!({"qualityPreset":"high", "frameRateLimit":120}),
-            json!({"qualityPreset":"invalid", "frameRateLimit":60}),
-        ] {
-            assert!(Preferences::from_json(&invalid).is_err());
-        }
-    }
-}

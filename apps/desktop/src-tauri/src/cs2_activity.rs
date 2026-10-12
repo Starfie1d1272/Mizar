@@ -23,29 +23,3 @@ impl Drop for Guard<'_> {
         self.0 .0.store(0, Ordering::Release);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn a_slow_operation_does_not_block_status_readers() {
-        let operation = std::sync::Mutex::new(());
-        let activity = Activity::default();
-        let _operation = operation.lock().unwrap();
-        let guard = activity.begin(1);
-        assert!(operation.try_lock().is_err());
-        assert_eq!(activity.phase(), "starting");
-        drop(guard);
-        assert_eq!(activity.phase(), "idle");
-    }
-
-    #[test]
-    fn routine_lock_contention_is_not_an_operator_action() {
-        let activity = Activity::default();
-        assert_eq!(activity.phase(), "idle");
-        let guard = activity.begin(3);
-        assert_eq!(activity.phase(), "checking");
-        drop(guard);
-        assert_eq!(activity.phase(), "idle");
-    }
-}

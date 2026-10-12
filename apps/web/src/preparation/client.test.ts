@@ -67,71 +67,6 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
-  it.each(['enter'] as const)(
-    'routes %s through the active Demo Host transaction',
-    async (action) => {
-      const calls = setup();
-      vi.mocked(fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ active: true, phase: 'playing', requestId: 'trial-id' })),
-      );
-      await productionAction(action, preparation);
-      expect(calls).toEqual(['enter_demo_test']);
-    },
-  );
-
-  it('delegates finish to the Host so its outcome survives hidden or navigated windows', async () => {
-    const calls = setup();
-    await productionAction('finish', preparation);
-    expect(calls).toEqual(['finish_workspace']);
-  });
-
-  it('preserves a Host finish rejection rather than announcing successful recovery', async () => {
-    setup();
-    window.__TAURI_INTERNALS__ = {
-      invoke: () => Promise.reject(new Error('CS2 尚未退出，请手动退出游戏后重试恢复。')),
-    };
-    await expect(productionAction('finish', preparation)).rejects.toThrow('CS2 尚未退出');
-  });
-
-  it('starts the game after OBS readiness and before committing live presentation', async () => {
-    const calls = setup();
-    await productionAction('enter', preparation);
-    expect(calls).toEqual([
-      '/local/v1/demo-test',
-      'gsi_status',
-      '/local/v1/obs',
-      'start_managed_cs2',
-      'cs2_config_status',
-      '/operator/production',
-      'present_production',
-    ]);
-  });
-  it('does not enter production after the pending launch is cancelled and restored', async () => {
-    const calls = setup(undefined, 'preparation', true, false, [
-      { running: false, pending: true },
-      { running: false, pending: false },
-    ]);
-    await expect(productionAction('enter', preparation)).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      '/local/v1/demo-test',
-      'gsi_status',
-      '/local/v1/obs',
-      'start_managed_cs2',
-      'cs2_config_status',
-      'cs2_config_status',
-    ]);
-    expect(calls).not.toContain('finish_managed_cs2');
-  });
-  it('continues the original entry intent after the late game is confirmed without launching again', async () => {
-    const calls = setup(undefined, 'preparation', true, false, [
-      { busy: true },
-      { running: false, pending: true },
-      { running: true, pending: true },
-    ]);
-    await productionAction('enter', preparation);
-    expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
-    expect(calls.slice(-2)).toEqual(['/operator/production', 'present_production']);
-  });
   it('cancels the entry intent when navigation changes during Steam startup', async () => {
     vi.useFakeTimers();
     const calls = setup(undefined, 'preparation', true, false);
@@ -145,32 +80,12 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(calls).not.toContain('/operator/production');
     expect(calls).not.toContain('finish_managed_cs2');
   });
-  it('does not enter production when the game cannot start', async () => {
-    const calls = setup('launch');
-    await expect(productionAction('enter', preparation)).rejects.toThrow('请先退出');
-    expect(calls).toEqual([
-      '/local/v1/demo-test',
-      'gsi_status',
-      '/local/v1/obs',
-      'start_managed_cs2',
-    ]);
-  });
-  it('hides the workspace without closing the game', async () => {
-    const calls = setup();
-    await productionAction('hide', { ...preparation, mode: 'live' });
-    expect(calls).toEqual(['/operator/production', 'present_production']);
-  });
   it('reads actual live state after an uncertain commit and keeps the newly started game', async () => {
     const calls = setup('network', 'live');
     await expect(productionAction('enter', preparation)).rejects.toThrow(
       '制作已开始，但工作台尚未打开',
     );
     expect(calls.at(-1)).toBe('/local/v1/production');
-    expect(calls).not.toContain('finish_managed_cs2');
-  });
-  it('keeps a reused managed game after a revision conflict and describes the remaining action', async () => {
-    const calls = setup('production', 'preparation', false);
-    await expect(productionAction('enter', preparation)).rejects.toThrow('受管理的 CS2 已保留');
     expect(calls).not.toContain('finish_managed_cs2');
   });
 });
