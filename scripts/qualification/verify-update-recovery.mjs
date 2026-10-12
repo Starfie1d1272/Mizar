@@ -33,7 +33,7 @@ async function run(args, overrides = {}) {
       ...args,
       ...(directTransaction ? ['-NoStatusWindow'] : []),
     ],
-    { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    { env, windowsHide: overrides.MIZAR_UPDATE_TEST_UI !== '1', stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let output = '',
     errors = '';
@@ -79,6 +79,7 @@ async function installWithHost(binaryPath, stage, env = {}) {
   });
   let output = '';
   let installation;
+  let settled = false;
   try {
     const started = new Promise((done, reject) => {
       host.stdout.on('data', (bytes) => {
@@ -94,7 +95,6 @@ async function installWithHost(binaryPath, stage, env = {}) {
     const readyPath = join(stage, 'install-script-ready.txt');
     const readyEvent = `Global\\MizarUpdateReady-${host.pid}-${Date.now()}`;
     const literal = (value) => `'${value.replace(/'/g, "''")}'`;
-    let settled = false;
     installation = run(
       [
         '-Command',
@@ -189,8 +189,36 @@ async function installWithHost(binaryPath, stage, env = {}) {
       await writeFile(join(stage, 'writer-release.txt'), 'release');
     }
     if (env.MIZAR_UPDATE_TEST_RECOVERY_UI === '1') {
-      const blockerPid = (await readFile(join(stage, 'blocker-pid.txt'), 'utf8')).trim();
+      let blockerPid = '';
+      for (let count = 0; !blockerPid; count++) {
+        assert(count < 200, 'Recovery blocker did not start');
+        blockerPid = (
+          await readFile(join(stage, 'blocker-pid.txt'), 'utf8').catch(() => '')
+        ).trim();
+        if (!blockerPid) await new Promise((done) => setTimeout(done, 50));
+      }
       assert.match(blockerPid, /^[1-9][0-9]*$/);
+      const rejected = await windowProbe(stage, 'restore', 'recovery-required');
+      assert.equal(rejected.code, 0, rejected.errors);
+      for (let count = 0; ; count++) {
+        const activity = await readFile(join(stage, 'update-activity.ndjson'), 'utf8');
+        const result = JSON.parse(await readFile(join(stage, 'journal.json'), 'utf8'));
+        if (
+          activity.includes('restore-requested') &&
+          activity.includes('update_process_remaining')
+        ) {
+          assert.equal(result.phase, 'installing');
+          break;
+        }
+        assert(count < 200, 'Occupied recovery did not reject safely');
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.equal(
+        await readFile(join(stage, 'previous/LICENSE'), 'utf8'),
+        'independent product license',
+      );
+      const busyWindow = await windowProbe(stage, 'capture-result', 'recovery-blocked');
+      assert.equal(busyWindow.code, 0, busyWindow.errors);
       const stopped = await run([
         '-Command',
         `Stop-Process -Id ${blockerPid} -Force; Wait-Process -Id ${blockerPid} -ErrorAction SilentlyContinue`,

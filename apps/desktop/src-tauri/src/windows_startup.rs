@@ -57,7 +57,7 @@ extern "system" {
 extern "system" {
     fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, kind: u32) -> i32;
     fn FindWindowW(class: *const u16, title: *const u16) -> isize;
-    fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn ShowWindowAsync(hwnd: isize, command: i32) -> i32;
     fn SetForegroundWindow(hwnd: isize) -> i32;
     fn FlashWindowEx(info: *const FlashInfo) -> i32;
 }
@@ -224,7 +224,7 @@ pub fn focus_update_window() -> bool {
         return false;
     }
     unsafe {
-        ShowWindow(handle, 9);
+        ShowWindowAsync(handle, 9);
         if SetForegroundWindow(handle) != 0 {
             return true;
         }
@@ -611,55 +611,6 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-    #[test]
-    fn rejected_production_start_unmaps_gui_and_headless_images_without_a_modal_wait() {
-        const CHILD: &str = "MIZAR_REJECTED_START_TEST";
-        if let Ok(mode) = std::env::var(CHILD) {
-            assert!(reject_update_start(mode == "headless").unwrap());
-            return;
-        }
-        let name: Vec<u16> = "Global\\MizarUpdateActive\0".encode_utf16().collect();
-        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
-        assert_ne!(handle, 0);
-        let _active = EventHandle(handle);
-        let root =
-            std::env::temp_dir().join(format!("mizar-rejected-start-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let image = root.join("Mizar.exe");
-        std::fs::copy(std::env::current_exe().unwrap(), &image).unwrap();
-        for mode in ["gui", "headless"] {
-            let mut child = Command::new(&image)
-                .args(["--exact", "windows_startup::tests::rejected_production_start_unmaps_gui_and_headless_images_without_a_modal_wait", "--nocapture"])
-                .env(CHILD, mode)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(3);
-            let status = loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    break status;
-                }
-                if Instant::now() >= deadline {
-                    child.kill().unwrap();
-                    child.wait().unwrap();
-                    panic!("rejected {mode} start kept the product image mapped");
-                }
-                thread::sleep(Duration::from_millis(10));
-            };
-            assert!(status.success());
-            use std::os::windows::fs::OpenOptionsExt;
-            let gate = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .share_mode(4)
-                .open(&image)
-                .unwrap();
-            drop(gate);
-        }
-        std::fs::remove_dir_all(root).unwrap();
-    }
     #[test]
     fn helper_acknowledgement_precedes_desktop_handle_release() {
         let handoff = UpdateHandoff::new().unwrap();

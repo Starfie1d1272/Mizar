@@ -79,7 +79,10 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Threading;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 public static class MizarUpdateWindow {
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
   static readonly object gate = new object();
   static readonly ManualResetEvent ready = new ManualResetEvent(false), closed = new ManualResetEvent(false);
   static readonly AutoResetEvent restore = new AutoResetEvent(false);
@@ -122,7 +125,7 @@ public static class MizarUpdateWindow {
         window.FormClosing+=delegate(object sender,FormClosingEventArgs args) {
           if (!finished) { args.Cancel=true; if (cancellable) RequestCancel(); else hint.Text="安装或恢复已开始，请等待完成后再关闭。"; }
         };
-        window.Shown+=delegate { ready.Set(); };
+        window.Shown+=delegate { ShowWindow(window.Handle,1); if(!IsWindowVisible(window.Handle)) { startupError=new InvalidOperationException("update_window_hidden"); finished=true; window.Close(); } ready.Set(); };
         window.FormClosed+=delegate { closed.Set(); };
         Application.Run(window);
       } catch(Exception error) { startupError=error; ready.Set(); closed.Set(); }
@@ -550,7 +553,7 @@ try { $phase = [string](Get-Content -Encoding UTF8 -LiteralPath (Join-Path $Stag
 $currentResult = $script:updateResultWritten -and $null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)
 $status = if ($currentResult) { [string]$result.status } elseif ($phase -eq 'prepared') { 'cancelled' } else { 'recovery-required' }
 $code = if ($currentResult) { [string]$result.code } elseif ($phase -eq 'prepared') { 'update_not_started' } else { 'update_result_unavailable' }
-if ($script:updateFailureCode) { $code = $script:updateFailureCode + ' / ' + $code }
+if ($script:updateFailureCode -and $script:updateFailureCode -ne $code) { $code = $script:updateFailureCode + ' / ' + $code }
 $canRestore = $false
 if ($status -eq 'recovery-required' -and (Test-Path -LiteralPath (Join-Path $StageRoot 'Installer.exe'))) {
   try { Assert-Payload (Join-Path $StageRoot 'previous') $plan.previousContentDigest; $canRestore = $true } catch { Record-UpdateActivity 'backup_unavailable' $_.ToString() }

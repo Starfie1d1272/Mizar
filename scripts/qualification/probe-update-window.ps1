@@ -1,6 +1,6 @@
 ﻿param(
   [Parameter(Mandatory=$true)][int]$ProcessId,
-  [ValidateSet('capture','restore','cancel','close-blocked','close-completed')][string]$Action,
+  [ValidateSet('capture','capture-result','restore','cancel','close-blocked','close-completed')][string]$Action,
   [Parameter(Mandatory=$true)][string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
@@ -27,7 +27,7 @@ public static class UpdateWindowProbe {
  }
 }
 '@
-$title = if ($Action -in @('close-completed','restore')) { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
+$title = if ($Action -in @('close-completed','restore','capture-result')) { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 $window = [IntPtr]::Zero
 while ($window -eq [IntPtr]::Zero) {
