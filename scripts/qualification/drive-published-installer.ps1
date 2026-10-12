@@ -18,8 +18,12 @@ function Window {
  return [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 }
 function Elements($window) { $window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) }
-function Named($window,[string]$name) {
+function Named($window,[string]$name,$type=$null) {
  $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,$name)
+ if($type) {
+  $kind=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,$type)
+  $condition=New-Object Windows.Automation.AndCondition($condition,$kind)
+ }
  return $window.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Capture([string]$name) {
@@ -34,7 +38,7 @@ function Capture([string]$name) {
 $names=@()
 try {
  $deadline=[DateTime]::UtcNow.AddSeconds(30)
- do { $window=Window;if($window) { $entry=Named $window '安装位置';$button=Named $window '安装' };if(!$entry -or !$button) { Start-Sleep -Milliseconds 100 } } while((!$entry -or !$button) -and [DateTime]::UtcNow -lt $deadline)
+ do { $window=Window;if($window) { $entry=Named $window '安装位置' ([Windows.Automation.ControlType]::Edit);$button=Named $window '安装' ([Windows.Automation.ControlType]::Button) };if(!$entry -or !$button) { Start-Sleep -Milliseconds 100 } } while((!$entry -or !$button) -and [DateTime]::UtcNow -lt $deadline)
  if(!$entry -or !$button) { throw 'Actual installer controls unavailable' }
  $value=[Windows.Automation.ValuePattern]$entry.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
  $value.SetValue($Destination)
