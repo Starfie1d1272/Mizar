@@ -186,6 +186,10 @@ namespace Mizar.WebInstaller {
           Assert(!Directory.Exists(residue) && File.Exists(Path.Combine(retained[0],".mizar-bootstrap-owner")));
           Console.WriteLine("PASS: owner-only uninstall residue is preserved whole and fresh NSIS installation can resume");
           Passed("owned-residue");
+        }
+        // These fresh-target failures share no installed Core/App state with the
+        // preceding residue/recovery chain; run on an independent Windows shard.
+        if(group=="all" || group=="cleanup") {
           var badIdentity = new JavaScriptSerializer().Deserialize<Plan>(new JavaScriptSerializer().Serialize(plan));
           badIdentity.contentDigest = new string('0',64);
           string failedTarget=Path.Combine(root,"failed NSIS identity path");
@@ -226,7 +230,7 @@ namespace Mizar.WebInstaller {
             new Downloader(client).Download(plan,args[1],new IgnoreProgress(),CancellationToken.None).GetAwaiter().GetResult();
           return 0;
         }
-        if((args.Length!=2 && args.Length!=3) || (args[0]!="all" && args[0]!="update" && args[0]!="faults")) throw new IOException("Unknown NSIS qualification group");
+        if((args.Length!=2 && args.Length!=3) || (args[0]!="all" && args[0]!="update" && args[0]!="faults" && args[0]!="cleanup")) throw new IOException("Unknown NSIS qualification group");
         timingOutput=Path.GetDirectoryName(Path.GetFullPath(args[1]));
         Run(args[0],args.Length==3 ? args[2] : null).GetAwaiter().GetResult();
         var evidence=new { group=args[0], cases=cases.ToArray(), sourceSha=Environment.GetEnvironmentVariable("GITHUB_SHA"), runId=Environment.GetEnvironmentVariable("GITHUB_RUN_ID"), attempt=Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT") };

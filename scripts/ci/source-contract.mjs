@@ -9,6 +9,7 @@ export const fullSourceJobs = Object.freeze([
   'update recovery / Windows',
   'installer / Windows / update',
   'installer / Windows / faults',
+  'installer / Windows / cleanup',
   'qualification / offline / Linux',
   'qualification / offline / macOS',
   'ci-gate',

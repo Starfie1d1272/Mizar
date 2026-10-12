@@ -1,10 +1,10 @@
-param([Parameter(Mandatory=$true)][string]$OutputDirectory, [ValidateSet('all','update','faults')][string]$CaseGroup = 'all')
+param([Parameter(Mandatory=$true)][string]$OutputDirectory, [ValidateSet('all','update','faults','cleanup')][string]$CaseGroup = 'all')
 $ErrorActionPreference = 'Stop'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
-# Update owns its complete installation chain and needs no Node/App deployment.
-if ($CaseGroup -eq 'update') {
+# Update and fresh-target cleanup need no Node/App deployment.
+if ($CaseGroup -in @('update','cleanup')) {
   & "$PSScriptRoot/test-nsis.ps1" -OutputDirectory $output -CaseGroup $CaseGroup
   exit 0
 }

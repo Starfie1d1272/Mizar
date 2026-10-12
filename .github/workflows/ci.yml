@@ -412,10 +412,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [update, faults]
+        group: [update, faults, cleanup]
     timeout-minutes: 10
     steps:
-      - if: ${{ matrix.group == 'update' }}
+      - if: ${{ matrix.group != 'faults' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -670,7 +670,7 @@ jobs:
           pattern: installer-evidence-*
           path: .agent-tmp/installer-shards
 
-      - name: Verify both isolated installer groups cover every case
+      - name: Verify all isolated installer groups cover every case
         if: ${{ needs.plan.outputs.run_installer == 'true' }}
         run: node scripts/ci/verify-installer-shards.mjs .agent-tmp/installer-shards ${{ github.run_attempt }}
 

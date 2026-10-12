@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory, [ValidateSet('all','update','faults')][string]$CaseGroup = 'all', [string]$DownloadCache, [switch]$PrepareDownloadOnly)
+﻿param([Parameter(Mandatory=$true)][string]$OutputDirectory, [ValidateSet('all','update','faults','cleanup')][string]$CaseGroup = 'all', [string]$DownloadCache, [switch]$PrepareDownloadOnly)
 $ErrorActionPreference = 'Stop'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $output = [IO.Path]::GetFullPath($OutputDirectory)
