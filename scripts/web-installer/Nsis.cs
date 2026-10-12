@@ -375,10 +375,10 @@ namespace Mizar.WebInstaller {
       }
       return entries;
     }
-    static string NativeScript() { using(var input=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("update-install.ps1")) {if(input==null) throw new IOException("缺少更新恢复入口。");using(var reader=new StreamReader(input)) return reader.ReadToEnd();} }
+    static string NativeScript() { using(var input=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("update-install.ps1")) {if(input==null) throw new IOException("缺少更新恢复入口。");using(var bytes=new MemoryStream()) {input.CopyTo(bytes);return new System.Text.UTF8Encoding(false,true).GetString(bytes.ToArray());}} }
     static string NativeScriptHash() {using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(new System.Text.UTF8Encoding(false).GetBytes(NativeScript()))).Replace("-","").ToLowerInvariant();}
     static async Task<string> Native(string script,string arguments,PendingInstall record=null,IProgress<string> progress=null,CancellationToken token=default(CancellationToken)) {
-      var start=new ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" "+arguments,UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+      var start=new ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" "+arguments+" -NoStatusWindow",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
       start.EnvironmentVariables.Remove("PSModulePath");
       using(var scriptLock=new FileStream(script,FileMode.Open,FileAccess.Read,FileShare.Read)) {
       AssertLocked(scriptLock,NativeScriptHash());
