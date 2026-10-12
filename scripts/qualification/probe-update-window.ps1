@@ -19,7 +19,15 @@ public static class UpdateWindowProbe {
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hwnd);
+ [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, Visit visitor, IntPtr parameter);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hwnd,uint message,IntPtr wparam,IntPtr lparam,uint flags,uint timeout,out IntPtr result);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+ public static IntPtr Button(IntPtr parent,string caption) {
+  IntPtr found=IntPtr.Zero;
+  EnumChildWindows(parent,delegate(IntPtr hwnd,IntPtr unused) { var text=new StringBuilder(256); GetWindowText(hwnd,text,256); if(text.ToString()==caption) {found=hwnd;return false;}return true;},IntPtr.Zero);
+  return found;
+ }
  public static IntPtr Find(uint owner, string title) {
   IntPtr found=IntPtr.Zero;
   EnumWindows(delegate(IntPtr hwnd,IntPtr unused) { uint pid; GetWindowThreadProcessId(hwnd,out pid); var text=new StringBuilder(256); GetWindowText(hwnd,text,256); if(pid==owner && text.ToString()==title) { found=hwnd; return false; } return true; },IntPtr.Zero);
@@ -36,33 +44,34 @@ while ($window -eq [IntPtr]::Zero) {
  Start-Sleep -Milliseconds 50
 }
 if (![UpdateWindowProbe]::IsWindowVisible($window)) { throw 'Update window is hidden' }
-function Invoke-Button($button) {
- if ($null -eq $button -or $button.Current.ControlType -ne [Windows.Automation.ControlType]::Button -or !$button.Current.IsEnabled) { throw 'Expected an enabled native button' }
+function Invoke-Button($caption) {
+ $handle = [UpdateWindowProbe]::Button($window,$caption)
+ if ($handle -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($handle)) { throw 'Expected an enabled native button' }
+ $button = [Windows.Automation.AutomationElement]::FromHandle($handle)
  $patterns = @($button.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName })
- @{ name=$button.Current.Name; controlType=$button.Current.ControlType.ProgrammaticName; patterns=$patterns } | ConvertTo-Json -Compress | Write-Output
+ @{ name=$button.Current.Name; controlType=$button.Current.ControlType.ProgrammaticName; patterns=$patterns; nativeHandle=[long]$handle } | ConvertTo-Json -Compress | Write-Output
  $pattern = $null
  if ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.InvokePattern]$pattern).Invoke(); return }
  if ($button.TryGetCurrentPattern([Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$pattern)) { ([Windows.Automation.LegacyIAccessiblePattern]$pattern).DoDefaultAction(); return }
- throw 'Native button has no supported invoke or accessibility action'
+ # BM_CLICK is the native button action, not a bypass of the handler or transaction.
+ $result = [IntPtr]::Zero
+ if ([UpdateWindowProbe]::SendMessageTimeout($handle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero,2,1000,[ref]$result) -eq [IntPtr]::Zero) { throw 'Native button action did not complete' }
 }
 $element = [Windows.Automation.AutomationElement]::FromHandle($window)
-$nameCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'取消更新')
-$buttonCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button)
-$condition = New-Object Windows.Automation.AndCondition($nameCondition,$buttonCondition)
-$cancel = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
-if ($Action -eq 'restore') { $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版'); $restore = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition); if ($null -eq $restore -or !$restore.Current.IsEnabled) { throw 'Verified recovery action is unavailable' } }
+$cancel = [UpdateWindowProbe]::Button($window,'取消更新')
+if ($Action -eq 'restore') { $restore = [UpdateWindowProbe]::Button($window,'恢复旧版'); if ($restore -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($restore)) { throw 'Verified recovery action is unavailable' } }
 if ($Action -eq 'backup-unavailable') {
  $restoreCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版')
  $restoreButton = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$restoreCondition)
- if ($null -eq $restoreButton -or $restoreButton.Current.IsEnabled) { throw 'Unverified backup must disable recovery' }
+ if ([UpdateWindowProbe]::Button($window,'恢复旧版') -eq [IntPtr]::Zero -or [UpdateWindowProbe]::IsWindowEnabled([UpdateWindowProbe]::Button($window,'恢复旧版'))) { throw 'Unverified backup must disable recovery' }
  $downloadCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'下载正式安装包')
  if ($null -eq $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$downloadCondition)) { throw 'Unavailable backup lacks a concrete download path' }
 }
 if ($Action -eq 'cancel') {
- if ($null -eq $cancel -or !$cancel.Current.IsEnabled) { throw 'Pre-install cancellation is unavailable' }
+ if ($cancel -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($cancel)) { throw 'Pre-install cancellation is unavailable' }
 }
 if ($Action -eq 'close-blocked') {
- if ($null -eq $cancel -or $cancel.Current.IsEnabled) { throw 'Mutation must disable cancellation' }
+ if ($cancel -eq [IntPtr]::Zero -or [UpdateWindowProbe]::IsWindowEnabled($cancel)) { throw 'Mutation must disable cancellation' }
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  Start-Sleep -Milliseconds 200
  if (![UpdateWindowProbe]::IsWindow($window)) { throw 'Close interrupted the protected transaction' }
@@ -78,8 +87,8 @@ $graphics = [Drawing.Graphics]::FromImage($bitmap)
 try { $graphics.CopyFromScreen($rectangle.Left,$rectangle.Top,0,0,$bitmap.Size); $bitmap.Save($OutputPath,[Drawing.Imaging.ImageFormat]::Png) }
 finally { $graphics.Dispose(); $bitmap.Dispose() }
 @{ realNativeWindow=$true; source='production update helper'; syntheticInstaller=$true; actualNSIS=$false; action=$Action; title=$title; names=$names } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($OutputPath+'.json') -Encoding UTF8
-if ($Action -eq 'cancel') { Invoke-Button $cancel }
-if ($Action -eq 'restore') { Invoke-Button $restore }
+if ($Action -eq 'cancel') { Invoke-Button '取消更新' }
+if ($Action -eq 'restore') { Invoke-Button '恢复旧版' }
 if ($Action -eq 'close-completed') {
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  $deadline = [DateTime]::UtcNow.AddSeconds(5)

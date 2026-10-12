@@ -179,6 +179,11 @@ public static class MizarUpdateWindow {
         if(restoreAllowed) { hint.Text="先关闭 Mizar 与安装向导，再点击“恢复旧版”。"; cancel.Text="恢复旧版"; cancel.Visible=true; cancel.Enabled=true; }
         else { hint.Text="旧版备份未通过核验；请关闭 Mizar，手动安装正式安装包。"; cancel.Text="恢复旧版"; cancel.Visible=true; cancel.Enabled=false; packageLink.Visible=true; }
       }
+      if(status=="recovery-required" && restoreAllowed && !String.IsNullOrEmpty(code)) {
+        if(code.Contains("update_process_remaining")) hint.Text="先正常退出残留的 Mizar，再点击“恢复旧版”重试。";
+        else if(code.Contains("update_installer_remaining")) hint.Text="先关闭安装向导并确认安装已停止，再点击“恢复旧版”。";
+        else if(code.Contains("update_program_in_use")) hint.Text="程序文件仍被占用；关闭 Mizar 和安装向导后重试恢复。";
+      }
       if(!String.IsNullOrEmpty(code)) detail.Text+="\r\n诊断代码："+code;
       window.AcceptButton=close; window.CancelButton=close; close.Focus();
     });
@@ -546,6 +551,12 @@ $script:launchAfterCommit = $false
 try { Invoke-UpdateTransaction }
 catch {
   $script:updateExitCode = 1
+  $cause = $_.Exception
+  $script:updateFailureCode = 'update_installation_failed'
+  while ($null -ne $cause) {
+    if ([string]$cause.Message -match '^update_[a-z_]+$') { $script:updateFailureCode = [string]$cause.Message; break }
+    $cause = $cause.InnerException
+  }
   Record-UpdateActivity 'transaction_entry_failed' $_.ToString()
   [Console]::Error.WriteLine($_.ToString())
 }
