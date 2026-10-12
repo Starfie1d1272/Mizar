@@ -1773,15 +1773,13 @@ fn run_desktop(
                         .zip(host.get_webview_window("workspace-dock"))
                         .and_then(|(left, dock)| left.hwnd().ok().zip(dock.hwnd().ok()))
                         .map(|(left, dock)| [left.0 as isize, dock.0 as isize]);
+                    let mut group_outcome = None;
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
                         let failure = workspace_group::synchronize(
                             &mut group, process.as_ref(), panels, &allowed,
                         );
-                        if group.restored {
-                            if let Ok(mut tracker) = worker_tracker.lock() { tracker.group_failure = None; }
-                        }
+                        group_outcome = Some((group.restored, failure));
                         if let Some(failure) = failure {
-                            if let Ok(mut tracker) = worker_tracker.lock() { tracker.group_failure = Some(failure); }
                             if let Some(process) = &process {
                                 let mut detail = failure.diagnostic();
                                 detail["gamePid"] = serde_json::json!(process.pid);
@@ -1817,6 +1815,14 @@ fn run_desktop(
                     } else {
                         (None, None)
                     };
+                    // Apply the outcome after discovery; discovering this same new game
+                    // must not erase a group failure observed earlier in this tick.
+                    if let Some((restored, failure)) = group_outcome {
+                        if let Ok(mut tracker) = worker_tracker.lock() {
+                            if restored { tracker.group_failure = None; }
+                            if let Some(failure) = failure { tracker.group_failure = Some(failure); }
+                        }
+                    }
                     let Ok(_dispatch) = setup_dispatch.lock() else {
                         break;
                     };
