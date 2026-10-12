@@ -90,6 +90,7 @@ public static class MizarUpdateWindow {
   static Label heading, detail, hint;
   static Button cancel, logs, close;
   static ProgressBar activity;
+  static LinkLabel packageLink;
   static bool cancellable, cancelled, finished, restoreAllowed;
   static Exception startupError;
   static Thread thread;
@@ -99,7 +100,7 @@ public static class MizarUpdateWindow {
     lock(gate) { if (!cancellable || finished) return; cancelled=true; cancellable=false; }
     cancel.Enabled=false; hint.Text="正在取消更新，请等待工具安全结束。";
   }
-  public static void Start(string stage, bool canCancel) {
+  public static void Start(string stage, bool canCancel, string version) {
     directory=stage; cancellable=canCancel;
     thread=new Thread(delegate() {
       try {
@@ -114,6 +115,8 @@ public static class MizarUpdateWindow {
         hint=new Label { Text="请等待本窗口完成，不要重复打开 Mizar。", Location=new Point(32,217), Size=new Size(526,30), ForeColor=Color.FromArgb(80,92,110) };
         logs=new Button { Text="查看日志", Location=new Point(32,255), Size=new Size(100,30), TabIndex=0 };
         logs.Click+=delegate { try { Process.Start(new ProcessStartInfo { FileName=directory, UseShellExecute=true }); } catch { hint.Text="日志目录无法打开，请保留更新记录并反馈。"; } };
+        packageLink=new LinkLabel { Text="下载正式安装包", Location=new Point(160,263), Size=new Size(160,22), Visible=false, TabIndex=3 };
+        packageLink.LinkClicked+=delegate { try { Process.Start(new ProcessStartInfo { FileName="https://github.com/Starfie1d1272/Mizar/releases/tag/v"+version, UseShellExecute=true }); } catch { hint.Text="下载页面无法打开，请从 GitHub 的 Mizar 正式发布页下载安装包。"; } };
         cancel=new Button { Text="取消更新", Location=new Point(347,255), Size=new Size(100,30), Enabled=canCancel, TabIndex=1 };
         cancel.Click+=delegate {
           if(finished && restoreAllowed) { finished=false; cancellable=false; cancel.Visible=false; close.Enabled=false; activity.Visible=true; window.Text="Mizar 应用更新"; heading.Text="正在核对恢复条件"; hint.Text="先核对程序和安装器是否已停止，失败时保留备份。"; restore.Set(); }
@@ -121,7 +124,7 @@ public static class MizarUpdateWindow {
         };
         close=new Button { Text="关闭", Location=new Point(458,255), Size=new Size(100,30), Enabled=false, TabIndex=2 };
         close.Click+=delegate { window.Close(); };
-        window.Controls.AddRange(new Control[] {banner,heading,detail,activity,hint,logs,cancel,close});
+        window.Controls.AddRange(new Control[] {banner,heading,detail,activity,hint,logs,cancel,close,packageLink});
         window.FormClosing+=delegate(object sender,FormClosingEventArgs args) {
           if (!finished) { args.Cancel=true; if (cancellable) RequestCancel(); else hint.Text="安装或恢复已开始，请等待完成后再关闭。"; }
         };
@@ -168,13 +171,13 @@ public static class MizarUpdateWindow {
   }
   public static void Complete(string status, string code, bool relaunch, bool canRestore) {
     Apply(delegate {
-      finished=true; cancellable=false; restoreAllowed=canRestore && status=="recovery-required"; window.Text="Mizar 更新结果"; activity.Visible=false; cancel.Visible=false; close.Enabled=true;
+      finished=true; cancellable=false; restoreAllowed=canRestore && status=="recovery-required"; window.Text="Mizar 更新结果"; activity.Visible=false; cancel.Visible=false; packageLink.Visible=false; close.Enabled=true;
       if(status=="installed") { heading.Text="更新已完成"; detail.Text="新版程序已核验。"; hint.Text=relaunch ? "正在重新打开 Mizar。" : "可以关闭本窗口后重新打开 Mizar。"; }
       else if(status=="restored") { heading.Text="旧版已恢复"; detail.Text="本次更新未完成，原程序与资料已保留。"; hint.Text="关闭本窗口后可重新打开 Mizar，再查看诊断。"; }
       else if(status=="cancelled") { heading.Text="更新未启动"; detail.Text="原程序未被替换，可以重新打开 Mizar。"; hint.Text="请查看日志了解原因，或使用正式安装包。"; }
       else { heading.Text="需要恢复"; detail.Text="当前程序尚未核验，原文件与恢复记录已保留。";
         if(restoreAllowed) { hint.Text="先关闭 Mizar 与安装向导，再点击“恢复旧版”。"; cancel.Text="恢复旧版"; cancel.Visible=true; cancel.Enabled=true; }
-        else { hint.Text="旧版备份未通过核验；请关闭 Mizar，手动安装正式安装包。"; }
+        else { hint.Text="旧版备份未通过核验；请关闭 Mizar，手动安装正式安装包。"; cancel.Text="恢复旧版"; cancel.Visible=true; cancel.Enabled=false; packageLink.Visible=true; }
       }
       if(!String.IsNullOrEmpty(code)) detail.Text+="\r\n诊断代码："+code;
       window.AcceptButton=close; window.CancelButton=close; close.Focus();
@@ -403,7 +406,7 @@ try {
   if (!$writerOwned) { throw 'update_transaction_busy' }
   $desktop = New-Object Threading.Mutex($false, 'Global\MizarDesktop')
   $active = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, 'Global\MizarUpdateActive')
-  if (!$NoStatusWindow -and !$script:updateWindowStarted) { [MizarUpdateWindow]::Start($StageRoot, ($Mode -eq 'Install')); $script:updateWindowStarted = $true }
+  if (!$NoStatusWindow -and !$script:updateWindowStarted) { [MizarUpdateWindow]::Start($StageRoot, ($Mode -eq 'Install'), $plan.version); $script:updateWindowStarted = $true }
   if ($ReadyEvent) {
     if ($Mode -ne 'Install' -or $ReadyEvent -notmatch '^Global\\MizarUpdateReady-[0-9]+-[0-9]+$') { throw 'update_handoff_invalid' }
     $ready = [Threading.EventWaitHandle]::OpenExisting($ReadyEvent)

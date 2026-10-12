@@ -198,6 +198,23 @@ async function installWithHost(binaryPath, stage, env = {}) {
         if (!blockerPid) await new Promise((done) => setTimeout(done, 50));
       }
       assert.match(blockerPid, /^[1-9][0-9]*$/);
+      const plan = JSON.parse(await readFile(join(stage, 'plan.json'), 'utf8'));
+      for (let count = 0; ; count++) {
+        const outcome = await readFile(join(plan.stateRoot, 'updates/result.json'), 'utf8')
+          .then(JSON.parse)
+          .catch(() => null);
+        if (outcome?.status === 'recovery-required') break;
+        assert(count < 200, 'Expected recovery-required outcome before user action');
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.equal(
+        await readFile(join(stage, 'previous/LICENSE'), 'utf8'),
+        'independent product license',
+      );
+      assert.deepEqual(
+        await readFile(join(stage, 'previous/Mizar.exe')),
+        await readFile(binaryPath),
+      );
       const rejected = await windowProbe(stage, 'restore', 'recovery-required');
       assert.equal(rejected.code, 0, rejected.errors);
       for (let count = 0; ; count++) {
@@ -529,7 +546,30 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
           join(installed, 'resources/app/dist/server.js'),
           'corrupt committed payload',
         );
-      result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
+      if (scenario === 'committed-corrupt') {
+        await writeFile(join(stage, 'previous/LICENSE'), 'unverified backup license');
+        const literal = (text) => `'${text.replaceAll("'", "''")}'`;
+        const recovery = run(
+          [
+            '-Command',
+            `[IO.File]::WriteAllText(${literal(join(stage, 'ui-helper-pid.txt'))}, [string]$PID); & ${literal(script)} -Mode Recover -StageRoot ${literal(stage)}; exit $LASTEXITCODE`,
+          ],
+          { MIZAR_UPDATE_TEST_UI: '1' },
+        );
+        for (
+          let count = 0;
+          !(await readFile(join(stage, 'ui-helper-pid.txt'), 'utf8').catch(() => ''));
+          count++
+        ) {
+          assert(count < 200);
+          await new Promise((done) => setTimeout(done, 50));
+        }
+        const unavailable = await windowProbe(stage, 'backup-unavailable', 'backup-unavailable');
+        assert.equal(unavailable.code, 0, unavailable.errors);
+        const close = await windowProbe(stage, 'close-completed', 'backup-unavailable-result');
+        assert.equal(close.code, 0, close.errors);
+        result = await recovery;
+      } else result = await run(['-File', script, '-Mode', 'Recover', '-StageRoot', stage]);
       const diagnostic = (registration) => {
         const summarize = (value) =>
           value && {

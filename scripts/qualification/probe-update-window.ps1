@@ -1,6 +1,6 @@
 ﻿param(
   [Parameter(Mandatory=$true)][int]$ProcessId,
-  [ValidateSet('capture','capture-result','restore','cancel','close-blocked','close-completed')][string]$Action,
+  [ValidateSet('capture','capture-result','backup-unavailable','restore','cancel','close-blocked','close-completed')][string]$Action,
   [Parameter(Mandatory=$true)][string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
@@ -27,7 +27,7 @@ public static class UpdateWindowProbe {
  }
 }
 '@
-$title = if ($Action -in @('close-completed','restore','capture-result')) { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
+$title = if ($Action -in @('close-completed','restore','capture-result','backup-unavailable')) { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 $window = [IntPtr]::Zero
 while ($window -eq [IntPtr]::Zero) {
@@ -40,6 +40,13 @@ $element = [Windows.Automation.AutomationElement]::FromHandle($window)
 $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'取消更新')
 $cancel = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
 if ($Action -eq 'restore') { $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版'); $restore = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition); if ($null -eq $restore -or !$restore.Current.IsEnabled) { throw 'Verified recovery action is unavailable' } }
+if ($Action -eq 'backup-unavailable') {
+ $restoreCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版')
+ $restoreButton = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$restoreCondition)
+ if ($null -eq $restoreButton -or $restoreButton.Current.IsEnabled) { throw 'Unverified backup must disable recovery' }
+ $downloadCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'下载正式安装包')
+ if ($null -eq $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$downloadCondition)) { throw 'Unavailable backup lacks a concrete download path' }
+}
 if ($Action -eq 'cancel') {
  if ($null -eq $cancel -or !$cancel.Current.IsEnabled) { throw 'Pre-install cancellation is unavailable' }
 }
