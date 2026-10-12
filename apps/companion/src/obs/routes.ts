@@ -1,3 +1,4 @@
+import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
 import { obsOutputCommandSchema } from '@mizar/protocol/obs';
 import { ObsOutputError } from './outputs.js';
 import type { FastifyInstance } from 'fastify';
@@ -16,6 +17,7 @@ export function registerObsRoutes(
     readonly activeScene: () => ProgramSceneId;
   },
 ) {
+  const captureDiagnostic = createObsCaptureDiagnosticReader();
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
@@ -44,9 +46,13 @@ export function registerObsRoutes(
       .send({ preview: await options.adapter.confidencePreview() }),
   );
   app.get('/local/v1/obs', async (_request, reply) => {
+    const diagnostic = allowed(_request.headers.origin)
+      ? captureDiagnostic()
+      : Promise.resolve(null);
     const status = await options.adapter.status();
     return reply.header('cache-control', 'no-store').send({
       ...status,
+      captureDiagnostic: await diagnostic,
       expectedScene: obsSceneName(options.activeScene()),
       sceneAligned:
         status.connection === 'connected'
@@ -107,7 +113,7 @@ export function registerObsRoutes(
             },
             'OBS preparation checked',
           );
-          return { ok: true, findings };
+          return { ok: true, findings, captureDiagnostic: await captureDiagnostic(true) };
         }
         if (action === 'audio-setup') {
           await options.adapter.setupAudio();

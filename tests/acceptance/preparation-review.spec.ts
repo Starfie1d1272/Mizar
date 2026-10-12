@@ -1181,3 +1181,70 @@ test('desktop GSI reads distinguish pending and failed queries, preserve indepen
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('gsi-failed-cs2-ready-1366.png') });
 });
+
+test('OBS capture guidance is read-only, survives repeated checks and clears after reported recovery', async ({
+  page,
+}, testInfo) => {
+  const commands: string[] = [];
+  let diagnostic: Record<string, unknown> = {
+    state: 'needs_attention',
+    reason: 'hook_pending',
+    code: null,
+    lastFailure: { reason: 'hook_file_locked', code: 32 },
+    owner: 'unknown',
+  };
+  await page.route('**/local/v1/obs', (route) =>
+    route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: 'Mizar · 比赛中',
+        expectedScene: 'Mizar · 比赛中',
+        sceneAligned: true,
+        streaming: false,
+        recording: false,
+        port: 4455,
+        passwordConfigured: true,
+        findings: [],
+        video: null,
+        captureDiagnostic: diagnostic,
+      },
+    }),
+  );
+  await page.route('**/operator/obs/*', (route) => {
+    commands.push(new URL(route.request().url()).pathname.split('/').at(-1)!);
+    return route.fulfill({ json: { ok: true, findings: [] } });
+  });
+  await page.goto('/settings?tab=obs');
+  await expect(page.getByText('OBS 游戏挂钩尚未就绪。', { exact: true })).toBeVisible();
+  await page.getByText('处理捕获问题', { exact: true }).click();
+  await expect(page.getByText(/最近日志报告捕获文件被占用，占用程序未知/)).toBeVisible();
+  await expect(page.getByText(/临时添加「窗口采集」/)).toBeVisible();
+  for (const width of [1920, 1366]) {
+    await page.setViewportSize({ width, height: width === 1920 ? 1080 : 768 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: testInfo.outputPath(`obs-capture-guidance-${width}.png`),
+      fullPage: true,
+    });
+  }
+  const check = page.getByRole('button', { name: '重新检测捕获', exact: true });
+  await check.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('已重新检测，请核对当前提示与 OBS 实际画面。')).toBeVisible();
+  await check.click();
+  expect(commands.filter((command) => command !== 'ensure')).toEqual(['check', 'check']);
+  diagnostic = {
+    state: 'reported_success',
+    reason: null,
+    code: null,
+    lastFailure: null,
+    owner: 'unknown',
+  };
+  await expect(page.getByText('OBS 游戏挂钩尚未就绪。', { exact: true })).toHaveCount(0);
+  await expect(check).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('obs-capture-recovered.png'), fullPage: true });
+  diagnostic = { state: 'unknown', reason: null, code: null, lastFailure: null, owner: 'unknown' };
+  await expect(page.getByText('OBS 游戏挂钩尚未就绪。', { exact: true })).toHaveCount(0);
+});

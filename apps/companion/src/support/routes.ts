@@ -15,7 +15,7 @@ import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
 import { choice, count, digest, readSupportLogs, record } from './logs.js';
 
-export const SUPPORT_BUNDLE_MAX_BYTES = 256 * 1024;
+export const SUPPORT_BUNDLE_MAX_BYTES = 1024 * 1024;
 const findingCodes = [
   'configuration_unchecked',
   'configuration_check_failed',
@@ -228,9 +228,14 @@ export function registerSupportRoutes(
           readSupportLogs(options.logsDirectory, 160 * 1024),
           options.obs().catch(() => undefined),
           Promise.resolve()
-            .then(() => (options.nativeObs ?? collectObsNativeEvidence)())
+            .then(() =>
+              (
+                options.nativeObs ?? (() => collectObsNativeEvidence({ includeRelatedLogs: true }))
+              )(),
+            )
             .catch(failedObsNativeEvidence),
         ]);
+        const { logAttachments: obsLogAttachments = [], ...nativeSummary } = nativeObs;
         const program = options.program?.();
         const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
@@ -274,10 +279,11 @@ export function registerSupportRoutes(
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
             'nativeObs 只读取本机 OBS 配置、近期日志和进程元数据；配置来自已保存文件，不等同于当前节目画面。日志成功不证明当前画面正常，进程时间关联不证明实际 hook PID；缺失或未知均不能判为黑屏根因。',
+            'OBS 摘要保留分类故障与最新状态，附件包含扫描范围内全部允许的技术事件，不含原始私人正文；scan 标明读取字节和缺失范围，附件 omittedEvents 与时间范围标明附件限额遗漏。',
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
-            nativeObs,
+            nativeObs: nativeSummary,
             program: program
               ? {
                   active: program.active,
@@ -400,6 +406,7 @@ export function registerSupportRoutes(
               })),
           },
           logs,
+          attachments: { obsLogs: obsLogAttachments },
         };
         const json = JSON.stringify(bundle, null, 2);
         if (Buffer.byteLength(json) > SUPPORT_BUNDLE_MAX_BYTES)

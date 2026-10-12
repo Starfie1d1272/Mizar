@@ -117,6 +117,51 @@ describe('support export', () => {
     }
   });
 
+  it('keeps related technical attachments outside the native summary and saves a bounded bundle above the old limit', async () => {
+    const event = {
+      localTime: '12:00:00',
+      message: 'update_hook_file: failed to update [hook file] (32)',
+      category: 'hook' as const,
+      outcome: 'failure' as const,
+      source: null,
+      target: null,
+      reason: 'hook_file_locked' as const,
+      code: 32,
+      codeHex: null,
+      hookVersions: null,
+    };
+    const collector = vi.spyOn(nativeObs, 'collectObsNativeEvidence').mockResolvedValue({
+      ...nativeObs.failedObsNativeEvidence(new Error('synthetic collector')),
+      logAttachments: [
+        {
+          root: 0,
+          slot: 0,
+          format: 'allowlisted-technical-events/1',
+          events: Array.from({ length: 1400 }, () => event),
+          omittedEvents: 0,
+          firstOmittedLocalTime: null,
+          lastOmittedLocalTime: null,
+        },
+      ],
+    });
+    const app = buildApp();
+    try {
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(Buffer.byteLength(response.body)).toBeGreaterThan(256 * 1024);
+      expect(Buffer.byteLength(response.body)).toBeLessThanOrEqual(SUPPORT_BUNDLE_MAX_BYTES);
+      const exported = response.json<{
+        snapshot: { nativeObs: Record<string, unknown> };
+        attachments: { obsLogs: { events: unknown[] }[] };
+      }>();
+      expect(exported.snapshot.nativeObs).not.toHaveProperty('logAttachments');
+      expect(exported.attachments.obsLogs[0]!.events).toHaveLength(1400);
+    } finally {
+      await app.close();
+      collector.mockRestore();
+    }
+  });
+
   it('retains the ordinary bundle when optional native evidence fails', async () => {
     const collector = vi
       .spyOn(nativeObs, 'collectObsNativeEvidence')

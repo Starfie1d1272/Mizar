@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsOutputCommand, ObsOutputsStatus, ObsCaptureDiagnostic } from '@mizar/protocol/obs';
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
+  readonly captureDiagnostic?: ObsCaptureDiagnostic | null;
   readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
