@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ObsCaptureGuidance } from '../workspace/ObsCaptureGuidance';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { beginObsConfiguration, obsCommand, useObsStatus } from '../workspace/obs-client';
@@ -27,6 +28,7 @@ export function Settings({ tab }: { tab: string }) {
   const program = useLocalRead<ProgramSceneState>('/local/v1/program-scenes', 3000);
   const evidence = obs?.programEvidence;
   const programIssue =
+    obs?.captureDiagnostic?.state === 'needs_attention' ||
     obs?.sceneAligned === false ||
     (evidence?.state === 'measured' && evidence.capture?.targetAvailable === false);
   const signal = (value: boolean | null | undefined) =>
@@ -416,6 +418,16 @@ export function Settings({ tab }: { tab: string }) {
               </div>
               {obs?.connection === 'connected' ? (
                 <>
+                  <ObsCaptureGuidance
+                    diagnostic={obs.captureDiagnostic}
+                    busy={busy}
+                    onCheck={() =>
+                      void action(async () => {
+                        await obsCommand('check');
+                        setMessage('已重新检测，请核对当前提示与 OBS 实际画面。');
+                      })
+                    }
+                  />
                   {obs.sceneAligned === false ? (
                     <StatusBanner tone="warning">
                       OBS 当前节目与 Mizar 选择不一致。请在工作台重新点击要播出的场景。

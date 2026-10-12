@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-const MAX_BYTES: usize = 256 * 1024;
+const MAX_BYTES: usize = 1024 * 1024;
 
 pub fn validate(contents: &str) -> Result<(), String> {
     if contents.len() > MAX_BYTES {

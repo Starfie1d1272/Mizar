@@ -24,7 +24,9 @@ export function ProductionStatus({
     !obs || !connected
       ? '无法确认'
       : obs.streaming
-        ? obs.sceneAligned !== true || obs.findings.length > 0
+        ? obs.sceneAligned !== true ||
+          obs.findings.length > 0 ||
+          obs.captureDiagnostic?.state === 'needs_attention'
           ? '需检查'
           : '正常'
         : '未推流';

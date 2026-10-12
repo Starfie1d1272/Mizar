@@ -22,3 +22,21 @@ export interface ObsOutputsStatus {
   readonly stream: ObsOutputStatus;
   readonly record: ObsOutputStatus;
 }
+
+/** OBS log evidence, never a proof of current visible frames or a black-screen root cause. */
+export interface ObsCaptureDiagnostic {
+  readonly state: 'unknown' | 'needs_attention' | 'reported_success';
+  readonly reason:
+    | 'access_denied'
+    | 'process_open_failed'
+    | 'hook_file_locked'
+    | 'hook_pending'
+    | 'capture_failed'
+    | null;
+  readonly code: number | null;
+  readonly lastFailure: {
+    readonly reason: ObsCaptureDiagnostic['reason'];
+    readonly code: number | null;
+  } | null;
+  readonly owner: 'unknown';
+}

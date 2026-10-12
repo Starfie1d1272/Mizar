@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsOutputCommand, ObsOutputsStatus, ObsCaptureDiagnostic } from '@mizar/protocol/obs';
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
+  readonly captureDiagnostic?: ObsCaptureDiagnostic | null;
   readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly currentScene: string | null;
@@ -38,8 +39,16 @@ export function useObsStatus(): ObsStatus | null {
   const [value, setValue] = useState<ObsStatus | null>(null);
   useEffect(() => {
     let active = true;
+    let revision = 0;
+    const checked = (event: Event) => {
+      const diagnostic = (event as CustomEvent<ObsCaptureDiagnostic>).detail;
+      revision++;
+      setValue((current) => (current ? { ...current, captureDiagnostic: diagnostic } : current));
+    };
+    window.addEventListener('mizar:obs-capture-checked', checked);
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
+      const requestRevision = revision;
       try {
         const response = await fetch('/local/v1/obs', {
           cache: 'no-store',
@@ -47,9 +56,9 @@ export function useObsStatus(): ObsStatus | null {
         });
         if (!response.ok) throw new Error('OBS unavailable');
         const status = (await response.json()) as ObsStatus;
-        if (active) setValue(status);
+        if (active && requestRevision === revision) setValue(status);
       } catch {
-        if (active) setValue(null);
+        if (active && requestRevision === revision) setValue(null);
       } finally {
         if (active) timer = setTimeout(() => void poll(), 3000);
       }
@@ -57,6 +66,7 @@ export function useObsStatus(): ObsStatus | null {
     void poll();
     return () => {
       active = false;
+      window.removeEventListener('mizar:obs-capture-checked', checked);
       clearTimeout(timer);
     };
   }, []);
@@ -92,8 +102,13 @@ async function performObsCommand(
   const value = (await response.json().catch(() => null)) as {
     message?: string;
     executablePath?: string;
+    captureDiagnostic?: ObsCaptureDiagnostic;
   } | null;
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
+  if (value?.captureDiagnostic)
+    window.dispatchEvent(
+      new CustomEvent('mizar:obs-capture-checked', { detail: value.captureDiagnostic }),
+    );
   if (nativeOpen) {
     if (!value?.executablePath) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
     const alreadyRunning = await desktopInvoke<boolean>('launch_obs', {
