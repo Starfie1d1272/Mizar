@@ -44,6 +44,13 @@ const request = {
 
 describe('support export', () => {
   it('exports bounded window measurements and unknown permission reads without private identifiers', async () => {
+    const collector = vi
+      .spyOn(nativeObs, 'collectObsNativeEvidence')
+      .mockResolvedValue(
+        nativeObs.failedObsNativeEvidence(
+          new Error('native_evidence_not_part_of_window_projection_contract'),
+        ),
+      );
     const app = buildApp();
     const geometry = {
       dpi: 144,
@@ -106,6 +113,7 @@ describe('support export', () => {
       expect(scrubbed.body).not.toContain('private-path');
     } finally {
       await app.close();
+      collector.mockRestore();
     }
   });
 

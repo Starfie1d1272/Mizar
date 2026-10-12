@@ -31,7 +31,36 @@ function booleans(value: unknown, keys: readonly string[]) {
 function supportCs2(value: unknown) {
   const input =
     typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-  return { ...booleans(value, ['found', 'managed']), geometry: input.geometry ?? null };
+  const fields = (value: unknown, keys: readonly string[]) => {
+    if (value === null || typeof value !== 'object') return null;
+    const data = value as Record<string, unknown>;
+    return Object.fromEntries(
+      keys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]),
+    );
+  };
+  const geometry = fields(input.geometry, [
+    'dpi',
+    'client',
+    'outer',
+    'monitorBounds',
+    'workArea',
+    'layoutArea',
+    'target',
+    'alignmentRetries',
+    'preserveSettings',
+    'fullscreenLayout',
+  ]);
+  if (geometry) {
+    const measured = input.geometry as Record<string, unknown>;
+    for (const key of ['alignmentFailure', 'groupFailure'])
+      geometry[key] = fields(measured[key], ['stage', 'api', 'lastError', 'target']);
+    for (const key of ['hostElevation', 'gameElevation'])
+      geometry[key] = fields(measured[key], ['elevated', 'lastError']);
+  }
+  return {
+    ...booleans(value, ['found', 'managed']),
+    ...(input.geometry !== undefined ? { geometry } : {}),
+  };
 }
 
 function supportGsi(value: unknown) {
