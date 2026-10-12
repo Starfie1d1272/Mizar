@@ -84,6 +84,33 @@ describe('map-scoped player stats accumulator', () => {
     expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBe(80);
   });
 
+  it.each(['gap', 'missing-players', 'round-jump', 'mid-round-baseline'] as const)(
+    'does not promote incomplete final-round evidence at gameover: %s',
+    (kind) => {
+      let state = createInitialRuntimeState('stats-gameover-incomplete');
+      if (kind !== 'mid-round-baseline') state = accept(state, frame(1, 1, 'freezetime', 17)).state;
+      state = accept(state, frame(kind === 'mid-round-baseline' ? 1 : 2, 2, 'live', 17, 80)).state;
+      const final = frame(
+        kind === 'gap' ? 4 : kind === 'mid-round-baseline' ? 2 : 3,
+        3,
+        'freezetime',
+        kind === 'round-jump' ? 20 : 18,
+        0,
+        4200,
+        kind === 'missing-players' ? 'absent' : 'present',
+      );
+      state = accept(state, {
+        ...final,
+        telemetry: {
+          ...final.telemetry,
+          map: { ...final.telemetry.map!, phase: 'gameover' as const },
+        },
+      }).state;
+      expect(state.playerStats.countedCompletedRounds).toBe(0);
+      expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBeNull();
+    },
+  );
+
   it('does not count a mid-round baseline, then resumes on the next complete round', () => {
     let state = createInitialRuntimeState('stats-mid-join');
     state = accept(state, frame(1, 1, 'live', 6, 90)).state;
