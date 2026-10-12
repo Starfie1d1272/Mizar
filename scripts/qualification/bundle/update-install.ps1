@@ -294,6 +294,7 @@ function Record-Result([string]$status, [string]$code) {
   $result = @{ status = $status; code = $code; version = $plan.version; recoveryDirectory = (Split-Path $StageRoot -Leaf) }
   Write-JsonAtomic (Join-Path $StageRoot 'result.json') $result
   Write-JsonAtomic (Join-Path $plan.stateRoot 'updates\result.json') $result
+  $script:updateResultWritten = $true
 }
 function Restore-Previous {
   [void](Start-UpdateMutation)
@@ -362,6 +363,7 @@ if ((Split-Path -Parent $StageRoot) -ne [IO.Path]::GetFullPath((Join-Path $plan.
   (Split-Path -Leaf $StageRoot) -notmatch '^install-[a-f0-9]{32}$') { throw 'update_stage_invalid' }
 $script:updateExitCode = 0
 $script:updateFailureCode = ''
+$script:updateResultWritten = $false
 $script:launchAfterCommit = $false
 function Invoke-UpdateTransaction {
 # One writer spans Install/Recover/Rollback, including all failure preservation.
@@ -512,8 +514,11 @@ catch {
 }
 $result = $null
 try { $result = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $plan.stateRoot 'updates/result.json') -Raw | ConvertFrom-Json } catch { }
-$status = if ($null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)) { [string]$result.status } else { 'cancelled' }
-$code = if ($null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)) { [string]$result.code } else { 'update_not_started' }
+$phase = ''
+try { $phase = [string](Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json).phase } catch { }
+$currentResult = $script:updateResultWritten -and $null -ne $result -and $result.recoveryDirectory -eq (Split-Path -Leaf $StageRoot)
+$status = if ($currentResult) { [string]$result.status } elseif ($phase -eq 'prepared') { 'cancelled' } else { 'recovery-required' }
+$code = if ($currentResult) { [string]$result.code } elseif ($phase -eq 'prepared') { 'update_not_started' } else { 'update_result_unavailable' }
 if ($script:updateFailureCode) { $code = $script:updateFailureCode + ' / ' + $code }
 if ($script:updateWindowAvailable) { [MizarUpdateWindow]::Complete($status, $code, $script:launchAfterCommit) }
 # No protected writes remain; the new Host can now acquire its desktop object.
