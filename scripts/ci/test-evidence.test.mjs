@@ -186,10 +186,8 @@ describe('isolated installer group evidence', () => {
       'unknown-existing-files',
       'completed-pending',
       'owned-residue',
-      'post-install-identity',
-      'cancelled-install',
-      'invalid-installer',
     ],
+    cleanup: ['post-install-identity', 'cancelled-install', 'invalid-installer'],
   };
   function fixture(action) {
     const root = mkdtempSync(join(tmpdir(), 'mizar-installer-evidence-'));
@@ -217,16 +215,18 @@ describe('isolated installer group evidence', () => {
     fixture((root, save) => {
       save('update');
       save('faults');
-      expect(verifyInstallerShards(root, context)).toEqual({ groups: 2, passed: 15 });
+      save('cleanup');
+      expect(verifyInstallerShards(root, context)).toEqual({ groups: 3, passed: 15 });
       save('faults', 2);
-      expect(verifyInstallerShards(root, context)).toEqual({ groups: 2, passed: 15 });
+      expect(verifyInstallerShards(root, context)).toEqual({ groups: 3, passed: 15 });
     });
   });
-  it.each(['update', 'faults'])(
+  it.each(['update', 'faults', 'cleanup'])(
     'rejects missing or incomplete newest %s evidence without fallback',
     (group) => {
       fixture((root, save) => {
-        save(group === 'update' ? 'faults' : 'update');
+        for (const other of ['update', 'faults', 'cleanup'].filter((name) => name !== group))
+          save(other);
         expect(() => verifyInstallerShards(root, context)).toThrow('missing installer');
         save(group);
         save(group, 2, { cases: cases[group].slice(1) });
@@ -244,6 +244,7 @@ describe('isolated installer group evidence', () => {
     fixture((root, save) => {
       save('update');
       save('faults');
+      save('cleanup');
       save('faults', 2, change);
       expect(() => verifyInstallerShards(root, context)).toThrow();
     });

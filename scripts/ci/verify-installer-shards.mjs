@@ -18,10 +18,8 @@ export const installerCases = Object.freeze({
     'unknown-existing-files',
     'completed-pending',
     'owned-residue',
-    'post-install-identity',
-    'cancelled-install',
-    'invalid-installer',
   ],
+  cleanup: ['post-install-identity', 'cancelled-install', 'invalid-installer'],
 });
 
 export function verifyInstallerShards(root, { attempt, runId, sourceSha }) {
@@ -34,7 +32,7 @@ export function verifyInstallerShards(root, { attempt, runId, sourceSha }) {
     throw new Error('invalid installer evidence identity');
   const selected = new Map();
   for (const name of readdirSync(root)) {
-    const match = /^installer-evidence-([1-9][0-9]*)-(update|faults)$/.exec(name);
+    const match = /^installer-evidence-([1-9][0-9]*)-(update|faults|cleanup)$/.exec(name);
     if (!match || Number(match[1]) > attempt)
       throw new Error('unknown or future installer evidence');
     const generation = Number(match[1]),
