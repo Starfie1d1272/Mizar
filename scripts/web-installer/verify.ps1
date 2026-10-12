@@ -15,6 +15,13 @@ $downloadChecks = Start-Job -ArgumentList $PSScriptRoot, $output, $downloadCache
   $ErrorActionPreference = 'Stop'
   & "$scripts/test-nsis.ps1" -OutputDirectory $directory -DownloadCache $cache -PrepareDownloadOnly
 }
+# Native UI owns no Node dependencies. Finish it before any NSIS state mutation.
+$nativeChecks = Start-Job -ArgumentList $PSScriptRoot, $output -ScriptBlock {
+  param($scripts, $directory)
+  $ErrorActionPreference = 'Stop'
+  & "$scripts/test-native.ps1" -OutputDirectory $directory
+  & "$scripts/capture-ui.ps1" -OutputDirectory $directory
+}
 $resourceChecks = $null
 $nativeFailure = $null
 try {
@@ -46,8 +53,8 @@ try {
     node "$scripts/test-pack-cache-boundary.mjs" (Join-Path $deployed 'resources/app/dist/web-installer/install-official-pack.mjs')
     if ($LASTEXITCODE) { throw 'Unverified policy rejection failed' }
   }
-  & "$PSScriptRoot/test-native.ps1" -OutputDirectory $output
-  & "$PSScriptRoot/capture-ui.ps1" -OutputDirectory $output
+  $nativeChecks | Wait-Job | Receive-Job -ErrorAction Continue
+  if ($nativeChecks.State -ne 'Completed') { throw 'Native UI checks did not complete' }
   if ($resourceChecks.State -eq 'Failed') { throw 'Windows resource checks failed before NSIS' }
   $previous = @{}
   foreach ($key in @('MIZAR_BRIDGE_NODE','MIZAR_BRIDGE_SCRIPT','MIZAR_BRIDGE_MODULE','MIZAR_BRIDGE_PLAN')) { $previous[$key] = [Environment]::GetEnvironmentVariable($key) }
@@ -65,6 +72,8 @@ try {
 } catch { $nativeFailure = $_ }
 # Join all checks, including after native failure; no test process outlives the gate.
 try {
+  $nativeChecks | Wait-Job | Out-Null
+  if ($nativeChecks.State -ne 'Completed' -and !$nativeFailure) { throw 'Native UI checks failed' }
   # Join the download even when dependency/native preparation failed.
   $downloadChecks | Wait-Job | Out-Null
   if ($downloadChecks.State -ne 'Completed' -and !$nativeFailure) { throw 'Verified NSIS download failed' }
@@ -75,6 +84,7 @@ try {
     if ($resourceChecks.State -ne 'Completed') { throw 'Windows resource checks did not complete' }
   }
 } finally {
+  Remove-Job -Job $nativeChecks
   Remove-Job -Job $downloadChecks
   if ($resourceChecks) { Remove-Job -Job $resourceChecks }
 }
