@@ -38,12 +38,27 @@ function Capture([string]$name) {
 $names=@()
 try {
  $deadline=[DateTime]::UtcNow.AddSeconds(30)
- do { $window=Window;if($window) { $entry=Named $window '安装位置' ([Windows.Automation.ControlType]::Edit);$button=Named $window '安装' ([Windows.Automation.ControlType]::Button) };if(!$entry -or !$button) { Start-Sleep -Milliseconds 100 } } while((!$entry -or !$button) -and [DateTime]::UtcNow -lt $deadline)
- if(!$entry -or !$button) { throw 'Actual installer controls unavailable' }
- $value=[Windows.Automation.ValuePattern]$entry.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
+ do {
+  $window=Window;$value=$null;$invoke=$null
+  if($window) {
+   $editable=@()
+   $tree=@()
+   foreach($element in (Elements $window)) {
+    $pattern=$null
+    if($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern) -and !$pattern.Current.IsReadOnly) { $editable+=,$pattern }
+    $tree += [ordered]@{name=$element.Current.Name;type=$element.Current.ControlType.ProgrammaticName;class=$element.Current.ClassName}
+    $pattern=$null
+    if($element.Current.Name -eq '安装' -and $element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { $invoke=$pattern }
+   }
+   $tree | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Evidence 'installer-controls.json') -Encoding UTF8
+   if($editable.Count -eq 1) { $value=$editable[0] }
+  }
+  if(!$value -or !$invoke) { Start-Sleep -Milliseconds 100 }
+ } while((!$value -or !$invoke) -and [DateTime]::UtcNow -lt $deadline)
+ if(!$value -or !$invoke) { throw 'Actual installer editable destination/action unavailable' }
  $value.SetValue($Destination)
  Capture 'published-installer-before.png'
- ([Windows.Automation.InvokePattern]$button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+ $invoke.Invoke()
  $deadline=[DateTime]::UtcNow.AddMinutes(12)
  $complete=$false
  do {
