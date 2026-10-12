@@ -375,11 +375,15 @@ try {
       journal?.phase === 'installing' &&
       (await exists(join(installed, 'Mizar.exe')))
     ) {
-      const probe = await processCommand(
-        join(installed, 'Mizar.exe'),
-        ['--no-browser'],
-        true,
-      ).done.catch(() => null);
+      let probe;
+      try {
+        probe = await processCommand(join(installed, 'Mizar.exe'), ['--no-browser'], true).done;
+      } catch (error) {
+        // A real NSIS writer can keep its image unavailable. This observation
+        // does not count as executing the native update guard.
+        if (!['EBUSY', 'EACCES', 'ENOENT'].includes(error.code)) throw error;
+        report.imageUnavailableSamples = (report.imageUnavailableSamples ?? 0) + 1;
+      }
       if (probe?.code === 1 && /正在安装更新或恢复旧版/.test(probe.stderr))
         duringMutation = { exit: probe.code, journalPhase: journal.phase };
     }
