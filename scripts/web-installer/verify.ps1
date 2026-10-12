@@ -16,9 +16,10 @@ $downloadChecks = Start-Job -ArgumentList $PSScriptRoot, $output, $downloadCache
   & "$scripts/test-nsis.ps1" -OutputDirectory $directory -DownloadCache $cache -PrepareDownloadOnly
 }
 # Native UI owns no Node dependencies. Finish it before any NSIS state mutation.
-$nativeChecks = Start-Job -ArgumentList $PSScriptRoot, $output -ScriptBlock {
-  param($scripts, $directory)
+$nativeChecks = Start-Job -ArgumentList (Get-Location).Path, $PSScriptRoot, $output -ScriptBlock {
+  param($repository, $scripts, $directory)
   $ErrorActionPreference = 'Stop'
+  Set-Location -LiteralPath $repository
   & "$scripts/test-native.ps1" -OutputDirectory $directory
   & "$scripts/capture-ui.ps1" -OutputDirectory $directory
 }
