@@ -939,6 +939,16 @@ it('exports outbox recovery cause without JSON.parse fragments or private paths'
       },
       'queue recovery',
     );
+    logger.log.warn(
+      {
+        event: 'outbox',
+        stage: 'outbox_load',
+        result: 'unconfirmed',
+        recovery: { code: 'outbox_preserved_without_records', recoveredRecords: 0 },
+        err: outboxLocalError(malformed),
+      },
+      'old events isolated',
+    );
     // Also cover Pino standard AggregateError serialization, not a handwritten shape.
     logger.log.warn({ event: 'outbox', stage: 'outbox_load', err: raw }, 'queue recovery');
     logger.log.error(
@@ -956,6 +966,14 @@ it('exports outbox recovery cause without JSON.parse fragments or private paths'
   const result = await readSupportLogs(dir);
   const serialized = JSON.stringify(result);
   expect(serialized).toContain('outbox_recovered');
+  expect(result.flatMap((log) => log.events)).toContainEqual(
+    expect.objectContaining({
+      stage: 'outbox_load',
+      result: 'unconfirmed',
+      recoveryCode: 'outbox_preserved_without_records',
+      recoveredRecords: 0,
+    }),
+  );
   expect(serialized).toContain('recoveredRecords');
   expect(serialized).toContain('SyntaxError');
   expect(serialized).toContain('EACCES');
@@ -965,4 +983,61 @@ it('exports outbox recovery cause without JSON.parse fragments or private paths'
   expect(serialized).not.toContain('private-user');
   expect(serialized).not.toContain('private-payload');
   expect(serialized).not.toContain('private-rejected-value');
+});
+
+it('exports the OBS exit probe failure with bounded redacted causes for the exact event', async () => {
+  const dir = await directory();
+  const lines: string[] = [];
+  const logger = Fastify({
+    logger: {
+      level: 'warn',
+      stream: {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    },
+  });
+  const cause = Object.assign(new Error('process query timed out'), { code: 'ETIMEDOUT' });
+  const error = new Error('OBS query failed C:\\Users\\private-user\\obs.exe', { cause });
+  try {
+    const entry = {
+      event: 'obs',
+      stage: 'obs_exit_process_probe',
+      result: 'failure',
+      diagnostic: { error: obsErrorEvidence(error), unknown: 'private-extra' },
+      unknown: 'private-extra',
+    };
+    logger.log.warn(entry, 'private log message');
+    logger.log.warn(
+      { ...entry, event: 'unknown', diagnostic: { error: { code: 'private-code' } } },
+      'unknown event',
+    );
+    logger.log.warn(
+      { event: 'obs', stage: 'unknown_probe', result: 'unconfirmed' },
+      'unknown probe',
+    );
+    await writeFile(join(dir, 'companion.log'), lines.join(''));
+  } finally {
+    await logger.close();
+  }
+  const logs = await readSupportLogs(dir);
+  const events = logs.flatMap((log) => log.events);
+  expect(events[0]).toMatchObject({
+    stage: 'obs_exit_process_probe',
+    result: 'failure',
+    hasLocalError: true,
+    causes: [{ code: null }, { code: 'ETIMEDOUT' }],
+    localDiagnostic: {
+      message: 'OBS query failed C:\\Users\\[user]\\obs.exe',
+      cause: { message: 'process query timed out', code: 'ETIMEDOUT' },
+    },
+  });
+  expect(events[1]).toMatchObject({ stage: 'companion_structured_log' });
+  expect(events[1]).not.toHaveProperty('causes');
+  expect(events[2]).toMatchObject({ result: null });
+  const serialized = JSON.stringify(logs);
+  for (const secret of ['private-user', 'private-extra', 'private log message', 'private-code'])
+    expect(serialized).not.toContain(secret);
+  expect(Buffer.byteLength(serialized)).toBeLessThan(8192);
 });

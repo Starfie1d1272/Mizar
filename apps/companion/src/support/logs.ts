@@ -280,7 +280,7 @@ function outboxErrorEvidence(value: unknown, depth = 0): unknown {
   const error = record(value);
   const errors = error.errors ?? error.aggregateErrors;
   return {
-    name: identifier(error.type ?? error.name),
+    name: identifier(error.name ?? error.type),
     code: identifier(error.code),
     message:
       error.type === 'SyntaxError' || error.name === 'SyntaxError'
@@ -305,7 +305,8 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const update =
     ['update', 'production', 'obs', 'resource'].includes(String(entry.event)) &&
     typeof entry.stage === 'string' &&
-    updateStages.has(entry.stage);
+    (updateStages.has(entry.stage) ||
+      (entry.event === 'obs' && entry.stage === 'obs_exit_process_probe'));
   const demo = entry.event === 'demo-test' && identifier(entry.stage) !== null;
   const live =
     entry.event === 'rivalhub_live' &&
@@ -408,7 +409,12 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
     timestamp: timestamp(entry.time ?? entry.timestamp),
     session,
     stage: stage ?? 'companion_structured_log',
-    result: choice(entry.result, ['begin', 'success', 'failure', 'skipped']),
+    result: choice(
+      entry.result,
+      outbox
+        ? ['begin', 'success', 'failure', 'skipped', 'unconfirmed']
+        : ['begin', 'success', 'failure', 'skipped'],
+    ),
     level,
     httpStatus:
       typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
