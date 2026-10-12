@@ -432,13 +432,87 @@ fn launched_process(
     }
 }
 
-unsafe extern "system" fn close_window(window: isize, pid: isize) -> i32 {
+struct CloseRequest {
+    pid: u32,
+    windows: u32,
+    error: Option<(&'static str, u32)>,
+}
+
+unsafe extern "system" fn close_window(window: isize, data: isize) -> i32 {
+    let request = &mut *(data as *mut CloseRequest);
     let mut found = 0;
     GetWindowThreadProcessId(window, &mut found);
-    if found == pid as u32 {
-        PostMessageW(window, 0x0010, 0, 0);
+    if found == request.pid {
+        request.windows += 1;
+        if PostMessageW(window, 0x0010, 0, 0) == 0 {
+            // Capture on the failing thread before enumeration or waiting can
+            // overwrite it. Do not send further requests after a refusal.
+            request.error = Some(("PostMessageW", GetLastError()));
+            return 0;
+        }
     }
     1
+}
+
+/// Called only with the held, identity-verified process from owned_process.
+fn close_owned_process(
+    process: &Process,
+    pid: u32,
+    created: u64,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<(), String> {
+    let mut request = CloseRequest {
+        pid,
+        windows: 0,
+        error: None,
+    };
+    if unsafe { EnumWindows(close_window, &mut request as *mut CloseRequest as isize) } == 0
+        && request.error.is_none()
+    {
+        request.error = Some(("EnumWindows", unsafe { GetLastError() }));
+    }
+    // A game that exited during enumeration no longer needs a close request.
+    // Failures and absent windows get an immediate stop check, not a 15s wait.
+    let wait_ms = if request.error.is_some() || request.windows == 0 {
+        0
+    } else {
+        15000
+    };
+    let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
+    if waited == 0 {
+        return Ok(());
+    }
+    let message = if let Some((api, code)) = request.error {
+        log.event("production_finish", "failure", Some(&format!(
+            "phase=game_close_request; api={api}; code={code}; pid={pid}; created={created}; windows={}; cause={}", request.windows, std::io::Error::from_raw_os_error(code as i32)
+        )));
+        if api == "PostMessageW" && code == 5 {
+            "Windows 拒绝向本次 CS2 发送正常关闭请求（PostMessageW，错误 5）。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
+        } else {
+            format!("本次 CS2 的正常关闭请求失败（{api}，Windows 错误 {code}）。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。")
+        }
+    } else if waited == 258 {
+        let phase = if request.windows == 0 {
+            "game_close_no_window"
+        } else {
+            "game_close_timeout"
+        };
+        log.event("production_finish", "failure", Some(&format!(
+            "phase={phase}; api=WaitForSingleObject; waitResult={waited}; pid={pid}; created={created}; windows={}", request.windows
+        )));
+        if request.windows == 0 {
+            "本次 CS2 仍在运行，但未找到可发送正常关闭请求的窗口。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
+        } else {
+            "已向本次 CS2 发送正常关闭请求，但 15 秒内尚未退出。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
+        }
+    } else {
+        let code = unsafe { GetLastError() };
+        log.event("production_finish", "failure", Some(&format!(
+            "phase=game_close_wait; api=WaitForSingleObject; code={code}; waitResult={waited}; pid={pid}; created={created}; cause={}", std::io::Error::from_raw_os_error(code as i32)
+        )));
+        format!("无法确认本次 CS2 是否已退出（WaitForSingleObject，Windows 错误 {code}）。请确认游戏正常退出后重试退出或恢复配置；备份仍保留。")
+    };
+    Err(message)
 }
 
 /// Read-only recovery facts usable before the local service or WebView exists.
@@ -987,15 +1061,14 @@ impl ManagedCs2 {
         self.poll();
         if let Some(value) = self.store.load()? {
             if let Some(process) = owned_process(&value, &self.log)? {
-                let pid = value["pid"].as_u64().ok_or("CS2 进程记录缺失。")?;
-                unsafe {
-                    EnumWindows(close_window, pid as isize);
-                }
-                // Hold the verified process handle while waiting; PID reuse does
-                // not make another process an owned game.
-                if unsafe { WaitForSingleObject(process.0, 15000) } != 0 {
-                    self.message = Some("CS2 尚未退出，请手动退出游戏后重试恢复。".into());
-                    return Err(self.message.clone().unwrap());
+                let pid = value["pid"]
+                    .as_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or("CS2 进程记录缺失。")?;
+                let created = value["created"].as_u64().ok_or("CS2 进程记录缺失。")?;
+                if let Err(error) = close_owned_process(&process, pid, created, &self.log) {
+                    self.message = Some(error.clone());
+                    return Err(error);
                 }
             }
         }
