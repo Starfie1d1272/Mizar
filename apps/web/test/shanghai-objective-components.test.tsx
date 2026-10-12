@@ -19,6 +19,7 @@ it.each(['plant', 'defuse'] as const)(
       remainingSeconds: number | null,
       state: 'planting' | 'defusing' | 'planted' = kind === 'plant' ? 'planting' : 'defusing',
       mapped = true,
+      sourcePlayerId: string | null = snapshot.payload.players[0]!.sourcePlayerId,
     ) => {
       const frame: ProgramSnapshot = {
         ...snapshot,
@@ -41,13 +42,13 @@ it.each(['plant', 'defuse'] as const)(
               kind === 'plant'
                 ? {
                     kind,
-                    sourcePlayerId: snapshot.payload.players[0]!.sourcePlayerId,
+                    sourcePlayerId,
                     remainingSeconds,
                     durationSeconds: 3.2,
                   }
                 : {
                     kind,
-                    sourcePlayerId: snapshot.payload.players[0]!.sourcePlayerId,
+                    sourcePlayerId,
                     remainingSeconds,
                     durationSeconds: 5,
                     hasDefuseKit: true,
@@ -77,6 +78,10 @@ it.each(['plant', 'defuse'] as const)(
           '25%',
         );
         expect(node.querySelector<HTMLElement>('.shanghai-fuse i')?.style.width).toBe('50%');
+        render(4, 'defusing', true, null);
+        expect(node.querySelector<HTMLElement>('.shanghai-action-track i')?.style.width).toBe(
+          '80%',
+        );
       }
       for (const remaining of [0, null, -0.01]) {
         render(remaining);
