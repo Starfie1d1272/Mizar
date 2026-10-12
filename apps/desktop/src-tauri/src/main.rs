@@ -2197,6 +2197,15 @@ fn main() {
         }
         return;
     }
+    // Rejection exits this image promptly; feedback belongs to the update tool.
+    match windows_startup::reject_update_start(headless) {
+        Ok(false) => (),
+        Ok(true) => std::process::exit(1),
+        Err(error) => {
+            eprintln!("无法核对更新状态，暂未启动 Mizar：{error}");
+            std::process::exit(1);
+        }
+    }
     // Automation does not initialize Tauri, acquire the GUI mutex or rotate desktop logs.
     if headless {
         let outcome = supervisor(&root, "--no-browser", None).and_then(|mut child| {
@@ -2221,7 +2230,9 @@ fn main() {
     let _mutex = match DesktopMutex::acquire() {
         Ok(Some(mutex)) => mutex,
         Ok(None) => {
-            windows_startup::ActivationSignal::notify();
+            if !matches!(windows_startup::reject_update_start(false), Ok(true)) {
+                windows_startup::ActivationSignal::notify();
+            }
             return;
         }
         Err(error) => {

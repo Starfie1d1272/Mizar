@@ -522,6 +522,8 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
     if crate::health_matches(&crate::bundle_root()?) {
         return Err("制播服务尚未停止，安装未启动。".into());
     }
+    let handoff = crate::windows_startup::UpdateHandoff::new()
+        .map_err(|error| io_failure(log, "helper_handoff_event", &error, "更新工具接力未建立。"))?;
     let mut command: Command = crate::background_powershell();
     command
         .arg("-ExecutionPolicy")
@@ -534,11 +536,13 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
         .arg(powershell::provider_path(stage))
         .arg("-HostProcessId")
         .arg(std::process::id().to_string())
+        .arg("-ReadyEvent")
+        .arg(handoff.name())
         .env_remove("PSModulePath")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command.spawn().map_err(|error| {
+    let mut child = command.spawn().map_err(|error| {
         io_failure(
             log,
             "helper_spawn",
@@ -546,6 +550,54 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
             "安装工具启动失败，旧版仍可用。请查看诊断中的系统错误，或从正式发布页下载。",
         )
     })?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let ready = loop {
+        match handoff.ready() {
+            Ok(true) => break Ok(()),
+            Ok(false) => (),
+            Err(error) => break Err(error),
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break Err(std::io::Error::other(format!("helper exited: {status}")))
+            }
+            Ok(None) => (),
+            Err(error) => break Err(error),
+        }
+        if Instant::now() >= deadline {
+            break Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "helper handoff timeout",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if let Err(error) = ready {
+        // This exact helper still waits for this live Host: no destructive phase
+        // can begin. Stop only our child before releasing the desktop handle.
+        let stopped = match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            _ => child.kill().and_then(|_| child.wait().map(|_| ())),
+        };
+        if let Err(stop_error) = stopped {
+            log.event(
+                "update_install",
+                "failure",
+                Some(&format!(
+                    "phase=helper_handoff_cancel; cause={stop_error:?}"
+                )),
+            );
+            return Err(
+                "更新工具状态未确认，请暂勿重新启动或安装；保留恢复目录并查看诊断。".into(),
+            );
+        }
+        return Err(io_failure(
+            log,
+            "helper_handoff",
+            &error,
+            "更新工具尚未就绪，安装未启动。",
+        ));
+    }
     log.event("update_install", "helper_started", None);
     Ok(())
 }
