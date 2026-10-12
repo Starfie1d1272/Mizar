@@ -14,6 +14,7 @@ public static class UpdateWindowProbe {
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
  [DllImport("user32.dll")] static extern bool EnumWindows(Visit visitor, IntPtr parameter);
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd,StringBuilder text,int count);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
@@ -23,6 +24,12 @@ public static class UpdateWindowProbe {
  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, Visit visitor, IntPtr parameter);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hwnd,uint message,IntPtr wparam,IntPtr lparam,uint flags,uint timeout,out IntPtr result);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+ public class ChildInfo { public string Caption; public string ClassName; public long Handle; public bool Enabled; }
+ public static ChildInfo[] Children(IntPtr parent) {
+  var list=new System.Collections.Generic.List<ChildInfo>();
+  EnumChildWindows(parent,delegate(IntPtr hwnd,IntPtr unused) {var text=new StringBuilder(256);var kind=new StringBuilder(256);GetWindowText(hwnd,text,256);GetClassName(hwnd,kind,256);list.Add(new ChildInfo {Caption=text.ToString(),ClassName=kind.ToString(),Handle=hwnd.ToInt64(),Enabled=IsWindowEnabled(hwnd)});return true;},IntPtr.Zero);
+  return list.ToArray();
+ }
  public static IntPtr Button(IntPtr parent,string caption) {
   IntPtr found=IntPtr.Zero;
   EnumChildWindows(parent,delegate(IntPtr hwnd,IntPtr unused) { var text=new StringBuilder(256); GetWindowText(hwnd,text,256); if(text.ToString()==caption) {found=hwnd;return false;}return true;},IntPtr.Zero);
@@ -58,7 +65,10 @@ function Invoke-Button($caption) {
  if ([UpdateWindowProbe]::SendMessageTimeout($handle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero,2,1000,[ref]$result) -eq [IntPtr]::Zero) { throw 'Native button action did not complete' }
 }
 $element = [Windows.Automation.AutomationElement]::FromHandle($window)
+[UpdateWindowProbe]::Children($window) | ConvertTo-Json -Depth 3 | Write-Output
 $cancel = [UpdateWindowProbe]::Button($window,'取消更新')
+@{ buttonMissing=($cancel -eq [IntPtr]::Zero); nativeHandle=[long]$cancel; nativeEnabled=($cancel -ne [IntPtr]::Zero -and [UpdateWindowProbe]::IsWindowEnabled($cancel)) } | ConvertTo-Json -Compress | Write-Output
+if ($cancel -ne [IntPtr]::Zero) { $observed=[Windows.Automation.AutomationElement]::FromHandle($cancel); @{ controlType=$observed.Current.ControlType.ProgrammaticName; isEnabled=$observed.Current.IsEnabled; patterns=@($observed.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName }) } | ConvertTo-Json -Compress | Write-Output }
 if ($Action -eq 'restore') { $restore = [UpdateWindowProbe]::Button($window,'恢复旧版'); if ($restore -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($restore)) { throw 'Verified recovery action is unavailable' } }
 if ($Action -eq 'backup-unavailable') {
  $restoreCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版')
@@ -71,7 +81,8 @@ if ($Action -eq 'cancel') {
  if ($cancel -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($cancel)) { throw 'Pre-install cancellation is unavailable' }
 }
 if ($Action -eq 'close-blocked') {
- if ($cancel -eq [IntPtr]::Zero -or [UpdateWindowProbe]::IsWindowEnabled($cancel)) { throw 'Mutation must disable cancellation' }
+ if ($cancel -eq [IntPtr]::Zero) { throw 'Cancel button missing from the native window' }
+ if ([UpdateWindowProbe]::IsWindowEnabled($cancel)) { throw 'Native cancellation button remains enabled during mutation' }
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  Start-Sleep -Milliseconds 200
  if (![UpdateWindowProbe]::IsWindow($window)) { throw 'Close interrupted the protected transaction' }
