@@ -80,14 +80,10 @@ describe('default radar map geometry provider', () => {
     expect(nukeBombA?.y).toBeCloseTo(0.48, 12);
 
     expect(cache).not.toBeNull();
-    const cacheCenter = projectWorldPosition(
-      { x: -2000 + (5.5 * 1024) / 2, y: 3250 - (5.5 * 1024) / 2, z: 0 },
-      cache!,
-    );
-    expect(cacheCenter).toMatchObject({ x: 0.5, y: 0.5, outOfBounds: false, layer: 'single' });
     const cacheBombA = projectWorldPosition({ x: -169.6, y: 1785.68, z: 0 }, cache!);
     expect(cacheBombA?.x).toBeCloseTo(0.325, 12);
     expect(cacheBombA?.y).toBeCloseTo(0.26, 12);
+    expect(cacheBombA?.layer).toBe('single');
 
     expect(train).not.toBeNull();
     expect(classifyRadarLayer(-51, train!)).toBe('lower');

@@ -37,11 +37,9 @@ describe('portable HUD preset packs', () => {
       expect(new Set([imported.preset.id, imported.layout.id, imported.theme.id]).size).toBe(3);
       expect(imported.preset.layoutId).toBe(imported.layout.id);
       expect(imported.preset.themeId).toBe(imported.theme.id);
-      const resolved = resolveHudPreset(imported.preset, imported.layout, imported.theme);
-      const original = resolveHudPreset(pack.preset, pack.layout, pack.theme);
-      expect(resolved.widgets).toEqual(original.widgets);
-      expect(resolved.layout.widgets).toEqual(original.layout.widgets);
-      expect(resolved.theme.semantic).toEqual(original.theme.semantic);
+      expect(imported.preset.widgets).toEqual(pack.preset.widgets);
+      expect(imported.layout.widgets).toEqual(pack.layout.widgets);
+      expect(imported.theme).toEqual({ ...pack.theme, id: imported.theme.id });
       expect('activePreset' in pack).toBe(false);
     },
   );

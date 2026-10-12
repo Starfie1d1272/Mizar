@@ -36,6 +36,7 @@ it.each(['plant', 'defuse'] as const)(
           bomb: {
             ...snapshot.payload.bomb!,
             state,
+            explosion: { remainingSeconds: 20, durationSeconds: 40 },
             action:
               kind === 'plant'
                 ? {
@@ -71,6 +72,12 @@ it.each(['plant', 'defuse'] as const)(
     try {
       render(1.25);
       expect(node.querySelector('.shanghai-event-panel b')?.textContent).toBe('1:25');
+      if (kind === 'defuse') {
+        expect(node.querySelector<HTMLElement>('.shanghai-action-track i')?.style.width).toBe(
+          '25%',
+        );
+        expect(node.querySelector<HTMLElement>('.shanghai-fuse i')?.style.width).toBe('50%');
+      }
       for (const remaining of [0, null, -0.01]) {
         render(remaining);
         expect(node.querySelector('.shanghai-event-panel')).toBeNull();

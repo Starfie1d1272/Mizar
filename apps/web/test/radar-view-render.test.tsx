@@ -60,46 +60,45 @@ function frame(sequence = 1, x = 0.5): RadarViewFrame {
 const canvas = () => container.querySelector('canvas')!;
 
 describe('shared radar surface lifecycle', () => {
-  it('renders ESL labels through the shared accepted-frame lifecycle and clears an unavailable frame', () => {
+  it('mounts without a baseline, renders recovery, freezes stale motion and clears unavailable', () => {
     const { step } = setup();
-    act(() =>
-      root!.render(
-        <RadarView
-          snapshot={frame()}
-          appearance="esl"
-          assetBaseUrl="/vendor/radar"
-          reducedMotion
-        />,
-      ),
-    );
-    step(0);
-    expect(canvas().dataset.radarAppearance).toBe('esl');
-    expect(canvas().dataset.radarPlayers).toBe('1');
     act(() =>
       root!.render(<RadarView snapshot={null} appearance="esl" assetBaseUrl="/vendor/radar" />),
     );
-    step(100);
-    expect(canvas().dataset.radarPlayers).toBe('0');
-  });
-  it('mounts without a baseline, renders recovery, freezes stale motion and clears unavailable', () => {
-    const { step } = setup();
-    act(() => root!.render(<RadarView snapshot={null} assetBaseUrl="/vendor/radar" />));
     step(0);
     expect(canvas().dataset.radarState).toBe('unavailable');
-    act(() => root!.render(<RadarView snapshot={frame()} assetBaseUrl="/vendor/radar" />));
+    act(() =>
+      root!.render(<RadarView snapshot={frame()} appearance="esl" assetBaseUrl="/vendor/radar" />),
+    );
     step(100);
     expect(canvas().dataset.radarPlayers).toBe('1');
-    act(() => root!.render(<RadarView snapshot={frame(2, 0.52)} assetBaseUrl="/vendor/radar" />));
+    expect(canvas().dataset.radarAppearance).toBe('esl');
+    act(() =>
+      root!.render(
+        <RadarView snapshot={frame(2, 0.52)} appearance="esl" assetBaseUrl="/vendor/radar" />,
+      ),
+    );
     step(600);
     step(700);
     act(() =>
-      root!.render(<RadarView snapshot={frame(2, 0.52)} paused assetBaseUrl="/vendor/radar" />),
+      root!.render(
+        <RadarView
+          snapshot={frame(2, 0.52)}
+          paused
+          appearance="esl"
+          assetBaseUrl="/vendor/radar"
+        />,
+      ),
     );
     step(750);
     const motion = canvas().dataset.radarObservedMotion;
     step(5000);
     expect(canvas().dataset.radarObservedMotion).toBe(motion);
-    act(() => root!.render(<RadarView snapshot={null} paused assetBaseUrl="/vendor/radar" />));
+    act(() =>
+      root!.render(
+        <RadarView snapshot={null} paused appearance="esl" assetBaseUrl="/vendor/radar" />,
+      ),
+    );
     step(5100);
     expect(canvas().dataset.radarPlayers).toBe('0');
     act(() =>
@@ -107,6 +106,7 @@ describe('shared radar surface lifecycle', () => {
         <RadarView
           snapshot={frame(1, 0.2)}
           presentationRevision={1}
+          appearance="esl"
           assetBaseUrl="/vendor/radar"
         />,
       ),
