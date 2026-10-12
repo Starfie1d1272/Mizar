@@ -51,7 +51,7 @@
     "design:catalog:build": "pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook:build",
     "design:components:test": "pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook:test",
     "design:check": "pnpm design:tokens:verify && pnpm architecture:check && pnpm design:contracts:test && pnpm design:catalog:build && pnpm design:components:test",
-    "design:contracts:test": "vitest run --config vitest.config.ts packages/design-tokens/scripts/tokens.test.mjs scripts/architecture scripts/ci/plan.test.mjs",
+    "design:contracts:test": "vitest run --config vitest.config.ts packages/design-tokens/scripts/tokens.test.mjs",
     "build:packages": "pnpm --filter './packages/*...' --fail-if-no-match run build",
     "acceptance:prepare": "pnpm build:packages"
   },

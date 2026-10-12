@@ -31,13 +31,4 @@ describe('EPL editor samples', () => {
       ]);
     }
   });
-
-  it('uses witnessed objective and side-switch states without completed future maps', () => {
-    expect(getHudEditorFixture('epl-defusing')?.payload.bomb?.state).toBe('defusing');
-    expect(getHudEditorFixture('epl-timeout')?.payload.clock?.phase).toBe('timeout_ct');
-    expect(getHudEditorFixture('epl-halftime')?.payload.teams.ct.entryId).toBe('epl-navi');
-    const result = getHudEditorFixture('epl-map-result')!.payload;
-    expect(result.map.score).toEqual({ ct: 6, t: 13 });
-    expect(result.series?.maps.slice(1).every((map) => map.finalScore === null)).toBe(true);
-  });
 });

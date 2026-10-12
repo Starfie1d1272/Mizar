@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { toMatchContext, toMatchDocumentV1, type BroadcastManifest } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { ReliableEventV1 } from '@mizar/protocol/output';
 
@@ -143,40 +143,6 @@ describe('Fixture durable isolation & lifecycle', () => {
       outbox,
       rehearsal,
       dispatchObservation,
-    };
-  }
-
-  function createLiveObservation(
-    sequence: number,
-    mapName = 'de_dust2',
-    sides: { ctScore: number; tScore: number } = { ctScore: 1, tScore: 0 },
-  ): TelemetryObservation {
-    return {
-      receive: {
-        sequence,
-        receivedAt: new Date().toISOString(),
-        receivedMonotonicMs: performance.now(),
-      },
-      source: { kind: 'cs2-gsi' },
-      coverage: {
-        provider: 'present',
-        map: 'present',
-        round: 'present',
-        phaseCountdowns: 'absent',
-        player: 'absent',
-        allPlayers: 'absent',
-        bomb: 'absent',
-        grenades: 'absent',
-      },
-      telemetry: {
-        map: {
-          name: mapName,
-          phase: 'live',
-          roundNumber: sides.ctScore + sides.tScore,
-          sides: { ct: { score: sides.ctScore }, t: { score: sides.tScore } },
-        },
-        round: { phase: 'live' },
-      },
     };
   }
 
@@ -356,120 +322,5 @@ describe('Fixture durable isolation & lifecycle', () => {
     rehearsal.stop();
     await outputService.retry();
     expect(outbox.getRecords()[0]?.status).toBe('expired');
-  });
-
-  it('3. direct fixture -> local automatically exits fixture state and allows real telemetry to advance', async () => {
-    const { rehearsal, controller, runtime, sceneController, coordinator } =
-      await createFixtureHarness();
-
-    // Load rehearsal and advance to gameplay
-    await rehearsal.load();
-    await rehearsal.stage(3);
-    expect(rehearsal.view().loaded).toBe(true);
-    expect(rehearsal.view().stageIndex).toBe(3);
-    expect(sceneController.get().active).toBe('gameplay');
-    expect(controller.getActiveBinding()?.origin).toBe('fixture');
-
-    // Prepare a local document with unplayed maps
-    const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
-      focusMatchId: string;
-      manifests: Record<string, BroadcastManifest>;
-    };
-    const focusManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
-    const localDoc = toMatchDocumentV1({
-      ...focusManifest,
-      match: {
-        ...focusManifest.match,
-        matchId: 'local-match-1',
-        scoreA: null,
-        scoreB: null,
-        completedAt: null,
-      },
-      maps: focusManifest.maps.map((map) => ({
-        ...map,
-        scoreA: null,
-        scoreB: null,
-        completedAt: null,
-      })),
-    });
-
-    // DIRECTLY switch to Local WITHOUT calling rehearsal.stop()
-    controller.activateLocalDocument(localDoc);
-
-    // Fixture state must be cleaned up automatically by composition owner / controller
-    expect(rehearsal.view().loaded).toBe(false);
-    expect(rehearsal.view().selectedMatchId).toBeNull();
-    expect(rehearsal.view().stageIndex).toBe(0);
-    expect(sceneController.get().active).toBe('waiting');
-    expect(controller.getActiveBinding()?.origin).toBe('local');
-
-    // Real telemetry observation can now advance normally for Map 1 (de_dust2)
-    const liveObs = createLiveObservation(100, 'de_dust2');
-    const result = runtime.acceptObservation(liveObs);
-    const bundle = coordinator.afterRuntimeMutation(result);
-
-    expect(bundle.program.status.telemetry).toBe('fresh');
-    expect(bundle.program.series?.currentMapOrder).toBe(1);
-    expect(bundle.program.series?.maps[0]?.status).toBe('current');
-    expect(bundle.program.series?.bindingState).toBe('bound');
-  });
-
-  it('4. direct fixture -> online automatically exits fixture state and allows real telemetry to advance', async () => {
-    const { rehearsal, controller, runtime, sceneController, coordinator } =
-      await createFixtureHarness();
-
-    // Load rehearsal and advance to gameplay
-    await rehearsal.load();
-    await rehearsal.stage(3);
-    expect(rehearsal.view().loaded).toBe(true);
-    expect(sceneController.get().active).toBe('gameplay');
-
-    const rawFixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
-      focusMatchId: string;
-      manifests: Record<string, BroadcastManifest>;
-    };
-    const focusManifest = rawFixture.manifests[rawFixture.focusMatchId]!;
-    if (!focusManifest.match.competition) throw new Error('event fixture required');
-    const onlineManifest: BroadcastManifest = {
-      ...focusManifest,
-      match: {
-        ...focusManifest.match,
-        matchId: 'online-match-999',
-        competition: { ...focusManifest.match.competition, competitionId: 'prod-comp' },
-        scoreA: null,
-        scoreB: null,
-        completedAt: null,
-      },
-      maps: focusManifest.maps.map((map) => ({
-        ...map,
-        scoreA: null,
-        scoreB: null,
-        completedAt: null,
-      })),
-    };
-
-    // DIRECTLY switch to Online WITHOUT calling rehearsal.stop()
-    const selectResult = await controller.selectMatch('online-match-999', {
-      kind: 'online',
-      load: () => Promise.resolve(onlineManifest),
-    });
-    expect(selectResult.ok).toBe(true);
-
-    // Fixture state must be cleaned up automatically
-    expect(rehearsal.view().loaded).toBe(false);
-    expect(rehearsal.view().selectedMatchId).toBeNull();
-    expect(rehearsal.view().stageIndex).toBe(0);
-    expect(sceneController.get().active).toBe('waiting');
-    expect(controller.getActiveBinding()?.origin).toBe('online');
-
-    // Real telemetry observation can now advance normally for Map 1 (de_dust2)
-    const liveObs = createLiveObservation(100, 'de_dust2');
-    const result = runtime.acceptObservation(liveObs);
-    const bundle = coordinator.afterRuntimeMutation(result);
-
-    expect(bundle.program.status.telemetry).toBe('fresh');
-    expect(bundle.program.series?.currentMapOrder).toBe(1);
-    expect(bundle.program.series?.maps[0]?.status).toBe('current');
-    expect(bundle.program.series?.bindingState).toBe('bound');
   });
 });

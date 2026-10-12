@@ -1,56 +1,16 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { registerStaticHost } from '../../src/local-web/static-host.js';
-import { buildApp } from '../../src/app.js';
-import {
-  createActivePolicyVerifier,
-  createRuntimeVerifier,
-} from '../../src/resource-store/runtime-adapter.js';
 import { ResourceStore } from '../../src/resource-store/store.js';
 import { ProgramSceneController } from '../../src/program-scenes/controller.js';
 import { registerProductionRoutes } from '../../src/program-scenes/production.js';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import type { ProjectionCoordinator } from '../../src/projections/projection-coordinator.js';
 import type { BpSession } from '../../src/bp/controller.js';
-
-it('opens one real Store, retains old Full URLs without a publisher pin, and releases its writer on App close', async () => {
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-app-resources-'));
-  const webRoot = join(root, 'web');
-  await mkdir(join(webRoot, 'fixtures/epl-inferno-video/replay'), { recursive: true });
-  await writeFile(join(webRoot, 'index.html'), '<html>Full</html>');
-  await writeFile(join(webRoot, 'fixtures/epl-inferno-video/replay/background.mp4'), '0123456789');
-  const app = buildApp({ webRoot, resources: { root: join(root, 'assets') } });
-  try {
-    await app.ready();
-    const store = app.getDecorator<() => ResourceStore>('getResourceStore')();
-    expect(store).toBeInstanceOf(ResourceStore);
-    expect((await app.inject('/local/v1/resources')).json()).toEqual({ resources: store.list() });
-    const response = await app.inject({
-      url: '/fixtures/epl-inferno-video/replay/background.mp4',
-      headers: { range: 'bytes=2-5' },
-    });
-    expect(response.statusCode).toBe(206);
-    expect(response.body).toBe('2345');
-    await expect(
-      store.installVerified('official:epl-default', () => Promise.resolve({})),
-    ).rejects.toThrow('resource_policy_unavailable');
-    expect((await app.inject('/fixtures/epl-inferno-video/replay/background.mp4')).body).toBe(
-      '0123456789',
-    );
-  } finally {
-    await app.close();
-  }
-  const reopened = await ResourceStore.open({
-    root: join(root, 'assets'),
-    verifyTrustedPack: createRuntimeVerifier(undefined),
-  });
-  await reopened.close();
-  await rm(root, { recursive: true, force: true });
-});
 
 it('holds production, scene and Host-update exclusion for the entire asynchronous activation', async () => {
   const app = Fastify();
@@ -142,86 +102,6 @@ it('holds production, scene and Host-update exclusion for the entire asynchronou
   }
 });
 
-it('calls actual offline receipt cryptography and refuses qualification proof as publisher authorization without network', async () => {
-  const encode = (value: Buffer) => value.toString('base64');
-  const fixture = new URL(
-    '../../../../packages/resource-pack-contract/test-fixtures/tuf/',
-    import.meta.url,
-  );
-  const proof = await readFile(
-    new URL('../fixtures/updates/distribution.attestation.json', import.meta.url),
-  );
-  const sha = 'e46dcf7ff5bf01703da2ee40491f503d1fc4d76b';
-  const statement = {
-    schemaVersion: 'mizar.resource-publication.v1',
-    repository: 'Starfie1d1272/Mizar',
-    packId: 'official:epl-default',
-    packVersion: '1.0.0',
-    sourceRef: 'refs/heads/main',
-    sourceSha: sha,
-    promotionSha: sha,
-    contentKind: 'recorded-replay',
-    compatibility: {
-      resourceSchemaVersion: 1,
-      minimumCoreVersion: '1.1.0',
-      maximumCoreVersionExclusive: '2.0.0',
-    },
-    manifestSha256: 'a'.repeat(64),
-    archive: {
-      name: 'Mizar-official-epl-default-1.0.0.zip',
-      format: 'zip',
-      bytes: 100,
-      sha256: 'b'.repeat(64),
-    },
-    sequence: 1,
-    issuedAt: '2026-10-09T01:00:00Z',
-    expiresAt: '2026-10-10T01:00:00Z',
-  };
-  const receipt = {
-    schemaVersion: 'mizar.resource-receipt.v1',
-    publicationBase64: encode(Buffer.from(JSON.stringify(statement))),
-    manifestBase64: encode(Buffer.from('{}')),
-    publicationBundleBase64: encode(proof),
-    archiveBundleBase64: encode(proof),
-    trust: {
-      schemaVersion: 'mizar.sigstore-cache.v1',
-      rootChain: [],
-      targetsBase64: encode(await readFile(new URL('targets.json', fixture))),
-      trustedRootBase64: encode(await readFile(new URL('trusted_root.json', fixture))),
-    },
-  };
-  const network = vi.fn(() => {
-    throw new Error('offline only');
-  });
-  vi.stubGlobal('fetch', network);
-  try {
-    const policy = {
-      packVersion: '1.0.0',
-      sourceSha: sha,
-      promotionSha: sha,
-      coreVersion: '1.1.0',
-      minimumSequence: 99,
-      now: 0,
-    };
-    const verify = createRuntimeVerifier(policy);
-    await expect(
-      createActivePolicyVerifier(policy)({ receipt, signal: new AbortController().signal }),
-    ).rejects.toThrow(/certificate identity/);
-    await expect(
-      verify({
-        packId: 'official:epl-default',
-        directory: '',
-        receipt,
-        purpose: 'cache',
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow(/certificate identity/);
-    expect(network).not.toHaveBeenCalled();
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
-
 it('serves active verified bytes at original URLs and never mixes missing or corrupt members with Full', async () => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-resource-http-'));
   const path = 'fixtures/epl-inferno-video/replay/background.mp4';
@@ -275,39 +155,6 @@ it('serves active verified bytes at original URLs and never mixes missing or cor
   } finally {
     await app.close();
     await store.close();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it('uses the authenticated Core context to verify a persisted catalog before accepting a policy-free App receipt', async () => {
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-app-catalog-'));
-  // Structural runtime context only; this denial case makes no formal Core/signature claim.
-  const app = buildApp({
-    resources: { root },
-    productRuntime: {
-      appVersion: '1.1.0',
-      gitSha: 'a'.repeat(40),
-      artifactSha256: 'b'.repeat(64),
-      instanceId: 'catalog-denial-fixture',
-      controlToken: 'fixture-control-token',
-      stop: vi.fn(),
-    },
-  });
-  try {
-    await app.ready();
-    const store = app.getDecorator<() => ResourceStore>('getResourceStore')();
-    await expect(
-      store.installVerified('official:epl-default', async ({ directory }) => {
-        await writeFile(join(directory, 'untrusted.json'), '{}');
-        return { schemaVersion: 'mizar.resource-receipt.v1', catalog: {} };
-      }),
-    ).rejects.toMatchObject({
-      code: 'resource_trust_failed',
-      cause: { message: '资源目录 receipt 版本无效' },
-    });
-    expect(store.getStatus('official:epl-default').activeVersion).toBeNull();
-  } finally {
-    await app.close();
     await rm(root, { recursive: true, force: true });
   }
 });

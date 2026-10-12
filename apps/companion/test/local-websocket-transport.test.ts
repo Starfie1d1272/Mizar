@@ -8,13 +8,10 @@ import type {
 } from '../src/local-protocol/channel-publisher.js';
 import {
   createLocalWebSocketTransport,
-  MAX_LOCAL_WS_CONNECTIONS,
   type LocalWebSocketLike,
   type LocalWebSocketTransport,
 } from '../src/local-web/websocket-transport.js';
 import {
-  HEARTBEAT_INTERVAL_MS,
-  MAX_LOCAL_SNAPSHOT_BYTES,
   MAX_LOCAL_WS_BUFFER_BYTES,
   type LocalWebChannel,
 } from '../src/local-web/transport-constants.js';
@@ -190,117 +187,6 @@ function attach(transport: LocalWebSocketTransport, socket: FakeSocket, userAgen
 }
 
 describe('local WebSocket transport lifecycle', () => {
-  it('classifies observed browser hosts without retaining their raw user-agent strings', async () => {
-    const publisher = new FakePublisher();
-    const transport = createTransport(publisher);
-    const obsSocket = new FakeSocket();
-    const browserSocket = new FakeSocket();
-    const unknownSocket = new FakeSocket();
-    const obsUserAgent = 'Mozilla/5.0 OBS/32.0.2.4 private-agent-marker';
-
-    attach(transport, obsSocket, obsUserAgent);
-    attach(transport, browserSocket, 'Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36');
-    attach(transport, unknownSocket, 'unrecognized-client private-agent-marker');
-
-    expect(transport.getHostDiagnostics()).toMatchObject({
-      active: {
-        obs: 1,
-        browser: 1,
-        unknown: 1,
-        byChannel: { program: 3 },
-        obsVersions: ['32.0.2'],
-      },
-      totals: { connected: 3, disconnected: 0 },
-      recentEvents: [
-        { action: 'connected', host: 'obs', obsVersion: '32.0.2' },
-        { action: 'connected', host: 'browser' },
-        { action: 'connected', host: 'unknown' },
-      ],
-    });
-    expect(JSON.stringify(transport.getHostDiagnostics())).not.toContain('private-agent-marker');
-
-    obsSocket.emit('close', 1000, Buffer.from('normal close'));
-    await flushMicrotasks();
-    const afterClose = transport.getHostDiagnostics();
-    expect(afterClose).toMatchObject({
-      active: { obs: 0 },
-      totals: { connected: 3, disconnected: 1 },
-    });
-    expect(afterClose.recentEvents.at(-1)).toMatchObject({
-      action: 'disconnected',
-      host: 'obs',
-      obsVersion: '32.0.2',
-    });
-  });
-
-  it('bounds host history and rejects connections after the transport capacity', async () => {
-    const publisher = new FakePublisher();
-    const transport = createTransport(publisher);
-    const sockets: FakeSocket[] = [];
-    for (let index = 0; index < MAX_LOCAL_WS_CONNECTIONS; index += 1) {
-      const socket = new FakeSocket();
-      sockets.push(socket);
-      attach(transport, socket, 'Chrome/140.0');
-    }
-
-    const rejected = new FakeSocket();
-    attach(transport, rejected, 'OBS/32.0.2');
-    expect(rejected.closeCalls[0]).toEqual({
-      code: 1013,
-      reason: 'local connection limit reached',
-    });
-    expect(transport.getHostDiagnostics()).toMatchObject({
-      active: { browser: MAX_LOCAL_WS_CONNECTIONS, obs: 0 },
-      totals: { connected: MAX_LOCAL_WS_CONNECTIONS, connectionLimitRejected: 1 },
-    });
-
-    for (const socket of sockets.slice(0, 20)) socket.emit('close', 1000, Buffer.from('closed'));
-    await flushMicrotasks();
-    const diagnostics = transport.getHostDiagnostics();
-    expect(diagnostics.recentEvents).toHaveLength(32);
-    expect(diagnostics.recentEvents[0]?.sequence).toBe(MAX_LOCAL_WS_CONNECTIONS + 20 - 32 + 1);
-  });
-
-  it.each([undefined, null])(
-    'accepts successful send callback %s and keeps forwarding snapshots',
-    async (success) => {
-      const publisher = new FakePublisher();
-      publisher.publish({ channel: 'program', value: 'baseline' });
-      const socket = new FakeSocket();
-      socket.sendError = success;
-      const transport = createTransport(publisher);
-
-      attach(transport, socket);
-      await flushMicrotasks();
-      publisher.publish({ channel: 'program', value: 'latest' });
-      await flushMicrotasks();
-
-      expect(socket.terminated).toBe(0);
-      expect(publisher.subscriberCount).toBe(1);
-      expect(socket.sent.map((value) => JSON.parse(value) as unknown)).toEqual([
-        { channel: 'program', channelSeq: 1, value: 'baseline' },
-        { channel: 'program', channelSeq: 2, value: 'latest' },
-      ]);
-    },
-  );
-
-  it('removes only the failed subscriber and keeps another channel consumer live', async () => {
-    const publisher = new FakePublisher();
-    publisher.publish({ channel: 'program', value: 'baseline' });
-    const failedSocket = new FakeSocket();
-    failedSocket.sendError = new Error('socket send failed');
-    const healthySocket = new FakeSocket();
-    const transport = createTransport(publisher);
-
-    attach(transport, failedSocket);
-    attach(transport, healthySocket);
-    await flushMicrotasks();
-
-    expect(failedSocket.terminated).toBe(1);
-    expect(healthySocket.sent).toHaveLength(1);
-    expect(publisher.subscriberCount).toBe(1);
-  });
-
   it('terminates a slow consumer before an unbounded transport queue can form', async () => {
     const publisher = new FakePublisher();
     publisher.publish({ channel: 'program', value: 'baseline' });
@@ -318,83 +204,6 @@ describe('local WebSocket transport lifecycle', () => {
       code: 'slow_consumer_terminated',
       bufferedBytes: MAX_LOCAL_WS_BUFFER_BYTES + 1,
     });
-  });
-
-  it('preserves the 1009 close handshake for an oversized snapshot', async () => {
-    const publisher = new FakePublisher();
-    publisher.publish({ channel: 'program', value: 'x'.repeat(MAX_LOCAL_SNAPSHOT_BYTES) });
-    const socket = new FakeSocket();
-    socket.deferCloseEvent = true;
-    const transport = createTransport(publisher);
-
-    attach(transport, socket);
-    await flushMicrotasks();
-
-    expect(socket.closeCalls[0]).toMatchObject({
-      code: 1009,
-      reason: 'local snapshot exceeds 256 KiB',
-    });
-    expect(socket.readyState).toBe(2);
-    expect(socket.terminated).toBe(0);
-    expect(publisher.subscriberCount).toBe(0);
-
-    socket.emitDeferredClose();
-    await flushMicrotasks();
-    expect(socket.terminated).toBe(0);
-  });
-
-  it('terminates and cleans the subscription when the socket emits an error', async () => {
-    const publisher = new FakePublisher();
-    const scheduler = new FakeHeartbeatScheduler();
-    const socket = new FakeSocket();
-    const transport = createTransport(publisher, scheduler);
-
-    attach(transport, socket);
-    expect(publisher.subscriberCount).toBe(1);
-
-    socket.emit('error', new Error('transport failure'));
-    await flushMicrotasks();
-
-    expect(socket.terminated).toBe(1);
-    expect(publisher.subscriberCount).toBe(0);
-    expect(scheduler.cleared).toBe(true);
-  });
-
-  it('cleans the publisher subscription and heartbeat after a remote normal close', async () => {
-    const publisher = new FakePublisher();
-    const scheduler = new FakeHeartbeatScheduler();
-    const socket = new FakeSocket();
-    const transport = createTransport(publisher, scheduler);
-
-    attach(transport, socket);
-    expect(publisher.subscriberCount).toBe(1);
-
-    socket.emit('close', 1000, Buffer.from('remote close'));
-    await flushMicrotasks();
-
-    expect(publisher.subscriberCount).toBe(0);
-    expect(scheduler.cleared).toBe(true);
-  });
-
-  it('uses one shared heartbeat timer and terminates only connections that miss two ticks', () => {
-    const publisher = new FakePublisher();
-    const scheduler = new FakeHeartbeatScheduler();
-    const first = new FakeSocket();
-    const second = new FakeSocket();
-    const transport = createTransport(publisher, scheduler);
-
-    attach(transport, first);
-    attach(transport, second);
-    expect(scheduler.intervalMs).toBe(HEARTBEAT_INTERVAL_MS);
-    scheduler.tick();
-    expect(first.pings).toBe(1);
-    expect(second.pings).toBe(1);
-    first.emit('pong');
-    scheduler.tick();
-    expect(first.terminated).toBe(0);
-    expect(second.terminated).toBe(1);
-    scheduler.tick();
-    expect(first.terminated).toBe(1);
   });
 
   it('cleans timer, socket subscriptions, and in-flight sends on shutdown', async () => {

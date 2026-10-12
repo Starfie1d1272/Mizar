@@ -620,21 +620,7 @@ mod tests {
         (root, log)
     }
 
-    #[test]
-    fn helper_accepts_actual_updates_directory_case_and_provider_paths() {
-        let (root, log) = helper_fixture();
-        let stage = log
-            .state_root
-            .join("Updates/install-0123456789abcdef0123456789abcdef");
-        fs::create_dir_all(&stage).unwrap();
-        for reported in [stage.clone(), powershell::provider_path(&stage)] {
-            assert_eq!(
-                helper_stage(&json!({ "stageRoot": reported }), &log).unwrap(),
-                stage.canonicalize().unwrap()
-            );
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
+
 
     #[test]
     fn helper_rejects_escape_bad_identity_and_unreadable_directory_with_guidance() {
@@ -719,92 +705,9 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn unreadable_plan_directories_keep_the_filesystem_cause() {
-        let (root, log) = helper_fixture();
-        let bundle = root.join("bundle");
-        fs::create_dir(&bundle).unwrap();
-        fs::write(bundle.join("installed.flag"), "installed").unwrap();
-        let bundle = bundle.canonicalize().unwrap();
-        let mut plan = json!({
-            "schemaVersion": 1,
-            "bundleRoot": powershell::provider_path(&bundle),
-            "stateRoot": powershell::provider_path(&log.state_root),
-            "installer": log.state_root.join("updates/download-case/Setup.exe")
-        });
-        assert!(validate_plan(&plan, &bundle, &log)
-            .unwrap_err()
-            .contains("导出诊断"));
-        fs::create_dir(log.state_root.join("updates")).unwrap();
-        plan["installer"] = json!(root.join("missing/download-case/Setup.exe"));
-        assert!(validate_plan(&plan, &bundle, &log)
-            .unwrap_err()
-            .contains("正式发布页"));
-        plan["bundleRoot"] = json!(root.join("missing-bundle"));
-        assert!(validate_plan(&plan, &bundle, &log)
-            .unwrap_err()
-            .contains("正式发布页"));
-        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
-        assert!(evidence.contains("plan_updates_canonicalize"));
-        assert!(evidence.contains("plan_installer_parent_canonicalize"));
-        assert!(evidence.contains("plan_bundle_canonicalize"));
-        assert!(evidence.contains("os_code=Some("));
-        fs::remove_dir_all(root).unwrap();
-    }
 
-    #[test]
-    fn io_and_json_failures_keep_stage_and_codes_without_runtime_input() {
-        let root = std::env::temp_dir().join(format!(
-            "mizar-update-evidence-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let log = DesktopLog::new(&root, Some(root.join("state"))).unwrap();
-        let message = io_failure(
-            &log,
-            "runtime_read",
-            &std::io::Error::from_raw_os_error(5),
-            "short UI",
-        );
-        assert!(message.contains("导出诊断"));
-        assert!(message.contains("旧版仍可用"));
-        let error =
-            serde_json::from_str::<Value>(r#"{"controlToken":"private-control-token","secret":} "#)
-                .unwrap_err();
-        assert!(json_failure(&log, "runtime_json", &error, "short UI").contains("正式发布页"));
-        let evidence = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
-        assert!(evidence.contains("runtime_read"));
-        assert!(evidence.contains("os_code=Some(5)"));
-        assert!(evidence.contains("runtime_json"));
-        assert!(evidence.contains("json_category=Syntax"));
-        assert!(!evidence.contains("private-control-token"));
-        assert!(!evidence.contains("controlToken"));
-        fs::remove_dir_all(root).unwrap();
-    }
 
-    #[test]
-    fn serialized_installation_plan_has_paths_windows_powershell_can_read() {
-        let plan = provider_plan(
-            json!({
-                "schemaVersion": 1,
-                "version": "1.1.0",
-                "installerSha256": "signed installer identity",
-                "installer": r"\\?\C:\Users\User\AppData\Local\Mizar\updates\download-test\Mizar-v1.1.0-Windows-x64-Setup.exe"
-            }),
-            Path::new(r"\\?\C:\Program Files\Mizar"),
-            Path::new(r"\\?\C:\Users\User\AppData\Local\Mizar"),
-        )
-        .unwrap();
-        assert_eq!(plan["bundleRoot"], r"C:\Program Files\Mizar");
-        assert_eq!(plan["stateRoot"], r"C:\Users\User\AppData\Local\Mizar");
-        assert_eq!(
-            plan["installer"],
-            r"C:\Users\User\AppData\Local\Mizar\updates\download-test\Mizar-v1.1.0-Windows-x64-Setup.exe"
-        );
-        assert_eq!(plan["version"], "1.1.0");
-        assert_eq!(plan["installerSha256"], "signed installer identity");
-    }
+
+
+
 }

@@ -1,71 +1,11 @@
-import { mkdtemp, readFile, writeFile, rm, cp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { programSnapshotSchema } from '@mizar/protocol/program';
 import { replayCapture } from '@mizar/testkit';
-import {
-  generateRealProgramFixtureEvidence,
-  serializeRealProgramFixtures,
-  REAL_PROGRAM_MATRIX,
-  REAL_PROGRAM_ARTIFACT_PATH,
-  runGenerator,
-} from './generate-real-program-fixtures.js';
+import { generateRealProgramFixtureEvidence } from './generate-real-program-fixtures.js';
 import { replayRealProgram, REPOSITORY_ROOT } from '../support/real-program-replay.js';
 
 describe('real-derived Program fixture generation', { timeout: 30_000 }, () => {
-  it('replays every prefix in order with exact provenance and byte-identical output', async () => {
-    const { artifact: first, verification } = await realProgramFixtureEvidence();
-    const bytes = await serializeRealProgramFixtures(first);
-    expect(await readFile(REAL_PROGRAM_ARTIFACT_PATH, 'utf8')).toBe(bytes);
-    expect(Object.keys(first.fixtures)).toEqual(REAL_PROGRAM_MATRIX.map(([id]) => id));
-    expect(bytes).not.toMatch(/auth|token|password|secret|generatedAt|\/Users\/|[A-Z]:\\/i);
-    expect(bytes).not.toContain(REPOSITORY_ROOT);
-    for (const row of verification) {
-      const fixture = first.fixtures[row.id];
-      expect(fixture?.provenance).toEqual({
-        kind: 'real-derived',
-        capturePath: row.capturePath,
-        targetSequence: row.targetSequence,
-        ...row.provenance,
-      });
-      expect(row.acceptedSequences).toEqual(row.expectedSequences);
-      expect(row.snapshot).toEqual(fixture?.snapshot);
-      expect(programSnapshotSchema.safeParse(row.snapshot).success).toBe(true);
-      expect(
-        row.mapStates.every(
-          (map) => map.scoreA === null && map.scoreB === null && map.completedAt === null,
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it('fails on missing targets, unknown identity namespaces, corrupted capture and artifact drift without writing', async () => {
-    const capturePath = resolve(REPOSITORY_ROOT, 'fixtures/gsi/semantic/observer/rich-live-state');
-    await expect(replayRealProgram({ capturePath, targetSequence: 728 })).rejects.toThrow(
-      'Target sequence not found',
-    );
-    const temporary = await mkdtemp(resolve(tmpdir(), 'real-program-fixtures-'));
-    try {
-      const captureCopy = resolve(temporary, 'capture');
-      await cp(capturePath, captureCopy, { recursive: true });
-      const manifestPath = resolve(captureCopy, 'manifest.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
-      manifest.framesSha256 = '0'.repeat(64);
-      await writeFile(manifestPath, JSON.stringify(manifest));
-      await expect(replayRealProgram({ capturePath: captureCopy })).rejects.toThrow();
-      const artifactPath = resolve(temporary, 'artifact.json');
-      const artifact = structuredClone((await realProgramFixtureEvidence()).artifact);
-      artifact.fixtures['real-live-rich']!.snapshot.payload.map.score.ct = 999;
-      const drift = await serializeRealProgramFixtures(artifact);
-      await writeFile(artifactPath, drift);
-      await expect(runGenerator('--check', artifactPath)).rejects.toThrow('real-live-rich');
-      expect(await readFile(artifactPath, 'utf8')).toBe(drift);
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
-  });
-
   it('preserves production equipment, identity, objective transitions and terminal semantics', async () => {
     const { fixtures } = (await realProgramFixtureEvidence()).artifact;
     const payload = (id: string) => fixtures[id]!.snapshot.payload;

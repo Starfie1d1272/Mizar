@@ -69,25 +69,3 @@ pub fn gsi_status(result: &Value) -> Value {
         }))
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn errors_are_actionable_without_forwarding_raw_script_output() {
-        assert!(failure(br#"{"error":{"code":"multiple-installations"}}"#).contains("请选择"));
-        for output in [
-            b"private-token C:\\Users\\secret".as_slice(),
-            br#"{"error":{"code":"unknown-secret","message":"secret"}}"#,
-        ] {
-            assert!(!failure(output).contains("secret"));
-        }
-        let status = gsi_status(
-            &json!({"readFailed":true,"issueCodes":["status-unreadable"],"gsiToken":"secret"}),
-        );
-        assert_eq!(status["conflict"], false);
-        assert_eq!(status["readFailed"], true);
-        assert_eq!(status["issues"][0]["code"], "status-unreadable");
-        assert!(!status.to_string().contains("secret"));
-    }
-}

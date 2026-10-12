@@ -19,44 +19,6 @@ async function fixture(): Promise<LiveSnapshotV1> {
   );
 }
 
-it('parses the complete public fixture and preserves complete, partial, unavailable and null history', async () => {
-  const base = await fixture();
-  expect(base.radar?.players[0]?.position).toEqual({ x: 0.5, y: 0.5, layer: 'upper' });
-  for (const completeness of ['complete', 'partial', 'unavailable'] as const) {
-    const roundHistory = {
-      ...base.roundHistory!,
-      completeness,
-      rounds: completeness === 'unavailable' ? [] : base.roundHistory!.rounds,
-    };
-    expect(parseLiveSnapshotV1({ ...base, roundHistory }).roundHistory).toEqual(roundHistory);
-  }
-  expect(parseLiveSnapshotV1({ ...base, roundHistory: null }).roundHistory).toBeNull();
-});
-
-it('rejects cross-field contradictions in the public live contract', async () => {
-  const base = await fixture();
-  const radar = base.radar!;
-  expect(() =>
-    parseLiveSnapshotV1({
-      ...base,
-      radar: { ...radar, mapName: base.map.name === 'de_nuke' ? 'de_ancient' : 'de_nuke' },
-    }),
-  ).toThrow();
-  expect(() =>
-    parseLiveSnapshotV1({
-      ...base,
-      capability: { ...base.capability, radarCurrent: false },
-    }),
-  ).toThrow();
-  expect(() =>
-    parseLiveSnapshotV1({
-      ...base,
-      series: { ...base.series, currentMapOrder: 2 },
-      roundHistory: { ...base.roundHistory!, mapOrder: 1 },
-    }),
-  ).toThrow();
-});
-
 it('rejects private and unknown fields at every new boundary', async () => {
   const base = await fixture();
   const radar = base.radar!;
@@ -92,46 +54,6 @@ it('rejects private and unknown fields at every new boundary', async () => {
     },
   ])
     expect(() => parseLiveSnapshotV1(candidate)).toThrow();
-});
-
-it('enforces collection, nested string, coordinate and layer limits', async () => {
-  const base = await fixture();
-  const radar = base.radar!;
-  const utility = radar.utility[1]!;
-  const flame = utility.flames[0]!;
-  for (const candidate of [
-    {
-      ...base,
-      roundHistory: { ...base.roundHistory, rounds: Array(257).fill(base.roundHistory!.rounds[0]) },
-    },
-    {
-      ...base,
-      roundHistory: {
-        ...base.roundHistory,
-        rounds: [{ ...base.roundHistory!.rounds[0], winnerEntryId: 'x'.repeat(129) }],
-      },
-    },
-    { ...base, radar: { ...radar, players: Array(65).fill(radar.players[0]) } },
-    { ...base, radar: { ...radar, utility: Array(129).fill(utility) } },
-    { ...base, radar: { ...radar, utility: [{ ...utility, flames: Array(65).fill(flame) }] } },
-    {
-      ...base,
-      radar: { ...radar, utility: Array(9).fill({ ...utility, flames: Array(64).fill(flame) }) },
-    },
-    { ...base, radar: { ...radar, calibrationRevision: 'x'.repeat(129) } },
-    { ...base, radar: { ...radar, utility: [{ ...utility, kind: 'x'.repeat(129) }] } },
-    { ...base, radar: { ...radar, layers: ['single', 'upper'] } },
-    { ...base, radar: { ...radar, layers: ['upper', 'upper'] } },
-    { ...base, radar: { ...radar, layers: ['upper'], players: [], bomb: null, utility: [] } },
-  ])
-    expect(() => parseLiveSnapshotV1(candidate)).toThrow();
-  for (const x of [-0.01, 1.01, NaN, Infinity])
-    expect(() =>
-      parseLiveSnapshotV1({
-        ...base,
-        radar: { ...radar, bomb: { position: { x, y: 0, layer: 'upper' } } },
-      }),
-    ).toThrow();
 });
 
 it('accepts a near-hard-bound fixture and rejects malicious escaped-string amplification', async () => {

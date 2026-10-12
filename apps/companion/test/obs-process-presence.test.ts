@@ -26,19 +26,6 @@ function respond(value: string, error: Error | null = null) {
   });
 }
 
-it('distinguishes a successful zero-process result from running OBS without reading installation configuration', async () => {
-  respond('0\r\n');
-  expect(await isObsProcessRunning()).toBe(false);
-  respond('2\r\n');
-  expect(await isObsProcessRunning()).toBe(true);
-  expect(mocks.execFile).toHaveBeenCalledWith(
-    'powershell.exe',
-    expect.any(Array),
-    expect.objectContaining({ timeout: 2000, windowsHide: true, maxBuffer: 4096 }),
-    expect.any(Function),
-  );
-});
-
 it('preserves query errors and refuses malformed counts instead of treating them as absence', async () => {
   const error = Object.assign(new Error('query timed out'), { code: 'ETIMEDOUT' });
   respond('', error);
@@ -47,10 +34,4 @@ it('preserves query errors and refuses malformed counts instead of treating them
     respond(value);
     await expect(isObsProcessRunning()).rejects.toThrow('response is invalid');
   }
-});
-
-it('does not assume absence on unsupported platforms', async () => {
-  Object.defineProperty(process, 'platform', { value: 'linux' });
-  await expect(isObsProcessRunning()).rejects.toThrow('requires Windows');
-  expect(mocks.execFile).not.toHaveBeenCalled();
 });

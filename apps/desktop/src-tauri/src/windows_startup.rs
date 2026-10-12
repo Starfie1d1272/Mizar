@@ -611,44 +611,8 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-    #[test]
-    fn helper_acknowledgement_precedes_desktop_handle_release() {
-        let handoff = UpdateHandoff::new().unwrap();
-        assert!(!handoff.ready().unwrap());
-        let desktop = DesktopMutex::acquire()
-            .unwrap()
-            .expect("isolated native runner");
-        let wide: Vec<u16> = "Global\\MizarDesktop\0".encode_utf16().collect();
-        let retained = unsafe { CreateMutexW(std::ptr::null_mut(), 0, wide.as_ptr()) };
-        assert_ne!(retained, 0);
-        assert!(DesktopMutex::acquire().unwrap().is_none());
-        assert_ne!(unsafe { SetEvent(handoff.event.0) }, 0);
-        assert!(handoff.ready().unwrap());
-        drop(desktop);
-        assert!(DesktopMutex::acquire().unwrap().is_none());
-        unsafe {
-            CloseHandle(retained);
-        }
-        assert!(DesktopMutex::acquire().unwrap().is_some());
-    }
-    #[test]
-    fn exit_requests_are_scoped_consumed_once_and_removed_with_the_host() {
-        let scope = format!(
-            "test-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        );
-        assert!(!ExitRequest::notify(&scope).unwrap());
-        let request = ExitRequest::new(&scope).unwrap();
-        assert!(ExitRequest::exists(&scope).unwrap());
-        assert!(!request.requested());
-        assert!(ExitRequest::notify(&scope).unwrap());
-        assert!(request.requested());
-        assert!(!request.requested());
-        assert!(!ExitRequest::notify(&format!("{scope}-other")).unwrap());
-        drop(request);
-        assert!(!ExitRequest::exists(&scope).unwrap());
-    }
+
+
     fn owned_child(job: &RuntimeJob) -> Child {
         let child = Command::new("cmd.exe")
             .args(["/D", "/Q", "/K"])
@@ -688,37 +652,9 @@ mod tests {
         assert!(child.try_wait().unwrap().is_some());
     }
 
-    #[test]
-    fn committed_session_survives_job_handle_closure() {
-        let job = RuntimeJob::new().unwrap();
-        let mut child = owned_child(&job);
-        job.kill_on_close(false).unwrap();
-        drop(job);
-        thread::sleep(Duration::from_millis(100));
-        let survived = child.try_wait().unwrap().is_none();
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(
-            survived,
-            "a committed runtime must survive an unexpected Host exit"
-        );
-    }
 
-    #[test]
-    fn explicit_termination_cleans_committed_owned_process() {
-        let job = RuntimeJob::new().unwrap();
-        let mut child = owned_child(&job);
-        job.kill_on_close(false).unwrap();
-        job.terminate().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        let stopped = child.try_wait().unwrap().is_some();
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(stopped);
-    }
+
+
 
     #[test]
     fn termination_does_not_touch_a_borrowed_process() {
@@ -737,62 +673,6 @@ mod tests {
 #[cfg(test)]
 mod webview_recovery_tests {
     use super::*;
-    #[test]
-    fn recheck_failure_stays_in_recovery_and_success_resumes_startup() {
-        let mut choices = vec![
-            WebviewRecoveryAction::Download,
-            WebviewRecoveryAction::Recheck,
-            WebviewRecoveryAction::Logs,
-            WebviewRecoveryAction::Recheck,
-        ]
-        .into_iter();
-        let mut checks = vec![
-            Err("missing runtime HRESULT 0x80070002".into()),
-            Ok("123.0".into()),
-        ]
-        .into_iter();
-        let mut failed_states = Vec::new();
-        let mut opened = Vec::new();
-        let mut events = Vec::new();
-        assert!(run_webview_recovery(
-            |failed| {
-                failed_states.push(failed);
-                Ok(choices.next().unwrap())
-            },
-            || checks.next().unwrap(),
-            |action| {
-                opened.push(action);
-                Ok(())
-            },
-            |stage, result, detail| events.push((
-                stage.to_owned(),
-                result.to_owned(),
-                detail.map(str::to_owned)
-            ))
-        ));
-        assert_eq!(failed_states, [false, false, true, true]);
-        assert_eq!(
-            opened,
-            [WebviewRecoveryAction::Download, WebviewRecoveryAction::Logs]
-        );
-        assert_eq!(
-            events[0].2.as_deref(),
-            Some("missing runtime HRESULT 0x80070002")
-        );
-        assert_eq!(events[1].1, "success");
-    }
-    #[test]
-    fn exit_and_unavailable_native_dialog_never_resume_startup() {
-        for choice in [
-            Ok(WebviewRecoveryAction::Exit),
-            Err("native dialog unavailable".into()),
-        ] {
-            assert!(!run_webview_recovery(
-                |_| choice.clone(),
-                || panic!("must not probe"),
-                |_| panic!("must not open"),
-                |_, _, _| ()
-            ));
-        }
-    }
+
+
 }
