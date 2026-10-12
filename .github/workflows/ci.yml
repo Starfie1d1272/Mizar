@@ -345,10 +345,14 @@ jobs:
         run: pnpm local-web:production-smoke
 
   qualification_windows:
-    name: native / Windows
+    name: ${{ matrix.lane == 'host' && 'native / Windows' || 'update recovery / Windows' }}
     if: ${{ needs.plan.outputs.run_qualification == 'true' }}
     needs: [plan]
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [host, recovery]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -361,33 +365,37 @@ jobs:
           install: false
 
       - name: Restore Cargo dependency and profile caches
+        if: matrix.lane == 'host'
         id: cargo-cache
         uses: ./.github/actions/cargo-cache
         with:
           profile: ci
 
       - name: Compile and test the actual Windows host
+        if: matrix.lane == 'host'
         shell: pwsh
         run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Verify Setup preparation overlap and failure joining
+        if: matrix.lane == 'recovery'
         shell: pwsh
         run: node scripts/qualification/verify-setup-preparation.mjs
 
       - name: Verify native update cancellation and recovery
+        if: matrix.lane == 'recovery'
         shell: pwsh
         timeout-minutes: 5
         run: node scripts/qualification/verify-update-recovery.mjs
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && matrix.lane == 'recovery'
         with:
           name: update-window-evidence-${{ github.run_attempt }}
           path: .agent-tmp/update-window
           retention-days: 7
 
       - name: Save reusable main Cargo caches
-        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        if: ${{ matrix.lane == 'host' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
         uses: ./.github/actions/save-cargo-cache
         with:
           profile: ci
