@@ -413,6 +413,37 @@ it('captures live Studio separation and bounded layer geometry without names or 
   expect(obs.calls.every((type) => type.startsWith('Get'))).toBe(true);
 });
 
+it.each([
+  { value: true, expected: true },
+  { value: false, expected: false },
+  { value: undefined, expected: null },
+  { value: 'true', expected: null },
+])(
+  'preserves crop-to-bounds $value as $expected without inferring missing flags',
+  async ({ value, expected }) => {
+    const obs = new FakeObs();
+    await repairObsConfiguration(obs, baseUrl);
+    obs.currentScene = 'Mizar · 比赛中';
+    const original = obs.call.bind(obs);
+    vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+      const result = await original(type, data);
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: (result.sceneItems as Record<string, unknown>[]).map((item) => ({
+            ...item,
+            sceneItemTransform: { boundsType: 'OBS_BOUNDS_SCALE_OUTER', cropToBounds: value },
+          })),
+        };
+      return result;
+    });
+    const result = await readObsProgramEvidence(obs, baseUrl, obs.currentScene);
+    expect(result.layers?.find((layer) => layer.role === 'capture')?.transform).toMatchObject({
+      boundsType: 'OBS_BOUNDS_SCALE_OUTER',
+      cropToBounds: expected,
+    });
+  },
+);
+
 it('distinguishes disabled Studio Mode from an unreadable live scene list', async () => {
   const obs = new FakeObs();
   await repairObsConfiguration(obs, baseUrl);
@@ -437,6 +468,38 @@ it('distinguishes disabled Studio Mode from an unreadable live scene list', asyn
     sceneId: 'waiting',
   });
 });
+
+it.each([
+  { initial: 'private-user-scene', next: 'Mizar · 比赛中', previewId: 'gameplay' },
+  { initial: 'Mizar · 比赛中', next: 'Mizar · 赛前等待', previewId: 'waiting' },
+])(
+  'marks Program changes from $initial and compares Preview within the same response',
+  async ({ initial, next, previewId }) => {
+    const obs = new FakeObs();
+    await repairObsConfiguration(obs, baseUrl);
+    obs.currentScene = initial;
+    const original = obs.call.bind(obs);
+    vi.spyOn(obs, 'call').mockImplementation(async (type, data) => {
+      if (type === 'GetSceneList')
+        return {
+          currentProgramSceneName: next,
+          currentPreviewSceneName: next,
+        };
+      // A late return to the initial Program must not erase the observed change.
+      return original(type, data);
+    });
+    const result = await readObsProgramEvidence(obs, baseUrl, initial);
+    expect(result).toMatchObject({
+      state: 'changed',
+      studio: {
+        enabled: true,
+        previewSceneId: previewId,
+        previewMatchesProgram: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-user-scene');
+  },
+);
 
 it('refuses collection mutations during output and protects user source names', async () => {
   const obs = new FakeObs();

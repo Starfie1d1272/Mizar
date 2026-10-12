@@ -16,7 +16,7 @@ export interface ObsProgramEvidence {
     role: 'capture' | 'browser' | 'group' | 'scene' | 'other';
     enabled: boolean | null;
     index: number | null;
-    transform: Record<string, number | string | null>;
+    transform: Record<string, number | string | boolean | null>;
   }[];
   readonly layersTruncated?: boolean;
   readonly sources: readonly {
@@ -52,9 +52,10 @@ const finite = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000
     ? value
     : null;
-function transformEvidence(value: unknown): Record<string, number | string | null> {
+function transformEvidence(value: unknown): Record<string, number | string | boolean | null> {
   const transform = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   return {
+    cropToBounds: bool(transform.cropToBounds),
     ...Object.fromEntries(
       [
         'positionX',
@@ -113,7 +114,11 @@ export async function readObsProgramEvidence(
       ? obsDesiredScenes(baseUrl).find((item) => item.sceneName === currentScene)
       : undefined;
   const evidence: ObsProgramEvidence = {
-    state: 'measured',
+    state:
+      typeof scenes?.currentProgramSceneName === 'string' &&
+      scenes.currentProgramSceneName !== currentScene
+        ? 'changed'
+        : 'measured',
     collection: collection === OBS_COLLECTION ? 'mizar' : 'other',
     sceneId: scene?.id ?? null,
     composition: scene?.composition ?? null,
@@ -134,8 +139,9 @@ export async function readObsProgramEvidence(
             )?.id ?? null)
           : null,
       previewMatchesProgram:
-        typeof scenes?.currentPreviewSceneName === 'string' && currentScene !== null
-          ? scenes.currentPreviewSceneName === currentScene
+        typeof scenes?.currentPreviewSceneName === 'string' &&
+        typeof scenes.currentProgramSceneName === 'string'
+          ? scenes.currentPreviewSceneName === scenes.currentProgramSceneName
           : null,
     },
     sources: [],
@@ -239,6 +245,7 @@ export async function readObsProgramEvidence(
     layersTruncated: items.length > 32,
     capture,
     state:
+      evidence.state === 'measured' &&
       after.currentProgramSceneName === currentScene &&
       afterCollection.currentSceneCollectionName === collection
         ? 'measured'
