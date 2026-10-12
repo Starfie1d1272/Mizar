@@ -21,6 +21,8 @@ const installed = join(area, 'installed path with spaces', 'Mizar');
 const state = join(process.env.LOCALAPPDATA, 'Mizar');
 const report = {
   schemaVersion: 1,
+  acceptanceSourceSha: process.env.GITHUB_SHA,
+  acceptanceRunId: process.env.GITHUB_RUN_ID,
   classification: 'real released EXE / original old helper / real new NSIS',
   oldVersion: '1.3.2',
   oldSha,
@@ -409,7 +411,7 @@ try {
   );
   record(
     'real old helper commits actual 1.3.3 Full NSIS; full new payload and retained original backup match',
-    { result, newContentDigest: current.artifactSha256 },
+    { transactionResult: result, newContentDigest: current.artifactSha256 },
   );
   assert.equal(await hash(stagedHelper), helperHash);
   await start('1.3.3', nextSha, nextRelease.contentDigest);
