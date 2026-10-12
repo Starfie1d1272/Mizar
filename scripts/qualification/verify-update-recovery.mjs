@@ -129,6 +129,10 @@ async function installWithHost(binaryPath, stage, env = {}) {
 
     assert.equal(host.exitCode, null, 'Host stays alive until explicitly released');
     assert.equal(settled, false, 'Install must wait for the live Host');
+    if (env.MIZAR_UPDATE_TEST_UI === '1' && env.MIZAR_UPDATE_TEST_HOLD === '1') {
+      const waiting = await windowProbe(stage, 'capture', 'waiting');
+      assert.equal(waiting.code, 0, waiting.errors);
+    }
     if (env.MIZAR_UPDATE_TEST_CANCEL_UI === '1') {
       const cancelled = await windowProbe(stage, 'cancel', 'waiting-cancel');
       assert.equal(cancelled.code, 0, cancelled.errors);
@@ -183,6 +187,17 @@ async function installWithHost(binaryPath, stage, env = {}) {
         'independent product license',
       );
       await writeFile(join(stage, 'writer-release.txt'), 'release');
+    }
+    if (env.MIZAR_UPDATE_TEST_RECOVERY_UI === '1') {
+      const blockerPid = (await readFile(join(stage, 'blocker-pid.txt'), 'utf8')).trim();
+      assert.match(blockerPid, /^[1-9][0-9]*$/);
+      const stopped = await run([
+        '-Command',
+        `Stop-Process -Id ${blockerPid} -Force; Wait-Process -Id ${blockerPid} -ErrorAction SilentlyContinue`,
+      ]);
+      assert.equal(stopped.code, 0, stopped.errors);
+      const recovery = await windowProbe(stage, 'restore', 'recovery-required');
+      assert.equal(recovery.code, 0, recovery.errors);
     }
     if (env.MIZAR_UPDATE_TEST_UI === '1' && env.MIZAR_UPDATE_TEST_HOLD !== '1') {
       const completed = await windowProbe(
@@ -322,7 +337,13 @@ public class UpdateFixture {
       }
       return;
     }
-    if (mode == "failure") { File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation"); File.WriteAllText(Path.Combine(target, "unknown-user-file.txt"), "preserve unknown content"); }
+    if (mode == "failure") {
+      File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation"); File.WriteAllText(Path.Combine(target, "unknown-user-file.txt"), "preserve unknown content");
+      if (Environment.GetEnvironmentVariable("MIZAR_UPDATE_TEST_RECOVERY_UI") == "1") {
+        var blocker=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=Path.Combine(stage,"previous","Mizar.exe"),Arguments="--hold",UseShellExecute=false,CreateNoWindow=true});
+        File.WriteAllText(Path.Combine(stage,"blocker-pid.txt"),blocker.Id.ToString());
+      }
+    }
     Environment.Exit(2);
   }
 }
@@ -409,6 +430,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     'cancel',
     'cancel-before-install',
     'failure',
+    'recovery-blocked',
     'interrupted',
     'remaining-process',
     'committed-valid',
@@ -461,7 +483,10 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     assert.equal(prepared.code, 0, prepared.errors);
     const stage = JSON.parse(prepared.output).stageRoot;
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
-    await writeFile(join(stage, 'mode.txt'), success ? 'success' : scenario);
+    await writeFile(
+      join(stage, 'mode.txt'),
+      success ? 'success' : scenario === 'recovery-blocked' ? 'failure' : scenario,
+    );
     // An actual timing write failure must preserve both a successful commit and
     // the original installer cancellation/rollback, using these existing cases.
     const timingFault = scenario === 'success-no-shortcut' || scenario === 'failure';
@@ -616,16 +641,18 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
               MIZAR_UPDATE_TEST_UI: '1',
               MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE: join(stage, 'launch-evidence.txt'),
             }
-          : scenario === 'cancel-before-install'
-            ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_CANCEL_UI: '1' }
-            : timingFault
-              ? {
-                  MIZAR_MEASURE_UPDATE: '1',
-                  ...(scenario === 'failure' ? { MIZAR_UPDATE_TEST_UI: '1' } : {}),
-                }
-              : {},
+          : scenario === 'recovery-blocked'
+            ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_RECOVERY_UI: '1' }
+            : scenario === 'cancel-before-install'
+              ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_CANCEL_UI: '1' }
+              : timingFault
+                ? {
+                    MIZAR_MEASURE_UPDATE: '1',
+                    ...(scenario === 'failure' ? { MIZAR_UPDATE_TEST_UI: '1' } : {}),
+                  }
+                : {},
       );
-      assert.equal(result.code, success ? 0 : 1, result.errors);
+      assert.equal(result.code, success || scenario === 'recovery-blocked' ? 0 : 1, result.errors);
       if (timingFault) {
         assert.match(result.output, /update_timing_write_failed/);
         if (!success) assert.match(result.errors, /update_installer_cancelled/);

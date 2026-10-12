@@ -1,6 +1,6 @@
 ﻿param(
   [Parameter(Mandatory=$true)][int]$ProcessId,
-  [ValidateSet('cancel','close-blocked','close-completed')][string]$Action,
+  [ValidateSet('capture','restore','cancel','close-blocked','close-completed')][string]$Action,
   [Parameter(Mandatory=$true)][string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
@@ -27,7 +27,7 @@ public static class UpdateWindowProbe {
  }
 }
 '@
-$title = if ($Action -eq 'close-completed') { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
+$title = if ($Action -in @('close-completed','restore')) { 'Mizar 更新结果' } else { 'Mizar 应用更新' }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 $window = [IntPtr]::Zero
 while ($window -eq [IntPtr]::Zero) {
@@ -39,6 +39,7 @@ if (![UpdateWindowProbe]::IsWindowVisible($window)) { throw 'Update window is hi
 $element = [Windows.Automation.AutomationElement]::FromHandle($window)
 $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'取消更新')
 $cancel = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
+if ($Action -eq 'restore') { $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版'); $restore = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition); if ($null -eq $restore -or !$restore.Current.IsEnabled) { throw 'Verified recovery action is unavailable' } }
 if ($Action -eq 'cancel') {
  if ($null -eq $cancel -or !$cancel.Current.IsEnabled) { throw 'Pre-install cancellation is unavailable' }
 }
@@ -60,6 +61,7 @@ try { $graphics.CopyFromScreen($rectangle.Left,$rectangle.Top,0,0,$bitmap.Size);
 finally { $graphics.Dispose(); $bitmap.Dispose() }
 @{ realNativeWindow=$true; source='production update helper'; syntheticInstaller=$true; actualNSIS=$false; action=$Action; title=$title; names=$names } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($OutputPath+'.json') -Encoding UTF8
 if ($Action -eq 'cancel') { ([Windows.Automation.InvokePattern]$cancel.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke() }
+if ($Action -eq 'restore') { ([Windows.Automation.InvokePattern]$restore.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke() }
 if ($Action -eq 'close-completed') {
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  $deadline = [DateTime]::UtcNow.AddSeconds(5)
