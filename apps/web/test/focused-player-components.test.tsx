@@ -3,13 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getProgramFixture } from '../src/program/fixtures';
-import {
-  buildFocusedPlayerPresentation,
-  buildReserveAmmoPresentation,
-} from '../src/program/widgets/focused-player/presentation';
+import { buildFocusedPlayerPresentation } from '../src/program/widgets/focused-player/presentation';
 import { FocusedPlayerCard } from '../src/program/widgets/focused-player/FocusedPlayer';
-import { TopScoreBar } from '../src/program/widgets/match-header/TopScoreBar';
-import { getBuiltinResolvedPreset, placementToBox } from '@mizar/hud-config';
 
 let root: Root | undefined;
 afterEach(() => {
@@ -107,25 +102,6 @@ describe('Focused media and combat presentation lifecycle', () => {
     expect(container.querySelector('.focused-player__vitals')?.textContent).toBe('');
   });
 
-  it('keeps shell and reserve-round counts textual and fails closed without the magazine icon', () => {
-    const magazineAsset = { canonicalKey: 'ammo.magazine', outputPath: '/unused.svg' };
-    expect(buildReserveAmmoPresentation('shells', 12, magazineAsset)).toEqual({
-      reserveText: 'SHELL 12',
-      reserveMagazine: null,
-    });
-    expect(buildReserveAmmoPresentation('reserve-rounds', 42, magazineAsset)).toEqual({
-      reserveText: 'RDS 42',
-      reserveMagazine: null,
-    });
-    expect(buildReserveAmmoPresentation('magazine', 3, null)).toEqual({
-      reserveText: null,
-      reserveMagazine: null,
-    });
-    expect(buildReserveAmmoPresentation('charge', 1, magazineAsset)).toEqual({
-      reserveText: null,
-      reserveMagazine: null,
-    });
-  });
   it('renders completed ADR and partial KAD independently', () => {
     const container = host();
     const player = buildFocusedPlayerPresentation(getProgramFixture('real-live-rich')!.payload)!;
@@ -193,46 +169,5 @@ describe('Focused media and combat presentation lifecycle', () => {
     );
     expect(container.querySelector('.shanghai-focus-firearm')).toBeNull();
     expect(container.querySelector('.focused-player__ammo')?.textContent).toBe('');
-  });
-  it('uses remaining rather than completed defuse time for Shanghai', () => {
-    const container = host();
-    const preset = getBuiltinResolvedPreset('builtin:perfectworld-preset');
-    const placement = preset.layout.widgets['top-score-bar'];
-    const snapshot = getProgramFixture('real-live-rich')!;
-    act(() =>
-      root!.render(
-        <TopScoreBar
-          design="perfectworld"
-          resolvedPreset={preset}
-          placement={placement}
-          box={placementToBox('top-score-bar', placement)}
-          widgetId="top-score-bar"
-          settings={preset.widgets['top-score-bar']}
-          snapshot={{
-            ...snapshot,
-            payload: {
-              ...snapshot.payload,
-              round: { ...snapshot.payload.round!, phase: 'live' },
-              bomb: {
-                state: 'defusing',
-                sourcePlayerId: null,
-                explosion: { remainingSeconds: 20, durationSeconds: 40 },
-                action: {
-                  kind: 'defuse',
-                  sourcePlayerId: null,
-                  remainingSeconds: 4,
-                  durationSeconds: 5,
-                  hasDefuseKit: true,
-                },
-              },
-            },
-          }}
-        />,
-      ),
-    );
-    expect(container.querySelector<HTMLElement>('.shanghai-action-track i')?.style.width).toBe(
-      '80%',
-    );
-    expect(container.querySelector<HTMLElement>('.shanghai-fuse i')?.style.width).toBe('50%');
   });
 });

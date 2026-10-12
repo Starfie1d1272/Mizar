@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
-import { buildFocusedPlayerPresentation as build } from '../src/program/widgets/focused-player/presentation';
+import {
+  buildFocusedPlayerPresentation as build,
+  buildReserveAmmoPresentation,
+} from '../src/program/widgets/focused-player/presentation';
 
 type Player = ProgramPayload['players'][number];
 const base = getProgramFixture('real-live-rich')!.payload;
@@ -97,6 +100,23 @@ describe('Focused current POV contract (real base, explicit synthetic evidence e
     ).toMatchObject({
       clip: 5,
       clipFill: null,
+      reserveText: null,
+      reserveMagazine: null,
+    });
+    const magazineAsset = { canonicalKey: 'ammo.magazine', outputPath: '/unused.svg' };
+    expect(buildReserveAmmoPresentation('shells', 12, magazineAsset)).toEqual({
+      reserveText: 'SHELL 12',
+      reserveMagazine: null,
+    });
+    expect(buildReserveAmmoPresentation('reserve-rounds', 42, magazineAsset)).toEqual({
+      reserveText: 'RDS 42',
+      reserveMagazine: null,
+    });
+    expect(buildReserveAmmoPresentation('magazine', 3, null)).toEqual({
+      reserveText: null,
+      reserveMagazine: null,
+    });
+    expect(buildReserveAmmoPresentation('charge', 1, magazineAsset)).toEqual({
       reserveText: null,
       reserveMagazine: null,
     });

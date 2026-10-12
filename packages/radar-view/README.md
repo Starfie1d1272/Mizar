@@ -8,7 +8,7 @@ Mizar 与网站共用的 React Canvas 雷达。只接收已投影数据，不连
 
 ```sh
 # Mizar 根目录
-pnpm --filter @mizar-hud/radar-view... build
+pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run build
 node scripts/radar-view/pack.mjs /tmp/radar-package
 
 # RivalHub / 独立 consumer
@@ -60,7 +60,7 @@ const frame = fromPublicRadar(live.radar, {
 ## 可复现验证
 
 ```sh
-pnpm --filter @mizar-hud/radar-view... build
+pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run build
 node scripts/radar-view/consumer-smoke.mjs ../RivalHub
 ```
 

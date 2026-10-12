@@ -33,6 +33,7 @@ import {
 describe('hud-config schema and framework contract', () => {
   it('reads already-saved default snapshots without changing geometry, theme or explicit metrics', () => {
     const saved = getBuiltinResolvedPreset();
+    expect(saved.widgets['focused-player'].settings.showMetrics).toBe(false);
     saved.layout.widgets['top-score-bar'] = {
       visible: true,
       anchor: 'top-center',
@@ -301,10 +302,6 @@ describe('widget customization contract', () => {
       expect(
         focusedPlayerPresentationSettings(restored.widgets['focused-player']).showMetrics,
       ).toBe(true);
-      expect(
-        focusedPlayerPresentationSettings(getBuiltinResolvedPreset().widgets['focused-player'])
-          .showMetrics,
-      ).toBe(false);
     },
   );
 
@@ -348,9 +345,7 @@ describe('widget customization contract', () => {
     const descriptor = getHudWidgetDescriptor('focused-player');
     preset.widgets['focused-player'] = { variant: 'minimal', settings: {} };
     const parsed = parseHudPreset(preset);
-    expect(parsed.widgets['focused-player'].settings).toEqual(
-      descriptor.defaultSettingsByVariant.minimal,
-    );
+    expect(parsed.widgets['focused-player'].settings).toEqual({ showReserveAmmo: false });
     const resolved = resolveHudPreset(parsed, getBuiltinLayout(), getBuiltinTheme());
     expect(parseHudResolvedPreset(JSON.parse(JSON.stringify(resolved)))).toEqual(resolved);
     expect(() =>

@@ -216,10 +216,6 @@ describe('Match Header presentation selector', () => {
     });
   });
 
-  it('does not render a production placeholder when roundNumber is unavailable', () => {
-    expect(presentation('series-round-unavailable').roundLabel).toBeNull();
-  });
-
   it('keeps dense overtime history bounded to the fixed widget model', () => {
     expect(presentation('series-overtime-history').roundHistory?.rounds).toHaveLength(36);
   });

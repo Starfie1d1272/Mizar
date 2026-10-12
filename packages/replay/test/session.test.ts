@@ -172,9 +172,9 @@ describe('shared ReplaySession', () => {
     invalid.dispose();
   });
 
-  it('catches up to the latest eligible frame after a delayed callback', () => {
+  it('catches up after repeated timer lateness without shifting the playback anchor', () => {
     const scheduler = new ManualScheduler();
-    const sourceFrames = frames([0, 250, 500, 750]);
+    const sourceFrames = frames([0, 250, 500, 750, 1000]);
     const session = createReplaySession(
       { frames: sourceFrames, events: [], rebuild: (captureIndex) => sourceFrames[captureIndex]! },
       scheduler,
@@ -182,31 +182,21 @@ describe('shared ReplaySession', () => {
 
     session.play();
     expect(scheduler.timers.size).toBe(1);
-    scheduler.fireNextAt(620);
-
-    expect(session.getSnapshot().currentIndex).toBe(2);
-    expect(session.getSnapshot().current?.cursor.scheduledElapsedUs).toBe(500_000);
-    expect(scheduler.timers.size).toBe(1);
-    expect([...scheduler.timers.values()][0]!.deadline).toBe(750);
-    session.dispose();
-  });
-
-  it('keeps the original playback anchor through repeated timer lateness', () => {
-    const scheduler = new ManualScheduler();
-    const sourceFrames = frames([0, 250, 500, 750]);
-    const session = createReplaySession(
-      { frames: sourceFrames, events: [], rebuild: (captureIndex) => sourceFrames[captureIndex]! },
-      scheduler,
-    );
-
-    session.play();
     scheduler.fireNextAt(300);
     expect(session.getSnapshot().currentIndex).toBe(1);
-    scheduler.fireNextAt(630);
-    expect(session.getSnapshot().currentIndex).toBe(2);
-    scheduler.fireNextAt(910);
+    expect(scheduler.timers.size).toBe(1);
+    expect([...scheduler.timers.values()][0]!.deadline).toBe(500);
+
+    scheduler.fireNextAt(820);
     expect(session.getSnapshot().currentIndex).toBe(3);
+    expect(session.getSnapshot().current?.cursor.scheduledElapsedUs).toBe(750_000);
+    expect(scheduler.timers.size).toBe(1);
+    expect([...scheduler.timers.values()][0]!.deadline).toBe(1000);
+
+    scheduler.fireNextAt(1130);
+    expect(session.getSnapshot().currentIndex).toBe(4);
     expect(session.getSnapshot().isPlaying).toBe(false);
+    expect(scheduler.timers.size).toBe(0);
     session.dispose();
   });
 

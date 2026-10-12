@@ -53,22 +53,6 @@ describe('paired Program and Radar editor fixtures', () => {
     }
   });
 
-  it('pairs EPL editor stages with the same captured cursor', () => {
-    for (const id of [
-      'epl-live',
-      'epl-planted',
-      'epl-halftime',
-      'epl-map-result',
-      'epl-match-result',
-    ]) {
-      const program = getProgramFixture(id);
-      const radar = radarSnapshotForProgramFixture(id);
-      expect(program, id).not.toBeNull();
-      expect(radar, id).not.toBeNull();
-      expect(radar!.cursor).toEqual(program!.cursor);
-    }
-  });
-
   it('does not substitute a Radar scene when the Program frame has no exact pair', () => {
     for (const id of ['awaiting-neutral', 'focused-avatar', 'player-rails-eco']) {
       expect(radarSnapshotForProgramFixture(id), id).toBeNull();

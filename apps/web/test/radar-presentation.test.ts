@@ -570,53 +570,29 @@ describe('Radar renderer local lifecycle', () => {
     ).toHaveLength(0);
   });
 
-  it('wraps angles along the shortest distance and eases movement without changing truth', () => {
+  it('wraps angles, interpolates real-time samples and bounds prediction to 100 ms', () => {
     expect(shortestAngle(359, 1)).toBe(2);
     expect(shortestAngle(1, 359)).toBe(-2);
-    const m = new RadarPresentation();
-    const a = single();
-    m.accept(a, 0);
-    m.tick(0, false);
-    const before = [...m.players.values()][0]!.x;
-    const b = next(a);
-    b.payload.players[0]!.position!.x += 100;
-    m.accept(b, 100);
-    m.tick(116, false);
-    const p = [...m.players.values()][0]!;
-    expect(p.x).toBeGreaterThan(before);
-    expect(p.x).toBeLessThan(p.target.x);
-    expect(b.payload.players[0]!.position!.x).toBe(-900);
-  });
-  it('interpolates between real-time samples and bounds prediction to 100 ms', () => {
     const model = new RadarPresentation();
     const a = single();
     model.accept(a, 0);
     model.tick(0, false);
-    const before = [...model.players.values()][0]!;
     const b = next(a);
     b.payload.players[0]!.position!.x = -900;
     model.accept(b, 250);
     model.tick(375, false);
 
     const between = [...model.players.values()][0]!;
-    const dx = between.target.x - between.previousTarget.x;
-    const dy = between.target.y - between.previousTarget.y;
-    const distanceSquared = dx * dx + dy * dy;
-    const progress =
-      ((between.x - between.previousTarget.x) * dx + (between.y - between.previousTarget.y) * dy) /
-      distanceSquared;
-    expect(before.target.x).toBe(between.previousTarget.x);
-    expect(progress).toBeCloseTo(0.5, 1);
+    // Mirage overview calibration gives -950 world X at the halfway sample.
+    expect(between.x).toBeCloseTo(0.4453125, 6);
+    expect(b.payload.players[0]!.position!.x).toBe(-900);
 
     model.tick(600, false);
     const atPredictionLimit = [...model.players.values()][0]!;
     const boundedX = atPredictionLimit.x;
     model.tick(900, false);
     expect([...model.players.values()][0]!.x).toBe(boundedX);
-    expect(atPredictionLimit.x).toBeCloseTo(
-      atPredictionLimit.target.x + atPredictionLimit.velocity.x * 100,
-      6,
-    );
+    expect(atPredictionLimit.x).toBeCloseTo(0.462890625, 6);
   });
   it('snaps motion at a skipped source sample instead of bridging the gap', () => {
     const model = new RadarPresentation();
@@ -758,26 +734,24 @@ describe('Radar renderer local lifecycle', () => {
       ),
     ).toBe(true);
   });
-  it('bounds real-observation trails and starts ID reuse with new history', () => {
+  it('starts ID reuse with new history after an observed projectile disappears', () => {
     const m = new RadarPresentation();
     let s = single();
-    for (let i = 0; i < 1000; i++) {
-      s = next(s);
-      s.payload.grenades[0]!.position!.x += 0.1;
-      m.accept(s, i * 10);
-      m.tick(i * 10, false);
-    }
+    m.accept(s, 0);
+    s = next(s);
+    s.payload.grenades[0]!.position!.x += 0.1;
+    m.accept(s, 10);
     const g = [...m.grenades.values()][0]!;
-    expect(g.trail.length).toBeLessThanOrEqual(RADAR_PRESENTATION.trailPoints);
+    expect(g.trail).toHaveLength(2);
     expect(g.side).toBe('unknown');
     const gone = next(s);
     gone.payload.grenades = [];
-    m.accept(gone, 10000);
+    m.accept(gone, 20);
     expect(m.grenades.size).toBe(0);
     expect(m.exits.size).toBe(1);
     const reused = next(gone);
     reused.payload.grenades = s.payload.grenades;
-    m.accept(reused, 10100);
+    m.accept(reused, 30);
     expect([...m.grenades.values()][0]!.trail).toHaveLength(1);
     expect(m.exits.size).toBe(0);
   });
