@@ -7,6 +7,18 @@ export interface ObsProgramEvidence {
   readonly collection: 'mizar' | 'other';
   readonly sceneId: ProgramSceneId | null;
   readonly composition: 'gameplay_overlay' | 'full_screen_graphic' | null;
+  readonly studio?: {
+    enabled: boolean | null;
+    previewSceneId: ProgramSceneId | null;
+    previewMatchesProgram: boolean | null;
+  };
+  readonly layers?: readonly {
+    role: 'capture' | 'browser' | 'group' | 'scene' | 'other';
+    enabled: boolean | null;
+    index: number | null;
+    transform: Record<string, number | string | boolean | null>;
+  }[];
+  readonly layersTruncated?: boolean;
   readonly sources: readonly {
     role: 'capture' | 'browser';
     present: boolean;
@@ -36,6 +48,48 @@ function objects(value: unknown): Record<string, unknown>[] {
 const bool = (value: unknown) => (typeof value === 'boolean' ? value : null);
 const dimension = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const finite = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000
+    ? value
+    : null;
+function transformEvidence(value: unknown): Record<string, number | string | boolean | null> {
+  const transform = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  return {
+    cropToBounds: bool(transform.cropToBounds),
+    ...Object.fromEntries(
+      [
+        'positionX',
+        'positionY',
+        'rotation',
+        'scaleX',
+        'scaleY',
+        'sourceWidth',
+        'sourceHeight',
+        'width',
+        'height',
+        'cropLeft',
+        'cropRight',
+        'cropTop',
+        'cropBottom',
+        'boundsWidth',
+        'boundsHeight',
+        'alignment',
+        'boundsAlignment',
+      ].map((key) => [key, finite(transform[key])]),
+    ),
+    boundsType: [
+      'OBS_BOUNDS_NONE',
+      'OBS_BOUNDS_STRETCH',
+      'OBS_BOUNDS_SCALE_INNER',
+      'OBS_BOUNDS_SCALE_OUTER',
+      'OBS_BOUNDS_SCALE_TO_WIDTH',
+      'OBS_BOUNDS_SCALE_TO_HEIGHT',
+      'OBS_BOUNDS_MAX_ONLY',
+    ].includes(String(transform.boundsType))
+      ? String(transform.boundsType)
+      : null,
+  };
+}
 function cs2Window(value: unknown): boolean {
   return (
     typeof value === 'string' &&
@@ -50,16 +104,46 @@ export async function readObsProgramEvidence(
   baseUrl: string,
   currentScene: string | null,
 ): Promise<ObsProgramEvidence> {
-  const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
+  const [collections, scenes] = await Promise.all([
+    obs.call('GetSceneCollectionList'),
+    obs.call('GetSceneList').catch(() => null),
+  ]);
+  const collection = collections.currentSceneCollectionName;
   const scene =
     collection === OBS_COLLECTION
       ? obsDesiredScenes(baseUrl).find((item) => item.sceneName === currentScene)
       : undefined;
   const evidence: ObsProgramEvidence = {
-    state: 'measured',
+    state:
+      typeof scenes?.currentProgramSceneName === 'string' &&
+      scenes.currentProgramSceneName !== currentScene
+        ? 'changed'
+        : 'measured',
     collection: collection === OBS_COLLECTION ? 'mizar' : 'other',
     sceneId: scene?.id ?? null,
     composition: scene?.composition ?? null,
+    studio: {
+      // GetSceneList returns null Preview when Studio Mode is disabled.
+      enabled:
+        scenes === null
+          ? null
+          : typeof scenes.currentPreviewSceneName === 'string'
+            ? true
+            : scenes.currentPreviewSceneName === null
+              ? false
+              : null,
+      previewSceneId:
+        collection === OBS_COLLECTION
+          ? (obsDesiredScenes(baseUrl).find(
+              (item) => item.sceneName === scenes?.currentPreviewSceneName,
+            )?.id ?? null)
+          : null,
+      previewMatchesProgram:
+        typeof scenes?.currentPreviewSceneName === 'string' &&
+        typeof scenes.currentProgramSceneName === 'string'
+          ? scenes.currentPreviewSceneName === scenes.currentProgramSceneName
+          : null,
+    },
     sources: [],
     capture: null,
   };
@@ -75,6 +159,23 @@ export async function readObsProgramEvidence(
       enabled: bool(item?.sceneItemEnabled),
     };
   });
+  // OBS includes live transforms in this response. Project only numeric geometry
+  // and known roles; arbitrary source names, types and plugin settings stay local.
+  const layers = items.slice(0, 32).map((item) => ({
+    role:
+      item.sourceName === OBS_CAPTURE_INPUT
+        ? ('capture' as const)
+        : item.sourceName === scene.browserInput
+          ? ('browser' as const)
+          : item.isGroup === true
+            ? ('group' as const)
+            : item.sourceType === 'OBS_SOURCE_TYPE_SCENE'
+              ? ('scene' as const)
+              : ('other' as const),
+    enabled: bool(item.sceneItemEnabled),
+    index: finite(item.sceneItemIndex),
+    transform: transformEvidence(item.sceneItemTransform),
+  }));
   let capture: ObsProgramEvidence['capture'] = null;
   if (scene.composition === 'gameplay_overlay') {
     const inputs = objects((await obs.call('GetInputList')).inputs);
@@ -140,8 +241,11 @@ export async function readObsProgramEvidence(
   return {
     ...evidence,
     sources,
+    layers,
+    layersTruncated: items.length > 32,
     capture,
     state:
+      evidence.state === 'measured' &&
       after.currentProgramSceneName === currentScene &&
       afterCollection.currentSceneCollectionName === collection
         ? 'measured'
