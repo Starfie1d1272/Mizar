@@ -106,9 +106,6 @@ async function updateFixture(
   };
 }
 
-for (const interruption of ['poll', 'input', 'focus', 'production'] as const) {
-}
-
 test('entering and leaving production during download revokes the previous installation request', async ({
   page,
 }) => {
