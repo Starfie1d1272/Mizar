@@ -631,7 +631,13 @@ async fn finish_workspace(
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
-        let presentation = open_main(host.clone(), None);
+        if let Err(error) = open_main(host.clone(), None) {
+            log.event(
+                "production_finish",
+                "failure",
+                Some(&format!("phase=workspace_recovery_window; cause={error}")),
+            );
+        }
         let trial = demo_test::status(&log)?;
         if trial["active"] == true || cs2.has_demo_journal()? {
             feedback.stage("restoration");
@@ -663,8 +669,10 @@ async fn finish_workspace(
             )?;
         }
         refresh_finished_window_feedback(&host, &cs2);
+        drop(cs2);
         feedback.stage("presentation");
-        presentation?;
+        // Retry presentation after cleanup; an earlier transient window failure
+        // must not prevent returning to preparation once the game is finished.
         present_production_inner(&host, false)
     })
     .await
@@ -963,18 +971,22 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
     if !main_path_allowed(&path) {
         return Err("页面无法识别。".into());
     }
-    if let Some(window) = app.get_webview_window("main") {
-        window
-            .navigate(
-                format!("{BASE}{path}")
-                    .parse()
-                    .map_err(|_| "页面无法识别。")?,
-            )
-            .map_err(|_| "无法打开 Mizar。")?;
-        let _ = window.unminimize();
-        let _ = window_presentation::set_visible(&window, true);
-        let _ = window.set_focus();
-    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or("准备中心窗口不可用，请通过托盘退出后重新打开 Mizar。")?;
+    window
+        .navigate(
+            format!("{BASE}{path}")
+                .parse()
+                .map_err(|_| "页面无法识别。")?,
+        )
+        .map_err(|_| "无法打开 Mizar。")?;
+    window
+        .unminimize()
+        .map_err(|_| "准备中心窗口未能恢复，请重试。")?;
+    window_presentation::set_visible(&window, true)
+        .map_err(|_| "准备中心窗口未能显示，请重试。")?;
+    let _ = window.set_focus();
     Ok(())
 }
 
