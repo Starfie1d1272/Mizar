@@ -1,12 +1,21 @@
+import type { LiveSnapshotV1, ReliableEventV1 } from '../../packages/protocol/src/output.js';
+import type { MatchDocumentV1 as WireMatchDocument } from '../../packages/protocol/src/context.js';
 import type { MatchDocumentV1 } from '../../packages/core/src/match-context/index.js';
 import type { SeriesBindingView } from '../../packages/protocol/src/operator.js';
 import { expect, test } from './companion-isolation.js';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  RivalHubConnection,
+  OFFICIAL_RIVALHUB_URL,
+} from '../../apps/companion/src/match-context/rivalhub-connection.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
+import { mapOperatorProjection } from '../../apps/companion/src/local-protocol/operator-wire.js';
+import { mapProgramProjection } from '../../apps/companion/src/local-protocol/program-wire.js';
+import { workspaceLiveRosterAlert } from '../../apps/web/src/workspace/live-roster-model.js';
 import { createProgramRuntime } from '../../apps/companion/src/runtime/program-runtime.js';
 import { createProjectionCoordinator } from '../../apps/companion/src/projections/projection-coordinator.js';
 import { createCstvSourceManagers } from '../../apps/companion/src/telemetry/cstv-source-manager.js';
@@ -49,6 +58,7 @@ async function connectOwnedCompanion(
   await page.routeWebSocket(`ws://${new URL(address).host}/local/v1/**`, (socket) => {
     socket.connectToServer();
   });
+  return address;
 }
 
 function liveRoster(
@@ -229,6 +239,282 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
     );
   } finally {
     await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('online account differences alert once, preserve unknown identities and reach the website roster workflow', async ({
+  page,
+  context,
+}, testInfo) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-roster-alert-'));
+  const { runtime, coordinator } = ownedRuntime();
+  const sourceManifest = sampleManifest();
+  const manifest = {
+    ...sourceManifest,
+    maps: sourceManifest.maps.map((map) => ({
+      ...map,
+      scoreA: null,
+      scoreB: null,
+      completedAt: null,
+    })),
+  };
+  const connectionPath = join(directory, 'connection.json');
+  await writeFile(
+    connectionPath,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test-only',
+      installationId: 'test-only',
+      competitionId: manifest.match.competition!.competitionId,
+      displayName: '测试制播机',
+    }),
+  );
+  const outgoing: { operation: string; body: unknown }[] = [];
+  const connection = new RivalHubConnection(connectionPath, (url, init) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    const operation = requestUrl.split('/').at(-1)!;
+    if (typeof init?.body === 'string')
+      outgoing.push({ operation, body: JSON.parse(init.body) as unknown });
+    if (operation === 'claim')
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+    if (operation === 'live') return Promise.resolve(Response.json({ accepted: true }));
+    if (operation === 'reliable') return Promise.resolve(new Response(null, { status: 204 }));
+    return Promise.resolve(Response.json(manifest));
+  });
+  await connection.load();
+  const binding = {
+    manifest,
+    context: toMatchContext(manifest),
+    origin: 'online' as const,
+    freshness: 'fresh' as const,
+    diagnostics: [],
+  };
+  coordinator.setMatchContextBinding(binding);
+  const app = buildApp({
+    matchManifestPath: join(directory, 'manifest.json'),
+    matchContextBinding: binding,
+    rivalhubConnection: connection,
+    reliableOutboxPath: join(directory, 'outbox.json'),
+    gsiToken: 'recovery-test',
+    programRuntime: runtime,
+    projectionCoordinator: coordinator,
+    clock: { now: () => ({ receivedAt: new Date().toISOString(), receivedMonotonicMs: 0 }) },
+  });
+  const starters = [
+    ...manifest.entrants.a.roster.players.filter((p) => p.isStarter),
+    ...manifest.entrants.b.roster.players.filter((p) => p.isStarter),
+  ].map((p) => ({ steam64: p.steam64!, displayName: p.displayName }));
+  const changed = starters.map((p, i) =>
+    i === 4 || i === 9
+      ? {
+          steam64: i === 4 ? '76561198099999991' : '76561198099999992',
+          displayName: i === 4 ? '广州老头乐' : '卡油兔克',
+        }
+      : p,
+  );
+  try {
+    const address = await connectOwnedCompanion(page, context, app);
+    const revision = (await app.inject('/local/v1/production')).json<{ revision: string }>()
+      .revision;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/production',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'enter', expectedRevision: revision },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const push = async (players: typeof starters) => {
+      const response = await fetch(`${address}/gsi`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(liveRoster(players, manifest.maps[0]!.mapName)),
+      });
+      expect(response.status).toBe(204);
+    };
+    await push(changed);
+    await push(changed);
+    const bundle = coordinator.getCurrent();
+    expect(bundle.identity.state).toBe('degraded');
+    expect(
+      bundle.program.players.filter((p) => p.sourcePlayerId.startsWith('7656119809999999')),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ canonicalPlayerId: null, displayName: '广州老头乐' }),
+        expect.objectContaining({ canonicalPlayerId: null, displayName: '卡油兔克' }),
+      ]),
+    );
+    const document = (await app.inject('/local/v1/match-document')).json<{
+      document: WireMatchDocument;
+    }>().document;
+    const operator = mapOperatorProjection(bundle.operator);
+    const program = mapProgramProjection(bundle.program);
+    const acceptedConnection = {
+      paired: true,
+      activeMatchId: manifest.match.matchId,
+      activeSourceMatchId: manifest.match.matchId,
+      sourceReady: true,
+      liveDelivery: { status: 'accepted' as const },
+    };
+    const alert = workspaceLiveRosterAlert(
+      operator,
+      program,
+      document,
+      acceptedConnection,
+      bundle.program.cursor,
+    );
+    expect(alert?.observed.map((p) => p.displayName).sort()).toEqual(['卡油兔克', '广州老头乐']);
+    expect(alert?.absent.map((p) => p.displayName).sort()).toEqual(['北极光五号', '星火五号']);
+    expect(alert?.syncStatus).toBe('网站实时同步仍在进行，人员差异待核对。');
+    expect(
+      workspaceLiveRosterAlert(operator, program, null, acceptedConnection, bundle.program.cursor),
+    ).toBeNull();
+    expect(
+      workspaceLiveRosterAlert(
+        operator,
+        program,
+        document,
+        { ...acceptedConnection, activeMatchId: 'other' },
+        bundle.program.cursor,
+      ),
+    ).toBeNull();
+    const missingAccount = {
+      ...document,
+      entrants: {
+        ...document.entrants,
+        a: {
+          ...document.entrants.a,
+          players: document.entrants.a.players.map((p, i) =>
+            i === 4 ? { ...p, steam64: null } : p,
+          ),
+        },
+      },
+    };
+    expect(
+      workspaceLiveRosterAlert(
+        operator,
+        program,
+        missingAccount,
+        acceptedConnection,
+        bundle.program.cursor,
+      ),
+    ).toBeNull();
+    expect(
+      workspaceLiveRosterAlert(operator, program, document, acceptedConnection, {
+        ...bundle.program.cursor,
+        mapEpoch: bundle.program.cursor.mapEpoch + 1,
+      }),
+    ).toBeNull();
+    expect(
+      (await app.inject('/local/v1/live-snapshot')).json<LiveSnapshotV1>().capability,
+    ).toMatchObject({ identity: 'degraded', lineupMismatchOnly: true, canonicalTeams: true });
+    expect((await app.inject('/local/v1/rivalhub-connection')).json()).toMatchObject({
+      sourceReady: true,
+    });
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/rivalhub/source/claim',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(outgoing.find((request) => request.operation === 'claim')?.body).toMatchObject({
+      allowLineupMismatch: true,
+      lineupSteam64: expect.arrayContaining(changed.map((p) => p.steam64)),
+    });
+    await push(changed);
+    await expect
+      .poll(() =>
+        outgoing.some(
+          (request) =>
+            request.operation === 'reliable' &&
+            (request.body as { event: ReliableEventV1 }).event.kind === 'map_started',
+        ),
+      )
+      .toBe(true);
+    const start = outgoing.find(
+      (request) =>
+        request.operation === 'reliable' &&
+        (request.body as { event: ReliableEventV1 }).event.kind === 'map_started',
+    )!.body as { event: ReliableEventV1 };
+    expect(start.event.evidence).toMatchObject({ identity: 'degraded', lineupMismatchOnly: true });
+    await expect.poll(() => connection.view().liveDelivery.status).toBe('accepted');
+    const live = outgoing.find((request) => request.operation === 'live')!.body as LiveSnapshotV1;
+    expect(live.capability).toMatchObject({ identity: 'degraded', lineupMismatchOnly: true });
+    expect(
+      live.players
+        .filter((p) => p.sourcePlayerId.startsWith('7656119809999999'))
+        .every((p) => p.canonicalPlayerId === null && p.identityEvidence === 'observed'),
+    ).toBe(true);
+    await page.goto('/workspace/left');
+    const dialog = page.getByRole('dialog', { name: '本场上场选手／账号与网站首发不一致' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('广州老头乐');
+    await expect(dialog).toContainText('卡油兔克');
+    await expect(dialog).toContainText('网站实时同步仍在进行');
+    await expect(dialog).not.toContainText('7656119');
+    expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    for (const viewport of [
+      { width: 480, height: 1080 },
+      { width: 384, height: 864 },
+      { width: 320, height: 720 },
+      { width: 640, height: 1440 },
+      { width: 512, height: 1152 },
+      { width: 427, height: 960 },
+    ]) {
+      await page.setViewportSize(viewport);
+      const bounds = await dialog.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    }
+    await page.setViewportSize({ width: 480, height: 1080 });
+    await page.screenshot({ path: testInfo.outputPath('live-roster-alert.png') });
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await push(changed);
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '查看人员差异' })).toBeVisible();
+    await page.getByRole('button', { name: '查看人员差异' }).click();
+    const popupPromise = page.waitForEvent('popup');
+    await dialog.getByRole('button', { name: '核对网站名单', exact: true }).click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState();
+    expect(new URL(popup.url()).pathname + new URL(popup.url()).search).toBe('/matches?tab=roster');
+    await expect(popup.getByRole('link', { name: '打开网站本场工作台' })).toHaveAttribute(
+      'href',
+      `${OFFICIAL_RIVALHUB_URL}/admin/${manifest.match.competition!.slug}/matches/${manifest.match.matchId}`,
+    );
+    await expect(popup.getByRole('button', { name: '刷新比赛资料与 BP' })).toBeVisible();
+    await popup.close();
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    // Different observed IDs re-open even if the game nickname stays unchanged.
+    const nextDifference = changed.map((p, i) =>
+      i === 4 ? { ...p, steam64: '76561198099999993' } : p,
+    );
+    const outsideControl = page.getByRole('button', { name: '比赛资料', exact: true });
+    await outsideControl.focus();
+    await push(nextDifference);
+    await expect(dialog).toBeVisible();
+    await expect(outsideControl).toBeFocused();
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await push(starters);
+    await expect(page.getByRole('button', { name: '查看人员差异' })).not.toBeVisible();
+    await push(nextDifference);
+    await expect(dialog).toBeVisible();
+    // Incomplete observations do not invent a new account mismatch.
+    await push(starters.slice(0, 8));
+    await expect(dialog).not.toBeVisible();
+  } finally {
+    await app.close();
+    await coordinator.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

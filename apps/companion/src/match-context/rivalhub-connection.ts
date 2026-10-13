@@ -450,6 +450,7 @@ export class RivalHubConnection {
         mapEpoch: snapshot.cursor.mapEpoch,
         contextRevision,
         takeover,
+        ...(snapshot.capability?.lineupMismatchOnly === true ? { allowLineupMismatch: true } : {}),
         lineupSteam64: lineupSteam64.length === 10 ? lineupSteam64 : [],
       }),
     });

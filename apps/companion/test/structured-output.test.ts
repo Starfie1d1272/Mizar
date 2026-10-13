@@ -8,6 +8,7 @@ import { expect, it, vi } from 'vitest';
 
 import { buildApp } from '../src/app.js';
 import type { MatchContextBinding } from '../src/match-context/index.js';
+import { hasLineupMismatchOnly } from '../src/output/lineup-mismatch.js';
 import { projectLiveSnapshotV1 } from '../src/output/projector.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { OutputService } from '../src/output/service.js';
@@ -327,5 +328,122 @@ it('recovers the complete terminal enqueue from the real runtime, projection and
     await service.close();
     await coordinator.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('allows only current roster differences with both entrants and the planned map proved', async () => {
+  const binding = await bindingFixture();
+  const baseline = observation(binding.manifest, 1, 'live');
+  const current = baseline.telemetry.allPlayers!;
+  const different = current.map((player, i) =>
+    i === 4 || i === 9
+      ? {
+          ...player,
+          sourcePlayerId: i === 4 ? '76561198099999991' : '76561198099999992',
+          displayName: i === 4 ? '广州老头乐' : '卡油兔克',
+        }
+      : player,
+  );
+  const cases = [
+    { name: 'two accounts differ', players: different, mapName: 'de_ancient', allowed: true },
+    {
+      name: 'one entrant has no account proof',
+      players: different.map((p, i) =>
+        i < 5
+          ? {
+              ...p,
+              sourcePlayerId: `7656119809999990${i}`,
+            }
+          : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    {
+      name: 'entrant accounts span both sides',
+      players: different.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              side: 'T' as const,
+            }
+          : i === 5
+            ? { ...p, side: 'CT' as const }
+            : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    { name: 'wrong map', players: different, mapName: 'de_inferno', allowed: false },
+    {
+      name: 'incomplete observation',
+      players: different.slice(0, 9),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    {
+      name: 'duplicate observed identity',
+      players: different.map((p, i) =>
+        i === 4
+          ? {
+              ...p,
+              sourcePlayerId: different[0]!.sourcePlayerId,
+            }
+          : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+  ];
+  for (const scenario of cases) {
+    const runtime = createProgramRuntime(`roster-${scenario.name}`, {
+      liveSession: { kind: 'bound', liveSessionId: 'roster-test-session' },
+    });
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      matchContextBinding: binding,
+      nowMonotonicMs: () => 1000,
+    });
+    try {
+      const input = {
+        ...baseline,
+        telemetry: {
+          ...baseline.telemetry,
+          map: { ...baseline.telemetry.map!, name: scenario.mapName },
+          allPlayers: scenario.players,
+        },
+      };
+      const result = runtime.acceptObservation(input);
+      const bundle = coordinator.afterRuntimeMutation(result);
+      expect(hasLineupMismatchOnly(bundle, binding), scenario.name).toBe(scenario.allowed);
+      const snapshot = projectLiveSnapshotV1({
+        bundle,
+        binding,
+        producedAt: '2026-09-28T00:00:01Z',
+      });
+      expect(snapshot?.capability.lineupMismatchOnly === true, scenario.name).toBe(
+        scenario.allowed,
+      );
+      if (scenario.allowed) {
+        expect(bundle.identity.capabilities.identityDependentResult).toBe(false);
+        expect(
+          snapshot?.players.filter((p) => p.sourcePlayerId.startsWith('7656119809999999')),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ canonicalPlayerId: null, identityEvidence: 'observed' }),
+          ]),
+        );
+        expect(hasLineupMismatchOnly(bundle, { ...binding, freshness: 'stale' })).toBe(false);
+        expect(
+          hasLineupMismatchOnly(bundle, {
+            ...binding,
+            context: { ...binding.context, matchId: 'other' },
+          }),
+        ).toBe(false);
+      }
+    } finally {
+      await coordinator.close();
+    }
   }
 });

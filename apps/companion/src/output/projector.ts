@@ -13,6 +13,7 @@ import {
 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 
 type LiveProjectionInput = Pick<ProjectionBundle, 'program' | 'radar' | 'operator'>;
@@ -65,6 +66,7 @@ export function projectLiveSnapshotV1(input: {
   if (!eligible(bundle, binding) || binding === undefined || binding.context.competition === null)
     return null;
   const { program, radar, operator } = bundle;
+  const lineupMismatchOnly = hasLineupMismatchOnly(bundle, binding);
   const currentMap = program.series?.maps.find(
     (map) => map.mapOrder === program.series?.currentMapOrder,
   );
@@ -136,7 +138,10 @@ export function projectLiveSnapshotV1(input: {
       return {
         sourcePlayerId: player.sourcePlayerId,
         canonicalPlayerId: player.canonicalPlayerId,
-        identityEvidence: player.identityEvidence,
+        identityEvidence:
+          lineupMismatchOnly && player.canonicalPlayerId === null
+            ? 'observed'
+            : player.identityEvidence,
         lineupEvidence: player.lineupEvidence,
         displayName: player.displayName,
         side: player.side,
@@ -189,6 +194,7 @@ export function projectLiveSnapshotV1(input: {
       lineupComplete: operator.activeLineup.ctCount === 5 && operator.activeLineup.tCount === 5,
       radarCurrent,
       canonicalTeams: program.teams.ct.mode === 'canonical' && program.teams.t.mode === 'canonical',
+      ...(lineupMismatchOnly ? { lineupMismatchOnly: true } : {}),
     },
   };
   return parseLiveSnapshotV1(snapshot);
@@ -292,6 +298,7 @@ export function buildReliableEventV1(input: {
       telemetryFresh: bundle.program.status.telemetry === 'fresh',
       contextFresh: true,
       source: input.source,
+      ...(hasLineupMismatchOnly(bundle, binding) ? { lineupMismatchOnly: true } : {}),
     },
     payload,
   });

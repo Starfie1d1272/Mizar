@@ -211,3 +211,10 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 私有 operator 的 `matchContext.rosterAuthority` 区分 `local-server / rivalhub / fixture / unknown`，名单编辑权限不从 `origin` 推断；`sourceFailureCode` 是最近真实获取失败的有限类别（网络、超时、授权、未找到、服务、响应、清单或比赛不一致）。它们属于获取外层信息，不写入比赛事实或公开输出。启动缓存不产生失败类别，恢复同版本有效来源后清除失败；原始异常正文和凭据不进入这些字段。
 
 私有 operator 身份诊断的 `affectsExpectedLineup` 由 identity owner 对缺少 Steam64 的 canonical 记录按 `isStarter` 赋值；`false` 保留替补技术诊断但不触发首发恢复操作，`null` 表示旧协议未提供范围；同时存在未知上场账号时先给中性资料来源核对，不断言当前账号不匹配。单独的未标范围缺失诊断不产生当前名单错误。页面不从整体 identity 状态、错图或部分观测推断缺失记录已上场，也不按昵称匹配身份。
+
+
+### 仅名单差异的在线展示例外
+
+RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对网站首发。Mizar 仅在授权的在线本场资料新鲜、合法当前地图绑定、新鲜当前十名唯一真人且 CT/T 各五人、两方均有当前登记账号证明并与队伍阵营一致时发出。实际账号与预期首发或替补不同是唯一身份问题；资料缺项、重复账号、队伍归属歧义、阵营冲突、错图及过期输入不能获得例外。
+
+公开快照的 `capability.lineupMismatchOnly` 与可靠事件的 `evidence.lineupMismatchOnly` 为可选布尔值，缺失按 false；仅上述证明成立才发 true。允许 `identity=degraded` 的可靠开局与现场比分／遥测展示；LIVE 仍等待同一授权、生产者、会话、代际与地图执行的可靠开局确认。未匹配账号保留 `canonicalPlayerId=null` 与 `identityEvidence=observed`，不按昵称映射登记选手。正式赛果可靠发送继续需要完整身份匹配；网站带差异认领记录名单冲突并关闭自动赛果写入。两端协同支持此可选语义后使用，不修改首发或平台生产库。
