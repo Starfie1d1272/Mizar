@@ -271,6 +271,7 @@ test('online account differences alert once, preserve unknown identities and rea
     }),
   );
   const outgoing: { operation: string; body: unknown }[] = [];
+  let rejectMapStarts = false;
   const connection = new RivalHubConnection(connectionPath, (url, init) => {
     const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
     const operation = requestUrl.split('/').at(-1)!;
@@ -279,7 +280,8 @@ test('online account differences alert once, preserve unknown identities and rea
     if (operation === 'claim')
       return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
     if (operation === 'live') return Promise.resolve(Response.json({ accepted: true }));
-    if (operation === 'reliable') return Promise.resolve(new Response(null, { status: 204 }));
+    if (operation === 'reliable')
+      return Promise.resolve(new Response(null, { status: rejectMapStarts ? 409 : 204 }));
     return Promise.resolve(Response.json(manifest));
   });
   await connection.load();
@@ -327,11 +329,17 @@ test('online account differences alert once, preserve unknown identities and rea
         })
       ).statusCode,
     ).toBe(200);
-    const push = async (players: typeof starters) => {
+    const push = async (players: typeof starters, warmup = false) => {
+      const frame = liveRoster(players, manifest.maps[0]!.mapName, warmup ? 'warmup' : 'live');
+      if (warmup) {
+        frame.map.round = 0;
+        frame.map.team_ct.score = 0;
+        frame.map.team_t.score = 0;
+      }
       const response = await fetch(`${address}/gsi`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(liveRoster(players, manifest.maps[0]!.mapName)),
+        body: JSON.stringify(frame),
       });
       expect(response.status).toBe(204);
     };
@@ -357,7 +365,7 @@ test('online account differences alert once, preserve unknown identities and rea
       activeMatchId: manifest.match.matchId,
       activeSourceMatchId: manifest.match.matchId,
       sourceReady: true,
-      liveDelivery: { status: 'accepted' as const },
+      liveDelivery: { status: 'accepted' as const, cursor: bundle.program.cursor },
     };
     const alert = workspaceLiveRosterAlert(
       operator,
@@ -509,6 +517,25 @@ test('online account differences alert once, preserve unknown identities and rea
     await expect(page.getByRole('button', { name: '查看人员差异' })).not.toBeVisible();
     await push(nextDifference);
     await expect(dialog).toBeVisible();
+    // A new execution must not inherit an accepted LIVE from the previous one.
+    await push(starters);
+    const priorCursor = coordinator.getCurrent().program.cursor;
+    await expect.poll(() => connection.view().liveDelivery.status).toBe('accepted');
+    rejectMapStarts = true;
+    await push(starters, true);
+    expect(coordinator.getCurrent().program.cursor.mapEpoch).toBe(priorCursor.mapEpoch + 1);
+    await push(nextDifference);
+    await push(nextDifference);
+    await expect(dialog).toBeVisible();
+    await expect(dialog).not.toContainText('网站实时同步仍在进行');
+    await expect.poll(() => connection.view().liveDelivery.reason).toBe('map_start_rejected');
+    await expect(dialog).toContainText('网站未接受本场开局');
+    const newEpoch = coordinator.getCurrent().program.cursor.mapEpoch;
+    expect(
+      outgoing
+        .filter((request) => request.operation === 'live')
+        .some((request) => (request.body as LiveSnapshotV1).cursor.mapEpoch === newEpoch),
+    ).toBe(false);
     // Incomplete observations do not invent a new account mismatch.
     await push(starters.slice(0, 8));
     await expect(dialog).not.toBeVisible();

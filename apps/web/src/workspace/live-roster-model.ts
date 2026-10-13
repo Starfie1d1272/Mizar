@@ -7,7 +7,11 @@ export interface LiveRosterConnection {
   readonly activeMatchId: string | null;
   readonly activeSourceMatchId: string | null;
   readonly sourceReady?: boolean;
-  readonly liveDelivery?: { readonly status: 'idle' | 'accepted' | 'dropped' | 'failing' };
+  readonly liveDelivery?: {
+    readonly status: 'idle' | 'accepted' | 'dropped' | 'failing';
+    readonly reason?: string | null;
+    readonly cursor?: ProgramSnapshot['cursor'] | null;
+  };
 }
 
 export interface LiveRosterDifference {
@@ -117,16 +121,27 @@ export function workspaceLiveRosterAlert(
     }));
   if (observed.length === 0 || absent.length === 0) return null;
   const isSource = connection.activeSourceMatchId === matchId;
+  const delivery = connection.liveDelivery;
+  const deliveryIsCurrent =
+    delivery?.cursor != null &&
+    delivery.cursor.producerInstanceId === programCursor.producerInstanceId &&
+    delivery.cursor.liveSessionId === programCursor.liveSessionId &&
+    delivery.cursor.programSourceGeneration === programCursor.programSourceGeneration &&
+    delivery.cursor.mapEpoch === programCursor.mapEpoch;
   const syncStatus =
     connection.sourceReady === false
       ? '网站实时同步尚未就绪：当前人员差异仍需核对。'
-      : isSource && connection.liveDelivery?.status === 'accepted'
+      : isSource && deliveryIsCurrent && delivery?.status === 'accepted'
         ? '网站实时同步仍在进行，人员差异待核对。'
-        : isSource && connection.liveDelivery?.status === 'failing'
-          ? '网站实时同步接收失败，请打开比赛同步检查。'
-          : isSource
-            ? '本机已认领数据源，网站实时接收状态待确认。'
-            : '本机尚未成为本场数据源，请打开比赛同步检查。';
+        : isSource && deliveryIsCurrent && delivery?.reason === 'map_start_rejected'
+          ? '网站未接受本场开局，实时同步尚未开始，请打开比赛同步检查。'
+          : isSource && deliveryIsCurrent && delivery?.status === 'failing'
+            ? '网站实时同步接收失败，请打开比赛同步检查。'
+            : isSource && deliveryIsCurrent && delivery?.reason === 'map_start_pending'
+              ? '本场开局等待网站确认，实时同步尚未开始。'
+              : isSource
+                ? '本机已认领数据源，网站实时接收状态待确认。'
+                : '本机尚未成为本场数据源，请打开比赛同步检查。';
   return {
     key: JSON.stringify([
       matchId,

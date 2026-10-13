@@ -29,3 +29,5 @@ export type {
   ResolvedIdentityPlayer,
   UnresolvedObservedPlayer,
 } from './types.js';
+
+export { hasObservedLineupDifference } from './lineup-difference.js';

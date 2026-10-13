@@ -449,6 +449,17 @@ export class OutputService {
       !this.isCurrentForRetry(event)
     )
       return false;
+    if (
+      event.kind === 'map_ended' &&
+      event.evidence.lineupMismatchOnly === true &&
+      hasLineupMismatchOnly(bundle, this.binding)
+    )
+      return (
+        bundle.program.map.phase === 'gameover' &&
+        bundle.program.map.name === event.mapName &&
+        bundle.program.map.score.ct === event.payload.scoreCT &&
+        bundle.program.map.score.t === event.payload.scoreT
+      );
     if (event.kind === 'map_ended') {
       const series = bundle.program.series;
       const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
@@ -476,8 +487,15 @@ export class OutputService {
     return (
       bundle.program.status.telemetry === 'fresh' &&
       (bundle.program.status.identity === 'matched' ||
-        ((event.kind === 'map_started' || event.kind === 'match_started') &&
-          event.evidence.lineupMismatchOnly === true &&
+        ([
+          'map_started',
+          'match_started',
+          'map_epoch_changed',
+          'source_generation_changed',
+        ].includes(event.kind) &&
+          (event.evidence.lineupMismatchOnly === true ||
+            event.kind === 'map_epoch_changed' ||
+            event.kind === 'source_generation_changed') &&
           hasLineupMismatchOnly(bundle, this.binding)))
     );
   }

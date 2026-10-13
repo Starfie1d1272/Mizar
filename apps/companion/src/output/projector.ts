@@ -16,7 +16,7 @@ import type { MatchContextBinding } from '../match-context/index.js';
 import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 
-type LiveProjectionInput = Pick<ProjectionBundle, 'program' | 'radar' | 'operator'>;
+type LiveProjectionInput = Pick<ProjectionBundle, 'program' | 'radar' | 'operator' | 'identity'>;
 
 function eligible(bundle: LiveProjectionInput, binding: MatchContextBinding | undefined): boolean {
   return (
@@ -234,7 +234,29 @@ export function buildReliableEventV1(input: {
   const currentMap = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
-  const mapResult = input.kind === 'map_ended' ? entrantRelativeMapResult(bundle) : null;
+  const displayOnly = hasLineupMismatchOnly(bundle, binding);
+  const observedEnd =
+    displayOnly &&
+    input.kind === 'map_ended' &&
+    currentMap &&
+    bundle.program.map.phase === 'gameover' &&
+    bundle.program.map.score.ct !== null &&
+    bundle.program.map.score.t !== null
+      ? {
+          mapId: currentMap.mapId,
+          mapName: currentMap.mapName,
+          scoreA:
+            bundle.operator.identity.sideMapping.a === 'CT'
+              ? bundle.program.map.score.ct
+              : bundle.program.map.score.t,
+          scoreB:
+            bundle.operator.identity.sideMapping.b === 'CT'
+              ? bundle.program.map.score.ct
+              : bundle.program.map.score.t,
+        }
+      : null;
+  const mapResult =
+    input.kind === 'map_ended' ? (observedEnd ?? entrantRelativeMapResult(bundle)) : null;
   if (
     input.kind === 'map_ended' &&
     (mapResult === null ||
@@ -298,7 +320,7 @@ export function buildReliableEventV1(input: {
       telemetryFresh: bundle.program.status.telemetry === 'fresh',
       contextFresh: true,
       source: input.source,
-      ...(hasLineupMismatchOnly(bundle, binding) ? { lineupMismatchOnly: true } : {}),
+      ...(displayOnly ? { lineupMismatchOnly: true } : {}),
     },
     payload,
   });

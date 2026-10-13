@@ -1,3 +1,4 @@
+import { hasObservedLineupDifference } from '@mizar/core/identity';
 import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
@@ -6,7 +7,7 @@ import type { ProjectionBundle } from '../projections/projection-coordinator.js'
  * unresolved accounts remain observed identities, never guessed canonical players.
  */
 export function hasLineupMismatchOnly(
-  bundle: Pick<ProjectionBundle, 'program' | 'operator'>,
+  bundle: Pick<ProjectionBundle, 'program' | 'operator' | 'identity'>,
   binding: MatchContextBinding | undefined,
 ): boolean {
   const { program, operator } = bundle;
@@ -36,7 +37,12 @@ export function hasLineupMismatchOnly(
   if (
     !currentMap ||
     !expectedMap ||
-    currentMap.status !== 'current' ||
+    !(
+      currentMap.status === 'current' ||
+      (currentMap.status === 'completed' &&
+        currentMap.finalScore === null &&
+        program.map.phase === 'gameover')
+    ) ||
     currentMap.mapId !== expectedMap.mapId ||
     program.map.name === null ||
     canonicalizeCs2MapName(expectedMap.mapName) !== canonicalizeCs2MapName(program.map.name) ||
@@ -54,29 +60,7 @@ export function hasLineupMismatchOnly(
     teamB.entryId !== binding.context.entrants.b.entryId
   )
     return false;
-  if (
-    !identity.issues.some(
-      (issue) =>
-        issue.code === 'unexpected_human_steam64' || issue.code === 'lineup_differs_from_expected',
-    )
-  )
-    return false;
-  if (
-    identity.issues.some(
-      (issue) =>
-        ![
-          'unexpected_human_steam64',
-          'lineup_differs_from_expected',
-          'missing_canonical_display_name',
-        ].includes(issue.code) &&
-        !(issue.code === 'missing_canonical_steam64' && issue.affectsExpectedLineup === false) &&
-        !(
-          issue.severity === 'info' &&
-          ['map_epoch_changed', 'source_generation_changed'].includes(issue.code)
-        ),
-    )
-  )
-    return false;
+  if (!hasObservedLineupDifference(bundle.identity)) return false;
   const starters = Object.values(binding.context.entrants).flatMap((team) =>
     team.players.filter((p) => p.isStarter),
   );

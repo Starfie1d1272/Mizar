@@ -199,3 +199,40 @@ describe('SeriesProgress', () => {
     );
   });
 });
+
+it('observed completion advances only the adjacent planned map without awarding a result', () => {
+  const context = contextFixture();
+  const displayProof = { ...proof(1), displayOnly: true };
+  let progress = reduce(createSeriesProgress(context), [], observation('Mirage', 1), displayProof);
+  progress = reduce(
+    progress,
+    [mapEnded(1, { ct: 13, t: 6 })],
+    { ...observation('Mirage', 1, { ct: 13, t: 6 }), mapEnded: true },
+    displayProof,
+  );
+  expect(progress.maps[0]).toMatchObject({
+    status: 'completed',
+    finalScore: null,
+    winnerEntryId: null,
+  });
+  expect(progress.score).toEqual({ a: 0, b: 0 });
+  const next = reduce(progress, [], observation('Dust 2', 2), { ...proof(2), displayOnly: true });
+  expect(next.bindingState).toBe('bound');
+  expect(next.currentMapOrder).toBe(2);
+  expect(next.score).toEqual({ a: 0, b: 0 });
+  const skipped = reduce(progress, [], observation('de_inferno', 2), {
+    ...proof(2),
+    displayOnly: true,
+  });
+  expect(skipped.bindingState).toBe('needs_operator');
+  const withoutEnd = reduce(
+    createSeriesProgress(context),
+    [],
+    observation('Mirage', 1),
+    displayProof,
+  );
+  expect(
+    reduce(withoutEnd, [], observation('Dust 2', 2), { ...proof(2), displayOnly: true })
+      .bindingState,
+  ).toBe('needs_operator');
+});
