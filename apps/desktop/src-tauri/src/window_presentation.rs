@@ -99,6 +99,20 @@ pub fn set_visible(window: &WebviewWindow, visible: bool) -> tauri::Result<()> {
     sync_visibility(window)
 }
 
+/// Attempt both panels even when one fails. A later exit retry checks each
+/// window's actual visibility again through set_visible.
+pub fn hide_panels(mut hide: impl FnMut(&str) -> Result<(), String>) -> Result<(), String> {
+    let mut result = Ok(());
+    for label in ["workspace-left", "workspace-dock"] {
+        if let Err(error) = hide(label) {
+            if result.is_ok() {
+                result = Err(error);
+            }
+        }
+    }
+    result
+}
+
 #[link(name = "user32")]
 extern "system" {
     fn IsWindowVisible(hwnd: isize) -> i32;
@@ -187,5 +201,39 @@ pub fn set_overlay_visible(window: &WebviewWindow, visible: bool) -> Result<(), 
 pub fn sync_all(app: &tauri::AppHandle) {
     for window in app.webview_windows().values() {
         let _ = sync_visibility(window);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_hide_failure_attempts_the_other_panel_and_allows_retry() {
+        let mut left_visible = true;
+        let mut dock_visible = true;
+        let result = hide_panels(|label| {
+            if label == "workspace-left" {
+                Err("left hide failed".into())
+            } else {
+                dock_visible = false;
+                Ok(())
+            }
+        });
+        assert_eq!(result.unwrap_err(), "left hide failed");
+        assert!(left_visible);
+        assert!(!dock_visible);
+
+        hide_panels(|label| {
+            if label == "workspace-left" {
+                left_visible = false;
+            } else {
+                dock_visible = false;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(!left_visible);
+        assert!(!dock_visible);
     }
 }
