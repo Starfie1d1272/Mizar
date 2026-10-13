@@ -620,8 +620,18 @@ export class MatchContextController {
       next.entrants.b.entryId !== current.entrants.b.entryId
     )
       return result;
+    // Results are mutable website evidence, not changes to the execution plan.
+    const planMaps = (manifest: BroadcastManifest) =>
+      manifest.maps.map((map) => ({
+        mapId: map.mapId,
+        mapOrder: map.mapOrder,
+        mapName: map.mapName,
+        pickedByEntryId: map.pickedByEntryId,
+        teamAStartSide: map.teamAStartSide,
+      }));
     const samePlan =
-      isDeepStrictEqual(current.maps, next.maps) && isDeepStrictEqual(current.veto, next.veto);
+      isDeepStrictEqual(planMaps(current), planMaps(next)) &&
+      isDeepStrictEqual(current.veto, next.veto);
     const canActivate = () => samePlan || (!isLocalBinding(active) && allowPlanUpdate());
     if (canActivate())
       return this.activatePendingOnlineMatch(revision, pending.revision, canActivate);

@@ -80,4 +80,37 @@ describe('Match Manifest last-known-good seam', () => {
     expect(result.binding.freshness).toBe('stale');
     expect(result.binding.context).toEqual(controller.getActiveBinding()?.context);
   });
+  it('refreshes confirmed results during execution without accepting a changed plan', async () => {
+    const root = await temporaryDirectory();
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+    const initial = {
+      ...manifest,
+      maps: manifest.maps.map((map) => ({
+        ...map,
+        scoreA: null,
+        scoreB: null,
+        completedAt: null,
+      })),
+    };
+    const controller = new MatchContextController({
+      lkgStore: new MatchManifestLkgStore({ filePath: join(root, 'manifest.json') }),
+    });
+    await controller.selectMatch(manifest.match.matchId, source('online', initial));
+    await controller.refreshOnlineMatch(source('online', manifest), () => false);
+    expect(controller.getActiveBinding()?.context.maps[0]).toMatchObject({
+      scoreA: 16,
+      scoreB: 12,
+      completedAt: '2026-09-16T11:15:00.000Z',
+    });
+    expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+    const changed = {
+      ...manifest,
+      maps: manifest.maps.map((map, index) =>
+        index === 1 ? { ...map, teamAStartSide: 't' as const } : map,
+      ),
+    };
+    await controller.refreshOnlineMatch(source('online', changed), () => false);
+    expect(controller.getActiveBinding()?.manifest.maps[1]?.teamAStartSide).toBe('ct');
+    expect(controller.getPendingOnlineCandidate()).toBeDefined();
+  });
 });

@@ -245,4 +245,61 @@ describe('ProgramRuntime SeriesProgress composition', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'checkpoint_incompatible' })]),
     );
   });
+  it.each(['refresh', 'restart'] as const)(
+    'recovers a missing prior result from explicit website completion on %s',
+    (mode) => {
+      const context = contextFixture();
+      const store = new MemoryCheckpointStore();
+      let runtime = createProgramRuntime('before', { seriesProgressCheckpointStore: store });
+      runtime.acceptObservation(frame(1, 'live', 'freezetime', { ct: 0, t: 0 }));
+      runtime.synchronizeSeriesProgress(context, sideProof, 'online');
+      runtime.acceptObservation(frame(2, 'live', 'live', { ct: 0, t: 0 }));
+      runtime.acceptObservation(frame(3, 'live', 'over', { ct: 1, t: 0 }, 'CT'));
+      runtime.synchronizeSeriesProgress(context, sideProof, 'online');
+      const recordedRounds = store.checkpoint!.progress.maps[0]!.roundHistory.rounds;
+      const nextFrame = frame(4, 'live', 'freezetime', { ct: 0, t: 0 });
+      runtime.acceptObservation({
+        ...nextFrame,
+        telemetry: {
+          ...nextFrame.telemetry,
+          map: { ...nextFrame.telemetry.map!, name: 'de_dust2' },
+        },
+      });
+      const blocked = runtime.synchronizeSeriesProgress(context, null, 'online');
+      expect(blocked?.bindingState).toBe('needs_operator');
+      const history = blocked!.maps[0]!.roundHistory;
+      expect(history.rounds).toEqual(recordedRounds);
+      const confirmed: MatchContext = {
+        ...context,
+        maps: context.maps.map((map, index) =>
+          index === 0
+            ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-09-18T00:30:00Z' }
+            : map,
+        ),
+      };
+      if (mode === 'restart') {
+        runtime = createProgramRuntime('after', { seriesProgressCheckpointStore: store });
+        runtime.acceptObservation({
+          ...nextFrame,
+          telemetry: {
+            ...nextFrame.telemetry,
+            map: { ...nextFrame.telemetry.map!, name: 'de_dust2' },
+          },
+        });
+      }
+      const recovered = runtime.synchronizeSeriesProgress(confirmed, null, 'online');
+      expect(recovered).toMatchObject({
+        score: { a: 1, b: 0 },
+        currentMapOrder: 2,
+        bindingState: 'bound',
+      });
+      expect(recovered?.maps[0]).toMatchObject({
+        status: 'completed',
+        finalScore: { a: 13, b: 3 },
+        roundHistory: history,
+      });
+      expect(store.checkpoint?.progress).toEqual(recovered);
+      expect(runtime.synchronizeSeriesProgress(confirmed, null, 'online')).toEqual(recovered);
+    },
+  );
 });

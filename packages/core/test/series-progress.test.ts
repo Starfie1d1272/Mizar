@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createSeriesProgress,
+  reconcileSeriesProgressResults,
   syncSeriesProgress,
   type SeriesProgressEvent,
   type SeriesMapObservation,
@@ -236,4 +237,105 @@ it('observed completion advances only the adjacent planned map without awarding 
     reduce(withoutEnd, [], observation('Dust 2', 2), { ...proof(2), displayOnly: true })
       .bindingState,
   ).toBe('needs_operator');
+});
+
+it('preserves frozen results and history, exposes conflicts, and clears an agreeing result conflict', () => {
+  const context = contextFixture();
+  const progress = createSeriesProgress(context);
+  const frozen = {
+    ...progress,
+    maps: progress.maps.map((map, index) =>
+      index === 0
+        ? {
+            ...map,
+            status: 'completed' as const,
+            finalScore: { a: 13, b: 9 },
+            winnerEntryId: 'a',
+          }
+        : map,
+    ),
+    score: { a: 1, b: 0 },
+  };
+  const website = {
+    ...context,
+    maps: context.maps.map((map, index) =>
+      index === 0 ? { ...map, scoreA: 3, scoreB: 13, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  const conflict = reconcileSeriesProgressResults(frozen, website);
+  expect(conflict.maps).toBe(frozen.maps);
+  expect(conflict.score).toEqual({ a: 1, b: 0 });
+  expect(conflict.issues).toContainEqual(
+    expect.objectContaining({ code: 'context_result_conflict', mapOrder: 1 }),
+  );
+  const later = {
+    ...website,
+    maps: website.maps.map((map, index) =>
+      index === 1 ? { ...map, scoreA: 3, scoreB: 13, completedAt: '2026-10-13T15:04:15Z' } : map,
+    ),
+  };
+  const stillConflicted = reconcileSeriesProgressResults(conflict, later);
+  expect(stillConflicted.score).toEqual({ a: 1, b: 0 });
+  expect(stillConflicted.maps[1]?.finalScore).toBeNull();
+  const agreeing = {
+    ...website,
+    maps: website.maps.map((map, index) => (index === 0 ? { ...map, scoreA: 13, scoreB: 9 } : map)),
+  };
+  expect(reconcileSeriesProgressResults(conflict, agreeing)).toEqual(frozen);
+});
+
+it('requires explicit completion, identical identity and plan, and does not skip missing results', () => {
+  const context = contextFixture();
+  const progress = createSeriesProgress(context);
+  const scoreOnly = {
+    ...context,
+    maps: context.maps.map((map, index) => (index === 0 ? { ...map, scoreA: 13, scoreB: 3 } : map)),
+  };
+  const completed = {
+    ...scoreOnly,
+    maps: scoreOnly.maps.map((map, index) =>
+      index === 0 ? { ...map, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  expect(reconcileSeriesProgressResults(progress, scoreOnly)).toBe(progress);
+  expect(reconcileSeriesProgressResults(progress, { ...completed, matchId: 'another' })).toBe(
+    progress,
+  );
+  expect(
+    reconcileSeriesProgressResults(progress, {
+      ...completed,
+      entrants: {
+        ...completed.entrants,
+        a: { ...completed.entrants.a, entryId: 'replacement' },
+      },
+    }),
+  ).toBe(progress);
+  expect(
+    reconcileSeriesProgressResults(progress, {
+      ...completed,
+      maps: completed.maps.map((map, index) =>
+        index === 0 ? { ...map, teamAStartSide: 'T' as const } : map,
+      ),
+    }),
+  ).toBe(progress);
+  const laterOnly = {
+    ...context,
+    maps: context.maps.map((map, index) =>
+      index === 1 ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  expect(reconcileSeriesProgressResults(progress, laterOnly)).toBe(progress);
+  const completedSeries = {
+    ...completed,
+    maps: completed.maps.map((map, index) =>
+      index > 0 ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-10-13T15:04:15Z' } : map,
+    ),
+  };
+  const result = reconcileSeriesProgressResults(progress, completedSeries);
+  expect(result.score).toEqual({ a: 2, b: 0 });
+  expect(result.maps[2]?.status).toBe('not_played');
+  expect(result.maps[2]?.finalScore).toBeNull();
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({ code: 'context_result_conflict', mapOrder: 3 }),
+  );
 });
