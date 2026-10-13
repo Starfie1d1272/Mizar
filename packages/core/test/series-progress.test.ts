@@ -268,6 +268,15 @@ it('preserves frozen results and history, exposes conflicts, and clears an agree
   expect(conflict.issues).toContainEqual(
     expect.objectContaining({ code: 'context_result_conflict', mapOrder: 1 }),
   );
+  const later = {
+    ...website,
+    maps: website.maps.map((map, index) =>
+      index === 1 ? { ...map, scoreA: 3, scoreB: 13, completedAt: '2026-10-13T15:04:15Z' } : map,
+    ),
+  };
+  const stillConflicted = reconcileSeriesProgressResults(conflict, later);
+  expect(stillConflicted.score).toEqual({ a: 1, b: 0 });
+  expect(stillConflicted.maps[1]?.finalScore).toBeNull();
   const agreeing = {
     ...website,
     maps: website.maps.map((map, index) => (index === 0 ? { ...map, scoreA: 13, scoreB: 9 } : map)),

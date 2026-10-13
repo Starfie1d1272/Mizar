@@ -966,7 +966,7 @@ export function reconcileSeriesProgressResults(
   if (!isSeriesProgressCheckpointCompatible(makeSeriesProgressCheckpoint(progress), context))
     return progress;
   let next = progress;
-  for (const slot of progress.maps) {
+  for (const slot of progress.maps.slice().sort((a, b) => a.mapOrder - b.mapOrder)) {
     const map = next.maps.find((candidate) => candidate.mapOrder === slot.mapOrder)!;
     const upstream = context.maps.find((candidate) => candidate.mapId === map.mapId);
     if (upstream?.completedAt == null) continue;
@@ -1002,6 +1002,12 @@ export function reconcileSeriesProgressResults(
     if (
       next.maps.some(
         (previous) => previous.mapOrder < map.mapOrder && previous.status !== 'completed',
+      ) ||
+      next.issues.some(
+        (item) =>
+          item.code === 'context_result_conflict' &&
+          item.mapOrder !== null &&
+          item.mapOrder < map.mapOrder,
       )
     )
       continue;
