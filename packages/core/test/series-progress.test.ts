@@ -4,6 +4,7 @@ import {
   createSeriesProgress,
   syncSeriesProgress,
   type SeriesProgressEvent,
+  type SeriesMapObservation,
   type SeriesSideProof,
 } from '../src/series-progress/index.js';
 import type { MatchContext } from '../src/match-context/index.js';
@@ -98,7 +99,7 @@ function proof(mapEpoch: number, a: 'CT' | 'T' = 'CT'): SeriesSideProof {
 function reduce(
   progress: ReturnType<typeof createSeriesProgress>,
   events: readonly SeriesProgressEvent[] = [],
-  currentObservation = observation('Mirage', 1),
+  currentObservation: SeriesMapObservation = observation('Mirage', 1),
   currentProof: SeriesSideProof | null = proof(currentObservation.mapEpoch),
 ) {
   return syncSeriesProgress(progress, {
