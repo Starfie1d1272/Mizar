@@ -434,6 +434,7 @@ impl SessionStore {
         if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
+        let target = fs::canonicalize(video).map_err(|_| "无法核实备份目标。")?;
         let convars = video
             .parent()
             .ok_or("配置目录缺失。")?
@@ -477,6 +478,15 @@ impl SessionStore {
         atomic_write(
             &snapshot.join("absent.json"),
             &serde_json::to_vec(&absent).map_err(|_| "无法记录原始配置缺失状态。")?,
+        )?;
+        // Old snapshots have no target identity; never infer it from their name.
+        if fs::canonicalize(video).map_err(|_| "无法复核备份目标。")? != target {
+            return Err("备份期间配置目标发生变化，未修改设置。".into());
+        }
+        atomic_write(
+            &snapshot.join("identity.json"),
+            &serde_json::to_vec(&json!({"version": 1, "video": target}))
+                .map_err(|_| "无法记录备份目标。")?,
         )?;
         Ok(())
     }
@@ -642,19 +652,31 @@ impl SessionStore {
             }
             frame_restorations.push((
                 *frame_path,
+                current.clone(),
                 cs2_frame_rate::restored(&value["frameRateFiles"][index], &current)?,
             ));
         }
         let current =
             fs::read_to_string(path).map_err(|_| "无法读取游戏视频配置；原配置备份仍保留。")?;
         let restored = if current == original {
-            current
+            current.clone()
         } else {
             cs2_video::restore(original, applied, &current, &owned)?
         };
-        atomic_write(path, restored.as_bytes())?;
-        for (frame_path, restored) in frame_restorations {
-            atomic_write(frame_path, restored.as_bytes())?;
+        // Recheck all inputs before the first write, and each file immediately
+        // before replacement. A later conflict retains the journal for retry.
+        for (frame_path, expected, _) in &frame_restorations {
+            unchanged(frame_path, expected.as_bytes())?;
+        }
+        unchanged(path, current.as_bytes())?;
+        if restored != current {
+            atomic_write(path, restored.as_bytes())?;
+        }
+        for (frame_path, expected, restored) in frame_restorations {
+            unchanged(frame_path, expected.as_bytes())?;
+            if restored != expected {
+                atomic_write(frame_path, restored.as_bytes())?;
+            }
         }
         // Keep a readable, exact original even after successful recovery.
         atomic_write(&self.root.join("last-original.txt"), original.as_bytes())?;
@@ -670,6 +692,13 @@ impl SessionStore {
         let spectator_error = self.restore_spectator().err();
         self.finish_core_restore(playback_handoff, spectator_error)
     }
+}
+
+fn unchanged(path: &Path, expected: &[u8]) -> Result<(), String> {
+    if fs::read(path).map_err(|_| "无法复核当前配置，备份仍保留。")? != expected {
+        return Err("配置已被游戏或其他程序修改，请重新检查；备份仍保留。".into());
+    }
+    Ok(())
 }
 
 fn frame_files<'a>(
@@ -769,6 +798,34 @@ mod tests {
             .unwrap();
         let applied_video = fs::read(&video).unwrap();
         assert_ne!(applied_video, original_video);
+        let snapshot = fs::read_dir(store.backup_directory())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("original-")
+            })
+            .unwrap();
+        let identity: Value =
+            serde_json::from_slice(&fs::read(snapshot.join("identity.json")).unwrap()).unwrap();
+        assert_eq!(identity["version"], 1);
+        assert_eq!(identity["video"], json!(fs::canonicalize(&video).unwrap()));
+        assert_eq!(
+            fs::read(snapshot.join("cs2_video.txt")).unwrap(),
+            original_video
+        );
+        // A changed input must not be written using the earlier read. Keep the
+        // exact external bytes and durable transaction available for retry.
+        let applied_machine = fs::read(&machine).unwrap();
+        fs::write(&machine, b"external write").unwrap();
+        assert!(unchanged(&machine, &applied_machine).is_err());
+        assert!(store.restore().is_err());
+        assert_eq!(fs::read(&machine).unwrap(), b"external write");
+        assert_eq!(fs::read(&video).unwrap(), applied_video);
+        assert!(store.load().unwrap().is_some());
+        fs::write(&machine, applied_machine).unwrap();
         // An unconfirmed OBS safety transaction must leave the game files alone.
         assert!(crate::production_exit::finish_then_restore(
             || Err("OBS 运行状态未确认".into()),
