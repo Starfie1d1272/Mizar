@@ -234,3 +234,29 @@ export const Checkboxes: Story = {
     await expect(canvas.getByRole('checkbox', { name: '不可编辑' })).toBeDisabled();
   },
 };
+
+function PassiveDialogExample() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>显示提醒</Button>
+      <Dialog modal={false} open={open} title="制作提醒" onClose={() => setOpen(false)}>
+        <p>保留当前操作焦点，其他控件仍可操作。</p>
+      </Dialog>
+    </>
+  );
+}
+export const PassiveDialog: Story = {
+  name: '保留操作焦点的提醒',
+  render: () => <PassiveDialogExample />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const trigger = canvas.getByRole('button', { name: '显示提醒' });
+    await userEvent.click(trigger);
+    const dialog = canvas.getByRole('dialog', { name: '制作提醒' });
+    await expect(dialog).toBeVisible();
+    await expect(trigger).toHaveFocus();
+    await userEvent.click(canvas.getByRole('button', { name: '关闭' }));
+    await expect(dialog).not.toBeVisible();
+  },
+};

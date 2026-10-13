@@ -27,6 +27,7 @@ const capability = z.strictObject({
   lineupComplete: z.boolean(),
   radarCurrent: z.boolean(),
   canonicalTeams: z.boolean(),
+  lineupMismatchOnly: z.boolean().optional(),
 });
 const player = z.strictObject({
   sourcePlayerId: id,
@@ -227,6 +228,7 @@ const reliableEventBase = z.strictObject({
     identity,
     telemetryFresh: z.boolean(),
     contextFresh: z.boolean(),
+    lineupMismatchOnly: z.boolean().optional(),
     source: z.enum(['runtime-transition', 'runtime-continuity', 'series-progress', 'identity']),
   }),
 });

@@ -1,8 +1,10 @@
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import type { ContextEnvelope } from '@mizar/core/match-context';
+import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { OperatorPayload } from '@mizar/protocol/operator';
-import type { ProgramPayload } from '@mizar/protocol/program';
+import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { getRadarArtwork } from '@mizar-hud/radar-view';
 import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
@@ -20,6 +22,7 @@ import {
   workspaceMatchScore,
   type WorkspaceIssue,
 } from './model';
+import { workspaceLiveRosterAlert, type LiveRosterConnection } from './live-roster-model';
 import { useObsStatus } from './obs-client';
 import {
   useLocalRead,
@@ -31,6 +34,7 @@ import {
 } from '../preparation/client';
 import { Button, StatusPill, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
+import { LiveRosterAlert } from './LiveRosterAlert';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
@@ -54,17 +58,36 @@ async function openPreparation(path: string) {
 function ContextPanel({
   operator,
   program,
+  programCursor,
 }: {
   readonly operator: OperatorPayload | null;
   readonly program: ProgramPayload | null;
+  readonly programCursor: ProgramSnapshot['cursor'] | null;
 }) {
   const match = operator?.matchContext.summary;
   const score = workspaceMatchScore(program);
   const pov = workspaceCurrentPov(program);
   const issues = workspaceIssues(operator);
+  const document = useLocalRead<ContextEnvelope<MatchDocumentV1>>(
+    operator?.matchContext.rosterAuthority === 'rivalhub' ? '/local/v1/match-document' : null,
+  );
+  const connection = useLocalRead<LiveRosterConnection>(
+    operator?.matchContext.rosterAuthority === 'rivalhub' ? '/local/v1/rivalhub-connection' : null,
+    3000,
+  );
+  const rosterAlert = workspaceLiveRosterAlert(
+    operator,
+    program,
+    document?.document ?? null,
+    connection,
+    programCursor,
+  );
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
-  const issueKey = issues.map((issue) => issue.id).join(',');
+  const attentionIssues = rosterAlert
+    ? issues.filter((issue) => issue.id !== 'steam64' && issue.id !== 'roster')
+    : issues;
+  const issueKey = `${issues.map((issue) => issue.id).join(',')}:${rosterAlert?.key ?? ''}`;
   const visibleIssueError = issueError?.key === issueKey ? issueError.message : null;
   async function openIssue(issue: WorkspaceIssue) {
     const path = issue.path;
@@ -106,19 +129,39 @@ function ContextPanel({
         </small>
       )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
-      {issues.length > 0 ? (
-        <div className="workspace-attention" data-multiple={issues.length > 1}>
-          <span role="status" title={issues.map((issue) => issue.summary).join('；')}>
+      <LiveRosterAlert
+        alert={rosterAlert}
+        recovered={
+          operator?.runtime.telemetryFreshness === 'fresh' &&
+          operator.identity.state === 'matched' &&
+          operator.activeLineup.state === 'complete' &&
+          operator.activeLineup.retainedCount === 0 &&
+          !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
+        }
+        onReview={() =>
+          void openIssue({
+            id: 'live-roster',
+            summary: '上场选手／账号与网站首发不一致',
+            detail: '',
+            action: '核对网站名单',
+            path: '/matches?tab=roster',
+          })
+        }
+        error={visibleIssueError}
+      />
+      {attentionIssues.length > 0 ? (
+        <div className="workspace-attention" data-multiple={attentionIssues.length > 1}>
+          <span role="status" title={attentionIssues.map((issue) => issue.summary).join('；')}>
             <Button
               variant="secondary"
               className="workspace-issue-summary"
               onClick={() => setIssuesOpen(true)}
             >
-              {issues[0]!.summary}
+              {attentionIssues[0]!.summary}
             </Button>
-            {issues.length > 1 ? ` · 共 ${issues.length} 项` : ''}
+            {attentionIssues.length > 1 ? ` · 共 ${attentionIssues.length} 项` : ''}
           </span>
-          <Button onClick={() => void openIssue(issues[0]!)}>{issues[0]!.action}</Button>
+          <Button onClick={() => void openIssue(attentionIssues[0]!)}>{issues[0]!.action}</Button>
           {issues.length > 1 ? <Button onClick={() => setIssuesOpen(true)}>全部问题</Button> : null}
         </div>
       ) : null}
@@ -236,6 +279,9 @@ export function WorkspaceLeft() {
         </section>
         <ContextPanel
           operator={payload}
+          programCursor={
+            programState.state === 'live' ? (programState.current?.cursor ?? null) : null
+          }
           program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />

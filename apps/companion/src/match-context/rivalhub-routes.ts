@@ -124,7 +124,9 @@ export function registerRivalHubConnectionRoutes(
     const snapshot = options.currentSnapshot();
     return (
       snapshot?.matchId === linkedBinding()?.context.matchId &&
-      snapshot?.capability.identity === 'matched' &&
+      (snapshot?.capability.identity === 'matched' ||
+        (snapshot?.capability.identity === 'degraded' &&
+          snapshot.capability.lineupMismatchOnly === true)) &&
       snapshot.capability.telemetryFresh &&
       snapshot.capability.contextFresh &&
       Boolean(snapshot?.cursor.liveSessionId) &&

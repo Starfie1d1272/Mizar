@@ -188,6 +188,7 @@ export function Dialog({
   children,
   className,
   canClose,
+  modal = true,
 }: {
   open: boolean;
   title: string;
@@ -195,24 +196,31 @@ export function Dialog({
   children: ReactNode;
   className?: string;
   canClose?: () => boolean;
+  /** Passive operator alerts must not move focus from the game or lock the workspace. */
+  modal?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
   useEffect(() => {
     const dialog = ref.current;
-    if (!dialog) return;
+    if (!dialog || !modal) return;
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
-  }, [open]);
+  }, [open, modal]);
   return (
     <dialog
       ref={ref}
+      open={modal ? undefined : open}
       className={['mizar-dialog', className].filter(Boolean).join(' ')}
       onCancel={(event) => {
         if (canClose && !canClose()) event.preventDefault();
       }}
       aria-labelledby={id}
       onKeyDown={(event) => {
+        if (!modal) {
+          if (event.key === 'Escape' && (!canClose || canClose())) onClose();
+          return;
+        }
         if (event.key !== 'Tab') return;
         const controls = Array.from(
           event.currentTarget.querySelectorAll<HTMLElement>(
@@ -236,7 +244,10 @@ export function Dialog({
       {children}
       <Button
         onClick={() => {
-          if (!canClose || canClose()) ref.current?.close();
+          if (!canClose || canClose()) {
+            if (modal) ref.current?.close();
+            else onClose();
+          }
         }}
       >
         关闭

@@ -542,3 +542,39 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.workspace-live-roster-alert {
+  position: fixed;
+  inset: var(--mizar-layout-padding);
+  margin: auto;
+  width: calc(100% - 2 * var(--mizar-layout-padding));
+  height: fit-content;
+  z-index: 20;
+  border-color: var(--mizar-status-warning);
+}
+.workspace-live-roster-alert ul {
+  list-style: none;
+  padding: 0;
+}
+.workspace-live-roster-alert li {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+  margin-block: var(--mizar-layout-compact);
+  overflow-wrap: anywhere;
+}
+.workspace-roster-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--mizar-layout-target);
+  width: var(--mizar-layout-target);
+  height: var(--mizar-layout-target);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-control);
+  background: var(--mizar-bg-surface);
+}
+.workspace-roster-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

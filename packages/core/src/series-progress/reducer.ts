@@ -436,7 +436,10 @@ function addRound(
 
   const proofIsValid = validSideProof(sideProof, event.sourceGeneration, event.mapEpoch);
   const winnerEntryId =
-    proofIsValid && sideProof !== null && event.winnerSide !== 'unknown'
+    proofIsValid &&
+    sideProof !== null &&
+    sideProof.displayOnly !== true &&
+    event.winnerSide !== 'unknown'
       ? entrantForSide(sideProof, event.winnerSide) === 'a'
         ? progress.entrants.a.entryId
         : entrantForSide(sideProof, event.winnerSide) === 'b'
@@ -538,6 +541,23 @@ function endMap(
         'side_mapping_unproven',
         'error',
         'map_ended 时没有同一 mapEpoch/source generation 的 canonical side proof。',
+        map.mapOrder,
+        event.mapEpoch,
+      ),
+    );
+  }
+  if (sideProof.displayOnly === true) {
+    const maps = progress.maps.map((candidate) =>
+      candidate.mapOrder === map.mapOrder
+        ? { ...candidate, status: 'completed' as const, finalScore: null, winnerEntryId: null }
+        : candidate,
+    );
+    return addIssue(
+      recomputeScore(progress, maps),
+      issue(
+        'result_pending_review',
+        'warning',
+        '已观察本图结束，人员差异仍待核对；只接续展示，正式比分与胜者尚未确认。',
         map.mapOrder,
         event.mapEpoch,
       ),

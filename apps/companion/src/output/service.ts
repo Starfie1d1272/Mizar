@@ -2,6 +2,7 @@ import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
 import {
@@ -139,7 +140,7 @@ export class OutputService {
       program.status.context === 'fresh' &&
       program.match?.matchId === binding.context.matchId &&
       program.status.telemetry === 'fresh' &&
-      program.status.identity === 'matched' &&
+      (program.status.identity === 'matched' || hasLineupMismatchOnly(bundle, binding)) &&
       program.map.phase === 'live' &&
       program.map.name !== null &&
       program.cursor.mapEpoch > 0 &&
@@ -448,6 +449,17 @@ export class OutputService {
       !this.isCurrentForRetry(event)
     )
       return false;
+    if (
+      event.kind === 'map_ended' &&
+      event.evidence.lineupMismatchOnly === true &&
+      hasLineupMismatchOnly(bundle, this.binding)
+    )
+      return (
+        bundle.program.map.phase === 'gameover' &&
+        bundle.program.map.name === event.mapName &&
+        bundle.program.map.score.ct === event.payload.scoreCT &&
+        bundle.program.map.score.t === event.payload.scoreT
+      );
     if (event.kind === 'map_ended') {
       const series = bundle.program.series;
       const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
@@ -473,7 +485,18 @@ export class OutputService {
         bundle.program.status.identity === 'degraded'
       );
     return (
-      bundle.program.status.identity === 'matched' && bundle.program.status.telemetry === 'fresh'
+      bundle.program.status.telemetry === 'fresh' &&
+      (bundle.program.status.identity === 'matched' ||
+        ([
+          'map_started',
+          'match_started',
+          'map_epoch_changed',
+          'source_generation_changed',
+        ].includes(event.kind) &&
+          (event.evidence.lineupMismatchOnly === true ||
+            event.kind === 'map_epoch_changed' ||
+            event.kind === 'source_generation_changed') &&
+          hasLineupMismatchOnly(bundle, this.binding)))
     );
   }
 

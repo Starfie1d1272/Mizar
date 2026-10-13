@@ -2,12 +2,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import type { ReliableEventV1 } from '@mizar/protocol/output';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { expect, it, vi } from 'vitest';
 
 import { buildApp } from '../src/app.js';
 import type { MatchContextBinding } from '../src/match-context/index.js';
+import { hasLineupMismatchOnly } from '../src/output/lineup-mismatch.js';
 import { projectLiveSnapshotV1 } from '../src/output/projector.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { OutputService } from '../src/output/service.js';
@@ -327,5 +329,230 @@ it('recovers the complete terminal enqueue from the real runtime, projection and
     await service.close();
     await coordinator.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('allows only current roster differences with both entrants and the planned map proved', async () => {
+  const binding = await bindingFixture();
+  const baseline = observation(binding.manifest, 1, 'live');
+  const current = baseline.telemetry.allPlayers!;
+  const different = current.map((player, i) =>
+    i === 4 || i === 9
+      ? {
+          ...player,
+          sourcePlayerId: i === 4 ? '76561198099999991' : '76561198099999992',
+          displayName: i === 4 ? '广州老头乐' : '卡油兔克',
+        }
+      : player,
+  );
+  const cases = [
+    { name: 'two accounts differ', players: different, mapName: 'de_ancient', allowed: true },
+    {
+      name: 'one entrant has no account proof',
+      players: different.map((p, i) =>
+        i < 5
+          ? {
+              ...p,
+              sourcePlayerId: `7656119809999990${i}`,
+            }
+          : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    {
+      name: 'entrant accounts span both sides',
+      players: different.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              side: 'T' as const,
+            }
+          : i === 5
+            ? { ...p, side: 'CT' as const }
+            : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    { name: 'wrong map', players: different, mapName: 'de_inferno', allowed: false },
+    {
+      name: 'incomplete observation',
+      players: different.slice(0, 9),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+    {
+      name: 'duplicate observed identity',
+      players: different.map((p, i) =>
+        i === 4
+          ? {
+              ...p,
+              sourcePlayerId: different[0]!.sourcePlayerId,
+            }
+          : p,
+      ),
+      mapName: 'de_ancient',
+      allowed: false,
+    },
+  ];
+  for (const scenario of cases) {
+    const runtime = createProgramRuntime(`roster-${scenario.name}`, {
+      liveSession: { kind: 'bound', liveSessionId: 'roster-test-session' },
+    });
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      matchContextBinding: binding,
+      nowMonotonicMs: () => 1000,
+    });
+    try {
+      const input = {
+        ...baseline,
+        telemetry: {
+          ...baseline.telemetry,
+          map: { ...baseline.telemetry.map!, name: scenario.mapName },
+          allPlayers: scenario.players,
+        },
+      };
+      const result = runtime.acceptObservation(input);
+      const bundle = coordinator.afterRuntimeMutation(result);
+      expect(hasLineupMismatchOnly(bundle, binding), scenario.name).toBe(scenario.allowed);
+      const snapshot = projectLiveSnapshotV1({
+        bundle,
+        binding,
+        producedAt: '2026-09-28T00:00:01Z',
+      });
+      expect(snapshot?.capability.lineupMismatchOnly === true, scenario.name).toBe(
+        scenario.allowed,
+      );
+      if (scenario.allowed) {
+        expect(bundle.identity.capabilities.identityDependentResult).toBe(false);
+        expect(
+          snapshot?.players.filter((p) => p.sourcePlayerId.startsWith('7656119809999999')),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ canonicalPlayerId: null, identityEvidence: 'observed' }),
+          ]),
+        );
+        expect(hasLineupMismatchOnly(bundle, { ...binding, freshness: 'stale' })).toBe(false);
+        expect(
+          hasLineupMismatchOnly(bundle, {
+            ...binding,
+            context: { ...binding.context, matchId: 'other' },
+          }),
+        ).toBe(false);
+      }
+    } finally {
+      await coordinator.close();
+    }
+  }
+});
+
+it('delivers display end and execution continuity under a persistent account difference without a formal result', async () => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-display-continuity-'));
+  const runtime = createProgramRuntime('display-continuity', {
+    liveSession: { kind: 'bound', liveSessionId: 'display-continuity-session' },
+  });
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(join(directory, 'outbox.json'));
+  const sent: ReliableEventV1[] = [];
+  const service = new OutputService({
+    outbox: box,
+    sink: {
+      send: (event) => {
+        sent.push(event);
+        return Promise.resolve('accepted' as const);
+      },
+    },
+    now: () => new Date(Date.parse('2026-09-28T00:00:00Z') + time),
+    authorityScope: () => 'test-authority',
+  });
+  try {
+    await service.start();
+    for (const [sequence, phase, mapName] of [
+      [1, 'live', 'de_ancient'],
+      [2, 'gameover', 'de_ancient'],
+      [3, 'live', 'de_mirage'],
+    ] as const) {
+      time = sequence * 1000;
+      const base = observation(binding.manifest, sequence, phase, mapName);
+      const allPlayers = base.telemetry.allPlayers!.map((player, index) =>
+        index === 4 || index === 9
+          ? { ...player, sourcePlayerId: index === 4 ? '76561198099999991' : '76561198099999992' }
+          : player,
+      );
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation({
+        ...base,
+        telemetry: { ...base.telemetry, allPlayers },
+      });
+      const bundle = coordinator.afterRuntimeMutation(result);
+      service.afterRuntimeMutation(result, bundle, binding);
+      await box.flushPending();
+      await service.retry();
+    }
+    time = 3500;
+    service.beforeRuntimeMutation();
+    const advanced = runtime.advanceProgramSourceGeneration({
+      monotonicMs: time,
+      utc: '2026-09-28T00:00:03.500Z',
+    });
+    service.afterRuntimeMutation(advanced, coordinator.afterRuntimeMutation(advanced), binding);
+    time = 4000;
+    const refreshed = observation(binding.manifest, 4, 'live', 'de_mirage');
+    const allPlayers = refreshed.telemetry.allPlayers!.map((player, index) =>
+      index === 4 || index === 9
+        ? { ...player, sourcePlayerId: index === 4 ? '76561198099999991' : '76561198099999992' }
+        : player,
+    );
+    service.beforeRuntimeMutation();
+    const accepted = runtime.acceptObservation({
+      ...refreshed,
+      telemetry: { ...refreshed.telemetry, allPlayers },
+    });
+    service.afterRuntimeMutation(accepted, coordinator.afterRuntimeMutation(accepted), binding);
+    await box.flushPending();
+    await service.retry();
+    expect(
+      sent
+        .filter((event) =>
+          ['map_started', 'map_ended', 'map_epoch_changed', 'source_generation_changed'].includes(
+            event.kind,
+          ),
+        )
+        .map((event) => event.kind),
+    ).toEqual([
+      'map_started',
+      'map_ended',
+      'map_epoch_changed',
+      'map_started',
+      'source_generation_changed',
+      'map_started',
+    ]);
+    const ended = sent.filter((event) => event.kind === 'map_ended');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.evidence).toMatchObject({ identity: 'degraded', lineupMismatchOnly: true });
+    expect(ended[0]?.payload).toEqual({ scoreA: 13, scoreB: 11, scoreCT: 13, scoreT: 11 });
+    expect(coordinator.getCurrent().program.series).toMatchObject({
+      currentMapOrder: 2,
+      score: { a: 0, b: 0 },
+    });
+    expect(coordinator.getCurrent().program.series?.maps[0]).toMatchObject({
+      finalScore: null,
+      winnerEntryId: null,
+    });
+    expect(service.current()?.capability.lineupMismatchOnly).toBe(true);
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });

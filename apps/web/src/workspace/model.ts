@@ -177,7 +177,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
   else if (identityCodes.has('unexpected_human_steam64') && !rosterIncomplete && !steam64Missing)
     issues.push({
       id: 'steam64',
-      summary: '选手 Steam64 不匹配',
+      summary: authority === 'rivalhub' ? '上场账号与网站名单不一致' : '上场账号与名单不一致',
       detail: `观测到的选手 Steam64 不在本场名单中。先核对比赛与服务器是否正确，再确认替补或名单变化。${rosterRecovery}`,
       action: rosterAction,
       path: '/matches?tab=roster',

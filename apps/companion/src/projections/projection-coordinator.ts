@@ -1,5 +1,6 @@
 import { BombDamageResources } from './bomb-damage-resources.js';
 import {
+  hasObservedLineupDifference,
   emptyActiveLineup,
   identityEvidenceFromObservation,
   createIdentityResolver,
@@ -805,7 +806,7 @@ function seriesSideProofFor(
 ): SeriesSideProof | null {
   const runtime = runtimeSnapshot.current;
   if (
-    !identity.capabilities.identityDependentResult ||
+    (!identity.capabilities.identityDependentResult && !hasObservedLineupDifference(identity)) ||
     identity.sourceGeneration !== runtime.programSource.generation ||
     identity.mapEpoch !== runtime.map.epoch ||
     identity.sideMapping.a === 'unknown' ||
@@ -817,6 +818,7 @@ function seriesSideProofFor(
   return {
     sourceGeneration: runtime.programSource.generation,
     mapEpoch: runtime.map.epoch,
+    ...(hasObservedLineupDifference(identity) ? { displayOnly: true } : {}),
     a: identity.sideMapping.a,
     b: identity.sideMapping.b,
   };

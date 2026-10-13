@@ -34,6 +34,7 @@ type Source = {
   liveSessionId: string;
   acknowledgedExecution?: string;
   mapStartAttempt?: symbol;
+  deliveryExecution?: string;
 };
 
 type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
@@ -140,6 +141,7 @@ export class RivalHubConnection {
   private activeDeviceName: string | null = null;
   private claimRevision = 0;
   private liveDelivery: {
+    cursor: LiveSnapshotV1['cursor'] | null;
     status: 'idle' | 'accepted' | 'dropped' | 'failing';
     reason: string | null;
     consecutiveUnaccepted: number;
@@ -147,6 +149,7 @@ export class RivalHubConnection {
     notified: boolean;
     failure?: LiveFailure;
   } = {
+    cursor: null,
     status: 'idle',
     reason: null,
     consecutiveUnaccepted: 0,
@@ -197,9 +200,10 @@ export class RivalHubConnection {
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       liveDelivery:
         this.source === null
-          ? { status: 'idle', reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
+          ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
           : {
               status: this.liveDelivery.status,
+              cursor: this.liveDelivery.cursor,
               reason: this.liveDelivery.reason,
               failure: this.liveDelivery.failure ?? null,
               consecutiveUnaccepted: this.liveDelivery.consecutiveUnaccepted,
@@ -450,6 +454,7 @@ export class RivalHubConnection {
         mapEpoch: snapshot.cursor.mapEpoch,
         contextRevision,
         takeover,
+        ...(snapshot.capability?.lineupMismatchOnly === true ? { allowLineupMismatch: true } : {}),
         lineupSteam64: lineupSteam64.length === 10 ? lineupSteam64 : [],
       }),
     });
@@ -461,6 +466,7 @@ export class RivalHubConnection {
     };
     if (result.claimed) {
       this.liveDelivery = {
+        cursor: null,
         status: 'idle',
         reason: null,
         consecutiveUnaccepted: 0,
@@ -543,15 +549,30 @@ export class RivalHubConnection {
     }
   }
 
+  private beginDeliveryExecution(source: Source, cursor: LiveSnapshotV1['cursor']): void {
+    const execution = executionKey(cursor);
+    if (source.deliveryExecution === execution) return;
+    source.deliveryExecution = execution;
+    this.liveDelivery = {
+      cursor,
+      status: 'idle',
+      reason: 'map_start_pending',
+      consecutiveUnaccepted: 0,
+      since: null,
+      notified: false,
+    };
+  }
+
   async sendLive(snapshot: LiveSnapshotV1): Promise<void> {
     // Claiming a source does not establish the website's map/identity evidence.
     // Keep the disposable lane behind the reliable start acknowledgement, also
     // after re-claim, generation advance and map change. No old snapshot is queued.
-    if (this.source?.acknowledgedExecution !== executionKey(snapshot.cursor))
-      throw new Error('rivalhub_map_start_pending');
     const source = this.source;
     if (!source || source.matchId !== snapshot.matchId)
       throw new Error('rivalhub_live_unavailable');
+    this.beginDeliveryExecution(source, snapshot.cursor);
+    const execution = executionKey(snapshot.cursor);
+    if (source.acknowledgedExecution !== execution) throw new Error('rivalhub_map_start_pending');
     let reason: string;
     let accepted = false;
     let dropped = false;
@@ -657,7 +678,8 @@ export class RivalHubConnection {
                   : 'response_read_failed';
       // Keep only bounded evidence. A newer frame may recover; never resend this frame.
     }
-    if (this.source !== source) throw new Error('rivalhub_live_unavailable');
+    if (this.source !== source || source.deliveryExecution !== execution)
+      throw new Error('rivalhub_live_unavailable');
     if (lostAuthority) {
       this.source = null;
       this.activeDeviceName = '另一台制播设备';
@@ -667,6 +689,7 @@ export class RivalHubConnection {
       if (previous.notified)
         this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
       this.liveDelivery = {
+        cursor: snapshot.cursor,
         status: 'accepted',
         reason: null,
         consecutiveUnaccepted: 0,
@@ -676,6 +699,7 @@ export class RivalHubConnection {
       return;
     }
     this.liveDelivery = {
+      cursor: snapshot.cursor,
       status: dropped && previous.status !== 'failing' ? 'dropped' : 'failing',
       reason,
       consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
@@ -734,7 +758,10 @@ export class RivalHubConnection {
       : [];
     if (signal.aborted) return 'retry';
     const attempt = event.kind === 'map_started' ? Symbol('map_start') : undefined;
-    if (source && attempt) source.mapStartAttempt = attempt;
+    if (source && attempt) {
+      source.mapStartAttempt = attempt;
+      if (sameExecution) this.beginDeliveryExecution(source, event.cursor);
+    }
     const isCurrent = () =>
       this.source === source && (attempt === undefined || source?.mapStartAttempt === attempt);
     const result = await this.upload(
@@ -744,8 +771,19 @@ export class RivalHubConnection {
       signal,
       isCurrent,
     );
-    if (result === 'accepted' && attempt && source && isCurrent() && !signal.aborted)
-      source.acknowledgedExecution = executionKey(event.cursor);
+    if (attempt && source && isCurrent() && !signal.aborted) {
+      if (result === 'accepted') source.acknowledgedExecution = executionKey(event.cursor);
+      else if (
+        result === 'rejected' &&
+        sameExecution &&
+        source.deliveryExecution === executionKey(event.cursor)
+      )
+        this.liveDelivery = {
+          ...this.liveDelivery,
+          status: 'failing',
+          reason: 'map_start_rejected',
+        };
+    }
     return result;
   }
 }
