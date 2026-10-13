@@ -103,6 +103,18 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
           },
     );
   }
+  const resultConflict = operator.seriesProgress?.issues.find(
+    (issue) => issue.code === 'context_result_conflict' && issue.mapOrder !== null,
+  );
+  if (resultConflict)
+    issues.push({
+      id: 'result-conflict',
+      summary: `第 ${resultConflict.mapOrder} 图赛果冲突`,
+      detail:
+        '网站已确认赛果与本地冻结记录不同，已保留本地事实。请在网站本场工作台核对赛果；刷新不会覆盖已有比分。',
+      action: '核对网站赛果',
+      path: '/matches?tab=maps',
+    });
   const unfinished = operator.seriesProgress?.maps.find((map) => map.status === 'current');
   const resultBlocked =
     unfinished &&
