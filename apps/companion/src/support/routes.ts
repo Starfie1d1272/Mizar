@@ -13,7 +13,7 @@ import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
-import { choice, count, digest, readSupportLogs, record } from './logs.js';
+import { choice, count, digest, readSupportLogs, record, recorderCodes } from './logs.js';
 
 export const SUPPORT_BUNDLE_MAX_BYTES = 1024 * 1024;
 const findingCodes = [
@@ -133,6 +133,7 @@ export function registerSupportRoutes(
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
+    readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
     readonly recorder: () => RecorderHealth;
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
     readonly hosts: () => LocalWebHostDiagnostics;
@@ -265,7 +266,7 @@ export function registerSupportRoutes(
             },
             limits: {
               bundleBytes: SUPPORT_BUNDLE_MAX_BYTES,
-              files: 16,
+              files: 20,
               eventsPerFile: 32,
               tailBytesPerFile: 65536,
               headerBytesPerFile: 4096,
@@ -306,6 +307,7 @@ export function registerSupportRoutes(
                 }
               : null,
             runtime: options.runtimeSummary(),
+            businessLog: options.businessLogStatus?.() ?? 'not_configured',
             gsi: {
               ingressConfigured: options.gsiConfigured,
               source: 'desktop-host-via-browser',
@@ -391,6 +393,7 @@ export function registerSupportRoutes(
               frameCount: count(recorder.frameCount),
               droppedFrames: count(recorder.droppedFrames),
               incomplete: bool(recorder.incomplete),
+              lastErrorCode: choice(recorder.lastErrorCode, recorderCodes),
             },
             delivery: options
               .delivery()

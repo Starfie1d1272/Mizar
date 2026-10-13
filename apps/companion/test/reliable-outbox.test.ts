@@ -7,6 +7,8 @@ import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/outp
 import { describe, expect, it, vi } from 'vitest';
 
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { BusinessJournal } from '../src/support/business-journal.js';
+import { readSupportLogs } from '../src/support/logs.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
@@ -59,11 +61,25 @@ describe('bounded reliable output', () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-'));
     try {
       const path = join(dir, 'outbox.json');
-      const first = new ReliableOutbox(path);
+      const journal = new BusinessJournal(dir, () => {});
+      const first = new ReliableOutbox(path, undefined, (record, reason) =>
+        journal.reliable(record, reason),
+      );
       const at = new Date('2026-09-28T00:00:00.000Z');
       expect(await first.enqueue(event('event-one'), at)).toBe(true);
       expect(await first.enqueue(event('event-one'), at)).toBe(false);
       let calls = 0;
+      await first.flush({
+        now: at,
+        isCurrent: () => true,
+        canSend: () => false,
+        sink: {
+          send: () => {
+            throw new Error('guard must prevent send');
+          },
+        },
+      });
+      expect(first.getRecords()[0]?.attempts).toBe(0);
       await first.flush({
         now: at,
         isCurrent: () => true,
@@ -75,7 +91,9 @@ describe('bounded reliable output', () => {
         },
       });
       expect(first.getRecords()[0]).toMatchObject({ status: 'pending', attempts: 1 });
-      const recovered = new ReliableOutbox(path);
+      const recovered = new ReliableOutbox(path, undefined, (record, reason) =>
+        journal.reliable(record, reason),
+      );
       await recovered.load();
       await recovered.flush({
         now: new Date('2026-09-28T00:00:00.500Z'),
@@ -99,6 +117,36 @@ describe('bounded reliable output', () => {
         },
       });
       expect(calls).toBe(2);
+      const history = (await readSupportLogs(dir))
+        .find((log) => log.name === 'business.ndjson')!
+        .events.filter((entry) => entry.stage === 'business_delivery');
+      expect(history.map((entry) => entry.business?.reason)).toEqual([
+        'queued',
+        'send_guard_blocked',
+        'retry_unknown',
+        'receiver_accepted',
+      ]);
+      expect(history.at(-1)?.business).toMatchObject({
+        status: 'accepted',
+        attempts: 2,
+        mapEpoch: 3,
+        sourceGeneration: 2,
+        receiveSequence: 9,
+      });
+      await recovered.enqueue(event('event-two'), at);
+      await recovered.flush({
+        now: new Date('2026-09-28T00:00:02.000Z'),
+        isCurrent: () => true,
+        sink: { send: () => Promise.resolve('rejected' as const) },
+      });
+      const rejection = (await readSupportLogs(dir))
+        .find((log) => log.name === 'business.ndjson')!
+        .events.at(-1)?.business;
+      expect(rejection).toMatchObject({
+        status: 'rejected',
+        attempts: 1,
+        reason: 'delivery_rejected_unknown',
+      });
       expect(recovered.getRecords()[0]?.status).toBe('accepted');
     } finally {
       await rm(dir, { recursive: true, force: true });

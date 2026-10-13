@@ -57,6 +57,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
 import { registerSupportRoutes } from './support/routes.js';
+import { BusinessJournal } from './support/business-journal.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
@@ -217,31 +218,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const debugClock = options.debugClock ?? { nowMonotonicMs: () => performance.now() };
   const deliveryConsumers = options.deliveryConsumers ?? [];
   let outputBinding = options.matchContextBinding;
+  let businessJournal: BusinessJournal | undefined;
   const outputService: OutputService = new OutputService({
     ...(options.reliableOutboxPath === undefined
       ? {}
       : {
-          outbox: new ReliableOutbox(options.reliableOutboxPath, (recovery, error) => {
-            // Raw cause stays in the local log; support export applies its existing redaction.
-            const evidence = {
-              event: 'outbox',
-              stage: 'outbox_load',
-              err: outboxLocalError(error),
-              recovery: recovery ?? null,
-              result:
-                recovery === undefined
-                  ? 'failure'
-                  : recovery.code === 'outbox_recovered'
-                    ? 'success'
-                    : 'unconfirmed',
-            };
-            if (recovery === undefined)
-              app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
-            else {
-              app.log.warn(evidence, recovery.message);
-              recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
-            }
-          }),
+          outbox: new ReliableOutbox(
+            options.reliableOutboxPath,
+            (recovery, error) => {
+              // Raw cause stays in the local log; support export applies its existing redaction.
+              const evidence = {
+                event: 'outbox',
+                stage: 'outbox_load',
+                err: outboxLocalError(error),
+                recovery: recovery ?? null,
+                result:
+                  recovery === undefined
+                    ? 'failure'
+                    : recovery.code === 'outbox_recovered'
+                      ? 'success'
+                      : 'unconfirmed',
+              };
+              if (recovery === undefined)
+                app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
+              else {
+                app.log.warn(evidence, recovery.message);
+                recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
+              }
+            },
+            (record, reason) => businessJournal?.reliable(record, reason),
+          ),
         }),
     ...(options.rivalhubConnection !== undefined
       ? {
@@ -366,6 +372,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
+  if (options.supportLogsDirectory !== undefined) {
+    businessJournal = new BusinessJournal(options.supportLogsDirectory, () =>
+      app.log.warn(
+        { event: 'business', stage: 'business_log_write_failed', result: 'failure' },
+        '业务诊断日志写入失败',
+      ),
+    );
+  }
   app.addHook('onResponse', async (request, reply) => {
     if (
       reply.statusCode >= 400 ||
@@ -774,6 +788,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const presentation = new ProgramPresentationStore();
   const presentationUnsubscribe = projectionCoordinator.subscribePresentation((bundle) => {
+    businessJournal?.runtime(
+      bundle,
+      matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    );
     guidance.update(
       bundle,
       matchContextController?.getActiveBinding() ?? options.matchContextBinding,
@@ -938,6 +956,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
+    businessJournal?.runtime(projectionCoordinator.getCurrent(), outputBinding);
+    for (const record of outputService.getReliableRecords())
+      businessJournal?.reliable(record, 'restored');
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
@@ -1044,6 +1065,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
     hosts: () => localWebTransport.getHostDiagnostics(),

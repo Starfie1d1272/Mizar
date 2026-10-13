@@ -95,7 +95,15 @@ function logRecorderDiagnostic(diagnostic: RecorderDiagnostic): void {
     ...(diagnostic.operation === undefined ? {} : { operation: diagnostic.operation }),
     ...(diagnostic.causeCode === undefined ? {} : { causeCode: diagnostic.causeCode }),
   };
-  console.warn(`Companion 采集记录诊断：${JSON.stringify(fields)}`);
+  console.warn(
+    JSON.stringify({
+      event: 'recorder',
+      stage: 'recorder_failure',
+      result: 'failure',
+      time: Date.now(),
+      diagnostic: fields,
+    }),
+  );
 }
 
 async function writeFinalRuntime(path: string, response: unknown): Promise<void> {
