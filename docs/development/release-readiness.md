@@ -115,10 +115,6 @@ v1.1.0 实际源码固定读取 GitHub 的 update-manifest.json 与 NSIS 更新�
 
 长期离线 ZIP 的关键依赖是明确首次安装的信任合同：若沿用在线 SDK 的 TUF freshness 要求，过期离线包必须更新；若要求长期冷机器断网首次安装，则需要在现有信任体系内单独审定可授权该行为的合同，不能把新安装改称缓存恢复。旧版本只读 Box 验证、真实旧签名的断网前置验证与 UI fixtures 均不冒充新产品安装验收。readiness 必须以真实产品资格与安装证据为准。
 
-## 当前 1.2.0 资格状态
-
-版本与用户更新日志已准备；正式 Windows Core Qualification、冷缓存安装和 Box 同步回读仍待执行。只有最终准确源码通过 CI、Qualification 及原始资产验证后才能晋级发布。此动态验收状态保留在维护文档，不能嵌入用户更新清单或替代发行门禁。
-
 Promotion 对同次已成功资格任务的产品和验收证据并行下载到独立目录，两者全部完成后才校验来源与证据；任一失败阻断后续。产品各项 provenance 逐个复用原始 `qualification-provenance.json`，仍绑定 main 签发工作流、精确源码 SHA 和每个资产字节；缺失或无效 bundle 直接失败，不回退到放宽校验。CI 的 `release_provenance_benchmark` 只读比较既有 v1.3.0 原始证明的远端／随包核验，记录失败与含准备时间的总墙钟，不发布或更改线上资产；该测量不替代全流程十分钟验收。
 
 Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。只读 CI `release_profile_benchmark` 运行相同 Windows release 测试命令，不构建签发候选、不发布、不保存分支缓存；新增 runner 排队及缓存传输必须纳入墙钟比较。
