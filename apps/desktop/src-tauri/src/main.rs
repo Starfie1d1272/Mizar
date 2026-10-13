@@ -631,7 +631,13 @@ async fn finish_workspace(
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
-        let presentation = open_main(host.clone(), None);
+        if let Err(error) = open_main(host.clone(), None) {
+            log.event(
+                "production_finish",
+                "failure",
+                Some(&format!("phase=workspace_recovery_window; cause={error}")),
+            );
+        }
         let trial = demo_test::status(&log)?;
         if trial["active"] == true || cs2.has_demo_journal()? {
             feedback.stage("restoration");
@@ -663,8 +669,10 @@ async fn finish_workspace(
             )?;
         }
         refresh_finished_window_feedback(&host, &cs2);
+        drop(cs2);
         feedback.stage("presentation");
-        presentation?;
+        // Retry presentation after cleanup; an earlier transient window failure
+        // must not prevent returning to preparation once the game is finished.
         present_production_inner(&host, false)
     })
     .await
@@ -926,19 +934,26 @@ fn show_workspace(app: &tauri::AppHandle) {
     update_overlay(app, &state);
 }
 
-fn hide_workspace(app: &tauri::AppHandle) {
+fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<HostState>();
     state.visible.store(false, Ordering::Relaxed);
     if let Ok(mut group) = state.window_group.lock() {
         *group = workspace_group::Group::default();
     }
     sync_workspace_shell(app);
-    for label in ["workspace-left", "workspace-dock"] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window_presentation::set_visible(&window, false);
-        }
-    }
+    let result = window_presentation::hide_panels(|label| {
+        let Some(window) = app.get_webview_window(label) else { return Ok(()); };
+        window_presentation::set_visible(&window, false).map_err(|error| {
+            app.state::<DesktopLog>().event(
+                "production_finish", "failure",
+                Some(&format!("phase=workspace_hide_panel; label={label}; cause={error}")),
+            );
+            let title = if label == "workspace-left" { "现场工作区" } else { "现场控制底栏" };
+            format!("{title}未能隐藏，请在准备中心重试退出工作台。")
+        })
+    });
     present_overlay(app, None);
+    result
 }
 
 fn main_path_allowed(path: &str) -> bool {
@@ -963,18 +978,22 @@ fn open_main(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> 
     if !main_path_allowed(&path) {
         return Err("页面无法识别。".into());
     }
-    if let Some(window) = app.get_webview_window("main") {
-        window
-            .navigate(
-                format!("{BASE}{path}")
-                    .parse()
-                    .map_err(|_| "页面无法识别。")?,
-            )
-            .map_err(|_| "无法打开 Mizar。")?;
-        let _ = window.unminimize();
-        let _ = window_presentation::set_visible(&window, true);
-        let _ = window.set_focus();
-    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or("准备中心窗口不可用，请通过托盘退出后重新打开 Mizar。")?;
+    window
+        .navigate(
+            format!("{BASE}{path}")
+                .parse()
+                .map_err(|_| "页面无法识别。")?,
+        )
+        .map_err(|_| "无法打开 Mizar。")?;
+    window
+        .unminimize()
+        .map_err(|_| "准备中心窗口未能恢复，请重试。")?;
+    window_presentation::set_visible(&window, true)
+        .map_err(|_| "准备中心窗口未能显示，请重试。")?;
+    let _ = window.set_focus();
     Ok(())
 }
 
@@ -1061,7 +1080,7 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         completion.recv().map_err(|_| "现场窗口呈现未能完成，请在准备中心重新进入工作台。".to_string())??;
     } else {
         open_main(app.clone(), None)?;
-        hide_workspace(&app);
+        hide_workspace(&app)?;
     }
     Ok(())
 }
@@ -1717,7 +1736,7 @@ fn run_desktop(
                             }
                         }
                         "hide_workspace" => {
-                            hide_workspace(app);
+                            let _ = hide_workspace(app);
                             if let Some(window) = app.get_webview_window("workspace-dock") {
                                 let _ =
                                     window.eval("window.dispatchEvent(new Event('mizar-hide'))");
@@ -1938,7 +1957,7 @@ fn run_desktop(
                 api.prevent_close();
                 match window.label() {
                     "workspace-left" | "workspace-dock" => {
-                        hide_workspace(window.app_handle());
+                        let _ = hide_workspace(window.app_handle());
                         if let Some(dock) = window.app_handle().get_webview_window("workspace-dock")
                         {
                             let _ = dock.eval("window.dispatchEvent(new Event('mizar-hide'))");
@@ -2042,7 +2061,7 @@ fn run_desktop(
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
                     host.state::<production_exit::ExitGate>().cancel();
-                    hide_workspace(&host);
+                    let _ = hide_workspace(&host);
                     if host.state::<production_exit::VerifiedStop>().complete() {
                         // Direct service-stop callers may already have removed HTTP.
                         // Native recovery remains available through the tray, never a refused WebView.

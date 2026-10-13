@@ -23,6 +23,7 @@ import {
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   refreshSeriesProgressMetadata,
+  reconcileSeriesProgressResults,
   seriesCheckpointIdentity,
   syncSeriesProgress as reduceSeriesProgress,
   type OperatorCommand,
@@ -283,6 +284,13 @@ export class ProgramRuntime {
     if (refreshed !== this.seriesProgress) {
       this.seriesProgress = refreshed;
       shouldPersist = true;
+    }
+    if (effectiveOrigin === 'online' || effectiveOrigin === 'cache') {
+      const reconciled = reconcileSeriesProgressResults(this.seriesProgress, context);
+      if (reconciled !== this.seriesProgress) {
+        this.seriesProgress = reconciled;
+        shouldPersist = true;
+      }
     }
     this.seriesSideProof = sideProof;
     const before = this.seriesProgress;

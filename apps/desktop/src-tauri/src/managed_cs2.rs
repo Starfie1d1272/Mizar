@@ -1155,6 +1155,10 @@ mod tests {
         assert!(external.child.try_wait().unwrap().is_none());
         external.child.kill().unwrap();
         external.child.wait().unwrap();
+        // A manually exited external game leaves no owned process or journal.
+        // Repeated workspace cleanup must remain safe and complete successfully.
+        managed.finish().unwrap();
+        managed.finish().unwrap();
         managed.confirm_game_stopped().unwrap();
         assert!(tracker.finish_session_feedback(&managed).unwrap());
         assert_eq!(tracker.window_message(), None);
