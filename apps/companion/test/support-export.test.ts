@@ -1,13 +1,15 @@
 import { mkdtemp, rm, symlink, writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
+import * as nativeProcesses from '../src/obs/native-process.js';
 import { readSupportLogs } from '../src/support/logs.js';
 import { BusinessJournal, BUSINESS_LOG_BYTES } from '../src/support/business-journal.js';
 import type { ReliableOutboxRecord } from '../src/output/reliable-outbox.js';
 const dirs: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 async function directory() {
@@ -24,6 +26,8 @@ const request = {
 
 describe('support export', () => {
   it('exports previous business sessions after restart without leaking private fields', async () => {
+    // Keep host process discovery deterministic while exercising real business log persistence and redaction.
+    vi.spyOn(nativeProcesses, 'readObsNativeProcesses').mockResolvedValue([]);
     const dir = await directory();
     const first = buildApp({ supportLogsDirectory: dir, gsiToken: 'PRIVATE-GSI-TOKEN' });
     await first.ready();
