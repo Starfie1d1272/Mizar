@@ -169,6 +169,7 @@ const networkCodes = new Set([
 function safeNetworkCode(error) {
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
   const code = error?.cause?.code || error?.code;
+  if (code === 'BOX_RESPONSE_LIMIT') return 'response_limit';
   return networkCodes.has(code) ? code : 'network';
 }
 function directoryCategory(path) {
@@ -197,28 +198,46 @@ async function boxStage(stage, action) {
 }
 async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
-  let response;
-  const readOnlyBox = (options.method ?? 'GET') === 'GET' && new URL(url).origin === origin;
+  const readOnlyBox =
+    ['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase()) &&
+    new URL(url).origin === origin;
+  const temporaryStatuses = new Set([408, 429, 500, 502, 503, 504]);
+  const retry = async (attempt, reason) => {
+    console.log(`Box 只读请求暂态失败（${reason}），${attempt + 1}s 后重试 ${attempt + 1}/2`);
+    await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
+  };
   for (let attempt = 0; ; attempt++) {
     const signal = AbortSignal.timeout(timeout);
+    let response;
     try {
       response = await transport(url, { ...options, signal });
-      break;
     } catch (error) {
       const code = safeNetworkCode(error);
-      if (readOnlyBox && code === 'UND_ERR_CONNECT_TIMEOUT' && !signal.aborted && attempt < 2) {
-        console.log(`Box 只读连接超时，${attempt + 1}s 后重试 ${attempt + 1}/2`);
-        await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
+      if (
+        readOnlyBox &&
+        (networkCodes.has(code) || (code === 'timeout' && signal.aborted)) &&
+        attempt < 2
+      ) {
+        await retry(attempt, code);
         continue;
       }
       throw new MirrorError(
-        `网络请求失败或超时（${code}，请求上限${timeout}ms）；保留现有文件，可重试同一版本`,
+        `网络请求失败或超时（${code}，每次请求上限${timeout}ms，已尝试${attempt + 1}次）；保留现有文件，可重试同一版本`,
       );
     }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      if (readOnlyBox && temporaryStatuses.has(response.status) && attempt < 2) {
+        await retry(attempt, `HTTP ${response.status}`);
+        continue;
+      }
+      throw new MirrorError(
+        `远端请求失败（HTTP ${response.status}，已尝试${attempt + 1}次）；保留现有文件`,
+        response.status,
+      );
+    }
+    return response;
   }
-  if (!response.ok)
-    throw new MirrorError(`远端请求失败（HTTP ${response.status}）；保留现有文件`, response.status);
-  return response;
 }
 
 export class BoxClient {
