@@ -169,6 +169,7 @@ const networkCodes = new Set([
 function safeNetworkCode(error) {
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
   const code = error?.cause?.code || error?.code;
+  if (code === 'BOX_RESPONSE_LIMIT') return 'response_limit';
   return networkCodes.has(code) ? code : 'network';
 }
 function directoryCategory(path) {

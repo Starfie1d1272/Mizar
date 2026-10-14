@@ -17,23 +17,47 @@ export async function apiRequest(url, options, request = httpsRequest) {
       url,
       { method: options.method ?? 'GET', headers, signal: options.signal },
       (incoming) => {
+        let locallyDestroyed = false;
+        incoming.on('error', reject);
+        incoming.on('close', () => {
+          if (!incoming.complete && !locallyDestroyed) {
+            reject(
+              options.signal.aborted
+                ? options.signal.reason
+                : Object.assign(new Error('Box API response interrupted'), { code: 'ECONNRESET' }),
+            );
+          }
+        });
+        const status = incoming.statusCode;
+        if (!Number.isInteger(status) || status < 200 || status > 599) {
+          locallyDestroyed = true;
+          reject(new Error('Box API response status invalid'));
+          incoming.destroy();
+          return;
+        }
+        if (status >= 300) {
+          locallyDestroyed = true;
+          resolve(new Response(null, { status }));
+          incoming.destroy();
+          return;
+        }
         const chunks = [];
         let size = 0;
         incoming.on('data', (chunk) => {
           size += chunk.length;
           if (size > 2 * 1024 * 1024) {
-            incoming.destroy(new Error('Box API response exceeds limit'));
+            locallyDestroyed = true;
+            const error = Object.assign(new Error('Box API response exceeds limit'), {
+              code: 'BOX_RESPONSE_LIMIT',
+            });
+            reject(error);
+            incoming.destroy(error);
             return;
           }
           chunks.push(chunk);
         });
-        incoming.on('error', reject);
-        incoming.on('aborted', () => reject(new Error('Box API response interrupted')));
         incoming.on('end', () => {
           try {
-            const status = incoming.statusCode;
-            if (!Number.isInteger(status) || status < 200 || status > 599)
-              throw new Error('Box API response status invalid');
             resolve(new Response(size ? Buffer.concat(chunks) : null, { status }));
           } catch (error) {
             reject(error);
@@ -65,22 +89,37 @@ export async function multipartUpload(url, options, request = httpsRequest) {
         },
       },
       (incoming) => {
+        incoming.on('error', reject);
+        const status = incoming.statusCode;
+        if (!Number.isInteger(status) || status < 200 || status > 599) {
+          reject(new Error('Box upload response status invalid'));
+          incoming.destroy();
+          return;
+        }
+        if (status >= 300) {
+          console.log(
+            `Box 上传响应 HTTP ${status}（${Math.round(performance.now() - started)}ms）`,
+          );
+          resolve(new Response(null, { status }));
+          incoming.destroy();
+          return;
+        }
         const chunks = [];
         let size = 0;
         incoming.on('data', (chunk) => {
           size += chunk.length;
           if (size > 65536) {
-            incoming.destroy(new Error('Box upload response exceeds limit'));
+            const error = Object.assign(new Error('Box upload response exceeds limit'), {
+              code: 'BOX_RESPONSE_LIMIT',
+            });
+            reject(error);
+            incoming.destroy(error);
             return;
           }
           chunks.push(chunk);
         });
-        incoming.on('error', reject);
         incoming.on('end', () => {
           try {
-            const status = incoming.statusCode;
-            if (!Number.isInteger(status) || status < 200 || status > 599)
-              throw new Error('Box upload response status invalid');
             const response = new Response(size ? Buffer.concat(chunks) : null, { status });
             console.log(
               `Box 上传响应 HTTP ${status}（${Math.round(performance.now() - started)}ms）`,
