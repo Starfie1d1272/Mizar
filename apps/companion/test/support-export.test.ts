@@ -26,7 +26,7 @@ const request = {
 
 describe('support export', () => {
   it('exports previous business sessions after restart without leaking private fields', async () => {
-    // Business log export owns real persistence and redaction; native process discovery has its own tests.
+    // Keep host process discovery deterministic while exercising real business log persistence and redaction.
     vi.spyOn(nativeProcesses, 'readObsNativeProcesses').mockResolvedValue([]);
     const dir = await directory();
     const first = buildApp({ supportLogsDirectory: dir, gsiToken: 'PRIVATE-GSI-TOKEN' });
