@@ -1,49 +1,23 @@
 name: Box Sync
+run-name: Read-only Box connection ABBA
 on:
-  workflow_run:
-    workflows: [Release Promotion]
-    types: [completed]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 正式版本标签（同步时必填，例如 v1.0.0）
-        type: string
-      mode:
-        description: 同步正式分发、只读验收用户入口，或恢复旧入口
-        type: choice
-        default: sync
-        options: [sync, probe, verify-downloads, rollback-downloads]
 permissions:
   contents: read
-  actions: read
 concurrency:
-  group: mizar-box-stable
+  group: mizar-box-readonly-connection-probe
   cancel-in-progress: false
 jobs:
-  sync:
-    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && github.event.workflow_run.event == 'workflow_dispatch'))
+  connection-probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: 同步与校验云盘
+      - name: Same-runner same-path read-only connection comparison
         env:
-          # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
           NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
-          GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
-        run: node scripts/qualification/box-sync.mjs
-      - name: Record complete qualification trigger through Box verification timing
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/qualification/release-timings.mjs box release-timings.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}
-          path: release-timings.json
-          retention-days: 7
+        run: node scripts/qualification/box-connection-probe.mjs
