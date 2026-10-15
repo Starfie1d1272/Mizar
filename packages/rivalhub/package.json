@@ -21,9 +21,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@mizar/testkit": "workspace:*",
     "@typescript/native": "catalog:",
-    "@types/node": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "catalog:"
   }
 }
