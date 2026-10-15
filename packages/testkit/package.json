@@ -24,7 +24,6 @@
     "@mizar/telemetry-gsi": "workspace:*"
   },
   "devDependencies": {
-    "@mizar/core": "workspace:*",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:"
   }
