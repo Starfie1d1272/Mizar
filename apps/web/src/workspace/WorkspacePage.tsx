@@ -1,3 +1,4 @@
+import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
@@ -294,6 +295,7 @@ export function WorkspaceLeft() {
           program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
+        <MusicControls compact />
       </div>
       <ObsConfidence />
     </main>

@@ -1,0 +1,31 @@
+.music-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+}
+.music-controls__track {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.music-controls--compact {
+  flex-wrap: nowrap;
+  min-width: 0;
+  padding: var(--mizar-layout-compact);
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.music-controls--compact .music-controls__track {
+  flex: 1;
+}
+.music-controls--compact .mizar-field {
+  flex: 0 0 calc(var(--mizar-layout-target) * 2);
+  min-width: 0;
+}
+.music-controls--compact input {
+  width: 100%;
+}
+.music-controls--compact .mizar-button {
+  flex-shrink: 0;
+}

@@ -1,3 +1,7 @@
+import { MusicStore } from './music/store.js';
+import { MusicDirector } from './music/director.js';
+import { ObsMusicProvider } from './music/obs-provider.js';
+import { registerMusicRoutes } from './music/routes.js';
 import { errorEvidence } from './updates/diagnostics.js';
 import {
   DemoTestController,
@@ -526,10 +530,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               'OBS request failed',
             ),
         );
+  let musicDirector: MusicDirector | undefined;
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
-    obsAdapter === undefined ? undefined : (id, options) => obsAdapter.switchScene(id, options),
+    obsAdapter === undefined
+      ? undefined
+      : (id, options) =>
+          obsAdapter.switchScene(id, {
+            ...options,
+            onStarted: () => {
+              if (id === 'matchup' && options.valid?.() !== false)
+                musicDirector?.opening(`opening:${sceneController.get().preparing?.revision}`);
+            },
+          }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
   );
   if (options.steamAvatars) {
@@ -827,9 +841,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     bpSession,
     () => production.get().mode !== 'preparation',
   );
+  if (obsConfigStore && options.obsConfigPath) {
+    const musicStore = new MusicStore(join(dirname(options.obsConfigPath), 'music'));
+    app.addHook('onReady', async () => {
+      await musicStore.load().catch(() => {
+        musicStore.failure = true;
+      });
+    });
+    musicDirector = new MusicDirector(musicStore, new ObsMusicProvider(obsConfigStore), () => ({
+      program: projectionCoordinator.getCurrent().program,
+      active: sceneController.get().active,
+      production:
+        production.get().mode !== 'preparation' &&
+        projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+    }));
+    registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
+  }
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());
+    void musicDirector?.tick();
   }, 100);
   directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
@@ -1234,6 +1265,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     clearInterval(directorTimer);
     presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();
+    await musicDirector?.close();
     await obsAdapter?.close();
     await Promise.all([
       cstvSources.program.stop(),

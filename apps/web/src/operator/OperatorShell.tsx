@@ -69,6 +69,7 @@ export function OperatorShell({
             [
               ['gsi', '游戏设置'],
               ['obs', 'OBS 连接'],
+              ['music', '节目音乐'],
               ['rivalhub', '赛事平台'],
               ['advanced', '高级设置'],
             ] as const
