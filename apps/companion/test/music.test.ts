@@ -601,3 +601,65 @@ it('cancels pending OBS unmute permission when a newer manual stop supersedes re
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
   expect(r.obs.restarts()).toBe(starts);
 });
+it('does not grant an older resume permission after a concurrent newer stop persists', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.command('stop');
+  r.obs.bgm().muted = true;
+  const starts = r.obs.restarts();
+  const resume = r.director.command('resume');
+  const stop = r.director.command('stop');
+  await Promise.all([resume, stop]);
+  await r.step();
+  expect(r.director.get().held).toBe(true);
+  expect(r.store.state.held).toBe(true);
+  expect(r.obs.bgm().muted).toBe(true);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('guards resume permission after playback persistence while keeping telemetry independent of commands', async () => {
+  for (const newerStop of [true, false]) {
+    const r = await rig();
+    await r.step();
+    await r.director.command('stop');
+    r.obs.bgm().muted = true;
+    const starts = r.obs.restarts();
+    const update = r.store.update.bind(r.store);
+    let writes = 0,
+      release!: () => void,
+      reached!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const preparing = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    r.store.update = async (change) => {
+      const write = ++writes;
+      await update(change);
+      if (write === 2) {
+        reached();
+        await blocked;
+      }
+    };
+    const resume = r.director.command('resume');
+    await preparing;
+    if (newerStop) await r.director.command('stop');
+    else {
+      r.truth.active = 'gameplay';
+      r.truth.program.map.phase = 'live';
+      r.truth.program.map.score = { ct: 2, t: 3 };
+      r.truth.program.clock = { phase: 'timeout_ct', endsInSeconds: 44 };
+      await r.step();
+    }
+    expect(r.obs.bgm().muted).toBe(true);
+    expect(r.obs.restarts()).toBe(starts);
+    release();
+    await resume;
+    await r.step();
+    expect(r.director.get().held).toBe(newerStop);
+    expect(r.store.state.held).toBe(newerStop);
+    expect(r.obs.bgm().muted).toBe(newerStop);
+    expect(r.obs.restarts()).toBe(starts + (newerStop ? 0 : 1));
+    if (!newerStop) expect(r.director.get().bgm?.group).toBe('tactical');
+  }
+});

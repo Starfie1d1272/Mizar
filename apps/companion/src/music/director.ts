@@ -27,6 +27,7 @@ interface Fade {
 }
 export class MusicDirector {
   private generation = 0;
+  private commandRevision = 0;
   private desiredKey = '';
   private inFlight = false;
   private closed = false;
@@ -66,31 +67,48 @@ export class MusicDirector {
     this.desiredKey = '';
   }
   async command(action: 'stop' | 'resume' | 'next') {
-    this.invalidate(); // Cancel obsolete starts/fades before waiting for persistence.
+    if (this.closed) return;
+    const revision = ++this.commandRevision;
+    const current = () => !this.closed && revision === this.commandRevision;
+    this.invalidate(); // Cancel playback work; command validity is independent of telemetry changes.
     this.fades = {};
     this.pendingOpening = null;
     this.resumeLayers.clear();
+    this.nextRequested = false;
     let persistenceError: unknown;
     if (action !== 'next') {
-      this.heldOverride = action === 'stop';
+      // Resume stays quiet until both persistence steps confirm this is still the newest command.
+      this.heldOverride = true;
       try {
         await this.store.hold(action === 'stop');
+        if (!current()) return;
+        if (action === 'resume') {
+          await this.store.update((s) => {
+            if (current() && s.bgm && !s.bgm.finished) s.bgm.suspended = true;
+          });
+          if (!current()) return;
+          this.resumeLayers = new Set(
+            (['bgm', 'stinger'] as const).filter(
+              (layer) => this.store.state.sources[layer] !== null,
+            ),
+          );
+          this.failed.clear();
+          this.appliedVolumes.clear();
+          this.heldOverride = false;
+        }
       } catch (error) {
+        if (!current()) return;
         this.heldOverride = true;
         persistenceError = error;
+        if (action === 'resume') {
+          await this.store.hold(true).catch(() => undefined);
+          if (!current()) return;
+        }
       }
     } else if (!this.isHeld()) this.nextRequested = true;
-    if (action === 'resume') {
-      this.resumeLayers = new Set(
-        (['bgm', 'stinger'] as const).filter((layer) => this.store.state.sources[layer] !== null),
-      );
-      this.failed.clear();
-      this.appliedVolumes.clear();
-      await this.store.update((s) => {
-        if (s.bgm && !s.bgm.finished) s.bgm.suspended = true;
-      });
-    }
+    if (!current()) return;
     await this.tick();
+    if (!current()) return;
     if (persistenceError)
       throw new Error('music_hold_persistence_failed', { cause: persistenceError });
   }
@@ -284,6 +302,7 @@ export class MusicDirector {
     );
   }
   private async holdForObsControl() {
+    this.commandRevision++;
     this.heldOverride = true;
     this.pendingOpening = null;
     this.fades = {};
@@ -641,6 +660,7 @@ export class MusicDirector {
     return fade.stop && progress < 1;
   }
   async close() {
+    this.commandRevision++;
     this.closed = true;
     this.invalidate();
     // Wait only for the bounded active RPC, then stop owned sources without changing manual hold.
