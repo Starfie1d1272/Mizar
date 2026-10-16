@@ -70,7 +70,7 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
       )
     )
       return { group: 'mapVictory', key: `mapVictory:${map}` };
-    return null;
+    return active === 'waiting' || active === 'bp' ? waiting : null;
   }
   // The same halftime survives paused -> freezetime until actual gameplay is due.
   const halftime =

@@ -167,6 +167,14 @@ export class MusicDirector {
         });
       let cue = musicCue(truth, this.store.state.pause?.id ?? null);
       const current = this.store.state.bgm;
+      if (
+        cue?.group === 'waiting' &&
+        truth.program.map.phase === 'gameover' &&
+        current?.group === 'mapVictory' &&
+        !current.finished &&
+        current.key === `mapVictory:${map}`
+      )
+        cue = { group: current.group, key: current.key };
       if (cue?.group === 'mapVictory' && truth.active === 'intermap' && current?.key !== cue.key)
         cue = { group: 'waiting', key: `waiting:${truth.program.match!.matchId}` };
       // Labels inside one pause do not create a new theme or restart its media.

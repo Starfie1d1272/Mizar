@@ -241,6 +241,13 @@ it('finishes map victory naturally into waiting, preempts it for live play, and 
   await r.step();
   await r.step();
   expect(r.director.get().bgm?.group).toBe('waiting');
+  const waitingStarts = r.obs.restarts();
+  for (const active of ['waiting', 'bp', 'intermap'] as const) {
+    r.truth.active = active;
+    await r.step();
+    expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  }
+  expect(r.obs.restarts()).toBe(waitingStarts);
   r.truth.program.map.phase = 'live';
   await r.step();
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
