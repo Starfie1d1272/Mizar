@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --pretty false",
-    "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
+    "typecheck": "tsc -p tsconfig.json --noEmit --tsBuildInfoFile ./tsconfig.typecheck.tsbuildinfo --pretty false"
   },
   "dependencies": {
     "@mizar/replay": "workspace:*",
