@@ -12,6 +12,8 @@ import type { MatchContextBinding } from '../src/match-context/index.js';
 import { hasLineupMismatchOnly } from '../src/output/lineup-mismatch.js';
 import { projectLiveSnapshotV1 } from '../src/output/projector.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { readBusinessHistory, BUSINESS_HISTORY_FILE } from '../src/support/business-history.js';
+import { failedObsNativeEvidence } from '../src/obs/native-evidence.js';
 import { OutputService } from '../src/output/service.js';
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
@@ -147,6 +149,7 @@ it('wires restart recovery through production app composition and GSI ingress', 
     };
   };
   const appA = buildApp({
+    supportLogsDirectory: directory,
     producerInstanceId: 'app-A',
     gsiToken: 'test-gsi-token',
     matchContextBinding: binding,
@@ -156,6 +159,32 @@ it('wires restart recovery through production app composition and GSI ingress', 
     expect(
       (await appA.inject({ method: 'POST', url: '/gsi', payload: frame('live') })).statusCode,
     ).toBe(204);
+    const incomplete = frame('live');
+    await appA.inject({ method: 'POST', url: '/gsi', payload: { ...incomplete, map: undefined } });
+    const missingMap = readBusinessHistory(directory)
+      .groups.flatMap((g) => g.events)
+      .find(
+        (e) =>
+          e.stage === 'business_runtime' &&
+          e.evidence.coverage.map === 'absent' &&
+          e.evidence.observed.length === 10,
+      );
+    expect(missingMap?.evidence.expected.filter((p) => p.isStarter)).toHaveLength(10);
+    expect(missingMap?.evidence.missing).toEqual([]);
+    expect(missingMap?.evidence.extra).toEqual([]);
+    // An actual lineup contradiction is independently visible from incomplete map telemetry.
+    const different = frame('live');
+    const originalId = Object.keys(different.allplayers)[0]!;
+    const player = different.allplayers[originalId]!;
+    delete different.allplayers[originalId];
+    different.allplayers['76561199999999999'] = { ...player, steamid: '76561199999999999' };
+    await appA.inject({ method: 'POST', url: '/gsi', payload: different });
+    const mismatch = readBusinessHistory(directory)
+      .groups.flatMap((g) => g.events)
+      .find((e) => e.evidence.extra.includes('76561199999999999'));
+    expect(mismatch?.evidence.missing).toContain(originalId);
+    expect(mismatch?.evidence.issues).toContain('unexpected_human_steam64');
+    await appA.inject({ method: 'POST', url: '/gsi', payload: frame('live') });
     expect(
       (await appA.inject({ method: 'POST', url: '/gsi', payload: frame('gameover') })).statusCode,
     ).toBe(204);
@@ -168,6 +197,11 @@ it('wires restart recovery through production app composition and GSI ingress', 
   expect(event.cursor.producerInstanceId).toBe('app-A');
   const send = vi.fn(() => Promise.resolve('accepted' as const));
   const appB = buildApp({
+    supportLogsDirectory: directory,
+    readObsCaptureEvidence: () =>
+      Promise.resolve(
+        failedObsNativeEvidence(new Error('synthetic native collection unavailable')),
+      ),
     producerInstanceId: 'app-B',
     gsiToken: 'test-gsi-token',
     matchContextBinding: binding,
@@ -177,6 +211,60 @@ it('wires restart recovery through production app composition and GSI ingress', 
   try {
     await appB.ready();
     expect(send).not.toHaveBeenCalled();
+    expect(
+      readBusinessHistory(directory)
+        .groups.flatMap((g) => g.events)
+        .some(
+          (e) =>
+            e.stage === 'business_guard' && e.evidence.blockers.includes('telemetry_not_fresh'),
+        ),
+    ).toBe(true);
+    const restoredHistory = readBusinessHistory(directory)
+      .groups.flatMap((g) => g.events)
+      .filter((e) => e.evidence.idempotencyKey === event.idempotencyKey);
+    expect(
+      restoredHistory.some(
+        (e) =>
+          e.evidence.reason === 'restored' &&
+          e.evidence.producerInstanceId === 'app-A' &&
+          e.evidence.originalObservedAt === event.observedAt,
+      ),
+    ).toBe(true);
+    expect(
+      restoredHistory.every(
+        (e) =>
+          e.evidence.matchId === binding.context.matchId &&
+          e.evidence.liveSessionId === event.cursor.liveSessionId,
+      ),
+    ).toBe(true);
+    expect(
+      restoredHistory.find((e) => e.evidence.reason === 'restored')?.evidence.sentAt,
+    ).toBeNull();
+    for (let i = 0; i < 2; i++) {
+      const response = await appB.inject({
+        method: 'POST',
+        url: '/debug/support-bundle',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(200);
+      const exported = response.json<{ businessHistory: ReturnType<typeof readBusinessHistory> }>()
+        .businessHistory;
+      expect(
+        exported.groups
+          .flatMap((g) => g.events)
+          .some(
+            (e) =>
+              e.evidence.idempotencyKey === event.idempotencyKey &&
+              e.evidence.originalObservedAt === event.observedAt &&
+              e.evidence.matchId === event.matchId,
+          ),
+      ).toBe(true);
+    }
+    expect(await readFile(join(directory, BUSINESS_HISTORY_FILE), 'utf8')).not.toContain(
+      'test-gsi-token',
+    );
+
     expect(
       (await appB.inject({ method: 'POST', url: '/gsi', payload: frame('gameover') })).statusCode,
     ).toBe(204);

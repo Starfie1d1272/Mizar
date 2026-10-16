@@ -329,7 +329,7 @@ function outboxErrorEvidence(value: unknown, depth = 0): unknown {
 }
 
 /** Project known events; exception evidence is explicitly redacted and bounded. */
-function projectEvent(entry: Record<string, unknown>, session: string | null, salt = '') {
+function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const recorder = entry.event === 'recorder' && entry.stage === 'recorder_failure';
   const business =
     entry.event === 'business' &&
@@ -403,7 +403,7 @@ function projectEvent(entry: Record<string, unknown>, session: string | null, sa
           },
         }
       : {}),
-    ...(business ? { business: businessEvidence(entry.evidence, salt) } : {}),
+    ...(business ? { business: businessEvidence(entry.evidence) } : {}),
     ...(demo || stage === 'demo_test'
       ? {
           demoCode: identifier(demoEvidence.code),
@@ -569,7 +569,7 @@ async function readLog(directory: string, name: string, salt: string) {
           typeof currentSession === 'string' && currentSession.length <= 128
             ? createHash('sha256').update(salt).update(currentSession).digest('hex').slice(0, 24)
             : null;
-        return projectEvent(entry, session, salt);
+        return projectEvent(entry, session);
       })
       .filter((event) => event !== null);
     // Page navigation is context, not a reason to evict an earlier failure.

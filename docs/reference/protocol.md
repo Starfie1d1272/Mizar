@@ -218,3 +218,7 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对网站首发。Mizar 仅在授权的在线本场资料新鲜、合法当前地图绑定、新鲜当前十名唯一真人且 CT/T 各五人、两方均有当前登记账号证明并与队伍阵营一致时发出。实际账号与预期首发或替补不同是唯一身份问题；资料缺项、重复账号、队伍归属歧义、阵营冲突、错图及过期输入不能获得例外。
 
 公开快照的 `capability.lineupMismatchOnly` 与可靠事件的 `evidence.lineupMismatchOnly` 为可选布尔值，缺失按 false；仅上述证明成立才发 true。允许 `identity=degraded` 的可靠开局与现场比分／遥测展示；LIVE 仍等待同一授权、生产者、会话、代际与地图执行的可靠开局确认。未匹配账号保留 `canonicalPlayerId=null` 与 `identityEvidence=observed`，不按昵称映射登记选手。带上述展示标记的 `map_ended` 仅表达观察到的结束与 CT/T、A/B 候选比分；Mizar 系列状态记录已观察结束但不冻结正式比分或胜者、不增加系列胜场，随后才允许相邻计划图。结束观察、epoch／generation 变化及下一图开局继续经可靠通道与当前授权校验；缺少结束观察不能跳图。正式赛果可靠发送继续需要完整身份匹配，展示结束不授权正式赛果；网站带差异认领记录名单冲突并关闭自动赛果写入。两端协同支持此可选语义后使用，不修改首发或平台生产库。
+
+### 本机诊断历史
+
+`POST /debug/support-bundle` 继续只允许本机受信任 Origin，保留 `mizar-support-bundle/1` 容器；新增 `businessHistory` 附件及其独立 manifest。业务 ID 与诊断名单 Steam64 跨重启和导出保留原值，仅用于使用者明确保存的排障包，不进入新的公开接口，也不自动上传。字段白名单、容量、完整性与旧日志兼容规则见[架构](architecture.md)。

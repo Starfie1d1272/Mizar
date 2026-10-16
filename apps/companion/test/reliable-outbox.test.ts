@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { BusinessJournal } from '../src/support/business-journal.js';
-import { readSupportLogs } from '../src/support/logs.js';
+import { readBusinessHistory } from '../src/support/business-history.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
@@ -61,6 +61,7 @@ describe('bounded reliable output', () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-'));
     try {
       const path = join(dir, 'outbox.json');
+      vi.stubEnv('MIZAR_APP_VERSION', '1.3.4');
       const journal = new BusinessJournal(dir, () => {});
       const first = new ReliableOutbox(path, undefined, (record, reason) =>
         journal.reliable(record, reason),
@@ -91,10 +92,13 @@ describe('bounded reliable output', () => {
         },
       });
       expect(first.getRecords()[0]).toMatchObject({ status: 'pending', attempts: 1 });
+      vi.stubEnv('MIZAR_APP_VERSION', '1.3.5');
+      const restartedJournal = new BusinessJournal(dir, () => {});
       const recovered = new ReliableOutbox(path, undefined, (record, reason) =>
-        journal.reliable(record, reason),
+        restartedJournal.reliable(record, reason),
       );
       await recovered.load();
+      for (const record of recovered.getRecords()) restartedJournal.reliable(record, 'restored');
       await recovered.flush({
         now: new Date('2026-09-28T00:00:00.500Z'),
         isCurrent: () => true,
@@ -117,16 +121,25 @@ describe('bounded reliable output', () => {
         },
       });
       expect(calls).toBe(2);
-      const history = (await readSupportLogs(dir))
-        .find((log) => log.name === 'business.ndjson')!
-        .events.filter((entry) => entry.stage === 'business_delivery');
-      expect(history.map((entry) => entry.business?.reason)).toEqual([
+      const history = readBusinessHistory(dir)
+        .groups.flatMap((g) => g.events)
+        .filter((entry) => entry.stage === 'business_delivery');
+      expect(history.map((entry) => entry.evidence.reason)).toEqual([
         'queued',
         'send_guard_blocked',
         'retry_unknown',
+        'restored',
         'receiver_accepted',
       ]);
-      expect(history.at(-1)?.business).toMatchObject({
+      expect(history.find((e) => e.evidence.reason === 'restored')?.evidence).toMatchObject({
+        generatedVersion: '1.3.4',
+        restoredVersion: '1.3.5',
+        originalObservedAt: '2026-09-28T00:00:00.000Z',
+        sentAt: null,
+        acknowledgedAt: null,
+      });
+      expect(history.at(-1)?.evidence).toMatchObject({
+        generatedVersion: '1.3.4',
         status: 'accepted',
         attempts: 2,
         mapEpoch: 3,
@@ -139,9 +152,10 @@ describe('bounded reliable output', () => {
         isCurrent: () => true,
         sink: { send: () => Promise.resolve('rejected' as const) },
       });
-      const rejection = (await readSupportLogs(dir))
-        .find((log) => log.name === 'business.ndjson')!
-        .events.at(-1)?.business;
+      const rejection = readBusinessHistory(dir)
+        .groups.flatMap((g) => g.events)
+        .filter((e) => e.stage === 'business_delivery')
+        .at(-1)?.evidence;
       expect(rejection).toMatchObject({
         status: 'rejected',
         attempts: 1,
@@ -149,6 +163,7 @@ describe('bounded reliable output', () => {
       });
       expect(recovered.getRecords()[0]?.status).toBe('accepted');
     } finally {
+      vi.unstubAllEnvs();
       await rm(dir, { recursive: true, force: true });
     }
   });
