@@ -278,6 +278,8 @@ it('recovers the complete terminal enqueue from the real runtime, projection and
   });
   let restored: OutputService | undefined;
   try {
+    // Keep periodic delivery under test control while durable file I/O remains real.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     await service.start();
     service.setCurrent(coordinator.getCurrent(), binding);
     for (const [seq, phase] of [
@@ -297,8 +299,14 @@ it('recovers the complete terminal enqueue from the real runtime, projection and
     expect(terminal.map((r) => r.event.kind)).toEqual(['map_ended', 'series_ended']);
     await service.close();
     const damaged = JSON.parse(await readFile(path, 'utf8')) as {
-      records: { event: { kind: string }; status: unknown }[];
+      records: { event: { kind: string }; status: unknown; attempts: unknown }[];
     };
+    expect(
+      damaged.records.filter((r) => ['map_ended', 'series_ended'].includes(r.event.kind)),
+    ).toMatchObject([
+      { event: { kind: 'map_ended' }, status: 'pending', attempts: 0 },
+      { event: { kind: 'series_ended' }, status: 'pending', attempts: 0 },
+    ]);
     damaged.records.find((r) => r.event.kind === 'series_ended')!.status = ['pending'];
     await writeFile(path, JSON.stringify(damaged));
     const recovered = new ReliableOutbox(path);
@@ -325,10 +333,14 @@ it('recovers the complete terminal enqueue from the real runtime, projection and
     await restored.retry();
     expect(sent).toHaveLength(2);
   } finally {
-    await restored?.close();
-    await service.close();
-    await coordinator.close();
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await restored?.close();
+      await service.close();
+      await coordinator.close();
+      await rm(dir, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
   }
 });
 
