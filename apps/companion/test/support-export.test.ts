@@ -109,7 +109,15 @@ describe('support export', () => {
 
   it('reserves fault history from ordinary noise, bounds per-match/global retention and reports omissions', async () => {
     const dir = await directory();
+    await writeFile(join(dir, BUSINESS_HISTORY_FILE + '.tmp'), 'interrupted-uncommitted-CANARY');
     const journal = new BusinessJournal(dir, () => {});
+    expect(readBusinessHistory(dir).manifest.abandonedStagingFiles).toBe(1);
+    await expect(stat(join(dir, BUSINESS_HISTORY_FILE + '.tmp'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readFile(join(dir, BUSINESS_HISTORY_FILE), 'utf8')).not.toContain(
+      'interrupted-uncommitted-CANARY',
+    );
     journal.write('business_claim', {
       matchId: 'match-one',
       liveSessionId: 'session-one',

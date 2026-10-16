@@ -26,6 +26,8 @@ export const BUSINESS_HISTORY_LIMITS = {
   groups: 16,
   groupBytes: 512 * 1024,
   totalBytes: 8 * 1024 * 1024,
+  stagingBytes: 8 * 1024 * 1024,
+  peakDiskBytes: 16 * 1024 * 1024,
   contextBytes: 128 * 1024,
   exportBytes: 512 * 1024,
 };
@@ -59,6 +61,7 @@ type Archive = {
   evictedGroups: number;
   evictedEvents: number;
   writeFailures: number;
+  abandonedStagingFiles: number;
   groups: Group[];
 };
 const obj = (v: unknown): Record<string, unknown> =>
@@ -70,6 +73,7 @@ const empty = (): Archive => ({
   evictedGroups: 0,
   evictedEvents: 0,
   writeFailures: 0,
+  abandonedStagingFiles: 0,
   groups: [],
 });
 const failure = (e: Entry) =>
@@ -118,6 +122,7 @@ function load(directory: string): { status: string; archive: Archive; corruptRec
     archive.evictedGroups = count(raw.evictedGroups);
     archive.evictedEvents = count(raw.evictedEvents);
     archive.writeFailures = count(raw.writeFailures);
+    archive.abandonedStagingFiles = count(raw.abandonedStagingFiles);
     let corruptRecords = 0;
     for (const value of raw.groups) {
       const g = obj(value);
@@ -259,8 +264,17 @@ export class BusinessHistory {
         this.archive.evictedEvents += oldest.events.length + oldest.rotatedEvents;
       }
       mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-      const temporary = join(this.directory, `${BUSINESS_HISTORY_FILE}.${this.session}.tmp`);
+      const temporary = join(this.directory, `${BUSINESS_HISTORY_FILE}.tmp`);
       try {
+        try {
+          const stale = lstatSync(temporary);
+          if (!stale.isFile() || stale.isSymbolicLink()) throw new Error('invalid_staging_file');
+          // One fixed staging slot bounds crash residue. Never import uncommitted bytes.
+          unlinkSync(temporary);
+          this.archive.abandonedStagingFiles++;
+        } catch (error) {
+          if (obj(error).code !== 'ENOENT') throw error;
+        }
         const handle = openSync(
           temporary,
           constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
@@ -348,6 +362,7 @@ export function readBusinessHistory(
       rotatedGroups: archive.evictedGroups,
       rotatedEvents: archive.evictedEvents + groups.reduce((n, g) => n + g.rotatedEvents, 0),
       writeFailures: archive.writeFailures,
+      abandonedStagingFiles: archive.abandonedStagingFiles,
       completeness: 'bounded_observations_only',
       legacy: 'legacy_refs_are_irreversible; historical_missing_fields_were_not_collected',
       attemptsMeaning: 'outbox_sink_invocations_including_local_rejections; not_HTTP_requests',
