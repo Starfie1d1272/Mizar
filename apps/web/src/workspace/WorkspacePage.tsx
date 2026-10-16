@@ -35,6 +35,7 @@ import {
 import { Button, StatusPill, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { LiveRosterAlert } from './LiveRosterAlert';
+import { SyncHealthAlert, type SyncHealth } from './SyncHealthAlert';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
 import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
@@ -71,7 +72,7 @@ function ContextPanel({
   const document = useLocalRead<ContextEnvelope<MatchDocumentV1>>(
     operator?.matchContext.rosterAuthority === 'rivalhub' ? '/local/v1/match-document' : null,
   );
-  const connection = useLocalRead<LiveRosterConnection>(
+  const connection = useLocalRead<LiveRosterConnection & { syncHealth?: SyncHealth }>(
     operator?.matchContext.rosterAuthority === 'rivalhub' ? '/local/v1/rivalhub-connection' : null,
     3000,
   );
@@ -129,8 +130,16 @@ function ContextPanel({
         </small>
       )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
+      <SyncHealthAlert
+        health={connection?.syncHealth}
+        isSource={Boolean(
+          connection?.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
+        )}
+        onOpen={openPreparation}
+      />
       <LiveRosterAlert
         alert={rosterAlert}
+        suppressAutomatic={connection?.syncHealth?.status === 'attention'}
         recovered={
           operator?.runtime.telemetryFreshness === 'fresh' &&
           operator.identity.state === 'matched' &&

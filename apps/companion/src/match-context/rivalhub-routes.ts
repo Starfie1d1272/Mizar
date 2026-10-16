@@ -140,6 +140,8 @@ export function registerRivalHubConnectionRoutes(
       ).size === 10
     );
   };
+  const syncExpected = () => Boolean(linkedBinding() && (!options.canClaim || options.canClaim()));
+  let sourceCommand: Promise<unknown> | null = null;
   app.post('/operator/rivalhub/refresh', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -154,7 +156,16 @@ export function registerRivalHubConnectionRoutes(
   app.get('/local/v1/rivalhub-connection', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       ...options.connection.view(),
+      syncHealth: options.connection.syncHealth(
+        options.currentSnapshot(),
+        syncExpected(),
+        linkedBinding()?.context.matchId ?? null,
+      ),
       activeMatchId: linkedBinding()?.context.matchId ?? null,
+      activeDeviceName:
+        options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
+          ? options.connection.view().activeDeviceName
+          : null,
       sourceReady: Boolean(
         linkedBinding()?.origin === 'online' &&
         (!options.canClaim || options.canClaim()) &&
@@ -270,31 +281,75 @@ export function registerRivalHubConnectionRoutes(
       !binding ||
       binding.origin !== 'online' ||
       !snapshot ||
-      snapshot.matchId !== binding.context.matchId
+      snapshot.matchId !== binding.context.matchId ||
+      !observedLineupReady()
     )
       return reply.code(409).send({ message: '请先在工作区加载赛事比赛。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
-      return await options.connection.claim(
+      sourceCommand = options.connection.claim(
         snapshot,
         binding.manifest.revision,
         (request.body as { takeover?: boolean } | null)?.takeover === true,
       );
+      return await sourceCommand;
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply
         .code(409)
         .send({ message: error instanceof Error ? error.message : '数据源切换未完成。' });
+    } finally {
+      sourceCommand = null;
     }
+  });
+  app.post('/operator/rivalhub/source/retry', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const view = options.connection.view();
+    const snapshot = options.currentSnapshot();
+    const binding = linkedBinding();
+    if (binding?.origin !== 'online' || snapshot?.matchId !== binding.context.matchId)
+      return reply.code(409).send({ message: '请刷新比赛资料并确认加载网站版本后重试。' });
+    if (
+      !syncExpected() ||
+      !snapshot ||
+      view.stoppedMatchId === snapshot.matchId ||
+      view.activeDeviceName ||
+      view.activeSourceMatchId !== snapshot.matchId
+    )
+      return reply.code(409).send({ message: '请先明确认领本场数据源。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+    if (!options.connection.hasCurrentStart(snapshot)) {
+      if (!observedLineupReady())
+        return reply.code(409).send({ message: '请刷新比赛资料并等待当前十人首发后重试。' });
+      try {
+        sourceCommand = options.connection.claim(snapshot, binding.manifest.revision, false);
+        await sourceCommand;
+      } catch (error) {
+        return reply
+          .code(409)
+          .send({ message: error instanceof Error ? error.message : '重试未完成。' });
+      } finally {
+        sourceCommand = null;
+      }
+    }
+    options.connection.retryLive();
+    return { ok: true, message: '已请求重试；等待当前比赛的新数据确认网站接收。' };
   });
   app.post('/operator/rivalhub/source/release', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
-      await options.connection.release();
+      options.connection.stopSync(linkedBinding()?.context.matchId ?? null);
+      sourceCommand = options.connection.release();
+      await sourceCommand;
       return options.connection.view();
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply.code(502).send({ message: '数据源停止未确认，请稍后再试。' });
+    } finally {
+      sourceCommand = null;
     }
   });
 }
