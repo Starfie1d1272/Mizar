@@ -203,8 +203,23 @@ it('repairs only Mizar collection, browser sources and order, then is idempotent
     'url_drift',
   );
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
-  await switchObsScene(obs, 'gameplay');
+  const onStarted = vi.fn(),
+    onCompleted = vi.fn();
+  await switchObsScene(obs, 'gameplay', {
+    transition: { kind: 'cut', durationMs: 0 },
+    onStarted,
+    onCompleted,
+  });
   expect(obs.calls.at(-1)).toBe('GetCurrentProgramScene');
+  expect(onStarted).toHaveBeenCalledOnce();
+  expect(onCompleted).toHaveBeenCalledOnce();
+  await switchObsScene(obs, 'gameplay', {
+    transition: { kind: 'cut', durationMs: 0 },
+    onStarted,
+    onCompleted,
+  });
+  expect(onStarted).toHaveBeenCalledOnce();
+  expect(onCompleted).toHaveBeenCalledOnce();
 });
 
 it('refuses collection mutations during output and protects user source names', async () => {

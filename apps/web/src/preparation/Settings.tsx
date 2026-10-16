@@ -1,3 +1,4 @@
+import { MusicSettings } from '../music/MusicSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ObsCaptureGuidance } from '../workspace/ObsCaptureGuidance';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
@@ -219,6 +220,8 @@ export function Settings({ tab }: { tab: string }) {
       </Button>
     </details>
   ) : null;
+  if (tab === 'music') return <MusicSettings />;
+
   return (
     <>
       {tab === 'rivalhub' ? (

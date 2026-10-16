@@ -65,6 +65,10 @@
     "./obs": {
       "types": "./dist/obs.d.ts",
       "import": "./dist/obs.js"
+    },
+    "./music": {
+      "types": "./dist/music.d.ts",
+      "import": "./dist/music.js"
     }
   },
   "scripts": {

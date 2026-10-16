@@ -17,6 +17,8 @@ export class ObsExitSafetyError extends Error {}
 
 export interface ObsSceneSwitchOptions {
   readonly transition: ProgramTransition;
+  readonly onStarted?: () => void;
+  readonly onCompleted?: () => void;
   readonly signal?: AbortSignal;
   readonly valid?: () => boolean;
 }
@@ -496,6 +498,7 @@ export async function switchObsScene(
     }
     await obs.call('SetCurrentProgramScene', { sceneName: name });
     assertCurrent();
+    options.onStarted?.();
     if (finished) {
       await Promise.race([
         finished,
@@ -507,6 +510,7 @@ export async function switchObsScene(
     assertCurrent();
     const current = await obs.call('GetCurrentProgramScene');
     if (current.currentProgramSceneName !== name) throw new Error('OBS 未切入目标场景。');
+    options.onCompleted?.();
   } finally {
     unsubscribe?.();
     if (timer) clearTimeout(timer);

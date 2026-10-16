@@ -44,6 +44,7 @@ const tabs = {
   '/settings': [
     ['gsi', 'CS2 与 GSI'],
     ['obs', 'OBS'],
+    ['music', '节目音乐'],
     ['rivalhub', 'RivalHub'],
     ['advanced', '高级'],
   ],
@@ -187,6 +188,7 @@ export function PreparationPage() {
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
+    music: '节目音乐',
     rivalhub: '赛事平台',
     advanced: '高级设置',
   };
