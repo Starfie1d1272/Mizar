@@ -478,3 +478,95 @@ it('fades incrementally without blocking an urgent stop and restores only system
   await r.step();
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
 });
+
+const obsManualControls = [
+  {
+    name: 'stop',
+    apply: (input: ReturnType<MediaObs['bgm']>) => {
+      input.state = 'OBS_MEDIA_STATE_STOPPED';
+    },
+  },
+  {
+    name: 'pause',
+    apply: (input: ReturnType<MediaObs['bgm']>) => {
+      input.state = 'OBS_MEDIA_STATE_PAUSED';
+    },
+  },
+  {
+    name: 'mute',
+    apply: (input: ReturnType<MediaObs['bgm']>) => {
+      input.muted = true;
+    },
+  },
+  {
+    name: 'volume',
+    apply: (input: ReturnType<MediaObs['bgm']>) => {
+      input.volume = 0.2;
+    },
+  },
+];
+it('observes OBS manual control before replacing waiting with a tactical cue', async () => {
+  for (const layer of ['bgm', 'stinger'] as const)
+    for (const control of obsManualControls) {
+      const r = await rig();
+      await r.step();
+      if (layer === 'stinger') {
+        r.director.opening('take-manual');
+        await r.step();
+      }
+      const input =
+        layer === 'bgm'
+          ? r.obs.bgm()
+          : [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+      control.apply(input);
+      const label = `${layer}:${control.name}`,
+        starts = r.obs.restarts();
+      r.truth.active = 'gameplay';
+      r.truth.program.map.phase = 'live';
+      r.truth.program.map.score = { ct: 2, t: 3 };
+      r.truth.program.clock = { phase: 'timeout_ct', endsInSeconds: 44 };
+      await r.step();
+      expect(r.director.get().held, label).toBe(true);
+      expect(r.store.state.held, label).toBe(true);
+      expect(r.obs.restarts(), label).toBe(starts);
+      await r.step();
+      for (const source of r.obs.inputs.values())
+        expect(source.state, label).toBe('OBS_MEDIA_STATE_STOPPED');
+      await r.director.command('resume');
+      expect(r.director.get().held, label).toBe(false);
+      expect(r.director.get().bgm?.group, label).toBe('tactical');
+      expect(r.obs.restarts(), label).toBe(starts + 1);
+    }
+});
+it('observes OBS manual control before stale telemetry can record a system suspension', async () => {
+  for (const layer of ['bgm', 'stinger'] as const)
+    for (const control of obsManualControls) {
+      const r = await rig();
+      await r.step();
+      if (layer === 'stinger') {
+        r.director.opening('take-manual');
+        await r.step();
+      }
+      const input =
+        layer === 'bgm'
+          ? r.obs.bgm()
+          : [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+      control.apply(input);
+      const label = `${layer}:${control.name}`,
+        starts = r.obs.restarts();
+      r.truth.program.status.telemetry = 'stale';
+      await r.step();
+      expect(r.director.get().held, label).toBe(true);
+      r.truth.program.status.telemetry = 'fresh';
+      await r.step();
+      expect(r.obs.restarts(), label).toBe(starts);
+      const restored = new MusicStore(r.directory);
+      await restored.load();
+      expect(restored.state.held, label).toBe(true);
+      const next = new MusicDirector(restored, r.provider, () => r.truth);
+      await next.tick();
+      expect(r.obs.restarts(), label).toBe(starts);
+      for (const source of r.obs.inputs.values())
+        expect(source.state, label).toBe('OBS_MEDIA_STATE_STOPPED');
+    }
+});

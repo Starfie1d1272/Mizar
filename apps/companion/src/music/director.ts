@@ -33,6 +33,7 @@ export class MusicDirector {
   private heldOverride: boolean | null = null;
   private pendingOpening: { key: string; expires: number } | null = null;
   private fades: Partial<Record<MusicLayer, Fade>> = {};
+  private expectedStops = new Map<MusicLayer, string>();
   private appliedVolumes = new Map<MusicLayer, number>();
   private config = '';
   private failed = new Map<string, Set<string>>();
@@ -79,7 +80,9 @@ export class MusicDirector {
       }
     } else if (!this.isHeld()) this.nextRequested = true;
     if (action === 'resume') {
-      this.resumeLayers = new Set(['bgm', 'stinger']);
+      this.resumeLayers = new Set(
+        (['bgm', 'stinger'] as const).filter((layer) => this.store.state.sources[layer] !== null),
+      );
       this.failed.clear();
       this.appliedVolumes.clear();
       await this.store.update((s) => {
@@ -208,6 +211,8 @@ export class MusicDirector {
         this.epoch = epoch;
         this.status.connection = 'connected';
         this.status.message = null;
+        // Observe both existing layers before changing a cue or attributing a stop to the system.
+        if (await this.observeManualControls(obs, valid)) return;
         await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
         if (opening && opening.expires >= this.now() && valid() && !this.isHeld()) {
           await this.store.consume(opening.key); // At-most-once across uncertain RPCs / process restarts.
@@ -248,6 +253,70 @@ export class MusicDirector {
       this.inFlight = false;
     }
   }
+  private manualControlObserved(
+    layer: MusicLayer,
+    state: unknown,
+    muted: unknown,
+    volume: unknown,
+  ) {
+    if (this.isHeld() || this.resumeLayers.has(layer)) return false;
+    const saved = this.store.state[layer];
+    const active = [
+      'OBS_MEDIA_STATE_PLAYING',
+      'OBS_MEDIA_STATE_OPENING',
+      'OBS_MEDIA_STATE_BUFFERING',
+    ].includes(String(state));
+    const expectedVolume =
+      this.appliedVolumes.get(layer) ??
+      (saved ? this.store.state.config.groups[saved.group].volume : null);
+    return (
+      muted === true ||
+      state === 'OBS_MEDIA_STATE_PAUSED' ||
+      Boolean(
+        saved &&
+        !saved.finished &&
+        !saved.suspended &&
+        ((state === 'OBS_MEDIA_STATE_STOPPED' &&
+          this.expectedStops.get(layer) !== this.store.state.sources[layer]) ||
+          (active && expectedVolume !== null && Math.abs(Number(volume) - expectedVolume) > 0.015)),
+      )
+    );
+  }
+  private async holdForObsControl() {
+    this.heldOverride = true;
+    this.pendingOpening = null;
+    this.fades = {};
+    this.nextRequested = false;
+    this.resumeLayers.clear();
+    this.invalidate();
+    await this.store.hold(true);
+  }
+  private async observeManualControls(obs: ObsRpc, valid: () => boolean) {
+    if (this.isHeld()) return false;
+    for (const layer of ['bgm', 'stinger'] as const) {
+      if (!this.store.state.sources[layer] || this.resumeLayers.has(layer)) continue;
+      const name = await ownedMusicInput(obs, this.store, layer, false, valid);
+      if (!name) continue;
+      const args = { inputUuid: this.store.state.sources[layer] };
+      const call = (type: string) => {
+        if (!valid()) throw new Error('music_cancelled');
+        return obs.call(type, args);
+      };
+      const [media, mute, volume] = await Promise.all([
+        call('GetMediaInputStatus'),
+        call('GetInputMute'),
+        call('GetInputVolume'),
+      ]);
+      if (!valid()) throw new Error('music_cancelled');
+      if (
+        this.manualControlObserved(layer, media.mediaState, mute.inputMuted, volume.inputVolumeMul)
+      ) {
+        await this.holdForObsControl();
+        return true;
+      }
+    }
+    return false;
+  }
   private async layer(
     obs: ObsRpc,
     layer: MusicLayer,
@@ -258,6 +327,12 @@ export class MusicDirector {
   ) {
     const call = async (type: string, data: Record<string, unknown>) => {
       if (!valid()) throw new Error('music_cancelled');
+      if (type === 'TriggerMediaInputAction') {
+        if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP')
+          this.expectedStops.set(layer, String(data.inputUuid));
+        else if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART')
+          this.expectedStops.delete(layer);
+      }
       return obs.call(type, data);
     };
     let saved = this.store.state[layer];
@@ -273,7 +348,8 @@ export class MusicDirector {
     const mute = await call('GetInputMute', args);
     const volume = await call('GetInputVolume', args);
     const settings = await call('GetInputSettings', args);
-    if (this.resumeLayers.has(layer)) {
+    const resuming = this.resumeLayers.has(layer);
+    if (resuming) {
       await call('SetInputMute', { ...args, inputMuted: false });
       this.resumeLayers.delete(layer);
       mute.inputMuted = false;
@@ -295,6 +371,14 @@ export class MusicDirector {
             : null;
       else this.status.stinger = p && !p.finished ? p.track.name : null;
     };
+    if (
+      !resuming &&
+      this.manualControlObserved(layer, state, mute.inputMuted, volume.inputVolumeMul)
+    ) {
+      await this.holdForObsControl();
+      markStatus(null);
+      return;
+    }
     if (!enabled) {
       // Gameplay/stale/manual stop bypass ordinary fades. No delayed work can delay a cut.
       delete this.fades[layer];
@@ -319,12 +403,6 @@ export class MusicDirector {
           };
         });
       markStatus(null);
-      return;
-    }
-    if (mute.inputMuted === true && !this.resumeLayers.has(layer)) {
-      this.heldOverride = true;
-      await this.store.hold(true);
-      this.invalidate();
       return;
     }
     const matching =
@@ -388,24 +466,6 @@ export class MusicDirector {
           };
         }
         markStatus(saved);
-        return;
-      }
-      // A user's OBS stop, pause, mute or volume change is a persistent manual hold.
-      const expectedVolume = this.appliedVolumes.get(layer) ?? spec!.volume;
-      if (
-        mute.inputMuted === true ||
-        state === 'OBS_MEDIA_STATE_STOPPED' ||
-        state === 'OBS_MEDIA_STATE_PAUSED' ||
-        (active &&
-          !configChanged &&
-          expectedVolume !== null &&
-          Math.abs(Number(volume.inputVolumeMul) - expectedVolume) > 0.015)
-      ) {
-        this.heldOverride = true;
-        await this.store.hold(true);
-        this.invalidate();
-        this.fades = {};
-        markStatus(null);
         return;
       }
       if (configChanged && active) {
@@ -568,11 +628,13 @@ export class MusicDirector {
     await obs.call('SetInputVolume', { inputUuid: fade.inputUuid, inputVolumeMul: volume });
     this.appliedVolumes.set(layer, volume);
     if (progress === 1 && valid()) {
-      if (fade.stop)
+      if (fade.stop) {
+        this.expectedStops.set(layer, fade.inputUuid);
         await obs.call('TriggerMediaInputAction', {
           inputUuid: fade.inputUuid,
           mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
         });
+      }
       delete this.fades[layer];
     }
     return fade.stop && progress < 1;
