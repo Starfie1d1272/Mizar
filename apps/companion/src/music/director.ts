@@ -44,6 +44,7 @@ export class MusicDirector {
     stinger: null,
   };
   private epoch = 0;
+  private lastPoll = -Infinity;
   private nextRequested = false;
   private resumeLayers = new Set<MusicLayer>();
   constructor(
@@ -140,12 +141,18 @@ export class MusicDirector {
       (truth.program.clock?.endsInSeconds ?? 999) <= 5,
       truth.active,
       this.isHeld(),
+      this.store.state.config,
     ]);
-    if (preliminary !== this.desiredKey) {
+    const changed = preliminary !== this.desiredKey;
+    if (changed) {
       this.desiredKey = preliminary;
       this.generation++;
     }
     if (this.inFlight) return;
+    // Facts still invalidate every 100 ms; steady media polling is bounded, fades remain smooth.
+    const interval = Object.keys(this.fades).length ? 100 : 250;
+    if (!changed && !this.pendingOpening && this.now() - this.lastPoll < interval) return;
+    this.lastPoll = this.now();
     this.inFlight = true;
     const generation = this.generation;
     const valid = () => !this.closed && generation === this.generation;
@@ -248,8 +255,11 @@ export class MusicDirector {
     let saved = this.store.state[layer];
     const spec = cue ? this.store.state.config.groups[cue.group] : null;
     const enabled = Boolean(cue && spec?.enabled && spec.tracks.length);
+    const previousUuid = this.store.state.sources[layer];
     const name = await ownedMusicInput(obs, this.store, layer, enabled, valid, reconnect);
+    if (cue && previousUuid !== this.store.state.sources[layer]) this.failed.delete(cue.key);
     if (!name) return;
+    saved = this.store.state[layer];
     const args = { inputUuid: this.store.state.sources[layer]! };
     const media = await call('GetMediaInputStatus', args);
     const mute = await call('GetInputMute', args);
@@ -343,6 +353,10 @@ export class MusicDirector {
         await this.store.update((s) => {
           s[layer] = { ...saved!, suspended: false };
         });
+        if (active) {
+          await call('SetInputVolume', { ...args, inputVolumeMul: spec!.volume });
+          this.appliedVolumes.set(layer, spec!.volume);
+        }
         if (!active) {
           await call('SetInputVolume', {
             ...args,
@@ -580,7 +594,9 @@ export class MusicDirector {
                     ...saved,
                     suspended: true,
                     finished: saved.finished || layer === 'stinger',
-                    cursorMs: Math.max(0, Number(media.mediaCursor) || 0),
+                    cursorMs: saved.suspended
+                      ? saved.cursorMs
+                      : Math.max(0, Number(media.mediaCursor) || 0),
                   };
               });
             }

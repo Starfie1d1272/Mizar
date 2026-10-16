@@ -18,6 +18,7 @@ class MediaObs implements ObsRpc {
     { uuid: string; state: string; file: string; volume: number; muted: boolean; cursor: number }
   >();
   disconnected = false;
+  private inputGeneration = 0;
   intercept: ((type: string) => Promise<void>) | undefined;
   async call(type: string, data: Record<string, unknown> = {}) {
     await this.intercept?.(type);
@@ -39,7 +40,7 @@ class MediaObs implements ObsRpc {
     if (type === 'GetSceneItemList')
       return { sceneItems: [...this.inputs.keys()].map((sourceName) => ({ sourceName })) };
     if (type === 'CreateInput') {
-      const uuid = `uuid-${this.inputs.size}`;
+      const uuid = `uuid-${this.inputGeneration++}`;
       this.inputs.set(String(data.inputName), {
         uuid,
         state: 'OBS_MEDIA_STATE_STOPPED',
@@ -142,7 +143,7 @@ async function rig() {
     tracks,
     directory,
     provider,
-    step: async (ms = 100) => {
+    step: async (ms = 300) => {
       time += ms;
       await director.tick();
     },
@@ -294,6 +295,13 @@ it('keeps OBS manual stop / mute and cancels a late start when formal play resum
   expect(r.obs.restarts()).toBe(starts);
   await r.director.command('resume');
   expect(r.obs.restarts()).toBe(starts + 1);
+  r.obs.bgm().volume = 0.2;
+  await r.step();
+  expect(r.store.state.held).toBe(true);
+  await r.director.command('resume');
+  await r.step();
+  expect(r.director.get().held).toBe(false);
+  expect(r.obs.bgm().volume).toBe(0.5);
   r.obs.bgm().state = 'OBS_MEDIA_STATE_STOPPED';
   await r.step();
   expect(r.store.state.held).toBe(true);
@@ -350,6 +358,12 @@ it('skips invalid tracks, isolates an empty group, and refuses a source whose UU
   await r.store.configure(config);
   await r.step();
   expect(r.obs.restarts()).toBe(2);
+  const ownName = [...r.obs.inputs.keys()][0]!;
+  r.obs.inputs.delete(ownName);
+  r.truth.program.map.phase = 'warmup';
+  r.truth.program.clock = null;
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
   r.obs.bgm().uuid = 'foreign';
   r.truth.program.map.phase = 'warmup';
   r.truth.program.clock = null;

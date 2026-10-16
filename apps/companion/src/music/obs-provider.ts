@@ -2,7 +2,7 @@ import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from '../obs/config.js';
 import type { ObsRpc } from '../obs/reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../obs/desired-state.js';
-import type { MusicStore } from './store.js';
+import { looping, type MusicStore } from './store.js';
 
 export type MusicLayer = 'bgm' | 'stinger';
 export class ObsMusicProvider {
@@ -141,6 +141,14 @@ export async function ownedMusicInput(
     if (typeof result.inputUuid !== 'string') throw new Error('music_obs_version');
     await store.update((s) => {
       s.sources[layer] = result.inputUuid as string;
+      const previous = s[layer];
+      if (previous) {
+        if (looping(previous.group)) s[layer] = null;
+        else {
+          s[layer] = { ...previous, finished: true };
+          s.consumed = [...s.consumed, previous.key].slice(-64);
+        }
+      }
     });
   }
   if (create && (attach || !found)) {
