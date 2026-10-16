@@ -176,7 +176,9 @@ export function SupportExport() {
   return (
     <Panel>
       <h2>问题反馈</h2>
-      <p>导出运行状态与错误记录，反馈时附上版本、发生时间和操作步骤。</p>
+      <p>
+        诊断包包含比赛与账号信息（含名单和 Steam64），不会自动上传。反馈时附上版本、时间和操作步骤。
+      </p>
       <p>
         <a
           href="https://github.com/Starfie1d1272/Mizar/issues/new?template=bug-report.yml"

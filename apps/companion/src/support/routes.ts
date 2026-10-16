@@ -13,6 +13,8 @@ import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
+import type { BusinessJournal } from './business-journal.js';
+import { readBusinessHistory } from './business-history.js';
 import { choice, count, digest, readSupportLogs, record, recorderCodes } from './logs.js';
 
 export const SUPPORT_BUNDLE_MAX_BYTES = 1024 * 1024;
@@ -133,6 +135,8 @@ export function registerSupportRoutes(
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
+    readonly flushBusinessLog?: () => Promise<void>;
+    readonly businessLogHealth?: () => ReturnType<BusinessJournal['getHealth']>;
     readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
     readonly recorder: () => RecorderHealth;
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
@@ -225,6 +229,7 @@ export function registerSupportRoutes(
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
       try {
+        await options.flushBusinessLog?.();
         const [logs, obs, nativeObs] = await Promise.all([
           readSupportLogs(options.logsDirectory, 160 * 1024),
           options.obs().catch(() => undefined),
@@ -247,8 +252,29 @@ export function registerSupportRoutes(
         const hosts = options.hosts();
         const exportedAt = new Date().toISOString();
         const gitSha = digest(options.artifact?.gitSha, 40);
+        const businessHistory = readBusinessHistory(options.logsDirectory);
+        const businessHealth = options.businessLogHealth?.();
         const bundle = {
           schema: 'mizar-support-bundle/1',
+          businessHistory: {
+            ...businessHistory,
+            manifest: {
+              ...businessHistory.manifest,
+              ...businessHealth,
+              writeFailures: Math.max(
+                businessHistory.manifest.writeFailures,
+                businessHealth?.writeFailures ?? 0,
+              ),
+              committedWriteFailures: businessHistory.manifest.writeFailures,
+              committedDroppedPendingEvents: businessHistory.manifest.droppedPendingEvents,
+              committedCoalescedEvents: businessHistory.manifest.coalescedEvents,
+              uncommittedWriteFailures: Math.max(
+                0,
+                (businessHealth?.writeFailures ?? 0) - businessHistory.manifest.writeFailures,
+              ),
+              currentWriteStatus: options.businessLogStatus?.() ?? 'not_configured',
+            },
+          },
           manifest: {
             exportedAt,
             gitSha,
@@ -272,10 +298,10 @@ export function registerSupportRoutes(
               headerBytesPerFile: 4096,
             },
             logPolicy: 'allowlisted-events; bounded-redacted-error-causes-and-technical-paths',
-            sessionPolicy: 'salted-per-export-sha256',
+            sessionPolicy: 'ordinary-log-session-salted; business-identifiers-stable',
           },
           summary: [
-            '本文件是有界诊断摘要，可用于提交 Mizar 问题；不包含原始遥测、选手资料或凭据；异常可能包含必要技术路径，用户目录名已脱敏。',
+            '本文件包含比赛业务 ID、阵容核对所需的 Steam64、队伍与槽位；不含凭据、完整配置或原始遥测。异常可能包含必要技术路径，用户目录名已脱敏。',
             '日志保留阶段、结果、错误码及有界脱敏的异常消息、原因链和堆栈。session 只在本文件内关联。',
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',

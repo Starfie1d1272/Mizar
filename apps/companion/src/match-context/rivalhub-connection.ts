@@ -6,7 +6,7 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
 import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
-import { redactDiagnosticText } from '../updates/diagnostics.js';
+import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
   type ReliableDeliveryResult,
@@ -83,6 +83,30 @@ function liveTimeout(error: LiveErrorEvidence): boolean {
   );
 }
 
+function requestFailureReason(error: unknown): string {
+  if (error instanceof RivalHubResponseError)
+    return error.code === 'RIVALHUB_INVALID_JSON' ? 'invalid_response' : 'response_read_failed';
+  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_TIMEOUT')
+    return 'timeout';
+  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_NETWORK_FAILED')
+    return 'network_failed';
+  const evidence = liveErrorEvidence(error);
+  if (liveTimeout(evidence)) return 'timeout';
+  if (evidence.name === 'SyntaxError') return 'invalid_response';
+  const network = (e: LiveErrorEvidence): boolean =>
+    e.name === 'TypeError' || (e.cause !== undefined && network(e.cause));
+  return network(evidence) ? 'network_failed' : 'unknown';
+}
+function requestFailureCode(error: unknown): string | undefined {
+  if (error instanceof Error && 'rootCauseCode' in error) {
+    const code = diagnosticNetworkCode(error.rootCauseCode);
+    if (code) return code;
+  }
+  const root = (evidence: LiveErrorEvidence): string | undefined =>
+    (evidence.cause ? root(evidence.cause) : undefined) ?? diagnosticNetworkCode(evidence.code);
+  return root(liveErrorEvidence(error));
+}
+
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   return JSON.stringify([
     cursor.producerInstanceId,
@@ -92,12 +116,55 @@ function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   ]);
 }
 
-function networkError(error: unknown): unknown {
-  if (error instanceof Error && error.name === 'TimeoutError')
-    return new Error('连接 RivalHub 超时，请检查网络后重试。', { cause: error });
-  if (error instanceof TypeError)
-    return new Error('连接 RivalHub 失败，请检查网络后重试。', { cause: error });
-  return error;
+class RivalHubResponseError extends Error {
+  readonly code: 'RIVALHUB_INVALID_JSON' | 'RIVALHUB_RESPONSE_READ_FAILED';
+  constructor(kind: 'parse' | 'read') {
+    super(
+      kind === 'parse'
+        ? 'RivalHub 返回的数据无法解析，请稍后重试。'
+        : 'RivalHub 响应读取失败，请稍后重试。',
+    );
+    this.name = 'RivalHubResponseError';
+    this.code = kind === 'parse' ? 'RIVALHUB_INVALID_JSON' : 'RIVALHUB_RESPONSE_READ_FAILED';
+  }
+}
+function networkError(error: unknown): Error {
+  if (error instanceof RivalHubResponseError) return error;
+  const project = (raw: LiveErrorEvidence): LiveErrorEvidence => {
+    const code = diagnosticNetworkCode(raw.code);
+    return {
+      name: ['Error', 'TypeError', 'AbortError', 'TimeoutError', 'SyntaxError'].includes(raw.name)
+        ? raw.name
+        : 'UnknownError',
+      ...(code ? { code } : {}),
+      ...(raw.cause ? { cause: project(raw.cause) } : {}),
+    };
+  };
+  const evidence = project(liveErrorEvidence(error));
+  const rootCauseCode = requestFailureCode(error);
+  const timeout =
+    liveTimeout(evidence) ||
+    (rootCauseCode !== undefined && liveTimeout({ name: 'UnknownError', code: rootCauseCode }));
+  const network = evidence.name === 'TypeError' || rootCauseCode !== undefined;
+  return Object.assign(
+    new Error(
+      timeout
+        ? '连接 RivalHub 超时，请检查网络后重试。'
+        : network
+          ? '连接 RivalHub 失败，请检查网络后重试。'
+          : 'RivalHub 请求未完成，请稍后重试。',
+      { cause: evidence },
+    ),
+    {
+      name: 'RivalHubRequestError',
+      ...(rootCauseCode ? { rootCauseCode } : {}),
+      code: timeout
+        ? 'RIVALHUB_TIMEOUT'
+        : network
+          ? 'RIVALHUB_NETWORK_FAILED'
+          : 'RIVALHUB_REQUEST_FAILED',
+    },
+  );
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -120,6 +187,38 @@ export class RivalHubConnection {
   private onDiagnostic: (operation: string, error: unknown) => void = () => {};
   setDiagnosticHandler(handler: (operation: string, error: unknown) => void): void {
     this.onDiagnostic = handler;
+  }
+  private businessHandler: ((stage: string, evidence: unknown) => void) | undefined;
+  setBusinessEvidenceHandler(handler: (stage: string, evidence: unknown) => void): void {
+    this.businessHandler = handler;
+  }
+  private business(
+    stage: string,
+    snapshot: {
+      matchId: string;
+      cursor: LiveSnapshotV1['cursor'];
+      competitionId?: string;
+      contextRevision?: string;
+      observedAt?: string;
+    },
+    evidence: Record<string, unknown>,
+  ) {
+    try {
+      this.businessHandler?.(stage, {
+        matchId: snapshot.matchId,
+        competitionId: snapshot.competitionId,
+        contextRevision: snapshot.contextRevision,
+        originalObservedAt: snapshot.observedAt,
+        authorityRevision: this.source?.authorityRevision,
+        liveSessionId: snapshot.cursor.liveSessionId,
+        producerInstanceId: snapshot.cursor.producerInstanceId,
+        mapEpoch: snapshot.cursor.mapEpoch,
+        sourceGeneration: snapshot.cursor.programSourceGeneration,
+        ...evidence,
+      });
+    } catch {
+      /* Diagnostics cannot affect authorization or delivery. */
+    }
   }
   private scheduleGeneration = 0;
   private scheduleCache: {
@@ -259,30 +358,24 @@ export class RivalHubConnection {
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok) {
-        const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
-        let detail = '';
-        if (reader) {
-          try {
-            const decoder = new TextDecoder();
-            while (detail.length < 4096) {
-              const chunk = await reader.read();
-              if (chunk.done) break;
-              detail += decoder.decode(chunk.value.subarray(0, 4096), { stream: true });
-            }
-          } finally {
-            await reader.cancel();
-            reader.releaseLock();
-          }
-        }
-        this.onDiagnostic(
-          operation,
-          new Error(`RivalHub HTTP ${response.status}: ${detail.slice(0, 4096)}`),
-        );
+        await response.body?.cancel();
+        this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
       return response;
     } catch (error) {
-      this.onDiagnostic(operation, error);
-      throw networkError(error);
+      const safe = networkError(error);
+      this.onDiagnostic(operation, safe);
+      throw safe;
+    }
+  }
+
+  private async readJson(response: Response): Promise<unknown> {
+    try {
+      return await response.json();
+    } catch (error) {
+      // JSON parser/read errors may quote credentials or arbitrary remote bytes.
+      // Never attach the original error as cause or log it at this boundary.
+      throw new RivalHubResponseError(error instanceof SyntaxError ? 'parse' : 'read');
     }
   }
 
@@ -296,7 +389,7 @@ export class RivalHubConnection {
       throw networkError(error);
     });
     if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
-    const value = (await response.json()) as {
+    const value = (await this.readJson(response)) as {
       pairingId?: unknown;
       pollToken?: unknown;
       authorizeUrl?: unknown;
@@ -357,7 +450,7 @@ export class RivalHubConnection {
       throw networkError(error);
     });
     if (!response.ok) throw new Error('授权状态暂时无法获取。');
-    const value = (await response.json()) as {
+    const value = (await this.readJson(response)) as {
       status?: unknown;
       credential?: unknown;
       installationId?: unknown;
@@ -406,7 +499,7 @@ export class RivalHubConnection {
       `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     );
     if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
-    const result = validateBroadcastScheduleWindow(await response.json());
+    const result = validateBroadcastScheduleWindow(await this.readJson(response));
     if (!result.ok) throw new Error('赛事赛程格式不兼容。');
     if (
       this.installation &&
@@ -438,54 +531,76 @@ export class RivalHubConnection {
       !snapshot.cursor.liveSessionId
     )
       throw new Error('当前比赛尚未准备好连接。');
-    const lineupSteam64 = snapshot.players
-      .filter(
-        (player) => player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
-      )
-      .map((player) => player.sourcePlayerId);
-    const response = await this.request('claim', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        matchId: snapshot.matchId,
-        producerInstanceId: snapshot.cursor.producerInstanceId,
-        liveSessionId: snapshot.cursor.liveSessionId,
-        programSourceGeneration: snapshot.cursor.programSourceGeneration,
-        mapEpoch: snapshot.cursor.mapEpoch,
+    this.business('business_claim', snapshot, { contextRevision, reason: 'claim_attempt' });
+    try {
+      const lineupSteam64 = snapshot.players
+        .filter(
+          (player) => player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
+        )
+        .map((player) => player.sourcePlayerId);
+      const response = await this.request('claim', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          matchId: snapshot.matchId,
+          producerInstanceId: snapshot.cursor.producerInstanceId,
+          liveSessionId: snapshot.cursor.liveSessionId,
+          programSourceGeneration: snapshot.cursor.programSourceGeneration,
+          mapEpoch: snapshot.cursor.mapEpoch,
+          contextRevision,
+          takeover,
+          ...(snapshot.capability?.lineupMismatchOnly === true
+            ? { allowLineupMismatch: true }
+            : {}),
+          lineupSteam64: lineupSteam64.length === 10 ? lineupSteam64 : [],
+        }),
+      });
+      this.business('business_claim', snapshot, {
         contextRevision,
-        takeover,
-        ...(snapshot.capability?.lineupMismatchOnly === true ? { allowLineupMismatch: true } : {}),
-        lineupSteam64: lineupSteam64.length === 10 ? lineupSteam64 : [],
-      }),
-    });
-    if (!response.ok) throw new Error('当前比赛无法成为数据源，请刷新比赛资料并核对首发。');
-    const result = (await response.json()) as {
-      claimed: boolean;
-      authorityRevision: number;
-      activeDeviceName?: string;
-    };
-    if (result.claimed) {
-      this.liveDelivery = {
-        cursor: null,
-        status: 'idle',
-        reason: null,
-        consecutiveUnaccepted: 0,
-        since: null,
-        notified: false,
+        httpStatus: response.status,
+        reason: response.ok ? 'claim_response_received' : `http_${response.status}`,
+      });
+      if (!response.ok) throw new Error('当前比赛无法成为数据源，请刷新比赛资料并核对首发。');
+      const result = (await this.readJson(response)) as {
+        claimed: boolean;
+        authorityRevision: number;
+        activeDeviceName?: string;
       };
-      this.claimRevision += 1;
-      this.source = {
-        matchId: snapshot.matchId,
-        authorityRevision: result.authorityRevision,
-        producerInstanceId: snapshot.cursor.producerInstanceId,
-        liveSessionId: snapshot.cursor.liveSessionId,
-      };
-      this.activeDeviceName = null;
-    } else {
-      this.source = null;
-      this.activeDeviceName = result.activeDeviceName ?? '另一台制播设备';
+      if (result.claimed) {
+        this.liveDelivery = {
+          cursor: null,
+          status: 'idle',
+          reason: null,
+          consecutiveUnaccepted: 0,
+          since: null,
+          notified: false,
+        };
+        this.claimRevision += 1;
+        this.source = {
+          matchId: snapshot.matchId,
+          authorityRevision: result.authorityRevision,
+          producerInstanceId: snapshot.cursor.producerInstanceId,
+          liveSessionId: snapshot.cursor.liveSessionId,
+        };
+        this.activeDeviceName = null;
+      } else {
+        this.source = null;
+        this.activeDeviceName = result.activeDeviceName ?? '另一台制播设备';
+      }
+      this.business('business_claim', snapshot, {
+        contextRevision,
+        reason: result.claimed ? 'claim_accepted' : 'claim_rejected',
+        acknowledgedAt: result.claimed ? new Date().toISOString() : null,
+      });
+      return this.view();
+    } catch (error) {
+      this.business('business_claim', snapshot, {
+        contextRevision,
+        reason: requestFailureReason(error),
+        causeCode: requestFailureCode(error),
+      });
+      throw error;
     }
-    return this.view();
   }
 
   async release(): Promise<void> {
@@ -517,11 +632,23 @@ export class RivalHubConnection {
     signal?: AbortSignal,
     isCurrent: () => boolean = () => true,
   ): Promise<ReliableDeliveryResult> {
-    if (!this.source) return 'retry';
+    const event = (body as { event: ReliableEventV1 }).event;
+    const evidence = (fields: Record<string, unknown>) =>
+      this.business('business_reliable', event, {
+        idempotencyKey: event.idempotencyKey,
+        eventKind: event.kind,
+        originalObservedAt: event.observedAt,
+        ...fields,
+      });
+    if (!this.source) {
+      evidence({ reason: 'source_unavailable' });
+      return 'retry';
+    }
     if (this.source.matchId !== matchId) return 'rejected';
     const source = this.source;
     try {
       if (signal?.aborted || !isCurrent()) return 'retry';
+      evidence({ reason: 'request_started', sentAt: new Date().toISOString() });
       const response = await this.request(operation, {
         ...(signal ? { signal } : {}),
         method: 'POST',
@@ -533,6 +660,11 @@ export class RivalHubConnection {
       });
       await response.body?.cancel();
       if (signal?.aborted || !isCurrent()) return 'retry';
+      evidence({
+        reason: response.ok ? 'receiver_accepted' : `http_${response.status}`,
+        httpStatus: response.status,
+        acknowledgedAt: response.ok ? new Date().toISOString() : null,
+      });
       if (response.ok) return 'accepted';
       if (response.status === 403) {
         if (this.source === source) {
@@ -544,7 +676,15 @@ export class RivalHubConnection {
       return response.status === 408 || response.status === 429 || response.status >= 500
         ? 'retry'
         : 'rejected';
-    } catch {
+    } catch (error) {
+      evidence({
+        reason: signal?.aborted
+          ? requestFailureReason(signal.reason) === 'timeout'
+            ? 'timeout'
+            : 'request_aborted'
+          : requestFailureReason(error),
+        causeCode: requestFailureCode(error),
+      });
       return 'retry';
     }
   }
@@ -568,11 +708,16 @@ export class RivalHubConnection {
     // Keep the disposable lane behind the reliable start acknowledgement, also
     // after re-claim, generation advance and map change. No old snapshot is queued.
     const source = this.source;
-    if (!source || source.matchId !== snapshot.matchId)
+    if (!source || source.matchId !== snapshot.matchId) {
+      this.business('business_live', snapshot, { reason: 'source_unavailable' });
       throw new Error('rivalhub_live_unavailable');
+    }
     this.beginDeliveryExecution(source, snapshot.cursor);
     const execution = executionKey(snapshot.cursor);
-    if (source.acknowledgedExecution !== execution) throw new Error('rivalhub_map_start_pending');
+    if (source.acknowledgedExecution !== execution) {
+      this.business('business_live', snapshot, { reason: 'map_start_pending' });
+      throw new Error('rivalhub_map_start_pending');
+    }
     let reason: string;
     let accepted = false;
     let dropped = false;
@@ -580,6 +725,7 @@ export class RivalHubConnection {
     let stage: LiveFailure['stage'] = 'fetch';
     let failure: LiveFailure | undefined;
     const signal = AbortSignal.timeout(4000);
+    const sentAt = new Date().toISOString();
     try {
       // LIVE is disposable: one bounded request, no retries and no response payload logging.
       const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
@@ -684,6 +830,13 @@ export class RivalHubConnection {
       this.source = null;
       this.activeDeviceName = '另一台制播设备';
     }
+    this.business('business_live', snapshot, {
+      reason: accepted ? 'receiver_accepted' : reason,
+      failureStage: failure?.stage,
+      causeCode: failure?.error.cause?.code ?? failure?.error.code,
+      sentAt,
+      acknowledgedAt: accepted ? new Date().toISOString() : null,
+    });
     const previous = this.liveDelivery;
     if (accepted) {
       if (previous.notified)
@@ -740,8 +893,13 @@ export class RivalHubConnection {
       source &&
       (source.producerInstanceId !== event.cursor.producerInstanceId ||
         source.liveSessionId !== event.cursor.liveSessionId)
-    )
+    ) {
+      this.business('business_reliable', event, {
+        idempotencyKey: event.idempotencyKey,
+        reason: 'producer_mismatch',
+      });
       return 'rejected';
+    }
     const sameExecution =
       current?.matchId === event.matchId &&
       current.cursor.producerInstanceId === event.cursor.producerInstanceId &&

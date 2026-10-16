@@ -302,6 +302,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       return projectionCoordinator.refresh();
     },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
+    onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
   });
   if (demoRecovery)
     void outputService.setQuarantined(true).catch((error) =>
@@ -373,13 +374,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
   if (options.supportLogsDirectory !== undefined) {
-    businessJournal = new BusinessJournal(options.supportLogsDirectory, () =>
-      app.log.warn(
-        { event: 'business', stage: 'business_log_write_failed', result: 'failure' },
-        '业务诊断日志写入失败',
-      ),
+    businessJournal = new BusinessJournal(
+      options.supportLogsDirectory,
+      () =>
+        app.log.warn(
+          { event: 'business', stage: 'business_log_write_failed', result: 'failure' },
+          '业务诊断日志写入失败',
+        ),
+      options.productRuntime?.appVersion,
     );
   }
+  options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) =>
+    businessJournal?.write(stage, evidence),
+  );
   app.addHook('onResponse', async (request, reply) => {
     if (
       reply.statusCode >= 400 ||
@@ -791,6 +798,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     businessJournal?.runtime(
       bundle,
       matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+      programRuntime.getCurrentState().programTelemetry,
     );
     guidance.update(
       bundle,
@@ -956,9 +964,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
-    businessJournal?.runtime(projectionCoordinator.getCurrent(), outputBinding);
+    businessJournal?.runtime(
+      projectionCoordinator.getCurrent(),
+      outputBinding,
+      programRuntime.getCurrentState().programTelemetry,
+    );
     for (const record of outputService.getReliableRecords())
       businessJournal?.reliable(record, 'restored');
+    await businessJournal?.flush();
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
@@ -1065,6 +1078,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    flushBusinessLog: () => businessJournal?.flush() ?? Promise.resolve(),
+    ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
@@ -1231,6 +1246,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await localWebTransport.close();
     await hudConfigStore.flush();
     await currentRecorder().finalize();
+    await businessJournal?.close();
   });
 
   return app;
