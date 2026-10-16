@@ -41,23 +41,41 @@ export function syncHealthText(health?: SyncHealth): string {
   }
 }
 
-/** Passive operator alert: no Host activation and no Program rendering. */
-export function SyncHealthAlert({
-  health,
-  isSource,
-  onOpen,
-}: {
+type AlertProps = {
   health: SyncHealth | undefined;
   isSource: boolean;
   onOpen: (path: string) => Promise<void>;
-}) {
+};
+
+/** Passive operator alert: no Host activation and no Program rendering. */
+export function SyncHealthAlert(props: AlertProps) {
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const health = props.health;
+  if (health?.status !== 'attention') return null;
+  // Operation feedback and manual review belong only to this active incident.
+  // Leaving attention unmounts them, including callbacks still awaiting a reply.
+  return (
+    <SyncHealthIncident
+      key={health.incidentId}
+      {...props}
+      health={health}
+      dismissed={dismissed === health.incidentId}
+      onDismiss={() => setDismissed(health.incidentId)}
+    />
+  );
+}
+
+function SyncHealthIncident({
+  health,
+  isSource,
+  onOpen,
+  dismissed,
+  onDismiss,
+}: AlertProps & { health: SyncHealth; dismissed: boolean; onDismiss: () => void }) {
   const [reviewing, setReviewing] = useState(false);
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const [feedback, setFeedback] = useState('');
-  const warning = health?.status === 'attention';
-  if (!warning && !reviewing) return null;
   const reason = health?.reason;
   const text = syncHealthText(health);
   const run = async (operation: () => Promise<unknown>) => {
@@ -76,20 +94,16 @@ export function SyncHealthAlert({
     }
   };
   const close = () => {
-    setDismissed(health?.incidentId ?? null);
+    onDismiss();
     setReviewing(false);
   };
   return (
     <>
-      {warning ? (
-        <StatusBanner tone="warning">
-          <Button onClick={() => setReviewing(true)}>网站同步需处理</Button>
-        </StatusBanner>
-      ) : null}
+      <StatusBanner tone="warning">
+        <Button onClick={() => setReviewing(true)}>网站同步需处理</Button>
+      </StatusBanner>
       <Dialog
-        open={
-          reviewing || Boolean(warning && health?.incidentId && dismissed !== health.incidentId)
-        }
+        open={reviewing || Boolean(health.incidentId && !dismissed)}
         modal={false}
         className="workspace-live-roster-alert"
         title="本场网站同步需要处理"

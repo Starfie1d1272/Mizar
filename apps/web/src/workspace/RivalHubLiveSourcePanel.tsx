@@ -240,7 +240,7 @@ export function RivalHubLiveSourcePanel({
 
   return (
     <div className="workspace-rivalhub-source" data-compact={compact} aria-label="实时数据源状态">
-      {connection.syncHealth ? (
+      {compact && connection.syncHealth ? (
         <span role="status">{syncHealthText(connection.syncHealth)}</span>
       ) : null}
       {compact ? (

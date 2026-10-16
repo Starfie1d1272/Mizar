@@ -274,6 +274,7 @@ test('online account differences alert once, preserve unknown identities and rea
   let rejectMapStarts = false;
   let liveAccepted = true;
   let healthOffset = 0;
+  let otherDevice = false;
   const connection = new RivalHubConnection(
     connectionPath,
     (url, init) => {
@@ -282,7 +283,13 @@ test('online account differences alert once, preserve unknown identities and rea
       if (typeof init?.body === 'string')
         outgoing.push({ operation, body: JSON.parse(init.body) as unknown });
       if (operation === 'claim')
-        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+        return Promise.resolve(
+          Response.json({
+            claimed: !otherDevice,
+            authorityRevision: 1,
+            activeDeviceName: otherDevice ? '备用制播机' : undefined,
+          }),
+        );
       if (operation === 'live') return Promise.resolve(Response.json({ accepted: liveAccepted }));
       if (operation === 'reliable')
         return Promise.resolve(new Response(null, { status: rejectMapStarts ? 409 : 204 }));
@@ -570,15 +577,53 @@ test('online account differences alert once, preserve unknown identities and rea
     await syncDialog.getByRole('button', { name: '立即重试同步' }).click();
     await push(starters);
     await expect.poll(() => connection.view().liveDelivery.status).toBe('accepted');
-    await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(syncDialog).not.toBeVisible();
+    await expect(
+      page.getByText('操作已提交，等待网站接收本场新数据确认。', { exact: true }),
+    ).not.toBeVisible();
     await expect(page.getByRole('button', { name: '网站同步需处理' })).not.toBeVisible();
     liveAccepted = false;
     healthOffset += 16_000;
     await push(starters);
     await expect(syncDialog).toBeVisible();
+    await expect(syncDialog).not.toContainText('操作已提交，等待网站接收本场新数据确认。');
     await syncDialog.getByText('详情与诊断导出', { exact: true }).click();
     await expect(syncDialog.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sync-health-interrupted.png') });
+    // Manually reopened alerts also disappear after an explicit stop or an
+    // acknowledged source transfer; neither leaves the former warning behind.
+    const sourceCommand = async (operation: 'claim' | 'release') => {
+      await push(starters);
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/operator/rivalhub/source/${operation}`,
+            headers: { origin: 'http://127.0.0.1:3000' },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+    };
+    const reopen = async () => {
+      await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();
+      await page.getByRole('button', { name: '网站同步需处理' }).click();
+      await expect(syncDialog).toBeVisible();
+    };
+    await reopen();
+    await sourceCommand('release');
+    await expect(syncDialog).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '网站同步需处理' })).not.toBeVisible();
+    await sourceCommand('claim');
+    await app.inject('/local/v1/rivalhub-connection');
+    healthOffset += 16_000;
+    await push(starters);
+    await expect(syncDialog).toBeVisible();
+    await reopen();
+    otherDevice = true;
+    await sourceCommand('claim');
+    await expect(syncDialog).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '网站同步需处理' })).not.toBeVisible();
     // Reuse the existing CI browser-evidence artifact, including successful runs.
     const evidence = '.agent-tmp/test-evidence/ui-sync-health';
     await mkdir(evidence, { recursive: true });
