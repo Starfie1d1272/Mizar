@@ -69,6 +69,7 @@ export class MusicDirector {
     this.invalidate(); // Cancel obsolete starts/fades before waiting for persistence.
     this.fades = {};
     this.pendingOpening = null;
+    this.resumeLayers.clear();
     let persistenceError: unknown;
     if (action !== 'next') {
       this.heldOverride = action === 'stop';

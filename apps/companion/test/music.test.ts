@@ -570,3 +570,34 @@ it('observes OBS manual control before stale telemetry can record a system suspe
         expect(source.state, label).toBe('OBS_MEDIA_STATE_STOPPED');
     }
 });
+it('cancels pending OBS unmute permission when a newer manual stop supersedes resume', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.command('stop');
+  r.obs.bgm().muted = true;
+  const starts = r.obs.restarts();
+  let release!: () => void, reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reading = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'GetInputSettings') {
+      reached();
+      await blocked;
+    }
+  };
+  const resume = r.director.command('resume');
+  await reading;
+  await r.director.command('stop');
+  release();
+  await resume;
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.director.get().held).toBe(true);
+  expect(r.obs.bgm().muted).toBe(true);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.restarts()).toBe(starts);
+});
