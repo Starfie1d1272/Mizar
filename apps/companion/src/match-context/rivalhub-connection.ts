@@ -84,6 +84,12 @@ function liveTimeout(error: LiveErrorEvidence): boolean {
 }
 
 function requestFailureReason(error: unknown): string {
+  if (error instanceof RivalHubResponseError)
+    return error.code === 'RIVALHUB_INVALID_JSON' ? 'invalid_response' : 'response_read_failed';
+  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_TIMEOUT')
+    return 'timeout';
+  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_NETWORK_FAILED')
+    return 'network_failed';
   const evidence = liveErrorEvidence(error);
   if (liveTimeout(evidence)) return 'timeout';
   if (evidence.name === 'SyntaxError') return 'invalid_response';
@@ -105,12 +111,67 @@ function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   ]);
 }
 
-function networkError(error: unknown): unknown {
-  if (error instanceof Error && error.name === 'TimeoutError')
-    return new Error('连接 RivalHub 超时，请检查网络后重试。', { cause: error });
-  if (error instanceof TypeError)
-    return new Error('连接 RivalHub 失败，请检查网络后重试。', { cause: error });
-  return error;
+class RivalHubResponseError extends Error {
+  readonly code: 'RIVALHUB_INVALID_JSON' | 'RIVALHUB_RESPONSE_READ_FAILED';
+  constructor(kind: 'parse' | 'read') {
+    super(
+      kind === 'parse'
+        ? 'RivalHub 返回的数据无法解析，请稍后重试。'
+        : 'RivalHub 响应读取失败，请稍后重试。',
+    );
+    this.name = 'RivalHubResponseError';
+    this.code = kind === 'parse' ? 'RIVALHUB_INVALID_JSON' : 'RIVALHUB_RESPONSE_READ_FAILED';
+  }
+}
+function networkError(error: unknown): Error {
+  if (error instanceof RivalHubResponseError) return error;
+  const project = (raw: LiveErrorEvidence): LiveErrorEvidence => {
+    const code =
+      typeof raw.code === 'string' &&
+      [
+        'ECONNREFUSED',
+        'ECONNRESET',
+        'ENOTFOUND',
+        'EHOSTUNREACH',
+        'ENETUNREACH',
+        'ETIMEDOUT',
+        'EPIPE',
+        'UND_ERR_CONNECT_TIMEOUT',
+        'UND_ERR_HEADERS_TIMEOUT',
+        'UND_ERR_BODY_TIMEOUT',
+        'UND_ERR_SOCKET',
+      ].includes(raw.code)
+        ? raw.code
+        : undefined;
+    return {
+      name: ['Error', 'TypeError', 'AbortError', 'TimeoutError', 'SyntaxError'].includes(raw.name)
+        ? raw.name
+        : 'UnknownError',
+      ...(code ? { code } : {}),
+      ...(raw.cause ? { cause: project(raw.cause) } : {}),
+    };
+  };
+  const evidence = project(liveErrorEvidence(error));
+  const timeout = liveTimeout(evidence);
+  const network = evidence.name === 'TypeError' || evidence.code !== undefined;
+  return Object.assign(
+    new Error(
+      timeout
+        ? '连接 RivalHub 超时，请检查网络后重试。'
+        : network
+          ? '连接 RivalHub 失败，请检查网络后重试。'
+          : 'RivalHub 请求未完成，请稍后重试。',
+      { cause: evidence },
+    ),
+    {
+      name: 'RivalHubRequestError',
+      code: timeout
+        ? 'RIVALHUB_TIMEOUT'
+        : network
+          ? 'RIVALHUB_NETWORK_FAILED'
+          : 'RIVALHUB_REQUEST_FAILED',
+    },
+  );
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -309,8 +370,19 @@ export class RivalHubConnection {
       }
       return response;
     } catch (error) {
-      this.onDiagnostic(operation, error);
-      throw networkError(error);
+      const safe = networkError(error);
+      this.onDiagnostic(operation, safe);
+      throw safe;
+    }
+  }
+
+  private async readJson(response: Response): Promise<unknown> {
+    try {
+      return await response.json();
+    } catch (error) {
+      // JSON parser/read errors may quote credentials or arbitrary remote bytes.
+      // Never attach the original error as cause or log it at this boundary.
+      throw new RivalHubResponseError(error instanceof SyntaxError ? 'parse' : 'read');
     }
   }
 
@@ -324,7 +396,7 @@ export class RivalHubConnection {
       throw networkError(error);
     });
     if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
-    const value = (await response.json()) as {
+    const value = (await this.readJson(response)) as {
       pairingId?: unknown;
       pollToken?: unknown;
       authorizeUrl?: unknown;
@@ -385,7 +457,7 @@ export class RivalHubConnection {
       throw networkError(error);
     });
     if (!response.ok) throw new Error('授权状态暂时无法获取。');
-    const value = (await response.json()) as {
+    const value = (await this.readJson(response)) as {
       status?: unknown;
       credential?: unknown;
       installationId?: unknown;
@@ -434,7 +506,7 @@ export class RivalHubConnection {
       `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     );
     if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
-    const result = validateBroadcastScheduleWindow(await response.json());
+    const result = validateBroadcastScheduleWindow(await this.readJson(response));
     if (!result.ok) throw new Error('赛事赛程格式不兼容。');
     if (
       this.installation &&
@@ -496,7 +568,7 @@ export class RivalHubConnection {
         reason: response.ok ? 'claim_response_received' : `http_${response.status}`,
       });
       if (!response.ok) throw new Error('当前比赛无法成为数据源，请刷新比赛资料并核对首发。');
-      const result = (await response.json()) as {
+      const result = (await this.readJson(response)) as {
         claimed: boolean;
         authorityRevision: number;
         activeDeviceName?: string;

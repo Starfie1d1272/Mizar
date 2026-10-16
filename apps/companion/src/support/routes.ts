@@ -13,6 +13,7 @@ import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
+import type { BusinessJournal } from './business-journal.js';
 import { readBusinessHistory } from './business-history.js';
 import { choice, count, digest, readSupportLogs, record, recorderCodes } from './logs.js';
 
@@ -134,6 +135,8 @@ export function registerSupportRoutes(
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
+    readonly flushBusinessLog?: () => Promise<void>;
+    readonly businessLogHealth?: () => ReturnType<BusinessJournal['getHealth']>;
     readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
     readonly recorder: () => RecorderHealth;
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
@@ -226,6 +229,7 @@ export function registerSupportRoutes(
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
       try {
+        await options.flushBusinessLog?.();
         const [logs, obs, nativeObs] = await Promise.all([
           readSupportLogs(options.logsDirectory, 160 * 1024),
           options.obs().catch(() => undefined),
@@ -249,12 +253,25 @@ export function registerSupportRoutes(
         const exportedAt = new Date().toISOString();
         const gitSha = digest(options.artifact?.gitSha, 40);
         const businessHistory = readBusinessHistory(options.logsDirectory);
+        const businessHealth = options.businessLogHealth?.();
         const bundle = {
           schema: 'mizar-support-bundle/1',
           businessHistory: {
             ...businessHistory,
             manifest: {
               ...businessHistory.manifest,
+              ...businessHealth,
+              writeFailures: Math.max(
+                businessHistory.manifest.writeFailures,
+                businessHealth?.writeFailures ?? 0,
+              ),
+              committedWriteFailures: businessHistory.manifest.writeFailures,
+              committedDroppedPendingEvents: businessHistory.manifest.droppedPendingEvents,
+              committedCoalescedEvents: businessHistory.manifest.coalescedEvents,
+              uncommittedWriteFailures: Math.max(
+                0,
+                (businessHealth?.writeFailures ?? 0) - businessHistory.manifest.writeFailures,
+              ),
               currentWriteStatus: options.businessLogStatus?.() ?? 'not_configured',
             },
           },

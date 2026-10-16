@@ -971,6 +971,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
     for (const record of outputService.getReliableRecords())
       businessJournal?.reliable(record, 'restored');
+    await businessJournal?.flush();
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
@@ -1077,6 +1078,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    flushBusinessLog: () => businessJournal?.flush() ?? Promise.resolve(),
+    ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
@@ -1243,6 +1246,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await localWebTransport.close();
     await hudConfigStore.flush();
     await currentRecorder().finalize();
+    await businessJournal?.close();
   });
 
   return app;

@@ -1,3 +1,8 @@
+import * as filesystem from 'node:fs/promises';
+import Fastify from 'fastify';
+import { createWriteStream } from 'node:fs';
+import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
+import type { MatchContextController } from '../src/match-context/controller.js';
 import { mkdtemp, rm, symlink, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +21,9 @@ import {
   BUSINESS_HISTORY_FILE,
   BUSINESS_HISTORY_LIMITS,
 } from '../src/support/business-history.js';
+vi.mock('node:fs/promises', async (original) => ({
+  ...(await original<typeof import('node:fs/promises')>()),
+}));
 const dirs: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -57,6 +65,7 @@ describe('support export', () => {
       });
       expect(response.statusCode).toBe(204);
     }
+    await first.inject(request);
     const beforeRestart = readBusinessHistory(dir)
       .groups.flatMap((g) => g.events)
       .filter((e) => e.stage === 'business_runtime');
@@ -111,6 +120,7 @@ describe('support export', () => {
     const dir = await directory();
     await writeFile(join(dir, BUSINESS_HISTORY_FILE + '.tmp'), 'interrupted-uncommitted-CANARY');
     const journal = new BusinessJournal(dir, () => {});
+    await journal.flush();
     expect(readBusinessHistory(dir).manifest.abandonedStagingFiles).toBe(1);
     await expect(stat(join(dir, BUSINESS_HISTORY_FILE + '.tmp'))).rejects.toMatchObject({
       code: 'ENOENT',
@@ -118,12 +128,20 @@ describe('support export', () => {
     expect(await readFile(join(dir, BUSINESS_HISTORY_FILE), 'utf8')).not.toContain(
       'interrupted-uncommitted-CANARY',
     );
+    journal.write('business_runtime', {
+      matchId: 'match-one',
+      liveSessionId: 'session-one',
+      identity: 'matched',
+      coverage: { allPlayers: 'present' },
+      expected: [{ steam64: '76561199999999999', isStarter: true }],
+      observed: [{ steam64: '76561199999999999', side: 'CT', slot: 0 }],
+    });
     journal.write('business_claim', {
       matchId: 'match-one',
       liveSessionId: 'session-one',
       reason: 'http_403',
     });
-    for (let runtimeSeq = 0; runtimeSeq < 150; runtimeSeq++)
+    for (let runtimeSeq = 0; runtimeSeq < 150; runtimeSeq++) {
       journal.write('business_runtime', {
         matchId: 'match-one',
         liveSessionId: 'session-one',
@@ -134,6 +152,8 @@ describe('support export', () => {
           entryId: 'entry-one',
         })),
       });
+      await journal.flush();
+    }
     const history = readBusinessHistory(dir);
     expect(history.manifest.rotatedEvents).toBeGreaterThan(0);
     expect(
@@ -141,6 +161,15 @@ describe('support export', () => {
         .find((g) => g.matchId === 'match-one')
         ?.events.some((e) => e.evidence.reason === 'http_403'),
     ).toBe(true);
+    const retainedFault = history.groups
+      .find((g) => g.matchId === 'match-one')!
+      .events.find((e) => e.evidence.reason === 'http_403')!;
+    expect(retainedFault.context?.runtime?.evidence).toMatchObject({
+      identity: 'matched',
+      coverage: { allPlayers: 'present' },
+      expected: [{ steam64: '76561199999999999' }],
+      observed: [{ steam64: '76561199999999999' }],
+    });
     expect((await stat(join(dir, BUSINESS_HISTORY_FILE))).size).toBeLessThanOrEqual(
       BUSINESS_HISTORY_LIMITS.totalBytes,
     );
@@ -153,6 +182,7 @@ describe('support export', () => {
         liveSessionId: `session-${i}`,
         reason: 'claim_rejected',
       });
+    await journal.flush();
     expect(readBusinessHistory(dir).manifest.rotatedGroups).toBeGreaterThan(0);
     expect(readBusinessHistory(dir).groups.length).toBeLessThanOrEqual(16);
     const blocked = join(dir, 'blocked');
@@ -192,6 +222,7 @@ describe('support export', () => {
       config: { secret: canary },
     });
     const path = join(dir, BUSINESS_HISTORY_FILE);
+    await journal.flush();
     const disk = await readFile(path, 'utf8');
     expect(disk).not.toContain(canary);
     expect(disk).toContain('76561199999999999');
@@ -226,6 +257,20 @@ describe('support export', () => {
         .flatMap((g) => g.events)
         .some((e) => e.evidence.expected.some((p) => p.steam64 === '76561199999999999')),
     ).toBe(true);
+    raw.groups.push({ events: null } as unknown as (typeof raw.groups)[number]);
+    const withBadGroup = JSON.stringify(raw);
+    await writeFile(path, withBadGroup);
+    const isolated = readBusinessHistory(dir);
+    expect(isolated.manifest).toMatchObject({
+      status: 'partial_corrupt',
+      corruptGroups: 1,
+      corruptRecords: null,
+    });
+    expect(isolated.groups.some((g) => g.matchId === 'match-281')).toBe(true);
+    const blockedWriter = new BusinessJournal(dir, () => {});
+    await blockedWriter.close();
+    expect(await readFile(path, 'utf8')).toBe(withBadGroup);
+    raw.groups.pop();
     raw.groups[0]!.events.push({ evidence: {}, password: canary });
     await writeFile(path, JSON.stringify(raw));
     expect(readBusinessHistory(dir).manifest).toMatchObject({
@@ -318,6 +363,7 @@ describe('support export', () => {
     outcome = 'accept';
     expect(await connection.sendReliable(event, snapshot)).toBe('accepted');
     await connection.sendLive(snapshot);
+    await journal.flush();
     const events = readBusinessHistory(dir).groups.find((g) => g.matchId === 'match-281')!.events;
     const reasons = events.map((e) => e.evidence.reason);
     expect(reasons).toEqual(
@@ -347,6 +393,305 @@ describe('support export', () => {
       expect(text).not.toContain('CANARY-PRIVATE-NAME');
       expect(text).not.toContain('private.example');
     }
+  });
+
+  it('contains invalid remote JSON at the actual claim route, disk logger and final HTTP bundle', async () => {
+    const dir = await directory();
+    const canary = 'n8Q4z281';
+    const connectionPath = join(dir, 'connection.json');
+    await writeFile(
+      connectionPath,
+      JSON.stringify({
+        baseUrl: OFFICIAL_RIVALHUB_URL,
+        credential: canary,
+        installationId: 'installation-281',
+        competitionId: 'competition-281',
+        displayName: 'synthetic',
+      }),
+    );
+    let mode: 'json' | 'network' | 'read' = 'json';
+    const connection = new RivalHubConnection(connectionPath, () => {
+      if (mode === 'network')
+        throw new TypeError('https://user:' + canary + '@synthetic.example/?key=' + canary);
+      if (mode === 'read')
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new TypeError(canary));
+              },
+            }),
+          ),
+        );
+      return Promise.resolve(new Response(canary, { status: 200 }));
+    });
+    await connection.load();
+    const stream = createWriteStream(join(dir, 'companion.log'));
+    const routes = Fastify({ logger: { stream } });
+    const snapshot = {
+      matchId: 'match-281',
+      competitionId: 'competition-281',
+      cursor: {
+        producerInstanceId: 'producer-281',
+        liveSessionId: 'session-281',
+        programSourceGeneration: 2,
+        mapEpoch: 3,
+      },
+      players: [],
+    } as unknown as LiveSnapshotV1;
+    registerRivalHubConnectionRoutes(routes, {
+      connection,
+      canClaim: () => true,
+      controller: {
+        getActiveBinding: () => ({
+          origin: 'online',
+          context: { matchId: 'match-281' },
+          manifest: { revision: 'revision-281' },
+        }),
+      } as unknown as MatchContextController,
+      currentSnapshot: () => snapshot,
+      originPolicy: {
+        mode: 'loopback',
+        bindHost: '127.0.0.1',
+        allowedOrigins: ['http://127.0.0.1:3000'],
+      },
+    });
+    try {
+      const response = await routes.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/source/claim',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.body).not.toContain(canary);
+      mode = 'network';
+      const failed = await routes.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/source/claim',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {},
+      });
+      expect(failed.statusCode).toBe(409);
+      expect(failed.body).not.toContain(canary);
+      mode = 'read';
+      const readFailure = await routes.inject({
+        method: 'POST',
+        url: '/operator/rivalhub/source/claim',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {},
+      });
+      expect(readFailure.statusCode).toBe(409);
+      expect(readFailure.body).not.toContain(canary);
+    } finally {
+      await routes.close();
+      await new Promise<void>((resolve) => stream.end(resolve));
+    }
+    const disk = await readFile(join(dir, 'companion.log'), 'utf8');
+    expect(disk).toContain('RIVALHUB_INVALID_JSON');
+    expect(disk).toContain('RIVALHUB_RESPONSE_READ_FAILED');
+    expect(disk).not.toContain(canary);
+    const support = buildApp({
+      supportLogsDirectory: dir,
+      readObsCaptureEvidence: () => Promise.reject(new Error('synthetic unavailable')),
+    });
+    try {
+      const response = await support.inject(request);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain(canary);
+      expect(response.body).toContain('RIVALHUB_INVALID_JSON');
+    } finally {
+      await support.close();
+    }
+  });
+
+  it('aggregates 150 successful LIVE frames while retaining the failed frame and its roster/coverage/guard evidence', async () => {
+    const dir = await directory();
+    const journal = new BusinessJournal(dir, () => {});
+    const ids = Array.from({ length: 10 }, (_, i) => '7656119800000000' + String(i));
+    const scope = {
+      matchId: 'match-live',
+      liveSessionId: 'session-live',
+      producerInstanceId: 'producer-live',
+    };
+    journal.write('business_runtime', {
+      ...scope,
+      identity: 'matched',
+      coverage: { map: 'present', allPlayers: 'present' },
+      expected: ids.map((steam64) => ({ steam64, isStarter: true })),
+      observed: ids.map((steam64, i) => ({ steam64, side: i < 5 ? 'CT' : 'T', slot: i })),
+    });
+    journal.write('business_guard', {
+      ...scope,
+      reason: 'send_guard_blocked',
+      blockers: ['telemetry_not_fresh'],
+    });
+    journal.write('business_live', {
+      ...scope,
+      reason: 'network_failed',
+      originalObservedAt: '2026-10-16T00:00:00.000Z',
+    });
+    await journal.flush();
+    const initialWrites = journal.getHealth().committedWrites;
+    for (let i = 1; i <= 150; i++)
+      journal.write('business_live', {
+        ...scope,
+        reason: 'receiver_accepted',
+        originalObservedAt: new Date(
+          Date.parse('2026-10-16T00:00:00.000Z') + i * 500,
+        ).toISOString(),
+      });
+    await journal.close();
+    const history = readBusinessHistory(dir);
+    const events = history.groups.find((g) => g.matchId === 'match-live')!.events;
+    const failed = events.find((e) => e.evidence.reason === 'network_failed')!;
+    expect(failed.context?.runtime?.evidence.expected.map((p) => p.steam64)).toEqual(ids);
+    expect(failed.context?.runtime?.evidence.observed.map((p) => p.steam64)).toEqual(ids);
+    expect(failed.context?.runtime?.evidence.coverage).toMatchObject({
+      map: 'present',
+      allPlayers: 'present',
+    });
+    expect(failed.context?.guard?.evidence.blockers).toContain('telemetry_not_fresh');
+    const successes = events.filter(
+      (e) => e.stage === 'business_live' && e.evidence.reason === 'receiver_accepted',
+    );
+    expect(successes).toHaveLength(1);
+    expect(successes[0]).toMatchObject({
+      occurrences: 150,
+      lastObservedAt: '2026-10-16T00:01:15.000Z',
+    });
+    expect(journal.getHealth().committedWrites - initialWrites).toBe(1);
+    expect(history.manifest.coalescedEvents).toBeGreaterThanOrEqual(149);
+  });
+
+  it('reports uncommitted write failures in the HTTP manifest and persists them after storage recovers', async () => {
+    const dir = await directory();
+    const app = buildApp({
+      supportLogsDirectory: dir,
+      gsiToken: 'synthetic-gsi',
+      readObsCaptureEvidence: () => Promise.reject(new Error('synthetic unavailable')),
+    });
+    const originalRename = filesystem.rename;
+    let failing = true;
+    try {
+      await app.ready();
+      vi.spyOn(filesystem, 'rename').mockImplementation((source, target) =>
+        String(source).endsWith(BUSINESS_HISTORY_FILE + '.tmp') && failing
+          ? Promise.reject(Object.assign(new Error('synthetic denied'), { code: 'EACCES' }))
+          : originalRename(source, target),
+      );
+      await app.inject({
+        method: 'POST',
+        url: '/gsi',
+        payload: {
+          auth: { token: 'synthetic-gsi' },
+          map: {
+            name: 'de_nuke',
+            phase: 'live',
+            round: 0,
+            team_ct: { score: 0 },
+            team_t: { score: 0 },
+          },
+        },
+      });
+      const response = await app.inject(request);
+      const result = response.json<{
+        businessHistory: ReturnType<typeof readBusinessHistory> & {
+          manifest: { currentWriteStatus: string; uncommittedEvents: number };
+        };
+      }>();
+      expect(result.businessHistory.manifest).toMatchObject({
+        currentWriteStatus: 'write_failed',
+        committedWriteFailures: 0,
+        evidenceSource: 'committed_disk',
+      });
+      expect(result.businessHistory.manifest.writeFailures).toBeGreaterThan(0);
+      expect(result.businessHistory.manifest.uncommittedWriteFailures).toBeGreaterThan(0);
+      expect(result.businessHistory.manifest.uncommittedEvents).toBeGreaterThan(0);
+      expect(
+        result.businessHistory.groups
+          .flatMap((g) => g.events)
+          .some((e) => e.evidence.mapName === 'de_nuke'),
+      ).toBe(false);
+      failing = false;
+      const recovered = (await app.inject(request)).json<typeof result>();
+      expect(recovered.businessHistory.manifest).toMatchObject({
+        currentWriteStatus: 'available',
+        uncommittedWriteFailures: 0,
+        uncommittedEvents: 0,
+      });
+      expect(recovered.businessHistory.manifest.committedWriteFailures).toBeGreaterThan(0);
+      expect(
+        recovered.businessHistory.groups
+          .flatMap((g) => g.events)
+          .some((e) => e.evidence.mapName === 'de_nuke'),
+      ).toBe(true);
+    } finally {
+      failing = false;
+      await app.close();
+    }
+  });
+
+  it('bounds the pending queue and keeps accepting telemetry while the asynchronous fsync is held', async () => {
+    const dir = await directory();
+    const journal = new BusinessJournal(dir, () => {});
+    await journal.flush();
+    const appDir = await directory();
+    const app = buildApp({ supportLogsDirectory: appDir, gsiToken: 'synthetic-gsi' });
+    await app.ready();
+    const originalOpen = filesystem.open;
+    let release: () => void = () => {};
+    let held = false;
+    let appHeld = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]).endsWith(BUSINESS_HISTORY_FILE + '.tmp')) {
+        const sync = handle.sync.bind(handle);
+        vi.spyOn(handle, 'sync').mockImplementation(async () => {
+          held = true;
+          if (args[0] === join(appDir, BUSINESS_HISTORY_FILE + '.tmp')) appHeld = true;
+          await gate;
+          await sync();
+        });
+      }
+      return handle;
+    });
+    journal.write('business_live', { matchId: 'async-match', reason: 'network_failed' });
+    const writing = journal.flush();
+    try {
+      await vi.waitFor(() => expect(held).toBe(true));
+      for (let i = 0; i < 500; i++)
+        journal.write('business_delivery', {
+          matchId: 'async-match',
+          idempotencyKey: 'event-' + i,
+          reason: 'retry_unknown',
+          attempts: i,
+        });
+      expect(journal.getHealth().queuedEvents).toBeLessThanOrEqual(
+        BUSINESS_HISTORY_LIMITS.queuedEvents,
+      );
+      expect(journal.getHealth().queuedBytes).toBeLessThanOrEqual(
+        BUSINESS_HISTORY_LIMITS.queuedBytes,
+      );
+      const frame = (name: string) => ({
+        method: 'POST' as const,
+        url: '/gsi',
+        payload: { auth: { token: 'synthetic-gsi' }, map: { name } },
+      });
+      expect((await app.inject(frame('de_ancient'))).statusCode).toBe(204);
+      await vi.waitFor(() => expect(appHeld).toBe(true));
+      // Its own history fsync is still held: ingress must nevertheless finish.
+      expect((await app.inject(frame('de_nuke'))).statusCode).toBe(204);
+    } finally {
+      release();
+      await writing;
+      await journal.close();
+      await app.close();
+    }
+    expect(readBusinessHistory(dir).manifest.droppedPendingEvents).toBeGreaterThan(0);
   });
 
   it.skipIf(process.platform === 'win32')('rejects symlink log targets', async () => {

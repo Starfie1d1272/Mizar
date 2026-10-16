@@ -1,17 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import {
-  constants,
-  openSync,
-  closeSync,
-  fstatSync,
-  lstatSync,
-  fsyncSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  mkdirSync,
-  unlinkSync,
-} from 'node:fs';
+import { constants, openSync, closeSync, fstatSync, lstatSync, readFileSync } from 'node:fs';
+import { open, mkdir, lstat, unlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   businessEvidence,
@@ -30,6 +19,8 @@ export const BUSINESS_HISTORY_LIMITS = {
   peakDiskBytes: 16 * 1024 * 1024,
   contextBytes: 128 * 1024,
   exportBytes: 512 * 1024,
+  queuedEvents: 128,
+  queuedBytes: 512 * 1024,
 };
 const stages = [
   'business_session',
@@ -47,7 +38,12 @@ type Entry = {
   version: string | null;
   startupSessionId: string | null;
   evidence: Evidence;
+  occurrences: number;
+  lastObservedAt: string | null;
+  lastRecordedAt: string;
+  context?: { runtime: ContextEntry | null; guard: ContextEntry | null };
 };
+type ContextEntry = Pick<Entry, 'recordedAt' | 'version' | 'evidence'>;
 type Group = {
   matchId: string | null;
   liveSessionId: string | null;
@@ -63,6 +59,8 @@ type Archive = {
   writeFailures: number;
   abandonedStagingFiles: number;
   groups: Group[];
+  coalescedEvents: number;
+  droppedPendingEvents: number;
 };
 const obj = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -75,6 +73,8 @@ const empty = (): Archive => ({
   writeFailures: 0,
   abandonedStagingFiles: 0,
   groups: [],
+  coalescedEvents: 0,
+  droppedPendingEvents: 0,
 });
 const failure = (e: Entry) =>
   e.evidence.status === 'rejected' ||
@@ -93,7 +93,12 @@ const failure = (e: Entry) =>
     ].includes(e.evidence.reason));
 
 /** Fixed path, bounded read, no traversal or configuration/remote payload copying. */
-function load(directory: string): { status: string; archive: Archive; corruptRecords: number } {
+function load(directory: string): {
+  status: string;
+  archive: Archive;
+  corruptRecords: number;
+  corruptGroups: number;
+} {
   let handle: number | undefined;
   try {
     const path = join(directory, BUSINESS_HISTORY_FILE);
@@ -123,11 +128,17 @@ function load(directory: string): { status: string; archive: Archive; corruptRec
     archive.evictedEvents = count(raw.evictedEvents);
     archive.writeFailures = count(raw.writeFailures);
     archive.abandonedStagingFiles = count(raw.abandonedStagingFiles);
+    archive.coalescedEvents = count(raw.coalescedEvents);
+    archive.droppedPendingEvents = count(raw.droppedPendingEvents);
     let corruptRecords = 0;
+    let corruptGroups = 0;
     for (const value of raw.groups) {
       const g = obj(value);
-      if (!Array.isArray(g.events) || bytes(g) > BUSINESS_HISTORY_LIMITS.groupBytes)
-        throw new Error('invalid_group');
+      if (!Array.isArray(g.events) || bytes(g) > BUSINESS_HISTORY_LIMITS.groupBytes) {
+        corruptGroups++;
+        if (Array.isArray(g.events)) corruptRecords += g.events.length;
+        continue;
+      }
       const events: Entry[] = g.events.flatMap((value) => {
         const e = obj(value);
         if (!stages.includes(String(e.stage)) || !utc(e.recordedAt)) {
@@ -141,6 +152,17 @@ function load(directory: string): { status: string; archive: Archive; corruptRec
             version: version(e.version),
             startupSessionId: businessId(e.startupSessionId),
             evidence: businessEvidence(e.evidence),
+            occurrences: Math.max(1, count(e.occurrences)),
+            lastObservedAt: utc(e.lastObservedAt),
+            lastRecordedAt: utc(e.lastRecordedAt) ?? utc(e.recordedAt)!,
+            ...(e.context === undefined
+              ? {}
+              : {
+                  context: {
+                    runtime: projectContext(obj(e.context).runtime),
+                    guard: projectContext(obj(e.context).guard),
+                  },
+                }),
           },
         ];
       });
@@ -153,24 +175,57 @@ function load(directory: string): { status: string; archive: Archive; corruptRec
         events,
       });
     }
-    return { status: corruptRecords ? 'partial_corrupt' : 'read', archive, corruptRecords };
+    return {
+      status: corruptRecords || corruptGroups ? 'partial_corrupt' : 'read',
+      archive,
+      corruptRecords,
+      corruptGroups,
+    };
   } catch (error) {
     return {
       status: obj(error).code === 'ENOENT' ? 'not_collected' : 'unreadable_or_corrupt',
       archive: empty(),
       corruptRecords: 0,
+      corruptGroups: 0,
     };
   } finally {
     if (handle !== undefined) closeSync(handle);
   }
 }
 
+function projectContext(value: unknown): ContextEntry | null {
+  const e = obj(value);
+  return utc(e.recordedAt)
+    ? {
+        recordedAt: utc(e.recordedAt)!,
+        version: version(e.version),
+        evidence: businessEvidence(e.evidence),
+      }
+    : null;
+}
+const groupKey = (e: Evidence) => JSON.stringify([e.matchId, e.liveSessionId]);
+
 export class BusinessHistory {
   private readonly session = randomUUID();
   private readonly archive: Archive;
   private failed = false;
-  private readonly previous = new Map<string, string>();
+  private readonly retained = new Set<Entry>();
+  private readonly previous = new Map<string, { signature: string; entry: Entry }>();
+  private readonly contexts = new Map<
+    string,
+    { runtime: ContextEntry | null; guard: ContextEntry | null }
+  >();
   private readonly blocked: boolean;
+  private pending: Entry[] = [];
+  private queuedBytes = 0;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private writing: Promise<void> | undefined;
+  private dirty = false;
+  private closed = false;
+  private committedFailures: number;
+  private uncommittedEvents = 0;
+  private committedWrites = 0;
+  private uncommittedAggregates = 0;
   constructor(
     private readonly directory: string,
     private readonly onFailure: () => void,
@@ -178,80 +233,214 @@ export class BusinessHistory {
   ) {
     const loaded = load(directory);
     this.archive = loaded.archive;
-    // Preserve damaged/unsupported evidence. Never silently replace it with an empty history.
     this.blocked = !['read', 'not_collected'].includes(loaded.status);
+    this.committedFailures = this.archive.writeFailures;
+    for (const group of this.archive.groups)
+      for (const entry of group.events) this.updateContext(entry);
   }
-  append(stage: string, evidence: Evidence) {
-    if (!stages.includes(stage)) return;
-    try {
-      if (this.blocked) throw new Error('history_unreadable');
-      const key = JSON.stringify([
-        stage,
-        evidence.matchId,
-        evidence.liveSessionId,
-        evidence.idempotencyKey,
-      ]);
-      const signature = JSON.stringify({
-        ...evidence,
-        sentAt: null,
-        acknowledgedAt: null,
-        restoredAt: null,
-      });
-      if (this.previous.get(key) === signature && !this.failed) return;
-      // Remember only after a successful write, so failure remains retryable.
-      const at = new Date().toISOString();
-      let group = this.archive.groups.find(
+  private updateContext(entry: Entry) {
+    if (!['business_runtime', 'business_guard'].includes(entry.stage)) return;
+    const key = groupKey(entry.evidence);
+    const context = {
+      ...(this.contexts.get(key) ?? { runtime: null, guard: null }),
+      [entry.stage === 'business_runtime' ? 'runtime' : 'guard']: {
+        recordedAt: entry.recordedAt,
+        version: entry.version,
+        evidence: entry.evidence,
+      },
+    };
+    this.contexts.delete(key);
+    this.contexts.set(key, context);
+    if (this.contexts.size > BUSINESS_HISTORY_LIMITS.groups)
+      this.contexts.delete(this.contexts.keys().next().value!);
+  }
+  append(stage: string, evidence: Evidence): void {
+    if (this.closed || !stages.includes(stage)) return;
+    if (this.blocked) {
+      this.archive.droppedPendingEvents++;
+      this.fail();
+      return;
+    }
+    const key = JSON.stringify([stage, groupKey(evidence), evidence.idempotencyKey]);
+    const at = new Date().toISOString();
+    const entry: Entry = {
+      stage,
+      recordedAt: at,
+      version: this.sourceVersion,
+      startupSessionId: this.session,
+      evidence,
+      occurrences: 1,
+      lastObservedAt: evidence.originalObservedAt,
+      lastRecordedAt: at,
+    };
+    const context = this.contexts.get(groupKey(evidence));
+    if (failure(entry) && context) entry.context = context;
+    const signature = JSON.stringify({
+      ...evidence,
+      sentAt: null,
+      acknowledgedAt: null,
+      restoredAt: null,
+      ...(stage === 'business_live'
+        ? { originalObservedAt: null, runtimeSeq: null, receiveSequence: null }
+        : {}),
+      context: entry.context,
+    });
+    const previous = this.previous.get(key);
+    if (previous?.signature === signature && this.retained.has(previous.entry)) {
+      const queued = this.pending.includes(previous.entry);
+      const priorBytes = queued ? bytes(previous.entry) : 0;
+      previous.entry.occurrences++;
+      this.uncommittedAggregates++;
+      previous.entry.lastRecordedAt = at;
+      const group = this.archive.groups.find(
         (g) => g.matchId === evidence.matchId && g.liveSessionId === evidence.liveSessionId,
       );
-      if (!group) {
-        group = {
-          matchId: evidence.matchId,
-          liveSessionId: evidence.liveSessionId,
-          firstRecordedAt: at,
-          lastRecordedAt: at,
-          rotatedEvents: 0,
-          events: [],
-        };
-        this.archive.groups.push(group);
+      if (group) group.lastRecordedAt = at;
+      previous.entry.lastObservedAt = evidence.originalObservedAt;
+      if (queued) {
+        this.queuedBytes += bytes(previous.entry) - priorBytes;
+        this.boundPending();
       }
-      if (stage === 'business_delivery') {
-        evidence.generatedVersion =
-          group.events.find(
-            (e) =>
-              e.evidence.idempotencyKey === evidence.idempotencyKey &&
-              e.evidence.generatedVersion !== null,
-          )?.evidence.generatedVersion ??
-          (evidence.reason === 'queued' ? this.sourceVersion : null);
+      this.archive.coalescedEvents++;
+      this.dirty = true;
+      // Healthy identical LIVE frames never schedule a rewrite. After a disk
+      // failure, new observations may request one bounded, delayed retry.
+      if (this.failed && !this.writing && !this.timer) {
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          void this.startWriter();
+        }, 1000);
+        this.timer.unref();
       }
-      const e: Entry = {
-        stage,
-        recordedAt: at,
-        version: this.sourceVersion,
-        startupSessionId: this.session,
-        evidence,
+      return;
+    }
+    this.updateContext(entry);
+    // Ordinary state can be superseded while waiting for the writer. A fault has
+    // already pinned its own immutable context, independent of this queue slot.
+    const replace =
+      stage === 'business_runtime' && !failure(entry)
+        ? this.pending.findIndex(
+            (e) => e.stage === stage && groupKey(e.evidence) === groupKey(evidence) && !failure(e),
+          )
+        : -1;
+    if (replace >= 0) {
+      this.queuedBytes -= bytes(this.pending[replace]);
+      this.retained.delete(this.pending[replace]!);
+      this.pending.splice(replace, 1);
+      this.archive.coalescedEvents++;
+    }
+    this.pending.push(entry);
+    this.retained.add(entry);
+    this.queuedBytes += bytes(entry);
+    this.boundPending();
+    this.previous.delete(key);
+    this.previous.set(key, { signature, entry });
+    if (this.previous.size > 256) this.previous.delete(this.previous.keys().next().value!);
+    this.dirty = true;
+    if (!this.writing && !this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        void this.startWriter();
+      }, 25);
+      this.timer.unref();
+    }
+  }
+  private boundPending(): void {
+    while (
+      this.pending.length > BUSINESS_HISTORY_LIMITS.queuedEvents ||
+      this.queuedBytes > BUSINESS_HISTORY_LIMITS.queuedBytes
+    ) {
+      const normal = this.pending.findIndex((e) => !failure(e));
+      const removed = this.pending.splice(normal >= 0 ? normal : 0, 1)[0]!;
+      this.retained.delete(removed);
+      this.queuedBytes -= bytes(removed);
+      this.archive.droppedPendingEvents++;
+      // Do not keep an evicted queue entry as the live aggregation target.
+      for (const [k, v] of this.previous) if (v.entry === removed) this.previous.delete(k);
+    }
+  }
+  private apply(entry: Entry): void {
+    const { evidence } = entry;
+    let group = this.archive.groups.find(
+      (g) => g.matchId === evidence.matchId && g.liveSessionId === evidence.liveSessionId,
+    );
+    if (!group) {
+      group = {
+        matchId: evidence.matchId,
+        liveSessionId: evidence.liveSessionId,
+        firstRecordedAt: entry.recordedAt,
+        lastRecordedAt: entry.recordedAt,
+        rotatedEvents: 0,
+        events: [],
       };
-      group.events.push(e);
-      group.lastRecordedAt = at;
-      const trim = (predicate: (event: Entry) => boolean, limit: number) => {
-        while (bytes(group.events.filter(predicate)) > limit) {
-          const index = group.events.findIndex(predicate);
-          if (index < 0) break;
-          group.events.splice(index, 1);
-          group.rotatedEvents++;
-        }
-      };
-      trim((e) => !failure(e), BUSINESS_HISTORY_LIMITS.contextBytes);
-      trim(
-        failure,
-        BUSINESS_HISTORY_LIMITS.groupBytes - BUSINESS_HISTORY_LIMITS.contextBytes - 4096,
-      );
-      while (
-        Buffer.byteLength(JSON.stringify({ businessHistory: { groups: [group] } }, null, 2)) >
-        BUSINESS_HISTORY_LIMITS.groupBytes - 16 * 1024
-      ) {
-        group.events.shift();
+      this.archive.groups.push(group);
+    }
+    if (entry.stage === 'business_delivery')
+      evidence.generatedVersion =
+        group.events.find(
+          (e) =>
+            e.evidence.idempotencyKey === evidence.idempotencyKey &&
+            e.evidence.generatedVersion !== null,
+        )?.evidence.generatedVersion ?? (evidence.reason === 'queued' ? this.sourceVersion : null);
+    group.events.push(entry);
+    group.lastRecordedAt = entry.recordedAt;
+    const trim = (predicate: (event: Entry) => boolean, limit: number) => {
+      while (bytes(group.events.filter(predicate)) > limit) {
+        const index = group.events.findIndex(predicate);
+        if (index < 0) break;
+        this.retained.delete(group.events[index]!);
+        group.events.splice(index, 1);
         group.rotatedEvents++;
       }
+    };
+    trim((e) => !failure(e), BUSINESS_HISTORY_LIMITS.contextBytes);
+    trim(failure, BUSINESS_HISTORY_LIMITS.groupBytes - BUSINESS_HISTORY_LIMITS.contextBytes - 4096);
+    while (
+      Buffer.byteLength(JSON.stringify({ businessHistory: { groups: [group] } }, null, 2)) >
+      BUSINESS_HISTORY_LIMITS.groupBytes - 16 * 1024
+    ) {
+      this.retained.delete(group.events[0]!);
+      group.events.shift();
+      group.rotatedEvents++;
+    }
+  }
+  private fail(): void {
+    this.archive.writeFailures++;
+    this.dirty = true;
+    if (!this.failed) {
+      try {
+        this.onFailure();
+      } catch {
+        /* Optional diagnostics. */
+      }
+    }
+    this.failed = true;
+  }
+  private startWriter(): Promise<void> {
+    if (this.writing) return this.writing;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.writing = this.writePending().finally(() => {
+      this.writing = undefined;
+      if (!this.closed && !this.failed && (this.pending.length || this.dirty) && !this.timer) {
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          void this.startWriter();
+        }, 25);
+        this.timer.unref();
+      }
+    });
+    return this.writing;
+  }
+  private async writePending(): Promise<void> {
+    if (this.blocked) return;
+    if (this.pending.length || this.dirty) {
+      const batch = this.pending;
+      this.pending = [];
+      this.queuedBytes = 0;
+      for (const entry of batch) this.apply(entry);
       while (
         this.archive.groups.length > BUSINESS_HISTORY_LIMITS.groups ||
         bytes(this.archive) > BUSINESS_HISTORY_LIMITS.totalBytes
@@ -259,56 +448,87 @@ export class BusinessHistory {
         const oldest = [...this.archive.groups].sort((a, b) =>
           (a.lastRecordedAt ?? '').localeCompare(b.lastRecordedAt ?? ''),
         )[0]!;
+        for (const entry of oldest.events) this.retained.delete(entry);
         this.archive.groups.splice(this.archive.groups.indexOf(oldest), 1);
         this.archive.evictedGroups++;
         this.archive.evictedEvents += oldest.events.length + oldest.rotatedEvents;
       }
-      mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+      this.uncommittedEvents += batch.length;
+      const events = this.uncommittedEvents;
+      this.dirty = false;
       const temporary = join(this.directory, `${BUSINESS_HISTORY_FILE}.tmp`);
+      let ownedTemporary = false;
       try {
+        await mkdir(this.directory, { recursive: true, mode: 0o700 });
         try {
-          const stale = lstatSync(temporary);
+          const stale = await lstat(temporary);
           if (!stale.isFile() || stale.isSymbolicLink()) throw new Error('invalid_staging_file');
-          // One fixed staging slot bounds crash residue. Never import uncommitted bytes.
-          unlinkSync(temporary);
+          await unlink(temporary);
           this.archive.abandonedStagingFiles++;
         } catch (error) {
           if (obj(error).code !== 'ENOENT') throw error;
         }
-        const handle = openSync(
+        const failures = this.archive.writeFailures;
+        // A bounded snapshot is serialized once per batch; no synchronous file
+        // writes or fsync execute in the telemetry/claim/delivery callback.
+        const aggregates = this.uncommittedAggregates;
+        const contents = JSON.stringify(this.archive);
+        const handle = await open(
           temporary,
           constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
           0o600,
         );
+        ownedTemporary = true;
         try {
-          writeFileSync(handle, JSON.stringify(this.archive));
-          fsyncSync(handle);
+          await handle.writeFile(contents);
+          await handle.sync();
         } finally {
-          closeSync(handle);
+          await handle.close();
         }
-        renameSync(temporary, join(this.directory, BUSINESS_HISTORY_FILE));
+        await rename(temporary, join(this.directory, BUSINESS_HISTORY_FILE));
+        ownedTemporary = false;
+        this.uncommittedAggregates -= aggregates;
+        this.committedFailures = failures;
+        this.uncommittedEvents -= events;
+        this.committedWrites++;
+        this.failed = false;
+      } catch {
+        this.fail();
       } finally {
-        try {
-          unlinkSync(temporary);
-        } catch {
-          /* Rename normally consumed it. */
-        }
+        if (ownedTemporary) await unlink(temporary).catch(() => undefined);
       }
-      this.previous.delete(key);
-      this.previous.set(key, signature);
-      if (this.previous.size > 256) this.previous.delete(this.previous.keys().next().value!);
-      this.failed = false;
-    } catch {
-      this.archive.writeFailures++;
-      if (!this.failed) {
-        try {
-          this.onFailure();
-        } catch {
-          /* Optional diagnostic callback. */
-        }
-      }
-      this.failed = true;
     }
+  }
+  async flush(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    // A failed attempt is reported, not retried indefinitely during export/exit.
+    const active = this.writing;
+    await this.startWriter();
+    // At most the active commit plus one batch; live input need not go idle.
+    // close() stops producers first, so this also drains all queued exit evidence.
+    if (active && !this.failed && (this.pending.length || this.dirty)) await this.startWriter();
+  }
+  async close(): Promise<void> {
+    this.closed = true;
+    await this.flush();
+  }
+  getHealth() {
+    return {
+      writeFailures: this.archive.writeFailures,
+      droppedPendingEvents: this.archive.droppedPendingEvents,
+      coalescedEvents: this.archive.coalescedEvents,
+      committedWriteFailures: this.committedFailures,
+      uncommittedWriteFailures: this.archive.writeFailures - this.committedFailures,
+      queuedEvents: this.pending.length,
+      queuedBytes: this.queuedBytes,
+      uncommittedEvents: this.uncommittedEvents + this.pending.length,
+      uncommittedAggregates: this.uncommittedAggregates,
+      uncommittedChanges: this.dirty || this.pending.length > 0 || this.uncommittedEvents > 0,
+      committedWrites: this.committedWrites,
+    };
   }
   getStatus(): 'available' | 'write_failed' {
     return this.failed ? 'write_failed' : 'available';
@@ -321,7 +541,7 @@ export function readBusinessHistory(
 ) {
   const loaded = directory
     ? load(directory)
-    : { status: 'not_configured', archive: empty(), corruptRecords: 0 };
+    : { status: 'not_configured', archive: empty(), corruptRecords: 0, corruptGroups: 0 };
   const { archive } = loaded;
   const groups = [...archive.groups].sort(
     (a, b) =>
@@ -342,7 +562,11 @@ export function readBusinessHistory(
   const result = () => ({
     manifest: {
       status: loaded.status,
-      corruptRecords: loaded.corruptRecords,
+      corruptRecords: loaded.corruptGroups ? null : loaded.corruptRecords,
+      knownCorruptRecords: loaded.corruptRecords,
+      corruptGroups: loaded.corruptGroups,
+      coalescedEvents: archive.coalescedEvents,
+      droppedPendingEvents: archive.droppedPendingEvents,
       firstRecordedAt:
         groups
           .map((g) => g.firstRecordedAt)
@@ -362,6 +586,9 @@ export function readBusinessHistory(
       rotatedGroups: archive.evictedGroups,
       rotatedEvents: archive.evictedEvents + groups.reduce((n, g) => n + g.rotatedEvents, 0),
       writeFailures: archive.writeFailures,
+      committedWriteFailures: archive.writeFailures,
+      uncommittedWriteFailures: 0,
+      evidenceSource: 'committed_disk',
       abandonedStagingFiles: archive.abandonedStagingFiles,
       completeness: 'bounded_observations_only',
       legacy: 'legacy_refs_are_irreversible; historical_missing_fields_were_not_collected',

@@ -92,6 +92,7 @@ describe('bounded reliable output', () => {
         },
       });
       expect(first.getRecords()[0]).toMatchObject({ status: 'pending', attempts: 1 });
+      await journal.close();
       vi.stubEnv('MIZAR_APP_VERSION', '1.3.5');
       const restartedJournal = new BusinessJournal(dir, () => {});
       const recovered = new ReliableOutbox(path, undefined, (record, reason) =>
@@ -121,6 +122,7 @@ describe('bounded reliable output', () => {
         },
       });
       expect(calls).toBe(2);
+      await restartedJournal.flush();
       const history = readBusinessHistory(dir)
         .groups.flatMap((g) => g.events)
         .filter((entry) => entry.stage === 'business_delivery');
@@ -152,6 +154,7 @@ describe('bounded reliable output', () => {
         isCurrent: () => true,
         sink: { send: () => Promise.resolve('rejected' as const) },
       });
+      await restartedJournal.flush();
       const rejection = readBusinessHistory(dir)
         .groups.flatMap((g) => g.events)
         .filter((e) => e.stage === 'business_delivery')

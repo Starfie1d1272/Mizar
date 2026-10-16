@@ -161,6 +161,12 @@ it('wires restart recovery through production app composition and GSI ingress', 
     ).toBe(204);
     const incomplete = frame('live');
     await appA.inject({ method: 'POST', url: '/gsi', payload: { ...incomplete, map: undefined } });
+    await appA.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
     const missingMap = readBusinessHistory(directory)
       .groups.flatMap((g) => g.events)
       .find(
@@ -179,6 +185,12 @@ it('wires restart recovery through production app composition and GSI ingress', 
     delete different.allplayers[originalId];
     different.allplayers['76561199999999999'] = { ...player, steamid: '76561199999999999' };
     await appA.inject({ method: 'POST', url: '/gsi', payload: different });
+    await appA.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
     const mismatch = readBusinessHistory(directory)
       .groups.flatMap((g) => g.events)
       .find((e) => e.evidence.extra.includes('76561199999999999'));

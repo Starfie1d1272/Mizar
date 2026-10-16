@@ -164,6 +164,15 @@ export class BusinessJournal {
   write(stage: string, evidence: unknown): void {
     this.history.append(stage, businessEvidence({ ...object(evidence), schema: 2 }));
   }
+  flush(): Promise<void> {
+    return this.history.flush();
+  }
+  close(): Promise<void> {
+    return this.history.close();
+  }
+  getHealth() {
+    return this.history.getHealth();
+  }
   getStatus(): 'available' | 'write_failed' {
     return this.history.getStatus();
   }
