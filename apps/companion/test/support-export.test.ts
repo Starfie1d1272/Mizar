@@ -190,7 +190,9 @@ describe('support export', () => {
     const failed = new BusinessJournal(blocked, () => {
       throw new Error('optional logger failure');
     });
+    await failed.close();
     expect(failed.getStatus()).toBe('write_failed');
+    expect(failed.getHealth().writeFailures).toBeGreaterThan(0);
   });
 
   it('filters secret canaries before disk and again during export, preserving only useful account identifiers', async () => {
