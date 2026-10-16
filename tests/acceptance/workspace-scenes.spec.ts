@@ -272,18 +272,25 @@ test('online account differences alert once, preserve unknown identities and rea
   );
   const outgoing: { operation: string; body: unknown }[] = [];
   let rejectMapStarts = false;
-  const connection = new RivalHubConnection(connectionPath, (url, init) => {
-    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
-    const operation = requestUrl.split('/').at(-1)!;
-    if (typeof init?.body === 'string')
-      outgoing.push({ operation, body: JSON.parse(init.body) as unknown });
-    if (operation === 'claim')
-      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
-    if (operation === 'live') return Promise.resolve(Response.json({ accepted: true }));
-    if (operation === 'reliable')
-      return Promise.resolve(new Response(null, { status: rejectMapStarts ? 409 : 204 }));
-    return Promise.resolve(Response.json(manifest));
-  });
+  let liveAccepted = true;
+  let healthOffset = 0;
+  const connection = new RivalHubConnection(
+    connectionPath,
+    (url, init) => {
+      const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      const operation = requestUrl.split('/').at(-1)!;
+      if (typeof init?.body === 'string')
+        outgoing.push({ operation, body: JSON.parse(init.body) as unknown });
+      if (operation === 'claim')
+        return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+      if (operation === 'live') return Promise.resolve(Response.json({ accepted: liveAccepted }));
+      if (operation === 'reliable')
+        return Promise.resolve(new Response(null, { status: rejectMapStarts ? 409 : 204 }));
+      return Promise.resolve(Response.json(manifest));
+    },
+    OFFICIAL_RIVALHUB_URL,
+    () => performance.now() + healthOffset,
+  );
   await connection.load();
   const binding = {
     manifest,
@@ -539,6 +546,39 @@ test('online account differences alert once, preserve unknown identities and rea
     // Incomplete observations do not invent a new account mismatch.
     await push(starters.slice(0, 8));
     await expect(dialog).not.toBeVisible();
+    // A matched roster still needs real website acceptance. The health clock is
+    // injected in this owned local Companion; no website or user data is touched.
+    await push(starters);
+    expect(coordinator.getCurrent().identity.state).toBe('matched');
+    await app.inject('/local/v1/rivalhub-connection');
+    healthOffset += 16_000;
+    await push(starters);
+    const syncDialog = page.getByRole('dialog', { name: '本场网站同步需要处理' });
+    const outside = page.getByRole('button', { name: '比赛资料', exact: true });
+    await outside.focus();
+    await expect(syncDialog).toBeVisible();
+    await expect(outside).toBeFocused();
+    expect(await syncDialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    await expect(syncDialog.getByRole('link', { name: '打开网站本场工作台' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('sync-health-matched.png') });
+    await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await push(starters);
+    await expect(syncDialog).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '网站同步需处理' })).toBeVisible();
+    await page.getByRole('button', { name: '网站同步需处理' }).click();
+    rejectMapStarts = false;
+    await syncDialog.getByRole('button', { name: '立即重试同步' }).click();
+    await push(starters);
+    await expect.poll(() => connection.view().liveDelivery.status).toBe('accepted');
+    await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(page.getByRole('button', { name: '网站同步需处理' })).not.toBeVisible();
+    liveAccepted = false;
+    healthOffset += 16_000;
+    await push(starters);
+    await expect(syncDialog).toBeVisible();
+    await syncDialog.getByText('详情与诊断导出', { exact: true }).click();
+    await expect(syncDialog.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('sync-health-interrupted.png') });
   } finally {
     await app.close();
     await coordinator.close();

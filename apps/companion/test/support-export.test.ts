@@ -446,7 +446,11 @@ describe('support export', () => {
         programSourceGeneration: 2,
         mapEpoch: 3,
       },
-      players: [],
+      capability: { identity: 'matched', telemetryFresh: true, contextFresh: true },
+      players: Array.from({ length: 10 }, (_, index) => ({
+        lineupEvidence: 'current',
+        sourcePlayerId: String(76561198000000000n + BigInt(index)),
+      })),
     } as unknown as LiveSnapshotV1;
     registerRivalHubConnectionRoutes(routes, {
       connection,
@@ -455,7 +459,10 @@ describe('support export', () => {
         getActiveBinding: () => ({
           origin: 'online',
           context: { matchId: 'match-281' },
-          manifest: { revision: 'revision-281' },
+          manifest: {
+            revision: 'revision-281',
+            match: { competition: { competitionId: 'competition-281' } },
+          },
         }),
       } as unknown as MatchContextController,
       currentSnapshot: () => snapshot,

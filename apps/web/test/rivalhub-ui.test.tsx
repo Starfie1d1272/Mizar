@@ -114,7 +114,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('本机正在提供实时数据');
+    expect(container.textContent).toContain('网站接收待确认');
     const releaseBtn = Array.from(container.querySelectorAll('button')).find((b) =>
       b.textContent?.includes('停止作为数据源'),
     )!;
@@ -145,7 +145,7 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
       resumeButton.click();
       await Promise.resolve();
     });
-    expect(container.textContent).toContain('本机正在提供实时数据');
+    expect(container.textContent).toContain('网站接收待确认');
     expect(
       fetchMock.mock.calls.filter((call) =>
         toUrlString(call[0]).includes('/operator/rivalhub/source/claim'),

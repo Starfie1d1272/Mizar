@@ -24,24 +24,27 @@ export function LiveRosterAlert({
   onReview,
   error,
   recovered,
+  suppressAutomatic = false,
 }: {
   alert: Alert | null;
   recovered: boolean;
+  suppressAutomatic?: boolean;
   onReview: () => void;
   error: string | null;
 }) {
+  const [requested, setRequested] = useState(false);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   // Temporary missing HTTP/telemetry data does not erase an acknowledgement.
   // Only a positively recovered current lineup permits the same difference to alert again.
   if (recovered && dismissedKey !== null) setDismissedKey(null);
   if (!alert) return null;
-  const open = dismissedKey !== alert.key;
+  const open = requested || (!suppressAutomatic && dismissedKey !== alert.key);
   return (
     <>
       <StatusBanner tone="warning">
         <strong>上场选手／账号与网站首发不一致</strong>
         <p>{alert.syncStatus}</p>
-        <Button onClick={() => setDismissedKey(null)}>查看人员差异</Button>
+        <Button onClick={() => setRequested(true)}>查看人员差异</Button>
         <Button onClick={onReview}>核对网站名单</Button>
       </StatusBanner>
       <Dialog
@@ -49,7 +52,10 @@ export function LiveRosterAlert({
         modal={false}
         className="workspace-live-roster-alert"
         title="本场上场选手／账号与网站首发不一致"
-        onClose={() => setDismissedKey(alert.key)}
+        onClose={() => {
+          setDismissedKey(alert.key);
+          setRequested(false);
+        }}
       >
         <p role="status">{alert.syncStatus}</p>
         <p>可能存在临时换人或借用账号。先确认所选比赛与服务器，再由赛务核对网站首发。</p>

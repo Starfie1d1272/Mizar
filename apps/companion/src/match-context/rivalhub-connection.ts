@@ -229,7 +229,7 @@ export class RivalHubConnection {
   getSchedule(): ScheduleWindowV1 | null {
     return this.installation &&
       this.scheduleCache?.competitionId === this.installation.competitionId &&
-      performance.now() - this.scheduleCache.acquiredAt < 60_000
+      this.monotonicNow() - this.scheduleCache.acquiredAt < 60_000
       ? this.scheduleCache.value
       : null;
   }
@@ -238,7 +238,115 @@ export class RivalHubConnection {
   private pairingPoll: Promise<PairingStatus> | null = null;
   private source: Source | null = null;
   private activeDeviceName: string | null = null;
+  private activeDeviceMatchId: string | null = null;
   private claimRevision = 0;
+  private stoppedMatchId: string | null = null;
+  private controlFailure: string | null = null;
+  private controlFailureScope: string | null = null;
+  private failureScope(snapshot: { matchId: string; cursor: LiveSnapshotV1['cursor'] }): string {
+    return JSON.stringify([snapshot.matchId, executionKey(snapshot.cursor), this.claimRevision]);
+  }
+  private nextLiveAt = 0;
+  private liveFailures = 0;
+  private syncWatch: {
+    key: string;
+    matchId: string;
+    since: number;
+    incidentId: string | null;
+  } | null = null;
+  private lastAcceptedAt = 0;
+
+  /** Operator-only projection. A claim or a reliable ACK is never LIVE acceptance. */
+  syncHealth(
+    snapshot: LiveSnapshotV1 | null,
+    expected: boolean,
+    matchId = snapshot?.matchId ?? null,
+  ) {
+    const result = (status: string, reason: string | null = null) => ({
+      status,
+      reason,
+      incidentId: this.syncWatch?.incidentId ?? null,
+      deviceName: this.activeDeviceName,
+    });
+    if (matchId && this.syncWatch?.matchId !== matchId) this.syncWatch = null;
+    if (!this.installation) {
+      this.syncWatch = null;
+      return result('inactive');
+    }
+    // Hiding the workspace or entering preparation is not receiver recovery.
+    // Preserve the incident acknowledgement until acceptance or a new execution.
+    if (!expected) return result('inactive');
+    if (matchId && this.stoppedMatchId === matchId) return result('stopped');
+    if (this.activeDeviceName && this.activeDeviceMatchId === matchId)
+      return result('other_device');
+    // Only a current, bound formal execution can start a watch. Warmup and
+    // unbound practice/demo inputs never establish an expected website stream.
+    if (snapshot && snapshot.map.phase !== 'live') {
+      this.syncWatch = null;
+      return result('inactive');
+    }
+    if (
+      snapshot?.map.phase === 'live' &&
+      snapshot.map.mapId &&
+      snapshot.cursor.liveSessionId &&
+      snapshot.capability.canonicalTeams &&
+      snapshot.capability.lineupComplete
+    ) {
+      const key = JSON.stringify([snapshot.matchId, executionKey(snapshot.cursor)]);
+      if (this.syncWatch?.key !== key)
+        this.syncWatch = {
+          key,
+          matchId: snapshot.matchId,
+          since: this.monotonicNow(),
+          incidentId: null,
+        };
+    }
+    const watch = this.syncWatch;
+    if (!watch) return result('inactive');
+    const current =
+      snapshot &&
+      this.source?.matchId === snapshot.matchId &&
+      this.source.deliveryExecution === executionKey(snapshot.cursor) &&
+      this.liveDelivery.cursor &&
+      executionKey(this.liveDelivery.cursor) === executionKey(snapshot.cursor);
+    const now = this.monotonicNow();
+    if (current && this.liveDelivery.status === 'accepted' && now - this.lastAcceptedAt < 15_000) {
+      watch.since = now;
+      watch.incidentId = null;
+      return result('healthy');
+    }
+    const reason =
+      (snapshot && this.controlFailureScope === this.failureScope(snapshot)
+        ? this.controlFailure
+        : null) ??
+      (!snapshot
+        ? 'input_unavailable'
+        : !this.source
+          ? 'source_unavailable'
+          : current
+            ? (this.liveDelivery.reason ?? 'reception_unconfirmed')
+            : 'map_start_pending');
+    if (now - watch.since < 15_000 && !watch.incidentId) return result('waiting', reason);
+    watch.incidentId ??= randomUUID();
+    return result('attention', reason);
+  }
+
+  retryLive(): void {
+    this.nextLiveAt = 0;
+    this.liveFailures = 0;
+  }
+
+  hasCurrentStart(snapshot: LiveSnapshotV1): boolean {
+    return (
+      this.source?.matchId === snapshot.matchId &&
+      this.source.acknowledgedExecution === executionKey(snapshot.cursor)
+    );
+  }
+
+  stopSync(matchId: string | null): void {
+    this.stoppedMatchId = matchId;
+    this.syncWatch = null;
+  }
   private liveDelivery: {
     cursor: LiveSnapshotV1['cursor'] | null;
     status: 'idle' | 'accepted' | 'dropped' | 'failing';
@@ -273,6 +381,7 @@ export class RivalHubConnection {
     private readonly path: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly baseUrl = OFFICIAL_RIVALHUB_URL,
+    private readonly monotonicNow = () => performance.now(),
   ) {}
 
   async load(): Promise<void> {
@@ -296,7 +405,9 @@ export class RivalHubConnection {
       displayName: this.installation?.displayName ?? null,
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
+      activeDeviceMatchId: this.activeDeviceMatchId,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
+      stoppedMatchId: this.stoppedMatchId,
       liveDelivery:
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
@@ -309,7 +420,7 @@ export class RivalHubConnection {
               durationMs:
                 this.liveDelivery.since === null
                   ? 0
-                  : Math.max(0, performance.now() - this.liveDelivery.since),
+                  : Math.max(0, this.monotonicNow() - this.liveDelivery.since),
             },
     };
   }
@@ -510,7 +621,7 @@ export class RivalHubConnection {
       this.scheduleCache = {
         competitionId: this.installation.competitionId,
         value: toScheduleWindowV1(result.value),
-        acquiredAt: performance.now(),
+        acquiredAt: this.monotonicNow(),
       };
     return result.value;
   }
@@ -560,13 +671,27 @@ export class RivalHubConnection {
         httpStatus: response.status,
         reason: response.ok ? 'claim_response_received' : `http_${response.status}`,
       });
-      if (!response.ok) throw new Error('当前比赛无法成为数据源，请刷新比赛资料并核对首发。');
+      if (!response.ok) {
+        this.controlFailureScope = this.failureScope(snapshot);
+        this.controlFailure =
+          response.status === 401
+            ? 'authorization_expired'
+            : response.status === 403
+              ? 'permission_denied'
+              : response.status === 409
+                ? 'context_conflict'
+                : `http_${response.status}`;
+        throw new Error('当前比赛无法成为数据源，请检查同步状态后重试。');
+      }
       const result = (await this.readJson(response)) as {
         claimed: boolean;
         authorityRevision: number;
         activeDeviceName?: string;
       };
       if (result.claimed) {
+        this.stoppedMatchId = null;
+        this.controlFailure = null;
+        this.retryLive();
         this.liveDelivery = {
           cursor: null,
           status: 'idle',
@@ -583,9 +708,11 @@ export class RivalHubConnection {
           liveSessionId: snapshot.cursor.liveSessionId,
         };
         this.activeDeviceName = null;
+        this.activeDeviceMatchId = null;
       } else {
         this.source = null;
         this.activeDeviceName = result.activeDeviceName ?? '另一台制播设备';
+        this.activeDeviceMatchId = snapshot.matchId;
       }
       this.business('business_claim', snapshot, {
         contextRevision,
@@ -594,6 +721,10 @@ export class RivalHubConnection {
       });
       return this.view();
     } catch (error) {
+      if (requestFailureReason(error) !== 'unknown') {
+        this.controlFailureScope = this.failureScope(snapshot);
+        this.controlFailure = requestFailureReason(error);
+      }
       this.business('business_claim', snapshot, {
         contextRevision,
         reason: requestFailureReason(error),
@@ -666,10 +797,20 @@ export class RivalHubConnection {
         acknowledgedAt: response.ok ? new Date().toISOString() : null,
       });
       if (response.ok) return 'accepted';
+      if (event.kind === 'map_started' && source.deliveryExecution === executionKey(event.cursor)) {
+        this.controlFailureScope = this.failureScope(event);
+        this.controlFailure =
+          response.status === 401
+            ? 'authorization_expired'
+            : response.status === 403
+              ? 'permission_denied'
+              : response.status === 409
+                ? 'context_conflict'
+                : `http_${response.status}`;
+      }
       if (response.status === 403) {
         if (this.source === source) {
           this.source = null;
-          this.activeDeviceName = '另一台制播设备';
         }
         return 'rejected';
       }
@@ -677,6 +818,15 @@ export class RivalHubConnection {
         ? 'retry'
         : 'rejected';
     } catch (error) {
+      if (
+        isCurrent() &&
+        !signal?.aborted &&
+        event.kind === 'map_started' &&
+        source.deliveryExecution === executionKey(event.cursor)
+      ) {
+        this.controlFailureScope = this.failureScope(event);
+        this.controlFailure = requestFailureReason(error);
+      }
       evidence({
         reason: signal?.aborted
           ? requestFailureReason(signal.reason) === 'timeout'
@@ -708,7 +858,13 @@ export class RivalHubConnection {
     // Keep the disposable lane behind the reliable start acknowledgement, also
     // after re-claim, generation advance and map change. No old snapshot is queued.
     const source = this.source;
-    if (!source || source.matchId !== snapshot.matchId) {
+    if (this.stoppedMatchId === snapshot.matchId) return;
+    if (
+      !source ||
+      source.matchId !== snapshot.matchId ||
+      source.producerInstanceId !== snapshot.cursor.producerInstanceId ||
+      source.liveSessionId !== snapshot.cursor.liveSessionId
+    ) {
       this.business('business_live', snapshot, { reason: 'source_unavailable' });
       throw new Error('rivalhub_live_unavailable');
     }
@@ -718,6 +874,7 @@ export class RivalHubConnection {
       this.business('business_live', snapshot, { reason: 'map_start_pending' });
       throw new Error('rivalhub_map_start_pending');
     }
+    if (this.monotonicNow() < this.nextLiveAt) return;
     let reason: string;
     let accepted = false;
     let dropped = false;
@@ -828,7 +985,6 @@ export class RivalHubConnection {
       throw new Error('rivalhub_live_unavailable');
     if (lostAuthority) {
       this.source = null;
-      this.activeDeviceName = '另一台制播设备';
     }
     this.business('business_live', snapshot, {
       reason: accepted ? 'receiver_accepted' : reason,
@@ -839,6 +995,9 @@ export class RivalHubConnection {
     });
     const previous = this.liveDelivery;
     if (accepted) {
+      this.controlFailure = null;
+      this.lastAcceptedAt = this.monotonicNow();
+      this.retryLive();
       if (previous.notified)
         this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
       this.liveDelivery = {
@@ -851,16 +1010,30 @@ export class RivalHubConnection {
       };
       return;
     }
+    if (!dropped) {
+      this.liveFailures += 1;
+      this.nextLiveAt =
+        this.monotonicNow() + Math.min(8_000, 500 * 2 ** Math.min(this.liveFailures, 4));
+      this.controlFailureScope = this.failureScope(snapshot);
+      this.controlFailure =
+        reason === 'http_401'
+          ? 'authorization_expired'
+          : reason === 'http_403'
+            ? 'permission_denied'
+            : reason === 'http_409'
+              ? 'context_conflict'
+              : reason;
+    }
     this.liveDelivery = {
       cursor: snapshot.cursor,
       status: dropped && previous.status !== 'failing' ? 'dropped' : 'failing',
       reason,
       consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
-      since: previous.since ?? performance.now(),
+      since: previous.since ?? this.monotonicNow(),
       notified: previous.notified,
       ...(failure ? { failure } : previous.failure ? { failure: previous.failure } : {}),
     };
-    const duration = performance.now() - this.liveDelivery.since!;
+    const duration = this.monotonicNow() - this.liveDelivery.since!;
     let newlyNotified = false;
     if (
       !this.liveDelivery.notified &&
@@ -886,6 +1059,7 @@ export class RivalHubConnection {
     current: LiveSnapshotV1 | null,
     signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
   ): Promise<ReliableDeliveryResult> {
+    if (this.stoppedMatchId === event.matchId) return 'retry';
     const source = this.source;
     // Durable recovery keeps the original producer evidence. A new claim cannot
     // authorize that old producer, even when the live session was restored.
@@ -921,7 +1095,9 @@ export class RivalHubConnection {
       if (sameExecution) this.beginDeliveryExecution(source, event.cursor);
     }
     const isCurrent = () =>
-      this.source === source && (attempt === undefined || source?.mapStartAttempt === attempt);
+      this.stoppedMatchId !== event.matchId &&
+      this.source === source &&
+      (attempt === undefined || source?.mapStartAttempt === attempt);
     const result = await this.upload(
       'reliable',
       { event, lineupSteam64: observed.length === 10 ? observed : [] },
@@ -930,8 +1106,10 @@ export class RivalHubConnection {
       isCurrent,
     );
     if (attempt && source && isCurrent() && !signal.aborted) {
-      if (result === 'accepted') source.acknowledgedExecution = executionKey(event.cursor);
-      else if (
+      if (result === 'accepted') {
+        source.acknowledgedExecution = executionKey(event.cursor);
+        if (source.deliveryExecution === executionKey(event.cursor)) this.controlFailure = null;
+      } else if (
         result === 'rejected' &&
         sameExecution &&
         source.deliveryExecution === executionKey(event.cursor)
