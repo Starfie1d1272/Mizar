@@ -4,7 +4,7 @@ import type { MatchDocumentV1 } from '../../packages/core/src/match-context/inde
 import type { SeriesBindingView } from '../../packages/protocol/src/operator.js';
 import { expect, test } from './companion-isolation.js';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -579,6 +579,11 @@ test('online account differences alert once, preserve unknown identities and rea
     await syncDialog.getByText('详情与诊断导出', { exact: true }).click();
     await expect(syncDialog.getByRole('button', { name: '导出诊断包', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sync-health-interrupted.png') });
+    // Reuse the existing CI browser-evidence artifact, including successful runs.
+    const evidence = '.agent-tmp/test-evidence/ui-sync-health';
+    await mkdir(evidence, { recursive: true });
+    for (const name of ['sync-health-matched.png', 'sync-health-interrupted.png'])
+      await copyFile(testInfo.outputPath(name), join(evidence, name));
   } finally {
     await app.close();
     await coordinator.close();
