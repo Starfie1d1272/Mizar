@@ -57,6 +57,59 @@ function single(): RadarSnapshot {
 }
 
 describe('Radar renderer local lifecycle', () => {
+  it.each([
+    {
+      round: 3,
+      entity: '114',
+      samples: [
+        { at: 0, position: [-1084.8, -915.9, 402.1], lifetime: 4.137, effect: 0 },
+        { at: 14.045, position: [-1085.6, -917.7, 404.1], lifetime: 4.152, effect: 0 },
+        { at: 45.728, position: [-1087.3, -921.4, 407.8], lifetime: 4.184, effect: 0 },
+        { at: 3467.384, position: [-1258.2, -1309, 24], lifetime: 7.605, effect: 0.031 },
+      ],
+    },
+    {
+      round: 6,
+      entity: '486',
+      samples: [
+        { at: 0, position: [-1090, -928.1, 409.4], lifetime: 4.47, effect: 0 },
+        { at: 30.314, position: [-1091.8, -931.8, 412.4], lifetime: 4.501, effect: 0 },
+        { at: 60.972, position: [-1093.5, -935.5, 415.2], lifetime: 4.533, effect: 0 },
+        { at: 3264.513, position: [-1256.2, -1301, 24], lifetime: 7.736, effect: 0.047 },
+      ],
+    },
+  ])(
+    'waits for effect time before anchoring the Ancient round $round smoke',
+    ({ entity, samples }) => {
+      // Minimal positions/timing from the 2026-10-16 GSI capture of demo
+      // 4163084560_1000003401: seq 30073–30075/30161 and 39038–39040/39118.
+      const model = new RadarPresentation();
+      let snapshot = single();
+      snapshot.payload.mapName = 'de_ancient';
+      for (const sample of samples) {
+        snapshot = next(snapshot);
+        const [x, y, z] = sample.position as [number, number, number];
+        snapshot.payload.grenades = [
+          {
+            ...snapshot.payload.grenades[0]!,
+            sourceEntityId: entity,
+            kind: 'smoke',
+            position: { x, y, z },
+            lifetimeSeconds: sample.lifetime,
+            effectTimeSeconds: sample.effect,
+          },
+        ];
+        model.accept(snapshot, sample.at);
+        expect(model.grenades.get(entity)?.phase).toBe(sample.effect > 0 ? 'effect' : 'projectile');
+      }
+      const settled = samples.at(-1)!;
+      const marker = model.grenades.get(entity)!;
+      // Ancient's independent overview calibration is (-2953, 2164), 5 units/px at 1024px.
+      expect(marker.target.x).toBeCloseTo((settled.position[0]! + 2953) / 5120);
+      expect(marker.target.y).toBeCloseTo((2164 - settled.position[1]!) / 5120);
+    },
+  );
+
   it('keeps the real seq 925→926 smoke stable across owner identity drift', () => {
     const before = single();
     const owner = '76561197960690195';
@@ -121,6 +174,27 @@ describe('Radar renderer local lifecycle', () => {
       target: initialAnchor.target,
       phaseStartedAt: initialPhaseStartedAt,
     });
+
+    // Previously observed lifetime quantization and short missing/zero effect fields
+    // must not turn a confirmed smoke back into a projectile or restart its entrance.
+    let stable = noisy;
+    for (const [index, update] of [
+      { lifetimeSeconds: 19.597, effectTimeSeconds: 0 },
+      { lifetimeSeconds: 19.7, effectTimeSeconds: null, position: null },
+    ].entries()) {
+      stable = next(stable);
+      Object.assign(stable.payload.grenades[0]!, update);
+      model.accept(stable, 600 + index * 100);
+      expect(model.grenades.get('160')).toMatchObject({
+        phase: 'effect',
+        side: before.payload.players[0].side,
+        phaseStartedAt: initialPhaseStartedAt,
+        x: initialAnchor.x,
+        y: initialAnchor.y,
+        target: initialAnchor.target,
+        positionAvailable: true,
+      });
+    }
   });
   it('starts ID reuse with new history after an observed projectile disappears', () => {
     const m = new RadarPresentation();
