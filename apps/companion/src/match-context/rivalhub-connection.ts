@@ -6,7 +6,7 @@ import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
 import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
-import { redactDiagnosticText } from '../updates/diagnostics.js';
+import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
   type ReliableDeliveryResult,
@@ -97,9 +97,14 @@ function requestFailureReason(error: unknown): string {
     e.name === 'TypeError' || (e.cause !== undefined && network(e.cause));
   return network(evidence) ? 'network_failed' : 'unknown';
 }
-function requestFailureCode(error: unknown) {
-  const evidence = liveErrorEvidence(error);
-  return evidence.cause?.code ?? evidence.code;
+function requestFailureCode(error: unknown): string | undefined {
+  if (error instanceof Error && 'rootCauseCode' in error) {
+    const code = diagnosticNetworkCode(error.rootCauseCode);
+    if (code) return code;
+  }
+  const root = (evidence: LiveErrorEvidence): string | undefined =>
+    (evidence.cause ? root(evidence.cause) : undefined) ?? diagnosticNetworkCode(evidence.code);
+  return root(liveErrorEvidence(error));
 }
 
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
@@ -126,23 +131,7 @@ class RivalHubResponseError extends Error {
 function networkError(error: unknown): Error {
   if (error instanceof RivalHubResponseError) return error;
   const project = (raw: LiveErrorEvidence): LiveErrorEvidence => {
-    const code =
-      typeof raw.code === 'string' &&
-      [
-        'ECONNREFUSED',
-        'ECONNRESET',
-        'ENOTFOUND',
-        'EHOSTUNREACH',
-        'ENETUNREACH',
-        'ETIMEDOUT',
-        'EPIPE',
-        'UND_ERR_CONNECT_TIMEOUT',
-        'UND_ERR_HEADERS_TIMEOUT',
-        'UND_ERR_BODY_TIMEOUT',
-        'UND_ERR_SOCKET',
-      ].includes(raw.code)
-        ? raw.code
-        : undefined;
+    const code = diagnosticNetworkCode(raw.code);
     return {
       name: ['Error', 'TypeError', 'AbortError', 'TimeoutError', 'SyntaxError'].includes(raw.name)
         ? raw.name
@@ -152,8 +141,11 @@ function networkError(error: unknown): Error {
     };
   };
   const evidence = project(liveErrorEvidence(error));
-  const timeout = liveTimeout(evidence);
-  const network = evidence.name === 'TypeError' || evidence.code !== undefined;
+  const rootCauseCode = requestFailureCode(error);
+  const timeout =
+    liveTimeout(evidence) ||
+    (rootCauseCode !== undefined && liveTimeout({ name: 'UnknownError', code: rootCauseCode }));
+  const network = evidence.name === 'TypeError' || rootCauseCode !== undefined;
   return Object.assign(
     new Error(
       timeout
@@ -165,6 +157,7 @@ function networkError(error: unknown): Error {
     ),
     {
       name: 'RivalHubRequestError',
+      ...(rootCauseCode ? { rootCauseCode } : {}),
       code: timeout
         ? 'RIVALHUB_TIMEOUT'
         : network

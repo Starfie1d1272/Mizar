@@ -411,8 +411,14 @@ describe('support export', () => {
         displayName: 'synthetic',
       }),
     );
-    let mode: 'json' | 'network' | 'read' = 'json';
+    const journal = new BusinessJournal(dir, () => {});
+    let rootCode = 'ECONNREFUSED';
+    let mode: 'json' | 'network' | 'read' | 'root' = 'json';
     const connection = new RivalHubConnection(connectionPath, () => {
+      if (mode === 'root')
+        throw new TypeError(canary, {
+          cause: Object.assign(new Error(canary), { code: rootCode }),
+        });
       if (mode === 'network')
         throw new TypeError('https://user:' + canary + '@synthetic.example/?key=' + canary);
       if (mode === 'read')
@@ -427,6 +433,7 @@ describe('support export', () => {
         );
       return Promise.resolve(new Response(canary, { status: 200 }));
     });
+    connection.setBusinessEvidenceHandler((stage, evidence) => journal.write(stage, evidence));
     await connection.load();
     const stream = createWriteStream(join(dir, 'companion.log'));
     const routes = Fastify({ logger: { stream } });
@@ -485,13 +492,50 @@ describe('support export', () => {
       });
       expect(readFailure.statusCode).toBe(409);
       expect(readFailure.body).not.toContain(canary);
+      mode = 'root';
+      for (const code of ['ECONNREFUSED', 'ENOTFOUND']) {
+        rootCode = code;
+        const failedRoot = await routes.inject({
+          method: 'POST',
+          url: '/operator/rivalhub/source/claim',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: {},
+        });
+        expect(failedRoot.statusCode).toBe(409);
+        expect(failedRoot.body).not.toContain(canary);
+        await journal.flush();
+        const persisted = readBusinessHistory(dir)
+          .groups.flatMap((g) => g.events)
+          .filter((e) => e.stage === 'business_claim' && e.evidence.reason === 'network_failed');
+        expect(persisted.at(-1)?.evidence.causeCode).toBe(code);
+        expect(await readFile(join(dir, BUSINESS_HISTORY_FILE), 'utf8')).not.toContain(canary);
+      }
+      // An arbitrary code cannot smuggle a credential through the new field.
+      rootCode = canary;
+      expect(
+        (
+          await routes.inject({
+            method: 'POST',
+            url: '/operator/rivalhub/source/claim',
+            headers: { origin: 'http://127.0.0.1:3000' },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(409);
     } finally {
       await routes.close();
+      await journal.close();
       await new Promise<void>((resolve) => stream.end(resolve));
     }
     const disk = await readFile(join(dir, 'companion.log'), 'utf8');
     expect(disk).toContain('RIVALHUB_INVALID_JSON');
     expect(disk).toContain('RIVALHUB_RESPONSE_READ_FAILED');
+    const rootCodes = disk
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { err?: { rootCauseCode?: string } }).err?.rootCauseCode)
+      .filter(Boolean);
+    expect(new Set(rootCodes)).toEqual(new Set(['ECONNREFUSED', 'ENOTFOUND']));
     expect(disk).not.toContain(canary);
     const support = buildApp({
       supportLogsDirectory: dir,
@@ -502,6 +546,20 @@ describe('support export', () => {
       expect(response.statusCode).toBe(200);
       expect(response.body).not.toContain(canary);
       expect(response.body).toContain('RIVALHUB_INVALID_JSON');
+      const exported = response.json<{
+        businessHistory: ReturnType<typeof readBusinessHistory>;
+        logs: { events: { localDiagnostic?: { rootCauseCode?: string } }[] }[];
+      }>();
+      const claimCodes = exported.businessHistory.groups
+        .flatMap((g) => g.events)
+        .filter((e) => e.stage === 'business_claim' && e.evidence.causeCode !== null)
+        .map((e) => e.evidence.causeCode);
+      expect(claimCodes).toEqual(['ECONNREFUSED', 'ENOTFOUND']);
+      const exportedLogCodes = exported.logs
+        .flatMap((log) => log.events)
+        .map((e) => e.localDiagnostic?.rootCauseCode)
+        .filter(Boolean);
+      expect(new Set(exportedLogCodes)).toEqual(new Set(['ECONNREFUSED', 'ENOTFOUND']));
     } finally {
       await support.close();
     }
