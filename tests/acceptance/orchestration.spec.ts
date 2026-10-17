@@ -64,27 +64,46 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     undefined,
     undefined,
     (name) => verifyIsolatedPack(packRoot, name),
+    true,
   );
-  registerOrchestrationRoutes(app, director, music, {
-    mode: 'loopback',
-    bindHost: '127.0.0.1',
-    allowedOrigins: [],
-  });
+  let preparationRevision = '';
+  registerOrchestrationRoutes(
+    app,
+    director,
+    music,
+    {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: [],
+    },
+    {
+      controlToken: undefined,
+      configure: (revision, commit) => {
+        if (revision !== preparationRevision) throw new Error('preparation changed');
+        commit();
+      },
+    },
+  );
   await app.ready();
-  await context.route(/\/(?:local\/v1\/orchestration|operator\/orchestration)$/, async (route) => {
-    const request = route.request();
-    const response = await app.inject({
-      method: request.method() as 'GET' | 'POST',
-      url: new URL(request.url()).pathname,
-      headers: request.headers(),
-      ...(request.postDataBuffer() ? { payload: request.postDataBuffer()! } : {}),
-    });
-    await route.fulfill({
-      status: response.statusCode,
-      body: response.body,
-      contentType: 'application/json',
-    });
-  });
+  preparationRevision = (await app.inject('/local/v1/production')).json<{ revision: string }>()
+    .revision;
+  await context.route(
+    /\/(?:local\/v1\/(?:orchestration|production)|operator\/orchestration)$/,
+    async (route) => {
+      const request = route.request();
+      const response = await app.inject({
+        method: request.method() as 'GET' | 'POST',
+        url: new URL(request.url()).pathname,
+        headers: request.headers(),
+        ...(request.postDataBuffer() ? { payload: request.postDataBuffer()! } : {}),
+      });
+      await route.fulfill({
+        status: response.statusCode,
+        body: response.body,
+        contentType: 'application/json',
+      });
+    },
+  );
   try {
     await page.goto('/settings?tab=music');
     await page.getByRole('button', { name: '添加地图', exact: true }).click();
@@ -94,6 +113,11 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.getByRole('button', { name: '保存预设', exact: true }).click();
     await expect(page.getByText('已保存；自动运镜需重新启用。', { exact: true })).toBeVisible();
     expect(calls).toEqual([]);
+    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeDisabled();
+    await page.getByText('浏览器联调', { exact: true }).click();
+    await page.getByRole('button', { name: '使用浏览器联调模式', exact: true }).click();
+    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeEnabled();
+    expect(director.get().control).toEqual({ mode: 'browser', state: 'ready' });
     await page.getByRole('button', { name: '连接 MulNX', exact: true }).click();
     await page.getByText('游戏内筛选', { exact: true }).click();
     await expect(

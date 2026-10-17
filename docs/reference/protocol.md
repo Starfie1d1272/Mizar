@@ -239,6 +239,10 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机地图编排控制
 
-`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及 RC 验收见[地图自动编排](orchestration.md)。
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition、browser。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及 `2.0.0-alpha.1` 验收见[地图自动编排](orchestration.md)。
 
 桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。
+
+`status.control` 区分 browser/native 与 ready/blocked，只是本机控制许可，不是上游执行事实。`browser` 操作携带 `expectedRevision`，在制作生命周期负责者确认准备阶段、非忙碌/试播/更新后同步切换并保持人工。产品服务启动默认 native/blocked，独立开发浏览器服务默认 browser/ready。
+
+`POST /operator/runtime/camera-session` 只接受既有 `x-runtime-token`，拒绝浏览器 Origin 和非回环模式。Host 使用 host-start 注册启动标识并锁定旧原生会话；begin 在当前制作修订的准备阶段生成新租约；pulse 仅延长同 Host/借用代际、尚未失效的六秒期限；invalidate 锁定对应代际。Host 每两秒检查原句柄与唯一性后续约；超时/重启/实例失效/收尾后 connect、resume、audition 和自动调度均拒绝旧许可，必须完成制作后重新交接。旧代际 invalidate 不撤销新代际或浏览器模式。租约标识不作为认证秘密，实际授权仍是运行时令牌，网页不持有它。

@@ -659,6 +659,13 @@ async fn attach_external_cs2(
         app.state::<updates::PendingUpdate>().check()?;
         production_exit::prepare_external_entry(&log, &expected_revision)?;
         cs2.attach_external(pid, created, &executable)?;
+        let lease = production_exit::camera_session(&log, "host-start", None, None)
+            .and_then(|_| production_exit::camera_session(&log, "begin", None, Some(&expected_revision)))
+            .and_then(|value| value["lease"].as_str().map(str::to_owned).ok_or("原生运镜会话未确认。".into()));
+        match lease {
+            Ok(lease) => cs2.bind_external_camera(lease),
+            Err(error) => { cs2.invalidate_external(); return Err(error); }
+        }
         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
             tracker.preserve_settings = true;
         }
@@ -1991,6 +1998,8 @@ fn run_desktop(
     );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
+    // A retained Companion must revoke the previous Host before any UI can reconnect.
+    production_exit::camera_session(&log, "host-start", None, None)?;
     let managed = managed_cs2::ManagedCs2::new(log.clone());
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
@@ -2179,11 +2188,17 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
-                            if cs2.external_isolation_pending() {
+                            if let Some(lease) = cs2.external_camera_lease().map(str::to_owned) {
                                 let log = host.state::<DesktopLog>();
-                                match production_exit::disconnect_camera(&log) {
-                                    Ok(()) => cs2.external_isolated(),
-                                    Err(error) => log.event("external_game_isolation", "failure", Some(&error)),
+                                let invalid = cs2.external_isolation_pending();
+                                let action = if invalid { "invalidate" } else { "pulse" };
+                                match production_exit::camera_session(&log, action, Some(&lease), None) {
+                                    Ok(_) if invalid => cs2.external_isolated(),
+                                    Ok(_) => (),
+                                    Err(error) => {
+                                        cs2.invalidate_external();
+                                        log.event("external_game_isolation", "failure", Some(&error));
+                                    },
                                 }
                             }
                             refresh_finished_window_feedback(&host, &cs2);

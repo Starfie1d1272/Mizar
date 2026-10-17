@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { CameraShot, OrchestrationStatus } from '@mizar/protocol/orchestration';
 import { musicCue, musicMapKey, musicPause, musicSafe, type MusicTruth } from '../music/cues.js';
 import type { MulnxProvider } from './provider.js';
@@ -8,6 +9,9 @@ export interface CameraTruth extends MusicTruth {
 }
 /** Consume authoritative projections; never become a second match / timing authority. */
 export class CameraDirector {
+  private host = '';
+  private controlEpoch = 0;
+  private native: { lease: string; host: string; until: number; blocked: boolean } | null = null;
   private context = '';
   private execution = '';
   private connection = -1;
@@ -43,7 +47,68 @@ export class CameraDirector {
     private readonly now = () => performance.now(),
     private readonly random = Math.random,
     private readonly isolated: (pack: string) => boolean = () => false,
+    private nativeMode = false,
   ) {}
+  /** Authenticated Host lifecycle; never a source of match or upstream execution facts. */
+  hostStarted(host: string) {
+    this.host = host;
+    this.diagnostic('camera_host_session', { action: 'host-start', host });
+    if (this.nativeMode) this.invalidateNative();
+  }
+  beginNative(host: string) {
+    if (!host || host !== this.host) throw new Error('camera_host_changed');
+    this.nativeMode = true;
+    this.invalidateNative();
+    const lease = randomUUID();
+    this.native = { lease, host, until: this.now() + 6000, blocked: false };
+    this.message = '原生借用已确认，请重新连接并确认隔离包。';
+    this.diagnostic('camera_host_session', { action: 'begin', host, lease });
+    return lease;
+  }
+  pulseNative(host: string, lease: string) {
+    if (
+      !this.nativeReady() ||
+      !this.nativeMode ||
+      !this.native ||
+      this.native.host !== host ||
+      this.native.lease !== lease ||
+      host !== this.host
+    )
+      throw new Error('camera_native_session_invalid');
+    this.native.until = this.now() + 6000;
+  }
+  revokeNative(host: string, lease: string) {
+    // Delayed packets from an old borrow cannot touch its replacement or browser mode.
+    if (this.nativeMode && this.native?.host === host && this.native.lease === lease)
+      this.invalidateNative();
+  }
+  useBrowser() {
+    this.invalidateNative();
+    this.nativeMode = false;
+    this.native = null;
+    this.message = '浏览器联调，请重新连接并确认隔离包。';
+  }
+  finishProduction() {
+    if (this.nativeMode) this.invalidateNative();
+    else this.hold('正在结束制作；已停用自动运镜，停止结果未确认。');
+  }
+  private invalidateNative() {
+    this.diagnostic('camera_host_session', {
+      action: 'invalidate',
+      host: this.host,
+      lease: this.native?.lease,
+    });
+    if (this.native) this.native.blocked = true;
+    this.controlEpoch++;
+    this.hold('原生游戏交接待确认；请结束制作后重新借用，或在准备阶段选择浏览器联调。');
+    this.provider.close();
+  }
+  private nativeReady() {
+    if (!this.nativeMode) return true;
+    if (this.native && !this.native.blocked && this.now() >= this.native.until)
+      this.invalidateNative();
+    return Boolean(this.native && !this.native.blocked);
+  }
   private executionIdentity(t: CameraTruth) {
     const c = t.program.cursor;
     return JSON.stringify([musicMapKey(t.program), c.producerInstanceId, c.liveSessionId]);
@@ -53,11 +118,16 @@ export class CameraDirector {
       this.executionIdentity(t),
       t.program.cursor.programSourceGeneration,
       this.store.revision,
+      this.controlEpoch,
     ]);
   }
   private safe(t: CameraTruth) {
     return (
-      t.production && !t.manual && musicSafe(t.program) && t.program.status.telemetry === 'fresh'
+      this.nativeReady() &&
+      t.production &&
+      !t.manual &&
+      musicSafe(t.program) &&
+      t.program.status.telemetry === 'fresh'
     );
   }
   private edge(t: CameraTruth) {
@@ -73,8 +143,10 @@ export class CameraDirector {
     return { key: '', stage: '' };
   }
   get(): OrchestrationStatus {
+    const ready = this.nativeReady();
     const t = this.truth();
     return {
+      control: { mode: this.nativeMode ? 'native' : 'browser', state: ready ? 'ready' : 'blocked' },
       connected: this.provider.connected,
       connection: this.provider.generation,
       context: this.identity(t),
@@ -100,6 +172,7 @@ export class CameraDirector {
   }
   tick() {
     if (this.closed) return;
+    this.nativeReady();
     const t = this.truth(),
       context = this.identity(t);
     if (context !== this.context || this.connection !== this.provider.generation) {
@@ -302,6 +375,7 @@ export class CameraDirector {
     this.tick();
     this.diagnostic('camera_command', { action, expected, before: this.get(), result: 'begin' });
     if (action === 'connect') {
+      if (!this.nativeReady()) throw new Error('camera_native_session_invalid');
       this.hold();
       await this.provider.connect();
       this.tick();

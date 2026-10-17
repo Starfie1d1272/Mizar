@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import {
+  command,
   productionAction,
   useLocalRead,
   type Production,
@@ -21,7 +22,31 @@ export function MulnxHandoff() {
   const [processes, setProcesses] = useState<ProcessIdentity[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!window.__TAURI_INTERNALS__) return null;
+  if (!window.__TAURI_INTERNALS__)
+    return (
+      <details>
+        <summary>浏览器联调</summary>
+        <p>独立于 Host 借用会话；仅可在准备阶段选择。之后重新连接并确认隔离包。</p>
+        <Button
+          disabled={busy || production?.mode !== 'preparation'}
+          onClick={() => {
+            setBusy(true);
+            setError('');
+            void command('/operator/orchestration', {
+              action: 'browser',
+              expectedRevision: production?.revision,
+            })
+              .catch((reason: unknown) =>
+                setError(reason instanceof Error ? reason.message : '联调模式未确认'),
+              )
+              .finally(() => setBusy(false));
+          }}
+        >
+          使用浏览器联调模式
+        </Button>
+        {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
+      </details>
+    );
   async function run(open: boolean, external?: ExternalGameIdentity) {
     setBusy(true);
     setError('');

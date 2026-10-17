@@ -431,6 +431,20 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
     invalidate_local_match_exit(log)
 }
 
+/// Existing private runtime identity; browsers cannot renew a native lease.
+pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revision: Option<&str>) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    let mut body = serde_json::json!({"action": action, "host": log.session_id});
+    if let Some(lease) = lease { body["lease"] = lease.into(); }
+    if let Some(revision) = revision { body["expectedRevision"] = revision.into(); }
+    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/camera-session", &body.to_string(),
+        Instant::now() + Duration::from_secs(2), Some(&token))?;
+    if code != 200 || value["ok"] != true {
+        return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
+    }
+    Ok(value)
+}
+
 pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
     let (code, camera) = request(log, "POST", "/operator/orchestration", r#"{"action":"disconnect"}"#,
         Instant::now() + Duration::from_secs(2))?;

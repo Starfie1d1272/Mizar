@@ -10,13 +10,15 @@ import { OrchestrationStore } from '../src/orchestration/store.js';
 import { MulnxProvider, type GatewayResult } from '../src/orchestration/provider.js';
 import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
 import { MusicStore } from '../src/music/store.js';
+import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 import { musicProgram } from './music-fixtures.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
-async function rig() {
+async function rig(nativeRequired = false) {
   const root = await mkdtemp(join(tmpdir(), 'mizar-camera-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const store = new OrchestrationStore(join(root, 'orchestration'));
@@ -72,6 +74,7 @@ async function rig() {
     () => time,
     () => 0,
     () => isolation,
+    nativeRequired,
   );
   director.tick();
   const resume = () => director.command('resume', director.get());
@@ -497,5 +500,246 @@ it('requires verified isolation for both enabling and audition; loss of isolatio
   expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
   await r.live();
   await r.round(2);
+  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+});
+
+async function nativeRig() {
+  const r = await rig(true);
+  const app = Fastify();
+  cleanup.push(() => app.close());
+  const music = new MusicStore(join(r.root, 'music'));
+  await music.load();
+  const policy = { mode: 'loopback' as const, bindHost: '127.0.0.1', allowedOrigins: [] };
+  let safeExit = true;
+  const production = registerProductionRoutes(app, {
+    originPolicy: policy,
+    hasContext: () => true,
+    scenes: {
+      get: () => ({ active: 'waiting', revision: 'scene' }),
+      selectWaitingForExit: () => Promise.resolve({ ok: safeExit, message: 'waiting unconfirmed' }),
+    } as unknown as ProgramSceneController,
+    release: async () => {},
+    beforeFinish: () => r.director.finishProduction(),
+  });
+  registerOrchestrationRoutes(app, r.director, music, policy, {
+    controlToken: 'a'.repeat(64),
+    configure: production.configureCameraSession,
+  });
+  const native = (
+    payload: Record<string, unknown>,
+    headers: Record<string, string> = { 'x-runtime-token': 'a'.repeat(64) },
+  ) => app.inject({ method: 'POST', url: '/operator/runtime/camera-session', headers, payload });
+  const camera = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/orchestration',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload,
+    });
+  const lifecycle = async (action: string) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action, expectedRevision: production.get().revision },
+    });
+    r.truth.production = production.get().mode !== 'preparation';
+    return response;
+  };
+  const begin = async (host: string) => {
+    const response = await native({
+      action: 'begin',
+      host,
+      expectedRevision: production.get().revision,
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json<{ lease: string }>().lease;
+  };
+  const arm = async () => {
+    expect((await camera({ action: 'connect' })).statusCode).toBe(200);
+    const { context, connection } = r.director.get();
+    expect((await camera({ action: 'resume', expected: { context, connection } })).statusCode).toBe(
+      200,
+    );
+  };
+  return {
+    ...r,
+    app,
+    native,
+    camera,
+    lifecycle,
+    begin,
+    arm,
+    production,
+    failExit: () => {
+      safeExit = false;
+    },
+    allowExit: () => {
+      safeExit = true;
+    },
+  };
+}
+it.each(['timeout', 'instance-invalidated', 'host-restarted'] as const)(
+  'native %s latches across reconnect, resume, audition and fresh GSI until a new prepared handoff',
+  async (reason) => {
+    const r = await nativeRig();
+    expect(r.director.get().control).toEqual({ mode: 'native', state: 'blocked' });
+    expect((await r.native({ action: 'host-start', host: 'old-host' }, {})).statusCode).toBe(403);
+    expect(
+      (
+        await r.native(
+          { action: 'host-start', host: 'old-host' },
+          { 'x-runtime-token': 'a'.repeat(64), origin: 'http://127.0.0.1:3000' },
+        )
+      ).statusCode,
+    ).toBe(403);
+    expect((await r.native({ action: 'host-start', host: 'old-host' })).statusCode).toBe(200);
+    const oldLease = await r.begin('old-host');
+    expect((await r.lifecycle('enter')).statusCode).toBe(200);
+    await r.arm();
+    await r.round(1);
+    expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+    if (reason === 'timeout') await r.advance(6001);
+    else if (reason === 'instance-invalidated')
+      await r.native({ action: 'invalidate', host: 'old-host', lease: oldLease });
+    else await r.native({ action: 'host-start', host: 'new-host' });
+    await r.tick();
+    expect(r.director.get()).toMatchObject({
+      held: true,
+      connected: false,
+      control: { mode: 'native', state: 'blocked' },
+    });
+    expect(
+      (await r.native({ action: 'pulse', host: 'old-host', lease: oldLease })).statusCode,
+    ).toBe(409);
+    expect((await r.camera({ action: 'connect' })).statusCode).toBe(400);
+    const { context, connection } = r.director.get();
+    expect(
+      (await r.camera({ action: 'resume', expected: { context, connection } })).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await r.camera({
+          action: 'audition',
+          stage: 'round',
+          index: 0,
+          expected: { context, connection },
+        })
+      ).statusCode,
+    ).toBe(400);
+    await r.live();
+    await r.round(2);
+    r.director.opening();
+    expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+    expect(
+      (await r.camera({ action: 'browser', expectedRevision: r.production.get().revision }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await r.native({
+          action: 'begin',
+          host: 'old-host',
+          expectedRevision: r.production.get().revision,
+        })
+      ).statusCode,
+    ).toBe(409);
+    r.failExit();
+    expect((await r.lifecycle('finish')).statusCode).toBe(409);
+    expect(
+      (await r.camera({ action: 'browser', expectedRevision: r.production.get().revision }))
+        .statusCode,
+    ).toBe(400);
+    r.allowExit();
+    expect((await r.lifecycle('finish')).statusCode).toBe(200);
+    await r.native({ action: 'host-start', host: 'new-host' });
+    const newLease = await r.begin('new-host');
+    expect(newLease).not.toBe(oldLease);
+    // Late packets cannot renew or revoke the new borrow.
+    expect(
+      (await r.native({ action: 'pulse', host: 'old-host', lease: oldLease })).statusCode,
+    ).toBe(409);
+    await r.native({ action: 'invalidate', host: 'old-host', lease: oldLease });
+    expect(
+      (await r.native({ action: 'pulse', host: 'new-host', lease: newLease })).statusCode,
+    ).toBe(200);
+    expect((await r.lifecycle('enter')).statusCode).toBe(200);
+    await r.arm();
+    await r.tick();
+    expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+    await r.live();
+    await r.round(3);
+    expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(2);
+  },
+);
+it('browser fallback is an explicit prepared mode and remains independent of Host restarts and lease expiry', async () => {
+  const r = await nativeRig();
+  expect((await r.camera({ action: 'connect' })).statusCode).toBe(400);
+  expect((await r.camera({ action: 'browser', expectedRevision: 'old' })).statusCode).toBe(400);
+  expect(
+    (await r.camera({ action: 'browser', expectedRevision: r.production.get().revision }))
+      .statusCode,
+  ).toBe(200);
+  expect((await r.lifecycle('enter')).statusCode).toBe(200);
+  await r.arm();
+  await r.round(1);
+  await r.native({ action: 'host-start', host: 'host-one' });
+  await r.native({ action: 'host-start', host: 'host-two' });
+  await r.advance(60_000);
+  await r.live();
+  await r.round(2);
+  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(2);
+  expect(r.director.get().control).toEqual({ mode: 'browser', state: 'ready' });
+  // A fresh product Companion never restores a previous native or browser arm intent.
+  const restarted = await rig(true);
+  expect(restarted.director.get()).toMatchObject({
+    held: true,
+    control: { mode: 'native', state: 'blocked' },
+  });
+});
+it('native expiry drops a pending clear handoff and a late gateway ACK cannot restore it', async () => {
+  const r = await nativeRig();
+  await r.native({ action: 'host-start', host: 'host' });
+  const lease = await r.begin('host');
+  await r.lifecycle('enter');
+  await r.arm();
+  await r.round(1);
+  let clear!: (result: GatewayResult) => void;
+  r.provider.send = (type, macro) => {
+    r.calls.push({ type, ...(macro ? { macro } : {}) });
+    return type === 'CamPlay/ClearForce'
+      ? new Promise((resolve) => {
+          clear = resolve;
+        })
+      : Promise.resolve('queued');
+  };
+  await r.live();
+  await r.round(2);
+  await r.advance(6001);
+  clear('queued');
+  await r.tick();
+  expect((await r.native({ action: 'pulse', host: 'host', lease })).statusCode).toBe(409);
+  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+  expect(r.director.get().held).toBe(true);
+});
+
+it('healthy native renewals preserve manual hold across rounds without restoring automatic intent', async () => {
+  const r = await nativeRig();
+  await r.native({ action: 'host-start', host: 'host' });
+  const lease = await r.begin('host');
+  await r.lifecycle('enter');
+  await r.arm();
+  await r.round(1);
+  expect((await r.camera({ action: 'hold' })).statusCode).toBe(200);
+  for (let round = 2; round <= 4; round++) {
+    await r.advance(4000);
+    expect((await r.native({ action: 'pulse', host: 'host', lease })).statusCode).toBe(200);
+    await r.live();
+    await r.round(round);
+  }
+  expect(r.director.get()).toMatchObject({
+    held: true,
+    control: { mode: 'native', state: 'ready' },
+  });
   expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
 });

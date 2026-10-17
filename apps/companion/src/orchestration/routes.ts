@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { orchestrationPresetSchema, CAMERA_STAGES } from '@mizar/protocol/orchestration';
@@ -9,6 +10,7 @@ const expectedSchema = z
   .object({ context: z.string().max(4000), connection: z.number().int() })
   .strict();
 const commandSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('browser'), expectedRevision: z.string().max(128) }),
   z
     .object({
       action: z.literal('audition'),
@@ -26,11 +28,21 @@ const commandSchema = z.discriminatedUnion('action', [
     })
     .strict(),
 ]);
+const host = z.string().min(1).max(80);
+const nativeSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('host-start'), host }),
+  z.strictObject({ action: z.literal('begin'), host, expectedRevision: z.string().max(128) }),
+  z.strictObject({ action: z.enum(['pulse', 'invalidate']), host, lease: z.uuid() }),
+]);
 export function registerOrchestrationRoutes(
   app: FastifyInstance,
   director: CameraDirector,
   music: MusicStore,
   policy: LocalWebOriginPolicy,
+  session?: {
+    controlToken: string | undefined;
+    configure: (revision: string, commit: () => void) => void;
+  },
 ) {
   const allowed = (origin: string | undefined) =>
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -49,12 +61,46 @@ export function registerOrchestrationRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply.header('cache-control', 'no-store').send(view());
   });
+  app.post('/operator/runtime/camera-session', { bodyLimit: 2048 }, (request, reply) => {
+    const expected = Buffer.from(session?.controlToken ?? '');
+    const token = request.headers['x-runtime-token'];
+    const supplied = Buffer.from(typeof token === 'string' ? token : '');
+    if (
+      policy.mode !== 'loopback' ||
+      request.headers.origin !== undefined ||
+      !expected.length ||
+      expected.length !== supplied.length ||
+      !timingSafeEqual(expected, supplied)
+    )
+      return reply.code(403).send({ error: 'runtime-control-denied' });
+    try {
+      const body = nativeSchema.parse(request.body);
+      let lease: string | undefined;
+      if (body.action === 'host-start') director.hostStarted(body.host);
+      else if (body.action === 'begin')
+        session!.configure(body.expectedRevision, () => {
+          lease = director.beginNative(body.host);
+        });
+      else if (body.action === 'pulse') director.pulseNative(body.host, body.lease);
+      else director.revokeNative(body.host, body.lease);
+      return { ok: true, ...(lease ? { lease } : {}) };
+    } catch (error) {
+      request.log.error(
+        { stage: 'camera_host_session', err: error, result: 'failure' },
+        '原生运镜会话未确认',
+      );
+      return reply.code(409).send({ error: 'camera_native_session_invalid' });
+    }
+  });
   app.post('/operator/orchestration', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
       const body = commandSchema.parse(request.body);
-      if (body.action === 'audition') {
+      if (body.action === 'browser') {
+        if (!session) throw new Error('camera_production_unavailable');
+        session.configure(body.expectedRevision, () => director.useBrowser());
+      } else if (body.action === 'audition') {
         const map = director.store.map(director.get().map);
         const shot =
           body.stage === 'opening'

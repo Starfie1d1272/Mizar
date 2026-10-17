@@ -68,6 +68,7 @@ export function emptyOrchestrationPreset(): OrchestrationPreset {
   return { format: 'mizar.orchestration', version: 1, name: '我的编排', maps: [] };
 }
 export interface OrchestrationStatus {
+  control: { mode: 'browser' | 'native'; state: 'ready' | 'blocked' };
   connected: boolean;
   connection: number;
   context: string;

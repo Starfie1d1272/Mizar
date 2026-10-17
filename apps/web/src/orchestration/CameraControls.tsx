@@ -29,7 +29,8 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
     <div className="music-controls" aria-label="自动运镜">
       <span className="music-controls__track">
         运镜 · {s.held ? '人工' : '自动'}
-        {s.current ? ` · ${s.current}` : ''} · {s.message}
+        {s.current ? ` · ${s.current}` : ''} ·{' '}
+        {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
       </span>
       {setup ? (
         <span>
@@ -38,7 +39,10 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
         </span>
       ) : null}
       {setup ? (
-        <Button disabled={busy} onClick={() => void send(s.connected ? 'disconnect' : 'connect')}>
+        <Button
+          disabled={busy || (!s.connected && s.control.state === 'blocked')}
+          onClick={() => void send(s.connected ? 'disconnect' : 'connect')}
+        >
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
@@ -53,7 +57,7 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
       </Button>
       {s.held && s.connected ? (
         <Button
-          disabled={busy || !view.ready || !s.pack || !s.isolated}
+          disabled={busy || !view.ready || !s.pack || !s.isolated || s.control.state === 'blocked'}
           title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
           onClick={() => void send('resume')}
         >

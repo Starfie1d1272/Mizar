@@ -561,6 +561,7 @@ pub struct WorkspaceProcess {
     pub created: u64,
 }
 struct ExternalSession {
+    camera_lease: Option<String>,
     invalidated: bool,
     isolation_pending: bool,
     process: Arc<Process>,
@@ -637,7 +638,7 @@ impl ManagedCs2 {
             || !actual_executable.to_string_lossy().eq_ignore_ascii_case(&executable.to_string_lossy())
             || unsafe { WaitForSingleObject(process.0, 0) } != 258
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
-        self.external = Some(ExternalSession { invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        self.external = Some(ExternalSession { camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -796,6 +797,20 @@ impl ManagedCs2 {
         if let Err(error) = self.recover(false) {
             self.message = Some(error);
         }
+    }
+    pub fn bind_external_camera(&mut self, lease: String) {
+        if let Some(external) = &mut self.external { external.camera_lease = Some(lease); }
+    }
+    pub fn external_camera_lease(&self) -> Option<&str> {
+        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)
+            .and_then(|external| external.camera_lease.as_deref())
+    }
+    pub fn invalidate_external(&mut self) {
+        if let Some(external) = &mut self.external {
+            external.invalidated = true;
+            external.isolation_pending = true;
+        }
+        self.message = Some("原生运镜会话已失效；请结束制作后重新借用。".into());
     }
     pub fn external_isolation_pending(&self) -> bool {
         self.external.as_ref().is_some_and(|p| p.isolation_pending)
@@ -1275,6 +1290,8 @@ mod tests {
         assert!(managed.attach_external(external.child.id(), created, &actual_path).is_err());
         std::fs::remove_file(managed.store.backup_directory().join("pending.json")).unwrap();
         managed.attach_external(external.child.id(), created, &actual_path).unwrap();
+        managed.bind_external_camera("first-lease".into());
+        assert_eq!(managed.external_camera_lease(), Some("first-lease"));
         assert!(managed.preserve_settings());
         let borrowed_process = managed.workspace_process().unwrap().unwrap();
         assert!(borrowed_process.is_running());
@@ -1295,15 +1312,19 @@ mod tests {
         assert!(managed.window_session_finished().unwrap());
         assert!(managed.preserve_settings()); // No later layout pass may resize the detached game.
         managed.attach_external(external.child.id(), created, &actual_path).unwrap();
+        managed.bind_external_camera("second-lease".into());
         // A Host restart cannot silently recover a borrowed process as owned.
         let restarted = ManagedCs2::new(managed.log.clone());
         assert!(!restarted.has_external());
+        assert!(restarted.external_camera_lease().is_none());
         assert!(restarted.workspace_process().unwrap().is_none());
         external.child.kill().unwrap();
         external.child.wait().unwrap();
         managed.poll();
         assert!(managed.external_isolation_pending());
+        assert_eq!(managed.external_camera_lease(), Some("second-lease"));
         managed.external_isolated();
+        assert!(managed.external_camera_lease().is_none());
         assert!(!managed.external_isolation_pending());
         assert!(managed.has_external());
         assert!(managed.workspace_process().unwrap().is_none());
