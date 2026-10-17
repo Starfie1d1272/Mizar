@@ -223,9 +223,12 @@ describe('consented diagnostic outbox', () => {
     await writeFile(join(bad, 'outside.json'), '{}');
     await import('node:fs/promises').then((fs) => fs.mkdir(join(bad, 'diagnostic-outbox')));
     await symlink(join(bad, 'outside.json'), join(bad, 'diagnostic-outbox/state.json'));
-    await expect(
-      new DiagnosticDelivery(bad, new SessionJournal(bad)).initialize(false),
-    ).rejects.toThrow();
+    const badJournal = new SessionJournal(bad);
+    try {
+      await expect(new DiagnosticDelivery(bad, badJournal).initialize(false)).rejects.toThrow();
+    } finally {
+      await badJournal.close();
+    }
   });
   it('retains a batch after a false receipt and stops an in-flight upload immediately on revocation', async () => {
     const dir = await directory();
