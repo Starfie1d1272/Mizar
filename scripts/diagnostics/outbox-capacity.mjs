@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
-import { SessionJournal } from '../../apps/companion/src/support/session-journal.ts';
+import {
+  SESSION_LIMITS,
+  SessionJournal,
+} from '../../apps/companion/src/support/session-journal.ts';
 import {
   DiagnosticDelivery,
   decodeDiagnosticBatch,
@@ -117,7 +120,47 @@ export async function fullOutbox(directory) {
       });
       await journal.flush();
       await delivery.tick();
-      await close();
+      await delivery.close();
+      const tailIds = [];
+      let retainedTailBytes = 0;
+      if (boundary === 'batches') {
+        // Retained source is larger than the production 8 MiB pending budget,
+        // while 2048 tiny queued packets are far below the byte boundary.
+        // Stop only the observer, then use the real journal writer and rotation.
+        for (let i = 0; i < 384; i++) {
+          const index = offered++;
+          tailIds.push(index);
+          const text = 'compressible retained source '.repeat(1200);
+          retainedTailBytes += Buffer.byteLength(text);
+          journal.record('outbox_capacity', { index, text });
+          if (i % 16 === 15) await journal.flush();
+        }
+        await journal.flush();
+        assert(retainedTailBytes > DELIVERY_LIMITS.pendingBytes);
+        assert(retainedTailBytes < SESSION_LIMITS.segmentBytes * SESSION_LIMITS.segments);
+        const retained = new Set();
+        let actualTailBytes = 0;
+        for (let segment = 0; segment < SESSION_LIMITS.segments; segment++) {
+          const name = segment ? 'session.ndjson.' + segment : 'session.ndjson';
+          const text = await readFile(join(path, name), 'utf8').catch((error) => {
+            if (error.code === 'ENOENT') return '';
+            throw error;
+          });
+          for (const line of text.split('\n').filter(Boolean)) {
+            const event = JSON.parse(line);
+            if (event.stage === 'outbox_capacity') {
+              retained.add(event.evidence.index);
+              if (tailIds.includes(event.evidence.index))
+                actualTailBytes += Buffer.byteLength(line) + 1;
+            }
+          }
+        }
+        assert(
+          tailIds.every((index) => retained.has(index)),
+          'test tail was already rotated away',
+        );
+      }
+      await journal.close();
       await open();
       const restored = new Set((await state()).queue.map((batch) => batch.id));
       for (const [id, bytes] of before) {
@@ -142,6 +185,13 @@ export async function fullOutbox(directory) {
         'capacity release failed to recover retained source records',
       );
       assert(
+        tailIds.every((index) => received.has(index)),
+        'retained tail source IDs missing',
+      );
+      assert(
+        Array.from({ length: offered }, (_, index) => index).every((index) => received.has(index)),
+      );
+      assert(
         [...before.keys()].every((id) => originalPayloads.has(id)),
         'an unacknowledged original was replaced',
       );
@@ -154,6 +204,9 @@ export async function fullOutbox(directory) {
         peakBatches: full.queuedBatches,
         peakBytes: full.queuedBytes,
         retainedOriginals: before.size,
+        retainedTailRecords: tailIds.length,
+        retainedTailBytes,
+        allTailSourceIdsRecovered: true,
         allOriginalBytesPreserved: true,
         recoveredRecords: received.size,
         finalBacklog: 0,

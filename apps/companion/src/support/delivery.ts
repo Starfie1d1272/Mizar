@@ -873,7 +873,7 @@ export class DiagnosticDelivery {
     if (this.pendingBytes + bytes > DELIVERY_LIMITS.pendingBytes) {
       this.omitted('memory_budget_recoverable_from_local_journal');
       this.recoveryNeeded = true;
-      return;
+      return false;
     }
     this.pending.push({ line, sessionId: value.startupSessionId, sequence: value.sequence });
     this.pendingBytes += bytes;
@@ -903,6 +903,7 @@ export class DiagnosticDelivery {
     this.recoveryNeeded = true;
     const startedRevision = this.sourceRevision;
     const startedSequence = this.journal.health().sequence;
+    let sourceUnavailable = false;
     // Fixed Mizar log names only; source rotation remains governed by SessionJournal.
     for (let i = SESSION_LIMITS.segments - 1; i >= 0; i--) {
       const name = i ? `session.ndjson.${i}` : 'session.ndjson';
@@ -916,21 +917,23 @@ export class DiagnosticDelivery {
       } catch (error) {
         if (missing(error)) continue;
         this.error = 'journal_unreadable';
+        sourceUnavailable = true;
         continue;
       }
       let count = 0;
       for (const line of bytes.toString('utf8').split('\n')) {
         if (!line) continue;
         try {
-          this.observe(line + '\n', true);
+          if (this.observe(line + '\n', true) === false) return;
         } catch {
           this.omitted('unreadable_journal_record');
         }
         if (++count % 32 === 0) await yieldIO();
-        if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2) await this.persist();
+        if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist())) return;
         if (
+          this.state.queue.length >= DELIVERY_LIMITS.batches ||
           this.state.queue.reduce((n, v) => n + v.bytes, 0) >
-          DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
+            DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
         ) {
           // Capacity may stop recovery before reaching the unqueued tail in a
           // later segment. Keep scanning eligible source records after ACKs
@@ -940,7 +943,10 @@ export class DiagnosticDelivery {
         }
       }
     }
-    await this.persist();
+    // A stable source clock does not mean the scan completed. Capacity or
+    // unreadable source can leave an unadmitted tail; keep its cursors and the
+    // recovery flag until both scanning and prefix persistence succeed.
+    if (!(await this.persist()) || sourceUnavailable) return;
     for (const id of Object.keys(this.state.sessions)) {
       if (id === this.journal.sessionId || this.pending.some((v) => v.sessionId === id)) continue;
       delete this.state.sessions[id];
@@ -953,8 +959,8 @@ export class DiagnosticDelivery {
     this.recoveryNeeded =
       this.sourceRevision !== startedRevision || this.journal.health().sequence !== startedSequence;
   }
-  private async persist() {
-    if (!this.consentActive()) return;
+  private async persist(): Promise<boolean> {
+    if (!this.consentActive()) return false;
     const epoch = this.epoch;
     // Bound this collection to its admitted prefix. New committed records may
     // arrive during compression/fsync; keep them for the next scheduled batch.
@@ -1007,7 +1013,7 @@ export class DiagnosticDelivery {
         );
         compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
       }
-      if (!this.consentActive() || epoch !== this.epoch) return;
+      if (!this.consentActive() || epoch !== this.epoch) return false;
       if (
         compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
         raw.length > DELIVERY_LIMITS.expandedBytes
@@ -1029,7 +1035,7 @@ export class DiagnosticDelivery {
           DELIVERY_LIMITS.queueBytes
       ) {
         this.error = 'queue_budget_local_journal_retained';
-        return;
+        return false;
       }
       const id = checksum(compressed);
       const path = join(this.queueDirectory, `${id}.gz`);
@@ -1058,7 +1064,7 @@ export class DiagnosticDelivery {
       }
       if (!this.consentActive() || epoch !== this.epoch) {
         await unlink(path).catch(() => undefined);
-        return;
+        return false;
       }
       const batch: Batch = {
         id,
@@ -1088,6 +1094,10 @@ export class DiagnosticDelivery {
         this.state.sessions = oldCursors;
         this.state.queue = oldQueue;
         if (!oldQueue.some((v) => v.id === id)) await unlink(path).catch(() => undefined);
+        if (error instanceof Error && error.message === 'manifest_budget') {
+          this.error = 'manifest_budget_local_journal_retained';
+          return false;
+        }
         throw error;
       }
       this.pending.splice(0, selected.length);
@@ -1095,6 +1105,7 @@ export class DiagnosticDelivery {
       this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
       await yieldIO();
     }
+    return true;
   }
   private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;

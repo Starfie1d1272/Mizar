@@ -589,46 +589,59 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
-  it('recovers a saturated memory window from retained journal records without silently advancing past them', async () => {
-    const dir = await directory();
-    const journal = new SessionJournal(dir);
-    const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
-    await delivery.consent(true);
-    // Block the actual outbox write while the independent journal continues,
-    // so background threshold collection cannot drain away the saturation.
-    let blocked = true;
-    const originalOpen = filesystem.open;
-    const intercept = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
-      if (blocked && String(args[0]).endsWith('.gz'))
-        throw Object.assign(new Error('synthetic outbox busy'), { code: 'EBUSY' });
-      return originalOpen(...args);
-    });
-    for (let i = 0; i < 2304; i++) {
-      journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
-      if (i % 64 === 63) await journal.flush();
-    }
-    await journal.flush();
-    blocked = false;
-    await delivery.tick();
-    const files = (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) => v.endsWith('.gz'));
-    const indices: number[] = [];
-    for (const file of files) {
-      const decoded = await decodeDiagnosticBatch(
-        await readFile(join(dir, 'diagnostic-outbox', file)),
-      );
-      for (const event of decoded.events ?? []) {
-        const item = event as { stage: string; evidence: { index?: number } };
-        if (item.stage === 'load_fixture') indices.push(item.evidence.index!);
+  it.each(['outbox_io', 'manifest'] as const)(
+    'recovers a saturated memory window after %s blockage without silently advancing past retained records',
+    async (mode) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await delivery.consent(true);
+      // Block the actual outbox write while the independent journal continues,
+      // so background threshold collection cannot drain away the saturation.
+      let blocked = true;
+      const originalOpen = filesystem.open;
+      const intercept = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        if (blocked && mode === 'outbox_io' && String(args[0]).endsWith('.gz'))
+          throw Object.assign(new Error('synthetic outbox busy'), { code: 'EBUSY' });
+        if (blocked && mode === 'manifest' && String(args[0]).endsWith('state.json.tmp'))
+          throw new Error('manifest_budget');
+        return originalOpen(...args);
+      });
+      for (let i = 0; i < 2304; i++) {
+        journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
+        if (i % 64 === 63) await journal.flush();
       }
-    }
-    expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 2304 }, (_, i) => i));
-    expect(delivery.status().omissionReasons).toHaveProperty(
-      'memory_budget_recoverable_from_local_journal',
-    );
-    intercept.mockRestore();
-    await delivery.close();
-    await journal.close();
-  });
+      await journal.flush();
+      if (mode === 'outbox_io')
+        await expect(delivery.tick()).rejects.toThrow('synthetic outbox busy');
+      else {
+        await delivery.tick();
+        expect(delivery.status().error).toBe('manifest_budget_local_journal_retained');
+      }
+      blocked = false;
+      await delivery.tick();
+      const files = (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) =>
+        v.endsWith('.gz'),
+      );
+      const indices: number[] = [];
+      for (const file of files) {
+        const decoded = await decodeDiagnosticBatch(
+          await readFile(join(dir, 'diagnostic-outbox', file)),
+        );
+        for (const event of decoded.events ?? []) {
+          const item = event as { stage: string; evidence: { index?: number } };
+          if (item.stage === 'load_fixture') indices.push(item.evidence.index!);
+        }
+      }
+      expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 2304 }, (_, i) => i));
+      expect(delivery.status().omissionReasons).toHaveProperty(
+        'memory_budget_recoverable_from_local_journal',
+      );
+      intercept.mockRestore();
+      await delivery.close();
+      await journal.close();
+    },
+  );
   it.each(['threshold', 'scheduled'] as const)(
     'freezes a %s collection before real disk IO while preserving later records for the next batch',
     async (mode) => {
