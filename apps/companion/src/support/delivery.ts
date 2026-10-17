@@ -922,7 +922,11 @@ export class DiagnosticDelivery {
         continue;
       }
       let count = 0;
-      for (const line of bytes.toString('utf8').split('\n')) {
+      // A concurrent append can be visible before its final newline. Only
+      // complete journal records are eligible; retain the cursor and rescan
+      // the unfinished tail after its writer commits instead of reporting loss.
+      const completeBytes = bytes.lastIndexOf(10) + 1;
+      for (const line of bytes.subarray(0, completeBytes).toString('utf8').split('\n')) {
         if (!line) continue;
         try {
           if (this.observe(line + '\n', true) === false) return;
@@ -943,6 +947,7 @@ export class DiagnosticDelivery {
           return;
         }
       }
+      if (completeBytes < bytes.length) return;
     }
     // A stable source clock does not mean the scan completed. Capacity or
     // unreadable source can leave an unadmitted tail; keep its cursors and the

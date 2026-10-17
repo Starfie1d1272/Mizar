@@ -303,7 +303,7 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
-  it.each(['during-scan', 'allocated-before-scan'])(
+  it.each(['during-scan', 'allocated-before-scan', 'partial-append'])(
     'recovers older records before a live commit %s without advancing past either',
     async (mode) => {
       const dir = await directory();
@@ -344,12 +344,15 @@ describe('consented diagnostic outbox', () => {
             await readGate;
             return snapshot;
           });
-        } else if (args[1] & constants.O_WRONLY && mode === 'allocated-before-scan') {
+        } else if (args[1] & constants.O_WRONLY && mode !== 'during-scan') {
           const write = file.writeFile.bind(file);
           vi.spyOn(file, 'writeFile').mockImplementation(async (data, options) => {
             if (typeof data === 'string' && data.includes('during-recovery')) {
+              const split = mode === 'partial-append' ? Math.floor(data.length / 2) : 0;
+              if (split) await write(data.slice(0, split), options);
               enteredWrite();
               await writeGate;
+              return write(data.slice(split), options);
             }
             return write(data, options);
           });
@@ -357,7 +360,7 @@ describe('consented diagnostic outbox', () => {
         return file;
       });
       try {
-        if (mode === 'allocated-before-scan') {
+        if (mode !== 'during-scan') {
           journal.record('operation_result', { result: 'during-recovery' });
           await writeStarted;
         }
