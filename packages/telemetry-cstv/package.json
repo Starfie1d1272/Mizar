@@ -6,6 +6,10 @@
     "dist"
   ],
   "exports": {
+    "./research": {
+      "types": "./dist/research.d.ts",
+      "import": "./dist/research.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
