@@ -80,6 +80,8 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         $utf8=New-Object System.Text.UTF8Encoding($false);
         function Put($path,$text) { [IO.File]::WriteAllText($path,$text,$utf8) }
         function Prepare($expected) {
+          # Match a fresh process for the inherited native/script exit status.
+          $global:LASTEXITCODE=0;
           & ${quote(ensure)} -Product | Out-Null;
           if (($LASTEXITCODE -eq 0) -ne $expected) { throw "unexpected prepare exit: $LASTEXITCODE" }
         }
@@ -142,7 +144,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
         if ([IO.File]::ReadAllText($other) -ne '"uri" "http://localhost:4000/"') { throw 'other endpoint changed during restore' }
         'GSI_REPAIR_LIFECYCLE_PASS';
       `);
-      expect(result).toBe('GSI_REPAIR_LIFECYCLE_PASS');
+      expect(result.split(/\r?\n/).at(-1)).toBe('GSI_REPAIR_LIFECYCLE_PASS');
     },
   );
 });

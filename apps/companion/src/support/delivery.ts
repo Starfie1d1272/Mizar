@@ -1210,7 +1210,9 @@ export class DiagnosticDelivery {
         this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
       }
       if (this.recoveryNeeded) await this.recover();
-      if (collecting) await this.persist();
+      // persist() freezes the admitted prefix; a second pass here would turn
+      // records arriving during gzip/fsync into an immediate tiny extra batch.
+      // recover() already persists its own recovered prefix when needed.
     });
     if (!this.endpoint || this.closed || this.now() < this.state.nextAttemptAt) return;
     this.sending ??= this.send().finally(() => {
