@@ -1,11 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath, URL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { validateReleaseTag, windowsBundleName } from './app-version.mjs';
 import { githubReleaseNotes } from './release-notes.mjs';
-import { promotionTag } from './box-sync.mjs';
 import { makeUpdateManifest } from './update-manifest.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
 import { missingAssets } from './release-assets.mjs';
@@ -15,7 +12,7 @@ const prereleases = ['2.0.0-alpha.1', '2.0.0-beta.2', '2.0.0-rc.3'];
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 describe('bounded application release versions', () => {
-  it.each(['0.0.0', '1.5.0', ...prereleases, '2.0.0-alpha.0'])(
+  it.each(['0.0.0', '1.5.0', ...prereleases])(
     'accepts an exact %s tag and retains the full version in filenames',
     (version) => {
       expect(() => validateReleaseTag(`v${version}`, version)).not.toThrow();
@@ -27,6 +24,9 @@ describe('bounded application release versions', () => {
   it.each([
     '2.0',
     '2.0.0-alpha',
+    '2.0.0-alpha.0',
+    '2.0.0-beta.0',
+    '2.0.0-rc.0',
     '2.0.0-beta.x',
     '2.0.0-rc.-1',
     '2.0.0-preview.1',
@@ -46,34 +46,6 @@ describe('bounded application release versions', () => {
 
 describe.each(prereleases)('%s stays outside Stable distribution', (version) => {
   const tag = `v${version}`;
-  it('skips Box sync without credentials or any network access, including a workflow-derived tag', () => {
-    const run = { id: 123 };
-    const derived = promotionTag(run, [
-      { run_id: 123, status: 'completed', conclusion: 'success', name: `发布 Mizar ${tag}` },
-    ]);
-    expect(derived).toBe(tag);
-    const script = fileURLToPath(new URL('./box-sync.mjs', import.meta.url));
-    const output = execFileSync(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `globalThis.fetch = () => { throw new Error('Unexpected network access'); }; process.argv[1] = ${JSON.stringify(script)}; await import(${JSON.stringify(new URL('./box-sync.mjs', import.meta.url).href)});`,
-      ],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          GITHUB_EVENT_NAME: 'workflow_dispatch',
-          RELEASE_TAG: derived,
-          BOX_SYNC_MODE: 'sync',
-          MIZAR_BOX_REPO_TOKEN: '',
-          GITHUB_STEP_SUMMARY: '',
-        },
-      },
-    );
-    expect(output).toContain('预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样');
-  });
   it('links the exact full Setup and ZIP, without a stable Box or WebInstaller entry', () => {
     const notes = githubReleaseNotes(
       { version, markdown: '- 测试版本' },

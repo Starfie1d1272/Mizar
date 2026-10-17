@@ -17,7 +17,7 @@ export function windowsBundleName(appVersion) {
 }
 export function validateReleaseTag(tag, appVersion) {
   if (
-    !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.(0|[1-9]\d*))?$/.test(tag) ||
+    !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/.test(tag) ||
     tag !== `v${appVersion}`
   )
     throw new Error('发布标签与应用版本不一致');

@@ -229,7 +229,7 @@ jobs:
         shell: pwsh
         run: |
           $prereleaseFlags = @()
-          if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.\d+$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
+          if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.[1-9]\d*$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
           $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
           if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -Filter '*.zip' -File).FullName) }

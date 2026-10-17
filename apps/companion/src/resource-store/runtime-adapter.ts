@@ -60,7 +60,7 @@ export function createRuntimeVerifier(
       },
     },
     pinned?.coreVersion ??
-      expectedCore?.appVersion.replace(/-(?:alpha|beta|rc)\.\d+$/, '') ??
+      expectedCore?.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, '') ??
       '1.1.0',
   );
 }
