@@ -46,6 +46,7 @@ let initialTick: number | null = null;
 let appendedEvents = 0;
 let stopped = false;
 let writeQueue = '';
+let eventsWriteFailed = false;
 let failure = false;
 let outcome: string = 'not-started';
 let magicChecked = 0;
@@ -86,6 +87,33 @@ let input: ReadableStream<Uint8Array> | undefined;
 let sourceReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 let failureStage = 'open-source';
 let failureDetail: ReturnType<typeof describeFailure> | null = null;
+const finalizationFailures: ReturnType<typeof describeFailure>[] = [];
+const flushEvents = async () => {
+  if (!writeQueue || eventsWriteFailed) return;
+  // A failed write may already have persisted a prefix. Never retry this batch.
+  const batch = writeQueue;
+  writeQueue = '';
+  failureStage = 'write-events';
+  try {
+    await output.writeFile(batch);
+  } catch (error) {
+    eventsWriteFailed = true;
+    failureDetail ??= describeFailure(error, failureStage);
+    throw error;
+  }
+};
+const finalizeStep = async (stage: string, action: () => unknown) => {
+  try {
+    await action();
+  } catch (error) {
+    const detail = describeFailure(error, stage);
+    // Cleanup/report failures must not replace the original decode/write failure.
+    failureDetail ??= detail;
+    finalizationFailures.push(detail);
+    failure = true;
+    outcome = 'failed';
+  }
+};
 try {
   input = await growingDemo(values.input, {
     follow: values.follow ?? false,
@@ -102,11 +130,7 @@ try {
     {
       async pull(controller) {
         try {
-          if (writeQueue) {
-            failureStage = 'write-events';
-            await output.writeFile(writeQueue);
-            writeQueue = '';
-          }
+          await flushEvents();
           failureStage = 'read-source';
           const next = await reader.read();
           if (next.done) {
@@ -145,18 +169,20 @@ try {
 } catch (error) {
   failureDetail ??= describeFailure(error, failureStage);
   outcome = stopped ? 'stopped-incomplete' : 'failed';
-  failure = !stopped;
+  failure = !stopped || eventsWriteFailed;
 } finally {
   clearTimeout(timeout);
+  process.removeListener('SIGINT', stop);
+  process.removeListener('SIGTERM', stop);
   abort.abort();
   if (sourceReader) {
-    await sourceReader.cancel().catch(() => {});
-    sourceReader.releaseLock();
+    await finalizeStep('cancel-source', () => sourceReader!.cancel());
+    await finalizeStep('release-source', () => sourceReader!.releaseLock());
   } else if (input) {
-    await input.cancel().catch(() => {});
+    await finalizeStep('cancel-source', () => input!.cancel());
   }
-  if (writeQueue) await output.writeFile(writeQueue);
-  await output.close();
+  await finalizeStep('write-events', flushEvents);
+  await finalizeStep('close-events', () => output.close());
   const usage = process.cpuUsage(cpu);
   const report = {
     schema: 'mizar.viewer.decode-report.v1',
@@ -164,6 +190,8 @@ try {
     outcome,
     failureStage: failure ? (failureDetail?.stage ?? failureStage) : null,
     failure: failure ? failureDetail : null,
+    finalizationFailures,
+    eventsWriteFailed,
     counts,
     initialBytes,
     bytesRead: bytes,
@@ -177,10 +205,23 @@ try {
     displayBinding: 'unverified',
     windows: 'NOT_RUN',
   };
-  await writeFile(join(values.output, 'report.json'), JSON.stringify(report, null, 2) + '\n', {
-    flag: 'wx',
-    mode: 0o600,
+  let reportWritten = false;
+  await finalizeStep('write-report', async () => {
+    await writeFile(join(values.output!, 'report.json'), JSON.stringify(report, null, 2) + '\n', {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    reportWritten = true;
   });
+  // A full disk can also reject report.json. Stderr carries sanitized first cause
+  // and each finalization failure independently of that file's persistence.
+  Object.assign(report, {
+    outcome,
+    failureStage: failure ? (failureDetail?.stage ?? failureStage) : null,
+    failure: failure ? failureDetail : null,
+    reportWritten,
+  });
+  if (failure) console.error(JSON.stringify(report));
   console.log(JSON.stringify(report));
   if (failure) process.exitCode = 1;
 }

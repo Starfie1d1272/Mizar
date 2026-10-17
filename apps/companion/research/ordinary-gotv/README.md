@@ -18,7 +18,7 @@ pnpm --filter @mizar/companion exec tsx research/ordinary-gotv/decode.ts \
 
 省略 `--follow` 解析已完成文件。输出目录必须不存在。`events.jsonl` 包含 cursor、weapon_fire、player_death、round_start、round_end；`report.json` 记录读取字节、事件数、CPU/内存和证据状态。Steam64 是字符串，未知身份/地图/热身/时间间隔为空。武器名保留源字符串，未建立统一命名表。每次执行生成新 `streamInstance`，每个 tick 和事件输出前检查连续性，与每秒 cursor 节流分离；文件替换、已消费尾部重写、截断及地图/server_count 改变需要新实例；不会自动重接或拼接旧事件。
 
-`--seconds` 默认 300、上限 14400；`--offset` 默认 120、范围 0..3600。偏移只写入元数据，不将接收时间或 tick 冒充画面时间；`displayTime=null`。文件最多 8 GiB，输出队列最多 8 MiB；读取块 64 KiB，临时 EOF 每 50 ms 等待增长，输出通过下一次读取形成背压。跟随模式超时或 Ctrl+C 属于不完整停止，必须看报告；退出 0 也不代表在线成功。缺失文件、非法格式、源边界或解析失败退出非零，报告保留可区分的 category/reason/stage；已知错误使用固定安全原因，未知异常明确标记原文因可能含源数据而省略。文件尾部 4 KiB 的变化检测不是全文件防篡改承诺。
+`--seconds` 默认 300、上限 14400；`--offset` 默认 120、范围 0..3600。偏移只写入元数据，不将接收时间或 tick 冒充画面时间；`displayTime=null`。文件最多 8 GiB，输出队列最多 8 MiB；读取块 64 KiB，临时 EOF 每 50 ms 等待增长，输出通过下一次读取形成背压。跟随模式超时或 Ctrl+C 属于不完整停止，必须看报告；退出 0 也不代表在线成功。缺失文件、非法格式、源边界或解析失败退出非零，报告保留可区分的 category/reason/stage；已知错误使用固定安全原因，未知异常明确标记原文因可能含源数据而省略。事件写入失败后不重试可能已部分写入的批次；源清理、最终刷新、关闭及报告写入各自受保护。首因与后续 finalizationFailures 分开，eventsWriteFailed 表示事件文件可能不完整；counts 是解析产生数，不保证已持久化。报告也写不下时，stdout/stderr 的脱敏 JSON 明确 reportWritten=false、首因及 write-report 错误，退出非零；同盘满不保证 report.json 可用。文件尾部 4 KiB 的变化检测不是全文件防篡改承诺。
 
 ## 离线协议探针
 
