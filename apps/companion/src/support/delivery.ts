@@ -58,6 +58,12 @@ interface Batch {
     sourceTimeUnknownRecords?: number;
   };
 }
+export interface RetainedDiagnosticBatch {
+  id: string | null;
+  sourceBytes: number;
+  gzip?: Buffer;
+  error?: unknown;
+}
 interface State {
   version: 1;
   consentPolicy: 1 | 2;
@@ -1248,5 +1254,32 @@ export class DiagnosticDelivery {
     this.abort?.abort();
     await this.sending;
     await this.transaction(() => this.persist());
+  }
+  /** Explicit manual export only. Copies immutable bodies while ACK/deletion is
+   * serialized; never exports the credential manifest. At most queueBytes of gzip. */
+  retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
+    return this.transaction(async () => {
+      const snapshots: RetainedDiagnosticBatch[] = [];
+      try {
+        await this.persist();
+      } catch (error) {
+        snapshots.push({ id: null, sourceBytes: 0, error: diagnosticValue(error) });
+      }
+      for (const batch of this.state.queue) {
+        try {
+          const gzip = await secureRead(
+            this.queueDirectory,
+            `${batch.id}.gz`,
+            DELIVERY_LIMITS.compressedBytes,
+          );
+          if (checksum(gzip) !== batch.id) throw new Error('batch_integrity_failed');
+          snapshots.push({ id: batch.id, sourceBytes: gzip.length, gzip });
+        } catch (error) {
+          snapshots.push({ id: batch.id, sourceBytes: batch.bytes, error: diagnosticValue(error) });
+        }
+        await yieldIO();
+      }
+      return snapshots;
+    });
   }
 }

@@ -1,13 +1,14 @@
 import { setImmediate as yieldIO } from 'node:timers/promises';
 import { safePath } from '../resource-store/files.js';
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { join, resolve, parse } from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { diagnosticValue, SESSION_LIMITS } from './session-journal.js';
 import { PerformanceSpool } from './performance-spool.js';
+import { decodeDiagnosticBatch, type RetainedDiagnosticBatch } from './delivery.js';
 const compress = promisify(gzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
@@ -16,7 +17,10 @@ export interface ArchivedLogFile {
   status: string;
   sourceBytes: number;
   readBytes: number;
-  durability?: 'durable-pending' | 'memory-only';
+  durability?: 'durable-pending' | 'durable-outbox' | 'memory-only';
+  scope?: string;
+  error?: unknown;
+  snapshotAt?: string;
   sha256?: string;
   volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
 }
@@ -58,6 +62,7 @@ export async function fullLogArchive(
   directory: string | undefined,
   range: { from?: string; to?: string; focusSessionId?: string } = {},
   memoryPerformance: readonly unknown[] = [],
+  extra: { journalMemory?: readonly string[]; outbox?: readonly RetainedDiagnosticBatch[] } = {},
 ) {
   const fragments = new Map<string, { id: string; expected: number; parts: Set<number> }>();
   const sessions = new Map<
@@ -76,26 +81,128 @@ export async function fullLogArchive(
   const include = (time: unknown) =>
     typeof time !== 'string' ||
     ((!range.from || time >= range.from) && (!range.to || time <= range.to));
-  if (memoryPerformance.length) {
-    const values = memoryPerformance.filter((event) =>
-      include((event as { time?: unknown } | null)?.time),
-    );
-    const bytes = Buffer.from(
-      values.map((event) => JSON.stringify(diagnosticValue(event)) + '\n').join(''),
-    );
-    files.push({
-      name: 'performance-memory.ndjson',
-      status: 'read',
-      durability: 'memory-only',
-      sourceBytes: 0,
-      readBytes: 0,
-      ...(await encodeLogVolumes(bytes)),
-    });
+  const sourceTime = (event: {
+    time?: unknown;
+    evidence?: { sourceRecord?: { time?: unknown } };
+  }) => event.evidence?.sourceRecord?.time ?? event.time;
+  const indexRecord = (
+    event: Record<string, unknown>,
+    time: unknown,
+    name: string,
+    id = event.startupSessionId,
+  ) => {
+    if (typeof id === 'string') {
+      const session = sessions.get(id) ?? {
+        sessionId: id,
+        hostStartupSessionId:
+          typeof event.hostStartupSessionId === 'string'
+            ? event.hostStartupSessionId
+            : /^(?:desktop|supervisor|companion)/.test(name)
+              ? id
+              : null,
+        first: null,
+        last: null,
+        events: 0,
+        sequence: [],
+        ended: false,
+      };
+      if (typeof time === 'string') {
+        session.first = session.first === null || time < session.first ? time : session.first;
+        session.last = session.last === null || time > session.last ? time : session.last;
+      }
+      session.events++;
+      if (typeof event.sequence === 'number') session.sequence.push(event.sequence);
+      if (event.stage === 'session_end') session.ended = true;
+      sessions.set(id, session);
+    }
+  };
+  const appendVolatileAndRetained = async () => {
+    if (extra.journalMemory?.length) {
+      const records = extra.journalMemory.map((line) => JSON.parse(line) as { time?: unknown });
+      const bytes = Buffer.from(
+        records
+          .filter((event) => include(sourceTime(event)))
+          .map((event) => {
+            indexRecord(event, sourceTime(event), 'retained-copy');
+            return JSON.stringify(diagnosticValue(event)) + '\n';
+          })
+          .join(''),
+      );
+      files.push({
+        name: 'session-memory.ndjson',
+        status: 'read',
+        durability: 'memory-only',
+        scope: 'accepted SessionJournal records not confirmed on disk at the export snapshot',
+        sourceBytes: 0,
+        readBytes: 0,
+        ...(await encodeLogVolumes(bytes)),
+      });
+    }
+    for (const retained of extra.outbox ?? []) {
+      const file: ArchivedLogFile = {
+        name: retained.id ? `diagnostic-outbox/${retained.id}.ndjson` : 'diagnostic-outbox',
+        status: 'unreadable',
+        durability: 'durable-outbox',
+        scope:
+          'retained consented technical copy; original local journal can have broader scope; no credential manifest',
+        sourceBytes: retained.sourceBytes,
+        readBytes: 0,
+        volumes: [],
+      };
+      files.push(file);
+      try {
+        if (!retained.gzip) {
+          file.error = retained.error ?? 'retained_body_unavailable';
+          continue;
+        }
+        const body = await decodeDiagnosticBatch(retained.gzip);
+        const bytes = Buffer.from(
+          (body.events ?? [])
+            .filter((event) => include(sourceTime(event as { time?: unknown })))
+            .map((event) => {
+              indexRecord(
+                event as Record<string, unknown>,
+                sourceTime(event as { time?: unknown }),
+                'retained-copy',
+              );
+              return JSON.stringify(diagnosticValue(event)) + '\n';
+            })
+            .join(''),
+        );
+        Object.assign(file, await encodeLogVolumes(bytes), {
+          status: 'read',
+          readBytes: retained.sourceBytes,
+        });
+      } catch (error) {
+        file.error = diagnosticValue(error);
+      }
+      await yieldIO();
+    }
+    if (memoryPerformance.length) {
+      const values = memoryPerformance.filter((event) =>
+        include((event as { time?: unknown } | null)?.time),
+      );
+      const bytes = Buffer.from(
+        values.map((event) => JSON.stringify(diagnosticValue(event)) + '\n').join(''),
+      );
+      files.push({
+        name: 'performance-memory.ndjson',
+        status: 'read',
+        durability: 'memory-only',
+        sourceBytes: 0,
+        readBytes: 0,
+        ...(await encodeLogVolumes(bytes)),
+      });
+    }
+  };
+  if (!directory) {
+    await appendVolatileAndRetained();
+    return { status: 'not_configured', files };
   }
-  if (!directory) return { status: 'not_configured', files };
   try {
     await lstat(directory);
   } catch (error) {
+    await appendVolatileAndRetained();
     return {
       status: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable',
       files,
@@ -107,6 +214,13 @@ export async function fullLogArchive(
     if ((await lstat(ancestor)).isSymbolicLink()) throw new Error('support_log_link');
     ancestor = resolve(ancestor, '..');
   }
+  const snapshots: {
+    file: ArchivedLogFile;
+    fd?: Awaited<ReturnType<typeof open>>;
+    stat?: Stats;
+  }[] = [];
+  // Open fixed producer files before processing any large body. Their initial
+  // bytes stay readable when another process rotates/unlinks the named files.
   for (const name of names) {
     const file: ArchivedLogFile = {
       name,
@@ -116,7 +230,8 @@ export async function fullLogArchive(
       volumes: [],
     };
     files.push(file);
-    let fd: Awaited<ReturnType<typeof open>> | undefined;
+    const snapshot: (typeof snapshots)[number] = { file };
+    snapshots.push(snapshot);
     try {
       const path = join(directory, name);
       const before = await lstat(path);
@@ -125,9 +240,10 @@ export async function fullLogArchive(
         continue;
       }
       await safePath(directory, name);
-      fd = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const fd = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      snapshot.fd = fd;
       const stat = await fd.stat();
-      if (stat.ino !== before.ino || stat.dev !== before.dev) {
+      if (stat.ino !== before.ino || stat.dev !== before.dev || stat.nlink > 1) {
         file.status = 'file_changed';
         continue;
       }
@@ -136,121 +252,127 @@ export async function fullLogArchive(
         file.status = 'source_exceeds_producer_budget';
         continue;
       }
-      const source = Buffer.alloc(stat.size);
-      while (file.readBytes < stat.size) {
-        const { bytesRead } = await fd.read(
-          source,
-          file.readBytes,
-          stat.size - file.readBytes,
-          file.readBytes,
-        );
-        if (!bytesRead) break;
-        file.readBytes += bytesRead;
-      }
-      const after = await lstat(await safePath(directory, name));
-      if (
-        after.ino !== stat.ino ||
-        after.dev !== stat.dev ||
-        file.readBytes !== stat.size ||
-        (after.size <= stat.size && after.mtimeMs !== stat.mtimeMs)
-      ) {
-        file.status = 'file_changed';
-        continue;
-      }
-      // Parse structured records before redaction to preserve valid NDJSON and replace whole credential values.
-      let currentSession: unknown;
-      const lines = source.subarray(0, file.readBytes).toString('utf8').split('\n');
-      const processLine = (line: string) => {
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          const source = (event.evidence as { sourceRecord?: { time?: unknown } } | undefined)
-            ?.sourceRecord;
-          const stamp = source?.time ?? event.time ?? event.timestamp;
-          const time =
-            typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 && stamp < 1e14
-              ? new Date(stamp).toISOString()
-              : stamp;
-          if (typeof event.startupSessionId === 'string') currentSession = event.startupSessionId;
-          const id = event.startupSessionId ?? currentSession;
-          if (
-            typeof time === 'string' &&
-            ((range.from && time < range.from) || (range.to && time > range.to))
-          )
-            return '';
-          const rawDetail = event.error ?? event.detail;
-          if (typeof rawDetail === 'string') {
-            try {
-              const detail = JSON.parse(rawDetail) as {
-                detailId?: unknown;
-                part?: unknown;
-                parts?: unknown;
-              };
-              if (
-                typeof detail.detailId === 'string' &&
-                typeof detail.part === 'number' &&
-                typeof detail.parts === 'number'
-              ) {
-                const group = fragments.get(detail.detailId) ?? {
-                  id: detail.detailId,
-                  expected: detail.parts,
-                  parts: new Set<number>(),
-                };
-                group.parts.add(detail.part);
-                fragments.set(group.id, group);
-              }
-            } catch {
-              /* Ordinary native details need no fragment index. */
-            }
-          }
-          if (typeof id === 'string') {
-            const session = sessions.get(id) ?? {
-              sessionId: id,
-              hostStartupSessionId:
-                typeof event.hostStartupSessionId === 'string'
-                  ? event.hostStartupSessionId
-                  : /^(?:desktop|supervisor|companion)/.test(name)
-                    ? id
-                    : null,
-              first: null,
-              last: null,
-              events: 0,
-              sequence: [],
-              ended: false,
-            };
-            if (typeof time === 'string') {
-              session.first = session.first === null || time < session.first ? time : session.first;
-              session.last = session.last === null || time > session.last ? time : session.last;
-            }
-            session.events++;
-            if (typeof event.sequence === 'number') session.sequence.push(event.sequence);
-            if (event.stage === 'session_end') session.ended = true;
-            sessions.set(id, session);
-          }
-          return JSON.stringify(diagnosticValue(event));
-        } catch {
-          return diagnosticValue(line) as string;
-        }
-      };
-      const processed: string[] = [];
-      for (let index = 0; index < lines.length; index++) {
-        processed.push(processLine(lines[index]!));
-        if (index % 128 === 0) await yieldIO();
-      }
-      const text = processed.join('\n');
-      const bytes = Buffer.from(text);
-      Object.assign(file, await encodeLogVolumes(bytes));
-      file.status =
-        name !== 'business-history.json' &&
-        name !== 'session-retention.json' &&
-        text.length > 0 &&
-        !text.endsWith('\n')
-          ? 'incomplete_last_line'
-          : 'read';
+      snapshot.stat = stat;
+      file.snapshotAt = new Date().toISOString();
     } catch (error) {
       file.status = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable';
+      if (file.status !== 'missing') file.error = diagnosticValue(error);
     } finally {
-      await fd?.close();
+      if (!snapshot.stat) {
+        await snapshot.fd?.close();
+        delete snapshot.fd;
+      }
     }
+  }
+  try {
+    await appendVolatileAndRetained();
+    for (const { file, fd, stat } of snapshots) {
+      if (!fd || !stat) continue;
+      const name = file.name;
+      try {
+        const source = Buffer.alloc(stat.size);
+        while (file.readBytes < stat.size) {
+          const { bytesRead } = await fd.read(
+            source,
+            file.readBytes,
+            stat.size - file.readBytes,
+            file.readBytes,
+          );
+          if (!bytesRead) break;
+          file.readBytes += bytesRead;
+        }
+        const after = await fd.stat();
+        const changed =
+          after.ino !== stat.ino ||
+          after.dev !== stat.dev ||
+          file.readBytes !== stat.size ||
+          after.size < stat.size ||
+          (after.size === stat.size && after.mtimeMs !== stat.mtimeMs);
+        if (changed)
+          file.error = {
+            reason: 'source_changed_during_snapshot',
+            expectedBytes: stat.size,
+            availableBytes: file.readBytes,
+            finalBytes: after.size,
+          };
+        // Parse structured records before redaction to preserve valid NDJSON and replace whole credential values.
+        let currentSession: unknown;
+        const lines = source.subarray(0, file.readBytes).toString('utf8').split('\n');
+        const processLine = (line: string) => {
+          try {
+            const event = JSON.parse(line) as Record<string, unknown>;
+            const source = (event.evidence as { sourceRecord?: { time?: unknown } } | undefined)
+              ?.sourceRecord;
+            const stamp = source?.time ?? event.time ?? event.timestamp;
+            const time =
+              typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 && stamp < 1e14
+                ? new Date(stamp).toISOString()
+                : stamp;
+            if (typeof event.startupSessionId === 'string') currentSession = event.startupSessionId;
+            const id = event.startupSessionId ?? currentSession;
+            if (
+              typeof time === 'string' &&
+              ((range.from && time < range.from) || (range.to && time > range.to))
+            )
+              return '';
+            const rawDetail = event.error ?? event.detail;
+            if (typeof rawDetail === 'string') {
+              try {
+                const detail = JSON.parse(rawDetail) as {
+                  detailId?: unknown;
+                  part?: unknown;
+                  parts?: unknown;
+                };
+                if (
+                  typeof detail.detailId === 'string' &&
+                  typeof detail.part === 'number' &&
+                  typeof detail.parts === 'number'
+                ) {
+                  const group = fragments.get(detail.detailId) ?? {
+                    id: detail.detailId,
+                    expected: detail.parts,
+                    parts: new Set<number>(),
+                  };
+                  group.parts.add(detail.part);
+                  fragments.set(group.id, group);
+                }
+              } catch {
+                /* Ordinary native details need no fragment index. */
+              }
+            }
+            indexRecord(event, time, name, id);
+            return JSON.stringify(diagnosticValue(event));
+          } catch {
+            return diagnosticValue(line) as string;
+          }
+        };
+        const processed: string[] = [];
+        for (let index = 0; index < lines.length; index++) {
+          processed.push(processLine(lines[index]!));
+          if (index % 128 === 0) await yieldIO();
+        }
+        const text = processed.join('\n');
+        const bytes = Buffer.from(text);
+        Object.assign(file, await encodeLogVolumes(bytes));
+        file.status = changed
+          ? 'incomplete_snapshot'
+          : name !== 'business-history.json' &&
+              name !== 'session-retention.json' &&
+              text.length > 0 &&
+              !text.endsWith('\n')
+            ? 'incomplete_last_line'
+            : 'read';
+      } catch (error) {
+        file.status = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable';
+        file.error = diagnosticValue(error);
+      }
+    }
+  } finally {
+    await Promise.all(
+      snapshots.map(async (snapshot) => {
+        await snapshot.fd?.close();
+      }),
+    );
   }
   try {
     for await (const pending of new PerformanceSpool(directory).export()) {
