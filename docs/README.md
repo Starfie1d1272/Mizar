@@ -17,6 +17,7 @@
 | 参与开发 | [贡献指南](../CONTRIBUTING.md) · [开发验证](development/development-validation.md) |
 | 理解实现与接入 | [架构](reference/architecture.md) · [协议](reference/protocol.md) · [游戏数据语义](reference/telemetry.md) · [应用内更新](reference/updates.md) |
 | 修改视觉与文案 | [设计系统](design/README.md) · [中文与术语](development/terminology.md) |
+| 为独立重设计了解现状 | [产品现状基线](design/current-state/README.md)（固定提交的产品事实、源码索引与覆盖核对，不是新版方案） |
 | 维护依赖与发布版本 | [依赖维护](development/dependency-maintenance.md) · [发布流程](development/release-readiness.md) |
 | 查阅来源与决策 | [参考项目](reference/references.md) · [第三方说明](../THIRD-PARTY-NOTICES.md) · [决策维护](decisions/README.md) |
 
