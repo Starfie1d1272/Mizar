@@ -29,6 +29,73 @@ const channels = new Map<
   }
 >();
 const anomalies: unknown[] = [];
+const surfaces = new Map<
+  HTMLCanvasElement,
+  { id: number; sequence: number | null; changedAt: number; stalled: boolean }
+>();
+let nextSurfaceId = 1;
+
+function sampleSurfaces() {
+  const now = performance.now();
+  for (const element of surfaces.keys()) if (!element.isConnected) surfaces.delete(element);
+  const elements = document
+    .getElementById('root')
+    ?.querySelectorAll<HTMLCanvasElement>('canvas[data-radar-source]');
+  const channel = channels.get('radar');
+  const receivedSequence = channel?.cursor?.programReceiveSequence ?? null;
+  const result = [];
+  const selected = Array.from(elements ?? []).slice(0, 8);
+  for (const element of surfaces.keys()) if (!selected.includes(element)) surfaces.delete(element);
+  for (const element of selected) {
+    const raw = element.dataset.radarDrawnSequence;
+    const sequence = raw && /^\d+$/.test(raw) ? Number(raw) : null;
+    let state = surfaces.get(element);
+    if (!state) {
+      state = { id: nextSurfaceId++, sequence, changedAt: now, stalled: false };
+      surfaces.set(element, state);
+    }
+    if (sequence !== state.sequence) {
+      state.changedAt = now;
+      state.sequence = sequence;
+      state.stalled = false;
+    }
+    const paused = element.dataset.radarPaused === 'true';
+    const source = element.dataset.radarSource;
+    const visible = document.visibilityState === 'visible' && element.getClientRects().length > 0;
+    const ageMs = Math.max(0, now - state.changedAt);
+    // A static preview, an intentional pause or absent input is not a draw failure.
+    const stalled =
+      source === 'client' &&
+      visible &&
+      !paused &&
+      channel?.state === 'live' &&
+      now - channel.lastReceived < 1000 &&
+      receivedSequence !== null &&
+      (sequence === null || receivedSequence > sequence) &&
+      ageMs >= 3000;
+    if (stalled && !state.stalled)
+      anomaly({
+        time: new Date().toISOString(),
+        kind: 'radar_draw_not_advancing',
+        surfaceId: state.id,
+        drawnSequence: sequence,
+        receivedSequence,
+        ageMs,
+      });
+    state.stalled = stalled;
+    result.push({
+      id: state.id,
+      drawnSequence: sequence,
+      receivedSequence,
+      lastDrawChangeAgeMs: ageMs,
+      paused,
+      source,
+      visible,
+      stalled,
+    });
+  }
+  return { observed: result, omittedSurfaces: Math.max(0, (elements?.length ?? 0) - 8) };
+}
 
 function anomaly(value: unknown): void {
   anomalyCount++;
@@ -96,6 +163,7 @@ export async function flushPerformanceJournal(reason = 'export'): Promise<void> 
     visibility: document.visibilityState,
     frames: { callbacks: frames, maxGapMs: maxFrameGapMs, over50ms: slowFrames },
     longTasks: { supported: longTaskSupport, count: longTasks, maxDurationMs: maxLongTaskMs },
+    surfaces: sampleSurfaces(),
     channels: [...channels].map(([channel, value]) => ({
       channel,
       ...value,
@@ -105,7 +173,7 @@ export async function flushPerformanceJournal(reason = 'export'): Promise<void> 
     omittedAnomalySamples: Math.max(0, anomalyCount - anomalies.length),
     anomalies: anomalies.splice(0),
     scope:
-      'own document RAF callback cadence and snapshot acceptance/subscriber time; not GPU paint, screen capture, OBS or glass-to-glass latency',
+      'own document RAF cadence, accepted channel cursors and completed radar Canvas draw sequence; not GPU paint, screen capture, OBS or glass-to-glass latency',
   };
   started = now;
   anomalyCount = 0;
@@ -161,6 +229,7 @@ export function installPerformanceJournal(): void {
   setInterval(() => {
     void flushPerformanceJournal('interval');
   }, 15000);
+  setInterval(sampleSurfaces, 1000);
   window.addEventListener('pagehide', () => {
     void flushPerformanceJournal('pagehide');
   });

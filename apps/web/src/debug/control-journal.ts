@@ -73,6 +73,31 @@ export function controlEvidence(operation: string, phase: string, evidence: unkn
 
 /** Observe controls inside Mizar only; never inspect arbitrary files or other applications. */
 export function installControlJournal(): void {
+  window.addEventListener('error', (event) => {
+    // Exclude extension/foreign scripts and resource errors outside Mizar code.
+    if (!(event instanceof ErrorEvent)) return;
+    if (event.filename) {
+      try {
+        if (new URL(event.filename, location.href).origin !== location.origin) return;
+      } catch {
+        return;
+      }
+    }
+    controlEvidence('browser_error', 'failure', {
+      page: location.pathname,
+      file: event.filename,
+      line: event.lineno,
+      column: event.colno,
+      error: browserErrorEvidence(event.error ?? new Error(event.message)),
+    });
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    controlEvidence('browser_unhandled_rejection', 'failure', {
+      page: location.pathname,
+      error: browserErrorEvidence(event.reason),
+      scope: 'unhandled promise rejection in this Mizar document; task attribution unknown',
+    });
+  });
   const observe = (event: Event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || !document.getElementById('root')?.contains(target))

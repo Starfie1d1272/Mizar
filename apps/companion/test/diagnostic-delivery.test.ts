@@ -98,6 +98,18 @@ describe('consented diagnostic outbox', () => {
     await delivery.tick();
     expect(remote.calls).toEqual([]);
     await delivery.consent(true);
+    journal.record('performance_anomaly_samples', {
+      id: 'public-window',
+      phase: 'before',
+      samples: [
+        {
+          time: new Date(Date.now() - 86400_000).toISOString(),
+          evidence: 'private-pre-consent-sample',
+        },
+        { time: new Date(Date.now() + 1000).toISOString(), evidence: 'permitted-after-consent' },
+        { time: 'invalid', evidence: 'unknown-source-time' },
+      ],
+    });
     journal.record('operation_result', {
       result: 'confirmed',
       route: '/operator/music/config',
@@ -116,6 +128,13 @@ describe('consented diagnostic outbox', () => {
     expect(text).not.toContain(secret);
     expect(text).not.toContain('private-token');
     expect(text).not.toContain('private-chat');
+    expect(text).not.toContain('private-pre-consent-sample');
+    expect(text).not.toContain('unknown-source-time');
+    expect(text).toContain('permitted-after-consent');
+    expect(text).toContain('excludedPreConsentOrUnknownTimeSamples');
+    expect(await readFile(join(dir, 'session.ndjson'), 'utf8')).toContain(
+      'private-pre-consent-sample',
+    );
     expect(delivery.status().acknowledged).toBe(1);
     await delivery.close();
     await journal.close();
