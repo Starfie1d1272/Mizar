@@ -20,6 +20,9 @@ class SteamBridge final : private Port {
   Session& session() { return session_; }
   // Single-threaded host calls at >10 Hz. Do not mix with ManualDispatch.
   void pump(std::uint64_t monotonic_ms) {
+    // Expire before dispatch: an already queued success must not revive a timeout.
+    if (!context_ready()) session_.close(Failure::context);
+    session_.tick(monotonic_ms);
     SteamAPI_RunCallbacks();
     if (!context_ready()) session_.close(Failure::context);
     session_.tick(monotonic_ms);
