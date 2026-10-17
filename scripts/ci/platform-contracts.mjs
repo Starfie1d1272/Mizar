@@ -81,6 +81,10 @@ export async function runPlatformContracts(
         resolve(root, 'node_modules/vitest/vitest.mjs'),
         'run',
         '--config=vitest.config.ts',
+        // Windows child-process and durable-filesystem consumers compete for
+        // the same runner resources. Serialize files while retaining every
+        // test and its existing deadline; the report still requires each once.
+        ...(process.platform === 'win32' ? ['--no-file-parallelism'] : []),
         ...files,
         '--reporter=default',
         '--reporter=json',

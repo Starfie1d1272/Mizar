@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { meteredRuntime } from './capacity-runtime.mjs';
 import { fullOutbox } from './outbox-capacity.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
-import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import { performance } from 'node:perf_hooks';
 import { randomUUID, createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { strict as assert } from 'node:assert';
-import { setImmediate as yieldIO } from 'node:timers/promises';
+import { setImmediate as yieldIO, setTimeout as waitForIO } from 'node:timers/promises';
 import { buildApp } from '../../apps/companion/src/app.ts';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.ts';
 import {
@@ -268,6 +268,23 @@ async function profile(directory) {
         nativeOps++;
       }
       if (sequence % 1200 === 1199) {
+        // The producer clock advances 60 seconds while NativeSource's real timer
+        // does not. Observe its durable cursor reaching this input boundary;
+        // otherwise a fast CI host closes with unread source bytes and measures
+        // an incomplete workload. No extra collector or export is substituted.
+        const sourceBytes = (await stat(join(sourceDirectory, 'desktop.ndjson'))).size;
+        const deadline = performance.now() + 5000;
+        for (;;) {
+          const cursor = await readFile(join(sourceDirectory, 'native-source-cursor.json'), 'utf8')
+            .then(JSON.parse)
+            .catch((error) => {
+              if (error.code === 'ENOENT') return { cursors: [] };
+              throw error;
+            });
+          if (cursor.cursors.some((entry) => entry.offset === sourceBytes)) break;
+          assert(performance.now() < deadline, 'actual NativeSource did not commit minute input');
+          await waitForIO(50);
+        }
         await journal.flush();
         await delivery.tick(false);
         if (sequence % 12000 === 11999)
