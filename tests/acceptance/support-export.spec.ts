@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,9 +9,13 @@ import { expect, test } from './companion-isolation.js';
 
 test('normal UI exports retained operations and producer/renderer performance through real local transport', async ({
   page,
+  context,
 }, testInfo) => {
   const logs = await mkdtemp(join(tmpdir(), 'mizar-browser-performance-'));
+  const journal = new SessionJournal(logs);
+  journal.record('synthetic_large_record', { text: randomBytes(384 * 1024).toString('hex') });
   const app = buildApp({
+    supportJournal: journal,
     supportLogsDirectory: logs,
     gsiToken: 'synthetic-performance-gsi',
     productRuntime: {
@@ -22,8 +28,10 @@ test('normal UI exports retained operations and producer/renderer performance th
   });
   try {
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
-    await page.route(/\/debug\/(support-bundle|control-event)$/, async (route) => {
+    let supportRequests = 0;
+    await context.route(/\/debug\/(support-bundle|control-event)$/, async (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path === '/debug/support-bundle') supportRequests++;
       const response = await route.fetch({ url: `${address}${path}` });
       await route.fulfill({ response });
     });
@@ -170,8 +178,82 @@ test('normal UI exports retained operations and producer/renderer performance th
       body: await page.screenshot(),
       contentType: 'image/png',
     });
-    expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
+    expect(bytes.byteLength).toBeGreaterThan(256 * 1024);
+    expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024 * 1024);
     expect(bytes.toString('utf8')).not.toContain('private-');
+    await page.route('**/local/v1/updates', (route) =>
+      route.fulfill({
+        json: {
+          phase: 'error',
+          productionRevision: 'preparation-1',
+          automatic: false,
+          currentVersion: '1.4.0',
+          distribution: 'installed',
+          error: 'update_network_failed',
+          candidate: null,
+          downloadedBytes: 0,
+          failureDetails: [
+            {
+              stage: 'download',
+              summary: '更新网络请求失败。',
+              nextStep: '网络恢复后重试。',
+              operationId: 'synthetic-update',
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto('/settings?tab=advanced');
+    // Install the clipboard probe after navigation, without invoking the OS clipboard.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            (window as Window & { copiedUpdateSummary?: string }).copiedUpdateSummary = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    const requestsBeforeCopy = supportRequests;
+    await page.getByRole('button', { name: '复制更新摘要', exact: true }).click();
+    await expect(
+      page.getByText('更新摘要已复制。完整操作记录请导出诊断包后私下交付维护者。'),
+    ).toBeVisible();
+    const summary = await page.evaluate(
+      () => (window as Window & { copiedUpdateSummary?: string }).copiedUpdateSummary!,
+    );
+    expect(JSON.parse(summary)).toMatchObject({
+      schema: 'mizar-update-summary/1',
+      error: 'update_network_failed',
+    });
+    expect(summary).not.toContain('synthetic_large_record');
+    expect(summary).not.toContain('fullLogs');
+    expect(supportRequests).toBe(requestsBeforeCopy);
+    const opening = page.waitForEvent('popup');
+    await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
+    const diagnostics = await opening;
+    await expect(diagnostics.getByRole('heading', { name: '运行诊断', exact: true })).toBeVisible();
+    const fullDownload = diagnostics.waitForEvent('download');
+    await diagnostics.getByRole('button', { name: '导出诊断包', exact: true }).click();
+    const fullBytes = await readFile(await (await fullDownload).path());
+    expect(fullBytes.byteLength).toBeGreaterThan(256 * 1024);
+    expect(JSON.parse(fullBytes.toString('utf8'))).toMatchObject({
+      schema: 'mizar-support-bundle/1',
+      fullLogs: { status: 'available' },
+    });
+    await testInfo.attach('update-summary-large-export-evidence', {
+      contentType: 'application/json',
+      body: JSON.stringify({
+        firstExportBytes: bytes.byteLength,
+        updateExportBytes: fullBytes.byteLength,
+        copiedSummaryBytes: Buffer.byteLength(summary),
+        fullExportRequestsDuringCopy: supportRequests - requestsBeforeCopy - 1,
+        source: 'real production export of synthetic retained events; no private user records',
+      }),
+    });
+    await diagnostics.close();
     expect(errors).toEqual([]);
   } finally {
     await app.close();
