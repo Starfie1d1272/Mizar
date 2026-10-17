@@ -59,7 +59,9 @@ export function createRuntimeVerifier(
         });
       },
     },
-    pinned?.coreVersion ?? expectedCore?.appVersion.replace(/-rc\.\d+$/, '') ?? '1.1.0',
+    pinned?.coreVersion ??
+      expectedCore?.appVersion.replace(/-(?:alpha|beta|rc)\.\d+$/, '') ??
+      '1.1.0',
   );
 }
 

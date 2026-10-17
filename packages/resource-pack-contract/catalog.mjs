@@ -26,10 +26,12 @@ export function createResourceDescriptor({
   expiresAt,
   origin,
 }) {
-  const coreVersion = core?.appVersion?.replace(/-rc\.\d+$/, '');
+  const coreVersion = core?.appVersion?.replace(/-(?:alpha|beta|rc)\.\d+$/, '');
   requireValue(
     isVersion(coreVersion) &&
-      /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(core.appVersion) &&
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.(0|[1-9]\d*))?$/.test(
+        core.appVersion,
+      ) &&
       isSourceSha(core.gitSha) &&
       isSha256(core.archiveSha256) &&
       [
@@ -65,7 +67,9 @@ export function createResourceDescriptor({
       const publication = origin.publication;
       requireValue(
         isSourceSha(publication.promotionSha) &&
-          /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(publication.releaseVersion) &&
+          /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.(0|[1-9]\d*))?$/.test(
+            publication.releaseVersion,
+          ) &&
           isSha256(publication.sha256) &&
           Number.isSafeInteger(publication.sequence) &&
           publication.sequence > 0 &&

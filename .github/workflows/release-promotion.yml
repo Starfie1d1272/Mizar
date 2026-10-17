@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tag:
-        description: Exact application version tag (v1.2.0-rc.N or v1.2.0)
+        description: Exact application version tag (stable, alpha.N, beta.N or rc.N)
         required: true
         type: string
 permissions:
@@ -228,6 +228,8 @@ jobs:
       - name: Publish exact qualified assets
         shell: pwsh
         run: |
+          $prereleaseFlags = @()
+          if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.\d+$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
           $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
           if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -Filter '*.zip' -File).FullName) }
@@ -237,7 +239,7 @@ jobs:
             $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json $resources
             if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
-            gh release edit $env:RELEASE_TAG --draft=false
+            gh release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
             if ($LASTEXITCODE -ne 0) { throw 'Draft completion failed' }
             gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > existing-release.json
             if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
@@ -253,10 +255,10 @@ jobs:
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
             if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
             $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets
-            if ($env:RELEASE_TAG -match '-rc\.') { $args += '--prerelease' }
+            $args += $prereleaseFlags
             gh @args
             if ($LASTEXITCODE -ne 0) { throw 'Draft upload incomplete; retry verifies original bytes and adds missing assets' }
-            gh release edit $env:RELEASE_TAG --draft=false
+            gh release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
             if ($LASTEXITCODE -ne 0) { throw 'Publication failed; retry retains original assets' }
           }
       - name: Verify actual public resource assets before downstream authorization
