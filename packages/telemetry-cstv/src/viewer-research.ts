@@ -13,21 +13,48 @@ export interface ViewerEvent {
   target: string | null;
 }
 
+export class ViewerResearchError extends Error {
+  constructor(
+    readonly code:
+      'tick-regressed' | 'invalid-source-tick' | 'map-or-server-changed' | 'invalid-source-clock',
+    readonly previousTick?: number,
+    readonly currentTick?: number,
+  ) {
+    super(code);
+    this.name = 'ViewerResearchError';
+  }
+}
+
 export function viewerDecoder(emit: (event: ViewerEvent) => void) {
   const parser = new DemoReader();
   let map: string | null = null;
   let interval: number | null = null;
   let serverCount: number | undefined;
   let lastCursor = -Infinity;
+  let lastSeenTick = -Infinity;
+  let continuityFailure: ViewerResearchError | undefined;
+  const observeTick = (tick: number) => {
+    if (continuityFailure) throw continuityFailure;
+    if (!Number.isSafeInteger(tick) || tick < lastSeenTick) {
+      continuityFailure = new ViewerResearchError(
+        Number.isSafeInteger(tick) ? 'tick-regressed' : 'invalid-source-tick',
+        Number.isFinite(lastSeenTick) ? lastSeenTick : undefined,
+        Number.isFinite(tick) ? tick : undefined,
+      );
+      throw continuityFailure;
+    }
+    lastSeenTick = tick;
+  };
+  parser.on('tickstart', observeTick);
   parser.on('serverinfo', (info) => {
     if (map && (map !== info.map_name || serverCount !== info.server_count)) {
-      throw new Error('map-or-server-changed: start a new stream instance');
+      throw new ViewerResearchError('map-or-server-changed');
     }
     map = info.map_name ?? null;
     serverCount = info.server_count;
     interval = info.tick_interval ?? null;
     if (!map || interval === null || !(interval > 0 && interval <= 1)) {
-      throw new Error('invalid-source-clock');
+      throw new ViewerResearchError('invalid-source-clock');
     }
   });
   const send = (
@@ -36,6 +63,7 @@ export function viewerDecoder(emit: (event: ViewerEvent) => void) {
     actor: string | null = null,
     target: string | null = null,
   ) => {
+    observeTick(parser.currentTick);
     const props = parser.gameRules?.entity?.properties;
     const warmup = props?.['CCSGameRulesProxy.CCSGameRules.m_bWarmupPeriod'];
     const round = props?.['CCSGameRulesProxy.CCSGameRules.m_totalRoundsPlayed'];
@@ -54,8 +82,8 @@ export function viewerDecoder(emit: (event: ViewerEvent) => void) {
   const id = (value: string | undefined): string | null =>
     value && /^7656119\d{10}$/.test(value) ? value : null;
   parser.on('tickend', () => {
+    observeTick(parser.currentTick);
     if (!map || parser.currentTick < 0) return;
-    if (parser.currentTick < lastCursor) throw new Error('tick-regressed');
     if (interval && (parser.currentTick - lastCursor) * interval >= 1) {
       lastCursor = parser.currentTick;
       send('cursor');

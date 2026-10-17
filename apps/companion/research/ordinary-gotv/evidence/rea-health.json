@@ -4,9 +4,7 @@
   "scope": {
     "mode": "explicit",
     "clients": [],
-    "providers": [
-      "ghidra"
-    ],
+    "providers": ["ghidra"],
     "skill": false,
     "target": "/workspace/gotv-research/cs2/game/bin/win64/engine2.dll"
   },

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { viewerDecoder } from '@mizar/telemetry-cstv/viewer-research';
 import { growingDemo } from './follow.js';
+import { describeFailure } from './failure.js';
 
 const { values } = parseArgs({
   options: {
@@ -84,6 +85,7 @@ const timeout = setTimeout(stop, seconds * 1000);
 let input: ReadableStream<Uint8Array> | undefined;
 let sourceReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 let failureStage = 'open-source';
+let failureDetail: ReturnType<typeof describeFailure> | null = null;
 try {
   input = await growingDemo(values.input, {
     follow: values.follow ?? false,
@@ -99,20 +101,34 @@ try {
   const validated = new ReadableStream<Uint8Array>(
     {
       async pull(controller) {
-        if (writeQueue) {
-          await output.writeFile(writeQueue);
-          writeQueue = '';
+        try {
+          if (writeQueue) {
+            failureStage = 'write-events';
+            await output.writeFile(writeQueue);
+            writeQueue = '';
+          }
+          failureStage = 'read-source';
+          const next = await reader.read();
+          if (next.done) {
+            failureStage = 'validate-header';
+            if (magicChecked < magic.length) throw new Error('incomplete-demo-header');
+            controller.close();
+            return;
+          }
+          failureStage = 'validate-header';
+          for (
+            let i = 0;
+            i < next.value.length && magicChecked < magic.length;
+            i++, magicChecked++
+          ) {
+            if (next.value[i] !== magic[magicChecked]) throw new Error('invalid-cs2-demo-magic');
+          }
+          failureStage = 'parse-demo';
+          controller.enqueue(next.value);
+        } catch (error) {
+          failureDetail ??= describeFailure(error, failureStage);
+          throw error;
         }
-        const next = await reader.read();
-        if (next.done) {
-          if (magicChecked < magic.length) throw new Error('incomplete-demo-header');
-          controller.close();
-          return;
-        }
-        for (let i = 0; i < next.value.length && magicChecked < magic.length; i++, magicChecked++) {
-          if (next.value[i] !== magic[magicChecked]) throw new Error('invalid-cs2-demo-magic');
-        }
-        controller.enqueue(next.value);
       },
       async cancel(reason) {
         await reader.cancel(reason);
@@ -121,9 +137,13 @@ try {
     { highWaterMark: 0 },
   );
   outcome = (await decoder.parse(validated)).status;
-  if (outcome !== 'complete' && !stopped) failure = true;
+  if (outcome !== 'complete' && !stopped) {
+    failure = true;
+    failureDetail ??= { category: 'parser-outcome', reason: outcome, stage: 'parse-demo' };
+  }
   if (!failure) failureStage = 'none';
-} catch {
+} catch (error) {
+  failureDetail ??= describeFailure(error, failureStage);
   outcome = stopped ? 'stopped-incomplete' : 'failed';
   failure = !stopped;
 } finally {
@@ -142,7 +162,8 @@ try {
     schema: 'mizar.viewer.decode-report.v1',
     streamInstance,
     outcome,
-    failureStage: failure ? failureStage : null,
+    failureStage: failure ? (failureDetail?.stage ?? failureStage) : null,
+    failure: failure ? failureDetail : null,
     counts,
     initialBytes,
     bytesRead: bytes,

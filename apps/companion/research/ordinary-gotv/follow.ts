@@ -37,9 +37,10 @@ export async function growingDemo(
   };
   const check = async () => {
     const [handle, current] = await Promise.all([file.stat(), stat(path)]);
-    if (current.ino !== initial.ino || current.dev !== initial.dev || handle.size < offset) {
-      throw new SourceBoundary('source-replaced-or-truncated');
+    if (current.ino !== initial.ino || current.dev !== initial.dev) {
+      throw new SourceBoundary('source-replaced');
     }
+    if (handle.size < offset) throw new SourceBoundary('source-truncated');
     if (anchor.length) {
       const checkBytes = Buffer.alloc(anchor.length);
       const read = await file.read(checkBytes, 0, checkBytes.length, anchorOffset);
