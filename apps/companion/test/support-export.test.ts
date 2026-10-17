@@ -167,21 +167,25 @@ describe('support export', () => {
       liveSessionId: 'session-one',
       reason: 'http_403',
     });
+    // Ordinary delivery events retain independent source versions, so bounded
+    // batches exercise the real disk budget without 150 serial fsyncs.
     for (let runtimeSeq = 0; runtimeSeq < 150; runtimeSeq++) {
-      journal.write('business_runtime', {
+      journal.write('business_delivery', {
         matchId: 'match-one',
         liveSessionId: 'session-one',
-        reason: 'contiguous',
+        reason: 'receiver_accepted',
         runtimeSeq,
         expected: Array.from({ length: 64 }, () => ({
           steam64: '76561199999999999',
           entryId: 'entry-one',
         })),
       });
-      await journal.flush();
+      if (runtimeSeq % 16 === 15) await journal.flush();
     }
+    await journal.flush();
     const history = readBusinessHistory(dir);
     expect(history.manifest.rotatedEvents).toBeGreaterThan(0);
+    expect(history.manifest.droppedPendingEvents).toBe(0);
     expect(
       history.groups
         .find((g) => g.matchId === 'match-one')
