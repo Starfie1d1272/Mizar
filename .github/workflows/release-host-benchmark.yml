@@ -1,0 +1,27 @@
+name: Release Host benchmark
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-host-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release_profile_benchmark:
+    name: release Host test benchmark
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore release profile cache
+        uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+      - name: Test Windows desktop startup deadlines and diagnostics
+        run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
