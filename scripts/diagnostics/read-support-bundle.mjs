@@ -14,7 +14,7 @@ const bundle = JSON.parse(await readFile(path, 'utf8'));
 if (bundle.schema !== 'mizar-support-bundle/1' || !Array.isArray(bundle.fullLogs?.files))
   throw new Error('Full log archive missing (legacy or invalid bundle)');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const timeline = [];
+let timeline = [];
 const failures = [];
 const fragments = new Map();
 for (const file of bundle.fullLogs.files) {
@@ -118,7 +118,33 @@ for (const file of bundle.fullLogs.files) {
       }
     }
     session = event.startupSessionId ?? session;
-    timeline.push({ file: file.name, ...event, startupSessionId: session });
+    const source = event.stage?.startsWith('performance_anomaly_')
+      ? event.evidence?.sourceRecord
+      : null;
+    const validSource =
+      source &&
+      typeof source.id === 'string' &&
+      /^[a-f0-9-]{36}$/i.test(source.id) &&
+      typeof source.time === 'string' &&
+      Number.isFinite(Date.parse(source.time));
+    timeline.push({
+      file: file.name,
+      ...event,
+      startupSessionId: session,
+      ...(validSource
+        ? {
+            time: source.time,
+            persistedAt: event.sequence ? event.time : null,
+            sourceRecordId: source.id,
+            sourceStartupSessionId: source.sessionId,
+            sourceHostStartupSessionId: source.hostSessionId,
+            sourceSequence: source.recordSequence,
+            sourceQueuedAfterSequence: source.queuedAfterSequence,
+            sourceMonotonicMs: source.monotonicMs,
+            sourceDurability: file.durability ?? 'session-log',
+          }
+        : {}),
+    });
   }
 }
 for (const [id, group] of fragments) {
@@ -144,7 +170,18 @@ const time = (event) => {
   const value = Date.parse(event.recordedAt ?? event.timestamp ?? event.time);
   return Number.isFinite(value) ? value : typeof event.time === 'number' ? event.time : 0;
 };
-timeline.sort((a, b) => time(a) - time(b) || (a.sequence ?? 0) - (b.sequence ?? 0));
+const sourceRecords = new Set();
+timeline = timeline.filter((event) => {
+  if (!event.sourceRecordId) return true;
+  if (sourceRecords.has(event.sourceRecordId)) return false;
+  sourceRecords.add(event.sourceRecordId);
+  return true;
+});
+timeline.sort(
+  (a, b) =>
+    time(a) - time(b) ||
+    (a.sourceSequence ?? a.sequence ?? 0) - (b.sourceSequence ?? b.sequence ?? 0),
+);
 for (const event of timeline) process.stdout.write(JSON.stringify(event) + '\n');
 process.stderr.write(
   JSON.stringify({

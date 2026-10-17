@@ -181,9 +181,18 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     evidence?: {
       samples?: { time?: string }[];
       entries?: { entry?: { time?: string; stage?: string } }[];
+      sourceRecord?: { time?: string };
       [key: string]: unknown;
     };
   };
+  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.sourceRecord) {
+    const sourceTime = Date.parse(value.evidence.sourceRecord.time ?? '');
+    const since = Date.parse(consentAt ?? '');
+    if (!Number.isFinite(sourceTime) || !Number.isFinite(since) || sourceTime < since) {
+      value.stage = 'diagnostic_source_excluded';
+      value.evidence = { reason: 'recovered_source_before_consent_or_unknown_time' };
+    }
+  }
   if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
     const original = value.evidence.samples;
     const since = consentAt ? Date.parse(consentAt) : NaN;

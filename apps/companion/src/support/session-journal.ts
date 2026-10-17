@@ -168,6 +168,10 @@ export class SessionJournal {
   private draining = false;
   private dropped = 0;
   private failures = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private writeError: unknown = null;
+  private inflightRecords = 0;
+  private repair: { ino: number; dev: number; offset: number } | undefined;
   private size = -1;
   private initialized = false;
   private readonly identity: {
@@ -269,12 +273,19 @@ export class SessionJournal {
     }
     this.pendingBytes += bytes;
     this.pending.push({ line, bytes, sequence: this.sequence, ...(receipt ? { receipt } : {}) });
-    if (!this.draining) {
-      this.draining = true;
-      this.writer = Promise.resolve().then(() => this.drain());
+    if (receipt && this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
     }
+    if (!this.draining && !this.retryTimer) this.startWriter();
+  }
+  private startWriter() {
+    if (this.draining) return;
+    this.draining = true;
+    this.writer = Promise.resolve().then(() => this.drain());
   }
   private async drain(): Promise<void> {
+    let failed = false;
     try {
       while (this.pending.length) {
         const batch = [];
@@ -284,12 +295,15 @@ export class SessionJournal {
           batch.push(entry);
           bytes += entry.bytes;
         } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
+        this.inflightRecords = batch.length;
         try {
           await this.append(
             batch.map((entry) => entry.line).join(''),
             bytes,
             batch.some((entry) => entry.receipt),
           );
+          this.writeError = null;
+          this.pendingBytes -= bytes;
           for (const entry of batch) entry.receipt?.resolve(entry.sequence);
           for (const { line } of batch)
             for (const listener of this.listeners) {
@@ -301,13 +315,32 @@ export class SessionJournal {
             }
         } catch (error) {
           this.failures++;
-          for (const entry of batch) entry.receipt?.reject(error);
+          this.writeError = diagnosticValue(error);
+          const retained = [];
+          for (const entry of batch) {
+            if (entry.receipt) {
+              // A rejected explicit acknowledgment remains failed. Its owner
+              // (window spool/native cursor) decides whether to retry it.
+              entry.receipt.reject(error);
+              this.pendingBytes -= entry.bytes;
+            } else retained.push(entry);
+          }
+          this.pending.unshift(...retained);
+          failed = true;
+          break;
         } finally {
-          this.pendingBytes -= bytes;
+          this.inflightRecords = 0;
         }
       }
     } finally {
       this.draining = false;
+      if (failed && this.pending.length && !this.closed) {
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = undefined;
+          this.startWriter();
+        }, 1000);
+        this.retryTimer.unref();
+      }
     }
   }
   private async append(line: string, bytes: number, sync = false) {
@@ -339,9 +372,30 @@ export class SessionJournal {
         (before && (before.ino !== opened.ino || before.dev !== opened.dev))
       )
         throw new Error('session_log_changed');
-      await fd.writeFile(line);
-      this.size += bytes;
-      if (sync) await fd.sync();
+      let appendStart = opened.size;
+      if (this.repair) {
+        if (this.repair.ino === opened.ino && this.repair.dev === opened.dev) {
+          await fd.truncate(this.repair.offset);
+          appendStart = this.repair.offset;
+        }
+        this.repair = undefined;
+      }
+      try {
+        await fd.writeFile(line);
+        if (sync) await fd.sync();
+        this.size = appendStart + bytes;
+      } catch (error) {
+        try {
+          await fd.truncate(appendStart);
+          this.size = appendStart;
+        } catch (rollback) {
+          this.repair = { ino: opened.ino, dev: opened.dev, offset: appendStart };
+          throw new AggregateError([error, rollback], 'session_append_rollback_failed', {
+            cause: rollback,
+          });
+        }
+        throw error;
+      }
     } finally {
       await fd.close();
     }
@@ -419,6 +473,10 @@ export class SessionJournal {
   }
   async flush() {
     await this.writer;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    if (this.pending.length && !this.draining) this.startWriter();
+    await this.writer;
   }
   health() {
     return {
@@ -426,6 +484,8 @@ export class SessionJournal {
       sequence: this.sequence,
       dropped: this.dropped,
       writeFailures: this.failures,
+      writeError: this.writeError,
+      pendingRecords: this.pending.length + this.inflightRecords,
       pendingBytes: this.pendingBytes,
       closed: this.closed,
       rejectedAfterClose: this.rejectedAfterClose,

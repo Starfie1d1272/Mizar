@@ -862,6 +862,7 @@ type FullArchive = {
     files: {
       name: string;
       status: string;
+      durability?: string;
       sha256?: string;
       volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
     }[];
@@ -1030,6 +1031,173 @@ it('restores actual ingress and browser failure context from a complete bundle a
     expect(JSON.stringify(chunks)).not.toContain('not-selected-for-context');
   } finally {
     await second.close();
+  }
+});
+
+it('exports durable pending window originals during IO failure and restores them after restart in the original time range', async () => {
+  const dir = await directory();
+  let blocked = true;
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (String(args[0]) === join(dir, 'session.ndjson')) {
+      const write = handle.writeFile.bind(handle);
+      vi.spyOn(handle, 'writeFile').mockImplementation(async (data, options) => {
+        if (blocked && typeof data === 'string' && data.includes('performance_anomaly_'))
+          throw Object.assign(new Error('synthetic pending window IO failure'), { code: 'EBUSY' });
+        await write(data, options);
+      });
+    }
+    return handle;
+  });
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime('2026-10-17T00:00:00.000Z');
+  let first: ReturnType<typeof buildApp> | undefined;
+  let second: ReturnType<typeof buildApp> | undefined;
+  let now = 0;
+  const headers = { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' };
+  type WindowRecord = {
+    stage?: string;
+    time?: string;
+    sourceRecordId?: string;
+    evidence?: {
+      sourceRecord?: { id: string; sessionId: string };
+      samples?: {
+        sequence: number;
+        evidence: { input: { players: { state: { health: number } }[] } };
+      }[];
+      correlation?: { originalEvidence?: { error?: { cause?: { message: string } } } };
+    };
+  };
+  const readActualBundle = async (body: string, name: string): Promise<WindowRecord[]> => {
+    const path = join(dir, name + '.json');
+    await writeFile(path, body);
+    return execFileSync(process.execPath, ['scripts/diagnostics/read-support-bundle.mjs', path], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as WindowRecord);
+  };
+  try {
+    first = buildApp({
+      supportLogsDirectory: dir,
+      gsiToken: 'public-io-token',
+      debugClock: { nowMonotonicMs: () => now },
+      clock: {
+        now: () => ({
+          receivedAt: new Date(Date.now() + now).toISOString(),
+          receivedMonotonicMs: now,
+        }),
+      },
+    });
+    const address = await first.listen({ host: '127.0.0.1', port: 0 });
+    for (let index = 0; index < 9; index++) {
+      now = index * 250;
+      if (index === 5) {
+        const failure = await fetch(address + '/debug/control-event', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            operation: 'browser_error',
+            phase: 'failure',
+            time: new Date().toISOString(),
+            browserDocumentId: 'public-retry-document',
+            evidence: {
+              page: '/workspace',
+              error: {
+                name: 'IndexSizeError',
+                message: 'negative radius',
+                cause: { name: 'RangeError', message: 'original radius cause token=PRIVATE-IO' },
+              },
+            },
+          }),
+        });
+        expect(failure.status).toBe(204);
+      }
+      const response = await fetch(address + '/gsi', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          auth: { token: 'public-io-token' },
+          map: { name: 'de_ancient', phase: 'live', round: 1 },
+          allplayers: {
+            '76561198000000001': {
+              position: '1,2,3',
+              team: 'CT',
+              state: { health: index < 5 ? 100 : 17 },
+            },
+          },
+        }),
+      });
+      expect(response.status).toBe(204);
+    }
+    const pending = await fetch(address + '/debug/support-bundle', {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    expect(pending.status).toBe(200);
+    const pendingBody = await pending.text();
+    const pendingBundle = JSON.parse(pendingBody) as FullArchive;
+    expect(pendingBundle.fullLogs.files.some((file) => file.durability === 'durable-pending')).toBe(
+      true,
+    );
+    const pendingRows = (await readActualBundle(pendingBody, 'pending-io-bundle')).filter(
+      (row) => row.sourceRecordId,
+    );
+    expect(
+      pendingRows.some(
+        (row) =>
+          row.evidence?.correlation?.originalEvidence?.error?.cause?.message ===
+          'original radius cause token=[redacted]',
+      ),
+    ).toBe(true);
+    const originalSession = pendingRows[0]!.evidence!.sourceRecord!.sessionId;
+    const sourceIds = pendingRows.map((row) => row.sourceRecordId);
+    expect(new Set(sourceIds).size).toBe(sourceIds.length);
+    await first.close();
+    blocked = false;
+    vi.setSystemTime('2026-10-17T00:30:00.000Z');
+    second = buildApp({ supportLogsDirectory: dir });
+    const restartedAddress = await second.listen({ host: '127.0.0.1', port: 0 });
+    const restored = await fetch(restartedAddress + '/debug/support-bundle', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ from: '2026-10-16T23:59:59.000Z', to: '2026-10-17T00:01:00.000Z' }),
+    });
+    expect(restored.status).toBe(200);
+    const restoredBody = await restored.text();
+    const rows = (await readActualBundle(restoredBody, 'restored-io-bundle')).filter(
+      (row) => row.sourceRecordId,
+    );
+    expect(rows.map((row) => row.sourceRecordId)).toEqual(expect.arrayContaining(sourceIds));
+    expect(new Set(rows.map((row) => row.sourceRecordId)).size).toBe(rows.length);
+    expect(rows.every((row) => row.evidence?.sourceRecord?.sessionId === originalSession)).toBe(
+      true,
+    );
+    const samples = rows.flatMap((row) => row.evidence?.samples ?? []);
+    expect(new Set(samples.map((sample) => sample.sequence))).toEqual(
+      new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+    expect(
+      samples.some(
+        (sample) => sample.sequence === 0 && sample.evidence.input.players[0]?.state.health === 100,
+      ),
+    ).toBe(true);
+    expect(
+      samples.some(
+        (sample) => sample.sequence === 8 && sample.evidence.input.players[0]?.state.health === 17,
+      ),
+    ).toBe(true);
+    expect(restoredBody).not.toContain('PRIVATE-IO');
+  } finally {
+    blocked = false;
+    await first?.close();
+    await second?.close();
+    vi.useRealTimers();
   }
 });
 
