@@ -1,6 +1,7 @@
 import { DIAGNOSTIC_BODY_LIFETIME_MS } from '@mizar/protocol/diagnostics-upload';
 import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -302,6 +303,95 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
+  it.each(['during-scan', 'allocated-before-scan'])(
+    'recovers older records before a live commit %s without advancing past either',
+    async (mode) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await delivery.consent(true);
+      await journal.flush();
+      await delivery.close();
+      journal.record('operation_result', { result: 'before-recovery' });
+      await journal.flush();
+      let releaseRead = () => {};
+      let enteredRead = () => {};
+      let releaseWrite = () => {};
+      let enteredWrite = () => {};
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const readStarted = new Promise<void>((resolve) => {
+        enteredRead = resolve;
+      });
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const writeStarted = new Promise<void>((resolve) => {
+        enteredWrite = resolve;
+      });
+      const originalOpen = filesystem.open;
+      let readsUntilBlocked = mode === 'allocated-before-scan' ? 2 : 1;
+      const spy = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        const file = await originalOpen(...args);
+        if (String(args[0]) !== join(dir, 'session.ndjson') || typeof args[1] !== 'number')
+          return file;
+        if (!(args[1] & constants.O_WRONLY) && --readsUntilBlocked === 0) {
+          const read = file.readFile.bind(file);
+          vi.spyOn(file, 'readFile').mockImplementation(async () => {
+            const snapshot = await read();
+            enteredRead();
+            await readGate;
+            return snapshot;
+          });
+        } else if (args[1] & constants.O_WRONLY && mode === 'allocated-before-scan') {
+          const write = file.writeFile.bind(file);
+          vi.spyOn(file, 'writeFile').mockImplementation(async (data, options) => {
+            if (typeof data === 'string' && data.includes('during-recovery')) {
+              enteredWrite();
+              await writeGate;
+            }
+            return write(data, options);
+          });
+        }
+        return file;
+      });
+      try {
+        if (mode === 'allocated-before-scan') {
+          journal.record('operation_result', { result: 'during-recovery' });
+          await writeStarted;
+        }
+        delivery = new DiagnosticDelivery(dir, journal);
+        const initializing = delivery.initialize(false);
+        await readStarted;
+        if (mode === 'during-scan')
+          journal.record('operation_result', { result: 'during-recovery' });
+        releaseWrite();
+        await journal.flush();
+        releaseRead();
+        await initializing;
+        await delivery.tick();
+        const results: string[] = [];
+        for (const name of (await readdir(join(dir, 'diagnostic-outbox'))).filter((name) =>
+          name.endsWith('.gz'),
+        )) {
+          const batch = await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', name)),
+          );
+          for (const event of batch.events as { stage: string; evidence: { result: string } }[])
+            if (event.stage === 'operation_result') results.push(event.evidence.result);
+        }
+        expect(results.sort()).toEqual(['before-recovery', 'during-recovery']);
+        expect(delivery.status().omissionReasons).toEqual({});
+      } finally {
+        releaseRead();
+        releaseWrite();
+        spy.mockRestore();
+        await journal.close();
+        await delivery.close();
+      }
+    },
+  );
   it('keeps offline batches across restart, recovers source journal records and retries an identical accepted batch after lost acknowledgment', async () => {
     const dir = await directory();
     const remote = service(() => now);

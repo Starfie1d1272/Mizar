@@ -717,7 +717,11 @@ async function cloud(directory, profileResult, faultResult) {
         assert(current <= 64 * 1024 * 1024);
         assert(state.queue.length <= 2048);
         await restart(client);
-        assert.equal(client.delivery.status().omitted, 0);
+        assert.equal(
+          client.delivery.status().omitted,
+          0,
+          JSON.stringify({ day, client: client.index, status: client.delivery.status() }),
+        );
       }
       // Restart itself creates a genuine new session and recovery evidence.
       // Include its transmission in the day's work before judging drain, rather

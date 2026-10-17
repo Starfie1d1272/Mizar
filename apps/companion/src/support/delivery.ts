@@ -505,6 +505,7 @@ export class DiagnosticDelivery {
   private readonly queueDirectory: string;
   private nextCollectionAt: number;
   private collectionScheduled = false;
+  private sourceRevision = 0;
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
@@ -601,7 +602,10 @@ export class DiagnosticDelivery {
         !this.state.queue.some((v) => `${v.id}.gz` === entry.name)
       )
         await unlink(join(this.queueDirectory, entry.name));
-    this.unsubscribe = this.journal.subscribe((line) => this.observe(line));
+    this.unsubscribe = this.journal.subscribe((line) => {
+      this.sourceRevision++;
+      this.observe(line);
+    });
     if (this.state.consent) {
       await this.recover();
       this.registerSession(0);
@@ -894,6 +898,10 @@ export class DiagnosticDelivery {
     }
   }
   private async recover() {
+    // A live commit must not overtake an older record in the disk snapshot.
+    // Keep live notifications behind recovery until a complete scan is stable.
+    this.recoveryNeeded = true;
+    const startedRevision = this.sourceRevision;
     const startedSequence = this.journal.health().sequence;
     // Fixed Mizar log names only; source rotation remains governed by SessionJournal.
     for (let i = SESSION_LIMITS.segments - 1; i >= 0; i--) {
@@ -939,7 +947,11 @@ export class DiagnosticDelivery {
     }
     this.registerSession(0);
     await this.save();
-    this.recoveryNeeded = this.journal.health().sequence !== startedSequence;
+    // A record may have its sequence allocated before this scan but commit
+    // after the file snapshot. Observe durable notifications as well as new
+    // allocations so that this tail is picked up on the next bounded scan.
+    this.recoveryNeeded =
+      this.sourceRevision !== startedRevision || this.journal.health().sequence !== startedSequence;
   }
   private async persist() {
     if (!this.consentActive()) return;
