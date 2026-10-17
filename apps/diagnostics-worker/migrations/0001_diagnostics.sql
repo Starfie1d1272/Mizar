@@ -1,12 +1,12 @@
 CREATE TABLE installations (
   id TEXT PRIMARY KEY, proof_sha256 TEXT NOT NULL, created_at INTEGER NOT NULL,
   revoked_at INTEGER, quota_day INTEGER NOT NULL DEFAULT -1,
-  quota_bytes INTEGER NOT NULL DEFAULT 0, quota_batches INTEGER NOT NULL DEFAULT 0
+  quota_bytes INTEGER NOT NULL DEFAULT 0, quota_batches INTEGER NOT NULL DEFAULT 0, quota_permits INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX installations_revoked ON installations(revoked_at) WHERE revoked_at IS NOT NULL;
 CREATE TABLE daily (
   day INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0,
-  batches INTEGER NOT NULL DEFAULT 0, registrations INTEGER NOT NULL DEFAULT 0
+  batches INTEGER NOT NULL DEFAULT 0, permits INTEGER NOT NULL DEFAULT 0, registrations INTEGER NOT NULL DEFAULT 0
 );
 -- Short-lived body locators only. Full errors and operation identifiers stay in R2.
 CREATE TABLE batches (
@@ -27,3 +27,12 @@ CREATE TABLE sessions (
 );
 CREATE INDEX sessions_expiry ON sessions(expires_at);
 CREATE INDEX sessions_identity ON sessions(session_id);
+
+-- Minimal immutable intake fences, never body/session indexes. Kept under the
+-- same allocation hard stop: deleting a fence would allow an old digest to re-enroll.
+CREATE TABLE upload_permits (
+  payload_sha256 BLOB PRIMARY KEY CHECK(length(payload_sha256)=32),
+  installation_id BLOB NOT NULL CHECK(length(installation_id)=16),
+  installation_created_at INTEGER NOT NULL, consent_revision TEXT NOT NULL,
+  issued_at INTEGER NOT NULL, wire_sha256 BLOB CHECK(wire_sha256 IS NULL OR length(wire_sha256)=32)
+) WITHOUT ROWID;

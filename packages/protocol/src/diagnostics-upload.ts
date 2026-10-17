@@ -1,8 +1,11 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from './version.js';
 /** Public integrity certificate, never a bearer credential. The independent
  * authenticated upload must carry these same bytes on every retry. */
 export interface DiagnosticUploadPermit {
   schema: 'mizar-diagnostic-permit/1';
   installationId: string;
+  installationCreatedAt: number;
+  consentRevision: typeof DIAGNOSTIC_CONSENT_REVISION;
   payloadSha256: string;
   issuedAt: number;
   expiresAt: number;
@@ -18,17 +21,21 @@ export function diagnosticPermit(value: unknown): DiagnosticUploadPermit | null 
     /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(p.installationId) &&
     typeof p.payloadSha256 === 'string' &&
     /^[a-f0-9]{64}$/.test(p.payloadSha256) &&
+    Number.isSafeInteger(p.installationCreatedAt) &&
+    p.installationCreatedAt >= 0 &&
+    p.installationCreatedAt <= p.issuedAt &&
+    p.consentRevision === DIAGNOSTIC_CONSENT_REVISION &&
     Number.isSafeInteger(p.issuedAt) &&
     p.issuedAt >= 0 &&
     p.expiresAt === p.issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS &&
     typeof p.signature === 'string' &&
     /^[A-Za-z0-9_-]{43}$/.test(p.signature) &&
-    Object.keys(p).length === 6
+    Object.keys(p).length === 8
     ? p
     : null;
 }
 export const diagnosticPermitClaims = (p: Omit<DiagnosticUploadPermit, 'signature'>) =>
-  `mizar-diagnostic-permit-v1|${p.installationId}|${p.payloadSha256}|${p.issuedAt}|${p.expiresAt}`;
+  `mizar-diagnostic-permit-v1|${p.installationId}|${p.installationCreatedAt}|${p.consentRevision}|${p.payloadSha256}|${p.issuedAt}|${p.expiresAt}`;
 /** RFC 1952 FEXTRA, one MZ subfield. Gzip readers still decode the complete body. */
 export function sealDiagnosticGzip(bytes: Uint8Array, permit: DiagnosticUploadPermit) {
   if (

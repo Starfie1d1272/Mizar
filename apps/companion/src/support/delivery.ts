@@ -1090,6 +1090,13 @@ export class DiagnosticDelivery {
         });
         const receipt = await responseJson(response, signal);
         const permit = diagnosticPermit(receipt);
+        if (
+          response.status === 410 &&
+          (receipt as { error?: string }).error === 'batch_retention_expired'
+        ) {
+          await this.retainExpiredBatch(batch, epoch);
+          return;
+        }
         if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
         if (
           !permit ||
@@ -1156,29 +1163,10 @@ export class DiagnosticDelivery {
         error?: unknown;
       };
       if (response.status === 410 && ack.error === 'batch_retention_expired') {
-        await this.transaction(async () => {
-          if (epoch !== this.epoch || !this.consentActive()) return;
-          const previous = structuredClone(this.state);
-          const retained = this.state.queue.find((value) => value.id === batch.id);
-          if (!retained || retained.serverExpired) return;
-          retained.serverExpired = true;
-          this.omitted('server_retention_expired', batch.index.events);
-          try {
-            await this.save();
-          } catch (error) {
-            this.state = previous;
-            throw error;
-          }
-          this.error = 'server_retention_expired_local_copy_retained';
-          this.journal.record('diagnostic_cloud_expired', {
-            batchId: batch.id,
-            events: batch.index.events,
-            reason: 'server_retention_expired',
-            localCopy: 'retained; not acknowledged or evicted',
-          });
-        });
+        await this.retainExpiredBatch(batch, epoch);
         return;
       }
+
       if (
         !response.ok ||
         ack.batchId !== batch.id ||
@@ -1229,6 +1217,29 @@ export class DiagnosticDelivery {
     } finally {
       this.abort = undefined;
     }
+  }
+  private async retainExpiredBatch(batch: Batch, epoch: number) {
+    await this.transaction(async () => {
+      if (epoch !== this.epoch || !this.consentActive()) return;
+      const previous = structuredClone(this.state);
+      const retained = this.state.queue.find((value) => value.id === batch.id);
+      if (!retained || retained.serverExpired) return;
+      retained.serverExpired = true;
+      this.omitted('server_retention_expired', batch.index.events);
+      try {
+        await this.save();
+      } catch (error) {
+        this.state = previous;
+        throw error;
+      }
+      this.error = 'server_retention_expired_local_copy_retained';
+      this.journal.record('diagnostic_cloud_expired', {
+        batchId: batch.id,
+        events: batch.index.events,
+        reason: 'server_retention_expired',
+        localCopy: 'retained; not acknowledged or evicted',
+      });
+    });
   }
   async close() {
     this.closed = true;

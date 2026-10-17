@@ -1,12 +1,11 @@
+import * as filesystem from 'node:fs/promises';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, createHmac } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   sealDiagnosticGzip,
-  diagnosticPermitClaims,
   readDiagnosticGzipPermit,
-  DIAGNOSTIC_BODY_LIFETIME_MS,
 } from '../../packages/protocol/src/diagnostics-upload.js';
 import { gzipSync } from 'node:zlib';
 import { expect, it, vi } from 'vitest';
@@ -17,22 +16,18 @@ import {
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { runtime, migrate, bindings, script, adminHeaders, hash } from './fixture.js';
 
-function sealedFixture(bytes: Uint8Array, installationId: string) {
-  const issuedAt = Date.now();
-  const claims = {
-    schema: 'mizar-diagnostic-permit/1' as const,
-    installationId,
-    payloadSha256: hash(bytes),
-    issuedAt,
-    expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
-  };
+vi.mock('node:fs/promises', async (original) => ({
+  ...(await original<typeof import('node:fs/promises')>()),
+}));
+
+async function sealedFixture(bytes: Uint8Array, issue: (id: string) => Promise<Response>) {
+  const response = await issue(hash(bytes));
+  expect(response.status).toBe(200);
   return Buffer.from(
-    sealDiagnosticGzip(bytes, {
-      ...claims,
-      signature: createHmac('sha256', bindings.INGEST_SIGNING_KEY)
-        .update(diagnosticPermitClaims(claims))
-        .digest('base64url'),
-    }),
+    sealDiagnosticGzip(
+      bytes,
+      (await response.json()) as import('../../packages/protocol/src/diagnostics-upload.js').DiagnosticUploadPermit,
+    ),
   );
 }
 it('delivers the real disk outbox over HTTP into Worker/R2/D1; recovers lost ACK across both restarts; reads causes, expires and revokes', async () => {
@@ -261,15 +256,40 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const bytes = sealedFixture(
+    const issue = (id: string) =>
+      call(`/v1/diagnostics/permits/${id}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${identity.token}` },
+      });
+    const bytes = await sealedFixture(
       gzipSync(
         JSON.stringify({
           schema: 'mizar-technical-diagnostics/1',
           events: [{ stage: 'public_failure', evidence: { cause: 'real storage race' } }],
         }),
       ),
-      installation,
+      issue,
     );
+    const payloadId = readDiagnosticGzipPermit(bytes)!.permit.payloadSha256;
+    const permitUsage = await db.prepare('SELECT permits FROM daily').first();
+    env.DAILY_BATCHES = '0';
+    expect((await issue(payloadId)).status).toBe(200);
+    expect((await issue('f'.repeat(64))).status).toBe(429);
+    env.DAILY_BATCHES = bindings.DAILY_BATCHES;
+    env.INSTALLATION_DAILY_BATCHES = '0';
+    expect((await issue('f'.repeat(64))).status).toBe(429);
+    env.INSTALLATION_DAILY_BATCHES = bindings.INSTALLATION_DAILY_BATCHES;
+    expect(await db.prepare('SELECT permits FROM daily').first()).toEqual(permitUsage);
+    const parallel = await Promise.all([issue('e'.repeat(64)), issue('e'.repeat(64))]);
+    expect(parallel.map((response) => response.status)).toEqual([200, 200]);
+    expect(await parallel[0].json()).toEqual(await parallel[1].json());
+    expect(await db.prepare('SELECT permits FROM daily').first()).toMatchObject({ permits: 2 });
+    expect(
+      await db
+        .prepare('SELECT quota_permits FROM installations WHERE id=?')
+        .bind(installation)
+        .first(),
+    ).toMatchObject({ quota_permits: 2 });
     const id = hash(bytes);
     const upload = () =>
       call(`/v1/diagnostics/batches/${id}`, {
@@ -385,7 +405,12 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const bytes = sealedFixture(
+    const issue = (id: string) =>
+      fetch(`${endpoint}/v1/diagnostics/permits/${id}`, {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': '127.0.0.1', authorization: `Bearer ${identity.token}` },
+      });
+    const bytes = await sealedFixture(
       gzipSync(
         JSON.stringify({
           schema: 'mizar-technical-diagnostics/1',
@@ -397,7 +422,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
           ],
         }),
       ),
-      installation,
+      issue,
     );
     const id = hash(bytes);
     const session = randomUUID();
@@ -433,7 +458,13 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
       signature: 'x'.repeat(43),
     });
     expect((await upload(badSignature)).status).toBe(400);
-    expect((await upload(sealedFixture(opened.payload, randomUUID()))).status).toBe(400);
+    expect(
+      (
+        await upload(
+          sealDiagnosticGzip(opened.payload, { ...opened.permit, installationId: randomUUID() }),
+        )
+      ).status,
+    ).toBe(400);
     const tamperedPayload = Uint8Array.from(bytes);
     tamperedPayload[tamperedPayload.length - 1] = tamperedPayload[tamperedPayload.length - 1]! ^ 1;
     expect((await upload(tamperedPayload)).status).toBe(400);
@@ -459,6 +490,17 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     ).toBe(0);
     await db.exec('DROP TRIGGER fail_index;');
     expect((await upload()).status).toBe(200);
+    const reorderedPermit = Object.fromEntries(
+      Object.entries(opened.permit).reverse(),
+    ) as unknown as import('../../packages/protocol/src/diagnostics-upload.js').DiagnosticUploadPermit;
+    const alternateWire = sealDiagnosticGzip(opened.payload, reorderedPermit);
+    expect(hash(alternateWire)).not.toBe(id);
+    expect((await upload(alternateWire)).status).toBe(409);
+    const oldRevision = Buffer.from(bytes);
+    const revisionOffset = oldRevision.indexOf('technical-diagnostics-v2');
+    expect(revisionOffset).toBeGreaterThan(0);
+    oldRevision[revisionOffset + 'technical-diagnostics-v'.length] = 49;
+    expect((await upload(oldRevision)).status).toBe(400);
     expect((await bucket.head(row!.object_key))!.uploaded.getTime()).toBe(
       stored!.uploaded.getTime(),
     );
@@ -473,7 +515,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     expect(await db.prepare('SELECT bytes,batches FROM daily').first()).toEqual(before);
     // Reproduce a crash after reserving, before any R2 object exists. A retry can
     // deliver the full body; it cannot manufacture proof that the old writer ended.
-    const pendingBytes = sealedFixture(
+    const pendingBytes = await sealedFixture(
       gzipSync(
         JSON.stringify({
           schema: 'mizar-technical-diagnostics/1',
@@ -485,7 +527,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
           ],
         }),
       ),
-      installation,
+      issue,
     );
     const pendingId = hash(pendingBytes);
     const now = Date.now();
@@ -632,13 +674,15 @@ it('retrieves every indexed session and body locator across tied-timestamp pages
   }
 }, 20_000);
 
-it('never recreates an ACK-lost batch after seven-day cleanup, including a client and storage restart', async () => {
+it('recovers lost permits and failed atomic sealing without renewing the deadline, then rejects replay after cleanup and reinstallation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-expired-replay-'));
   let mf = runtime(join(directory, 'server'));
   let now = Date.now();
   const client = join(directory, 'client');
   let journal = new SessionJournal(client);
   let loseAck = true;
+  let losePermit = true;
+  const permits: unknown[] = [];
   const { handle } = (await import(
     `data:text/javascript;base64,${Buffer.from(script).toString('base64')}`
   )) as { handle: (request: Request, env: unknown, now: number) => Promise<Response> };
@@ -660,6 +704,19 @@ it('never recreates an ACK-lost batch after seven-day cleanup, including a clien
       await environment(),
       now,
     );
+    if (
+      (input instanceof Request ? input.url : input instanceof URL ? input.href : input).includes(
+        '/permits/',
+      ) &&
+      response.ok
+    ) {
+      permits.push((await response.clone().json()) as unknown);
+      if (losePermit) {
+        losePermit = false;
+        await response.arrayBuffer();
+        throw new Error('synthetic permit response lost after D1 commit');
+      }
+    }
     if (init?.method === 'PUT' && response.ok && loseAck) {
       loseAck = false;
       await response.arrayBuffer();
@@ -681,12 +738,86 @@ it('never recreates an ACK-lost batch after seven-day cleanup, including a clien
     expect(delivery.status()).toMatchObject({ acknowledged: 0, queuedBatches: 1, failures: 1 });
     const readState = async () =>
       JSON.parse(await readFile(join(client, 'diagnostic-outbox/state.json'), 'utf8')) as {
+        credentials: { installationId: string; enrollmentSecret: string; token: string };
         queue: { id: string; sealed: boolean; serverExpired?: boolean }[];
       };
+    const unsealed = await readState();
+    expect(unsealed.queue[0]!.sealed).not.toBe(true);
+    const originalGzip = await readFile(
+      join(client, `diagnostic-outbox/${unsealed.queue[0]!.id}.gz`),
+    );
+    expect(
+      await (
+        await mf.getD1Database('DIAGNOSTICS_DB')
+      )
+        .prepare('SELECT COUNT(*) AS count FROM batches')
+        .first(),
+    ).toMatchObject({ count: 0 });
+    await delivery.close();
+    await journal.close();
+    await mf.dispose();
+    mf = runtime(join(directory, 'server'));
+    now += 86400_000;
+    journal = new SessionJournal(client);
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    const originalRename = filesystem.rename;
+    let failCommit = true;
+    const renameSpy = vi.spyOn(filesystem, 'rename').mockImplementation(async (...args) => {
+      if (failCommit && args[1] === join(client, 'diagnostic-outbox/state.json')) {
+        const pending = JSON.parse(await readFile(args[0], 'utf8')) as {
+          queue: { sealed?: boolean }[];
+        };
+        if (pending.queue.some((item) => item.sealed)) {
+          failCommit = false;
+          throw Object.assign(new Error('synthetic sealed manifest EIO'), { code: 'EIO' });
+        }
+      }
+      await originalRename(...args);
+    });
+    await delivery.tick();
+    renameSpy.mockRestore();
+    expect(failCommit).toBe(false);
+    expect((await readState()).queue[0]!.sealed).not.toBe(true);
+    expect(await readFile(join(client, `diagnostic-outbox/${unsealed.queue[0]!.id}.gz`))).toEqual(
+      originalGzip,
+    );
+    expect(
+      await (
+        await mf.getD1Database('DIAGNOSTICS_DB')
+      )
+        .prepare('SELECT COUNT(*) AS count FROM batches')
+        .first(),
+    ).toMatchObject({ count: 0 });
+    expect(permits).toHaveLength(2);
+    expect(permits[1]).toEqual(permits[0]);
+    await delivery.close();
+    await journal.close();
+    await mf.dispose();
+    mf = runtime(join(directory, 'server'));
+    now += 86400_000;
+    journal = new SessionJournal(client);
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    await delivery.tick();
+    expect(permits).toHaveLength(3);
+    expect(permits[2]).toEqual(permits[0]);
     const before = await readState();
     expect(before.queue[0]!.sealed).toBe(true);
+    expect(
+      await (
+        await mf.getD1Database('DIAGNOSTICS_DB')
+      )
+        .prepare('SELECT quota_permits FROM installations WHERE id=?')
+        .bind(before.credentials.installationId)
+        .first(),
+    ).toMatchObject({ quota_permits: 0 });
     const id = before.queue[0]!.id;
     const packet = await readFile(join(client, `diagnostic-outbox/${id}.gz`));
+    const payload = readDiagnosticGzipPermit(packet)!.permit.payloadSha256;
+    const renewPermit = (token: string) =>
+      fetcher(`https://local.invalid/v1/diagnostics/permits/${payload}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
     expect(JSON.stringify(await decodeDiagnosticBatch(packet))).toContain(
       'preserved original failure',
     );
@@ -729,8 +860,45 @@ it('never recreates an ACK-lost batch after seven-day cleanup, including a clien
       count: 0,
     });
     expect(await db.prepare('SELECT batches FROM sessions').first()).toMatchObject({ batches: 1 });
+    expect((await renewPermit(before.credentials.token)).status).toBe(410);
+    // Clearing the short-lived locators and even retiring/recreating an installation
+    // cannot reset the first permit for the same original gzip SHA.
+    now += 100 * 86400_000;
+    expect(
+      (
+        await handle(
+          new Request('https://local.invalid/admin/cleanup', {
+            method: 'POST',
+            headers: adminHeaders,
+          }),
+          await environment(),
+          now,
+        )
+      ).status,
+    ).toBe(200);
+    for (const installationId of [before.credentials.installationId, randomUUID()]) {
+      const registered = await fetcher('https://local.invalid/v1/diagnostics/enroll', {
+        method: 'POST',
+        body: JSON.stringify({
+          consent: 'technical-diagnostics-v2',
+          enrollmentId: installationId,
+          enrollmentSecret: before.credentials.enrollmentSecret,
+        }),
+      });
+      expect(registered.status).toBe(200);
+      const identity = (await registered.json()) as { token: string };
+      expect((await renewPermit(identity.token)).status).toBe(409);
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM upload_permits').first()).toMatchObject({
+      count: 1,
+    });
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+      count: 0,
+    });
+
     expect((await (await mf.getR2Bucket('DIAGNOSTICS_BUCKET')).list()).objects).toHaveLength(0);
   } finally {
+    vi.restoreAllMocks();
     await delivery.close();
     await journal.close();
     await mf.dispose();

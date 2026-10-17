@@ -41,8 +41,24 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },
   });
-const sql = (env: Env, query: string, ...values: (string | number | null)[]) =>
+const sql = (env: Env, query: string, ...values: (string | number | null | ArrayBuffer)[]) =>
   env.DIAGNOSTICS_DB.prepare(query).bind(...values);
+const binaryId = (value: string) =>
+  Uint8Array.from(value.replaceAll('-', '').match(/../g)!, (byte) => parseInt(byte, 16)).buffer;
+async function permitRow(env: Env, payload: string) {
+  return sql(
+    env,
+    `SELECT lower(hex(installation_id)) AS installation_hex, installation_created_at, consent_revision,
+    issued_at, lower(hex(wire_sha256)) AS wire_hex FROM upload_permits WHERE payload_sha256=?`,
+    binaryId(payload),
+  ).first<{
+    installation_hex: string;
+    installation_created_at: number;
+    consent_revision: string;
+    issued_at: number;
+    wire_hex: string;
+  }>();
+}
 const budget = (value: string) => (/^\d{1,12}$/.test(value) ? Number(value) : 0);
 async function withinDatabaseBudget(env: Env) {
   const probe = await sql(env, 'SELECT 1').run();
@@ -338,6 +354,17 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   )
     return json({ error: 'invalid_batch_permit' }, 400);
   if (sealed.permit.expiresAt <= now) return json({ error: 'batch_retention_expired' }, 410);
+  const firstPermit = await permitRow(env, sealed.permit.payloadSha256);
+  if (
+    !firstPermit ||
+    firstPermit.installation_hex !== installation.replaceAll('-', '') ||
+    firstPermit.installation_created_at !== sealed.permit.installationCreatedAt ||
+    firstPermit.consent_revision !== sealed.permit.consentRevision ||
+    firstPermit.issued_at !== sealed.permit.issuedAt
+  )
+    return json({ error: 'invalid_batch_permit' }, 400);
+  if (firstPermit.wire_hex && firstPermit.wire_hex !== id)
+    return json({ error: 'payload_encoding_conflict' }, 409);
   if (
     bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
     !budget(env.INSTALLATION_DAILY_BATCHES)
@@ -348,6 +375,15 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     return json({ error: 'batch_retention_expired' }, 410);
   if (existing?.state === 'ready') return accepted(id);
   if (!(await withinDatabaseBudget(env))) return json({ error: 'index_allocation_budget' }, 503);
+  await sql(
+    env,
+    'UPDATE upload_permits SET wire_sha256=? WHERE payload_sha256=? AND wire_sha256 IS NULL',
+    binaryId(id),
+    binaryId(sealed.permit.payloadSha256),
+  ).run();
+  if ((await permitRow(env, sealed.permit.payloadSha256))?.wire_hex !== id)
+    return json({ error: 'payload_encoding_conflict' }, 409);
+
   if (existing && (existing.state === 'deleting' || existing.writers >= 8))
     return json({ error: 'batch_pending' }, 409);
   const owner = crypto.randomUUID();
@@ -396,11 +432,13 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     sql(
       env,
       `UPDATE installations SET quota_bytes=CASE WHEN quota_day=? THEN quota_bytes+? ELSE ? END,
-      quota_batches=CASE WHEN quota_day=? THEN quota_batches+1 ELSE 1 END,quota_day=? WHERE id=? AND
+      quota_batches=CASE WHEN quota_day=? THEN quota_batches+1 ELSE 1 END,
+      quota_permits=CASE WHEN quota_day=? THEN quota_permits ELSE 0 END,quota_day=? WHERE id=? AND
       EXISTS(SELECT 1 FROM batches WHERE installation_id=? AND id=? AND owner=?)`,
       day,
       bytes.length,
       bytes.length,
+      day,
       day,
       day,
       installation,
@@ -667,7 +705,7 @@ async function admin(request: Request, env: Env, path: string, now: number) {
     const day = Math.floor(now / DAY);
     const daily = await sql(
       env,
-      'SELECT day,bytes,batches,registrations FROM daily WHERE day=?',
+      'SELECT day,bytes,batches,permits,registrations FROM daily WHERE day=?',
       day,
     ).first();
     const storage = await sql(
@@ -873,14 +911,75 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
     const permitMatch = /^\/v1\/diagnostics\/permits\/([a-f0-9]{64})$/.exec(path);
     if (permitMatch && request.method === 'POST') {
       if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
-      if (!(await withinDatabaseBudget(env)))
-        return json({ error: 'index_allocation_budget' }, 503);
+      const owner = await sql(
+        env,
+        'SELECT created_at FROM installations WHERE id=? AND revoked_at IS NULL',
+        installation,
+      ).first<{ created_at: number }>();
+      if (!owner) return json({ error: 'unauthorized' }, 401);
+      const payload = permitMatch[1]!;
+      let first = await permitRow(env, payload);
+      if (!first) {
+        if (!budget(env.DAILY_BATCHES) || !budget(env.INSTALLATION_DAILY_BATCHES))
+          return json({ error: 'permit_budget' }, 429);
+        if (!(await withinDatabaseBudget(env)))
+          return json({ error: 'index_allocation_budget' }, 503);
+        const day = Math.floor(now / DAY);
+        await sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day).run();
+        // D1 batch is transactional. changes() carries each successful insert
+        // through the two counters; replayed/competing insertions charge neither.
+        const reservation = await env.DIAGNOSTICS_DB.batch([
+          sql(
+            env,
+            `INSERT OR IGNORE INTO upload_permits(payload_sha256,installation_id,installation_created_at,consent_revision,issued_at)
+            SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL
+              AND (quota_day!=? OR quota_permits<?)) AND EXISTS(SELECT 1 FROM daily WHERE day=? AND permits<?)`,
+            binaryId(payload),
+            binaryId(installation),
+            owner.created_at,
+            DIAGNOSTIC_CONSENT_REVISION,
+            now,
+            installation,
+            owner.created_at,
+            day,
+            budget(env.INSTALLATION_DAILY_BATCHES),
+            day,
+            budget(env.DAILY_BATCHES),
+          ),
+          sql(env, 'UPDATE daily SET permits=permits+1 WHERE day=? AND changes()>0', day),
+          sql(
+            env,
+            `UPDATE installations SET quota_bytes=CASE WHEN quota_day=? THEN quota_bytes ELSE 0 END,
+            quota_batches=CASE WHEN quota_day=? THEN quota_batches ELSE 0 END,
+            quota_permits=CASE WHEN quota_day=? THEN quota_permits+1 ELSE 1 END,quota_day=? WHERE id=? AND changes()>0`,
+            day,
+            day,
+            day,
+            day,
+            installation,
+          ),
+        ]);
+        if (!reservation[0]?.meta.changes && !(await permitRow(env, payload)))
+          return json({ error: 'permit_budget' }, 429);
+        first = await permitRow(env, payload);
+      }
+      if (
+        !first ||
+        first.installation_hex !== installation.replaceAll('-', '') ||
+        first.installation_created_at !== owner.created_at ||
+        first.consent_revision !== DIAGNOSTIC_CONSENT_REVISION
+      )
+        return json({ error: 'payload_identity_conflict' }, 409);
+      if (first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS <= now)
+        return json({ error: 'batch_retention_expired' }, 410);
       const claims: Omit<DiagnosticUploadPermit, 'signature'> = {
         schema: 'mizar-diagnostic-permit/1',
         installationId: installation,
-        payloadSha256: permitMatch[1]!,
-        issuedAt: now,
-        expiresAt: now + DIAGNOSTIC_BODY_LIFETIME_MS,
+        installationCreatedAt: first.installation_created_at,
+        consentRevision: DIAGNOSTIC_CONSENT_REVISION,
+        payloadSha256: payload,
+        issuedAt: first.issued_at,
+        expiresAt: first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS,
       };
       return json({
         ...claims,
