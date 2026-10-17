@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./viewer-research": {
+      "types": "./dist/viewer-research.d.ts",
+      "import": "./dist/viewer-research.js"
     }
   },
   "scripts": {

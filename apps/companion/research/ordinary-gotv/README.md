@@ -1,0 +1,54 @@
+# 普通观众 GOTV 研究原型
+
+**本分支没有实现可登录完美 GOTV 的无画面客户端。** 已交付的是协议证据探针、可运行的增量事件解码器及下一次实测方案。接入普通观众身份、持续在线收数仍未实证；所有程序报告保留 `INCONCLUSIVE`，不会用退出码、ConnectOK 或离线事件数代替接入证明。
+
+独立研究分支；不修改 #408/#409，不接入生产 HUD、Core 或遥测自动编排。`follow.ts` 复用了 #408 的增长文件读取实现，解码器通过 `@mizar/telemetry-cstv/viewer-research` 暴露标量事件，原始第三方解析器仍只在适配器包中使用。协议设计见 [DESIGN.md](DESIGN.md)，用户本机步骤见 [WINDOWS-TEST.md](WINDOWS-TEST.md)，原始结果和取证来源见 [EVIDENCE.md](EVIDENCE.md)。
+
+## 云端运行
+
+需要仓库指定的 Node/pnpm、Python 3.11+。从仓库根目录运行；云环境先 `source /workspace/.onboarding/activate.sh`。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @mizar/telemetry-cstv... --fail-if-no-match run build
+pnpm --filter @mizar/companion exec tsx research/ordinary-gotv/decode.ts \
+  --input /absolute/path/authorized.dem --output /absolute/path/new-run \
+  --follow --seconds 300 --offset 120
+```
+
+省略 `--follow` 解析已完成文件。输出目录必须不存在。`events.jsonl` 包含 cursor、weapon_fire、player_death、round_start、round_end；`report.json` 记录读取字节、事件数、CPU/内存和证据状态。Steam64 是字符串，未知身份/地图/热身/时间间隔为空。武器名保留源字符串，未建立统一命名表。每次执行生成新 `streamInstance`，文件替换、已消费尾部重写、截断及地图/server_count 改变需要新实例；不会自动重接或拼接旧事件。
+
+`--seconds` 默认 300、上限 14400；`--offset` 默认 120、范围 0..3600。偏移只写入元数据，不将接收时间或 tick 冒充画面时间；`displayTime=null`。文件最多 8 GiB，输出队列最多 8 MiB；读取块 64 KiB，临时 EOF 每 50 ms 等待增长，输出通过下一次读取形成背压。跟随模式超时或 Ctrl+C 属于不完整停止，必须看报告；退出 0 也不代表在线成功。缺失文件、非法格式、源边界或解析失败退出非零。文件尾部 4 KiB 的变化检测不是全文件防篡改承诺。
+
+## 离线协议探针
+
+```bash
+python apps/companion/research/ordinary-gotv/wire.py pcap \
+  --input /private/viewer.pcap --server "$GOTV_ENDPOINT" \
+  --output /private/new-wire-report.jsonl
+python apps/companion/research/ordinary-gotv/wire.py signon \
+  --input /private/already-decoded-signon.bin --output /private/new-signon.jsonl
+python apps/companion/research/ordinary-gotv/wire.py c2s-connect \
+  --input /private/already-decoded-connect.bin --output /private/new-connect.jsonl
+```
+
+工具不发包、不登录、不解密。PCAP 模式只识别外层 GNS 候选包、方向、时间、长度、证书/crypt 字段长度和断开码；不会把外层包还原成游戏事件。`signon` / `c2s-connect` 输入必须是已合法取得、已去除封装的**单个 protobuf 消息**，不是原始 UDP，更不是从加密包自动提取。它们检查字段结构，不能认证来源。
+
+支持经典 PCAP、Ethernet/VLAN、Linux cooked v1、raw IPv4 UDP；pcapng 需本机 `editcap -F pcap input.pcapng output.pcap`。不支持 IPv6、IP 分片、SDR 专用封装、TCP 或压缩抓包；遇到不支持不能宣称没有游戏流。最多 64 个本地端点 flow；复用同一 UDP 五元组时也可能属于新连接，flow 不等于会话。输出不含端点、玩家名、challenge、票据、密码、证书内容或 debug 原文；仅写新文件（POSIX 权限 0600，Windows 仍由目录 ACL 控制）。原始文件留在本机，报告仍应检查再分享。
+
+## 可重复验证
+
+公开 fixture 不放进仓库；从 [cs2parser test-fixtures/v2](https://github.com/osztenkurden/cs2parser/releases/tag/test-fixtures/v2) 下载 `demo.dem`，确认 SHA-256 为 `143eb78444727c7a8afa29d807272076d14044fc9d7c233035d0b9a176e70f60`。
+
+```bash
+python -m unittest discover -s apps/companion/research/ordinary-gotv -p 'test_*.py' -v
+python apps/companion/research/ordinary-gotv/verify.py \
+  --fixture /absolute/path/demo.dem --output /absolute/path/new-verification
+pnpm exec tsc -p apps/companion/research/ordinary-gotv/tsconfig.json
+pnpm exec eslint apps/companion/research/ordinary-gotv/*.ts packages/telemetry-cstv/src/viewer-research.ts
+pnpm architecture:check
+```
+
+`verify.py` 是 Linux 云端验证器：真实公开录像被人为分段写入，先保留后续数据，确认第一批事件已输出，再继续写入；比较完整/增量结果，检查停止、截断、空文件和非法文件。**这只是文件持续读取，不是完美持续收数。** `test_wire.py` 的包全部合成，专门验证脱敏、格式边界及避免误判，不能充当任何服务器的流量。
+
+可选独立 oracle：在隔离 Python 环境安装 `demoparser2==0.42.0`，按 [EVIDENCE.md](EVIDENCE.md) 导出四种事件，再给 `verify.py` 加 `--oracle-dir`。此依赖不加入 Mizar。
