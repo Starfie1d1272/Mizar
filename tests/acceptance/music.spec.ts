@@ -85,11 +85,11 @@ test('saves real local choices, imports atomically, persists manual stop through
     await expect(page.getByText(/音乐存储未就绪，原配置未加载/)).toHaveCount(0);
     await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
     await page.evaluate(() => {
-      const read = File.prototype.arrayBuffer;
+      const read = (file: File) => Blob.prototype.arrayBuffer.call(file);
       File.prototype.arrayBuffer = function () {
         return this.name === 'unreadable.mp3'
           ? Promise.reject(new DOMException('synthetic file read denied', 'NotReadableError'))
-          : read.call(this);
+          : read(this);
       };
     });
     await page
