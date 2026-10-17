@@ -463,7 +463,7 @@ fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
 }
 
 #[tauri::command]
-async fn select_obs_executable(app: tauri::AppHandle
+async fn select_obs_executable(app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
 ) -> Result<Option<String>, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
@@ -1726,7 +1726,7 @@ async fn save_support_bundle(app: tauri::AppHandle, contents: String) -> Result<
 }
 
 #[tauri::command]
-async fn select_cs2_installation(app: tauri::AppHandle, executable: bool
+async fn select_cs2_installation(app: tauri::AppHandle, executable: bool,
     diagnostic_operation_id: Option<String>,
 ) -> Result<bool, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
