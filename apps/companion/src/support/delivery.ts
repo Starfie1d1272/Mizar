@@ -224,6 +224,7 @@ export class DiagnosticDelivery {
   private epoch = 0;
   private requestedConsent = false;
   private requestedPause = false;
+  private pauseEpoch = 0;
   private revocationFenced = false;
   private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
@@ -491,8 +492,12 @@ export class DiagnosticDelivery {
     });
   }
   async pause(paused: boolean) {
-    this.requestedPause = paused;
-    if (paused) this.abort?.abort();
+    const epoch = ++this.pauseEpoch;
+    // Stopping is immediate. Resuming waits for its durable setting commit.
+    if (paused) {
+      this.requestedPause = true;
+      this.abort?.abort();
+    }
     return this.transaction(async () => {
       const previous = this.state.paused;
       this.state.paused = paused;
@@ -501,8 +506,10 @@ export class DiagnosticDelivery {
         await this.save();
       } catch (error) {
         this.state.paused = previous;
+        if (epoch === this.pauseEpoch) this.requestedPause = previous;
         throw error;
       }
+      if (epoch === this.pauseEpoch) this.requestedPause = paused;
       this.journal.record('diagnostic_transport', { paused, trigger: 'user', queue: 'retained' });
       return this.status();
     });

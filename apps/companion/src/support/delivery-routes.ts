@@ -17,6 +17,7 @@ export function registerDiagnosticDelivery(
   let delivery: DiagnosticDelivery | undefined;
   let failure: string | null = null;
   let ready = false;
+  let closing = false;
   let initializing = Promise.resolve();
   const status = () => ({
     available: ready,
@@ -87,6 +88,8 @@ export function registerDiagnosticDelivery(
       return reply.code(400).send({ message: '请先阅读技术诊断回传说明。' });
     if (!ready || !delivery)
       return reply.code(503).send({ message: '诊断待传队列尚不可用；当前不会回传。' });
+    if (body.enabled && !delivery.status().configured)
+      return reply.code(503).send({ message: '自动发送诊断暂不可用，仍可导出本机诊断报告。' });
     try {
       return await delivery.consent(body.enabled);
     } catch (error) {
@@ -104,7 +107,11 @@ export function registerDiagnosticDelivery(
     if (!ready || !delivery) return reply.code(503).send({ message: '诊断待传队列尚不可用。' });
     try {
       return await delivery.pause(body.paused);
-    } catch {
+    } catch (error) {
+      options.journal?.record('diagnostic_delivery_failure', {
+        phase: 'pause',
+        error: diagnosticValue(error),
+      });
       return reply.code(503).send({ message: '暂停设置未能持久保存。' });
     }
   });
@@ -123,25 +130,31 @@ export function registerDiagnosticDelivery(
     const report = { category: body.category, observedAt: new Date(time).toISOString() };
     if (!options.journal)
       return reply.code(503).send({ message: '本机诊断记录不可用，问题时间尚未保存。' });
-    const before = options.journal.health();
-    options.journal.record('problem_report', {
-      ...report,
-      trigger: 'user',
-      upload: delivery?.status().consent ? 'queued_when_capacity_available' : 'local_only',
-    });
-    options.onReport?.(report);
-    await options.journal.flush();
-    const after = options.journal.health();
-    if (after.dropped !== before.dropped || after.writeFailures !== before.writeFailures)
+    if (closing) return reply.code(503).send({ message: '本机诊断正在关闭，问题时间尚未保存。' });
+    try {
+      const sequence = await options.journal.recordCommitted('problem_report', {
+        ...report,
+        trigger: 'user',
+        upload: delivery?.status().consent ? 'queued_when_capacity_available' : 'local_only',
+      });
+      options.onReport?.(report);
+      await options.journal.flush();
+      return { recorded: true, sequence, ...report, cloud: delivery?.status() ?? null };
+    } catch (error) {
+      request.log.error(
+        { phase: 'problem_report', error: diagnosticValue(error) },
+        'Problem marker was not committed',
+      );
       return reply
         .code(503)
         .send({ message: '问题标记未确认写入；请保留发生时间并检查本机状态目录。' });
-    // A saved marker is not a cloud receipt or a claim that the field issue is fixed.
-    return { recorded: true, ...report, cloud: delivery?.status() ?? null };
+    }
   });
   return {
     status,
     async close() {
+      closing = true;
+      ready = false;
       await initializing;
       await delivery?.close();
     },

@@ -143,7 +143,15 @@ export class SessionJournal {
   private sequence = 0;
   private pendingBytes = 0;
   private writer = Promise.resolve();
-  private pending: { line: string; bytes: number }[] = [];
+  private pending: {
+    line: string;
+    bytes: number;
+    receipt?: { resolve: (sequence: number) => void; reject: (error: unknown) => void };
+    sequence: number;
+  }[] = [];
+  private closed = false;
+  private rejectedAfterClose = 0;
+  private closing: Promise<void> | undefined;
   private draining = false;
   private dropped = 0;
   private failures = 0;
@@ -191,13 +199,40 @@ export class SessionJournal {
     });
   }
   record(stage: string, evidence: unknown): void {
+    if (this.closed) {
+      this.rejectedAfterClose++;
+      return;
+    }
     try {
       this.enqueue(stage, evidence);
     } catch {
       this.failures++;
     }
   }
-  private enqueue(stage: string, evidence: unknown): void {
+  /** Explicit marker acknowledgment; ordinary ingress records remain asynchronous. */
+  recordCommitted(stage: string, evidence: unknown): Promise<number> {
+    if (this.closed) {
+      this.rejectedAfterClose++;
+      return Promise.reject(new Error('session_journal_closed'));
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        this.enqueue(stage, evidence, { resolve, reject });
+      } catch (error) {
+        this.failures++;
+        reject(
+          error instanceof Error
+            ? error
+            : new Error('session_journal_record_failed', { cause: error }),
+        );
+      }
+    });
+  }
+  private enqueue(
+    stage: string,
+    evidence: unknown,
+    receipt?: { resolve: (sequence: number) => void; reject: (error: unknown) => void },
+  ): void {
     const line =
       JSON.stringify({
         time: new Date().toISOString(),
@@ -214,10 +249,11 @@ export class SessionJournal {
     const bytes = Buffer.byteLength(line);
     if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
       this.dropped++;
+      receipt?.reject(new Error('session_journal_pending_budget'));
       return;
     }
     this.pendingBytes += bytes;
-    this.pending.push({ line, bytes });
+    this.pending.push({ line, bytes, sequence: this.sequence, ...(receipt ? { receipt } : {}) });
     if (!this.draining) {
       this.draining = true;
       this.writer = Promise.resolve().then(() => this.drain());
@@ -230,12 +266,17 @@ export class SessionJournal {
         let bytes = 0;
         do {
           const entry = this.pending.shift()!;
-          batch.push(entry.line);
+          batch.push(entry);
           bytes += entry.bytes;
         } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
         try {
-          await this.append(batch.join(''), bytes);
-          for (const line of batch)
+          await this.append(
+            batch.map((entry) => entry.line).join(''),
+            bytes,
+            batch.some((entry) => entry.receipt),
+          );
+          for (const entry of batch) entry.receipt?.resolve(entry.sequence);
+          for (const { line } of batch)
             for (const listener of this.listeners) {
               try {
                 listener(line);
@@ -243,8 +284,9 @@ export class SessionJournal {
                 /* Delivery cannot alter local diagnostics. */
               }
             }
-        } catch {
+        } catch (error) {
           this.failures++;
+          for (const entry of batch) entry.receipt?.reject(error);
         } finally {
           this.pendingBytes -= bytes;
         }
@@ -253,7 +295,7 @@ export class SessionJournal {
       this.draining = false;
     }
   }
-  private async append(line: string, bytes: number) {
+  private async append(line: string, bytes: number, sync = false) {
     await this.initialize();
     if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
     await safePath(this.directory);
@@ -284,6 +326,7 @@ export class SessionJournal {
         throw new Error('session_log_changed');
       await fd.writeFile(line);
       this.size += bytes;
+      if (sync) await fd.sync();
     } finally {
       await fd.close();
     }
@@ -369,11 +412,17 @@ export class SessionJournal {
       dropped: this.dropped,
       writeFailures: this.failures,
       pendingBytes: this.pendingBytes,
+      closed: this.closed,
+      rejectedAfterClose: this.rejectedAfterClose,
       retention: this.retention,
     };
   }
-  async close() {
-    this.record('session_end', this.health());
-    await this.flush();
+  close() {
+    if (!this.closing) {
+      this.record('session_end', this.health());
+      this.closed = true;
+      this.closing = this.flush();
+    }
+    return this.closing;
   }
 }

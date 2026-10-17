@@ -27,7 +27,7 @@ export function DiagnosticProblemReport() {
         category,
         observedAt: new Date(Date.now() - Number(minutesAgo) * 60000).toISOString(),
       });
-      setMessage({ error: false, text: '已在本机标记问题时间并保存上下文；这不代表云端已收到。' });
+      setMessage({ error: false, text: '已记录问题时间。' });
     } catch (error) {
       setMessage({
         error: true,
@@ -77,6 +77,7 @@ export function DiagnosticDeliverySettings() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
   async function change(enabled: boolean) {
+    if (busy || (enabled && !value?.configured)) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -86,12 +87,7 @@ export function DiagnosticDeliverySettings() {
       });
       setAccepted(false);
       setRefresh((v) => v + 1);
-      setMessage({
-        error: false,
-        text: enabled
-          ? '已保存同意；仅在接收端配置完成后按预算回传。'
-          : '已停止回传并清理待传内容；云端删除状态见下方。',
-      });
+      setMessage({ error: false, text: enabled ? '已开启自动发送。' : '已关闭自动发送。' });
     } catch (error) {
       setMessage({ error: true, text: error instanceof Error ? error.message : '设置未能保存。' });
     } finally {
@@ -99,80 +95,77 @@ export function DiagnosticDeliverySettings() {
     }
   }
   async function pause(paused: boolean) {
+    if (busy) return;
     setBusy(true);
     setMessage(null);
     try {
       await command('/operator/diagnostics/pause', { paused });
       setRefresh((v) => v + 1);
-      setMessage({
-        error: false,
-        text: paused
-          ? '已暂停回传，本机记录和待传副本继续保留。'
-          : '已恢复回传；仍受接收端配置和预算限制。',
-      });
+      setMessage({ error: false, text: paused ? '已暂停发送。' : '已恢复发送。' });
     } catch (error) {
-      setMessage({
-        error: true,
-        text: error instanceof Error ? error.message : '暂停设置未能保存。',
-      });
+      setMessage({ error: true, text: error instanceof Error ? error.message : '设置未能保存。' });
     } finally {
       setBusy(false);
     }
   }
+  const unavailable = !value?.available || !value.configured;
   return (
     <div>
       <p>
-        技术诊断回传默认关闭。内容可能含机器、文件路径、赛事和选手标识，并非匿名数据；凭据会脱敏，不回传音视频、私人聊天或整份原始
-        GSI。
+        自动发送诊断：
+        {unavailable ? '暂不可用' : !value.consent ? '关闭' : value.paused ? '已暂停' : '已开启'}
       </p>
-      <p>
-        完整证据保留在本机。云端有容量限制，拒收时保留待传副本并显示积压，不代表完整会话已上云。
-      </p>
-      {!value?.configured ? <p>云端接收端尚未配置：当前不会上传，也不会使用 R2。</p> : null}
+      {unavailable ? <p>仍可导出本机诊断报告。</p> : null}
       {value?.consent ? (
         <>
-          <Button disabled={busy} onClick={() => void pause(!value.paused)}>
-            {value.paused ? '恢复回传' : '暂停回传（保留本地待传）'}
+          <Button disabled={busy || unavailable} onClick={() => void pause(!value.paused)}>
+            {value.paused ? '恢复发送' : '暂停发送'}
           </Button>
           <details>
-            <summary>撤回同意与删除</summary>
-            <p>
-              撤回会清除待传副本并请求删除已传诊断；本机原始诊断日志不删除。断网时云端删除需等待同步确认。
-            </p>
+            <summary>关闭并删除已发送诊断</summary>
+            <p>关闭后停止发送，并请求维护者删除已发送的诊断。本机诊断记录保留。</p>
             <Button disabled={busy} onClick={() => void change(false)}>
-              确认撤回并请求删除
+              确认关闭并请求删除
             </Button>
           </details>
         </>
-      ) : (
-        <>
+      ) : !unavailable ? (
+        <details>
+          <summary>开启自动发送诊断</summary>
+          <p>
+            将操作、错误、运行状态和相关配置发送至维护者管理的 Cloudflare
+            服务，帮助排查问题。可能包含机器、路径、赛事和选手标识，并非匿名数据；密码和令牌等凭据会脱敏，不发送音视频或私人聊天。诊断正文保留七天，可随时暂停，或关闭并请求删除。
+          </p>
           <Field
-            label="我已阅读并同意回传技术诊断"
+            label="我已阅读并同意发送诊断"
             type="checkbox"
             checked={accepted}
             onChange={(event) => setAccepted(event.target.checked)}
           />
-          <Button
-            disabled={busy || !accepted || !value?.available}
-            onClick={() => void change(true)}
-          >
-            同意并保存设置
+          <Button disabled={busy || !accepted} onClick={() => void change(true)}>
+            同意并开启
           </Button>
-        </>
-      )}
-      {value ? (
-        <p>
-          待传 {value.queuedBatches} 批 · 已确认 {value.acknowledged} 批
-          {value.deletionPending ? ` · ${value.deletionPending} 份云端删除待同步` : ''}
-          {value.omitted ? ` · ${value.omitted} 次云副本缺失或预算记录，详情见本机诊断` : ''}
-        </p>
+        </details>
+      ) : null}
+      {value?.deletionPending ? (
+        <StatusBanner tone="warning">删除请求等待同步。</StatusBanner>
       ) : null}
       {value?.error ? (
-        <StatusBanner tone="warning">诊断回传暂不可用，本机制播继续；请导出本机诊断。</StatusBanner>
+        <StatusBanner tone="warning">暂时无法发送，诊断记录保留在本机。</StatusBanner>
       ) : null}
       {message ? (
         <StatusBanner tone={message.error ? 'danger' : 'success'}>{message.text}</StatusBanner>
       ) : null}
+      <details>
+        <summary>诊断详情</summary>
+        <p>本机保留完整证据。云端拒收或网络不可用时保留待传副本，缺失范围记录在诊断中。</p>
+        {value ? (
+          <p>
+            待传 {value.queuedBatches} 批 · 已确认 {value.acknowledged} 批
+            {value.omitted ? ` · ${value.omitted} 次缺失或预算记录` : ''}
+          </p>
+        ) : null}
+      </details>
       <DiagnosticProblemReport />
     </div>
   );

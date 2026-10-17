@@ -223,9 +223,12 @@ describe('consented diagnostic outbox', () => {
     await writeFile(join(bad, 'outside.json'), '{}');
     await import('node:fs/promises').then((fs) => fs.mkdir(join(bad, 'diagnostic-outbox')));
     await symlink(join(bad, 'outside.json'), join(bad, 'diagnostic-outbox/state.json'));
-    await expect(
-      new DiagnosticDelivery(bad, new SessionJournal(bad)).initialize(false),
-    ).rejects.toThrow();
+    const badJournal = new SessionJournal(bad);
+    try {
+      await expect(new DiagnosticDelivery(bad, badJournal).initialize(false)).rejects.toThrow();
+    } finally {
+      await badJournal.close();
+    }
   });
   it('retains a batch after a false receipt and stops an in-flight upload immediately on revocation', async () => {
     const dir = await directory();
@@ -591,6 +594,55 @@ describe('consented diagnostic outbox', () => {
     await delivery.tick();
     expect(delivery.status()).toMatchObject({ consent: true, paused: true, queuedBatches: 1 });
     expect(remote.calls).toEqual([]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('keeps transport paused when resuming cannot be saved and does not let an older failure override a newer pause', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.consent(true);
+    await delivery.pause(true);
+    journal.record('operation_result', { result: 'keep-paused-after-resume-failure' });
+    await journal.flush();
+    const internal = delivery as unknown as { save(): Promise<void> };
+    const save = internal.save.bind(delivery);
+    const spy = vi.spyOn(internal, 'save').mockRejectedValueOnce(new Error('resume write failed'));
+    await expect(delivery.pause(false)).rejects.toThrow('resume write failed');
+    expect(delivery.status().paused).toBe(true);
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    spy
+      .mockImplementationOnce(async () => {
+        entered();
+        await barrier;
+        throw new Error('older resume failed');
+      })
+      .mockImplementation(save);
+    const resume = delivery.pause(false);
+    const failed = expect(resume).rejects.toThrow('older resume failed');
+    await started;
+    const pause = delivery.pause(true);
+    release();
+    await failed;
+    await pause;
+    expect(delivery.status().paused).toBe(true);
+    const disk = JSON.parse(await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8')) as {
+      paused: boolean;
+    };
+    expect(disk.paused).toBe(true);
     await delivery.close();
     await journal.close();
   });
