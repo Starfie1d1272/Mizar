@@ -1,0 +1,122 @@
+{
+  "schema": "mizar-diagnostic-capacity/1",
+  "normalPollingAssumption": "4 GET per 2s, incoming+response journal event each",
+  "uploadCadenceModel": "one batch per minute; overload drain ticks are NOT elapsed real minutes",
+  "results": [
+    {
+      "profile": "normal",
+      "modelMinutes": 120,
+      "wallMs": 3599.6168209999996,
+      "emittedEvents": 30612,
+      "queuedEvents": 30613,
+      "stages": {
+        "service_log": 28800,
+        "runtime_performance_window": 480,
+        "browser_control": 960,
+        "operation_received": 120,
+        "operation_begin": 120,
+        "operation_result": 120,
+        "request_error": 12
+      },
+      "expandedBatchBytes": 14444905,
+      "batchIndexJsonBytes": 25173,
+      "localManifestBytes": 37119,
+      "gzipBytes": 791322,
+      "batches": 120,
+      "failureChainsVerified": 12,
+      "omissions": {},
+      "restartDrainTicks": 122,
+      "actualNetwork": "in-memory service, no external upload",
+      "limitations": "Synthetic rate and payload model, accelerated time. Uses production journal/outbox. No Windows/CS2/OBS session or new task/anomaly/console integration represented."
+    },
+    {
+      "profile": "fault",
+      "modelMinutes": 1,
+      "wallMs": 1231.0708049999998,
+      "emittedEvents": 6000,
+      "queuedEvents": 6001,
+      "stages": {
+        "request_error": 6000
+      },
+      "expandedBatchBytes": 7825808,
+      "batchIndexJsonBytes": 2202,
+      "localManifestBytes": 4700,
+      "gzipBytes": 249038,
+      "batches": 21,
+      "failureChainsVerified": 6000,
+      "omissions": {
+        "memory_budget_recoverable_from_local_journal": 1
+      },
+      "restartDrainTicks": 23,
+      "actualNetwork": "in-memory service, no external upload",
+      "limitations": "Synthetic rate and payload model, accelerated time. Uses production journal/outbox. No Windows/CS2/OBS session or new task/anomaly/console integration represented."
+    }
+  ],
+  "concurrent": [
+    {
+      "installations": 10,
+      "modelMinutesEach": 1,
+      "wallMs": 297.0870639999994,
+      "emittedEvents": 2560,
+      "gzipBytes": 69577,
+      "expandedBytes": 1209750,
+      "failureChainsVerified": 10,
+      "productionLocalPipelines": 10,
+      "remote": "in-memory ACK; not Worker request/CPU/CF quota benchmark"
+    },
+    {
+      "installations": 30,
+      "modelMinutesEach": 1,
+      "wallMs": 855.5424380000004,
+      "emittedEvents": 7680,
+      "gzipBytes": 208391,
+      "expandedBytes": 3629290,
+      "failureChainsVerified": 30,
+      "productionLocalPipelines": 30,
+      "remote": "in-memory ACK; not Worker request/CPU/CF quota benchmark"
+    },
+    {
+      "installations": 100,
+      "modelMinutesEach": 1,
+      "wallMs": 3545.1944949999997,
+      "emittedEvents": 25600,
+      "gzipBytes": 695191,
+      "expandedBytes": 12097680,
+      "failureChainsVerified": 100,
+      "productionLocalPipelines": 100,
+      "remote": "in-memory ACK; not Worker request/CPU/CF quota benchmark"
+    }
+  ],
+  "forecast": [
+    {
+      "installations": 10,
+      "twoHourSessionsPerInstallationPerDay": 3,
+      "gzipBytesPerHour": 395661,
+      "gzipBytesPerInstallationPerDay": 2373966,
+      "gzipBytesSevenDaysAll": 166177620,
+      "uploadPutsPerDayAll": 3600,
+      "measuredIndexJsonBytes90DaysAll": 67967100,
+      "indexEnvelopeBytesAt1KiB90DaysAll": 331776000
+    },
+    {
+      "installations": 30,
+      "twoHourSessionsPerInstallationPerDay": 3,
+      "gzipBytesPerHour": 395661,
+      "gzipBytesPerInstallationPerDay": 2373966,
+      "gzipBytesSevenDaysAll": 498532860,
+      "uploadPutsPerDayAll": 10800,
+      "measuredIndexJsonBytes90DaysAll": 203901300,
+      "indexEnvelopeBytesAt1KiB90DaysAll": 995328000
+    },
+    {
+      "installations": 100,
+      "twoHourSessionsPerInstallationPerDay": 3,
+      "gzipBytesPerHour": 395661,
+      "gzipBytesPerInstallationPerDay": 2373966,
+      "gzipBytesSevenDaysAll": 1661776200,
+      "uploadPutsPerDayAll": 36000,
+      "measuredIndexJsonBytes90DaysAll": 679671000,
+      "indexEnvelopeBytesAt1KiB90DaysAll": 3317760000
+    }
+  ]
+}
