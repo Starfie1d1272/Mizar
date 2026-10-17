@@ -1,3 +1,9 @@
+import {
+  DIAGNOSTIC_BODY_LIFETIME_MS,
+  diagnosticPermitClaims,
+  readDiagnosticGzipPermit,
+  type DiagnosticUploadPermit,
+} from '@mizar/protocol/diagnostics-upload';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
  * No body inflation, public object URL, runtime management token, or business-state interpretation. */
@@ -319,6 +325,19 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   const bytes = await bounded(request.body, LIMITS.compressedBytes);
   if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || (await hash(bytes)) !== id)
     return json({ error: 'batch_integrity' }, 400);
+  const sealed = readDiagnosticGzipPermit(bytes);
+  if (
+    !sealed ||
+    sealed.permit.installationId !== installation ||
+    sealed.permit.issuedAt > now ||
+    !equal(
+      sealed.permit.signature,
+      base64(await mac(env.INGEST_SIGNING_KEY, diagnosticPermitClaims(sealed.permit))),
+    ) ||
+    (await hash(sealed.payload)) !== sealed.permit.payloadSha256
+  )
+    return json({ error: 'invalid_batch_permit' }, 400);
+  if (sealed.permit.expiresAt <= now) return json({ error: 'batch_retention_expired' }, 410);
   if (
     bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
     !budget(env.INSTALLATION_DAILY_BATCHES)
@@ -352,7 +371,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       owner,
       bytes.length,
       now,
-      now + LIMITS.bodyDays * DAY,
+      sealed.permit.expiresAt,
       JSON.stringify(index),
       installation,
       day,
@@ -620,11 +639,20 @@ export async function cleanup(env: Env, now = Date.now()) {
     'DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE expires_at<=? LIMIT 100)',
     now,
   ).run();
-  await sql(env, 'DELETE FROM daily WHERE day<?', Math.floor(now / DAY) - 2).run();
-  // Installations with unresolved writers remain fenced, rather than reviving an old token.
   await sql(
     env,
-    `DELETE FROM installations WHERE rowid IN (SELECT rowid FROM installations WHERE created_at<?
+    `DELETE FROM sessions WHERE rowid IN (
+    SELECT s.rowid FROM installations AS i INDEXED BY installations_revoked
+    CROSS JOIN sessions AS s ON s.installation_id=i.id
+    WHERE i.revoked_at IS NOT NULL LIMIT 100)`,
+  ).run();
+  await sql(env, 'DELETE FROM daily WHERE day<?', Math.floor(now / DAY) - 2).run();
+  // Revoked identities retain only the minimal authentication fence under the
+  // database allocation budget. Removing it could revive an old enrollment proof.
+  // Installations with unresolved writers also remain fenced.
+  await sql(
+    env,
+    `DELETE FROM installations WHERE rowid IN (SELECT rowid FROM installations WHERE created_at<? AND revoked_at IS NULL
     AND NOT EXISTS(SELECT 1 FROM batches WHERE installation_id=installations.id)
     AND NOT EXISTS(SELECT 1 FROM sessions WHERE installation_id=installations.id) LIMIT 100)`,
     now - LIMITS.indexDays * DAY,
@@ -684,7 +712,10 @@ async function admin(request: Request, env: Env, path: string, now: number) {
       (from && to && from > to)
     )
       return json({ error: 'invalid_filter' }, 400);
-    const filters = ['expires_at>?'];
+    const filters = [
+      'expires_at>?',
+      'EXISTS(SELECT 1 FROM installations WHERE id=sessions.installation_id AND revoked_at IS NULL)',
+    ];
     const values: (string | number)[] = [now];
     for (const [column, value] of [
       ['installation_id', installation],
@@ -744,7 +775,11 @@ async function admin(request: Request, env: Env, path: string, now: number) {
     const installation = url.searchParams.get('installation');
     if (!installation || !uuid.test(installation))
       return json({ error: 'invalid_installation' }, 400);
-    const filters = ['installation_id=?', 'expires_at>?'];
+    const filters = [
+      'installation_id=?',
+      'expires_at>?',
+      'EXISTS(SELECT 1 FROM installations WHERE id=batches.installation_id AND revoked_at IS NULL)',
+    ];
     const values: (string | number)[] = [installation, now];
     const cursorText = url.searchParams.get('cursor');
     if (cursorText) {
@@ -835,6 +870,23 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
     const installation = await authenticate(request, env, now, deleting);
     if (!installation) return json({ error: 'unauthorized' }, 401);
     if (deleting) return await withdraw(env, installation);
+    const permitMatch = /^\/v1\/diagnostics\/permits\/([a-f0-9]{64})$/.exec(path);
+    if (permitMatch && request.method === 'POST') {
+      if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
+      if (!(await withinDatabaseBudget(env)))
+        return json({ error: 'index_allocation_budget' }, 503);
+      const claims: Omit<DiagnosticUploadPermit, 'signature'> = {
+        schema: 'mizar-diagnostic-permit/1',
+        installationId: installation,
+        payloadSha256: permitMatch[1]!,
+        issuedAt: now,
+        expiresAt: now + DIAGNOSTIC_BODY_LIFETIME_MS,
+      };
+      return json({
+        ...claims,
+        signature: base64(await mac(env.INGEST_SIGNING_KEY, diagnosticPermitClaims(claims))),
+      });
+    }
     const match = /^\/v1\/diagnostics\/batches\/([a-f0-9]{64})$/.exec(path);
     if (match && request.method === 'PUT')
       return await upload(request, env, match[1]!, installation, now);

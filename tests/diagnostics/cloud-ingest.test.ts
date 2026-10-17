@@ -1,7 +1,13 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
+import {
+  sealDiagnosticGzip,
+  diagnosticPermitClaims,
+  readDiagnosticGzipPermit,
+  DIAGNOSTIC_BODY_LIFETIME_MS,
+} from '../../packages/protocol/src/diagnostics-upload.js';
 import { gzipSync } from 'node:zlib';
 import { expect, it, vi } from 'vitest';
 import {
@@ -11,6 +17,24 @@ import {
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { runtime, migrate, bindings, script, adminHeaders, hash } from './fixture.js';
 
+function sealedFixture(bytes: Uint8Array, installationId: string) {
+  const issuedAt = Date.now();
+  const claims = {
+    schema: 'mizar-diagnostic-permit/1' as const,
+    installationId,
+    payloadSha256: hash(bytes),
+    issuedAt,
+    expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
+  };
+  return Buffer.from(
+    sealDiagnosticGzip(bytes, {
+      ...claims,
+      signature: createHmac('sha256', bindings.INGEST_SIGNING_KEY)
+        .update(diagnosticPermitClaims(claims))
+        .digest('base64url'),
+    }),
+  );
+}
 it('delivers the real disk outbox over HTTP into Worker/R2/D1; recovers lost ACK across both restarts; reads causes, expires and revokes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-real-'));
   let mf = runtime(join(directory, 'server'));
@@ -179,7 +203,7 @@ it('keeps deletion pending during a real R2 write and completes after the writer
   const mf = runtime(directory);
   const { handle } = (await import(
     `data:text/javascript;base64,${Buffer.from(script).toString('base64')}`
-  )) as { handle: (request: Request, env: unknown) => Promise<Response> };
+  )) as { handle: (request: Request, env: unknown, now?: number) => Promise<Response> };
   let failPut = true;
   let release: () => void = () => {};
   let entered: () => void = () => {};
@@ -237,11 +261,14 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const bytes = gzipSync(
-      JSON.stringify({
-        schema: 'mizar-technical-diagnostics/1',
-        events: [{ stage: 'public_failure', evidence: { cause: 'real storage race' } }],
-      }),
+    const bytes = sealedFixture(
+      gzipSync(
+        JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: [{ stage: 'public_failure', evidence: { cause: 'real storage race' } }],
+        }),
+      ),
+      installation,
     );
     const id = hash(bytes);
     const upload = () =>
@@ -305,6 +332,12 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     });
     expect(pending.status).toBe(202);
     expect(await pending.json()).toMatchObject({ deletion: 'pending', revoked: true });
+    for (const kind of ['sessions', 'batches']) {
+      const hidden = await call(`/admin/${kind}?installation=${installation}`, {
+        headers: adminHeaders,
+      });
+      expect(await hidden.json()).toMatchObject({ [kind]: [] });
+    }
     release();
     expect((await uploading).status).toBe(410);
     expect((await replaying).status).toBe(410);
@@ -352,16 +385,19 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const bytes = gzipSync(
-      JSON.stringify({
-        schema: 'mizar-technical-diagnostics/1',
-        events: [
-          {
-            stage: 'public_failure',
-            evidence: { cause: 'original persisted SQLite failure context' },
-          },
-        ],
-      }),
+    const bytes = sealedFixture(
+      gzipSync(
+        JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: [
+            {
+              stage: 'public_failure',
+              evidence: { cause: 'original persisted SQLite failure context' },
+            },
+          ],
+        }),
+      ),
+      installation,
     );
     const id = hash(bytes);
     const session = randomUUID();
@@ -389,6 +425,21 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
         },
         body: new Uint8Array(value),
       });
+    // The wire SHA alone cannot substitute for a valid, installation-bound lifetime certificate.
+    const opened = readDiagnosticGzipPermit(bytes)!;
+    expect((await upload(opened.payload)).status).toBe(400);
+    const badSignature = sealDiagnosticGzip(opened.payload, {
+      ...opened.permit,
+      signature: 'x'.repeat(43),
+    });
+    expect((await upload(badSignature)).status).toBe(400);
+    expect((await upload(sealedFixture(opened.payload, randomUUID()))).status).toBe(400);
+    const tamperedPayload = Uint8Array.from(bytes);
+    tamperedPayload[tamperedPayload.length - 1] = tamperedPayload[tamperedPayload.length - 1]! ^ 1;
+    expect((await upload(tamperedPayload)).status).toBe(400);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+      count: 0,
+    });
     // A real SQLite failure rolls back the session+ready transaction after the actual R2 put.
     await db.exec(
       "CREATE TRIGGER fail_index BEFORE INSERT ON sessions BEGIN SELECT RAISE(FAIL, 'synthetic index EIO'); END;",
@@ -422,13 +473,19 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     expect(await db.prepare('SELECT bytes,batches FROM daily').first()).toEqual(before);
     // Reproduce a crash after reserving, before any R2 object exists. A retry can
     // deliver the full body; it cannot manufacture proof that the old writer ended.
-    const pendingBytes = gzipSync(
-      JSON.stringify({
-        schema: 'mizar-technical-diagnostics/1',
-        events: [
-          { stage: 'public_failure', evidence: { cause: 'full retry after unknown writer crash' } },
-        ],
-      }),
+    const pendingBytes = sealedFixture(
+      gzipSync(
+        JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: [
+            {
+              stage: 'public_failure',
+              evidence: { cause: 'full retry after unknown writer crash' },
+            },
+          ],
+        }),
+      ),
+      installation,
     );
     const pendingId = hash(pendingBytes);
     const now = Date.now();
@@ -490,6 +547,10 @@ it('retrieves every indexed session and body locator across tied-timestamp pages
     const db = await mf.getD1Database('DIAGNOSTICS_DB');
     await migrate(db);
     const installation = randomUUID();
+    await db
+      .prepare('INSERT INTO installations(id,proof_sha256,created_at) VALUES(?,?,?)')
+      .bind(installation, 'a'.repeat(64), Date.now())
+      .run();
     const sessions = Array.from({ length: 102 }, () => randomUUID());
     const now = Date.now();
     const stamp = new Date(now).toISOString();
@@ -571,9 +632,236 @@ it('retrieves every indexed session and body locator across tied-timestamp pages
   }
 }, 20_000);
 
+it('never recreates an ACK-lost batch after seven-day cleanup, including a client and storage restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-expired-replay-'));
+  let mf = runtime(join(directory, 'server'));
+  let now = Date.now();
+  const client = join(directory, 'client');
+  let journal = new SessionJournal(client);
+  let loseAck = true;
+  const { handle } = (await import(
+    `data:text/javascript;base64,${Buffer.from(script).toString('base64')}`
+  )) as { handle: (request: Request, env: unknown, now: number) => Promise<Response> };
+  const environment = async () => ({
+    ...bindings,
+    DIAGNOSTICS_DB: await mf.getD1Database('DIAGNOSTICS_DB'),
+    DIAGNOSTICS_BUCKET: await mf.getR2Bucket('DIAGNOSTICS_BUCKET'),
+    ENROLL_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+    UPLOAD_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+  });
+  const fetcher: typeof fetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set('cf-connecting-ip', '127.0.0.1');
+    const response = await handle(
+      new Request(
+        input instanceof Request ? input.url : input instanceof URL ? input.href : input,
+        { ...init, headers },
+      ),
+      await environment(),
+      now,
+    );
+    if (init?.method === 'PUT' && response.ok && loseAck) {
+      loseAck = false;
+      await response.arrayBuffer();
+      throw new Error('synthetic receipt lost after durable acceptance');
+    }
+    return response;
+  };
+  const options = { endpoint: 'https://local.invalid', fetch: fetcher, now: () => now };
+  let delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+  try {
+    await migrate(await mf.getD1Database('DIAGNOSTICS_DB'));
+    await delivery.consent(true);
+    journal.record('workspace_exit_failure', {
+      phase: 'restore_window',
+      error: new Error('preserved original failure'),
+    });
+    await journal.flush();
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({ acknowledged: 0, queuedBatches: 1, failures: 1 });
+    const readState = async () =>
+      JSON.parse(await readFile(join(client, 'diagnostic-outbox/state.json'), 'utf8')) as {
+        queue: { id: string; sealed: boolean; serverExpired?: boolean }[];
+      };
+    const before = await readState();
+    expect(before.queue[0]!.sealed).toBe(true);
+    const id = before.queue[0]!.id;
+    const packet = await readFile(join(client, `diagnostic-outbox/${id}.gz`));
+    expect(JSON.stringify(await decodeDiagnosticBatch(packet))).toContain(
+      'preserved original failure',
+    );
+    await delivery.close();
+    await journal.close();
+    await mf.dispose();
+    mf = runtime(join(directory, 'server'));
+    now += 8 * 86400_000;
+    expect(
+      (
+        await handle(
+          new Request('https://local.invalid/admin/cleanup', {
+            method: 'POST',
+            headers: adminHeaders,
+          }),
+          await environment(),
+          now,
+        )
+      ).status,
+    ).toBe(200);
+    const db = await mf.getD1Database('DIAGNOSTICS_DB');
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+      count: 0,
+    });
+    expect((await (await mf.getR2Bucket('DIAGNOSTICS_BUCKET')).list()).objects).toHaveLength(0);
+    journal = new SessionJournal(client);
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({
+      acknowledged: 0,
+      error: 'server_retention_expired_local_copy_retained',
+    });
+    const after = await readState();
+    expect(after.queue.find((batch) => batch.id === id)).toMatchObject({
+      sealed: true,
+      serverExpired: true,
+    });
+    expect(await readFile(join(client, `diagnostic-outbox/${id}.gz`))).toEqual(packet);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+      count: 0,
+    });
+    expect(await db.prepare('SELECT batches FROM sessions').first()).toMatchObject({ batches: 1 });
+    expect((await (await mf.getR2Bucket('DIAGNOSTICS_BUCKET')).list()).objects).toHaveLength(0);
+  } finally {
+    await delivery.close();
+    await journal.close();
+    await mf.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it('hides revoked evidence immediately even when SQLite refuses physical session deletion, then completes cleanup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-revoke-failure-'));
+  const mf = runtime(directory);
+  try {
+    const db = await mf.getD1Database('DIAGNOSTICS_DB');
+    await migrate(db);
+    const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+    const { handle } = (await import(
+      `data:text/javascript;base64,${Buffer.from(script).toString('base64')}`
+    )) as { handle: (request: Request, env: unknown, now?: number) => Promise<Response> };
+    const env = {
+      ...bindings,
+      DIAGNOSTICS_DB: db,
+      DIAGNOSTICS_BUCKET: bucket,
+      ENROLL_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+      UPLOAD_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+    };
+    const call = (path: string, init: RequestInit = {}) =>
+      handle(
+        new Request(`https://local.invalid${path}`, {
+          ...init,
+          headers: { 'cf-connecting-ip': '127.0.0.1', ...init.headers },
+        }),
+        env,
+      );
+    const installation = randomUUID();
+    const identity = (await (
+      await call('/v1/diagnostics/enroll', {
+        method: 'POST',
+        body: JSON.stringify({
+          consent: 'technical-diagnostics-v2',
+          enrollmentId: installation,
+          enrollmentSecret: 'a'.repeat(64),
+        }),
+      })
+    ).json()) as { token: string };
+    const now = Date.now();
+    const id = 'b'.repeat(64);
+    const key = `v1/${installation}/${id}.gz`;
+    await db
+      .prepare(
+        'INSERT INTO sessions(installation_id,session_id,first_received_at,last_received_at,events,failures,batches,bytes,expires_at) VALUES(?,?,?, ?,1,1,1,128,?)',
+      )
+      .bind(installation, randomUUID(), now, now, now + 90 * 86400_000)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO batches(installation_id,id,object_key,owner,state,writers,bytes,received_at,expires_at,metadata) VALUES(?,?,?,?,'ready',0,128,?,?,'{}')",
+      )
+      .bind(installation, id, key, randomUUID(), now, now + 7 * 86400_000)
+      .run();
+    await bucket.put(key, gzipSync('public synthetic evidence'));
+    await db.exec(
+      "CREATE TRIGGER refuse_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'synthetic SQLite delete failure'); END;",
+    );
+    expect(
+      (
+        await call('/v1/diagnostics/installation', {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${identity.token}` },
+        })
+      ).status,
+    ).toBe(503);
+    expect(
+      (
+        await db
+          .prepare('SELECT revoked_at FROM installations WHERE id=?')
+          .bind(installation)
+          .first<{ revoked_at: number }>()
+      )?.revoked_at,
+    ).toBeGreaterThan(0);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM sessions').first()).toMatchObject({
+      count: 1,
+    });
+    for (const kind of ['sessions', 'batches']) {
+      const result = await call(`/admin/${kind}?installation=${installation}`, {
+        headers: adminHeaders,
+      });
+      expect(await result.json()).toMatchObject({ [kind]: [] });
+    }
+    expect(
+      (await call(`/admin/bodies/${installation}/${id}`, { headers: adminHeaders })).status,
+    ).toBe(404);
+    await db.exec('DROP TRIGGER refuse_session_delete;');
+    expect((await call('/admin/cleanup', { method: 'POST', headers: adminHeaders })).status).toBe(
+      200,
+    );
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM sessions').first()).toMatchObject({
+      count: 0,
+    });
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+      count: 0,
+    });
+    expect((await bucket.list()).objects).toHaveLength(0);
+    const afterRetention = now + 100 * 86400_000;
+    expect(
+      (
+        await handle(
+          new Request('https://local.invalid/admin/cleanup', {
+            method: 'POST',
+            headers: adminHeaders,
+          }),
+          env,
+          afterRetention,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await db
+          .prepare('SELECT revoked_at FROM installations WHERE id=?')
+          .bind(installation)
+          .first<{ revoked_at: number }>()
+      )?.revoked_at,
+    ).toBeGreaterThan(0);
+  } finally {
+    await mf.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
 it('indexes single-source failures and their original UTC through real envelopes, restart and healthy subsequent batches', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-envelopes-'));
-  const mf = runtime(join(directory, 'server'));
+  const mf = runtime(join(directory, 'server'), 100);
   const endpoint = (await mf.ready).origin;
   const client = join(directory, 'client');
   const realNow = Date.now();

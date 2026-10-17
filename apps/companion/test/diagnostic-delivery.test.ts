@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_BODY_LIFETIME_MS } from '@mizar/protocol/diagnostics-upload';
 import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,7 @@ function service() {
   let offline = false;
   let loseAcknowledgment = false;
   let revoked = false;
+  let installation = '';
   const fetcher: typeof fetch = async (input, init) => {
     if (offline) throw new TypeError('offline');
     const url = new URL(
@@ -45,10 +47,25 @@ function service() {
     calls.push(`${init?.method} ${url.pathname}`);
     if (url.pathname.endsWith('/enroll')) {
       const data = JSON.parse(init?.body as string) as { enrollmentId: string };
+      installation = data.enrollmentId;
       return Response.json({
         installationId: data.enrollmentId,
         token: 'test-token',
         expiresAt: Date.now() + 30 * 86400_000,
+      });
+    }
+    if (url.pathname.includes('/permits/')) {
+      const issuedAt = Date.now();
+      return Response.json({
+        schema: 'mizar-diagnostic-permit/1',
+        installationId:
+          installation ||
+          (JSON.parse(await readFile(currentState(), 'utf8')) as DiskState).credentials
+            .installationId,
+        payloadSha256: url.pathname.split('/').at(-1),
+        issuedAt,
+        expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
+        signature: 'a'.repeat(43),
       });
     }
     if (init?.method === 'DELETE') {
@@ -302,6 +319,7 @@ describe('consented diagnostic outbox', () => {
     let mode: 'false-ack' | 'block' = 'false-ack';
     let entered!: () => void;
     const started = new Promise<void>((r) => (entered = r));
+    let installation = '';
     const fetcher: typeof fetch = async (input, init) => {
       if (
         (input instanceof Request ? input.url : input instanceof URL ? input.href : input).endsWith(
@@ -309,10 +327,25 @@ describe('consented diagnostic outbox', () => {
         )
       ) {
         const data = JSON.parse(init?.body as string) as { enrollmentId: string };
+        installation = data.enrollmentId;
         return Response.json({
           installationId: data.enrollmentId,
           token: 'test-token',
           expiresAt: Date.now() + 30 * 86400_000,
+        });
+      }
+      const path = new URL(
+        input instanceof Request ? input.url : input instanceof URL ? input.href : input,
+      ).pathname;
+      if (path.includes('/permits/')) {
+        const issuedAt = Date.now();
+        return Response.json({
+          schema: 'mizar-diagnostic-permit/1',
+          installationId: installation,
+          payloadSha256: path.split('/').at(-1),
+          issuedAt,
+          expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
+          signature: 'a'.repeat(43),
         });
       }
       uploads++;
@@ -525,13 +558,24 @@ describe('consented diagnostic outbox', () => {
     const path = join(dir, 'diagnostic-outbox', 'state.json');
     const state = JSON.parse(await readFile(path, 'utf8')) as {
       consentPolicy: number;
-      credentials: { installationId: string };
+      credentials: { installationId: string; token?: string; expiresAt?: number };
+      nextAttemptAt: number;
+      failures: number;
     };
     const oldInstallation = state.credentials.installationId;
     state.consentPolicy = 1;
+    state.credentials.token = 'test-token';
+    state.credentials.expiresAt = Date.now() + 86400_000;
+    state.nextAttemptAt = Date.now() + 6 * 3600_000;
+    state.failures = 12;
     await writeFile(path, JSON.stringify(state));
     const nextJournal = new SessionJournal(dir);
-    const next = await new DiagnosticDelivery(dir, nextJournal).initialize(false);
+    const remote = service();
+    remote.setState(path);
+    const next = await new DiagnosticDelivery(dir, nextJournal, {
+      endpoint: 'https://diagnostics.example.test',
+      fetch: remote.fetcher,
+    }).initialize(false);
     try {
       expect(next.status()).toMatchObject({
         consent: false,
@@ -543,6 +587,9 @@ describe('consented diagnostic outbox', () => {
           name.startsWith('consent-revoked-'),
         ),
       ).toBe(true);
+      await next.tick();
+      expect(remote.calls).toEqual(['DELETE /v1/diagnostics/installation']);
+      expect(remote.revoked()).toBe(true);
       await next.consent(true);
       const renewed = JSON.parse(await readFile(path, 'utf8')) as {
         consentPolicy: number;

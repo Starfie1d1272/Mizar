@@ -1,3 +1,8 @@
+import {
+  DIAGNOSTIC_PERMIT_BYTES,
+  diagnosticPermit,
+  sealDiagnosticGzip,
+} from '@mizar/protocol/diagnostics-upload';
 import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
@@ -38,6 +43,7 @@ interface Batch {
   id: string;
   bytes: number;
   serverExpired?: boolean;
+  sealed?: boolean;
   index: {
     schema: string;
     events: number;
@@ -102,6 +108,7 @@ const stateSchema = z
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
           serverExpired: z.boolean().optional(),
+          sealed: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
             events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
@@ -135,7 +142,8 @@ const stateSchema = z
   .refine(
     (v) =>
       Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
-      v.queue.reduce((n, b) => n + b.bytes, 0) <= DELIVERY_LIMITS.queueBytes &&
+      v.queue.reduce((n, b) => n + b.bytes, 0) <=
+        DELIVERY_LIMITS.queueBytes + DELIVERY_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
       (!v.consent || v.credentials !== null),
   );
 async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
@@ -489,6 +497,8 @@ export class DiagnosticDelivery {
       this.state.credentials = null;
       this.state.sessions = {};
       this.state.queue = [];
+      this.state.failures = 0;
+      this.state.nextAttemptAt = 0;
       await this.save();
     }
     this.requestedConsent = this.state.consent;
@@ -859,7 +869,7 @@ export class DiagnosticDelivery {
       let compressed = await compress(raw);
       while (
         selected.length > 1 &&
-        (compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        (compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
           raw.length > DELIVERY_LIMITS.expandedBytes)
       ) {
         selected.splice(Math.ceil(selected.length / 2));
@@ -879,7 +889,7 @@ export class DiagnosticDelivery {
       }
       if (!this.consentActive() || epoch !== this.epoch) return;
       if (
-        compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
         raw.length > DELIVERY_LIMITS.expandedBytes
       ) {
         this.omitted('batch_size_budget', selected.length);
@@ -889,7 +899,12 @@ export class DiagnosticDelivery {
       }
       if (
         this.state.queue.length >= DELIVERY_LIMITS.batches ||
-        this.state.queue.reduce((n, v) => n + v.bytes, 0) + compressed.length >
+        this.state.queue.reduce(
+          (n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES),
+          0,
+        ) +
+          compressed.length +
+          DIAGNOSTIC_PERMIT_BYTES >
           DELIVERY_LIMITS.queueBytes
       ) {
         this.error = 'queue_budget_local_journal_retained';
@@ -1057,14 +1072,70 @@ export class DiagnosticDelivery {
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       await this.transaction(() => this.save());
-      const batch = this.state.queue.find((value) => !value.serverExpired);
-      if (!batch) return;
-      const bytes = await secureRead(
+      const selectedBatch = this.state.queue.find((value) => !value.serverExpired);
+      if (!selectedBatch) return;
+      let batch: Batch = selectedBatch;
+      let bytes = await secureRead(
         this.queueDirectory,
         `${batch.id}.gz`,
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
+      if (!batch.sealed) {
+        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/permits/${batch.id}`, {
+          method: 'POST',
+          redirect: 'error',
+          signal,
+          headers: { authorization: `Bearer ${bearer}` },
+        });
+        const receipt = await responseJson(response, signal);
+        const permit = diagnosticPermit(receipt);
+        if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
+        if (
+          !permit ||
+          permit.installationId !== identity.installationId ||
+          permit.payloadSha256 !== batch.id
+        )
+          throw new Error('invalid_batch_permit');
+        const sealed = Buffer.from(sealDiagnosticGzip(bytes, permit));
+        const oldBatch = batch;
+        const newBatch = { ...batch, id: checksum(sealed), bytes: sealed.length, sealed: true };
+        await this.transaction(async () => {
+          if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
+          const name = `${newBatch.id}.gz`;
+          await safePath(this.queueDirectory, name).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          const file = await open(
+            join(this.queueDirectory, name),
+            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+            0o600,
+          );
+          try {
+            await file.writeFile(sealed);
+            await file.sync();
+          } catch (error) {
+            await file.close();
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          } finally {
+            await file.close();
+          }
+          const previous = this.state.queue;
+          this.state.queue = previous.map((item) => (item.id === oldBatch.id ? newBatch : item));
+          try {
+            await this.save();
+          } catch (error) {
+            this.state.queue = previous;
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          }
+          batch = newBatch;
+          bytes = sealed;
+          await unlink(join(this.queueDirectory, `${oldBatch.id}.gz`));
+        });
+      }
+
       if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
       const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
         method: 'PUT',
