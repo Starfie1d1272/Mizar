@@ -63,6 +63,7 @@ async function rig() {
     },
   };
   let time = 0;
+  let isolation = true;
   const director = new CameraDirector(
     store,
     provider,
@@ -70,6 +71,7 @@ async function rig() {
     () => {},
     () => time,
     () => 0,
+    () => isolation,
   );
   director.tick();
   const resume = () => director.command('resume', director.get());
@@ -106,6 +108,9 @@ async function rig() {
     tick,
     round,
     live,
+    setIsolation: (value: boolean) => {
+      isolation = value;
+    },
     advance: async (ms: number) => {
       time += ms;
       await tick();
@@ -399,4 +404,98 @@ it('rejects a preset whose normalized export would exceed its readable file limi
   };
   expect(() => r.store.save(oversized)).toThrow('256 KiB');
   expect(r.store.preset).toEqual(before);
+});
+
+async function pendingTransition() {
+  const r = await rig();
+  await r.resume();
+  await r.round(4);
+  const send = r.provider.send;
+  let clear!: (result: GatewayResult) => void;
+  r.provider.send = (type, macro) => {
+    if (type !== 'CamPlay/ClearForce') return send(type, macro);
+    r.calls.push({ type });
+    return new Promise((resolve) => {
+      clear = resolve;
+    });
+  };
+  r.program.clock = { phase: 'timeout_ct', endsInSeconds: 30 };
+  await r.tick();
+  return { ...r, clear: (result: GatewayResult = 'queued') => clear(result) };
+}
+it('hands a freeze shot to a fresh tactical pause after clear ACK without claiming execution', async () => {
+  const r = await pendingTransition();
+  expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: 'A' }, { type: 'CamPlay/ClearForce' }]);
+  r.clear();
+  await r.tick();
+  await r.tick();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停' });
+  expect(r.calls).toHaveLength(3);
+  expect(r.director.get()).toMatchObject({ execution: 'unconfirmed', request: 'queued' });
+});
+it('an actual opening Take replaces an older phase even when its clear is unresolved', async () => {
+  const r = await rig();
+  await r.resume();
+  await r.round(4);
+  const send = r.provider.send;
+  let clear!: (value: GatewayResult) => void;
+  r.provider.send = (type, macro) => {
+    if (type !== 'CamPlay/ClearForce') return send(type, macro);
+    r.calls.push({ type });
+    return new Promise((resolve) => {
+      clear = resolve;
+    });
+  };
+  r.director.opening();
+  r.director.opening();
+  expect(r.calls).toHaveLength(2);
+  clear('queued');
+  await r.tick();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '开场' });
+  await r.tick();
+  expect(r.calls).toHaveLength(3);
+});
+it.each([
+  'hold',
+  'skip',
+  'map',
+  'reconnect',
+  'expire',
+  'phase',
+  'manual',
+  'isolation',
+  'rejected',
+] as const)('drops the one-slot handoff on %s, including late ACKs', async (cancel) => {
+  const r = await pendingTransition();
+  if (cancel === 'hold') r.director.hold();
+  else if (cancel === 'skip') await r.director.command('skip');
+  else if (cancel === 'map') r.program.map.name = 'de_nuke';
+  else if (cancel === 'reconnect') r.provider.generation++;
+  else if (cancel === 'expire') await r.advance(1000);
+  else if (cancel === 'phase') await r.live();
+  else if (cancel === 'manual') r.truth.manual = true;
+  else if (cancel === 'isolation') r.setIsolation(false);
+  r.clear(cancel === 'rejected' ? 'rejected' : 'queued');
+  await r.tick();
+  await r.tick();
+  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toEqual([
+    { type: 'CamMacro/Play', macro: 'A' },
+  ]);
+});
+it('requires verified isolation for both enabling and audition; loss of isolation holds automation', async () => {
+  const r = await rig();
+  r.setIsolation(false);
+  await expect(r.resume()).rejects.toThrow();
+  expect(() => r.director.audition({ macro: '候选', maxMs: 1000 }, r.director.get())).toThrow();
+  expect(r.calls).toEqual([]);
+  r.setIsolation(true);
+  await r.resume();
+  await r.round(1);
+  r.setIsolation(false);
+  await r.tick();
+  expect(r.director.get()).toMatchObject({ held: true, isolated: false });
+  expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
+  await r.live();
+  await r.round(2);
+  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
 });

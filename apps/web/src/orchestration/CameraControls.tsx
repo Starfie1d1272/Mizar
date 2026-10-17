@@ -33,7 +33,8 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
       </span>
       {setup ? (
         <span>
-          {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'}
+          {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'} ·{' '}
+          {s.isolated ? '隔离文件已验证' : '需准备隔离包'}
         </span>
       ) : null}
       {setup ? (
@@ -43,7 +44,7 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
       ) : null}
       <Button
         onClick={() => void send('hold')}
-        title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认"
+        title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
       >
         接管运镜
       </Button>
@@ -52,11 +53,11 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
       </Button>
       {s.held && s.connected ? (
         <Button
-          disabled={busy || !view.ready || !s.pack}
+          disabled={busy || !view.ready || !s.pack || !s.isolated}
           title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
           onClick={() => void send('resume')}
         >
-          确认活动包并启用自动
+          确认活动隔离包并启用自动
         </Button>
       ) : null}
       {error ? <span role="alert">{error}</span> : null}

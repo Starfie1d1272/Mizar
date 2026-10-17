@@ -21,6 +21,15 @@ export class CameraDirector {
   private highestRound = -1;
   private previousMacro = '';
   private current: { key: string; macro: string; until: number; edge: string } | null = null;
+  private handoff: {
+    shot: CameraShot;
+    key: string;
+    edge: string;
+    context: string;
+    connection: number;
+    until: number;
+  } | null = null;
+  private clearing = false;
   private request: OrchestrationStatus['request'] = 'idle';
   private message = '未启用';
   constructor(
@@ -33,6 +42,7 @@ export class CameraDirector {
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
     private readonly now = () => performance.now(),
     private readonly random = Math.random,
+    private readonly isolated: (pack: string) => boolean = () => false,
   ) {}
   private executionIdentity(t: CameraTruth) {
     const c = t.program.cursor;
@@ -70,12 +80,17 @@ export class CameraDirector {
       context: this.identity(t),
       map: t.program.map.name,
       pack: this.store.map(t.program.map.name)?.pack ?? null,
+      isolated: this.packReady(),
       held: this.held,
       request: this.request,
       execution: 'unconfirmed',
       current: this.current?.macro ?? null,
       message: this.message,
     };
+  }
+  private packReady() {
+    const pack = this.store.map(this.truth().program.map.name)?.pack;
+    return Boolean(pack && this.isolated(pack));
   }
   private consume(key: string) {
     if (this.seen.size >= 1024) return;
@@ -106,7 +121,13 @@ export class CameraDirector {
       this.highestRound = Math.max(this.highestRound, t.program.map.roundNumber ?? -1);
       return;
     }
-    if (!this.safe(t) || !this.provider.connected || !this.store.ready || this.store.saving) {
+    if (
+      !this.safe(t) ||
+      !this.provider.connected ||
+      !this.store.ready ||
+      this.store.saving ||
+      !this.packReady()
+    ) {
       if (!this.held || this.current) this.hold('自动运镜已暂停，请核对连接和比赛状态。');
     }
     const edge = this.edge(t);
@@ -121,6 +142,8 @@ export class CameraDirector {
           (t.program.clock.endsInSeconds ?? 0) <= 5))
     )
       this.stop('镜头窗口已结束，已请求清空；停止结果未确认。');
+    if (this.handoff && (this.now() >= this.handoff.until || this.handoff.edge !== edge.key))
+      this.handoff = null;
     if (edge.key === this.lastEdge) return;
     this.lastEdge = edge.key;
     if (!edge.key || this.seen.has(edge.key)) return;
@@ -141,7 +164,7 @@ export class CameraDirector {
       if (!candidates.length) candidates.push(...map.rounds);
       shot = candidates[Math.floor(this.random() * candidates.length)] ?? null;
     } else if (edge.stage in map.stages) shot = map.stages[edge.stage as keyof typeof map.stages];
-    if (shot) this.play(shot, edge.key, edge.key);
+    if (shot) this.dispatch(shot, edge.key, edge.key);
   }
   /** Only the actual current OBS Take start calls this; snapshots never synthesize openings. */
   opening() {
@@ -150,7 +173,8 @@ export class CameraDirector {
       map = this.store.map(t.program.map.name);
     if (!map?.opening || this.seen.has('opening')) return;
     this.consume('opening');
-    this.play(map.opening, 'opening', this.edge(t).key);
+    if (this.current) this.stop('开场交接，已请求清空；停止结果未确认。');
+    this.dispatch(map.opening, 'opening', this.edge(t).key);
   }
   audition(shot: CameraShot, expected: { context: string; connection: number }) {
     this.tick();
@@ -172,6 +196,35 @@ export class CameraDirector {
       this.held = true;
     }
   }
+  /** One fresh transition may wait for the clear gateway ACK, never for execution or reconnect. */
+  private dispatch(shot: CameraShot, key: string, edge: string) {
+    if (this.held || !this.safe(this.truth()) || !this.packReady()) return;
+    if (this.clearing) {
+      this.handoff = {
+        shot,
+        key,
+        edge,
+        context: this.context,
+        connection: this.provider.generation,
+        until: this.now() + 1000,
+      };
+      return;
+    }
+    this.play(shot, key, edge);
+  }
+  private releaseHandoff() {
+    const next = this.handoff;
+    this.handoff = null;
+    if (
+      !next ||
+      this.now() >= next.until ||
+      next.context !== this.identity(this.truth()) ||
+      next.connection !== this.provider.generation ||
+      next.edge !== this.edge(this.truth()).key
+    )
+      return;
+    this.play(next.shot, next.key, next.edge);
+  }
   private play(shot: CameraShot, key: string, edge: string) {
     const t = this.truth();
     if (
@@ -180,10 +233,11 @@ export class CameraDirector {
       !this.safe(t) ||
       !this.provider.connected ||
       !this.store.ready ||
-      this.store.saving
+      this.store.saving ||
+      !this.packReady()
     )
       return false;
-    // An unresolved request is never queued locally behind another shot.
+    // Only dispatch can retain one bounded transition behind an in-flight clear.
     if (this.current || this.request === 'submitted') return false;
     if (t.program.map.phase === null) return false;
     let maxMs = shot.maxMs;
@@ -208,6 +262,8 @@ export class CameraDirector {
     return true;
   }
   private stop(message: string) {
+    this.handoff = null;
+    this.clearing = false;
     const hadCurrent = this.current !== null;
     if (hadCurrent)
       this.diagnostic('camera_invalidate', {
@@ -223,10 +279,15 @@ export class CameraDirector {
       return;
     }
     this.request = 'submitted';
+    this.clearing = true;
     void this.provider.send('CamPlay/ClearForce').then((result) => {
       if (revision === this.revision && !this.closed) {
+        this.clearing = false;
         this.request = result;
-        if (result !== 'queued') this.held = true;
+        if (result !== 'queued') {
+          this.held = true;
+          this.handoff = null;
+        } else this.releaseHandoff();
       }
     });
   }
@@ -273,7 +334,7 @@ export class CameraDirector {
         !this.provider.connected ||
         !this.store.ready ||
         this.store.saving ||
-        !this.store.map(this.truth().program.map.name)
+        !this.packReady()
       )
         throw new Error('camera_context_changed');
       this.held = false;

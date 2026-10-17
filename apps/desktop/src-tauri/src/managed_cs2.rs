@@ -614,6 +614,22 @@ impl ManagedCs2 {
             created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
         }))
     }
+    /// Inspection only: do not adopt a process, write a session, restore config or close a game.
+    pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
+        let owned = self.workspace_process()?;
+        let mut processes = Vec::new();
+        for pid in cs2_pids(&self.log)? {
+            let Some(process) = open(pid, &self.log)? else { continue; };
+            let (created, executable) = identity(&process, &self.log)?;
+            if unsafe { WaitForSingleObject(process.0, 0) } != 258
+                || !executable.file_name().is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
+            { continue; }
+            let managed = owned.as_ref().is_some_and(|p| p.pid == pid && p.created == created && p.is_running());
+            processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed}));
+        }
+        // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
+        Ok(json!({"processes": processes, "url": "http://127.0.0.1:3000/"}))
+    }
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;
         let running = pending
@@ -1141,7 +1157,18 @@ mod tests {
                 .unwrap(),
             root,
         };
+        let process = open(external.child.id(), &log).unwrap().unwrap();
+        let (created, actual_path) = identity(&process, &log).unwrap();
         let mut managed = ManagedCs2::new(log);
+        let snapshot = managed.mulnx_handoff_status().unwrap();
+        let observed = snapshot["processes"].as_array().unwrap().iter()
+            .find(|p| p["pid"] == external.child.id()).unwrap();
+        assert_eq!(observed["created"], created.to_string());
+        assert_eq!(observed["executable"], actual_path.to_string_lossy().as_ref());
+        assert_eq!(observed["managed"], false);
+        assert!(managed.store.load().unwrap().is_none());
+        assert!(managed.workspace_process().unwrap().is_none());
+        drop(process);
         assert!(external.child.try_wait().unwrap().is_none());
         assert!(managed.startup_recovery_status().unwrap().running);
         assert!(managed

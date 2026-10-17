@@ -1,3 +1,4 @@
+import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
 import { CameraDirector } from './orchestration/director.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
@@ -172,6 +173,7 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly mulnxCamPacksRoot?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
@@ -1068,6 +1070,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         manual: director.get().mode === 'manual',
       }),
       cameraEvidence,
+      undefined,
+      undefined,
+      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot, pack),
     );
     app.addHook('onReady', async () => {
       await cameraStore

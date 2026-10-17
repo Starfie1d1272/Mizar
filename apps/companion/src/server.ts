@@ -332,6 +332,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     hudConfigPath,
     hudConfigStore,
     obsConfigPath: join(captureDir, '..', 'obs.json'),
+    ...(process.env.MIZAR_MULNX_CAM_PACKS_ROOT
+      ? { mulnxCamPacksRoot: process.env.MIZAR_MULNX_CAM_PACKS_ROOT }
+      : {}),
     ...(qualificationMode
       ? {
           qualificationRunId,

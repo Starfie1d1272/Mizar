@@ -602,6 +602,26 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 }
 
 #[tauri::command]
+async fn mulnx_handoff_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let result = state.try_lock().map_err(|_| "CS2 正忙，请稍后检查。".to_string())?
+            .mulnx_handoff_status();
+        result
+    }).await.map_err(|_| "无法读取 CS2 进程身份。".to_string())?
+}
+
+#[tauri::command]
+fn open_mulnx_browser(log: tauri::State<'_, DesktopLog>, diagnostic_operation_id: Option<String>) -> Result<(), String> {
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = format!("{BASE}/\0").encode_utf16().collect();
+    let result = unsafe { ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+    let outcome = if result <= 32 { Err("浏览器未能打开，请访问 http://127.0.0.1:3000/ 。".into()) } else { Ok(()) };
+    log.native_outcome("open_mulnx_browser", diagnostic_operation_id.as_deref(), &outcome);
+    outcome
+}
+
+#[tauri::command]
 async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
@@ -1952,7 +1972,7 @@ fn run_desktop(
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "cs2_host_status", "cs2_config_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
+            if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),
@@ -1971,6 +1991,8 @@ fn run_desktop(
             finish_obs_configuration,
             read_obs_configuration_context,
             cs2_config_status,
+            mulnx_handoff_status,
+            open_mulnx_browser,
             start_managed_cs2,
             finish_managed_cs2,
             finish_workspace,

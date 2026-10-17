@@ -11,6 +11,7 @@ import {
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
+import { MulnxHandoff } from './MulnxHandoff';
 import { CameraControls } from './CameraControls';
 
 function Shot({
@@ -89,6 +90,7 @@ export function CameraSettings() {
     <Panel>
       <h2>地图自动编排</h2>
       <CameraControls setup />
+      <MulnxHandoff />
       <details>
         <summary>游戏内筛选</summary>
         <p>试播使用当前地图已保存的镜头；结束后仍保持人工模式。</p>
@@ -109,7 +111,11 @@ export function CameraSettings() {
         </Select>
         <Button
           disabled={
-            busy || !current?.ready || !current.status.connected || Boolean(current.status.current)
+            busy ||
+            !current?.ready ||
+            !current.status.connected ||
+            !current.status.isolated ||
+            Boolean(current.status.current)
           }
           onClick={() =>
             void action(async () => {
@@ -128,10 +134,10 @@ export function CameraSettings() {
             })
           }
         >
-          试播已保存镜头
+          确认活动隔离包并试播
         </Button>
       </details>
-      <p>先在 MulNX 选中本图运镜包。开场音效跟随实际开场画面；阶段音乐沿用上方配置。</p>
+      <p>先在 MulNX 载入本图专用隔离包。开场音效跟随实际开场画面；阶段音乐沿用上方配置。</p>
       {current && !current.ready ? (
         <StatusBanner tone="danger">运镜预设无法读取，请检查本机数据目录后重启服务。</StatusBanner>
       ) : null}
@@ -310,8 +316,10 @@ export function CameraSettings() {
           <details>
             <summary>联调说明</summary>
             <p>
-              连接与入队不能证明游戏已执行。每次换图或重连后，在游戏内确认地图、活动包和视角，再启用自动。接管及镜头时限会请求清空全部
-              MulNX 运镜槽，实际停止需在游戏内核对。
+              先用 prepare-pack 工具复制自有运镜包，再设置
+              MIZAR_MULNX_CAM_PACKS_ROOT。文件验证要求回合自动列表为空；MulNX
+              改写文件后须重新准备隔离包。连接与入队不能证明游戏已执行。每次换图或重连后，在游戏内确认地图、活动包和视角，再启用自动。接管及镜头时限会请求清空全部
+              MulNX 运镜槽，实际停止需在游戏内核对；此操作不会关闭上游自动列表。
             </p>
           </details>
         </>
