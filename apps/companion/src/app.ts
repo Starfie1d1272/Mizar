@@ -479,7 +479,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     done(null, payload);
   });
   options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
-    if (stage === 'business_live') sessionJournal?.record('website_live_evidence', evidence);
+    if (stage === 'business_live' || stage === 'original_error')
+      sessionJournal?.record(
+        stage === 'business_live' ? 'website_live_evidence' : 'website_original_error',
+        evidence,
+      );
     businessJournal?.write(stage, evidence);
   });
   app.addHook('onResponse', async (request, reply) => {

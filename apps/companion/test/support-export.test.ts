@@ -355,8 +355,10 @@ describe('support export', () => {
     });
     const connection = new RivalHubConnection(path, fetchImpl);
     const rawLiveEvidence: unknown[] = [];
+    const originalErrors: unknown[] = [];
     connection.setBusinessEvidenceHandler((stage, evidence) => {
       if (stage === 'business_live') rawLiveEvidence.push(evidence);
+      if (stage === 'original_error') originalErrors.push(evidence);
       journal.write(stage, evidence);
     });
     await connection.load();
@@ -430,6 +432,10 @@ describe('support export', () => {
     expect(
       events.some((e) => e.stage === 'business_live' && e.evidence.reason === 'receiver_accepted'),
     ).toBe(true);
+    expect(JSON.stringify(originalErrors)).toContain('private.example');
+    expect(JSON.stringify(originalErrors)).toContain('TypeError');
+    expect(JSON.stringify(originalErrors)).toContain('SyntaxError');
+    expect(JSON.stringify(originalErrors)).not.toContain(credential);
     const disk = await readFile(join(dir, BUSINESS_HISTORY_FILE), 'utf8');
     for (const text of [disk, JSON.stringify(readBusinessHistory(dir))]) {
       expect(text).not.toContain(credential);
