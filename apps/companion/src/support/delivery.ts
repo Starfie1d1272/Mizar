@@ -14,6 +14,8 @@ export const DELIVERY_LIMITS = {
   expandedBytes: 512 * 1024,
   compressedBytes: 128 * 1024,
   queueBytes: 32 * 1024 * 1024,
+  batches: 256,
+  manifestBytes: 256 * 1024,
   pendingBytes: 2 * 1024 * 1024,
   events: 512,
   sessions: 128,
@@ -158,7 +160,9 @@ export class DiagnosticDelivery {
     await safePath(this.queueDirectory);
     try {
       const value = JSON.parse(
-        (await secureRead(this.queueDirectory, 'state.json', 256 * 1024)).toString(),
+        (
+          await secureRead(this.queueDirectory, 'state.json', DELIVERY_LIMITS.manifestBytes)
+        ).toString(),
       ) as State;
       if (
         value.version !== 1 ||
@@ -166,7 +170,7 @@ export class DiagnosticDelivery {
         !Array.isArray(value.queue) ||
         !Array.isArray(value.withdrawals) ||
         !value.sessions ||
-        value.queue.length > 4096 ||
+        value.queue.length > DELIVERY_LIMITS.batches ||
         value.withdrawals.length > DELIVERY_LIMITS.tombstones ||
         Object.keys(value.sessions).length > DELIVERY_LIMITS.sessions ||
         !value.queue.every(
@@ -257,7 +261,10 @@ export class DiagnosticDelivery {
       0o600,
     );
     try {
-      await fd.writeFile(JSON.stringify(this.state));
+      const text = JSON.stringify(this.state);
+      if (Buffer.byteLength(text) > DELIVERY_LIMITS.manifestBytes)
+        throw new Error('manifest_budget');
+      await fd.writeFile(text);
       await fd.sync();
     } finally {
       await fd.close();
@@ -321,6 +328,16 @@ export class DiagnosticDelivery {
     if (!this.state.consent || this.closed || (this.recoveryNeeded && !recovering)) return;
     // Journal supplies an immutable, already-redacted durable record.
     const value = JSON.parse(line) as { startupSessionId: string; sequence: number; stage: string };
+    if (
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.startupSessionId) ||
+      !Number.isSafeInteger(value.sequence) ||
+      value.sequence < 1 ||
+      typeof value.stage !== 'string' ||
+      !/^[a-z][a-z0-9_]{0,63}$/.test(value.stage)
+    ) {
+      this.omitted('invalid_source_cursor');
+      return;
+    }
     const cursor = this.state.sessions[value.startupSessionId];
     if (
       !cursor ||
@@ -443,8 +460,9 @@ export class DiagnosticDelivery {
         continue;
       }
       if (
+        this.state.queue.length >= DELIVERY_LIMITS.batches ||
         this.state.queue.reduce((n, v) => n + v.bytes, 0) + compressed.length >
-        DELIVERY_LIMITS.queueBytes
+          DELIVERY_LIMITS.queueBytes
       ) {
         this.error = 'queue_budget_local_journal_retained';
         return;
