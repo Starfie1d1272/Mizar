@@ -1,5 +1,9 @@
 import {
   DIAGNOSTIC_BODY_LIFETIME_MS,
+  DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
+  DIAGNOSTIC_CLOCK_SKEW_MS,
+  diagnosticInstallationCreatedAt,
+  diagnosticAutomaticTimeReason,
   diagnosticPermitClaims,
   readDiagnosticGzipPermit,
   type DiagnosticUploadPermit,
@@ -49,13 +53,15 @@ async function permitRow(env: Env, payload: string) {
   return sql(
     env,
     `SELECT lower(hex(installation_id)) AS installation_hex, installation_created_at, consent_revision,
-    issued_at, lower(hex(wire_sha256)) AS wire_hex FROM upload_permits WHERE payload_sha256=?`,
+    issued_at, payload_created_at, retire_at, lower(hex(wire_sha256)) AS wire_hex FROM upload_permits WHERE payload_sha256=?`,
     binaryId(payload),
   ).first<{
     installation_hex: string;
     installation_created_at: number;
     consent_revision: string;
     issued_at: number;
+    payload_created_at: number;
+    retire_at: number;
     wire_hex: string;
   }>();
 }
@@ -91,8 +97,11 @@ function equal(left: string, right: string) {
     different |= left.charCodeAt(index) ^ right.charCodeAt(index);
   return different === 0;
 }
-async function issued(env: Env, id: string, now: number) {
-  const expiresAt = now + 30 * DAY;
+async function issued(env: Env, id: string, now: number, deletion = false) {
+  const birth = diagnosticInstallationCreatedAt(id);
+  const expiresAt = deletion
+    ? now + 30 * DAY
+    : Math.min(now + 30 * DAY, (birth ?? 0) + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS);
   const claims = `${id}.${Math.floor(expiresAt / 1000)}`;
   return {
     installationId: id,
@@ -111,6 +120,14 @@ async function authenticate(request: Request, env: Env, now: number, allowRevoke
     !uuid.test(parts[0]!) ||
     !/^\d{10}$/.test(parts[1]!) ||
     Number(parts[1]) * 1000 <= now
+  )
+    return null;
+  const birth = diagnosticInstallationCreatedAt(parts[0]!);
+  if (
+    !allowRevoked &&
+    (birth === null ||
+      birth > now + DIAGNOSTIC_CLOCK_SKEW_MS ||
+      birth + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS <= now)
   )
     return null;
   const expected = base64(await mac(env.INGEST_SIGNING_KEY, `${parts[0]}.${parts[1]}`));
@@ -288,6 +305,19 @@ async function enroll(request: Request, env: Env, now: number) {
   )
     return json({ error: 'enrollment_proof_required' }, 400);
   const id = value.enrollmentId;
+  const deletion = value.deletion === true;
+  const birth = diagnosticInstallationCreatedAt(id);
+  if (!deletion) {
+    const reason =
+      birth === null
+        ? 'installation_identity_unverifiable'
+        : birth > now + DIAGNOSTIC_CLOCK_SKEW_MS
+          ? 'installation_clock_future'
+          : birth + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS <= now
+            ? 'installation_lease_closed'
+            : null;
+    if (reason) return json({ error: reason }, 410);
+  }
   const proof = await hash(encoder.encode(value.enrollmentSecret));
   const prior = await sql(
     env,
@@ -297,8 +327,19 @@ async function enroll(request: Request, env: Env, now: number) {
   // Proof holders can renew a deletion token; renewal never clears revocation.
   if (prior)
     return equal(prior.proof_sha256, proof)
-      ? json(await issued(env, id, now))
+      ? json(await issued(env, id, now, deletion))
       : json({ error: 'enrollment_conflict' }, 409);
+  if (deletion) {
+    const orphan = await sql(
+      env,
+      `SELECT 1 AS present FROM batches WHERE installation_id=? UNION ALL SELECT 1 FROM sessions WHERE installation_id=? LIMIT 1`,
+      id,
+      id,
+    ).first();
+    return orphan
+      ? json({ error: 'deletion_unconfirmed' }, 503)
+      : json({ installationId: id, revoked: true, deletion: 'complete', closed: true });
+  }
   if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
   if (!(await withinDatabaseBudget(env))) return json({ error: 'index_allocation_budget' }, 503);
   const day = Math.floor(now / DAY);
@@ -306,11 +347,12 @@ async function enroll(request: Request, env: Env, now: number) {
   const result = await env.DIAGNOSTICS_DB.batch([
     sql(
       env,
-      `INSERT OR IGNORE INTO installations(id,proof_sha256,created_at)
-      SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM daily WHERE day=? AND registrations<?)`,
+      `INSERT OR IGNORE INTO installations(id,proof_sha256,created_at,lease_expires_at)
+      SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM daily WHERE day=? AND registrations<?)`,
       id,
       proof,
       now,
+      birth! + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
       day,
       budget(env.DAILY_REGISTRATIONS),
     ),
@@ -360,7 +402,8 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     firstPermit.installation_hex !== installation.replaceAll('-', '') ||
     firstPermit.installation_created_at !== sealed.permit.installationCreatedAt ||
     firstPermit.consent_revision !== sealed.permit.consentRevision ||
-    firstPermit.issued_at !== sealed.permit.issuedAt
+    firstPermit.issued_at !== sealed.permit.issuedAt ||
+    firstPermit.payload_created_at !== sealed.permit.payloadCreatedAt
   )
     return json({ error: 'invalid_batch_permit' }, 400);
   if (firstPermit.wire_hex && firstPermit.wire_hex !== id)
@@ -718,15 +761,21 @@ export async function cleanup(env: Env, now = Date.now()) {
     WHERE i.revoked_at IS NOT NULL LIMIT 100)`,
   ).run();
   await sql(env, 'DELETE FROM daily WHERE day<?', Math.floor(now / DAY) - 2).run();
-  // Revoked identities retain only the minimal authentication fence under the
-  // database allocation budget. Removing it could revive an old enrollment proof.
-  // Installations with unresolved writers also remain fenced.
+  // The fixed timestamp in UUIDv7 closes old enrollment proofs after 90 days.
+  // Keep ownership only while its bounded session index/body still needs it;
+  // a genuinely unresolved writer remains quarantined, never falsely complete.
   await sql(
     env,
-    `DELETE FROM installations WHERE rowid IN (SELECT rowid FROM installations WHERE created_at<? AND revoked_at IS NULL
+    `DELETE FROM installations WHERE rowid IN (SELECT rowid FROM installations WHERE lease_expires_at<=?
     AND NOT EXISTS(SELECT 1 FROM batches WHERE installation_id=installations.id)
     AND NOT EXISTS(SELECT 1 FROM sessions WHERE installation_id=installations.id) LIMIT 100)`,
-    now - LIMITS.indexDays * DAY,
+    now,
+  ).run();
+  await sql(
+    env,
+    `DELETE FROM upload_permits WHERE payload_sha256 IN (
+    SELECT payload_sha256 FROM upload_permits WHERE retire_at<=? ORDER BY retire_at LIMIT 100)`,
+    now,
   ).run();
   return { visited: results.length, unresolvedWriters: unresolved.results.length };
 }
@@ -950,6 +999,9 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
         installation,
       ).first<{ created_at: number }>();
       if (!owner) return json({ error: 'unauthorized' }, 401);
+      const payloadCreatedAt = Number(request.headers.get('x-diagnostics-created-at'));
+      const clockReason = diagnosticAutomaticTimeReason(payloadCreatedAt, now);
+      if (clockReason) return json({ error: clockReason }, 410);
       const payload = permitMatch[1]!;
       let first = await permitRow(env, payload);
       if (!first) {
@@ -964,14 +1016,16 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
         const reservation = await env.DIAGNOSTICS_DB.batch([
           sql(
             env,
-            `INSERT OR IGNORE INTO upload_permits(payload_sha256,installation_id,installation_created_at,consent_revision,issued_at)
-            SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL
+            `INSERT OR IGNORE INTO upload_permits(payload_sha256,installation_id,installation_created_at,consent_revision,issued_at,payload_created_at,retire_at)
+            SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL
               AND (quota_day!=? OR quota_permits<?)) AND EXISTS(SELECT 1 FROM daily WHERE day=? AND permits<?)`,
             binaryId(payload),
             binaryId(installation),
             owner.created_at,
             DIAGNOSTIC_CONSENT_REVISION,
             now,
+            payloadCreatedAt,
+            payloadCreatedAt + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
             installation,
             owner.created_at,
             day,
@@ -1000,19 +1054,21 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
         !first ||
         first.installation_hex !== installation.replaceAll('-', '') ||
         first.installation_created_at !== owner.created_at ||
-        first.consent_revision !== DIAGNOSTIC_CONSENT_REVISION
+        first.consent_revision !== DIAGNOSTIC_CONSENT_REVISION ||
+        first.payload_created_at !== payloadCreatedAt
       )
         return json({ error: 'payload_identity_conflict' }, 409);
-      if (first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS <= now)
+      if (Math.min(first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS, first.retire_at) <= now)
         return json({ error: 'batch_retention_expired' }, 410);
       const claims: Omit<DiagnosticUploadPermit, 'signature'> = {
-        schema: 'mizar-diagnostic-permit/1',
+        schema: 'mizar-diagnostic-permit/2',
         installationId: installation,
         installationCreatedAt: first.installation_created_at,
         consentRevision: DIAGNOSTIC_CONSENT_REVISION,
         payloadSha256: payload,
+        payloadCreatedAt: first.payload_created_at,
         issuedAt: first.issued_at,
-        expiresAt: first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS,
+        expiresAt: Math.min(first.issued_at + DIAGNOSTIC_BODY_LIFETIME_MS, first.retire_at),
       };
       return json({
         ...claims,

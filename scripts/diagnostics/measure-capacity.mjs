@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { meteredRuntime } from './capacity-runtime.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
 import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { URL, fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { performance } from 'node:perf_hooks';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { strict as assert } from 'node:assert';
 import { setImmediate as yieldIO } from 'node:timers/promises';
@@ -18,7 +19,12 @@ import {
   decodeDiagnosticBatch,
 } from '../../apps/companion/src/support/delivery.ts';
 import { runtime, migrate, bindings } from '../../tests/diagnostics/fixture.ts';
-import { sealDiagnosticGzip } from '../../packages/protocol/src/diagnostics-upload.ts';
+import {
+  sealDiagnosticGzip,
+  stampDiagnosticGzip,
+  diagnosticGzipCreatedAt,
+  diagnosticInstallationId,
+} from '../../packages/protocol/src/diagnostics-upload.ts';
 const { fetch, Headers, structuredClone } = globalThis;
 const fixture = JSON.parse(
   await readFile(new URL('./fixtures/capacity-producers.json', import.meta.url), 'utf8'),
@@ -389,17 +395,24 @@ async function cloud(directory, profileResult, faultResult) {
   const users = [];
   const checkpoints = [];
   const starts = performance.now();
+  const retainedDirectory = join(root, 'retained-refusals');
+  await mkdir(retainedDirectory);
+  const refusals = [];
+  let acceptedBatches = 0,
+    acceptedSessions = 0,
+    auditedSessions = 0;
+  const expiryNow = Date.now() + 181 * 86400_000;
   try {
     const registrationTotals = Object.fromEntries(Object.keys(counts).map((k) => [k, 0]));
     for (let group = 0; group < 10; group++) {
       const current = [];
       for (let offset = 0; offset < 10; offset++) {
-        const installation = randomUUID();
+        const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
         const before = await snapshot();
         const enroll = await call('/v1/diagnostics/enroll', {
           method: 'POST',
           body: JSON.stringify({
-            consent: 'technical-diagnostics-v2',
+            consent: 'technical-diagnostics-v3',
             enrollmentId: installation,
             enrollmentSecret: hash('public-secret-' + installation),
           }),
@@ -424,11 +437,29 @@ async function cloud(directory, profileResult, faultResult) {
               );
               const oldSession = original.events[0].startupSessionId;
               const plain = Buffer.from(JSON.stringify(original).replaceAll(oldSession, session));
-              const raw = gzipSync(plain);
+              const raw = Buffer.from(stampDiagnosticGzip(gzipSync(plain), Date.now()));
               const issue = await call('/v1/diagnostics/permits/' + hash(raw), {
                 method: 'POST',
-                headers: { authorization: 'Bearer ' + identity.token },
+                headers: {
+                  authorization: 'Bearer ' + identity.token,
+                  'x-diagnostics-created-at': String(diagnosticGzipCreatedAt(raw)),
+                },
               });
+              if (issue.status === 429) {
+                const reason = await issue.json();
+                assert.equal(reason.error, 'permit_budget');
+                const id = hash(raw);
+                await writeFile(join(retainedDirectory, id + '.gz'), raw);
+                refusals.push({
+                  id,
+                  installation,
+                  session,
+                  bytes: raw.length,
+                  expandedBytes: plain.length,
+                  reason: reason.error,
+                });
+                continue;
+              }
               assert.equal(issue.status, 200);
               const permit = await issue.json();
               const bytes = Buffer.from(sealDiagnosticGzip(raw, permit));
@@ -451,10 +482,13 @@ async function cloud(directory, profileResult, faultResult) {
               const accepted = await call('/v1/diagnostics/batches/' + id, init);
               assert.equal(accepted.status, 200);
               assert.equal((await accepted.json()).batchId, id);
-              if (i === 0) first = { id, init };
+              acceptedBatches++;
+              first ??= { id, init };
               expanded += plain.length;
               compressed += bytes.length;
             }
+            if (!first) continue;
+            acceptedSessions++;
             const beforeReplay = await db
               .prepare(
                 'SELECT object_key,received_at,expires_at FROM batches WHERE installation_id=? AND id=?',
@@ -483,6 +517,7 @@ async function cloud(directory, profileResult, faultResult) {
             const body = Buffer.from(await downloaded.arrayBuffer());
             assert.equal(hash(body), first.id);
             assert((await decodeDiagnosticBatch(body)).events.length > 0);
+            auditedSessions++;
           }
           users.push({ installation, expanded, compressed });
         }),
@@ -500,14 +535,18 @@ async function cloud(directory, profileResult, faultResult) {
           )
           .first();
         assert.equal(isolation.count, 0);
-        assert.equal(dimensions.sessions, userCount * 4);
-        assert.equal(dimensions.batches, userCount * totalBatchesPerInstallation);
+        assert.equal(dimensions.sessions, acceptedSessions);
+        assert.equal(dimensions.batches, acceptedBatches);
+        assert.equal(acceptedBatches + refusals.length, userCount * totalBatchesPerInstallation);
         checkpoints.push({
           users: userCount,
           hoursPerUser: 6,
           sessionsPerUser: 4,
           faultBurstsPerUser: 1,
           actualDimensions: dimensions,
+          offeredBatches: userCount * totalBatchesPerInstallation,
+          refusedRetainedBatches: refusals.length,
+          cloudComplete: refusals.length === 0,
           total: await snapshot(),
           isolationVerified: true,
         });
@@ -537,15 +576,151 @@ async function cloud(directory, profileResult, faultResult) {
       )
       .first();
     assert.equal(remaining.batches, 0);
-    assert.equal(remaining.sessions, 400);
-    assert.equal(remaining.permits, 100 * totalBatchesPerInstallation);
+    assert.equal(remaining.sessions, acceptedSessions);
+    assert.equal(remaining.permits, acceptedBatches);
+    // Reopen exact refused bytes rather than dropping a saturated model input.
+    await writeFile(join(retainedDirectory, 'manifest.json'), JSON.stringify(refusals));
+    const recovered = JSON.parse(await readFile(join(retainedDirectory, 'manifest.json'), 'utf8'));
+    for (const item of recovered) {
+      const raw = await readFile(join(retainedDirectory, item.id + '.gz'));
+      assert.equal(hash(raw), item.id);
+      assert.equal(gunzipSync(raw).length, item.expandedBytes);
+    }
+    const beforeFiniteCleanup = await snapshot();
+    let finitePages = 0;
+    for (
+      let page = 0;
+      page < Math.ceil(Math.max(acceptedBatches, acceptedSessions) / 100) + 2;
+      page++
+    ) {
+      const response = await fetch(endpoint + '/__test/cleanup?now=' + expiryNow, {
+        method: 'POST',
+      });
+      assert.equal(response.status, 200);
+      await response.json();
+      finitePages++;
+    }
+    const finiteCleanupCost = difference(await snapshot(), beforeFiniteCleanup);
+    const finalRows = await db
+      .prepare(
+        'SELECT (SELECT COUNT(*) FROM installations) installations,(SELECT COUNT(*) FROM sessions) sessions,(SELECT COUNT(*) FROM batches) batches,(SELECT COUNT(*) FROM upload_permits) permits',
+      )
+      .first();
+    assert.deepEqual(finalRows, { installations: 0, sessions: 0, batches: 0, permits: 0 });
+    // Meter the destructive path separately while a real body and index exist.
+    // This is an isolated public installation, not a reused/expired cohort owner.
+    const maintenanceOwner = diagnosticInstallationId(Date.now(), randomBytes(16));
+    const enrolled = await call('/v1/diagnostics/enroll', {
+      method: 'POST',
+      body: JSON.stringify({
+        consent: 'technical-diagnostics-v3',
+        enrollmentId: maintenanceOwner,
+        enrollmentSecret: hash('public-maintenance-proof'),
+      }),
+    });
+    assert.equal(enrolled.status, 200);
+    const maintenanceIdentity = await enrolled.json();
+    const maintenanceRaw = Buffer.from(
+      stampDiagnosticGzip(
+        gzipSync(
+          JSON.stringify({
+            schema: 'mizar-technical-diagnostics/1',
+            events: [
+              { stage: 'normal_operation', evidence: { result: 'public cleanup evidence' } },
+            ],
+          }),
+        ),
+        Date.now(),
+      ),
+    );
+    const issued = await call('/v1/diagnostics/permits/' + hash(maintenanceRaw), {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + maintenanceIdentity.token,
+        'x-diagnostics-created-at': String(diagnosticGzipCreatedAt(maintenanceRaw)),
+      },
+    });
+    assert.equal(issued.status, 200);
+    const maintenanceWire = Buffer.from(sealDiagnosticGzip(maintenanceRaw, await issued.json()));
+    const maintenanceId = hash(maintenanceWire);
+    const maintenanceUpload = await call('/v1/diagnostics/batches/' + maintenanceId, {
+      method: 'PUT',
+      body: maintenanceWire,
+      headers: {
+        authorization: 'Bearer ' + maintenanceIdentity.token,
+        'content-type': 'application/gzip',
+        'x-content-sha256': maintenanceId,
+        'x-diagnostics-index': JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: 1,
+          expandedBytes: 256,
+          stages: ['normal_operation'],
+          sessionId: randomUUID(),
+        }),
+      },
+    });
+    assert.equal(maintenanceUpload.status, 200);
+    await maintenanceUpload.json();
+    const beforeWithdrawal = await snapshot();
+    const withdrawn = await call('/v1/diagnostics/installation', {
+      method: 'DELETE',
+      headers: { authorization: 'Bearer ' + maintenanceIdentity.token },
+    });
+    assert.equal(withdrawn.status, 200);
+    assert.deepEqual(await withdrawn.json(), {
+      installationId: maintenanceOwner,
+      revoked: true,
+      deletion: 'complete',
+    });
+    const withdrawalCost = difference(await snapshot(), beforeWithdrawal);
+    const afterWithdrawal = await db
+      .prepare(
+        'SELECT (SELECT COUNT(*) FROM batches) bodies,(SELECT COUNT(*) FROM sessions) sessions',
+      )
+      .first();
+    assert.deepEqual(afterWithdrawal, { bodies: 0, sessions: 0 });
+    const maintenanceCleanup = await fetch(endpoint + '/__test/cleanup?now=' + expiryNow, {
+      method: 'POST',
+    });
+    assert.equal(maintenanceCleanup.status, 200);
+    await maintenanceCleanup.json();
     const health = await call('/admin/health', {
       method: 'GET',
       headers: { authorization: 'Bearer ' + bindings.ADMIN_KEY },
     });
     const healthBody = await health.json();
+    const allocation = steadyAllocation(
+      await readFile(
+        new URL('../../apps/diagnostics-worker/migrations/0001_diagnostics.sql', import.meta.url),
+        'utf8',
+      ),
+      root,
+      {
+        sessionsPerDay: acceptedSessions,
+        meanCompressedBytes: Math.round(
+          users.reduce((n, x) => n + x.compressed, 0) / acceptedBatches,
+        ),
+        metadata: JSON.stringify(source[0].index),
+      },
+    );
     const output = {
       schema: 'mizar-final-cloud-capacity/1',
+      steadyAllocation: allocation,
+      withdrawal: { cost: withdrawalCost, remaining: afterWithdrawal, actualCompleteAck: true },
+      steadyDailyCost: {
+        scope:
+          'one complete measured cohort lifecycle amortized per day at steady retention, plus a conservative additional 100 measured one-body withdrawals; not account totals or other apps',
+        rowsRead:
+          uploadTotals.rowsRead +
+          cleanupCost.rowsRead +
+          finiteCleanupCost.rowsRead +
+          100 * withdrawalCost.rowsRead,
+        rowsWritten:
+          uploadTotals.rowsWritten +
+          cleanupCost.rowsWritten +
+          finiteCleanupCost.rowsWritten +
+          100 * withdrawalCost.rowsWritten,
+      },
       scope:
         'production handler over real HTTP with native local workerd R2 and SQLite D1 metered row metadata; rate limiter bypassed only for accelerated 100-user storage replay, separately tested actual shared-IP limiter; ten concurrent HTTP clients per group, three daily two-hour normal sessions plus one 6000-error burst per installation and one private body audit per session; one actual collector profile cloned with distinct installation/session identities, not 100 real CS2 computers, not deployed cloud CPU/request throughput',
       profile: {
@@ -562,11 +737,30 @@ async function cloud(directory, profileResult, faultResult) {
       registrationAndIndexTotal,
       registrationTotals,
       cleanup: { invocations: cleaned, cost: cleanupCost, remaining },
+      finiteCleanup: {
+        invocations: finitePages,
+        cost: finiteCleanupCost,
+        remaining: finalRows,
+        atDays: 181,
+      },
+      offeredBatches: 100 * totalBatchesPerInstallation,
+      refusalRetention: {
+        batches: refusals.length,
+        bytes: refusals.reduce((n, x) => n + x.bytes, 0),
+        allOriginalShaReopened: true,
+        cloudComplete: refusals.length === 0,
+        scope:
+          'raw payload files and refusal manifest persisted/reopened in isolated measurement directory; production outbox retry/restart separately exercised by sharedIp',
+      },
+      database: {
+        allocatedBytes: healthBody.d1AllocatedBytes,
+        allocationIncludesReusedFreePages: true,
+      },
       health: healthBody,
       retries: {
-        sameIdentityPerUser: 4,
+        sameIdentityAuditsTotal: auditedSessions,
         retentionClockUnchanged: true,
-        noExtraObjectWrites: registrationAndIndexTotal.put === totalBatchesPerInstallation * 100,
+        noExtraObjectWrites: registrationAndIndexTotal.put === acceptedBatches,
       },
       wallMs: performance.now() - starts,
       externalAccountRequests: 0,
@@ -575,6 +769,90 @@ async function cloud(directory, profileResult, faultResult) {
   } finally {
     await mf.dispose();
     await rm(root, { recursive: true, force: true });
+  }
+}
+
+function steadyAllocation(schema, directory, model) {
+  // Physical SQLite allocation of the exact schema, not a remote D1 billing claim.
+  // Fixed-budget permits/body locators and measured daily session cardinality.
+  const database = new DatabaseSync(join(directory, 'steady-allocation.sqlite'));
+  try {
+    database.exec(schema);
+    const permits = 4800 * 90;
+    const bodies = 4800 * 7;
+    const sessions = model.sessionsPerDay * 90;
+    const owners = 200 * 180; // Maximum configured new identities over a full index horizon.
+    const permit = database.prepare('INSERT INTO upload_permits VALUES(?,?,?,?,?,?,?,?)');
+    const installation = database.prepare(
+      'INSERT INTO installations(id,proof_sha256,created_at,lease_expires_at) VALUES(?,?,?,?)',
+    );
+    const body = database.prepare('INSERT INTO batches VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+    const session = database.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    const ownerBytes = Buffer.alloc(16, 1);
+    database.exec('BEGIN');
+    for (let i = 0; i < owners; i++)
+      installation.run('public-owner-' + i, 'a'.repeat(64), i, 90 * 86400_000 + i);
+    for (let i = 0; i < permits; i++) {
+      const digest = Buffer.alloc(32);
+      digest.writeUInt32LE(i);
+      permit.run(
+        digest,
+        ownerBytes,
+        1,
+        'technical-diagnostics-v3',
+        1,
+        1,
+        90 * 86400_000,
+        Buffer.alloc(32, 2),
+      );
+    }
+    for (let i = 0; i < bodies; i++)
+      body.run(
+        'public-owner-' + (i % owners),
+        String(i).padStart(64, '0'),
+        'v1/' + String(i).padStart(64, '0') + '.gz',
+        'public-writer',
+        'ready',
+        0,
+        0,
+        model.meanCompressedBytes,
+        1,
+        7 * 86400_000,
+        model.metadata,
+      );
+    for (let i = 0; i < sessions; i++)
+      session.run(
+        'public-owner-' + (i % owners),
+        String(i).padStart(36, '0'),
+        1,
+        1,
+        '2026-10-17T00:00:00.000Z',
+        '2026-10-17T02:00:00.000Z',
+        '1.4.0',
+        100,
+        1,
+        '["operation_failed"]',
+        0,
+        16,
+        2000000,
+        90 * 86400_000,
+      );
+    database.exec('COMMIT');
+    const allocatedBytes =
+      Number(database.prepare('PRAGMA page_count').get().page_count) *
+      Number(database.prepare('PRAGMA page_size').get().page_size);
+    return {
+      scope:
+        'actual local SQLite allocation of exact migration; 4800/day permits and body locators, measured session cardinality, maximum configured owner registration horizon; modeled row contents, not account allocation, cloud CPU or billing',
+      permits,
+      bodies,
+      sessions,
+      owners,
+      allocatedBytes,
+      withinProposed400MB: allocatedBytes < 400000000,
+    };
+  } finally {
+    database.close();
   }
 }
 
@@ -654,10 +932,15 @@ async function sharedIp(directory, policies) {
           }
         }
         assert(bearer);
+        const warmCreatedAt = Math.floor(Date.now() / 1000) * 1000;
         for (let i = 0; i < 400; i++) {
           const response = await fetch(endpoint + '/v1/diagnostics/permits/' + 'f'.repeat(64), {
             method: 'POST',
-            headers: { authorization: 'Bearer ' + bearer, 'cf-connecting-ip': '192.0.2.7' },
+            headers: {
+              authorization: 'Bearer ' + bearer,
+              'cf-connecting-ip': '192.0.2.7',
+              'x-diagnostics-created-at': String(warmCreatedAt),
+            },
           });
           await response.arrayBuffer();
           if (response.status === 200) warm.accepted++;

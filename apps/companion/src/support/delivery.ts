@@ -1,5 +1,11 @@
 import {
   DIAGNOSTIC_PERMIT_BYTES,
+  DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
+  diagnosticInstallationId,
+  diagnosticInstallationCreatedAt,
+  diagnosticGzipCreatedAt,
+  diagnosticAutomaticTimeReason,
+  stampDiagnosticGzip,
   diagnosticPermit,
   sealDiagnosticGzip,
 } from '@mizar/protocol/diagnostics-upload';
@@ -43,6 +49,7 @@ interface Batch {
   id: string;
   bytes: number;
   serverExpired?: boolean;
+  unavailableReason?: string;
   sealed?: boolean;
   index: {
     schema: string;
@@ -61,17 +68,19 @@ interface Batch {
 export interface RetainedDiagnosticBatch {
   id: string | null;
   sourceBytes: number;
+  automaticDelivery?: { blocked: boolean; reason?: string };
   gzip?: Buffer;
   error?: unknown;
 }
 interface State {
   version: 1;
-  consentPolicy: 1 | 2;
+  consentPolicy: 1 | 2 | 3;
   consent: boolean;
   paused: boolean;
   consentAt: string | null;
   credentials: Credentials | null;
   withdrawals: Credentials[];
+  retiredIdentities: Credentials[];
   sessions: Record<string, { from: number; queued: number }>;
   queue: Batch[];
   omitted: number;
@@ -98,12 +107,13 @@ const credentialsSchema = z
 const stateSchema = z
   .object({
     version: z.literal(1),
-    consentPolicy: z.union([z.literal(1), z.literal(2)]).default(1),
+    consentPolicy: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
     consent: z.boolean(),
     paused: z.boolean().default(false),
     consentAt: z.iso.datetime().nullable(),
     credentials: credentialsSchema.nullable(),
     withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
+    retiredIdentities: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones).default([]),
     sessions: z.record(
       identifier,
       z.object({ from: counter, queued: counter }).refine((v) => v.queued >= v.from),
@@ -114,6 +124,16 @@ const stateSchema = z
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
           serverExpired: z.boolean().optional(),
+          unavailableReason: z
+            .enum([
+              'installation_lease_closed',
+              'server_retention_expired',
+              'batch_retention_expired',
+              'automatic_window_expired',
+              'payload_clock_future',
+              'payload_creation_time_missing',
+            ])
+            .optional(),
           sealed: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
@@ -148,6 +168,10 @@ const stateSchema = z
   .refine(
     (v) =>
       Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
+      v.withdrawals.length +
+        v.retiredIdentities.length +
+        (v.credentials && (v.credentials.enrollmentAttempted || v.credentials.token) ? 1 : 0) <=
+        DELIVERY_LIMITS.tombstones &&
       v.queue.reduce((n, b) => n + b.bytes, 0) <=
         DELIVERY_LIMITS.queueBytes + DELIVERY_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
       (!v.consent || v.credentials !== null),
@@ -185,12 +209,13 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 }
 const initial = (): State => ({
   version: 1,
-  consentPolicy: 2,
+  consentPolicy: 3,
   consent: false,
   paused: false,
   consentAt: null,
   credentials: null,
   withdrawals: [],
+  retiredIdentities: [],
   sessions: {},
   queue: [],
   omitted: 0,
@@ -519,9 +544,13 @@ export class DiagnosticDelivery {
         if (this.fences.size >= 64) throw new Error('revocation_marker_budget');
         this.fences.set(entry.name, Promise.resolve());
       }
-    // The ninety-day identifiable index needs fresh consent, not an implicit
-    // extension of the earlier seven-day-body-only disclosure.
-    if (this.state.consent && this.state.consentPolicy !== 2) {
+    // Finite automatic delivery and rotating identities require the current
+    // explicit disclosure. Earlier policies never silently migrate consent.
+    if (
+      this.state.consent &&
+      (this.state.consentPolicy !== 3 ||
+        diagnosticInstallationCreatedAt(this.state.credentials?.installationId ?? '') === null)
+    ) {
       const name = `consent-revoked-${randomUUID()}.flag`;
       await this.createFence(name);
       this.fences.set(name, Promise.resolve());
@@ -529,6 +558,12 @@ export class DiagnosticDelivery {
     }
     if (this.fences.size) {
       this.revocationFenced = true;
+      for (const retired of this.state.retiredIdentities)
+        if (
+          !this.state.withdrawals.some((value) => value.installationId === retired.installationId)
+        )
+          this.state.withdrawals.push(retired);
+      this.state.retiredIdentities = [];
       if (
         this.state.credentials &&
         (this.state.credentials.enrollmentAttempted || this.state.credentials.token) &&
@@ -597,6 +632,7 @@ export class DiagnosticDelivery {
       omissionReasons: this.state.omissionReasons,
       acknowledged: this.state.acknowledged,
       deletionPending: this.state.withdrawals.length,
+      retiredIdentityCount: this.state.retiredIdentities.length,
       nextAttemptAt: this.state.nextAttemptAt,
       failures: this.state.failures,
       error: this.error,
@@ -680,14 +716,17 @@ export class DiagnosticDelivery {
       if (enabled && epoch !== this.epoch) return this.status();
       if (enabled) {
         if (this.state.consent && !this.revocationFenced) return this.status();
-        if (this.state.withdrawals.length >= DELIVERY_LIMITS.tombstones)
+        if (
+          this.state.withdrawals.length + this.state.retiredIdentities.length >=
+          DELIVERY_LIMITS.tombstones
+        )
           throw new Error('withdrawal_sync_required');
         const previous = structuredClone(this.state);
         this.state.consent = true;
-        this.state.consentPolicy = 2;
+        this.state.consentPolicy = 3;
         this.state.consentAt = new Date(this.now()).toISOString();
         this.state.credentials = {
-          installationId: randomUUID(),
+          installationId: diagnosticInstallationId(this.now(), randomBytes(16)),
           enrollmentSecret: randomBytes(32).toString('hex'),
         };
         this.state.sessions = {};
@@ -712,6 +751,12 @@ export class DiagnosticDelivery {
       } else {
         await fence;
         const prior = this.state.credentials;
+        for (const retired of this.state.retiredIdentities)
+          if (
+            !this.state.withdrawals.some((value) => value.installationId === retired.installationId)
+          )
+            this.state.withdrawals.push(retired);
+        this.state.retiredIdentities = [];
         this.state.consent = false;
         if (
           prior &&
@@ -913,7 +958,7 @@ export class DiagnosticDelivery {
           events,
         }),
       );
-      let compressed = await compress(raw);
+      let compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
       while (
         selected.length > 1 &&
         (compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
@@ -932,7 +977,7 @@ export class DiagnosticDelivery {
             events,
           }),
         );
-        compressed = await compress(raw);
+        compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
       }
       if (!this.consentActive() || epoch !== this.epoch) return;
       if (
@@ -1023,7 +1068,7 @@ export class DiagnosticDelivery {
       await yieldIO();
     }
   }
-  private async credentials(value: Credentials, signal: AbortSignal) {
+  private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
     value.enrollmentAttempted = true;
     await this.transaction(() => this.save());
@@ -1037,10 +1082,25 @@ export class DiagnosticDelivery {
         consent: CONSENT,
         enrollmentId: value.installationId,
         enrollmentSecret: value.enrollmentSecret,
+        deletion,
       }),
     });
     const responseData = await responseJson(response, signal);
     if (!response.ok) throw transportReceiptError('enrollment', response.status, responseData);
+    const closed = responseData as {
+      installationId?: unknown;
+      closed?: unknown;
+      revoked?: unknown;
+      deletion?: unknown;
+    };
+    if (
+      deletion &&
+      closed.installationId === value.installationId &&
+      closed.closed === true &&
+      closed.revoked === true &&
+      closed.deletion === 'complete'
+    )
+      return null;
     const data = responseData as {
       installationId: string;
       token: string;
@@ -1059,8 +1119,75 @@ export class DiagnosticDelivery {
     value.expiresAt = data.expiresAt;
     return data.token;
   }
+  private async renewExpiredInstallation() {
+    // Keep deletion ownership for the old identity's remaining ninety-day index.
+    // Past its maximum index age, ask the server to confirm closure; do not infer
+    // completion from local time when a crashed writer might still be pending.
+    const aged = this.state.retiredIdentities.filter((value) => {
+      const created = diagnosticInstallationCreatedAt(value.installationId);
+      return created !== null && created + 2 * DIAGNOSTIC_AUTOMATIC_LIFETIME_MS <= this.now();
+    });
+    if (aged.length) {
+      const previous = structuredClone(this.state);
+      for (const identity of aged)
+        if (
+          !this.state.withdrawals.some((value) => value.installationId === identity.installationId)
+        )
+          this.state.withdrawals.push(identity);
+      this.state.retiredIdentities = this.state.retiredIdentities.filter(
+        (value) => !aged.includes(value),
+      );
+      try {
+        await this.save();
+      } catch (error) {
+        this.state = previous;
+        throw error;
+      }
+    }
+    const identity = this.state.credentials;
+    if (!this.consentActive() || !identity) return;
+    const birth = diagnosticInstallationCreatedAt(identity.installationId);
+    if (birth !== null && birth + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS > this.now()) return;
+    if (
+      this.state.retiredIdentities.length + this.state.withdrawals.length >=
+      DELIVERY_LIMITS.tombstones - 1
+    ) {
+      this.error = 'retired_identity_sync_required';
+      return;
+    }
+    const previous = structuredClone(this.state);
+    if (identity.enrollmentAttempted || identity.token) this.state.retiredIdentities.push(identity);
+    let retained = 0;
+    for (const batch of this.state.queue)
+      if (!batch.serverExpired) {
+        batch.serverExpired = true;
+        batch.unavailableReason = 'installation_lease_closed';
+        this.omitted('installation_lease_closed', batch.index.events);
+        retained++;
+      }
+    this.state.credentials = {
+      installationId: diagnosticInstallationId(this.now(), randomBytes(16)),
+      enrollmentSecret: randomBytes(32).toString('hex'),
+    };
+    this.state.nextAttemptAt = 0;
+    this.state.failures = 0;
+    try {
+      await this.save();
+    } catch (error) {
+      this.state = previous;
+      throw error;
+    }
+    this.journal.record('diagnostic_installation_renewed', {
+      previousInstallationId: identity.installationId,
+      installationId: this.state.credentials.installationId,
+      retainedBatches: retained,
+      reason: 'installation_lease_closed',
+      oldCopies: 'retained locally for manual export; not acknowledged or re-signed',
+    });
+  }
   async tick(forceCollection = true) {
     await this.transaction(async () => {
+      await this.renewExpiredInstallation();
       const collecting = forceCollection || this.now() >= this.nextCollectionAt;
       if (collecting) {
         await this.persist();
@@ -1081,25 +1208,27 @@ export class DiagnosticDelivery {
     const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(15_000)]);
     try {
       for (const item of [...this.state.withdrawals]) {
-        const bearer = await this.credentials(item, signal);
-        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/installation`, {
-          method: 'DELETE',
-          redirect: 'error',
-          signal,
-          headers: { authorization: `Bearer ${bearer}` },
-        });
-        const ack = (await responseJson(response, signal)) as {
-          installationId: string;
-          revoked: boolean;
-          deletion: string;
-        };
-        if (
-          !response.ok ||
-          ack.installationId !== item.installationId ||
-          ack.revoked !== true ||
-          ack.deletion !== 'complete'
-        )
-          throw new Error('withdrawal_pending');
+        const bearer = await this.credentials(item, signal, true);
+        if (bearer !== null) {
+          const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/installation`, {
+            method: 'DELETE',
+            redirect: 'error',
+            signal,
+            headers: { authorization: `Bearer ${bearer}` },
+          });
+          const ack = (await responseJson(response, signal)) as {
+            installationId: string;
+            revoked: boolean;
+            deletion: string;
+          };
+          if (
+            !response.ok ||
+            ack.installationId !== item.installationId ||
+            ack.revoked !== true ||
+            ack.deletion !== 'complete'
+          )
+            throw new Error('withdrawal_pending');
+        }
         await this.transaction(async () => {
           const previous = this.state.withdrawals;
           this.state.withdrawals = previous.filter((v) => v.installationId !== item.installationId);
@@ -1120,6 +1249,7 @@ export class DiagnosticDelivery {
         return;
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
+      if (bearer === null) throw new Error('unexpected_closed_enrollment');
       await this.transaction(() => this.save());
       const selectedBatch = this.state.queue.find((value) => !value.serverExpired);
       if (!selectedBatch) return;
@@ -1131,19 +1261,33 @@ export class DiagnosticDelivery {
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
       if (!batch.sealed) {
+        const creationTime = diagnosticGzipCreatedAt(bytes);
+        const localReason = diagnosticAutomaticTimeReason(creationTime, this.now());
+        if (localReason) {
+          await this.retainExpiredBatch(batch, epoch, localReason);
+          return;
+        }
         const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/permits/${batch.id}`, {
           method: 'POST',
           redirect: 'error',
           signal,
-          headers: { authorization: `Bearer ${bearer}` },
+          headers: {
+            authorization: `Bearer ${bearer}`,
+            'x-diagnostics-created-at': String(creationTime),
+          },
         });
         const receipt = await responseJson(response, signal);
         const permit = diagnosticPermit(receipt);
         if (
           response.status === 410 &&
-          (receipt as { error?: string }).error === 'batch_retention_expired'
+          [
+            'batch_retention_expired',
+            'automatic_window_expired',
+            'payload_clock_future',
+            'payload_creation_time_missing',
+          ].includes((receipt as { error?: string }).error ?? '')
         ) {
-          await this.retainExpiredBatch(batch, epoch);
+          await this.retainExpiredBatch(batch, epoch, (receipt as { error: string }).error);
           return;
         }
         if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
@@ -1252,7 +1396,7 @@ export class DiagnosticDelivery {
           error: diagnosticValue(error, '', new Set(), [
             this.state.credentials?.enrollmentSecret ?? '',
             this.state.credentials?.token ?? '',
-            ...this.state.withdrawals.flatMap((value) => [
+            ...[...this.state.withdrawals, ...this.state.retiredIdentities].flatMap((value) => [
               value.enrollmentSecret,
               value.token ?? '',
             ]),
@@ -1267,25 +1411,33 @@ export class DiagnosticDelivery {
       this.abort = undefined;
     }
   }
-  private async retainExpiredBatch(batch: Batch, epoch: number) {
+  private async retainExpiredBatch(
+    batch: Batch,
+    epoch: number,
+    reason = 'server_retention_expired',
+  ) {
     await this.transaction(async () => {
       if (epoch !== this.epoch || !this.consentActive()) return;
       const previous = structuredClone(this.state);
       const retained = this.state.queue.find((value) => value.id === batch.id);
       if (!retained || retained.serverExpired) return;
       retained.serverExpired = true;
-      this.omitted('server_retention_expired', batch.index.events);
+      retained.unavailableReason = reason;
+      this.omitted(reason, batch.index.events);
       try {
         await this.save();
       } catch (error) {
         this.state = previous;
         throw error;
       }
-      this.error = 'server_retention_expired_local_copy_retained';
+      this.error =
+        reason === 'server_retention_expired'
+          ? 'server_retention_expired_local_copy_retained'
+          : `${reason}_local_copy_retained`;
       this.journal.record('diagnostic_cloud_expired', {
         batchId: batch.id,
         events: batch.index.events,
-        reason: 'server_retention_expired',
+        reason,
         localCopy: 'retained; not acknowledged or evicted',
       });
     });
@@ -1309,6 +1461,10 @@ export class DiagnosticDelivery {
         snapshots.push({ id: null, sourceBytes: 0, error: diagnosticValue(error) });
       }
       for (const batch of this.state.queue) {
+        const automaticDelivery = {
+          blocked: batch.serverExpired === true,
+          ...(batch.unavailableReason ? { reason: batch.unavailableReason } : {}),
+        };
         try {
           const gzip = await secureRead(
             this.queueDirectory,
@@ -1316,9 +1472,14 @@ export class DiagnosticDelivery {
             DELIVERY_LIMITS.compressedBytes,
           );
           if (checksum(gzip) !== batch.id) throw new Error('batch_integrity_failed');
-          snapshots.push({ id: batch.id, sourceBytes: gzip.length, gzip });
+          snapshots.push({ id: batch.id, sourceBytes: gzip.length, automaticDelivery, gzip });
         } catch (error) {
-          snapshots.push({ id: batch.id, sourceBytes: batch.bytes, error: diagnosticValue(error) });
+          snapshots.push({
+            id: batch.id,
+            sourceBytes: batch.bytes,
+            automaticDelivery,
+            error: diagnosticValue(error),
+          });
         }
         await yieldIO();
       }

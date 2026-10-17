@@ -32,7 +32,7 @@ async function directory() {
   return p;
 }
 const secret = '1'.repeat(64);
-function service() {
+function service(clock = Date.now) {
   const batches = new Map<string, Uint8Array>();
   const calls: string[] = [];
   let offline = false;
@@ -55,16 +55,17 @@ function service() {
       });
     }
     if (url.pathname.includes('/permits/')) {
-      const issuedAt = Date.now();
+      const issuedAt = clock();
       return Response.json({
-        schema: 'mizar-diagnostic-permit/1',
+        schema: 'mizar-diagnostic-permit/2',
         installationCreatedAt: 0,
-        consentRevision: 'technical-diagnostics-v2',
+        consentRevision: 'technical-diagnostics-v3',
         installationId:
           installation ||
           (JSON.parse(await readFile(currentState(), 'utf8')) as DiskState).credentials
             .installationId,
         payloadSha256: url.pathname.split('/').at(-1),
+        payloadCreatedAt: Number(new Headers(init?.headers).get('x-diagnostics-created-at')),
         issuedAt,
         expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
         signature: 'a'.repeat(43),
@@ -104,6 +105,114 @@ function service() {
   };
 }
 describe('consented diagnostic outbox', () => {
+  it('rolls back failed identity renewal and confirms retired closure after restart instead of inferring it from time', async () => {
+    const dir = await directory();
+    const path = join(dir, 'diagnostic-outbox/state.json');
+    const born = Date.now();
+    let now = born;
+    let online = true;
+    let failClosure = true;
+    const remote = service(() => now);
+    remote.setState(path);
+    const fetcher: typeof fetch = async (input, init) => {
+      if (!online) throw new TypeError('public offline test');
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname.endsWith('/enroll')) {
+        const data = JSON.parse(init?.body as string) as {
+          enrollmentId: string;
+          deletion?: boolean;
+        };
+        if (data.deletion) {
+          if (failClosure)
+            return Response.json({
+              installationId: 'wrong-identity',
+              closed: true,
+              revoked: true,
+              deletion: 'complete',
+            });
+          return Response.json({
+            installationId: data.enrollmentId,
+            closed: true,
+            revoked: true,
+            deletion: 'complete',
+          });
+        }
+      }
+      return remote.fetcher(input, init);
+    };
+    const options = { endpoint: 'https://diagnostics.example', fetch: fetcher, now: () => now };
+    let journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
+    const state = async () =>
+      JSON.parse(await readFile(path, 'utf8')) as {
+        credentials: { installationId: string };
+        queue: { id: string; serverExpired?: boolean }[];
+        withdrawals: { installationId: string }[];
+        retiredIdentities: { installationId: string }[];
+      };
+    try {
+      await delivery.consent(true);
+      journal.record('normal_operation', { result: 'first identity enrolled' });
+      await journal.flush();
+      await delivery.tick();
+      online = false;
+      journal.record('normal_operation', { result: 'retained original' });
+      await journal.flush();
+      await delivery.tick();
+      const before = await state();
+      const original = await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`));
+      now = born + 90 * 86400_000 + 1000;
+      const failed = vi
+        .spyOn(filesystem, 'rename')
+        .mockImplementationOnce((...args) =>
+          Promise.reject(
+            Object.assign(
+              new Error(
+                args[1] === path
+                  ? 'public renewal manifest EIO'
+                  : 'unexpected rename before renewal',
+              ),
+              { code: 'EIO' },
+            ),
+          ),
+        );
+      await expect(delivery.tick()).rejects.toThrow('renewal manifest EIO');
+      failed.mockRestore();
+      expect((await state()).credentials.installationId).toBe(before.credentials.installationId);
+      expect((await state()).queue[0]).toEqual(before.queue[0]);
+      await delivery.tick();
+      expect((await state()).credentials.installationId).not.toBe(
+        before.credentials.installationId,
+      );
+      expect(await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`))).toEqual(
+        original,
+      );
+      await delivery.close();
+      await journal.close();
+      now = born + 181 * 86400_000;
+      journal = new SessionJournal(dir);
+      delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
+      online = true;
+      await delivery.tick();
+      expect((await state()).withdrawals).toContainEqual(
+        expect.objectContaining({ installationId: before.credentials.installationId }),
+      );
+      expect(delivery.status().deletionPending).toBeGreaterThan(0);
+      failClosure = false;
+      now += 86400_000;
+      await delivery.tick();
+      expect((await state()).withdrawals).not.toContainEqual(
+        expect.objectContaining({ installationId: before.credentials.installationId }),
+      );
+      expect(delivery.status().deletionPending).toBe(0);
+      expect(await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`))).toEqual(
+        original,
+      );
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('defaults off, does not backfill pre-consent history, and preserves technical context without credentials', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
@@ -195,7 +304,7 @@ describe('consented diagnostic outbox', () => {
   });
   it('keeps offline batches across restart, recovers source journal records and retries an identical accepted batch after lost acknowledgment', async () => {
     const dir = await directory();
-    const remote = service();
+    const remote = service(() => now);
     let now = Date.now();
     const options = {
       endpoint: 'https://diagnostics.example',
@@ -342,11 +451,12 @@ describe('consented diagnostic outbox', () => {
       if (path.includes('/permits/')) {
         const issuedAt = Date.now();
         return Response.json({
-          schema: 'mizar-diagnostic-permit/1',
+          schema: 'mizar-diagnostic-permit/2',
           installationCreatedAt: 0,
-          consentRevision: 'technical-diagnostics-v2',
+          consentRevision: 'technical-diagnostics-v3',
           installationId: installation,
           payloadSha256: path.split('/').at(-1),
+          payloadCreatedAt: Number(new Headers(init?.headers).get('x-diagnostics-created-at')),
           issuedAt,
           expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
           signature: 'a'.repeat(43),
@@ -501,7 +611,7 @@ describe('consented diagnostic outbox', () => {
   it('collects normal operation batches every ten minutes while draining existing batches on the short poll', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    const remote = service();
+    const remote = service(() => now);
     remote.setState(join(dir, 'diagnostic-outbox', 'state.json'));
     let now = Date.now();
     const delivery = await new DiagnosticDelivery(dir, journal, {
@@ -602,7 +712,7 @@ describe('consented diagnostic outbox', () => {
   it('collects a committed problem marker within fifteen seconds without forcing normal batches early', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    const remote = service();
+    const remote = service(() => now);
     let now = Date.now();
     const delivery = await new DiagnosticDelivery(dir, journal, {
       endpoint: 'https://diagnostics.example',
@@ -626,60 +736,63 @@ describe('consented diagnostic outbox', () => {
       await journal.close();
     }
   });
-  it('requires fresh consent for a longer identifiable index and durably fences the previous policy', async () => {
-    const dir = await directory();
-    const journal = new SessionJournal(dir);
-    const previous = await new DiagnosticDelivery(dir, journal).initialize(false);
-    await previous.consent(true);
-    await previous.close();
-    await journal.close();
-    const path = join(dir, 'diagnostic-outbox', 'state.json');
-    const state = JSON.parse(await readFile(path, 'utf8')) as {
-      consentPolicy: number;
-      credentials: { installationId: string; token?: string; expiresAt?: number };
-      nextAttemptAt: number;
-      failures: number;
-    };
-    const oldInstallation = state.credentials.installationId;
-    state.consentPolicy = 1;
-    state.credentials.token = 'test-token';
-    state.credentials.expiresAt = Date.now() + 86400_000;
-    state.nextAttemptAt = Date.now() + 6 * 3600_000;
-    state.failures = 12;
-    await writeFile(path, JSON.stringify(state));
-    const nextJournal = new SessionJournal(dir);
-    const remote = service();
-    remote.setState(path);
-    const next = await new DiagnosticDelivery(dir, nextJournal, {
-      endpoint: 'https://diagnostics.example.test',
-      fetch: remote.fetcher,
-    }).initialize(false);
-    try {
-      expect(next.status()).toMatchObject({
-        consent: false,
-        error: 'consent_policy_changed',
-        queuedBatches: 0,
-      });
-      expect(
-        (await readdir(join(dir, 'diagnostic-outbox'))).some((name) =>
-          name.startsWith('consent-revoked-'),
-        ),
-      ).toBe(true);
-      await next.tick();
-      expect(remote.calls).toEqual(['DELETE /v1/diagnostics/installation']);
-      expect(remote.revoked()).toBe(true);
-      await next.consent(true);
-      const renewed = JSON.parse(await readFile(path, 'utf8')) as {
+  it.each([1, 2])(
+    'requires fresh consent for finite retention and durably fences previous policy %s',
+    async (policy) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      const previous = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await previous.consent(true);
+      await previous.close();
+      await journal.close();
+      const path = join(dir, 'diagnostic-outbox', 'state.json');
+      const state = JSON.parse(await readFile(path, 'utf8')) as {
         consentPolicy: number;
-        credentials: { installationId: string };
+        credentials: { installationId: string; token?: string; expiresAt?: number };
+        nextAttemptAt: number;
+        failures: number;
       };
-      expect(renewed.consentPolicy).toBe(2);
-      expect(renewed.credentials.installationId).not.toBe(oldInstallation);
-    } finally {
-      await next.close();
-      await nextJournal.close();
-    }
-  });
+      const oldInstallation = state.credentials.installationId;
+      state.consentPolicy = policy;
+      state.credentials.token = 'test-token';
+      state.credentials.expiresAt = Date.now() + 86400_000;
+      state.nextAttemptAt = Date.now() + 6 * 3600_000;
+      state.failures = 12;
+      await writeFile(path, JSON.stringify(state));
+      const nextJournal = new SessionJournal(dir);
+      const remote = service();
+      remote.setState(path);
+      const next = await new DiagnosticDelivery(dir, nextJournal, {
+        endpoint: 'https://diagnostics.example.test',
+        fetch: remote.fetcher,
+      }).initialize(false);
+      try {
+        expect(next.status()).toMatchObject({
+          consent: false,
+          error: 'consent_policy_changed',
+          queuedBatches: 0,
+        });
+        expect(
+          (await readdir(join(dir, 'diagnostic-outbox'))).some((name) =>
+            name.startsWith('consent-revoked-'),
+          ),
+        ).toBe(true);
+        await next.tick();
+        expect(remote.calls).toEqual(['DELETE /v1/diagnostics/installation']);
+        expect(remote.revoked()).toBe(true);
+        await next.consent(true);
+        const renewed = JSON.parse(await readFile(path, 'utf8')) as {
+          consentPolicy: number;
+          credentials: { installationId: string };
+        };
+        expect(renewed.consentPolicy).toBe(3);
+        expect(renewed.credentials.installationId).not.toBe(oldInstallation);
+      } finally {
+        await next.close();
+        await nextJournal.close();
+      }
+    },
+  );
   it('serializes rapid consent changes and coalesces durable revocation fences', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
@@ -710,7 +823,7 @@ describe('consented diagnostic outbox', () => {
   it('keeps an acknowledged batch durable when the receipt manifest commit fails', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    const remote = service();
+    const remote = service(() => now);
     let now = Date.now();
     const delivery = await new DiagnosticDelivery(dir, journal, {
       endpoint: 'https://diagnostics.example',

@@ -15,4 +15,4 @@ export type LocalTransientChannel = (typeof LOCAL_TRANSIENT_CHANNELS)[number];
 export type LocalChannel = LocalSnapshotChannel | LocalTransientChannel;
 
 /** Explicit consent for seven-day bodies and a ninety-day identifiable session index. */
-export const DIAGNOSTIC_CONSENT_REVISION = 'technical-diagnostics-v2' as const;
+export const DIAGNOSTIC_CONSENT_REVISION = 'technical-diagnostics-v3' as const;

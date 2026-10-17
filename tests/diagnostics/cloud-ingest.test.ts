@@ -2,9 +2,12 @@ import * as filesystem from 'node:fs/promises';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import {
   sealDiagnosticGzip,
+  stampDiagnosticGzip,
+  diagnosticGzipCreatedAt,
+  diagnosticInstallationId,
   readDiagnosticGzipPermit,
 } from '../../packages/protocol/src/diagnostics-upload.js';
 import { gzipSync } from 'node:zlib';
@@ -15,13 +18,19 @@ import {
 } from '../../apps/companion/src/support/delivery.js';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { runtime, migrate, bindings, script, adminHeaders, hash } from './fixture.js';
+const workerModule = '../../apps/diagnostics-worker/src/index.js';
 
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
 }));
 
-async function sealedFixture(bytes: Uint8Array, issue: (id: string) => Promise<Response>) {
-  const response = await issue(hash(bytes));
+async function sealedFixture(
+  input: Uint8Array,
+  issue: (id: string, createdAt: number) => Promise<Response>,
+  now = Date.now(),
+) {
+  const bytes = stampDiagnosticGzip(input, now);
+  const response = await issue(hash(bytes), diagnosticGzipCreatedAt(bytes)!);
   expect(response.status).toBe(200);
   return Buffer.from(
     sealDiagnosticGzip(
@@ -250,9 +259,9 @@ it('keeps deletion pending during a real R2 write and completes after the writer
       env,
     );
   try {
-    const installation = randomUUID();
+    const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
     const enrollment = {
-      consent: 'technical-diagnostics-v2',
+      consent: 'technical-diagnostics-v3',
       enrollmentId: installation,
       enrollmentSecret: 'a'.repeat(64),
     };
@@ -262,10 +271,14 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const issue = (id: string) =>
+    const createdAt = Math.floor(Date.now() / 1000) * 1000;
+    const issue = (id: string, payloadCreatedAt = createdAt) =>
       call(`/v1/diagnostics/permits/${id}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${identity.token}` },
+        headers: {
+          authorization: `Bearer ${identity.token}`,
+          'x-diagnostics-created-at': String(payloadCreatedAt),
+        },
       });
     const bytes = await sealedFixture(
       gzipSync(
@@ -275,6 +288,7 @@ it('keeps deletion pending during a real R2 write and completes after the writer
         }),
       ),
       issue,
+      createdAt,
     );
     const payloadId = readDiagnosticGzipPermit(bytes)!.permit.payloadSha256;
     const permitUsage = await db.prepare('SELECT permits FROM daily').first();
@@ -319,7 +333,10 @@ it('keeps deletion pending during a real R2 write and completes after the writer
       (
         await call('/v1/diagnostics/enroll', {
           method: 'POST',
-          body: JSON.stringify({ ...enrollment, enrollmentId: randomUUID() }),
+          body: JSON.stringify({
+            ...enrollment,
+            enrollmentId: diagnosticInstallationId(Date.now(), randomBytes(16)),
+          }),
         })
       ).status,
     ).toBe(503);
@@ -353,7 +370,9 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     env.DATABASE_BYTES = '0';
     const pending = await call('/v1/diagnostics/installation', {
       method: 'DELETE',
-      headers: { authorization: `Bearer ${identity.token}` },
+      headers: {
+        authorization: `Bearer ${identity.token}`,
+      },
     });
     expect(pending.status).toBe(202);
     expect(await pending.json()).toMatchObject({ deletion: 'pending', revoked: true });
@@ -369,7 +388,9 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     expect((await bucket.list()).objects).toHaveLength(0);
     const finished = await call('/v1/diagnostics/installation', {
       method: 'DELETE',
-      headers: { authorization: `Bearer ${identity.token}` },
+      headers: {
+        authorization: `Bearer ${identity.token}`,
+      },
     });
     expect(await finished.json()).toMatchObject({ deletion: 'complete', revoked: true });
     expect(
@@ -398,22 +419,27 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     const endpoint = (await mf.ready).origin;
     const db = await mf.getD1Database('DIAGNOSTICS_DB');
     await migrate(db);
-    const installation = randomUUID();
+    const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
     const enrolled = await fetch(`${endpoint}/v1/diagnostics/enroll`, {
       method: 'POST',
       headers: { 'cf-connecting-ip': '127.0.0.1' },
       body: JSON.stringify({
-        consent: 'technical-diagnostics-v2',
+        consent: 'technical-diagnostics-v3',
         enrollmentId: installation,
         enrollmentSecret: 'b'.repeat(64),
       }),
     });
     expect(enrolled.status).toBe(200);
     const identity = (await enrolled.json()) as { token: string };
-    const issue = (id: string) =>
+    const createdAt = Math.floor(Date.now() / 1000) * 1000;
+    const issue = (id: string, payloadCreatedAt = createdAt) =>
       fetch(`${endpoint}/v1/diagnostics/permits/${id}`, {
         method: 'POST',
-        headers: { 'cf-connecting-ip': '127.0.0.1', authorization: `Bearer ${identity.token}` },
+        headers: {
+          'cf-connecting-ip': '127.0.0.1',
+          authorization: `Bearer ${identity.token}`,
+          'x-diagnostics-created-at': String(payloadCreatedAt),
+        },
       });
     const bytes = await sealedFixture(
       gzipSync(
@@ -428,6 +454,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
         }),
       ),
       issue,
+      createdAt,
     );
     const id = hash(bytes);
     const session = randomUUID();
@@ -502,7 +529,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     expect(hash(alternateWire)).not.toBe(id);
     expect((await upload(alternateWire)).status).toBe(409);
     const oldRevision = Buffer.from(bytes);
-    const revisionOffset = oldRevision.indexOf('technical-diagnostics-v2');
+    const revisionOffset = oldRevision.indexOf('technical-diagnostics-v3');
     expect(revisionOffset).toBeGreaterThan(0);
     oldRevision[revisionOffset + 'technical-diagnostics-v'.length] = 49;
     expect((await upload(oldRevision)).status).toBe(400);
@@ -533,6 +560,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
         }),
       ),
       issue,
+      createdAt,
     );
     const pendingId = hash(pendingBytes);
     const now = Date.now();
@@ -576,7 +604,10 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     expect(await db.prepare('SELECT id FROM batches WHERE id=?').bind(id).first()).toBeNull();
     const withdrawal = await fetch(`${endpoint}/v1/diagnostics/installation`, {
       method: 'DELETE',
-      headers: { 'cf-connecting-ip': '127.0.0.1', authorization: `Bearer ${identity.token}` },
+      headers: {
+        'cf-connecting-ip': '127.0.0.1',
+        authorization: `Bearer ${identity.token}`,
+      },
     });
     expect(withdrawal.status).toBe(202);
     expect(await withdrawal.json()).toMatchObject({ revoked: true, deletion: 'pending' });
@@ -593,7 +624,7 @@ it('retrieves every indexed session and body locator across tied-timestamp pages
     const endpoint = (await mf.ready).origin;
     const db = await mf.getD1Database('DIAGNOSTICS_DB');
     await migrate(db);
-    const installation = randomUUID();
+    const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
     await db
       .prepare('INSERT INTO installations(id,proof_sha256,created_at) VALUES(?,?,?)')
       .bind(installation, 'a'.repeat(64), Date.now())
@@ -821,7 +852,12 @@ it('recovers lost permits and failed atomic sealing without renewing the deadlin
     const renewPermit = (token: string) =>
       fetcher(`https://local.invalid/v1/diagnostics/permits/${payload}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}` },
+        headers: {
+          authorization: `Bearer ${token}`,
+          'x-diagnostics-created-at': String(
+            readDiagnosticGzipPermit(packet)!.permit.payloadCreatedAt,
+          ),
+        },
       });
     expect(JSON.stringify(await decodeDiagnosticBatch(packet))).toContain(
       'preserved original failure',
@@ -866,8 +902,8 @@ it('recovers lost permits and failed atomic sealing without renewing the deadlin
     });
     expect(await db.prepare('SELECT batches FROM sessions').first()).toMatchObject({ batches: 1 });
     expect((await renewPermit(before.credentials.token)).status).toBe(410);
-    // Clearing the short-lived locators and even retiring/recreating an installation
-    // cannot reset the first permit for the same original gzip SHA.
+    // Normal replay/identity fences expire. An unchanged raw gzip still carries
+    // its SHA-covered creation time, so deleting those rows cannot renew it.
     now += 100 * 86400_000;
     expect(
       (
@@ -881,20 +917,33 @@ it('recovers lost permits and failed atomic sealing without renewing the deadlin
         )
       ).status,
     ).toBe(200);
-    for (const installationId of [before.credentials.installationId, randomUUID()]) {
-      const registered = await fetcher('https://local.invalid/v1/diagnostics/enroll', {
-        method: 'POST',
-        body: JSON.stringify({
-          consent: 'technical-diagnostics-v2',
-          enrollmentId: installationId,
-          enrollmentSecret: before.credentials.enrollmentSecret,
-        }),
-      });
-      expect(registered.status).toBe(200);
-      const identity = (await registered.json()) as { token: string };
-      expect((await renewPermit(identity.token)).status).toBe(409);
-    }
+    const oldEnrollment = {
+      consent: 'technical-diagnostics-v3',
+      enrollmentId: before.credentials.installationId,
+      enrollmentSecret: before.credentials.enrollmentSecret,
+    };
+    expect(
+      (
+        await fetcher('https://local.invalid/v1/diagnostics/enroll', {
+          method: 'POST',
+          body: JSON.stringify(oldEnrollment),
+        })
+      ).status,
+    ).toBe(410);
+    const registered = await fetcher('https://local.invalid/v1/diagnostics/enroll', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...oldEnrollment,
+        enrollmentId: diagnosticInstallationId(now, randomBytes(16)),
+      }),
+    });
+    expect(registered.status).toBe(200);
+    const freshIdentity = (await registered.json()) as { token: string };
+    expect((await renewPermit(freshIdentity.token)).status).toBe(410);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM upload_permits').first()).toMatchObject({
+      count: 0,
+    });
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM installations').first()).toMatchObject({
       count: 1,
     });
     expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
@@ -936,12 +985,12 @@ it('hides revoked evidence immediately even when SQLite refuses physical session
         }),
         env,
       );
-    const installation = randomUUID();
+    const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
     const identity = (await (
       await call('/v1/diagnostics/enroll', {
         method: 'POST',
         body: JSON.stringify({
-          consent: 'technical-diagnostics-v2',
+          consent: 'technical-diagnostics-v3',
           enrollmentId: installation,
           enrollmentSecret: 'a'.repeat(64),
         }),
@@ -970,7 +1019,9 @@ it('hides revoked evidence immediately even when SQLite refuses physical session
       (
         await call('/v1/diagnostics/installation', {
           method: 'DELETE',
-          headers: { authorization: `Bearer ${identity.token}` },
+          headers: {
+            authorization: `Bearer ${identity.token}`,
+          },
         })
       ).status,
     ).toBe(503);
@@ -1019,13 +1070,8 @@ it('hides revoked evidence immediately even when SQLite refuses physical session
       ).status,
     ).toBe(200);
     expect(
-      (
-        await db
-          .prepare('SELECT revoked_at FROM installations WHERE id=?')
-          .bind(installation)
-          .first<{ revoked_at: number }>()
-      )?.revoked_at,
-    ).toBeGreaterThan(0);
+      await db.prepare('SELECT id FROM installations WHERE id=?').bind(installation).first(),
+    ).toBeNull();
   } finally {
     await mf.dispose();
     await rm(directory, { recursive: true, force: true });
@@ -1466,21 +1512,25 @@ it.each(['snapshot', 'object-delete'])(
           target,
           now,
         );
-      const installation = randomUUID();
+      const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
       const enrolled = await call('/v1/diagnostics/enroll', {
         method: 'POST',
         body: JSON.stringify({
-          consent: 'technical-diagnostics-v2',
+          consent: 'technical-diagnostics-v3',
           enrollmentId: installation,
           enrollmentSecret: 'a'.repeat(64),
         }),
       });
       expect(enrolled.status).toBe(200);
       const identity = (await enrolled.json()) as { token: string };
-      const issue = (id: string) =>
+      const createdAt = Math.floor(Date.now() / 1000) * 1000;
+      const issue = (id: string, payloadCreatedAt = createdAt) =>
         call(`/v1/diagnostics/permits/${id}`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${identity.token}` },
+          headers: {
+            authorization: `Bearer ${identity.token}`,
+            'x-diagnostics-created-at': String(payloadCreatedAt),
+          },
         });
       const upload = async (operation: string) => {
         const bytes = await sealedFixture(
@@ -1497,6 +1547,7 @@ it.each(['snapshot', 'object-delete'])(
             }),
           ),
           issue,
+          now,
         );
         const id = hash(bytes);
         const response = await call(`/v1/diagnostics/batches/${id}`, {
@@ -1684,3 +1735,315 @@ it.each(['snapshot', 'object-delete'])(
   },
   30_000,
 );
+
+it('rotates a ninety-day identity across real disk restart, preserves the old unacknowledged packet for manual reading and withdraws both identities', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-finite-rotation-'));
+  const mf = runtime(join(directory, 'server'));
+  const client = join(directory, 'client');
+  const db = await mf.getD1Database('DIAGNOSTICS_DB');
+  await migrate(db);
+  const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+  const { handle } = (await import(workerModule)) as unknown as {
+    handle: (request: Request, env: unknown, now: number) => Promise<Response>;
+  };
+  let now = Date.now();
+  const born = now;
+  let offline = false;
+  const env = {
+    ...bindings,
+    DIAGNOSTICS_DB: db,
+    DIAGNOSTICS_BUCKET: bucket,
+    ENROLL_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+    UPLOAD_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+  };
+  const fetcher: typeof fetch = async (input, init) => {
+    if (offline) throw new TypeError('public offline test');
+    return handle(
+      new Request(input, {
+        ...init,
+        headers: {
+          ...Object.fromEntries(new Headers(init?.headers)),
+          'cf-connecting-ip': '127.0.0.1',
+        },
+      }),
+      env,
+      now,
+    );
+  };
+  const options = { endpoint: 'https://local.invalid', fetch: fetcher, now: () => now };
+  let journal = new SessionJournal(client);
+  let delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+  const state = async () =>
+    JSON.parse(await readFile(join(client, 'diagnostic-outbox/state.json'), 'utf8')) as {
+      credentials: { installationId: string; enrollmentSecret: string };
+      retiredIdentities: { installationId: string }[];
+      withdrawals: unknown[];
+      queue: { id: string; serverExpired?: boolean; unavailableReason?: string }[];
+    };
+  const call = (path: string, init: RequestInit = {}) =>
+    fetcher('https://local.invalid' + path, init);
+  try {
+    await delivery.consent(true);
+    journal.record('operation_result', { result: 'old installation accepted' });
+    await journal.flush();
+    await delivery.tick();
+    const oldIdentity = (await state()).credentials;
+    offline = true;
+    journal.record('workspace_exit_failure', {
+      phase: 'restore_window',
+      error: new Error('unacknowledged original ENOSPC cause'),
+    });
+    await journal.flush();
+    await delivery.tick();
+    await delivery.close();
+    await journal.close();
+    const oldPacket = (await state()).queue[0]!;
+    const original = await readFile(join(client, `diagnostic-outbox/${oldPacket.id}.gz`));
+    now = born + 90 * 86400_000 + 1000;
+    journal = new SessionJournal(client);
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    offline = false;
+    await delivery.tick();
+    const renewed = await state();
+    expect(renewed.credentials.installationId).not.toBe(oldIdentity.installationId);
+    expect(renewed.retiredIdentities).toEqual([
+      expect.objectContaining({ installationId: oldIdentity.installationId }),
+    ]);
+    expect(renewed.queue.find((x) => x.id === oldPacket.id)).toMatchObject({
+      serverExpired: true,
+      unavailableReason: 'installation_lease_closed',
+    });
+    expect(await readFile(join(client, `diagnostic-outbox/${oldPacket.id}.gz`))).toEqual(original);
+    const retained = await delivery.retainedBatches();
+    const retainedPacket = retained.find((x) => x.id === oldPacket.id)!;
+    expect(JSON.stringify(await decodeDiagnosticBatch(retainedPacket.gzip!))).toContain(
+      'unacknowledged original ENOSPC cause',
+    );
+    expect(delivery.status().blockedBatches).toBeGreaterThan(0);
+    expect(
+      (
+        await call('/v1/diagnostics/enroll', {
+          method: 'POST',
+          body: JSON.stringify({
+            consent: 'technical-diagnostics-v3',
+            enrollmentId: oldIdentity.installationId,
+            enrollmentSecret: oldIdentity.enrollmentSecret,
+          }),
+        })
+      ).status,
+    ).toBe(410);
+    await delivery.consent(false);
+    await delivery.tick();
+    expect(delivery.status().deletionPending).toBe(0);
+    for (const id of [oldIdentity.installationId, renewed.credentials.installationId]) {
+      expect(
+        (
+          await db
+            .prepare('SELECT revoked_at FROM installations WHERE id=?')
+            .bind(id)
+            .first<{ revoked_at: number }>()
+        )?.revoked_at,
+      ).toBeGreaterThan(0);
+      expect(
+        await db
+          .prepare('SELECT COUNT(*) count FROM sessions WHERE installation_id=?')
+          .bind(id)
+          .first(),
+      ).toMatchObject({ count: 0 });
+    }
+    // All ordinary records disappear after their finite lifetime, including revoked identities.
+    now = born + 181 * 86400_000;
+    await call('/admin/cleanup', { method: 'POST', headers: adminHeaders });
+    for (const table of ['installations', 'sessions', 'batches', 'upload_permits'])
+      expect(await db.prepare(`SELECT COUNT(*) count FROM ${table}`).first()).toMatchObject({
+        count: 0,
+      });
+    // The proof holder receives an explicit server closure ACK, not an inferred client success.
+    const closed = await call('/v1/diagnostics/enroll', {
+      method: 'POST',
+      body: JSON.stringify({
+        consent: 'technical-diagnostics-v3',
+        enrollmentId: oldIdentity.installationId,
+        enrollmentSecret: oldIdentity.enrollmentSecret,
+        deletion: true,
+      }),
+    });
+    expect(await closed.json()).toEqual({
+      installationId: oldIdentity.installationId,
+      closed: true,
+      revoked: true,
+      deletion: 'complete',
+    });
+  } finally {
+    await delivery.close();
+    await journal.close();
+    await mf.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it('keeps the last eligible session index until its own ninety-day deadline, then clears ordinary owners and replay fences without reviving old bytes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-finite-final-index-'));
+  const mf = runtime(directory);
+  const db = await mf.getD1Database('DIAGNOSTICS_DB');
+  await migrate(db);
+  const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+  const { handle } = (await import(workerModule)) as unknown as {
+    handle: (request: Request, env: unknown, now: number) => Promise<Response>;
+  };
+  const born = Date.now();
+  let now = born + 89 * 86400_000;
+  const installation = diagnosticInstallationId(born, randomBytes(16));
+  const env = {
+    ...bindings,
+    DIAGNOSTICS_DB: db,
+    DIAGNOSTICS_BUCKET: bucket,
+    ENROLL_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+    UPLOAD_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+  };
+  const call = (path: string, init: RequestInit = {}) =>
+    handle(
+      new Request('https://local.invalid' + path, {
+        ...init,
+        headers: {
+          ...Object.fromEntries(new Headers(init.headers)),
+          'cf-connecting-ip': '127.0.0.1',
+        },
+      }),
+      env,
+      now,
+    );
+  const enrollment = {
+    consent: 'technical-diagnostics-v3',
+    enrollmentId: installation,
+    enrollmentSecret: 'd'.repeat(64),
+  };
+  try {
+    const identity = (await (
+      await call('/v1/diagnostics/enroll', { method: 'POST', body: JSON.stringify(enrollment) })
+    ).json()) as { token: string; expiresAt: number };
+    expect(identity.expiresAt).toBe(born + 90 * 86400_000);
+    const raw = stampDiagnosticGzip(
+      gzipSync(
+        JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: [{ stage: 'normal_operation', evidence: { result: 'complete' } }],
+        }),
+      ),
+      now,
+    );
+    const createdAt = diagnosticGzipCreatedAt(raw)!;
+    const issue = () =>
+      call('/v1/diagnostics/permits/' + hash(raw), {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + identity.token,
+          'x-diagnostics-created-at': String(createdAt),
+        },
+      });
+    const permit = (await (
+      await issue()
+    ).json()) as import('../../packages/protocol/src/diagnostics-upload.js').DiagnosticUploadPermit;
+    const wire = sealDiagnosticGzip(raw, permit);
+    const id = hash(wire);
+    const upload = await call('/v1/diagnostics/batches/' + id, {
+      method: 'PUT',
+      body: wire,
+      headers: {
+        authorization: 'Bearer ' + identity.token,
+        'content-type': 'application/gzip',
+        'x-content-sha256': id,
+        'x-diagnostics-index': JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          sessionId: randomUUID(),
+          events: 1,
+          expandedBytes: 256,
+          stages: ['normal_operation'],
+        }),
+      },
+    });
+    expect(upload.status).toBe(200);
+    now = born + 91 * 86400_000;
+    await call('/admin/cleanup', { method: 'POST', headers: adminHeaders });
+    expect(await db.prepare('SELECT COUNT(*) count FROM installations').first()).toMatchObject({
+      count: 1,
+    });
+    expect(await db.prepare('SELECT COUNT(*) count FROM sessions').first()).toMatchObject({
+      count: 1,
+    });
+    expect(
+      (await call('/v1/diagnostics/enroll', { method: 'POST', body: JSON.stringify(enrollment) }))
+        .status,
+    ).toBe(410);
+    now = born + 180 * 86400_000;
+    await call('/admin/cleanup', { method: 'POST', headers: adminHeaders });
+    for (const table of ['installations', 'sessions', 'batches', 'upload_permits'])
+      expect(await db.prepare(`SELECT COUNT(*) count FROM ${table}`).first()).toMatchObject({
+        count: 0,
+      });
+    const fresh = (await (
+      await call('/v1/diagnostics/enroll', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...enrollment,
+          enrollmentId: diagnosticInstallationId(now, randomBytes(16)),
+        }),
+      })
+    ).json()) as { token: string };
+    const stale = await call('/v1/diagnostics/permits/' + hash(raw), {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + fresh.token,
+        'x-diagnostics-created-at': String(createdAt),
+      },
+    });
+    expect(stale.status).toBe(410);
+    expect(await stale.json()).toMatchObject({ error: 'automatic_window_expired' });
+    // Even a valid newly signed certificate for a fraudulent fresh creation-time
+    // claim cannot be attached to the original raw gzip: the covered MTIME differs.
+    const claimed = await call('/v1/diagnostics/permits/' + hash(raw), {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + fresh.token,
+        'x-diagnostics-created-at': String(Math.floor(now / 1000) * 1000),
+      },
+    });
+    expect(claimed.status).toBe(200);
+    const newPermit = (await claimed.json()) as typeof permit;
+    expect(() => sealDiagnosticGzip(raw, newPermit)).toThrow('invalid_diagnostic_permit');
+    // Construct the forged wire without the client-side check to verify the
+    // independent production reader rejects this same attack at HTTP ingress.
+    const forged = sealDiagnosticGzip(
+      stampDiagnosticGzip(gzipSync('public replacement'), now),
+      newPermit,
+    );
+    const headerLength = new DataView(forged.buffer).getUint16(10, true) + 12;
+    const oldBody = raw.subarray(10);
+    const attack = new Uint8Array(headerLength + oldBody.length);
+    attack.set(forged.subarray(0, headerLength));
+    attack.set(raw.subarray(0, 10));
+    attack[3] = 4;
+    attack.set(oldBody, headerLength);
+    const rejected = await call('/v1/diagnostics/batches/' + hash(attack), {
+      method: 'PUT',
+      body: attack,
+      headers: {
+        authorization: 'Bearer ' + fresh.token,
+        'content-type': 'application/gzip',
+        'x-content-sha256': hash(attack),
+        'x-diagnostics-index': JSON.stringify({
+          schema: 'mizar-technical-diagnostics/1',
+          events: 1,
+          expandedBytes: 256,
+          stages: ['normal_operation'],
+        }),
+      },
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: 'invalid_batch_permit' });
+    expect((await bucket.list()).objects).toHaveLength(0);
+  } finally {
+    await mf.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);

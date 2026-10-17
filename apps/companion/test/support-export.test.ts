@@ -865,6 +865,7 @@ type FullArchive = {
       name: string;
       status: string;
       durability?: string;
+      automaticDelivery?: { blocked: boolean; reason?: string };
       sha256?: string;
       volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
     }[];
@@ -1679,7 +1680,8 @@ async function readRetainedTimeline(body: string, directory: string) {
 it('exports full unacknowledged outbox evidence over the production HTTP route after restart and source rotation', async () => {
   const dir = await directory();
   const journal = new SessionJournal(dir);
-  const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+  let now = Date.now();
+  const delivery = await new DiagnosticDelivery(dir, journal, { now: () => now }).initialize(false);
   await delivery.consent(true);
   journal.record('workspace_exit_failure', {
     phase: 'restore_window',
@@ -1708,6 +1710,8 @@ it('exports full unacknowledged outbox evidence over the production HTTP route a
     { sourceDurability: 'session-log' },
   ]);
   expect(originalTimeline).toContain('synthetic-local-original-context');
+  now += 90 * 86400_000 + 1000;
+  await delivery.tick();
   await delivery.close();
   await journal.close();
   const state = JSON.parse(await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8')) as {
@@ -1735,7 +1739,8 @@ it('exports full unacknowledged outbox evidence over the production HTTP route a
         (file) =>
           file.name.startsWith('diagnostic-outbox/') &&
           file.status === 'read' &&
-          file.durability === 'durable-outbox',
+          file.durability === 'durable-outbox' &&
+          file.automaticDelivery?.reason === 'installation_lease_closed',
       ),
     ).toBe(true);
     const timeline = await readRetainedTimeline(body, dir);

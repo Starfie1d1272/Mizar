@@ -20,6 +20,7 @@ export interface ArchivedLogFile {
   readBytes: number;
   durability?: 'durable-pending' | 'durable-outbox' | 'memory-only';
   scope?: string;
+  automaticDelivery?: RetainedDiagnosticBatch['automaticDelivery'];
   error?: unknown;
   snapshotAt?: string;
   sha256?: string;
@@ -177,6 +178,7 @@ export async function fullLogArchive(
         name: retained.id ? `diagnostic-outbox/${retained.id}.ndjson` : 'diagnostic-outbox',
         status: 'unreadable',
         durability: 'durable-outbox',
+        automaticDelivery: retained.automaticDelivery,
         scope:
           'retained consented technical copy; original local journal can have broader scope; no credential manifest',
         sourceBytes: retained.sourceBytes,

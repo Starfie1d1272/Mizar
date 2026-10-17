@@ -54,7 +54,7 @@ it('requires loopback origin and explicit current consent; pauses without cleari
       await app.inject({
         method: 'POST',
         url: '/operator/diagnostics/consent',
-        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v3' },
       })
     ).statusCode,
   ).toBe(403);
@@ -74,7 +74,7 @@ it('requires loopback origin and explicit current consent; pauses without cleari
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v3' },
       })
     ).statusCode,
   ).toBe(503);
@@ -124,7 +124,7 @@ it('requires loopback origin and explicit current consent; pauses without cleari
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: false, revision: 'technical-diagnostics-v2' },
+        payload: { enabled: false, revision: 'technical-diagnostics-v3' },
       })
     ).json(),
   ).toMatchObject({ consent: false, deletionPending: 0 });
@@ -163,7 +163,7 @@ it('keeps normal service usable when diagnostics directory cannot initialize', a
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v3' },
       })
     ).statusCode,
   ).toBe(503);
