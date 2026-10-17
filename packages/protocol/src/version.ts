@@ -13,3 +13,6 @@ export const LOCAL_CHANNELS = [...LOCAL_SNAPSHOT_CHANNELS, ...LOCAL_TRANSIENT_CH
 export type LocalSnapshotChannel = (typeof LOCAL_SNAPSHOT_CHANNELS)[number];
 export type LocalTransientChannel = (typeof LOCAL_TRANSIENT_CHANNELS)[number];
 export type LocalChannel = LocalSnapshotChannel | LocalTransientChannel;
+
+/** Explicit consent for seven-day bodies and a ninety-day identifiable session index. */
+export const DIAGNOSTIC_CONSENT_REVISION = 'technical-diagnostics-v2' as const;

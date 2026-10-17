@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
  * No body inflation, public object URL, runtime management token, or business-state interpretation. */
 export interface Env {
@@ -238,7 +239,7 @@ async function enroll(request: Request, env: Env, now: number) {
   >;
   if (
     !value ||
-    value.consent !== 'technical-diagnostics-v2' ||
+    value.consent !== DIAGNOSTIC_CONSENT_REVISION ||
     typeof value.enrollmentId !== 'string' ||
     !uuid.test(value.enrollmentId) ||
     typeof value.enrollmentSecret !== 'string' ||

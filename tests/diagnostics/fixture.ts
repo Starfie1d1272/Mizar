@@ -2,14 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Miniflare } from 'miniflare';
-import ts from 'typescript';
-const source = await readFile(
-  new URL('../../apps/diagnostics-worker/src/index.ts', import.meta.url),
-  'utf8',
-);
-export const script = ts.transpileModule(source, {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-}).outputText;
+import { build } from 'esbuild';
+// Bundle the actual production entry and shared protocol export, as Wrangler does.
+const bundled = await build({
+  entryPoints: [new URL('../../apps/diagnostics-worker/src/index.ts', import.meta.url).pathname],
+  bundle: true,
+  write: false,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+});
+export const script = bundled.outputFiles[0]!.text;
 const schema = await readFile(
   new URL('../../apps/diagnostics-worker/migrations/0001_diagnostics.sql', import.meta.url),
   'utf8',

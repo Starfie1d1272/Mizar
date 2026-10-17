@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useState } from 'react';
 import { Button, Field, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
@@ -83,7 +84,7 @@ export function DiagnosticDeliverySettings() {
     try {
       await command('/operator/diagnostics/consent', {
         enabled,
-        revision: 'technical-diagnostics-v1',
+        revision: DIAGNOSTIC_CONSENT_REVISION,
       });
       setAccepted(false);
       setRefresh((v) => v + 1);

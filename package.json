@@ -69,6 +69,7 @@
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:",
-    "miniflare": "4.20260730.0"
+    "miniflare": "4.20260730.0",
+    "esbuild": "0.28.2"
   }
 }

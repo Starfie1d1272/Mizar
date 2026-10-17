@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
@@ -24,7 +25,7 @@ export const DELIVERY_LIMITS = {
   collectMs: 10 * 60_000,
   pollMs: 5000,
 };
-const CONSENT = 'technical-diagnostics-v2';
+const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
 interface Credentials {
   installationId: string;
   enrollmentSecret: string;
