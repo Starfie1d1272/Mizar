@@ -1316,3 +1316,271 @@ it('indexes single-source failures and their original UTC through real envelopes
     await rm(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.each(['snapshot', 'object-delete'])(
+  'keeps newly acknowledged uploads intact when two real cleanups overlap at %s',
+  async (interleaving) => {
+    const directory = await mkdtemp(join(tmpdir(), 'mizar-cleanup-concurrency-'));
+    const mf = runtime(directory);
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    let enteredA!: () => void;
+    let enteredB!: () => void;
+    const startedA = new Promise<void>((resolve) => {
+      enteredA = resolve;
+    });
+    const startedB = new Promise<void>((resolve) => {
+      enteredB = resolve;
+    });
+    let cleaningA: Promise<Response> | undefined;
+    let cleaningB: Promise<Response> | undefined;
+    try {
+      const db = await mf.getD1Database('DIAGNOSTICS_DB');
+      const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+      await migrate(db);
+      const { handle } = (await import(
+        `data:text/javascript;base64,${Buffer.from(script).toString('base64')}`
+      )) as {
+        handle: (request: Request, env: unknown, now: number) => Promise<Response>;
+      };
+      let now = Date.now();
+      const env = {
+        ...bindings,
+        DIAGNOSTICS_DB: db,
+        DIAGNOSTICS_BUCKET: bucket,
+        ENROLL_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+        UPLOAD_LIMITER: { limit: () => Promise.resolve({ success: true }) },
+      };
+      const call = (path: string, init: RequestInit = {}, target: unknown = env) =>
+        handle(
+          new Request(`https://local.invalid${path}`, {
+            ...init,
+            headers: { 'cf-connecting-ip': '127.0.0.1', ...init.headers },
+          }),
+          target,
+          now,
+        );
+      const installation = randomUUID();
+      const enrolled = await call('/v1/diagnostics/enroll', {
+        method: 'POST',
+        body: JSON.stringify({
+          consent: 'technical-diagnostics-v2',
+          enrollmentId: installation,
+          enrollmentSecret: 'a'.repeat(64),
+        }),
+      });
+      expect(enrolled.status).toBe(200);
+      const identity = (await enrolled.json()) as { token: string };
+      const issue = (id: string) =>
+        call(`/v1/diagnostics/permits/${id}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${identity.token}` },
+        });
+      const upload = async (operation: string) => {
+        const bytes = await sealedFixture(
+          gzipSync(
+            JSON.stringify({
+              schema: 'mizar-technical-diagnostics/1',
+              events: [
+                {
+                  stage: operation,
+                  time: new Date(now).toISOString(),
+                  evidence: { originalCause: operation },
+                },
+              ],
+            }),
+          ),
+          issue,
+        );
+        const id = hash(bytes);
+        const response = await call(`/v1/diagnostics/batches/${id}`, {
+          method: 'PUT',
+          body: bytes,
+          headers: {
+            authorization: `Bearer ${identity.token}`,
+            'content-type': 'application/gzip',
+            'x-content-sha256': id,
+            'x-diagnostics-index': JSON.stringify({
+              schema: 'mizar-technical-diagnostics/1',
+              events: 1,
+              expandedBytes: 256,
+              stages: [operation],
+              sessionId: randomUUID(),
+            }),
+          },
+        });
+        expect(response.status).toBe(200);
+        return { id, bytes };
+      };
+      const old = await upload('expired_original_operation');
+      const original = await db
+        .prepare('SELECT rowid AS row_id,object_key FROM batches WHERE id=?')
+        .bind(old.id)
+        .first<{ row_id: number; object_key: string }>();
+      now += 8 * 86400_000;
+      let pauseSnapshot = interleaving === 'snapshot';
+      const bindCounts: number[] = [];
+      type Statement = ReturnType<typeof db.prepare>;
+      const wrap = (statement: Statement, query: string): Statement =>
+        new Proxy(statement, {
+          get(target, property) {
+            if (property === 'bind')
+              return (...values: Parameters<Statement['bind']>) => {
+                bindCounts.push(values.length);
+                if (values.length > 100) throw new Error('D1 maximum 100 bound parameters');
+                return wrap(target.bind(...values), query);
+              };
+            if (property === 'all')
+              return async () => {
+                const result = await target.all();
+                if (
+                  pauseSnapshot &&
+                  query.includes('FROM batches WHERE writers=0 AND expires_at<=')
+                ) {
+                  pauseSnapshot = false;
+                  enteredA();
+                  await gateA;
+                }
+                return result;
+              };
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === 'function'
+              ? (...args: unknown[]) => Reflect.apply(value, target, args) as unknown
+              : value;
+          },
+        });
+      const guardedDb = new Proxy(db, {
+        get(target, property) {
+          if (property === 'prepare') return (query: string) => wrap(target.prepare(query), query);
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === 'function'
+            ? (...args: unknown[]) => Reflect.apply(value, target, args) as unknown
+            : value;
+        },
+      });
+      const pausedBucket = (which: 'a' | 'b') =>
+        new Proxy(bucket, {
+          get(target, property) {
+            if (property === 'delete')
+              return async (...args: Parameters<typeof bucket.delete>) => {
+                if (interleaving === 'object-delete') {
+                  if (which === 'a') {
+                    enteredA();
+                    await gateA;
+                  } else {
+                    enteredB();
+                    await gateB;
+                  }
+                }
+                return target.delete(...args);
+              };
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === 'function'
+              ? (...args: unknown[]) => Reflect.apply(value, target, args) as unknown
+              : value;
+          },
+        });
+      cleaningA = call(
+        '/admin/cleanup',
+        { method: 'POST', headers: adminHeaders },
+        { ...env, DIAGNOSTICS_DB: guardedDb, DIAGNOSTICS_BUCKET: pausedBucket('a') },
+      );
+      await Promise.race([
+        startedA,
+        cleaningA.then((response) => {
+          throw new Error(`cleanup A exited before barrier: ${response.status}`);
+        }),
+      ]);
+      cleaningB = call(
+        '/admin/cleanup',
+        { method: 'POST', headers: adminHeaders },
+        { ...env, DIAGNOSTICS_BUCKET: pausedBucket('b') },
+      );
+      if (interleaving === 'snapshot') expect((await cleaningB).status).toBe(200);
+      else
+        await Promise.race([
+          startedB,
+          cleaningB.then((response) => {
+            throw new Error(`cleanup B exited before barrier: ${response.status}`);
+          }),
+        ]);
+      const fresh = await upload('new_acknowledged_operation');
+      const freshRow = await db
+        .prepare('SELECT rowid AS row_id,state,writers,object_key FROM batches WHERE id=?')
+        .bind(fresh.id)
+        .first<{ row_id: number; state: string; writers: number; object_key: string }>();
+      expect(freshRow).toMatchObject({ state: 'ready', writers: 0 });
+      if (interleaving === 'snapshot') expect(freshRow!.row_id).toBe(original!.row_id);
+      const secondClaim = await db
+        .prepare('SELECT owner FROM batches WHERE id=?')
+        .bind(old.id)
+        .first<{ owner: string }>();
+      releaseA();
+      expect((await cleaningA).status).toBe(200);
+      if (interleaving === 'object-delete') {
+        expect(
+          await db.prepare('SELECT owner,state FROM batches WHERE id=?').bind(old.id).first(),
+        ).toMatchObject({ owner: secondClaim!.owner, state: 'deleting' });
+        releaseB();
+        expect((await cleaningB).status).toBe(200);
+      }
+      expect(
+        await db.prepare('SELECT state,writers FROM batches WHERE id=?').bind(fresh.id).first(),
+      ).toMatchObject({ state: 'ready', writers: 0 });
+      const kept = await bucket.get(freshRow!.object_key);
+      expect(kept).not.toBeNull();
+      expect(Buffer.from(await kept!.arrayBuffer())).toEqual(fresh.bytes);
+      expect(JSON.stringify(await decodeDiagnosticBatch(fresh.bytes))).toContain(
+        'new_acknowledged_operation',
+      );
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+        count: 1,
+      });
+      if (interleaving === 'snapshot') {
+        // Exercise all three composite-key pages under the real D1 binding limit.
+        for (let index = 0; index < 105; index++) {
+          const id = hash(Buffer.from(`public expired fixture ${index}`));
+          const key = `v1/${installation}/expired/${id}.gz`;
+          await db
+            .prepare(
+              "INSERT INTO batches(installation_id,id,object_key,owner,state,writers,bytes,received_at,expires_at,metadata) VALUES(?,?,?,?,'ready',0,128,?,?,'{}')",
+            )
+            .bind(installation, id, key, randomUUID(), now - 9 * 86400_000, now - 1)
+            .run();
+          await bucket.put(key, gzipSync(`public expired fixture ${index}`));
+        }
+        const bounded = { ...env, DIAGNOSTICS_DB: guardedDb };
+        expect(
+          (await call('/admin/cleanup', { method: 'POST', headers: adminHeaders }, bounded)).status,
+        ).toBe(200);
+        expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+          count: 6,
+        });
+        expect(
+          (await call('/admin/cleanup', { method: 'POST', headers: adminHeaders }, bounded)).status,
+        ).toBe(200);
+        expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
+          count: 1,
+        });
+        expect(Math.max(...bindCounts)).toBeLessThanOrEqual(100);
+        expect(await bucket.get(freshRow!.object_key)).not.toBeNull();
+      }
+    } finally {
+      releaseA();
+      releaseB();
+      await Promise.allSettled([
+        ...(cleaningA ? [cleaningA] : []),
+        ...(cleaningB ? [cleaningB] : []),
+      ]);
+      await mf.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);

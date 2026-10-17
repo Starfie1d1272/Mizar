@@ -614,63 +614,96 @@ async function withdraw(env: Env, installation: string) {
 export async function cleanup(env: Env, now = Date.now()) {
   const expired = await sql(
     env,
-    `SELECT rowid AS row_id,* FROM batches WHERE writers=0 AND expires_at<=? ORDER BY expires_at LIMIT ?`,
+    `SELECT * FROM batches WHERE writers=0 AND expires_at<=? ORDER BY expires_at LIMIT ?`,
     now,
     LIMITS.cleanupObjects,
-  ).all<BatchRow & { row_id: number }>();
+  ).all<BatchRow>();
   const revoked = await sql(
     env,
-    `SELECT b.rowid AS row_id,b.* FROM installations i JOIN batches b ON b.installation_id=i.id
+    `SELECT b.* FROM installations i JOIN batches b ON b.installation_id=i.id
     WHERE i.revoked_at IS NOT NULL AND b.writers=0 LIMIT ?`,
     LIMITS.cleanupObjects,
-  ).all<BatchRow & { row_id: number }>();
+  ).all<BatchRow>();
   const unresolved = await sql(
     env,
-    `SELECT b.rowid AS row_id,b.* FROM batches b JOIN installations i ON i.id=b.installation_id
+    `SELECT b.* FROM batches b JOIN installations i ON i.id=b.installation_id
     WHERE b.writers>0 AND (b.expires_at<=? OR i.revoked_at IS NOT NULL) ORDER BY b.cleanup_after LIMIT 10`,
     now,
-  ).all<BatchRow & { row_id: number }>();
+  ).all<BatchRow>();
   const finished = [
-    ...new Map([...expired.results, ...revoked.results].map((row) => [row.row_id, row])).values(),
+    ...new Map(
+      [...expired.results, ...revoked.results].map((row) => [
+        `${row.installation_id}:${row.id}`,
+        row,
+      ]),
+    ).values(),
   ].slice(0, LIMITS.cleanupObjects);
   const results = [...finished, ...unresolved.results];
-  const candidates = results.filter((row) => row.writers === 0);
-  if (candidates.length) {
-    const ids = candidates.map((row) => row.row_id);
-    const placeholders = ids.map(() => '?').join(',');
+  // At most 48 composite keys per statement: 96 bindings plus claim/clock,
+  // below D1's 100-bound-parameter limit. rowid is never a cross-await identity.
+  for (let offset = 0; offset < finished.length; offset += 48) {
+    const candidates = finished.slice(offset, offset + 48);
+    const keys = candidates.flatMap((row) => [row.installation_id, row.id]);
+    const placeholders = candidates.map(() => '(?,?)').join(',');
+    const claim = crypto.randomUUID();
     const claimed = await env.DIAGNOSTICS_DB.batch([
       sql(
         env,
-        `UPDATE batches SET state='deleting' WHERE writers=0 AND rowid IN (${placeholders})`,
-        ...ids,
+        `UPDATE batches SET state='deleting',owner=? WHERE writers=0
+        AND (expires_at<=? OR EXISTS(SELECT 1 FROM installations WHERE id=batches.installation_id AND revoked_at IS NOT NULL))
+        AND (installation_id,id) IN (${placeholders})`,
+        claim,
+        now,
+        ...keys,
       ),
       sql(
         env,
-        `SELECT rowid AS row_id,object_key FROM batches WHERE state='deleting' AND rowid IN (${placeholders})`,
-        ...ids,
+        `SELECT installation_id,id,object_key FROM batches WHERE state='deleting' AND owner=?
+        AND (installation_id,id) IN (${placeholders})`,
+        claim,
+        ...keys,
       ),
     ]);
-    const rows = claimed[1]!.results as { row_id: number; object_key: string }[];
+    const rows = claimed[1]!.results as {
+      installation_id: string;
+      id: string;
+      object_key: string;
+    }[];
     if (rows.length) {
       await env.DIAGNOSTICS_BUCKET.delete(rows.map((row) => row.object_key));
       await sql(
         env,
-        `DELETE FROM batches WHERE state='deleting' AND rowid IN (${rows.map(() => '?').join(',')})`,
-        ...rows.map((row) => row.row_id),
+        `DELETE FROM batches WHERE state='deleting' AND owner=?
+        AND (installation_id,id) IN (${rows.map(() => '(?,?)').join(',')})`,
+        claim,
+        ...rows.flatMap((row) => [row.installation_id, row.id]),
       ).run();
     }
   }
-  const uncertain = results.filter((row) => row.writers > 0);
-  if (uncertain.length) {
-    await env.DIAGNOSTICS_BUCKET.delete(uncertain.map((row) => row.object_key));
-    await sql(
+  if (unresolved.results.length) {
+    const keys = unresolved.results.flatMap((row) => [row.installation_id, row.id, row.owner]);
+    const placeholders = unresolved.results.map(() => '(?,?,?)').join(',');
+    const stillUncertain = await sql(
       env,
-      `UPDATE batches SET cleanup_after=?,metadata=CASE WHEN expires_at<=? THEN '{}' ELSE metadata END
-      WHERE writers>0 AND rowid IN (${uncertain.map(() => '?').join(',')})`,
+      `SELECT * FROM batches WHERE writers>0
+      AND (expires_at<=? OR EXISTS(SELECT 1 FROM installations WHERE id=batches.installation_id AND revoked_at IS NOT NULL))
+      AND (installation_id,id,owner) IN (${placeholders})`,
       now,
-      now,
-      ...uncertain.map((row) => row.row_id),
-    ).run();
+      ...keys,
+    ).all<BatchRow>();
+    if (stillUncertain.results.length) {
+      await env.DIAGNOSTICS_BUCKET.delete(stillUncertain.results.map((row) => row.object_key));
+      await sql(
+        env,
+        `UPDATE batches SET cleanup_after=?,metadata=CASE WHEN expires_at<=? THEN '{}' ELSE metadata END
+        WHERE writers>0 AND (expires_at<=? OR EXISTS(SELECT 1 FROM installations WHERE id=batches.installation_id AND revoked_at IS NOT NULL))
+        AND (installation_id,id,owner) IN (${stillUncertain.results.map(() => '(?,?,?)').join(',')})`,
+        now,
+        now,
+        now,
+        ...stillUncertain.results.flatMap((row) => [row.installation_id, row.id, row.owner]),
+      ).run();
+    }
   }
   await sql(
     env,
@@ -695,7 +728,7 @@ export async function cleanup(env: Env, now = Date.now()) {
     AND NOT EXISTS(SELECT 1 FROM sessions WHERE installation_id=installations.id) LIMIT 100)`,
     now - LIMITS.indexDays * DAY,
   ).run();
-  return { visited: results.length, unresolvedWriters: uncertain.length };
+  return { visited: results.length, unresolvedWriters: unresolved.results.length };
 }
 async function admin(request: Request, env: Env, path: string, now: number) {
   const authorization = request.headers.get('authorization') ?? '';
