@@ -817,10 +817,16 @@ async function cloud(directory, profileResult, faultResult) {
     );
     // Include normal daily restart/session/health traffic observed after full
     // recovery. The initial cohort alone can understate recurring overhead.
+    // The first drained day may still include old backlog: it belongs to the
+    // recovery peak. A steady day must also START with the previous day empty.
+    const steadyDays = days.filter(
+      (day, index) => day.receiver === 'accepting' && days[index - 1]?.queued === 0,
+    );
+    assert(steadyDays.length > 0, 'no full normal day starting without backlog');
     const steadyIngestCost = Object.fromEntries(
       Object.keys(healthyCost).map((key) => [
         key,
-        Math.max(healthyCost[key], ...days.slice(-2).map((day) => day.cost[key])),
+        Math.max(healthyCost[key], ...steadyDays.map((day) => day.cost[key])),
       ]),
     );
     const steadyDailyCost = {
@@ -833,7 +839,7 @@ async function cloud(directory, profileResult, faultResult) {
         Math.ceil((cleanupCost.rowsWritten + withdrawalCost.rowsWritten) / days.length) +
         withdrawalCost.rowsWritten,
       scope:
-        'maximum measured 100-user initial or final two fully drained days, including daily restart, plus complete cohort cleanup amortized daily and one extra actual multi-day installation withdrawal; excludes other apps and unknown writers',
+        'maximum measured 100-user initial day or accepting days starting and ending without backlog, including daily restart, plus complete cohort cleanup amortized daily and one extra actual multi-day installation withdrawal; excludes other apps and unknown writers',
     };
     const peakRecoveryDailyCost = {
       rowsRead:
@@ -886,6 +892,7 @@ async function cloud(directory, profileResult, faultResult) {
       unacknowledged: 0,
       healthyCost,
       steadyIngestCost,
+      steadySourceDays: [0, ...steadyDays.map((day) => day.day)],
       measuredSessionsPerDay,
       bodyAudits: auditedSessions.size,
       withdrawal: {
