@@ -110,6 +110,31 @@ describe('consented diagnostic outbox', () => {
         { time: 'invalid', evidence: 'unknown-source-time' },
       ],
     });
+    journal.record('native_host_records', {
+      entries: [
+        {
+          entry: {
+            time: new Date(Date.now() - 86400_000).toISOString(),
+            stage: 'process_start',
+            detail: 'private-native-before-consent',
+          },
+        },
+        {
+          entry: {
+            time: new Date(Date.now() + 1000).toISOString(),
+            stage: 'workspace_exit_wait',
+            detail: 'permitted-native-after-consent',
+          },
+        },
+        {
+          entry: {
+            time: new Date(Date.now() + 1000).toISOString(),
+            stage: 'private_chat',
+            detail: 'never-upload-native-chat',
+          },
+        },
+      ],
+    });
     journal.record('operation_result', {
       result: 'confirmed',
       route: '/operator/music/config',
@@ -132,6 +157,10 @@ describe('consented diagnostic outbox', () => {
     expect(text).not.toContain('unknown-source-time');
     expect(text).toContain('permitted-after-consent');
     expect(text).toContain('excludedPreConsentOrUnknownTimeSamples');
+    expect(text).not.toContain('private-native-before-consent');
+    expect(text).not.toContain('never-upload-native-chat');
+    expect(text).toContain('permitted-native-after-consent');
+    expect(text).toContain('excludedPreConsentUnknownTimeOrChatRecords');
     expect(await readFile(join(dir, 'session.ndjson'), 'utf8')).toContain(
       'private-pre-consent-sample',
     );

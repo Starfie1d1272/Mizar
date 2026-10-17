@@ -2,6 +2,7 @@ import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
+import { NativeSource } from './support/native-source.js';
 import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -404,6 +405,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const performanceContext = sessionJournal
     ? new PerformanceWindow(sessionJournal, () => debugClock.nowMonotonicMs())
     : undefined;
+  const nativeSource =
+    options.supportLogsDirectory && sessionJournal
+      ? new NativeSource(options.supportLogsDirectory, sessionJournal)
+      : undefined;
+  app.addHook('onReady', () => {
+    nativeSource?.start();
+  });
   if (options.supportLogsDirectory !== undefined) {
     businessJournal = new BusinessJournal(
       options.supportLogsDirectory,
@@ -1313,6 +1321,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
       channels,
       anomalyContext: performanceContext?.health() ?? null,
+      nativeSource: nativeSource?.health() ?? null,
       cstv: {
         program: cstvSources.program.getHealth(),
         lookahead: cstvSources.lookahead.getHealth(),
@@ -1397,6 +1406,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     flushBusinessLog: async () => {
+      await nativeSource?.poll();
       recordPerformanceWindow('export');
       await performanceContext?.flush();
       await businessJournal?.flush();
@@ -1607,6 +1617,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await hudConfigStore.flush();
     await currentRecorder().finalize();
     await businessJournal?.close();
+    await nativeSource?.close();
     await performanceContext?.close();
     await sessionJournal?.close();
     await diagnosticDelivery.close();
