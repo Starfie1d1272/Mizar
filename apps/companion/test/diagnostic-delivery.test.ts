@@ -385,15 +385,20 @@ describe('consented diagnostic outbox', () => {
   it('does not resume old consent after a withdrawal manifest write fails and the process restarts', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    const remote = service();
+    const options = { endpoint: 'https://diagnostics.example', fetch: remote.fetcher };
+    let delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
     await delivery.consent(true);
+    journal.record('operation_result', { result: 'enrolled-before-io-failure' });
+    await journal.flush();
+    await delivery.tick();
     const internal = delivery as unknown as { save(): Promise<void> };
     const spy = vi.spyOn(internal, 'save').mockRejectedValue(new Error('disk failure'));
     await expect(delivery.consent(false)).rejects.toThrow('disk failure');
     expect(delivery.status().consent).toBe(false);
     spy.mockRestore();
     await delivery.close();
-    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
     expect(delivery.status()).toMatchObject({
       consent: false,
       queuedBatches: 0,
@@ -541,6 +546,51 @@ describe('consented diagnostic outbox', () => {
     expect(
       (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.gz')),
     ).toEqual([]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('pauses transport across restart while continuing to retain local queued evidence', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    let delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.consent(true);
+    await delivery.pause(true);
+    journal.record('operation_result', { result: 'during-pause' });
+    await journal.flush();
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    expect(delivery.status()).toMatchObject({ consent: true, paused: true, queuedBatches: 1 });
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    await delivery.pause(false);
+    await delivery.tick();
+    expect(remote.batches.size).toBeGreaterThan(0);
+    await delivery.close();
+    await journal.close();
+  });
+  it('does not cancel a concurrent consent request when pausing transport', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await Promise.all([delivery.consent(true), delivery.pause(true)]);
+    journal.record('operation_result', { result: 'retained-with-consent-and-pause' });
+    await journal.flush();
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({ consent: true, paused: true, queuedBatches: 1 });
+    expect(remote.calls).toEqual([]);
     await delivery.close();
     await journal.close();
   });

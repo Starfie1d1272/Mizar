@@ -26,6 +26,7 @@ const CONSENT = 'technical-diagnostics-v1';
 interface Credentials {
   installationId: string;
   enrollmentSecret: string;
+  enrollmentAttempted?: boolean;
   token?: string;
   expiresAt?: number;
 }
@@ -37,6 +38,7 @@ interface Batch {
 interface State {
   version: 1;
   consent: boolean;
+  paused: boolean;
   consentAt: string | null;
   credentials: Credentials | null;
   withdrawals: Credentials[];
@@ -54,6 +56,7 @@ const credentialsSchema = z
   .object({
     installationId: identifier,
     enrollmentSecret: z.string().regex(/^[a-f0-9]{64}$/),
+    enrollmentAttempted: z.boolean().optional(),
     token: z
       .string()
       .max(2048)
@@ -66,6 +69,7 @@ const stateSchema = z
   .object({
     version: z.literal(1),
     consent: z.boolean(),
+    paused: z.boolean().default(false),
     consentAt: z.iso.datetime().nullable(),
     credentials: credentialsSchema.nullable(),
     withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
@@ -134,6 +138,7 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 const initial = (): State => ({
   version: 1,
   consent: false,
+  paused: false,
   consentAt: null,
   credentials: null,
   withdrawals: [],
@@ -218,6 +223,7 @@ export class DiagnosticDelivery {
   private closed = false;
   private epoch = 0;
   private requestedConsent = false;
+  private requestedPause = false;
   private revocationFenced = false;
   private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
@@ -268,6 +274,7 @@ export class DiagnosticDelivery {
       this.revocationFenced = true;
       if (
         this.state.credentials &&
+        (this.state.credentials.enrollmentAttempted || this.state.credentials.token) &&
         !this.state.withdrawals.some(
           (v) => v.installationId === this.state.credentials!.installationId,
         )
@@ -280,6 +287,7 @@ export class DiagnosticDelivery {
       await this.save();
     }
     this.requestedConsent = this.state.consent;
+    this.requestedPause = this.state.paused;
     // Bytes not referenced by the atomic manifest were never eligible for upload.
     for (const entry of await readdir(this.queueDirectory, { withFileTypes: true }))
       if (
@@ -320,6 +328,7 @@ export class DiagnosticDelivery {
     return {
       configured: Boolean(this.endpoint),
       consent: this.consentActive(),
+      paused: this.requestedPause,
       consentAt: this.state.consentAt,
       queuedBatches: this.state.queue.length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
@@ -443,7 +452,11 @@ export class DiagnosticDelivery {
         await fence;
         const prior = this.state.credentials;
         this.state.consent = false;
-        if (prior && !this.state.withdrawals.some((v) => v.installationId === prior.installationId))
+        if (
+          prior &&
+          (prior.enrollmentAttempted || prior.token) &&
+          !this.state.withdrawals.some((v) => v.installationId === prior.installationId)
+        )
           this.state.withdrawals.push(prior);
         this.state.credentials = null;
         this.state.sessions = {};
@@ -474,6 +487,23 @@ export class DiagnosticDelivery {
         result: 'persisted',
         deletionPending: this.state.withdrawals.length,
       });
+      return this.status();
+    });
+  }
+  async pause(paused: boolean) {
+    this.requestedPause = paused;
+    if (paused) this.abort?.abort();
+    return this.transaction(async () => {
+      const previous = this.state.paused;
+      this.state.paused = paused;
+      this.state.nextAttemptAt = 0;
+      try {
+        await this.save();
+      } catch (error) {
+        this.state.paused = previous;
+        throw error;
+      }
+      this.journal.record('diagnostic_transport', { paused, trigger: 'user', queue: 'retained' });
       return this.status();
     });
   }
@@ -697,6 +727,9 @@ export class DiagnosticDelivery {
   }
   private async credentials(value: Credentials, signal: AbortSignal) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
+    value.enrollmentAttempted = true;
+    await this.transaction(() => this.save());
+    if (signal.aborted) throw new Error('enrollment_aborted');
     const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/enroll`, {
       method: 'POST',
       redirect: 'error',
@@ -775,7 +808,13 @@ export class DiagnosticDelivery {
           }
         });
       }
-      if (!this.consentActive() || !this.state.credentials || epoch !== this.epoch) return;
+      if (
+        !this.consentActive() ||
+        this.requestedPause ||
+        !this.state.credentials ||
+        epoch !== this.epoch
+      )
+        return;
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       await this.transaction(() => this.save());
@@ -787,7 +826,7 @@ export class DiagnosticDelivery {
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
-      if (!this.consentActive() || epoch !== this.epoch) return;
+      if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
       const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
         method: 'PUT',
         redirect: 'error',
@@ -829,7 +868,7 @@ export class DiagnosticDelivery {
         await unlink(join(this.queueDirectory, `${batch.id}.gz`));
       });
     } catch (error) {
-      if (epoch !== this.epoch) return;
+      if (epoch !== this.epoch || this.requestedPause) return;
       await this.transaction(async () => {
         this.state.failures++;
         this.state.nextAttemptAt =

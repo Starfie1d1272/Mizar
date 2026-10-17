@@ -551,6 +551,20 @@ export function WorkspaceDock() {
                 : '关闭游戏并恢复配置'}
           </small>
           <Button
+            disabled={busy}
+            onClick={() =>
+              void action(async () => {
+                await command('/operator/diagnostics/report', {
+                  category: 'other',
+                  observedAt: new Date().toISOString(),
+                });
+                setMessage('问题时间已在本机诊断中保存；云端接收状态可在设置中查看。');
+              })
+            }
+          >
+            标记本场问题
+          </Button>
+          <Button
             className="workspace-exit"
             disabled={!production || busy || Boolean(exit?.busy)}
             aria-busy={busy || Boolean(exit?.busy)}

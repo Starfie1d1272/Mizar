@@ -298,6 +298,9 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
             stop: () => shutdown('product-stop'),
           },
         }),
+    ...(process.env.MIZAR_DIAGNOSTICS_ENDPOINT
+      ? { diagnosticsEndpoint: process.env.MIZAR_DIAGNOSTICS_ENDPOINT }
+      : {}),
     logger: true,
     gsiToken,
     recorder,

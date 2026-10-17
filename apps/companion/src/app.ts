@@ -1,3 +1,4 @@
+import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { MusicStore } from './music/store.js';
@@ -154,6 +155,8 @@ export interface CompanionAppOptions {
   readonly debugClock?: DebugRuntimeClock;
   readonly deliveryConsumers?: readonly DeliveryHealthSource[];
   readonly cstvSources?: CstvSourceManagers;
+  readonly diagnosticsEndpoint?: string;
+  readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
   readonly onObservation?: ObservationSink;
   readonly onGsiDiagnostics?: GsiDiagnosticsSink;
@@ -1313,6 +1316,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     sessionJournal?.record('browser_control', request.body);
     return reply.code(204).send();
   });
+  const diagnosticDelivery = registerDiagnosticDelivery(app, {
+    ...(options.supportLogsDirectory ? { directory: options.supportLogsDirectory } : {}),
+    ...(sessionJournal ? { journal: sessionJournal } : {}),
+    originPolicy: localWebTransport.getOriginPolicy(),
+    ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
+    ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
+    onReport: () => recordPerformanceWindow('problem_report'),
+  });
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.supportLogsDirectory === undefined
@@ -1503,6 +1514,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await currentRecorder().finalize();
     await businessJournal?.close();
     await sessionJournal?.close();
+    await diagnosticDelivery.close();
   });
 
   return app;
