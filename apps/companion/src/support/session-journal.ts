@@ -135,6 +135,11 @@ export class SessionJournal {
   ): T {
     return this.requestContext.run(context, run);
   }
+  private readonly listeners = new Set<(line: string) => void>();
+  subscribe(listener: (line: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
   private sequence = 0;
   private pendingBytes = 0;
   private writer = Promise.resolve();
@@ -230,6 +235,14 @@ export class SessionJournal {
         } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
         try {
           await this.append(batch.join(''), bytes);
+          for (const line of batch)
+            for (const listener of this.listeners) {
+              try {
+                listener(line);
+              } catch {
+                /* Delivery cannot alter local diagnostics. */
+              }
+            }
         } catch {
           this.failures++;
         } finally {
