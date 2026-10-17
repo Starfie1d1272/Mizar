@@ -883,10 +883,13 @@ export class DiagnosticDelivery {
   private async persist() {
     if (!this.consentActive()) return;
     const epoch = this.epoch;
-    while (this.pending.length) {
+    // Bound this collection to its admitted prefix. New committed records may
+    // arrive during compression/fsync; keep them for the next scheduled batch.
+    let remaining = this.pending.length;
+    while (remaining > 0) {
       const selected: typeof this.pending = [];
       let bytes = 128;
-      for (const item of this.pending) {
+      for (const item of this.pending.slice(0, remaining)) {
         const length = Buffer.byteLength(item.line);
         if (
           selected.length &&
@@ -938,6 +941,7 @@ export class DiagnosticDelivery {
       ) {
         this.omitted('batch_size_budget', selected.length);
         this.pending.splice(0, selected.length);
+        remaining -= selected.length;
         this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
         continue;
       }
@@ -1014,6 +1018,7 @@ export class DiagnosticDelivery {
         throw error;
       }
       this.pending.splice(0, selected.length);
+      remaining -= selected.length;
       this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
       await yieldIO();
     }
