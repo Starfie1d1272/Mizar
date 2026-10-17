@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
@@ -21,7 +22,11 @@ export function registerOnlineManifestRoutes(
       try {
         const source = createOnlineManifestSource(active.context.matchId, config);
         void controller.stageOnlineMatch(active.context.matchId, source).catch(() => undefined);
-      } catch {
+      } catch (error) {
+        app.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         /* Invalid config is surfaced by explicit refresh. */
       }
     }, 60_000);
@@ -62,7 +67,11 @@ export function registerOnlineManifestRoutes(
     let source;
     try {
       source = createOnlineManifestSource(body.matchId, options.config);
-    } catch {
+    } catch (error) {
+      app.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply
         .code(400)
         .send({ error: 'invalid_match_id', message: '比赛标识或来源配置有误。' });

@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import { errorEvidence } from '../updates/diagnostics.js';
 import { rosterCandidate, mergeObservedStarters } from './roster-capture.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
@@ -181,7 +182,11 @@ export function registerLocalTournamentRoutes(
           if (canActivate()) controller.activateLocalDocument(updated);
         }
         return { ok: true };
-      } catch {
+      } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         return reply
           .code(409)
           .send({ message: '名单保存未完成，请刷新当前比赛与服务器名单后重试。' });
@@ -215,7 +220,11 @@ export function registerLocalTournamentRoutes(
       });
       controller.activateLocalDocument(document);
       return { ok: true, matchId: document.matchId };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_match_create_failed' });
     }
   });
@@ -230,7 +239,11 @@ export function registerLocalTournamentRoutes(
       const document = await store.selectMatch(body.matchId);
       controller.activateLocalDocument(document);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(404).send({ error: 'local_match_not_found' });
     }
   });
@@ -267,6 +280,10 @@ export function registerLocalTournamentRoutes(
         }
         return { ok: true };
       } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         const code = error instanceof Error ? error.message : '';
         const known: Record<string, { status: number; message: string }> = {
           local_match_in_use: {
@@ -324,7 +341,11 @@ export function registerLocalTournamentRoutes(
       const document = await store.saveMatch(body.document);
       controller.activateLocalDocument(document);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_match_save_failed' });
     }
   });
@@ -366,7 +387,11 @@ export function registerLocalTournamentRoutes(
       )
         controller.activateLocalDocument(selected);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_event_save_failed' });
     }
   });
@@ -384,7 +409,11 @@ export function registerLocalTournamentRoutes(
     try {
       await store.reorder(body.eventId, body.matchIds);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_schedule_invalid' });
     }
   });

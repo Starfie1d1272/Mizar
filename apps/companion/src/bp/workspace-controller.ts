@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { DEFAULT_LOCAL_BP_MAP_POOL, LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
 import { bpWorkspaceSchema, localBpDraftSchema } from '@mizar/protocol/bp';
@@ -168,7 +169,11 @@ export function registerBpWorkspaceRoutes(
         else await options.localTournamentStore.saveMatch(document);
         options.controller.activateLocalDocument(document);
         return { ok: true, message: '本地 BP 已保存。' };
-      } catch {
+      } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         return reply.code(400).send({ error: 'bp_save_failed', message: '本地 BP 保存失败。' });
       }
     }

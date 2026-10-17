@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ObsStatus } from '../obs/adapter.js';
 import { isObsProcessRunning } from '../obs/config.js';
-import { errorEvidence } from './diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 import type { registerProductionRoutes } from '../program-scenes/production.js';
 import { UpdateManager, safeCode, updateFailure } from './manager.js';
@@ -62,7 +62,7 @@ export function registerUpdateRoutes(
           stage: 'install_plan',
           code: 'update_obs_process_probe_failed',
           result: 'failure',
-          diagnostic: { error: errorEvidence(error) },
+          diagnostic: { error: diagnosticValue(error) },
         },
         'OBS process state could not be confirmed',
       );

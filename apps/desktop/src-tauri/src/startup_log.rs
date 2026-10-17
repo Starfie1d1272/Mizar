@@ -101,16 +101,32 @@ fn rotate(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn bounded(text: &str) -> String {
-    if text.len() <= MESSAGE_LIMIT {
-        return text.into();
-    }
-    let mut end = MESSAGE_LIMIT;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{} [truncated]", &text[..end])
+fn credential_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace(['_', '-'], "");
+    ["password", "passwd", "token", "secret", "credential", "authorization", "cookie", "streamkey", "apikey"].iter().any(|word| key.contains(word))
 }
+
+fn redact_value(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(fields.into_iter().map(|(key, value)| {
+            let value = if credential_key(&key) { json!("[redacted]") } else { redact_value(value) };
+            (key, value)
+        }).collect()),
+        Value::Array(fields) => Value::Array(fields.into_iter().map(redact_value).collect()),
+        Value::String(text) if text.starts_with("http://") || text.starts_with("https://") => {
+            if let Some((path, query)) = text.split_once('?') {
+                let query = query.split('&').map(|part| {
+                    if let Some((key, value)) = part.split_once('=') {
+                        format!("{key}={}", if credential_key(key) || ["code", "key", "auth"].contains(&key) { "[redacted]" } else { value })
+                    } else { part.to_owned() }
+                }).collect::<Vec<_>>().join("&");
+                json!(format!("{path}?{query}"))
+            } else { json!(text) }
+        },
+        other => other,
+    }
+}
+
 
 impl DesktopLog {
     pub fn new(root: &Path, state_override: Option<PathBuf>) -> io::Result<Self> {
@@ -168,15 +184,30 @@ impl DesktopLog {
             .inner
             .lock()
             .map_err(|_| io::Error::other("desktop log lock unavailable"))?;
-        // Aggregate successful navigation at the producer so bounded log tails
-        // still contain the preparation/startup failure that preceded reloads.
+        // Preserve each navigation in the full retained product log.
         if stage == "main_page_load" && result == "success" {
             log.page_loads = log.page_loads.saturating_add(1);
-            if !log.page_loads.is_power_of_two() {
+
+        }
+        if let Some(detail) = detail {
+            let clean = serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned());
+            if clean.len() > MESSAGE_LIMIT {
+                let mut chunks = Vec::new();
+                let mut start = 0;
+                while start < clean.len() {
+                    let mut end = (start + MESSAGE_LIMIT).min(clean.len());
+                    while !clean.is_char_boundary(end) { end -= 1; }
+                    chunks.push(&clean[start..end]);
+                    start = end;
+                }
+                let detail_id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+                for (index, text) in chunks.iter().enumerate() {
+                    Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()))?;
+                }
                 return Ok(());
             }
-        }
-        Self::write_entry(&log, stage, result, detail)
+            Self::write_entry(&log, stage, result, Some(&clean))
+        } else { Self::write_entry(&log, stage, result, None) }
     }
 
     fn write_entry(
@@ -194,14 +225,10 @@ impl DesktopLog {
                 "error"
             } else {
                 "detail"
-            }] = json!(bounded(detail));
+            }] = json!(serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned()));
         }
         if stage == "main_page_load" && result == "success" {
-            entry["occurrences"] = json!(if log.page_loads <= 1 {
-                1
-            } else {
-                log.page_loads / 2
-            });
+            entry["occurrences"] = json!(1);
         }
         let mut bytes = serde_json::to_vec(&entry)?;
         bytes.push(b'\n');
@@ -237,6 +264,15 @@ impl DesktopLog {
                 Err(format!("{stage}: {message}"))
             }
         }
+    }
+
+    pub fn preserve_error<E: std::fmt::Debug, T>(&self, command: &str, operation_id: Option<&str>, error: &E, friendly: T) -> T {
+        self.event("native_error", "failure", Some(&json!({"command":command,"operationId":operation_id,"cause":format!("{error:?}")}).to_string()));
+        friendly
+    }
+
+    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(&self, command: &str, operation_id: Option<&str>, result: &Result<T, E>) {
+        self.event("native_command", if result.is_ok() { "success" } else { "failure" }, Some(&json!({"command":command,"operationId":operation_id,"outcome":format!("{result:?}")}).to_string()));
     }
 
     pub fn install_panic_hook(&self) {
@@ -276,6 +312,38 @@ mod tests {
         ));
         fs::create_dir_all(path.join("resources/metadata")).unwrap();
         path
+    }
+
+    #[test]
+    fn persists_every_control_stage_and_precise_redaction_across_restart() {
+        let root = root("control-evidence");
+        let log = DesktopLog::new(&root, None).unwrap();
+        log.event("native_command", "begin", Some(&json!({"command":"start_demo_test", "token":"private-token", "password":"private-password", "arguments":["-applaunch","730","-worldwide"],"width":1920}).to_string()));
+        for _ in 0..40 { log.event("main_page_load", "success", None); }
+        let failed: Result<(), String> = Err("restore_stage: PermissionDenied osCode=5".into());
+        log.native_outcome("finish_workspace", Some("fixture-operation"), &failed);
+        let long_cause = format!("{}; leaf=PermissionDenied osCode=5", "cause-chain;".repeat(4000));
+        log.event("long_failure", "failure", Some(&long_cause));
+        let directory = log.directory.clone();
+        drop(log);
+        let _restarted = DesktopLog::new(&root, None).unwrap();
+        let text = fs::read_to_string(directory.join("desktop.1.ndjson")).unwrap();
+        let mut parts: Vec<Value> = text.lines().filter_map(|line| {
+            let event: Value = serde_json::from_str(line).ok()?;
+            if event["stage"] != "long_failure" { return None; }
+            serde_json::from_str(event["error"].as_str()?).ok()
+        }).collect();
+        parts.sort_by_key(|part| part["part"].as_u64());
+        assert_eq!(parts.len() as u64, parts[0]["parts"].as_u64().unwrap());
+        assert_eq!(parts.iter().map(|part| part["text"].as_str().unwrap()).collect::<String>(), long_cause);
+        assert!(!text.contains("private-token"));
+        assert!(!text.contains("private-password"));
+        let events: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(events.iter().filter(|entry| entry["stage"] == "main_page_load").count(), 40);
+        assert!(text.contains("-worldwide"));
+        assert!(text.contains("PermissionDenied osCode=5"));
+        assert!(events.iter().any(|entry| entry["stage"] == "native_command" && entry["result"] == "failure"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -153,14 +153,36 @@ export function registerRivalHubConnectionRoutes(
         .send({ message: error instanceof Error ? error.message : '刷新失败，请重试。' });
     }
   });
-  app.get('/local/v1/rivalhub-connection', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send({
+  let lastSyncEvidence = '';
+  app.get('/local/v1/rivalhub-connection', (_request, reply) => {
+    const snapshot = options.currentSnapshot();
+    const expected = syncExpected();
+    const syncHealth = options.connection.syncHealth(
+      snapshot,
+      expected,
+      linkedBinding()?.context.matchId ?? null,
+    );
+    const evidence = {
+      expected,
+      syncHealth,
+      linkedMatchId: linkedBinding()?.context.matchId ?? null,
+      snapshotAvailable: snapshot !== null,
+      phase: snapshot?.map.phase ?? null,
+      mapId: snapshot?.map.mapId ?? null,
+      liveSessionId: snapshot?.cursor.liveSessionId ?? null,
+      canonicalTeams: snapshot?.capability.canonicalTeams ?? null,
+      lineupComplete: snapshot?.capability.lineupComplete ?? null,
+      observedLineupReady: observedLineupReady(),
+      receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
+    };
+    const signature = JSON.stringify(evidence);
+    if (signature !== lastSyncEvidence) {
+      lastSyncEvidence = signature;
+      app.log.info({ diagnostic: evidence }, 'Website sync prerequisites and health changed');
+    }
+    return reply.header('cache-control', 'no-store').send({
       ...options.connection.view(),
-      syncHealth: options.connection.syncHealth(
-        options.currentSnapshot(),
-        syncExpected(),
-        linkedBinding()?.context.matchId ?? null,
-      ),
+      syncHealth,
       activeMatchId: linkedBinding()?.context.matchId ?? null,
       activeDeviceName:
         options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
@@ -185,8 +207,8 @@ export function registerRivalHubConnectionRoutes(
       websiteUrl: linkedBinding()?.manifest.match.competition?.slug
         ? `${OFFICIAL_RIVALHUB_URL}/admin/${encodeURIComponent(linkedBinding()!.manifest.match.competition!.slug)}/matches/${encodeURIComponent(linkedBinding()!.context.matchId)}`
         : null,
-    }),
-  );
+    });
+  });
   app.get('/local/v1/rivalhub-schedule', async (request, reply) => {
     if (!options.connection.view().paired)
       return reply.code(404).send({ message: '尚未连接赛事。' });

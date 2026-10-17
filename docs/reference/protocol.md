@@ -181,7 +181,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
 
-桌面私有命令 `select_cs2_installation` 仅接受 `executable` 布尔选项，由 Host 打开原生选择框并验证、保存安装根目录；取消返回 false，不安装 GSI。`open_cs2_config_directory` 不接受路径，重新解析当前配置位置后打开文件夹。`gsi_status` 在既有布尔状态外返回 `readFailed`、有限问题列表、候选数、冲突文件与最近操作阶段。路径仅供本机设置页显示；支持包只允许有限问题码、数量和阶段，不导出路径、文件名或配置内容。
+桌面私有命令 `select_cs2_installation` 仅接受 `executable` 布尔选项，由 Host 打开原生选择框并验证、保存安装根目录；取消返回 false，不安装 GSI。`open_cs2_config_directory` 不接受路径，重新解析当前配置位置后打开文件夹。`gsi_status` 在既有布尔状态外返回 `readFailed`、有限问题列表、候选数、冲突文件与最近操作阶段。路径仅供本机设置页显示；支持包摘要保留问题码与阶段，完整日志保留实际技术路径、参数及相关配置，凭据值被替换。
 
 默认监听 `127.0.0.1`，生产网页与 WebSocket 由同一本地服务提供。非回环访问必须显式设置 `LOCAL_WEB_LAN_MODE=1` 和精确 `LOCAL_WEB_ALLOWED_ORIGINS`；局域网模式禁止控制写入，即使来源在允许列表中。
 
@@ -231,4 +231,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机节目音乐
 
-`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达、外部 LIVE 和支持包均不添加音乐路径或曲库字段。格式与限制见[节目音乐](music.md)。
+`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
+
+本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
+
+`fullLogs.files` 中 `format: obs-log-text/1` 为已关联 Mizar 的 OBS 日志原文经凭据替换后的分卷，采用同一 SHA-256 完整性契约；附带来源会话 UTC 起点与本地时区偏移。`nativeObs` 和 `attachments.obsLogs` 仍是技术事件索引，不能代替原文或证明画面正常。候选选择、预算、拒绝与缺失状态见架构；浏览器不能提交 OBS 文件路径。

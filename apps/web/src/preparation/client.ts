@@ -1,3 +1,4 @@
+import { controlEvidence } from '../debug/control-journal';
 import type { Cs2ConfigStatus } from './cs2-status';
 import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
@@ -108,6 +109,13 @@ export async function productionAction(
   state: Production,
   preserveSettings = false,
 ) {
+  controlEvidence('production_action', 'dispatch', {
+    action,
+    nativeAvailable: Boolean(window.__TAURI_INTERNALS__),
+    mode: state.mode,
+    expectedRevision: state.revision,
+    page: window.location.pathname,
+  });
   if (window.__TAURI_INTERNALS__ && action === 'finish') {
     await desktopInvoke('finish_workspace');
     return;

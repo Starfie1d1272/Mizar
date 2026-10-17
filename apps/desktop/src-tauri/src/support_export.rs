@@ -1,9 +1,13 @@
 use std::{fs, path::Path};
 
-const MAX_BYTES: usize = 1024 * 1024;
+const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 pub fn validate(contents: &str) -> Result<(), String> {
-    if contents.len() > MAX_BYTES {
+    validate_with_limit(contents, MAX_BYTES)
+}
+
+fn validate_with_limit(contents: &str, max_bytes: usize) -> Result<(), String> {
+    if contents.len() > max_bytes {
         return Err("诊断包超出大小限制，请重新生成。".into());
     }
     let value: serde_json::Value =
@@ -40,7 +44,7 @@ mod tests {
         assert!(validate(BUNDLE).is_ok());
         assert!(validate("{}").is_err());
         assert!(validate(&BUNDLE.replace("/1", "/2")).is_err());
-        assert!(validate(&"错".repeat(MAX_BYTES / 2)).is_err());
+        assert!(validate_with_limit(&"错".repeat(512), 1024).is_err());
     }
 
 }

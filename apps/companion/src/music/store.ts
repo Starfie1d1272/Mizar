@@ -56,8 +56,31 @@ export class MusicStore {
   };
   private trackCache = new Map<string, string>();
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(readonly directory: string) {}
+  constructor(
+    readonly directory: string,
+    private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+  ) {}
+  private async stage<T>(stage: string, evidence: unknown, run: () => Promise<T> | T): Promise<T> {
+    this.diagnostic(stage, { result: 'begin', ...(evidence as object) });
+    try {
+      const result = await run();
+      this.diagnostic(stage, { result: 'success', ...(evidence as object) });
+      return result;
+    } catch (error) {
+      this.diagnostic(stage, { result: 'failure', ...(evidence as object), error });
+      throw error;
+    }
+  }
   async load() {
+    try {
+      await this.stage('music_load', { directory: this.directory }, () => this.loadState());
+    } catch (error) {
+      this.failure = true;
+      this.ready = false;
+      throw error;
+    }
+  }
+  private async loadState() {
     await ensureDirectory(this.directory);
     await ensureDirectory(join(this.directory, 'tracks'));
     try {
@@ -69,9 +92,12 @@ export class MusicStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error('music_state_invalid', { cause: error });
+      this.failure = false;
       await this.update(() => undefined);
     }
+    this.failure = false;
     this.ready = true;
+    this.diagnostic('music_loaded_snapshot', { state: this.state });
   }
   update(change: (state: MusicState) => void): Promise<void> {
     const result = this.queue.then(async () => {
@@ -79,7 +105,9 @@ export class MusicStore {
       const next = structuredClone(this.state);
       change(next);
       stateSchema.parse(next);
-      await atomicJson(join(this.directory, 'state.json'), next);
+      await this.stage('music_commit_config', { before: this.state, after: next }, () =>
+        atomicJson(join(this.directory, 'state.json'), next),
+      );
       this.state = next;
     });
     this.queue = result.catch(() => undefined);
@@ -87,21 +115,27 @@ export class MusicStore {
   }
   async add(name: string, bytes: Buffer) {
     if (this.failure || !this.ready) throw new Error('music_state_invalid');
-    if (!audioBytes(name, bytes)) throw new Error('music_track_invalid');
+    await this.stage('music_validate', { name, bytes: bytes.length }, () => {
+      if (!audioBytes(name, bytes)) throw new Error('music_track_invalid');
+    });
     const id = `${createHash('sha256').update(bytes).digest('hex')}.${name.split('.').at(-1)!.toLowerCase()}`;
     const track = musicTrackSchema.parse({ id, name: basename(name) });
     const target = join(this.directory, 'tracks', id);
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
     await safePath(join(this.directory, 'tracks'));
-    const fd = await open(temporary, 'wx', 0o600);
+    const fd = await this.stage('music_open_track', { name, id, target, temporary }, () =>
+      open(temporary, 'wx', 0o600),
+    );
     try {
-      await fd.writeFile(bytes);
-      await fd.sync();
+      await this.stage('music_write', { name, id, bytes: bytes.length }, async () => {
+        await fd.writeFile(bytes);
+        await fd.sync();
+      });
     } finally {
       await fd.close();
     }
     try {
-      await rename(temporary, target);
+      await this.stage('music_commit_track', { name, id }, () => rename(temporary, target));
     } finally {
       await unlink(temporary).catch(() => undefined);
     }
@@ -128,7 +162,10 @@ export class MusicStore {
   async configure(config: MusicConfig) {
     const parsed = musicConfigSchema.parse(config);
     for (const group of MUSIC_GROUPS)
-      for (const track of parsed.groups[group].tracks) await this.trackPath(track.id);
+      for (const track of parsed.groups[group].tracks)
+        await this.stage('music_validate_stored_track', { group, id: track.id }, () =>
+          this.trackPath(track.id),
+        );
     await this.update((s) => {
       s.config = parsed;
     });
@@ -138,7 +175,11 @@ export class MusicStore {
     if (this.importing || this.failure || !this.ready) throw new Error('music_import_unavailable');
     this.importing = true;
     try {
-      const { manifest, entries } = await readMusicPack(zip);
+      const { manifest, entries } = await this.stage(
+        'music_validate_archive',
+        { bytes: zip.length },
+        () => readMusicPack(zip),
+      );
       const config = defaultMusicConfig();
       for (const group of MUSIC_GROUPS) {
         const spec = manifest.groups[group];

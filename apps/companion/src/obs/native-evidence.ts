@@ -1,9 +1,17 @@
+import { setImmediate as yieldIO } from 'node:timers/promises';
+import { diagnosticValue } from '../support/session-journal.js';
+import { encodeLogVolumes, type ArchivedLogFile } from '../support/archive.js';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  obsSceneName,
+  obsBrowserInputName,
+} from './desired-state.js';
 import { readObsNativeProcesses, type ObsNativeProcess } from './native-process.js';
 import { redactDiagnosticText } from '../updates/diagnostics.js';
 
@@ -12,6 +20,9 @@ export const OBS_NATIVE_LIMITS = {
   roots: 2,
   directoryEntries: 128,
   logFiles: 2,
+  relatedLogFiles: 8,
+  relatedLogBytes: 25 * 1024 * 1024,
+  relatedLogTotalBytes: 64 * 1024 * 1024,
   logAgeMs: 24 * 60 * 60 * 1000,
   logHeaderBytes: 8192,
   logScanBytes: 8 * 1024 * 1024,
@@ -462,6 +473,16 @@ interface RootEvidence {
   directoryTruncated: boolean;
   fileStatus: Record<string, 'read' | 'missing' | 'failed' | 'not_selected'>;
 }
+export interface RelatedObsLogFile extends ArchivedLogFile {
+  format: 'obs-log-text/1';
+  root: number;
+  slot: number;
+  sessionStartedAt: string;
+  utcOffsetMinutes: number;
+  modifiedAt: string;
+  association: 'mizar_source_marker' | 'not_established';
+  sourceSnapshot: 'bytes_at_open; later appends are outside this export';
+}
 export interface ObsNativeEvidence {
   collectionStatus: 'available' | 'unsupported' | 'timeout' | 'failed';
   processStatus: 'available' | 'failed' | 'unavailable';
@@ -470,6 +491,13 @@ export interface ObsNativeEvidence {
   errors: ReturnType<typeof failure>[];
   limits: typeof OBS_NATIVE_LIMITS;
   exportTruncated: boolean;
+  relatedLogFiles?: RelatedObsLogFile[];
+  relatedLogSelection?: {
+    root: number;
+    candidates: number;
+    selected: number;
+    notSelected: number;
+  }[];
   logAttachments?: {
     root: number;
     slot: number;
@@ -577,7 +605,7 @@ export async function collectObsNativeEvidence(
     const path = join(root, ...parts);
     const chain = await guardedPath(path);
     const before = chain[chain.length - 1]!.stat;
-    if (!before.isFile())
+    if (!before.isFile() || before.nlink !== 1)
       throw Object.assign(new Error('OBS evidence is not a regular file'), { code: 'EUNSAFE' });
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
@@ -588,7 +616,7 @@ export async function collectObsNativeEvidence(
           code: 'ECHANGED',
         });
       await unchanged(chain);
-      if (!stat.isFile())
+      if (!stat.isFile() || stat.nlink !== 1)
         throw Object.assign(new Error('OBS evidence is not a regular file'), { code: 'EUNSAFE' });
       if (!tail && !header && stat.size > limit)
         throw Object.assign(new Error('OBS evidence exceeds the read limit'), { code: 'ETOOBIG' });
@@ -641,18 +669,25 @@ export async function collectObsNativeEvidence(
       }
       const size = Math.min(stat.size, limit),
         buffer = Buffer.alloc(size);
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        size,
-        tail ? Math.max(0, stat.size - size) : 0,
-      );
-      check();
+      let bytesRead = 0;
+      while (bytesRead < size) {
+        const chunk = await handle.read(
+          buffer,
+          bytesRead,
+          Math.min(65536, size - bytesRead),
+          (tail ? Math.max(0, stat.size - size) : 0) + bytesRead,
+        );
+        check();
+        if (!chunk.bytesRead) break;
+        bytesRead += chunk.bytesRead;
+      }
+      await unchanged(chain);
       const text = buffer.subarray(0, bytesRead).toString('utf8');
       return {
         text: tail && stat.size > size ? text.slice(text.indexOf('\n') + 1) : text,
         size: stat.size,
         mtime: stat.mtimeMs,
+        readBytes: bytesRead,
       };
     } finally {
       await handle.close();
@@ -675,7 +710,37 @@ export async function collectObsNativeEvidence(
       return null;
     }
   }
+  async function redactRelatedText(text: string, secrets: readonly string[]) {
+    const parts: string[] = [];
+    let start = 0,
+      sinceYield = 0;
+    while (start < text.length) {
+      const newline = text.indexOf('\n', start);
+      const end = newline < 0 ? text.length : newline + 1;
+      const line = text.slice(start, end);
+      parts.push(
+        diagnosticValue(
+          line.replace(
+            /(stream[ _-]?key["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
+            '$1[redacted]',
+          ),
+          '',
+          new Set(),
+          secrets,
+        ) as string,
+      );
+      sinceYield += end - start;
+      start = end;
+      if (sinceYield >= 65536) {
+        await yieldIO();
+        check();
+        sinceYield = 0;
+      }
+    }
+    return parts.join('');
+  }
   async function collect() {
+    let relatedLogBytes = 0;
     let processes: readonly ObsNativeProcess[] = [];
     try {
       processes = await (options.readProcesses ?? readObsNativeProcesses)();
@@ -788,6 +853,48 @@ export async function collectObsNativeEvidence(
             : null,
         collection: saved,
       };
+      const logSecrets: string[] = [];
+      const rememberCredentials = (value: unknown) => {
+        const pending: unknown[] = [value];
+        while (pending.length) {
+          const entry = pending.pop();
+          if (!entry || typeof entry !== 'object') continue;
+          for (const [key, value] of Object.entries(entry)) {
+            if (
+              typeof value === 'string' &&
+              /password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key/i.test(key)
+            ) {
+              if (value) logSecrets.push(value);
+            } else if (value && typeof value === 'object') pending.push(value);
+          }
+        }
+      };
+      if (options.includeRelatedLogs) {
+        rememberCredentials(settings);
+        rememberCredentials(profileIni);
+        for (const [role, parts] of [
+          ...(component(basic.ProfileDir)
+            ? ([
+                ['redaction_service', ['basic', 'profiles', basic.ProfileDir, 'service.json']],
+              ] as const)
+            : []),
+          ['redaction_websocket', ['plugin_config', 'obs-websocket', 'config.json']],
+        ] as readonly (readonly [string, readonly string[]])[]) {
+          const source = await optional(root, [...parts], 65536, result.fileStatus, role);
+          if (source) {
+            try {
+              const data: unknown = JSON.parse(source.text);
+              rememberCredentials(data);
+              if (role === 'redaction_service') {
+                const key = obj(obj(data).settings).key;
+                if (typeof key === 'string' && key) logSecrets.push(key);
+              }
+            } catch {
+              result.fileStatus[role] = 'failed';
+            }
+          }
+        }
+      }
       try {
         const dirPath = join(root, 'logs');
         const directoryChain = await guardedPath(dirPath);
@@ -807,7 +914,21 @@ export async function collectObsNativeEvidence(
           await directory.close();
         }
         result.logsStatus = 'available';
-        for (const name of names.sort().reverse().slice(0, OBS_NATIVE_LIMITS.logFiles)) {
+        const orderedNames = names.sort().reverse();
+        const selectedNames = orderedNames.slice(
+          0,
+          options.includeRelatedLogs
+            ? OBS_NATIVE_LIMITS.relatedLogFiles
+            : OBS_NATIVE_LIMITS.logFiles,
+        );
+        if (options.includeRelatedLogs)
+          (evidence.relatedLogSelection ??= []).push({
+            root: evidence.roots.length - 1,
+            candidates: orderedNames.length,
+            selected: selectedNames.length,
+            notSelected: orderedNames.length - selectedNames.length,
+          });
+        for (const [slot, name] of selectedNames.entries()) {
           const tail = await read(
             root,
             ['logs', name],
@@ -833,7 +954,7 @@ export async function collectObsNativeEvidence(
           );
           const associated = associatedProcesses.length === 1 ? associatedProcesses[0] : undefined;
           const log: LogEvidence = {
-            slot: result.logs.length,
+            slot,
             modifiedAt: new Date(tail.mtime).toISOString(),
             sessionStartedAt: startedAt,
             processAssociation: associated ? 'time_correlated' : 'unverified',
@@ -985,6 +1106,76 @@ export async function collectObsNativeEvidence(
           };
           log.omittedLines += eventCount - log.events.length;
           if (options.includeRelatedLogs) (evidence.logAttachments ??= []).push(attachment);
+          if (options.includeRelatedLogs) {
+            const file: RelatedObsLogFile = {
+              name: `obs/root-${evidence.roots.length - 1}/${name}`,
+              status: 'not_collected',
+              sourceBytes: tail.size,
+              readBytes: 0,
+              volumes: [],
+              format: 'obs-log-text/1',
+              root: evidence.roots.length - 1,
+              slot,
+              sessionStartedAt: startedAt,
+              utcOffsetMinutes: -sessionDate.getTimezoneOffset() || 0,
+              modifiedAt: log.modifiedAt,
+              association: 'not_established',
+              sourceSnapshot: 'bytes_at_open; later appends are outside this export',
+            };
+            (evidence.relatedLogFiles ??= []).push(file);
+            if (
+              ['global', 'user', 'profile', 'redaction_service', 'redaction_websocket'].some(
+                (role) => result.fileStatus[role] === 'failed',
+              )
+            ) {
+              file.status = 'credential_context_unreadable';
+            } else if (
+              tail.size > OBS_NATIVE_LIMITS.relatedLogBytes ||
+              relatedLogBytes + tail.size > OBS_NATIVE_LIMITS.relatedLogTotalBytes
+            ) {
+              file.status = 'source_exceeds_budget';
+            } else {
+              try {
+                const full = await read(
+                  root,
+                  ['logs', name],
+                  Math.min(
+                    OBS_NATIVE_LIMITS.relatedLogBytes,
+                    OBS_NATIVE_LIMITS.relatedLogTotalBytes - relatedLogBytes,
+                  ),
+                );
+                relatedLogBytes += full.size;
+                file.sourceBytes = full.size;
+                // A fixed Mizar capture marker ties this OBS session to the product.
+                // Saved global configuration or another software's capture is insufficient.
+                const sources = [
+                  OBS_CAPTURE_INPUT,
+                  ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
+                ];
+                const related = sources.some(
+                  (source) =>
+                    full.text.includes(`: '${source}']`) || full.text.includes(`: "${source}"]`),
+                );
+                if (!related) file.status = 'mizar_association_not_established';
+                else {
+                  file.association = 'mizar_source_marker';
+                  const redacted = await redactRelatedText(full.text, logSecrets);
+                  Object.assign(file, await encodeLogVolumes(Buffer.from(redacted)));
+                  file.readBytes = full.readBytes ?? full.size;
+                  file.status =
+                    file.readBytes !== full.size
+                      ? 'incomplete_read'
+                      : redacted.endsWith('\n')
+                        ? 'read'
+                        : 'incomplete_last_line';
+                  check();
+                }
+              } catch (e) {
+                file.status = obj(e).code === 'ETOOBIG' ? 'source_exceeds_budget' : 'unreadable';
+                error('related_log_read', e);
+              }
+            }
+          }
           result.logs.push(log);
         }
       } catch (e) {
@@ -1017,6 +1208,8 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
   const exported = structuredClone(result);
   const attachments = exported.logAttachments;
   delete exported.logAttachments;
+  const relatedLogFiles = exported.relatedLogFiles;
+  delete exported.relatedLogFiles;
   while (Buffer.byteLength(JSON.stringify(exported, null, 2)) > OBS_NATIVE_LIMITS.exportBytes) {
     const logs = exported.roots
       .flatMap((r) => r.logs)
@@ -1045,6 +1238,7 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
     return {
       ...fallback,
       ...(attachments ? { logAttachments: attachments } : {}),
+      ...(relatedLogFiles ? { relatedLogFiles } : {}),
       exportTruncated: true,
       errors: [
         failure(
@@ -1054,5 +1248,9 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
       ],
     };
   }
-  return attachments ? { ...exported, logAttachments: attachments } : exported;
+  return {
+    ...exported,
+    ...(attachments ? { logAttachments: attachments } : {}),
+    ...(relatedLogFiles ? { relatedLogFiles } : {}),
+  };
 }

@@ -1,3 +1,8 @@
+import { execFileSync } from 'node:child_process';
+import type { MusicConfig, MusicTrack } from '@mizar/protocol/music';
+import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
+import { SessionJournal, SESSION_LIMITS } from '../src/support/session-journal.js';
 import * as filesystem from 'node:fs/promises';
 import Fastify from 'fastify';
 import { createWriteStream } from 'node:fs';
@@ -6,7 +11,7 @@ import type { MatchContextController } from '../src/match-context/controller.js'
 import { mkdtemp, rm, symlink, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RivalHubConnection,
   OFFICIAL_RIVALHUB_URL,
@@ -25,12 +30,16 @@ vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
 }));
 const dirs: string[] = [];
+// Native OBS discovery has its own OS consumer; these tests own persistence/export contracts.
+beforeEach(() => {
+  vi.spyOn(nativeProcesses, 'readObsNativeProcesses').mockResolvedValue([]);
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 async function directory() {
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-support-'));
+  const dir = await mkdtemp(join(await filesystem.realpath(tmpdir()), 'mizar-support-'));
   dirs.push(dir);
   return dir;
 }
@@ -85,6 +94,23 @@ describe('support export', () => {
         businessHistory: ReturnType<typeof readBusinessHistory>;
       }>();
       expect(bundle.snapshot.businessLog).toBe('available');
+      const systemEvents = unpack(response.json<FullArchive>(), 'session.ndjson')
+        .filter((event) => event.stage === 'business_evidence')
+        .map(
+          (event) =>
+            event.evidence as unknown as {
+              stage: string;
+              evidence: { telemetry?: string; mapName?: string };
+            },
+        );
+      expect(
+        systemEvents.some(
+          (event) =>
+            event.stage === 'business_runtime' &&
+            event.evidence.telemetry === 'fresh' &&
+            event.evidence.mapName === 'de_ancient',
+        ),
+      ).toBe(true);
       const events = bundle.businessHistory.groups.flatMap((g) => g.events);
       expect(
         new Set(events.filter((e) => e.stage === 'business_session').map((e) => e.startupSessionId))
@@ -328,7 +354,13 @@ describe('support export', () => {
       return Promise.resolve(new Response(null, { status: 204 }));
     });
     const connection = new RivalHubConnection(path, fetchImpl);
-    connection.setBusinessEvidenceHandler((stage, evidence) => journal.write(stage, evidence));
+    const rawLiveEvidence: unknown[] = [];
+    const originalErrors: unknown[] = [];
+    connection.setBusinessEvidenceHandler((stage, evidence) => {
+      if (stage === 'business_live') rawLiveEvidence.push(evidence);
+      if (stage === 'original_error') originalErrors.push(evidence);
+      journal.write(stage, evidence);
+    });
     await connection.load();
     const snapshot = {
       matchId: 'match-281',
@@ -365,6 +397,17 @@ describe('support export', () => {
     outcome = 'accept';
     expect(await connection.sendReliable(event, snapshot)).toBe('accepted');
     await connection.sendLive(snapshot);
+    expect(rawLiveEvidence).toContainEqual(
+      expect.objectContaining({
+        reason: 'receiver_accepted',
+        httpStatus: 200,
+        serverDate: null,
+        map: snapshot.map,
+        capability: snapshot.capability,
+        cursor: snapshot.cursor,
+        receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
+      }),
+    );
     await journal.flush();
     const events = readBusinessHistory(dir).groups.find((g) => g.matchId === 'match-281')!.events;
     const reasons = events.map((e) => e.evidence.reason);
@@ -389,6 +432,10 @@ describe('support export', () => {
     expect(
       events.some((e) => e.stage === 'business_live' && e.evidence.reason === 'receiver_accepted'),
     ).toBe(true);
+    expect(JSON.stringify(originalErrors)).toContain('private.example');
+    expect(JSON.stringify(originalErrors)).toContain('TypeError');
+    expect(JSON.stringify(originalErrors)).toContain('SyntaxError');
+    expect(JSON.stringify(originalErrors)).not.toContain(credential);
     const disk = await readFile(join(dir, BUSINESS_HISTORY_FILE), 'utf8');
     for (const text of [disk, JSON.stringify(readBusinessHistory(dir))]) {
       expect(text).not.toContain(credential);
@@ -800,4 +847,480 @@ describe('support export', () => {
       await app.close();
     }
   });
+});
+
+type FullArchive = {
+  sessionLogHealth: { writeFailures: number };
+  fullLogs: {
+    range: unknown;
+    fragmentedDetails: unknown;
+    focus: { componentSessions: string[] };
+    files: {
+      name: string;
+      status: string;
+      sha256?: string;
+      volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
+    }[];
+  };
+};
+function unpack(bundle: FullArchive, prefix: string) {
+  return bundle.fullLogs.files
+    .filter((file) => file.name.startsWith(prefix) && file.status === 'read')
+    .flatMap((file) => {
+      const bytes = Buffer.concat(
+        file.volumes.map((volume, index) => {
+          expect(volume.index).toBe(index);
+          const part = gunzipSync(Buffer.from(volume.gzipBase64, 'base64'));
+          expect(part.length).toBe(volume.bytes);
+          expect(createHash('sha256').update(part).digest('hex')).toBe(volume.sha256);
+          return part;
+        }),
+      );
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(file.sha256);
+      return bytes
+        .toString('utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              stage: string;
+              startupSessionId: string;
+              writeFailuresBefore: number;
+              requestId?: string;
+              browserOperationId?: string | null;
+              evidence: {
+                [key: string]: unknown;
+                route?: string;
+                requestId?: string;
+                filename?: string;
+                parameters?: unknown;
+                httpStatus?: number;
+                result?: unknown;
+                after?: { config: { groups: { waiting: { tracks: { id: string }[] } } } };
+                error?: { name: string; message: string; stack: string; cause: { name: string } };
+                dropped?: number;
+              };
+            },
+        );
+    });
+}
+
+it(
+  'reconstructs real 6 MiB MP3 upload, configuration, failure and restart from the production HTTP export',
+  { timeout: 20_000 },
+  async () => {
+    const dir = await directory();
+    const data = join(dir, 'data');
+    await filesystem.mkdir(data);
+    const logs = join(dir, 'logs');
+    const options = { supportLogsDirectory: logs, obsConfigPath: join(data, 'obs.json') };
+    const first = buildApp(options);
+    const origin = 'http://127.0.0.1:3000';
+    const browserOperationId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const frame = await readFile(new URL('./fixtures/diagnostic-tone.mp3', import.meta.url));
+    const bytes = Buffer.concat(
+      Array.from({ length: Math.ceil((6 * 1024 * 1024) / frame.length) }, () => frame),
+    );
+    let track: MusicTrack;
+    try {
+      const address = await first.listen({ host: '127.0.0.1', port: 0 });
+      const upload = await fetch(`${address}/operator/music/track`, {
+        method: 'POST',
+        headers: {
+          origin,
+          'content-type': 'application/x-mizar-audio',
+          'x-mizar-filename': encodeURIComponent('诊断合成音.mp3'),
+          'x-mizar-operation-id': browserOperationId,
+        },
+        body: bytes,
+      });
+      expect(upload.status).toBe(200);
+      track = (await upload.json()) as typeof track;
+      expect(track.name).toBe('诊断合成音.mp3');
+      expect((await readFile(join(data, 'music', 'tracks', track.id))).equals(bytes)).toBe(true);
+      const current = (await (await fetch(`${address}/local/v1/music`)).json()) as {
+        config: MusicConfig;
+      };
+      current.config.groups.waiting.tracks = [track];
+      const save = await fetch(`${address}/operator/music`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'configure', config: current.config }),
+      });
+      expect(save.status).toBe(200);
+      for (let index = 0; index < 40; index++) {
+        expect(
+          (
+            await fetch(`${address}/operator/music`, {
+              method: 'POST',
+              headers: { origin, 'content-type': 'application/json' },
+              body: JSON.stringify({ action: 'volume', group: 'waiting', volume: index / 100 }),
+            })
+          ).status,
+        ).toBe(200);
+      }
+      const invalid = await fetch(`${address}/operator/music/track`, {
+        method: 'POST',
+        headers: {
+          origin,
+          'content-type': 'application/x-mizar-audio',
+          'x-mizar-filename': 'broken.mp3',
+        },
+        body: 'invalid media',
+      });
+      expect(invalid.status).toBe(400);
+    } finally {
+      await first.close();
+    }
+    const second = buildApp(options);
+    try {
+      const address = await second.listen({ host: '127.0.0.1', port: 0 });
+      const restored = (await (await fetch(`${address}/local/v1/music`)).json()) as {
+        config: MusicConfig;
+      };
+      expect(restored.config.groups.waiting.tracks[0]).toMatchObject(track!);
+      expect(restored.config.groups.waiting.volume).toBe(0.39);
+      const exported = await fetch(`${address}/debug/support-bundle`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(exported.status).toBe(200);
+      const bundle = (await exported.json()) as FullArchive;
+      if (process.env.MIZAR_DIAGNOSTIC_EVIDENCE) {
+        await filesystem.mkdir(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, { recursive: true });
+        await writeFile(
+          join(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, 'synthetic-http-restart-bundle.json'),
+          JSON.stringify(bundle, null, 2),
+        );
+      }
+      const events = unpack(bundle, 'session.ndjson');
+      const begins = events.filter((event) => event.stage === 'operation_begin');
+      expect(begins.filter((event) => event.evidence.route === '/operator/music')).toHaveLength(41);
+      const upload = begins.find(
+        (event) =>
+          event.evidence.route === '/operator/music/track' &&
+          event.evidence.filename !== 'broken.mp3',
+      )!;
+      expect(upload.evidence.parameters).toMatchObject({
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        content: 'binary-not-collected',
+      });
+      const successful = events.find(
+        (event) =>
+          event.stage === 'operation_result' &&
+          event.evidence.requestId === upload.evidence.requestId &&
+          event.startupSessionId === upload.startupSessionId,
+      )!;
+      expect(successful.evidence).toMatchObject({ httpStatus: 200, result: track! });
+      const validated = events.find(
+        (event) => event.stage === 'music_validate' && event.evidence.result === 'success',
+      )!;
+      expect(validated.requestId).toBe(upload.evidence.requestId);
+      expect(validated.browserOperationId).toBe(browserOperationId);
+      expect(
+        events.some(
+          (event) =>
+            event.stage === 'music_commit_config' &&
+            event.evidence.after!.config.groups.waiting.tracks[0]?.id === track!.id,
+        ),
+      ).toBe(true);
+      const failure = events.find(
+        (event) => event.stage === 'music_validate' && event.evidence.result === 'failure',
+      )!;
+      expect(failure.evidence.error).toMatchObject({
+        name: 'Error',
+        message: 'music_track_invalid',
+      });
+      expect(failure.evidence.error!.stack).toContain('MusicStore');
+      expect(new Set(events.map((event) => event.startupSessionId)).size).toBe(2);
+      expect(events.some((event) => event.stage === 'session_end')).toBe(true);
+    } finally {
+      await second.close();
+    }
+  },
+);
+
+it('exports initialization cause instead of an apparently healthy empty library and can reload after repair', async () => {
+  const dir = await directory();
+  const data = join(dir, 'data');
+  await filesystem.mkdir(join(data, 'music'), { recursive: true });
+  await writeFile(join(data, 'music', 'state.json'), '{ damaged');
+  const app = buildApp({
+    supportLogsDirectory: join(dir, 'logs'),
+    obsConfigPath: join(data, 'obs.json'),
+  });
+  try {
+    await app.ready();
+    expect((await app.inject('/local/v1/music')).json<{ storage: unknown }>().storage).toEqual({
+      ready: false,
+      failed: true,
+    });
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/operator/music/track',
+      headers: {
+        origin: 'http://127.0.0.1:3000',
+        'content-type': 'application/x-mizar-audio',
+        'x-mizar-filename': 'valid.mp3',
+      },
+      payload: Buffer.from('ID3'),
+    });
+    expect(rejected.json<{ message: string }>().message).toContain('存储尚未就绪');
+    const events = unpack((await app.inject(request)).json<FullArchive>(), 'session.ndjson');
+    const failure = events.find(
+      (event) => event.stage === 'music_load' && event.evidence.result === 'failure',
+    )!;
+    expect(failure.evidence.error!.message).toBe('music_state_invalid');
+    expect(failure.evidence.error!.cause.name).toBe('SyntaxError');
+    expect(await readFile(join(data, 'music', 'state.json'), 'utf8')).toBe('{ damaged');
+    await filesystem.unlink(join(data, 'music', 'state.json'));
+    const repaired = await app.inject({
+      method: 'POST',
+      url: '/operator/music',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'reload' },
+    });
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.json<{ storage: unknown }>().storage).toEqual({ ready: true, failed: false });
+  } finally {
+    await app.close();
+  }
+});
+
+it('retains complete normal records in compressed volumes, exposes overload gaps and replaces only credentials', async () => {
+  const dir = await directory();
+  const journal = new SessionJournal(dir);
+  for (let index = 0; index < 100; index++) {
+    journal.record('control', {
+      index,
+      route: '/operator/example',
+      password: 'PRIVATE-PASSWORD',
+      config: { width: 1920, streamKey: 'PRIVATE-STREAM' },
+      message: 'stage=write token=PRIVATE-TOKEN result=failed',
+      error: new Error('wrapper', { cause: new Error('disk denied') }),
+      payload: 'context'.repeat(2000),
+    });
+    if (index % 20 === 19) await journal.flush();
+  }
+  journal.record('overload', { bytes: 'x'.repeat(SESSION_LIMITS.pendingBytes + 1) });
+  await journal.close();
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const events = unpack((await app.inject(request)).json<FullArchive>(), 'session.ndjson');
+    expect(events.filter((e) => e.stage === 'control')).toHaveLength(100);
+    const event = events.find((e) => e.stage === 'control')!;
+    expect(event.evidence).toMatchObject({
+      route: '/operator/example',
+      password: '[redacted]',
+      config: { width: 1920, streamKey: '[redacted]' },
+      message: 'stage=write token=[redacted] result=failed',
+      error: { message: 'wrapper', cause: { message: 'disk denied' } },
+    });
+    expect(events.find((e) => e.stage === 'session_end')!.evidence.dropped).toBe(1);
+    expect(JSON.stringify(events)).not.toContain('PRIVATE-');
+  } finally {
+    await app.close();
+  }
+});
+
+it('bounds rotated session storage, reports eviction and expiry, and honors an explicit export interval', async () => {
+  const dir = await directory();
+  const previous = { ...SESSION_LIMITS };
+  Object.assign(SESSION_LIMITS, { segmentBytes: 4096, segments: 3 });
+  try {
+    const journal = new SessionJournal(dir);
+    for (let index = 0; index < 12; index++) {
+      journal.record('retention-fixture', { index, text: 'x'.repeat(2500) });
+      await journal.flush();
+    }
+    await journal.close();
+    const files = await filesystem.readdir(dir);
+    const segments = files.filter((name) => /^session\.ndjson(?:\.\d+)?$/.test(name));
+    expect(segments.length).toBeLessThanOrEqual(3);
+    expect(
+      (await Promise.all(segments.map((name) => stat(join(dir, name))))).reduce(
+        (sum, value) => sum + value.size,
+        0,
+      ),
+    ).toBeLessThanOrEqual(3 * 4096);
+    expect(journal.health().retention.rotatedFiles).toBeGreaterThan(0);
+    const old = new Date(Date.now() - 15 * 86400_000);
+    for (const name of segments) await filesystem.utimes(join(dir, name), old, old);
+    const next = new SessionJournal(dir);
+    await next.close();
+    expect(next.health().retention.expiredFiles).toBe(segments.length);
+    expect(next.health().retention.rotatedFiles).toBeGreaterThan(0);
+    const app = buildApp({ supportLogsDirectory: dir });
+    try {
+      const response = await app.inject({
+        ...request,
+        payload: { from: '2000-01-01T00:00:00.000Z', to: '2001-01-01T00:00:00.000Z' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(unpack(response.json<FullArchive>(), 'session.ndjson')).toEqual([]);
+      expect(response.json<FullArchive>().fullLogs.range).toEqual({
+        from: '2000-01-01T00:00:00.000Z',
+        to: '2001-01-01T00:00:00.000Z',
+      });
+    } finally {
+      await app.close();
+    }
+  } finally {
+    Object.assign(SESSION_LIMITS, previous);
+  }
+});
+
+it('keeps the control response when session writes fail and exports the failure instead of inventing a persisted operation', async () => {
+  const dir = await directory();
+  const actualOpen = filesystem.open;
+  const blocked = vi.spyOn(filesystem, 'open').mockImplementation((...args) => {
+    if (String(args[0]).endsWith('session.ndjson'))
+      return Promise.reject(Object.assign(new Error('disk denied'), { code: 'EACCES' }));
+    return actualOpen(...args);
+  });
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/program-director',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'invalid' },
+    });
+    expect(response.statusCode).toBe(400);
+    const exported = await app.inject(request);
+    expect(exported.statusCode).toBe(200);
+    expect(exported.json<FullArchive>().sessionLogHealth.writeFailures).toBeGreaterThan(0);
+    expect(unpack(exported.json<FullArchive>(), 'session.ndjson')).toEqual([]);
+    blocked.mockRestore();
+    const recovered = await app.inject({
+      method: 'POST',
+      url: '/operator/program-director',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'invalid' },
+    });
+    expect(recovered.statusCode).toBe(400);
+    const events = unpack((await app.inject(request)).json<FullArchive>(), 'session.ndjson');
+    expect(events.some((event) => event.writeFailuresBefore > 0)).toBe(true);
+  } finally {
+    blocked.mockRestore();
+    await app.close();
+  }
+});
+
+it('exports newly named native stages without projection and detects missing long-error fragments in a selected interval', async () => {
+  const dir = await directory();
+  await writeFile(
+    join(dir, 'desktop.ndjson.1'),
+    JSON.stringify({
+      startupSessionId: 'legacy-native-session',
+      time: '2026-01-01T00:00:01.000Z',
+      stage: 'legacy_control',
+      result: 'success',
+      detail: 'kept in full',
+    }) + '\n',
+  );
+  const message = 'outer cause; ' + '技术原因'.repeat(3000) + '; leaf=EACCES';
+  const event = (part: number, time: string, text: string) => ({
+    startupSessionId: 'native-session',
+    time,
+    stage: 'new_native_failure_stage',
+    result: 'failure',
+    error: JSON.stringify({ detailId: 'native-detail-id', part, parts: 2, text }),
+  });
+  await writeFile(
+    join(dir, 'desktop.1.ndjson'),
+    JSON.stringify(event(1, '2026-01-01T00:00:00.000Z', message.slice(0, 6000))) + '\n',
+  );
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    JSON.stringify(event(2, '2026-01-01T00:00:01.000Z', message.slice(6000))) + '\n',
+  );
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await app.inject(request);
+    const bundle = response.json<FullArchive>();
+    expect(bundle.fullLogs.fragmentedDetails).toContainEqual({
+      id: 'native-detail-id',
+      expected: 2,
+      included: 2,
+      complete: true,
+    });
+    const events = unpack(bundle, 'desktop.');
+    expect(events.some((event) => event.stage === 'legacy_control')).toBe(true);
+    expect(events.filter((event) => event.stage === 'new_native_failure_stage')).toHaveLength(2);
+    const path = join(dir, 'export.json');
+    await writeFile(path, response.body);
+    const output = execFileSync(
+      process.execPath,
+      ['scripts/diagnostics/read-support-bundle.mjs', path],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const reconstructed = output
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { reconstructedDetail?: string })
+      .find((event) => event.reconstructedDetail !== undefined);
+    expect(reconstructed?.reconstructedDetail).toBe(message);
+    const interval = await app.inject({
+      ...request,
+      payload: { from: '2026-01-01T00:00:00.500Z', to: '2026-01-01T00:00:02.000Z' },
+    });
+    expect(interval.json<FullArchive>().fullLogs.fragmentedDetails).toContainEqual({
+      id: 'native-detail-id',
+      expected: 2,
+      included: 1,
+      complete: false,
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+it('focuses the Host session across restarts while retaining cross-process evidence for borrowed runtimes', async () => {
+  const dir = await directory();
+  for (const [host, operation] of [
+    ['host-A', 'first'],
+    ['host-A', 'restarted'],
+    ['host-B', 'unrelated'],
+  ] as const) {
+    const journal = new SessionJournal(dir, { hostStartupSessionId: host });
+    journal.record('host-linked-control', { operation });
+    await journal.close();
+  }
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    JSON.stringify({
+      startupSessionId: 'host-A',
+      time: new Date().toISOString(),
+      stage: 'cs2_launch_arguments',
+      result: 'begin',
+      detail: '-applaunch 730 -worldwide',
+    }) + '\n',
+  );
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await app.inject({ ...request, payload: { focusSessionId: 'host-A' } });
+    expect(response.statusCode).toBe(200);
+    const bundle = response.json<FullArchive>();
+    const controls = unpack(bundle, 'session.ndjson').filter(
+      (event) => event.stage === 'host-linked-control',
+    );
+    expect(controls.map((event) => event.evidence.operation)).toEqual([
+      'first',
+      'restarted',
+      'unrelated',
+    ]);
+    expect(bundle.fullLogs.focus.componentSessions).toHaveLength(3);
+    expect(new Set(controls.map((event) => event.startupSessionId)).size).toBe(3);
+    expect(unpack(bundle, 'desktop.').some((event) => event.stage === 'cs2_launch_arguments')).toBe(
+      true,
+    );
+    expect(JSON.stringify(controls)).toContain('unrelated');
+  } finally {
+    await app.close();
+  }
 });

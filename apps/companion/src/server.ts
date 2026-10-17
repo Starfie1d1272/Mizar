@@ -1,3 +1,4 @@
+import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
@@ -68,7 +69,14 @@ let httpOutputs: ReturnType<typeof configuredHttpOutputs> = {};
 let httpOutputConfigError: string | undefined;
 try {
   httpOutputs = configuredHttpOutputs(process.env);
-} catch {
+} catch (error) {
+  console.error(
+    JSON.stringify({
+      stage: 'http_output_configuration',
+      result: 'failure',
+      error: diagnosticValue(error),
+    }),
+  );
   httpOutputConfigError = 'HTTP 输出配置不完整或不安全';
 }
 
@@ -85,6 +93,13 @@ try {
     ...(lookaheadUrl === undefined ? {} : { lookaheadUrl }),
   });
 } catch (error: unknown) {
+  console.error(
+    JSON.stringify({
+      stage: 'cstv_source_configuration',
+      result: 'failure',
+      error: diagnosticValue(error),
+    }),
+  );
   cstvSourceConfigError =
     error instanceof Error ? error.message : 'CSTV source configuration invalid';
 }
@@ -194,6 +209,27 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   if (productInstance !== undefined && (qualificationMode || !productArtifact || !productToken)) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
+  const supportJournal = productInstance
+    ? new SessionJournal(resolve(captureDir, '../../logs'), {
+        appVersion: process.env.MIZAR_APP_VERSION ?? null,
+        gitSha: mizarCommit,
+        artifactSha256: productArtifact ?? null,
+      })
+    : undefined;
+  supportJournal?.record('service_configuration', {
+    host,
+    port,
+    webRoot,
+    captureDir,
+    localWebLanMode,
+    localWebAllowedOrigins,
+    liveOutputUrl: process.env.MIZAR_LIVE_OUTPUT_URL ?? null,
+    reliableOutputUrl: process.env.MIZAR_RELIABLE_OUTPUT_URL ?? null,
+    outputTokenConfigured: Boolean(process.env.MIZAR_OUTPUT_TOKEN),
+    programCstvUrl: programCstvUrl ?? null,
+    lookaheadCstvUrl: process.env.LOOKAHEAD_CSTV_URL ?? null,
+    gsiTokenConfigured: Boolean(gsiToken),
+  });
   let updates: UpdateManager | undefined;
   if (
     productInstance &&
@@ -207,14 +243,16 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
       version: process.env.MIZAR_APP_VERSION,
       currentContentDigest: productArtifact!,
       installed: process.env.MIZAR_DISTRIBUTION === 'installed',
-      log: (stage, code, version, diagnostic) =>
-        console.info(
-          JSON.stringify({ event: 'update', time: Date.now(), stage, code, version, diagnostic }),
-        ),
+      log: (stage, code, version, diagnostic) => {
+        const entry = { event: 'update', time: Date.now(), stage, code, version, diagnostic };
+        supportJournal?.record('update_stage', entry);
+        console.info(JSON.stringify(entry));
+      },
     });
     await updates.load();
   }
   const app = buildApp({
+    ...(supportJournal ? { supportJournal } : {}),
     resources: {
       root: defaultResourceRoot(),
       // This optional pin is inside the authenticated Core bundle, not mirror metadata.

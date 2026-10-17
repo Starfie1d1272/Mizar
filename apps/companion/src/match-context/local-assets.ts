@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -68,6 +69,10 @@ export function registerLocalAssetRoutes(
       await mkdir(options.directory, { recursive: true });
       await writeFile(join(options.directory, filename), bytes, { mode: 0o600, flag: 'wx' });
     } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
         return reply.code(500).send({ error: 'local_asset_write_failed' });
     }
@@ -90,7 +95,11 @@ export function registerLocalAssetRoutes(
         .header('cache-control', 'public, max-age=31536000, immutable')
         .header('x-content-type-options', 'nosniff')
         .send(bytes);
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(404).send({ error: 'local_asset_not_found' });
     }
   });

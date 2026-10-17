@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -189,6 +190,19 @@ export class RivalHubConnection {
     this.onDiagnostic = handler;
   }
   private businessHandler: ((stage: string, evidence: unknown) => void) | undefined;
+  private originalError(operation: string, error: unknown): void {
+    try {
+      this.businessHandler?.('original_error', {
+        operation,
+        error: diagnosticValue(error, '', new Set(), [
+          this.installation?.credential ?? '',
+          this.pendingPairing?.pollToken ?? '',
+        ]),
+      });
+    } catch {
+      /* Diagnostic observers cannot change transport or authorization. */
+    }
+  }
   setBusinessEvidenceHandler(handler: (stage: string, evidence: unknown) => void): void {
     this.businessHandler = handler;
   }
@@ -474,6 +488,7 @@ export class RivalHubConnection {
       }
       return response;
     } catch (error) {
+      this.originalError(operation, error);
       const safe = networkError(error);
       this.onDiagnostic(operation, safe);
       throw safe;
@@ -484,8 +499,9 @@ export class RivalHubConnection {
     try {
       return await response.json();
     } catch (error) {
-      // JSON parser/read errors may quote credentials or arbitrary remote bytes.
-      // Never attach the original error as cause or log it at this boundary.
+      // Keep the credential-redacted original in private local evidence; the browser
+      // and transport classifier retain their existing safe public projection.
+      this.originalError('response_json', error);
       throw new RivalHubResponseError(error instanceof SyntaxError ? 'parse' : 'read');
     }
   }
@@ -497,6 +513,7 @@ export class RivalHubConnection {
       redirect: 'manual',
       signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     }).catch((error: unknown) => {
+      this.originalError('pairing', error);
       throw networkError(error);
     });
     if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
@@ -558,6 +575,7 @@ export class RivalHubConnection {
       body: JSON.stringify({ pairingId: pending.pairingId, pollToken: pending.pollToken }),
       signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     }).catch((error: unknown) => {
+      this.originalError('pairing', error);
       throw networkError(error);
     });
     if (!response.ok) throw new Error('授权状态暂时无法获取。');
@@ -883,6 +901,8 @@ export class RivalHubConnection {
     let failure: LiveFailure | undefined;
     const signal = AbortSignal.timeout(4000);
     const sentAt = new Date().toISOString();
+    let httpStatus: number | null = null;
+    let serverDate: string | null = null;
     try {
       // LIVE is disposable: one bounded request, no retries and no response payload logging.
       const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
@@ -896,6 +916,10 @@ export class RivalHubConnection {
         },
         body: JSON.stringify(snapshot),
       });
+      httpStatus = response.status;
+      const dateHeader = response.headers.get('date');
+      if (dateHeader && Number.isFinite(Date.parse(dateHeader)))
+        serverDate = new Date(dateHeader).toISOString();
       if (response.ok || response.status === 429) {
         // Bounded response consumption; remote details/URLs are never diagnostics.
         stage = 'read';
@@ -965,6 +989,7 @@ export class RivalHubConnection {
         await response.body?.cancel();
       }
     } catch (error) {
+      this.originalError('live', error);
       const evidence = liveErrorEvidence(error);
       failure = { stage, error: evidence };
       reason =
@@ -991,6 +1016,13 @@ export class RivalHubConnection {
       failureStage: failure?.stage,
       causeCode: failure?.error.cause?.code ?? failure?.error.code,
       sentAt,
+      producedAt: snapshot.producedAt,
+      cursor: snapshot.cursor,
+      map: snapshot.map,
+      capability: snapshot.capability,
+      httpStatus,
+      serverDate,
+      receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
       acknowledgedAt: accepted ? new Date().toISOString() : null,
     });
     const previous = this.liveDelivery;

@@ -19,9 +19,14 @@ export class BusinessJournal {
   private readonly sourceVersion: string;
   private previousRuntime = '';
   private readonly delivery = new Map<string, string>();
-  constructor(directory: string, onFailure: () => void, sourceVersion?: string) {
+  constructor(
+    directory: string,
+    onFailure: () => void,
+    sourceVersion?: string,
+    onEvidence?: (entry: unknown) => void,
+  ) {
     this.sourceVersion = version(sourceVersion) ?? businessVersion();
-    this.history = new BusinessHistory(directory, onFailure, this.sourceVersion);
+    this.history = new BusinessHistory(directory, onFailure, this.sourceVersion, onEvidence);
     this.write('business_session', {});
   }
   runtime(

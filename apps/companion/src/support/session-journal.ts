@@ -1,0 +1,366 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { BOX_READ_TOKEN } from '../updates/contract.js';
+import { atomicJson, safePath } from '../resource-store/files.js';
+import { constants } from 'node:fs';
+import { randomUUID, createHash } from 'node:crypto';
+import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export const SESSION_LIMITS = {
+  segmentBytes: 8 * 1024 * 1024,
+  segments: 8,
+  retentionDays: 14,
+  pendingBytes: 2 * 1024 * 1024,
+};
+const credential =
+  /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|ticket)$/i;
+/** Preserve technical context; replace credential values, never whole events. */
+export function diagnosticValue(
+  value: unknown,
+  key = '',
+  seen = new Set<object>(),
+  secrets: readonly string[] = [],
+): unknown {
+  if (
+    key === 'ticket' &&
+    typeof value === 'string' &&
+    /^\[redacted-ticket:[a-f0-9]{64}\]$/.test(value)
+  )
+    return value;
+  // A Host exit ticket is a capability, not a business identifier. Its random UUID may be linked by digest only.
+  if (
+    key === 'ticket' &&
+    typeof value === 'string' &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)
+  )
+    return `[redacted-ticket:${createHash('sha256').update(value).digest('hex')}]`;
+  if (credential.test(key)) return '[redacted]';
+  if (value instanceof Error) {
+    if (seen.has(value)) return '[circular error]';
+    seen.add(value);
+    const fields = Object.fromEntries(
+      Object.getOwnPropertyNames(value).map((name) => [
+        name,
+        (value as unknown as Record<string, unknown>)[name],
+      ]),
+    );
+    const result = diagnosticValue(
+      { ...fields, name: value.name, message: value.message, stack: value.stack },
+      key,
+      seen,
+      secrets,
+    );
+    seen.delete(value);
+    return result;
+  }
+  if (Buffer.isBuffer(value))
+    return {
+      bytes: value.length,
+      sha256: createHash('sha256').update(value).digest('hex'),
+      content: 'binary-not-collected',
+    };
+  if (typeof value === 'string' && /^data:[^,]+;base64,/.test(value))
+    return {
+      content: 'media-not-collected',
+      bytes: Buffer.byteLength(value),
+      sha256: createHash('sha256').update(value).digest('hex'),
+    };
+  if (typeof value === 'string') {
+    let cleanText = value.replaceAll(BOX_READ_TOKEN, '[redacted]');
+    for (const secret of secrets)
+      if (secret) cleanText = cleanText.replaceAll(secret, '[redacted]');
+    if (/^\s*[{[]/.test(cleanText)) {
+      try {
+        return JSON.stringify(diagnosticValue(JSON.parse(cleanText), key, seen, secrets));
+      } catch {
+        /* A plain error or partial record remains text. */
+      }
+    }
+    return cleanText
+      .replace(/\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s"'<>]+/gi, (text) => {
+        try {
+          const url = new URL(text);
+          if (url.username || url.password) {
+            url.username = '[redacted]';
+            url.password = '';
+          }
+          for (const name of [...url.searchParams.keys()])
+            if (credential.test(name) || /^(?:code|auth|key)$/i.test(name))
+              url.searchParams.set(name, '[redacted]');
+          if (/^rtmps?:$/.test(url.protocol)) {
+            const parts = url.pathname.split('/');
+            if (parts.length > 2) {
+              parts[parts.length - 1] = '[redacted]';
+              url.pathname = parts.join('/');
+            }
+          }
+          return url.toString();
+        } catch {
+          return text;
+        }
+      })
+      .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 [redacted]')
+      .replace(/rh_mizar_[a-zA-Z0-9_-]+/g, '[redacted]')
+      .replace(
+        /((?:password|passwd|access[_-]?token|refresh[_-]?token|token|secret|credential|api[_-]?key|stream[_-]?key|ticket)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
+        '$1[redacted]',
+      );
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  const result = Array.isArray(value)
+    ? value.map((v) => diagnosticValue(v, '', seen, secrets))
+    : Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [
+          k,
+          diagnosticValue(v, k === 'key' && /stream/i.test(key) ? 'streamKey' : k, seen, secrets),
+        ]),
+      );
+  seen.delete(value);
+  return result;
+}
+
+/** Small asynchronous observer of existing control/log boundaries; never runs filesystem I/O on ingress. */
+export class SessionJournal {
+  readonly sessionId = randomUUID();
+  readonly hostStartupSessionId: string | null;
+  private readonly requestContext = new AsyncLocalStorage<{
+    requestId: string;
+    browserOperationId: string | null;
+  }>();
+  withRequest<T>(
+    context: { requestId: string; browserOperationId: string | null },
+    run: () => T,
+  ): T {
+    return this.requestContext.run(context, run);
+  }
+  private sequence = 0;
+  private pendingBytes = 0;
+  private writer = Promise.resolve();
+  private pending: { line: string; bytes: number }[] = [];
+  private draining = false;
+  private dropped = 0;
+  private failures = 0;
+  private size = -1;
+  private initialized = false;
+  private readonly identity: {
+    appVersion: string | null;
+    gitSha: string | null;
+    artifactSha256: string | null;
+  };
+  private retention = { rotatedFiles: 0, rotatedBytes: 0, expiredFiles: 0, expiredBytes: 0 };
+  constructor(
+    private readonly directory: string,
+    identity: {
+      appVersion?: string | null;
+      gitSha?: string | null;
+      artifactSha256?: string | null;
+      hostStartupSessionId?: string | null;
+    } = {},
+  ) {
+    const hostSession = identity.hostStartupSessionId ?? process.env.MIZAR_STARTUP_SESSION_ID;
+    this.hostStartupSessionId =
+      typeof hostSession === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(hostSession)
+        ? hostSession
+        : null;
+    const appVersion = identity.appVersion ?? process.env.MIZAR_APP_VERSION;
+    this.identity = {
+      appVersion:
+        typeof appVersion === 'string' && /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(appVersion)
+          ? appVersion
+          : null,
+      gitSha:
+        typeof identity.gitSha === 'string' && /^[a-f0-9]{40}$/i.test(identity.gitSha)
+          ? identity.gitSha
+          : null,
+      artifactSha256:
+        typeof identity.artifactSha256 === 'string' &&
+        /^[a-f0-9]{64}$/i.test(identity.artifactSha256)
+          ? identity.artifactSha256
+          : null,
+    };
+    this.record('session_start', {
+      limits: SESSION_LIMITS,
+      durability: 'async; abrupt power loss may lose pending or OS-buffered records',
+    });
+  }
+  record(stage: string, evidence: unknown): void {
+    try {
+      this.enqueue(stage, evidence);
+    } catch {
+      this.failures++;
+    }
+  }
+  private enqueue(stage: string, evidence: unknown): void {
+    const line =
+      JSON.stringify({
+        time: new Date().toISOString(),
+        startupSessionId: this.sessionId,
+        hostStartupSessionId: this.hostStartupSessionId,
+        ...this.identity,
+        sequence: ++this.sequence,
+        stage,
+        ...this.requestContext.getStore(),
+        droppedBefore: this.dropped,
+        writeFailuresBefore: this.failures,
+        evidence: diagnosticValue(evidence),
+      }) + '\n';
+    const bytes = Buffer.byteLength(line);
+    if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
+      this.dropped++;
+      return;
+    }
+    this.pendingBytes += bytes;
+    this.pending.push({ line, bytes });
+    if (!this.draining) {
+      this.draining = true;
+      this.writer = Promise.resolve().then(() => this.drain());
+    }
+  }
+  private async drain(): Promise<void> {
+    try {
+      while (this.pending.length) {
+        const batch = [];
+        let bytes = 0;
+        do {
+          const entry = this.pending.shift()!;
+          batch.push(entry.line);
+          bytes += entry.bytes;
+        } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
+        try {
+          await this.append(batch.join(''), bytes);
+        } catch {
+          this.failures++;
+        } finally {
+          this.pendingBytes -= bytes;
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
+  }
+  private async append(line: string, bytes: number) {
+    await this.initialize();
+    if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
+    await safePath(this.directory);
+    const path = join(this.directory, 'session.ndjson');
+    const before = await lstat(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (before && (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1))
+      throw new Error('unsafe_session_log');
+    const fd = await open(
+      path,
+      constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      await safePath(this.directory);
+      const named = await lstat(path);
+      const opened = await fd.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        named.isSymbolicLink() ||
+        named.ino !== opened.ino ||
+        named.dev !== opened.dev ||
+        (before && (before.ino !== opened.ino || before.dev !== opened.dev))
+      )
+        throw new Error('session_log_changed');
+      await fd.writeFile(line);
+      this.size += bytes;
+    } finally {
+      await fd.close();
+    }
+  }
+
+  write(line: string): void {
+    try {
+      this.record('service_log', JSON.parse(line));
+    } catch {
+      this.record('service_log', { text: line });
+    }
+  }
+  private async initialize() {
+    if (this.initialized) return;
+    await mkdir(this.directory, { recursive: true });
+    await safePath(this.directory);
+    try {
+      const path = await safePath(this.directory, 'session-retention.json');
+      const stat = await lstat(path);
+      if (stat.size > 4096) throw new Error('invalid_retention_metadata');
+      const value = JSON.parse(await readFile(path, 'utf8')) as typeof this.retention;
+      for (const key of Object.keys(this.retention) as (keyof typeof this.retention)[])
+        if (Number.isSafeInteger(value[key]) && value[key] >= 0) this.retention[key] = value[key];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failures++;
+    }
+    for (let index = 0; index < SESSION_LIMITS.segments; index++) {
+      const path = join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson');
+      try {
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+          throw new Error('unsafe_session_log');
+        if (Date.now() - stat.mtimeMs > SESSION_LIMITS.retentionDays * 86400_000) {
+          await unlink(path);
+          this.retention.expiredFiles++;
+          this.retention.expiredBytes += stat.size;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    this.size = await lstat(join(this.directory, 'session.ndjson')).then(
+      (s) => s.size,
+      () => 0,
+    );
+    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    this.initialized = true;
+  }
+  private async rotate() {
+    const oldest = await lstat(
+      join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`),
+    ).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (oldest) {
+      this.retention.rotatedFiles++;
+      this.retention.rotatedBytes += oldest.size;
+    }
+    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    await unlink(join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`)).catch(
+      (e) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      },
+    );
+    for (let index = SESSION_LIMITS.segments - 2; index >= 0; index--) {
+      await rename(
+        join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson'),
+        join(this.directory, `session.ndjson.${index + 1}`),
+      ).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      });
+    }
+    this.size = 0;
+  }
+  async flush() {
+    await this.writer;
+  }
+  health() {
+    return {
+      sessionId: this.sessionId,
+      sequence: this.sequence,
+      dropped: this.dropped,
+      writeFailures: this.failures,
+      pendingBytes: this.pendingBytes,
+      retention: this.retention,
+    };
+  }
+  async close() {
+    this.record('session_end', this.health());
+    await this.flush();
+  }
+}

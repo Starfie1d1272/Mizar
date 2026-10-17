@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { ResourceStoreError } from './contract.js';
 import type { ResourceStore } from './store.js';
@@ -15,7 +16,11 @@ export function registerResourceRoutes(
   app.get('/local/v1/resources', async (_request, reply) => {
     try {
       return reply.header('cache-control', 'no-store').send({ resources: current().list() });
-    } catch {
+    } catch (error) {
+      app.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(503).send({ error: 'resource_store_unavailable' });
     }
   });
@@ -25,6 +30,10 @@ export function registerResourceRoutes(
         .header('cache-control', 'no-store')
         .send(current().getStatus(request.params.packId));
     } catch (error) {
+      app.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       if (error instanceof ResourceStoreError && error.code === 'resource_store_unavailable')
         return reply.code(503).send({ error: error.code });
       return reply.code(404).send({ error: 'resource_pack_unknown' });
@@ -52,6 +61,10 @@ export function registerResourceRoutes(
             .header('content-range', `bytes ${result.start}-${result.end}/${result.totalBytes}`);
         return reply.send(result.bytes);
       } catch (error) {
+        app.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         const code = error instanceof ResourceStoreError ? error.code : 'resource_io_failed';
         if (code === 'resource_range_invalid') {
           if (error instanceof ResourceStoreError && error.totalBytes !== undefined)
