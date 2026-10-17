@@ -386,8 +386,12 @@ it('uses the real obs-websocket client to reconcile owned media after a connecti
   const { ObsMusicProvider } = await import('../src/music/obs-provider.js');
   const r = await rig(),
     server = Fastify();
+  let connections = 0,
+    failRpc = false;
+  const diagnostics: unknown[] = [];
   await server.register(websocket);
   server.get('/', { websocket: true }, (socket) => {
+    connections++;
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
     const handle = async (data: Buffer) => {
       const request = JSON.parse(data.toString()) as {
@@ -395,6 +399,23 @@ it('uses the real obs-websocket client to reconcile owned media after a connecti
         d: { requestType: string; requestId: string; requestData: Record<string, unknown> };
       };
       if (request.op === 1) socket.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
+      if (request.op === 6 && failRpc) {
+        socket.send(
+          JSON.stringify({
+            op: 7,
+            d: {
+              requestType: request.d.requestType,
+              requestId: request.d.requestId,
+              requestStatus: {
+                result: false,
+                code: 500,
+                comment: 'synthetic RPC rejection CANARY-MUSIC-PASSWORD',
+              },
+            },
+          }),
+        );
+        return;
+      }
       if (request.op === 6)
         socket.send(
           JSON.stringify({
@@ -416,12 +437,22 @@ it('uses the real obs-websocket client to reconcile owned media after a connecti
   const address = server.server.address();
   if (!address || typeof address === 'string') throw new Error('address unavailable');
   const config = new ObsConfigStore(join(r.directory, 'obs.json'));
-  await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
-  const provider = new ObsMusicProvider(config),
+  await config.save({
+    host: '127.0.0.1',
+    port: address.port,
+    password: 'CANARY-MUSIC-PASSWORD',
+    executablePath: null,
+  });
+  const provider = new ObsMusicProvider(config, (stage, evidence) =>
+      diagnostics.push({ stage, evidence }),
+    ),
     director = new MusicDirector(r.store, provider, () => r.truth);
   try {
     await director.tick();
     expect(r.obs.restarts()).toBe(1);
+    await provider.session(async () => undefined);
+    await provider.session(async () => undefined);
+    expect(connections).toBe(1);
     await provider.close();
     await director.tick();
     expect(r.obs.restarts()).toBe(1);
@@ -433,6 +464,13 @@ it('uses the real obs-websocket client to reconcile owned media after a connecti
     await newDirector.command('stop');
     expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
     expect(restored.state.held).toBe(true);
+    failRpc = true;
+    await expect(provider.session((rpc) => rpc.call('GetVersion'))).rejects.toThrow(
+      'music_obs_unavailable',
+    );
+    expect(JSON.stringify(diagnostics)).toContain('synthetic RPC rejection');
+    expect(JSON.stringify(diagnostics)).toContain('GetVersion');
+    expect(JSON.stringify(diagnostics)).not.toContain('CANARY-MUSIC-PASSWORD');
   } finally {
     await provider.close();
     await server.close();

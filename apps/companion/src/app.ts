@@ -983,13 +983,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         musicStore.failure = true;
       });
     });
-    musicDirector = new MusicDirector(musicStore, new ObsMusicProvider(obsConfigStore), () => ({
-      program: projectionCoordinator.getCurrent().program,
-      active: sceneController.get().active,
-      production:
-        production.get().mode !== 'preparation' &&
-        projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-    }));
+    musicDirector = new MusicDirector(
+      musicStore,
+      new ObsMusicProvider(obsConfigStore, (stage, evidence) =>
+        sessionJournal?.record(stage, evidence),
+      ),
+      () => ({
+        program: projectionCoordinator.getCurrent().program,
+        active: sceneController.get().active,
+        production:
+          production.get().mode !== 'preparation' &&
+          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+      }),
+    );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
   }
   sceneController.attachDirector(director);

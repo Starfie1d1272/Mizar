@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from '../obs/config.js';
 import type { ObsRpc } from '../obs/reconcile.js';
@@ -11,17 +12,35 @@ export class ObsMusicProvider {
   private connected = false;
   private epoch = 0;
   private retryAt = 0;
-  constructor(private readonly config: ObsConfigStore) {}
+  private knownSecrets: readonly string[] = [];
+  constructor(
+    private readonly config: ObsConfigStore,
+    private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+  ) {}
+  private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
+    try {
+      this.diagnostic(stage, diagnosticValue(evidence, '', new Set(), secrets));
+    } catch {
+      /* Diagnostics cannot change playback or connection ownership. */
+    }
+  }
   async session<T>(run: (rpc: ObsRpc, epoch: number) => Promise<T>): Promise<T> {
     if (!this.connected && Date.now() < this.retryAt) throw new Error('music_obs_unavailable');
     const config = await this.config.read();
     const signature = JSON.stringify([config.host, config.port, config.password]);
     if (signature !== this.signature || !this.connected) {
       await this.close();
+      this.knownSecrets = [config.password];
+      this.trace('music_obs_connect', { result: 'begin', host: config.host, port: config.port });
       const client = new OBSWebSocket();
       this.client = client;
-      client.on('ConnectionClosed', () => {
-        if (this.client === client) this.connected = false;
+      client.on('ConnectionClosed', (error) => {
+        if (this.client === client) {
+          this.connected = false;
+          this.trace('music_obs_connection_closed', { epoch: this.epoch, error }, [
+            config.password,
+          ]);
+        }
       });
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -31,10 +50,15 @@ export class ObsMusicProvider {
             timer = setTimeout(() => reject(new Error('music_obs_timeout')), 2000);
           }),
         ]);
-      } catch {
+      } catch (error) {
+        this.trace('music_obs_connect', { result: 'failure', retryAfterMs: 2000, error }, [
+          config.password,
+        ]);
         this.retryAt = Date.now() + 2000;
         await this.close();
-        throw new Error('music_obs_unavailable');
+        throw new Error('music_obs_unavailable', {
+          cause: diagnosticValue(error, '', new Set(), [config.password]),
+        });
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -42,6 +66,12 @@ export class ObsMusicProvider {
       this.signature = signature;
       this.connected = true;
       this.epoch++;
+      this.trace('music_obs_connect', {
+        result: 'success',
+        epoch: this.epoch,
+        host: config.host,
+        port: config.port,
+      });
     }
     const client = this.client!;
     const rpc: ObsRpc = {
@@ -59,10 +89,17 @@ export class ObsMusicProvider {
               timer = setTimeout(() => reject(new Error('music_obs_timeout')), 2000);
             }),
           ]);
-        } catch {
+        } catch (error) {
+          this.trace(
+            'music_obs_request',
+            { result: 'failure', request: name, parameters: data, error },
+            [config.password],
+          );
           this.retryAt = Date.now() + 2000;
           await this.close();
-          throw new Error('music_obs_unavailable');
+          throw new Error('music_obs_unavailable', {
+            cause: diagnosticValue(error, '', new Set(), [config.password]),
+          });
         } finally {
           if (timer) clearTimeout(timer);
         }
@@ -75,14 +112,29 @@ export class ObsMusicProvider {
     const client = this.client;
     this.client = null;
     if (client) {
+      const epoch = this.epoch,
+        secrets = this.knownSecrets;
+      this.trace('music_obs_disconnect', { result: 'begin', epoch });
+      let completed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        client.disconnect().catch(() => undefined),
+        client
+          .disconnect()
+          .then(() => {
+            completed = true;
+            this.trace('music_obs_disconnect', { result: 'success', epoch }, secrets);
+          })
+          .catch((error: unknown) => {
+            completed = true;
+            this.trace('music_obs_disconnect', { result: 'failure', epoch, error }, secrets);
+          }),
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, 200);
         }),
       ]);
       if (timer) clearTimeout(timer);
+      if (!completed)
+        this.trace('music_obs_disconnect', { result: 'wait_timeout', epoch, waitMs: 200 }, secrets);
     }
   }
 }

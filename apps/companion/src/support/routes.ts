@@ -249,7 +249,11 @@ export function registerSupportRoutes(
             )
             .catch(failedObsNativeEvidence),
         ]);
-        const { logAttachments: obsLogAttachments = [], ...nativeSummary } = nativeObs;
+        const {
+          logAttachments: obsLogAttachments = [],
+          relatedLogFiles: obsRelatedLogFiles = [],
+          ...nativeSummary
+        } = nativeObs;
         const program = options.program?.();
         const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
@@ -274,7 +278,12 @@ export function registerSupportRoutes(
             ...(typeof record(request.body).focusSessionId === 'string'
               ? { focusSessionId: record(request.body).focusSessionId as string }
               : {}),
-          }),
+          }).then((archive) => ({
+            ...archive,
+            productLogStatus: archive.status,
+            status: obsRelatedLogFiles.length ? 'available' : archive.status,
+            files: [...archive.files, ...obsRelatedLogFiles],
+          })),
           sessionLogHealth: options.sessionLogHealth?.() ?? null,
           businessHistory: {
             ...businessHistory,
@@ -321,6 +330,8 @@ export function registerSupportRoutes(
               fullLogs: { encoding: 'gzip-base64', volumeBytes: 1024 * 1024 },
             },
             logPolicy: 'full-retained-product-logs-gzip-volumes; summaries-are-indexes',
+            relatedObsLogs:
+              'whole credential-redacted text only for fixed recent OBS sources with Mizar source markers; gzip/SHA-256 files; source age/count/byte/deadline limits and rejected sources remain explicit in nativeObs and file states; later appends are outside the snapshot',
             browserCollection:
               'locally delivered renderer events; per-document delivery failures are reported on later successful delivery; loss while offline or after a document closes may be unknown',
             sessionPolicy: 'full-log-and-business-identifiers-stable; summary-log-session-salted',

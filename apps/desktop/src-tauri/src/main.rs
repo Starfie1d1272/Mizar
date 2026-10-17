@@ -1109,7 +1109,7 @@ fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     sync_workspace_shell(app);
     let result = window_presentation::hide_panels(|label| {
         let Some(window) = app.get_webview_window(label) else { return Ok(()); };
-        window_presentation::set_visible(&window, false).map_err(|error| {
+        window_presentation::hide_without_activation(&window).map_err(|error| {
             app.state::<DesktopLog>().event(
                 "production_finish", "failure",
                 Some(&format!("phase=workspace_hide_panel; label={label}; cause={error}")),

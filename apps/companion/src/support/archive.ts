@@ -10,6 +10,28 @@ import { diagnosticValue, SESSION_LIMITS } from './session-journal.js';
 const compress = promisify(gzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
+export interface ArchivedLogFile {
+  name: string;
+  status: string;
+  sourceBytes: number;
+  readBytes: number;
+  sha256?: string;
+  volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
+}
+export async function encodeLogVolumes(bytes: Buffer) {
+  const volumes: ArchivedLogFile['volumes'] = [];
+  for (let start = 0; start < bytes.length; start += VOLUME_BYTES) {
+    const part = bytes.subarray(start, start + VOLUME_BYTES);
+    volumes.push({
+      index: volumes.length,
+      bytes: part.length,
+      sha256: createHash('sha256').update(part).digest('hex'),
+      gzipBase64: (await compress(part)).toString('base64'),
+    });
+  }
+  return { sha256: createHash('sha256').update(bytes).digest('hex'), volumes };
+}
+
 const names = [
   ...[1, 2, 3].map((index) => `desktop.ndjson.${index}`),
   'session-retention.json',
@@ -47,14 +69,7 @@ export async function fullLogArchive(
       ended: boolean;
     }
   >();
-  const files: {
-    name: string;
-    status: string;
-    sourceBytes: number;
-    readBytes: number;
-    sha256?: string;
-    volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
-  }[] = [];
+  const files: ArchivedLogFile[] = [];
   if (!directory) return { status: 'not_configured', files };
   try {
     await lstat(directory);
@@ -71,14 +86,13 @@ export async function fullLogArchive(
     ancestor = resolve(ancestor, '..');
   }
   for (const name of names) {
-    const file: {
-      name: string;
-      status: string;
-      sourceBytes: number;
-      readBytes: number;
-      sha256?: string;
-      volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
-    } = { name, status: 'missing', sourceBytes: 0, readBytes: 0, volumes: [] };
+    const file: ArchivedLogFile = {
+      name,
+      status: 'missing',
+      sourceBytes: 0,
+      readBytes: 0,
+      volumes: [],
+    };
     files.push(file);
     let fd: Awaited<ReturnType<typeof open>> | undefined;
     try {
@@ -200,16 +214,7 @@ export async function fullLogArchive(
       }
       const text = processed.join('\n');
       const bytes = Buffer.from(text);
-      file.sha256 = createHash('sha256').update(bytes).digest('hex');
-      for (let start = 0; start < bytes.length; start += VOLUME_BYTES) {
-        const part = bytes.subarray(start, start + VOLUME_BYTES);
-        file.volumes.push({
-          index: file.volumes.length,
-          bytes: part.length,
-          sha256: createHash('sha256').update(part).digest('hex'),
-          gzipBase64: (await compress(part)).toString('base64'),
-        });
-      }
+      Object.assign(file, await encodeLogVolumes(bytes));
       file.status =
         name !== 'business-history.json' &&
         name !== 'session-retention.json' &&
