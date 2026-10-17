@@ -815,17 +815,25 @@ async function cloud(directory, profileResult, faultResult) {
         metadata: JSON.stringify(normalModel[0].index),
       },
     );
+    // Include normal daily restart/session/health traffic observed after full
+    // recovery. The initial cohort alone can understate recurring overhead.
+    const steadyIngestCost = Object.fromEntries(
+      Object.keys(healthyCost).map((key) => [
+        key,
+        Math.max(healthyCost[key], ...days.slice(-2).map((day) => day.cost[key])),
+      ]),
+    );
     const steadyDailyCost = {
       rowsRead:
-        healthyCost.rowsRead +
+        steadyIngestCost.rowsRead +
         Math.ceil((cleanupCost.rowsRead + withdrawalCost.rowsRead) / days.length) +
         withdrawalCost.rowsRead,
       rowsWritten:
-        healthyCost.rowsWritten +
+        steadyIngestCost.rowsWritten +
         Math.ceil((cleanupCost.rowsWritten + withdrawalCost.rowsWritten) / days.length) +
         withdrawalCost.rowsWritten,
       scope:
-        'measured 100-user healthy day plus complete cohort cleanup amortized daily and one extra actual multi-day installation withdrawal; excludes other apps and unknown writers',
+        'maximum measured 100-user initial or final two fully drained days, including daily restart, plus complete cohort cleanup amortized daily and one extra actual multi-day installation withdrawal; excludes other apps and unknown writers',
     };
     const peakRecoveryDailyCost = {
       rowsRead:
@@ -877,6 +885,7 @@ async function cloud(directory, profileResult, faultResult) {
       allModeledPayloadsAcknowledged: expected.size,
       unacknowledged: 0,
       healthyCost,
+      steadyIngestCost,
       measuredSessionsPerDay,
       bodyAudits: auditedSessions.size,
       withdrawal: {
