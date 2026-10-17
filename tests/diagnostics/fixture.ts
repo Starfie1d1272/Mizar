@@ -1,11 +1,14 @@
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Miniflare } from 'miniflare';
 import { build } from 'esbuild';
 // Bundle the actual production entry and shared protocol export, as Wrangler does.
 const bundled = await build({
-  entryPoints: [new URL('../../apps/diagnostics-worker/src/index.ts', import.meta.url).pathname],
+  entryPoints: [
+    fileURLToPath(new URL('../../apps/diagnostics-worker/src/index.ts', import.meta.url)),
+  ],
   bundle: true,
   write: false,
   format: 'esm',

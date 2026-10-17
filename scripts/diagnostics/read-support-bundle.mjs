@@ -17,6 +17,59 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 let timeline = [];
 const failures = [];
 const fragments = new Map();
+const consoleLines = new Map();
+function collectConsole(entry, file) {
+  if (entry?.stage !== 'cs2_console_records' || typeof entry.detail !== 'string') return;
+  let detail;
+  try {
+    detail = JSON.parse(entry.detail);
+  } catch {
+    return;
+  }
+  if (
+    detail?.source !== 'owned-cs2-technical-console' ||
+    detail.rawFileIncluded !== false ||
+    !Array.isArray(detail.records)
+  )
+    return;
+  for (const record of detail.records) {
+    if (
+      !record ||
+      typeof record.sourceRecordId !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.sourceRecordId) ||
+      !Number.isInteger(record.part) ||
+      !Number.isInteger(record.parts) ||
+      record.part < 1 ||
+      record.parts > 64 ||
+      record.part > record.parts ||
+      typeof record.text !== 'string' ||
+      Buffer.byteLength(record.text) > 1024
+    ) {
+      failures.push({ name: file.name, status: 'invalid_console_part' });
+      continue;
+    }
+    const group = consoleLines.get(record.sourceRecordId) ?? {
+      expected: record.parts,
+      parts: new Map(),
+    };
+    const candidate = {
+      file: file.name,
+      ...record,
+      sourceDurability: file.durability ?? 'session-log',
+      sourceScope: file.scope,
+      sourceHostStartupSessionId: entry.startupSessionId,
+      binding: detail.binding,
+    };
+    if (group.expected !== record.parts) {
+      failures.push({ name: file.name, status: 'inconsistent_console_parts' });
+      continue;
+    }
+    const previous = group.parts.get(record.part);
+    if (!previous || priority(candidate) < priority(previous))
+      group.parts.set(record.part, candidate);
+    consoleLines.set(record.sourceRecordId, group);
+  }
+}
 for (const file of bundle.fullLogs.files) {
   if (!['read', 'incomplete_last_line', 'incomplete_snapshot'].includes(file.status)) {
     failures.push({
@@ -108,6 +161,9 @@ for (const file of bundle.fullLogs.files) {
     } catch {
       event = { stage: 'unstructured_or_partial_record', text: line };
     }
+    collectConsole(event, file);
+    if (event.stage === 'native_host_records' && Array.isArray(event.evidence?.entries))
+      for (const copied of event.evidence.entries) collectConsole(copied?.entry, file);
     const rawDetail = event.error ?? event.detail;
     if (typeof rawDetail === 'string') {
       try {
@@ -180,16 +236,46 @@ for (const [id, group] of fragments) {
     .join('');
   timeline.push({ ...group.event, reconstructedDetail: text, detailId: id, reconstructed: true });
 }
+for (const [id, group] of consoleLines) {
+  const parts = [...group.parts.entries()].sort(([a], [b]) => a - b);
+  const first = parts[0]?.[1];
+  if (!first) continue;
+  const missing = Array.from({ length: group.expected }, (_, index) => index + 1).filter(
+    (index) => !group.parts.has(index),
+  );
+  if (missing.length)
+    failures.push({ sourceRecordId: id, status: 'missing_console_parts', missing });
+  timeline.push({
+    ...first,
+    stage: 'cs2_console_line',
+    sourceRecordId: `console:${id}`,
+    text: parts.map(([, part]) => part.text).join(''),
+    part: undefined,
+    time:
+      typeof first.capturedAt === 'string' && Number.isFinite(Date.parse(first.capturedAt))
+        ? first.capturedAt
+        : null,
+    sourceAfterUtc: first.sourceAfterUtc,
+    timestampStatus: 'capture upper bound; exact engine event UTC unavailable',
+    complete: missing.length === 0,
+    missingParts: missing,
+    scope:
+      'recognized technical lines from a verified managed game; raw console/chat/unknown lines excluded',
+  });
+}
 const time = (event) => {
   const value = Date.parse(event.recordedAt ?? event.timestamp ?? event.time);
   return Number.isFinite(value) ? value : typeof event.time === 'number' ? event.time : 0;
 };
 // Keep the broad original local record ahead of any cloud-filtered retained
 // copy or unconfirmed memory duplicate. The archive itself preserves every copy.
-const priority = (event) =>
-  ({ 'session-log': 0, 'durable-pending': 1, 'durable-outbox': 2, 'memory-only': 3 })[
-    event.sourceDurability ?? 'session-log'
-  ] ?? 4;
+function priority(event) {
+  return (
+    { 'session-log': 0, 'durable-pending': 1, 'durable-outbox': 2, 'memory-only': 3 }[
+      event.sourceDurability ?? 'session-log'
+    ] ?? 4
+  );
+}
 const unique = new Map();
 const unkeyed = [];
 for (const event of timeline) {

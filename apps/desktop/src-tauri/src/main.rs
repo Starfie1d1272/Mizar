@@ -2,6 +2,7 @@
 
 mod cs2_activity;
 mod cs2_diagnostics;
+mod cs2_console;
 mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
@@ -1022,6 +1023,34 @@ async fn finish_demo_test(
     diagnostic_result
 }
 
+async fn console_settings_request(
+    app: tauri::AppHandle, enabled: Option<bool>, expected_generation: Option<String>,
+    diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let command = if enabled.is_some() { "set_cs2_console_capture" } else { "cs2_console_status" };
+    let log = app.state::<DesktopLog>().inner().clone();
+    let diagnostic_log = log.clone();
+    let join_operation = diagnostic_operation_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || {
+            let result = (|| {
+                if let Some(enabled) = enabled { cs2_console::set_enabled(&log, enabled, expected_generation.as_deref())?; }
+                cs2_console::status(&log)
+            })();
+            log.native_outcome(command, diagnostic_operation_id.as_deref(), &result);
+            result
+        })
+    }).await.map_err(|error| diagnostic_log.preserve_error(command, join_operation.as_deref(), &error, "技术日志设置未能完成，请重试。".to_string()))?
+}
+#[tauri::command]
+async fn cs2_console_status(app: tauri::AppHandle, diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Result<serde_json::Value, String> {
+    console_settings_request(app, None, None, diagnostic_operation_id, diagnostic_task_id, diagnostic_trigger).await
+}
+#[tauri::command]
+async fn set_cs2_console_capture(app: tauri::AppHandle, enabled: bool, expected_generation: Option<String>, diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Result<serde_json::Value, String> {
+    console_settings_request(app, Some(enabled), expected_generation, diagnostic_operation_id, diagnostic_task_id, diagnostic_trigger).await
+}
+
 #[tauri::command]
 async fn set_cs2_preferences(
     app: tauri::AppHandle,
@@ -1924,6 +1953,8 @@ fn run_desktop(
     let running = Arc::new(AtomicBool::new(true));
     let worker = Arc::new(Mutex::new(None::<thread::JoinHandle<()>>));
     let setup_worker = worker.clone();
+    let console_worker = Arc::new(Mutex::new(None));
+    let setup_console_worker = console_worker.clone();
     let dispatch = Arc::new(Mutex::new(()));
     let setup_dispatch = dispatch.clone();
     let state = HostState {
@@ -1952,7 +1983,7 @@ fn run_desktop(
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "cs2_host_status", "cs2_config_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
+            if !["gsi_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),
@@ -1982,6 +2013,8 @@ fn run_desktop(
             restore_cs2_backup,
             open_cs2_backup,
             set_cs2_preferences,
+            cs2_console_status,
+            set_cs2_console_capture,
             open_main,
             present_production,
             open_tool,
@@ -2090,6 +2123,10 @@ fn run_desktop(
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
+            let console_running = worker_running.clone();
+            let console_log = setup_log.clone();
+            let console_thread = thread::spawn(move || cs2_console::run_worker(console_log, console_running));
+            *setup_console_worker.lock().map_err(|_| "技术日志线程状态不可用。")? = Some(console_thread);
             let worker_tracker = host.state::<HostState>().tracker.clone();
             let worker_visible = host.state::<HostState>().visible.clone();
             let worker_layout_dirty = host.state::<HostState>().layout_dirty.clone();
@@ -2319,6 +2356,9 @@ fn run_desktop(
         })?;
     // run() terminates the process. run_return() lets the outer owner stop the
     // Companion and persist cleanup diagnostics before leaving the process.
+    let console_guard = DesktopWorker {
+        running: running.clone(), dispatch: Arc::new(Mutex::new(())), handle: console_worker,
+    };
     let worker_guard = DesktopWorker {
         running: running.clone(),
         dispatch: dispatch.clone(),
@@ -2416,6 +2456,7 @@ fn run_desktop(
         _ => (),
     });
     worker_guard.stop();
+    console_guard.stop();
     // Tauri APIs must not be used after run_return has cleaned up the application.
     let ready_error = ready_error.lock().ok().and_then(|error| error.clone());
     if let Some(error) = ready_error {

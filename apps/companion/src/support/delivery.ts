@@ -3,7 +3,7 @@ import {
   diagnosticPermit,
   sealDiagnosticGzip,
 } from '@mizar/protocol/diagnostics-upload';
-import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
+import { diagnosticConsoleEvidence, diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
@@ -266,7 +266,7 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     stage?: string;
     evidence?: {
       samples?: { time?: string }[];
-      entries?: { entry?: { time?: string; stage?: string } }[];
+      entries?: { entry?: { time?: string; stage?: string; detail?: unknown } }[];
       sourceRecord?: { time?: string };
       [key: string]: unknown;
     };
@@ -326,7 +326,45 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
   if (value.stage === 'native_host_records' && Array.isArray(value.evidence?.entries)) {
     const original = value.evidence.entries;
     const since = consentAt ? Date.parse(consentAt) : NaN;
-    value.evidence.entries = original.filter((record) => {
+    const filteredConsole = original.map((record) => {
+      const entry = record?.entry;
+      if (entry?.stage !== 'cs2_console_records') return record;
+      const detail = diagnosticConsoleEvidence(entry);
+      const records = Array.isArray(detail?.records) ? detail.records : [];
+      const kept = records.filter((value: unknown) => {
+        if (!value || typeof value !== 'object') return false;
+        const item = value as Record<string, unknown>;
+        const after = diagnosticSourceUtc(item.sourceAfterUtc);
+        const captured = diagnosticSourceUtc(item.capturedAt);
+        const host = diagnosticSourceUtc(entry.time);
+        return (
+          Number.isFinite(since) &&
+          after !== null &&
+          captured !== null &&
+          host !== null &&
+          Date.parse(after) >= since &&
+          after <= captured &&
+          captured <= host
+        );
+      });
+      return {
+        ...record,
+        entry: {
+          ...entry,
+          detail: JSON.stringify({
+            ...(detail ?? { source: 'owned-cs2-technical-console', rawFileIncluded: false }),
+            records: kept,
+            cloudCoverage: {
+              excludedPreConsentUnknownOrInvalidSourceRecords: records.length - kept.length,
+              sourceEnvelopeValid: detail !== null,
+              scope:
+                'source write interval, never Host poll time, controls console consent; full local source retained',
+            },
+          }),
+        },
+      };
+    });
+    value.evidence.entries = filteredConsole.filter((record) => {
       const entry = record?.entry;
       if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
       const source = diagnosticSourceUtc(entry.time);

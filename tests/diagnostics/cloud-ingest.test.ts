@@ -202,6 +202,11 @@ it('keeps deletion pending during a real R2 write and completes after the writer
   let failPut = true;
   let release: () => void = () => {};
   let entered: () => void = () => {};
+  let bothEntered: () => void = () => {};
+  let writerEntries = 0;
+  const bothWriters = new Promise<void>((resolve) => {
+    bothEntered = resolve;
+  });
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
@@ -223,6 +228,7 @@ it('keeps deletion pending during a real R2 write and completes after the writer
               throw new Error('synthetic R2 unavailable');
             }
             entered();
+            if (++writerEntries === 2) bothEntered();
             await gate;
             return bucket.put(...args);
           };
@@ -339,11 +345,10 @@ it('keeps deletion pending during a real R2 write and completes after the writer
     const uploading = upload();
     await started;
     const replaying = upload();
-    await vi.waitFor(async () =>
-      expect(
-        await db.prepare('SELECT writers FROM batches WHERE id=?').bind(id).first(),
-      ).toMatchObject({ writers: 2 }),
-    );
+    await bothWriters;
+    expect(
+      await db.prepare('SELECT writers FROM batches WHERE id=?').bind(id).first(),
+    ).toMatchObject({ writers: 2 });
     env.ACCEPTING = '0';
     env.DATABASE_BYTES = '0';
     const pending = await call('/v1/diagnostics/installation', {
@@ -1078,6 +1083,43 @@ it('indexes single-source failures and their original UTC through real envelopes
     ],
   };
   const cases: { stage: string; evidence: unknown; kind: string }[] = [
+    {
+      stage: 'native_host_records',
+      evidence: {
+        entries: [
+          {
+            entry: {
+              schemaVersion: 1,
+              time: laterUtc,
+              startupSessionId: 'original-console-host',
+              stage: 'cs2_console_records',
+              result: 'observed',
+              detail: JSON.stringify({
+                source: 'owned-cs2-technical-console',
+                rawFileIncluded: false,
+                binding: 'c'.repeat(64),
+                records: [
+                  {
+                    sourceRecordId: 'd'.repeat(64),
+                    part: 1,
+                    parts: 1,
+                    sourceOffset: 0,
+                    sourceBytes: 64,
+                    sourceAfterUtc: sourceUtc,
+                    capturedAt: laterUtc,
+                    channel: 'RenderSystem',
+                    result: 'failure',
+                    failureKind: 'graphics_device_lost',
+                    text: '[RenderSystem] Error: DXGI_ERROR_DEVICE_REMOVED original console cause',
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      },
+      kind: 'native',
+    },
     { stage: 'browser_control', evidence: browser(), kind: 'browser' },
     {
       stage: 'native_host_records',
@@ -1274,6 +1316,53 @@ it('indexes single-source failures and their original UTC through real envelopes
       sourceRecord: { ...rootSource(), time: currentUtc },
       correlation: { ageMs: 10000 },
     });
+    journal.record('native_host_records', {
+      entries: [
+        {
+          entry: {
+            schemaVersion: 1,
+            time: currentUtc,
+            startupSessionId: 'delayed-console-source',
+            stage: 'cs2_console_records',
+            result: 'observed',
+            detail: JSON.stringify({
+              source: 'owned-cs2-technical-console',
+              rawFileIncluded: false,
+              binding: 'e'.repeat(64),
+              records: [
+                {
+                  sourceAfterUtc: new Date(realNow - 3 * 3600_000).toISOString(),
+                  capturedAt: currentUtc,
+                  result: 'failure',
+                  failureKind: 'engine_error',
+                  text: 'PRIVATE_OLD_CONSOLE_CONTEXT',
+                },
+                {
+                  sourceAfterUtc: null,
+                  capturedAt: currentUtc,
+                  result: 'failure',
+                  failureKind: 'engine_error',
+                  text: 'PRIVATE_UNKNOWN_CONSOLE_CONTEXT',
+                },
+                {
+                  sourceAfterUtc: currentUtc,
+                  capturedAt: sourceUtc,
+                  result: 'failure',
+                  failureKind: 'engine_error',
+                  text: 'PRIVATE_INVALID_CONSOLE_INTERVAL',
+                },
+                {
+                  sourceAfterUtc: sourceUtc,
+                  capturedAt: currentUtc,
+                  result: 'observed',
+                  text: 'POST_CONSENT_NORMAL_CONSOLE_CONTEXT',
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    });
     journal.record('browser_control', {
       ...browser(),
       time: new Date(realNow - 3 * 3600_000).toISOString(),
@@ -1299,14 +1388,25 @@ it('indexes single-source failures and their original UTC through real envelopes
     ).json()) as { sessions: unknown[] };
     expect(healthy.sessions).toHaveLength(0);
     const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+    let normalConsoleRetained = false;
     for (const item of (await bucket.list()).objects) {
       const body = await (await bucket.get(item.key))!.arrayBuffer();
-      expect(JSON.stringify(await decodeDiagnosticBatch(Buffer.from(body)))).not.toContain(
+      const contents = JSON.stringify(await decodeDiagnosticBatch(Buffer.from(body)));
+      normalConsoleRetained ||= contents.includes('POST_CONSENT_NORMAL_CONSOLE_CONTEXT');
+      for (const excluded of [
         'must_not_upload_pre_consent',
-      );
+        'PRIVATE_OLD_CONSOLE_CONTEXT',
+        'PRIVATE_UNKNOWN_CONSOLE_CONTEXT',
+        'PRIVATE_INVALID_CONSOLE_INTERVAL',
+      ])
+        expect(contents).not.toContain(excluded);
     }
+    expect(normalConsoleRetained).toBe(true);
     expect(await readFile(join(client, 'session.ndjson'), 'utf8')).toContain(
       'must_not_upload_pre_consent_browser',
+    );
+    expect(await readFile(join(client, 'session.ndjson'), 'utf8')).toContain(
+      'PRIVATE_OLD_CONSOLE_CONTEXT',
     );
   } finally {
     vi.useRealTimers();
