@@ -1,5 +1,7 @@
 # 无头接收与私有观察辅助研究（#216）
 
+准备连接完美 GOTV 时，优先按 [Windows 最小实测流程](WINDOWS-TEST.md)完成客户端对照、运行时参数核对、比赛中录制和解析；不先做时间校准。
+
 这是可运行研究工具，不是 Mizar 已支持的实时观战功能。入口不由 Companion 启动，不监听网络，不向 Program、HUD、OBS、RivalHub 或公开雷达发送数据。当前正式 `ObserverAssistProjection` 仍为 unavailable。
 
 ```text
