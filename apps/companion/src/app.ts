@@ -1,6 +1,7 @@
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
+import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
 import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -400,6 +401,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
+  const performanceContext = sessionJournal
+    ? new PerformanceWindow(sessionJournal, () => debugClock.nowMonotonicMs())
+    : undefined;
   if (options.supportLogsDirectory !== undefined) {
     businessJournal = new BusinessJournal(
       options.supportLogsDirectory,
@@ -755,6 +759,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
       outputService.beforeRuntimeMutation();
       const result = programRuntime.acceptObservation(observation);
+      if (result.disposition.kind === 'ignored')
+        performanceContext?.trigger('observation_ignored', {
+          receive: observation.receive,
+          disposition: result.disposition,
+        });
       if (sampleStageBinding) {
         programRuntime.executeOperatorCommand({
           kind: 'bind-current-map-execution-to-series-map',
@@ -770,6 +779,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       demoTest?.observationAccepted();
     } catch (error) {
       sessionJournal?.record('observation_failure', { error, receive: observation.receive });
+      performanceContext?.trigger('observation_failure', { receive: observation.receive });
       throw error;
     } finally {
       const durationMs = performance.now() - processingStarted;
@@ -777,6 +787,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       processing.totalMs += durationMs;
       processing.maxMs = Math.max(processing.maxMs, durationMs);
       if (durationMs >= 50) {
+        performanceContext?.trigger('slow_observation', {
+          sequence: observation.receive.sequence,
+          durationMs,
+        });
         slowProcessingCount++;
         slowProcessing.push({
           time: new Date().toISOString(),
@@ -1298,6 +1312,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       recorder: currentRecorder().getHealth(),
       delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
       channels,
+      anomalyContext: performanceContext?.health() ?? null,
       cstv: {
         program: cstvSources.program.getHealth(),
         lookahead: cstvSources.lookahead.getHealth(),
@@ -1313,6 +1328,27 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ? setInterval(() => recordPerformanceWindow('interval'), 15000)
     : undefined;
   performanceTimer?.unref();
+  let inputGapReported = false;
+  const contextTimer = performanceContext
+    ? setInterval(() => {
+        performanceContext.tick();
+        const now = debugClock.nowMonotonicMs();
+        // Input silence is evidence, not proof that rendering or the game froze.
+        if (
+          latestRawInput &&
+          !inputGapReported &&
+          now - latestRawInput.receivedMonotonicMs >= 1000
+        ) {
+          inputGapReported = true;
+          performanceContext.trigger('input_silence', {
+            lastRaw: latestRawInput,
+            ageMs: now - latestRawInput.receivedMonotonicMs,
+            interpretation: 'source stopped sending; may be normal game/menu inactivity',
+          });
+        }
+      }, 1000)
+    : undefined;
+  contextTimer?.unref();
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
   app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
@@ -1322,6 +1358,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     sessionJournal?.record('browser_control', request.body);
+    const body = request.body as { operation?: string; time?: string; browserDocumentId?: string };
+    if (
+      body &&
+      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(
+        body.operation ?? '',
+      ) &&
+      (body.operation !== 'browser_performance' ||
+        (body as { evidence?: { anomalyCount?: number } }).evidence?.anomalyCount)
+    )
+      performanceContext?.trigger('browser_anomaly', {
+        operation: body.operation,
+        observedAt: body.time,
+        browserDocumentId: body.browserDocumentId,
+        contextCapturedAt: new Date().toISOString(),
+      });
     return reply.code(204).send();
   });
   const diagnosticDelivery = registerDiagnosticDelivery(app, {
@@ -1330,7 +1381,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
-    onReport: () => recordPerformanceWindow('problem_report'),
+    onReport: () => {
+      recordPerformanceWindow('problem_report');
+      performanceContext?.trigger('problem_report', {
+        interpretation:
+          'context begins at report receipt; past untriggered buffers are unavailable',
+      });
+    },
   });
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1341,6 +1398,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     flushBusinessLog: async () => {
       recordPerformanceWindow('export');
+      await performanceContext?.flush();
       await businessJournal?.flush();
       await sessionJournal?.flush();
     },
@@ -1373,11 +1431,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : { sequenceSource: options.gsiSequenceSource }),
       onAcceptedRaw: (input) => {
+        if (
+          latestRawInput &&
+          input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs >= 1000
+        )
+          performanceContext?.trigger('input_resumed_after_gap', {
+            previous: latestRawInput,
+            sequence: input.sequence,
+            gapMs: input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs,
+          });
+        inputGapReported = false;
         latestRawInput = {
           sequence: input.sequence,
           receivedAt: input.receivedAt,
           receivedMonotonicMs: input.receivedMonotonicMs,
         };
+        if (performanceContext?.shouldSample(input.receivedMonotonicMs))
+          performanceContext.sample({
+            time: input.receivedAt,
+            monotonicMs: input.receivedMonotonicMs,
+            sequence: input.sequence,
+            evidence: {
+              input: selectedGsiContext(input.payload),
+              normalizedBeforeCurrentRaw: latestInput,
+              runtimeBeforeCurrentRaw: programRuntime.getCurrentState().programSource,
+              publicationBeforeCurrentRaw: (['program', 'radar'] as const).map((channel) => {
+                const current = projectionCoordinator.getPublisher(channel).getCurrent();
+                return { channel, channelSeq: current?.channelSeq, cursor: current?.cursor };
+              }),
+            },
+          });
         debugEvidenceStore.recordAcceptedRaw(input);
         options.onAcceptedRaw?.(input);
       },
@@ -1390,7 +1473,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         debugEvidenceStore.recordGsiDiagnostics(diagnostics);
         options.onGsiDiagnostics?.(diagnostics);
       },
-      onRuntimeDiagnostic: (code) => {
+      onRuntimeDiagnostic: (code, failure) => {
+        sessionJournal?.record('telemetry_failure', { code, ...failure });
+        performanceContext?.trigger('telemetry_diagnostic', { code, receive: failure.receive });
         recordRuntimeDiagnostic(code, 'telemetry');
       },
     });
@@ -1503,6 +1588,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   app.addHook('onClose', async () => {
     clearInterval(performanceTimer);
+    clearInterval(contextTimer);
     recordPerformanceWindow('close');
     clearInterval(directorTimer);
     presentationUnsubscribe();
@@ -1521,6 +1607,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await hudConfigStore.flush();
     await currentRecorder().finalize();
     await businessJournal?.close();
+    await performanceContext?.close();
     await sessionJournal?.close();
     await diagnosticDelivery.close();
   });

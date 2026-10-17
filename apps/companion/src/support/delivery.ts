@@ -175,6 +175,27 @@ function cloudValue(value: unknown, key = ''): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloudValue(v, k)]));
   return value;
 }
+function cloudRecord(line: string, consentAt: string | null): unknown {
+  const value = JSON.parse(line) as {
+    stage?: string;
+    evidence?: { samples?: { time?: string }[]; [key: string]: unknown };
+  };
+  if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
+    const original = value.evidence.samples;
+    const since = consentAt ? Date.parse(consentAt) : NaN;
+    value.evidence.samples = original.filter((sample) => {
+      if (!sample || typeof sample !== 'object') return false;
+      const time = typeof sample.time === 'string' ? Date.parse(sample.time) : NaN;
+      return Number.isFinite(since) && Number.isFinite(time) && time >= since;
+    });
+    value.evidence.cloudCoverage = {
+      consentAt,
+      excludedPreConsentOrUnknownTimeSamples: original.length - value.evidence.samples.length,
+      scope: 'only source samples since consent; local window metadata describes original scope',
+    };
+  }
+  return cloudValue(diagnosticValue(value));
+}
 async function secureRead(directory: string, name: string, maximum: number) {
   await safePath(directory, name);
   const path = join(directory, name);
@@ -618,7 +639,7 @@ export class DiagnosticDelivery {
         selected.push(item);
         bytes += length;
       }
-      let events = selected.map((v) => cloudValue(diagnosticValue(JSON.parse(v.line))));
+      let events = selected.map((v) => cloudRecord(v.line, this.state.consentAt));
       let raw = Buffer.from(
         JSON.stringify({
           schema: 'mizar-technical-diagnostics/1',
@@ -637,7 +658,7 @@ export class DiagnosticDelivery {
           raw.length > DELIVERY_LIMITS.expandedBytes)
       ) {
         selected.splice(Math.ceil(selected.length / 2));
-        events = selected.map((v) => cloudValue(diagnosticValue(JSON.parse(v.line))));
+        events = selected.map((v) => cloudRecord(v.line, this.state.consentAt));
         raw = Buffer.from(
           JSON.stringify({
             schema: 'mizar-technical-diagnostics/1',

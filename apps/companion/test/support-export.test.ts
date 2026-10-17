@@ -907,6 +907,128 @@ function unpack(bundle: FullArchive, prefix: string) {
     });
 }
 
+it('restores actual ingress and browser failure context from a complete bundle after restart', async () => {
+  const dir = await directory();
+  let now = 0;
+  const first = buildApp({
+    supportLogsDirectory: dir,
+    gsiToken: 'private-fixture-token',
+    debugClock: { nowMonotonicMs: () => now },
+    clock: {
+      now: () => ({ receivedMonotonicMs: now, receivedAt: new Date(now).toISOString() }),
+    },
+    onObservation: () => {
+      if (now === 1500)
+        throw new Error('observation callback failed', { cause: new Error('original sink cause') });
+    },
+  });
+  const frame = async (health: number) => {
+    const response = await first.inject({
+      method: 'POST',
+      url: '/gsi',
+      payload: {
+        auth: { token: 'private-fixture-token' },
+        map: { name: 'de_ancient', phase: 'live', round: 1 },
+        allplayers: {
+          'public-player-fixture': {
+            name: 'not-selected-for-context',
+            position: '100,200,300',
+            team: 'CT',
+            state: { health },
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(204);
+  };
+  try {
+    for (now = 0; now <= 1000; now += 250) await frame(100);
+    const response = await first.inject({
+      method: 'POST',
+      url: '/debug/control-event',
+      headers: request.headers,
+      payload: {
+        operation: 'browser_error',
+        phase: 'failure',
+        time: new Date(now).toISOString(),
+        browserDocumentId: 'public-browser-fixture',
+        evidence: {
+          error: {
+            name: 'Error',
+            message: 'drawing failed',
+            cause: { name: 'IndexSizeError', message: 'negative radius; token=PRIVATE-SECRET' },
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(204);
+    now = 1500;
+    await frame(17);
+  } finally {
+    await first.close();
+  }
+  const second = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await second.inject(request);
+    expect(response.statusCode).toBe(200);
+    const records = unpack(response.json<FullArchive>(), 'session');
+    const failure = records.find(
+      (entry) => entry.stage === 'browser_control' && entry.evidence.operation === 'browser_error',
+    );
+    expect(failure?.evidence.evidence).toMatchObject({
+      error: {
+        name: 'Error',
+        cause: { name: 'IndexSizeError', message: 'negative radius; token=[redacted]' },
+      },
+    });
+    const begin = records.find((entry) => entry.stage === 'performance_anomaly_begin');
+    expect(begin?.evidence).toMatchObject({
+      reason: 'browser_anomaly',
+      correlation: { browserDocumentId: 'public-browser-fixture' },
+    });
+    expect(records.find((entry) => entry.stage === 'telemetry_failure')?.evidence).toMatchObject({
+      code: 'observation_sink_failed',
+      receive: { sequence: 5 },
+      error: { message: 'observation callback failed', cause: { message: 'original sink cause' } },
+    });
+    const chunks = records.filter((entry) => entry.stage === 'performance_anomaly_samples');
+    const before = chunks
+      .filter((entry) => entry.evidence.phase === 'before')
+      .flatMap((entry) => entry.evidence.samples as { sequence: number; evidence: unknown }[]);
+    const after = chunks
+      .filter((entry) => entry.evidence.phase === 'after')
+      .flatMap((entry) => entry.evidence.samples as { sequence: number; evidence: unknown }[]);
+    expect(before.map((sample) => sample.sequence)).toEqual([0, 1, 2, 3, 4]);
+    expect(after).toMatchObject([
+      {
+        sequence: 5,
+        evidence: {
+          input: { players: [{ state: { health: 17 } }] },
+          normalizedBeforeCurrentRaw: { sequence: 4 },
+        },
+      },
+    ]);
+    expect(
+      records.find((entry) => entry.stage === 'performance_anomaly_end')?.evidence,
+    ).toMatchObject({
+      reason: 'shutdown',
+      postIncomplete: true,
+      postSamples: 1,
+    });
+    expect(
+      new Set(
+        records
+          .filter((entry) => entry.stage === 'session_start')
+          .map((entry) => entry.startupSessionId),
+      ).size,
+    ).toBe(2);
+    expect(JSON.stringify(records)).not.toContain('PRIVATE-SECRET');
+    expect(JSON.stringify(chunks)).not.toContain('not-selected-for-context');
+  } finally {
+    await second.close();
+  }
+});
+
 it(
   'reconstructs real 6 MiB MP3 upload, configuration, failure and restart from the production HTTP export',
   { timeout: 20_000 },
