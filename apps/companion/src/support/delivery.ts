@@ -898,6 +898,7 @@ export class DiagnosticDelivery {
     }
   }
   private async recover() {
+    if (!this.consentActive() || this.closed) return;
     // A live commit must not overtake an older record in the disk snapshot.
     // Keep live notifications behind recovery until a complete scan is stable.
     this.recoveryNeeded = true;
