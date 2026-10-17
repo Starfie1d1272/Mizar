@@ -226,10 +226,12 @@ export class BusinessHistory {
   private uncommittedEvents = 0;
   private committedWrites = 0;
   private uncommittedAggregates = 0;
+  private readonly observed = new WeakMap<Entry, number>();
   constructor(
     private readonly directory: string,
     private readonly onFailure: () => void,
     private readonly sourceVersion = businessVersion(),
+    private readonly onEvidence?: (entry: Entry) => void,
   ) {
     const loaded = load(directory);
     this.archive = loaded.archive;
@@ -254,13 +256,17 @@ export class BusinessHistory {
     if (this.contexts.size > BUSINESS_HISTORY_LIMITS.groups)
       this.contexts.delete(this.contexts.keys().next().value!);
   }
-  append(stage: string, evidence: Evidence): void {
-    if (this.closed || !stages.includes(stage)) return;
-    if (this.blocked) {
-      this.archive.droppedPendingEvents++;
+  private observe(entry: Entry): void {
+    if (this.observed.get(entry) === entry.occurrences) return;
+    try {
+      this.onEvidence?.(entry);
+      this.observed.set(entry, entry.occurrences);
+    } catch {
       this.fail();
-      return;
     }
+  }
+  append(stage: string, evidence: Evidence): void {
+    if (this.closed) return;
     const key = JSON.stringify([stage, groupKey(evidence), evidence.idempotencyKey]);
     const at = new Date().toISOString();
     const entry: Entry = {
@@ -273,6 +279,16 @@ export class BusinessHistory {
       lastObservedAt: evidence.originalObservedAt,
       lastRecordedAt: at,
     };
+    if (!stages.includes(stage)) {
+      this.observe(entry);
+      return;
+    }
+    if (this.blocked) {
+      this.observe(entry);
+      this.archive.droppedPendingEvents++;
+      this.fail();
+      return;
+    }
     const context = this.contexts.get(groupKey(evidence));
     if (failure(entry) && context) entry.context = context;
     const signature = JSON.stringify({
@@ -314,6 +330,8 @@ export class BusinessHistory {
       }
       return;
     }
+    if (previous) this.observe(previous.entry);
+    this.observe(entry);
     this.updateContext(entry);
     // Ordinary state can be superseded while waiting for the writer. A fault has
     // already pinned its own immutable context, independent of this queue slot.
@@ -335,7 +353,11 @@ export class BusinessHistory {
     this.boundPending();
     this.previous.delete(key);
     this.previous.set(key, { signature, entry });
-    if (this.previous.size > 256) this.previous.delete(this.previous.keys().next().value!);
+    if (this.previous.size > 256) {
+      const oldest = this.previous.keys().next().value!;
+      this.observe(this.previous.get(oldest)!.entry);
+      this.previous.delete(oldest);
+    }
     this.dirty = true;
     if (!this.writing && !this.timer) {
       this.timer = setTimeout(() => {
@@ -352,6 +374,7 @@ export class BusinessHistory {
     ) {
       const normal = this.pending.findIndex((e) => !failure(e));
       const removed = this.pending.splice(normal >= 0 ? normal : 0, 1)[0]!;
+      this.observe(removed);
       this.retained.delete(removed);
       this.queuedBytes -= bytes(removed);
       this.archive.droppedPendingEvents++;
@@ -388,6 +411,7 @@ export class BusinessHistory {
       while (bytes(group.events.filter(predicate)) > limit) {
         const index = group.events.findIndex(predicate);
         if (index < 0) break;
+        this.observe(group.events[index]!);
         this.retained.delete(group.events[index]!);
         group.events.splice(index, 1);
         group.rotatedEvents++;
@@ -399,6 +423,7 @@ export class BusinessHistory {
       Buffer.byteLength(JSON.stringify({ businessHistory: { groups: [group] } }, null, 2)) >
       BUSINESS_HISTORY_LIMITS.groupBytes - 16 * 1024
     ) {
+      this.observe(group.events[0]!);
       this.retained.delete(group.events[0]!);
       group.events.shift();
       group.rotatedEvents++;
@@ -448,7 +473,10 @@ export class BusinessHistory {
         const oldest = [...this.archive.groups].sort((a, b) =>
           (a.lastRecordedAt ?? '').localeCompare(b.lastRecordedAt ?? ''),
         )[0]!;
-        for (const entry of oldest.events) this.retained.delete(entry);
+        for (const entry of oldest.events) {
+          this.observe(entry);
+          this.retained.delete(entry);
+        }
         this.archive.groups.splice(this.archive.groups.indexOf(oldest), 1);
         this.archive.evictedGroups++;
         this.archive.evictedEvents += oldest.events.length + oldest.rotatedEvents;
@@ -500,6 +528,7 @@ export class BusinessHistory {
     }
   }
   async flush(): Promise<void> {
+    for (const value of this.previous.values()) this.observe(value.entry);
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;

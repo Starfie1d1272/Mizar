@@ -109,8 +109,36 @@ export class SessionJournal {
   private failures = 0;
   private size = -1;
   private initialized = false;
+  private readonly identity: {
+    appVersion: string | null;
+    gitSha: string | null;
+    artifactSha256: string | null;
+  };
   private retention = { rotatedFiles: 0, rotatedBytes: 0, expiredFiles: 0, expiredBytes: 0 };
-  constructor(private readonly directory: string) {
+  constructor(
+    private readonly directory: string,
+    identity: {
+      appVersion?: string | null;
+      gitSha?: string | null;
+      artifactSha256?: string | null;
+    } = {},
+  ) {
+    const appVersion = identity.appVersion ?? process.env.MIZAR_APP_VERSION;
+    this.identity = {
+      appVersion:
+        typeof appVersion === 'string' && /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(appVersion)
+          ? appVersion
+          : null,
+      gitSha:
+        typeof identity.gitSha === 'string' && /^[a-f0-9]{40}$/i.test(identity.gitSha)
+          ? identity.gitSha
+          : null,
+      artifactSha256:
+        typeof identity.artifactSha256 === 'string' &&
+        /^[a-f0-9]{64}$/i.test(identity.artifactSha256)
+          ? identity.artifactSha256
+          : null,
+    };
     this.record('session_start', {
       limits: SESSION_LIMITS,
       durability: 'async; abrupt power loss may lose pending or OS-buffered records',
@@ -128,6 +156,7 @@ export class SessionJournal {
       JSON.stringify({
         time: new Date().toISOString(),
         startupSessionId: this.sessionId,
+        ...this.identity,
         sequence: ++this.sequence,
         stage,
         droppedBefore: this.dropped,

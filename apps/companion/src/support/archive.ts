@@ -227,9 +227,7 @@ export async function fullLogArchive(
       included: group.parts.size,
       complete:
         group.parts.size === group.expected &&
-        Array.from({ length: group.expected }, (_, index) => index + 1).every((index) =>
-          group.parts.has(index),
-        ),
+        [...group.parts].sort((a, b) => a - b).every((part, index) => part === index + 1),
     })),
     sessions: [...sessions.values()].map(({ sequence, ...session }) => {
       const ordered = [...new Set(sequence)].sort((a, b) => a - b);

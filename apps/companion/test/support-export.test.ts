@@ -94,6 +94,23 @@ describe('support export', () => {
         businessHistory: ReturnType<typeof readBusinessHistory>;
       }>();
       expect(bundle.snapshot.businessLog).toBe('available');
+      const systemEvents = unpack(response.json<FullArchive>(), 'session.ndjson')
+        .filter((event) => event.stage === 'business_evidence')
+        .map(
+          (event) =>
+            event.evidence as unknown as {
+              stage: string;
+              evidence: { telemetry?: string; mapName?: string };
+            },
+        );
+      expect(
+        systemEvents.some(
+          (event) =>
+            event.stage === 'business_runtime' &&
+            event.evidence.telemetry === 'fresh' &&
+            event.evidence.mapName === 'de_ancient',
+        ),
+      ).toBe(true);
       const events = bundle.businessHistory.groups.flatMap((g) => g.events);
       expect(
         new Set(events.filter((e) => e.stage === 'business_session').map((e) => e.startupSessionId))

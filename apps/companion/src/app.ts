@@ -375,7 +375,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       return Math.max(performance.now(), lastReceived);
     });
   const sessionJournal = options.supportLogsDirectory
-    ? new SessionJournal(options.supportLogsDirectory)
+    ? new SessionJournal(options.supportLogsDirectory, {
+        appVersion: options.productRuntime?.appVersion ?? null,
+        gitSha: options.productRuntime?.gitSha ?? null,
+        artifactSha256: options.productRuntime?.artifactSha256 ?? null,
+      })
     : undefined;
   const app = Fastify({
     logger: sessionJournal
@@ -400,6 +404,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           '业务诊断日志写入失败',
         ),
       options.productRuntime?.appVersion,
+      (entry) => sessionJournal?.record('business_evidence', entry),
     );
   }
   const isControl = (url: string, method: string) =>
