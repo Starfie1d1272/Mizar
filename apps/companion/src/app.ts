@@ -757,6 +757,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       debugEvidenceStore.recordNormalizedObservation(observation);
       debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
       demoTest?.observationAccepted();
+    } catch (error) {
+      sessionJournal?.record('observation_failure', { error, receive: observation.receive });
+      throw error;
     } finally {
       const durationMs = performance.now() - processingStarted;
       processing.count++;
