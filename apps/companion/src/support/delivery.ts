@@ -127,6 +127,7 @@ const stateSchema = z
           unavailableReason: z
             .enum([
               'installation_lease_closed',
+              'consent_policy_changed',
               'server_retention_expired',
               'batch_retention_expired',
               'automatic_window_expired',
@@ -539,7 +540,7 @@ export class DiagnosticDelivery {
     }
     const entries = await readdir(this.queueDirectory, { withFileTypes: true });
     for (const entry of entries)
-      if (/^consent-revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
+      if (/^consent-(?:policy-)?revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
         await secureRead(this.queueDirectory, entry.name, 16);
         if (this.fences.size >= 64) throw new Error('revocation_marker_budget');
         this.fences.set(entry.name, Promise.resolve());
@@ -551,13 +552,17 @@ export class DiagnosticDelivery {
       (this.state.consentPolicy !== 3 ||
         diagnosticInstallationCreatedAt(this.state.credentials?.installationId ?? '') === null)
     ) {
-      const name = `consent-revoked-${randomUUID()}.flag`;
+      const name = `consent-policy-revoked-${randomUUID()}.flag`;
       await this.createFence(name);
       this.fences.set(name, Promise.resolve());
       this.error = 'consent_policy_changed';
     }
     if (this.fences.size) {
       this.revocationFenced = true;
+      const preserveCopies = ![...this.fences.keys()].some((name) =>
+        name.startsWith('consent-revoked-'),
+      );
+      if (preserveCopies) this.error = 'consent_policy_changed';
       for (const retired of this.state.retiredIdentities)
         if (
           !this.state.withdrawals.some((value) => value.installationId === retired.installationId)
@@ -575,7 +580,13 @@ export class DiagnosticDelivery {
       this.state.consent = false;
       this.state.credentials = null;
       this.state.sessions = {};
-      this.state.queue = [];
+      if (preserveCopies) {
+        for (const batch of this.state.queue) {
+          if (!batch.serverExpired) this.omitted('consent_policy_changed', batch.index.events);
+          batch.serverExpired = true;
+          batch.unavailableReason = 'consent_policy_changed';
+        }
+      } else this.state.queue = [];
       this.state.failures = 0;
       this.state.nextAttemptAt = 0;
       await this.save();

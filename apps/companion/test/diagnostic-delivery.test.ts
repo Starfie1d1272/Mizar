@@ -743,11 +743,17 @@ describe('consented diagnostic outbox', () => {
       const journal = new SessionJournal(dir);
       const previous = await new DiagnosticDelivery(dir, journal).initialize(false);
       await previous.consent(true);
+      journal.record('normal_operation', {
+        result: 'full unacknowledged evidence before policy change',
+      });
+      await journal.flush();
+      await previous.tick();
       await previous.close();
       await journal.close();
       const path = join(dir, 'diagnostic-outbox', 'state.json');
       const state = JSON.parse(await readFile(path, 'utf8')) as {
         consentPolicy: number;
+        queue: { id: string }[];
         credentials: { installationId: string; token?: string; expiresAt?: number };
         nextAttemptAt: number;
         failures: number;
@@ -759,10 +765,10 @@ describe('consented diagnostic outbox', () => {
       state.nextAttemptAt = Date.now() + 6 * 3600_000;
       state.failures = 12;
       await writeFile(path, JSON.stringify(state));
-      const nextJournal = new SessionJournal(dir);
+      let nextJournal = new SessionJournal(dir);
       const remote = service();
       remote.setState(path);
-      const next = await new DiagnosticDelivery(dir, nextJournal, {
+      let next = await new DiagnosticDelivery(dir, nextJournal, {
         endpoint: 'https://diagnostics.example.test',
         fetch: remote.fetcher,
       }).initialize(false);
@@ -770,13 +776,37 @@ describe('consented diagnostic outbox', () => {
         expect(next.status()).toMatchObject({
           consent: false,
           error: 'consent_policy_changed',
-          queuedBatches: 0,
+          queuedBatches: state.queue.length,
+          blockedBatches: state.queue.length,
         });
         expect(
           (await readdir(join(dir, 'diagnostic-outbox'))).some((name) =>
-            name.startsWith('consent-revoked-'),
+            name.startsWith('consent-policy-revoked-'),
           ),
         ).toBe(true);
+        const originalCopies = await Promise.all(
+          state.queue.map((x) => readFile(join(dir, `diagnostic-outbox/${x.id}.gz`))),
+        );
+        expect(originalCopies.length).toBeGreaterThan(0);
+        await next.close();
+        await nextJournal.close();
+        nextJournal = new SessionJournal(dir);
+        next = await new DiagnosticDelivery(dir, nextJournal, {
+          endpoint: 'https://diagnostics.example.test',
+          fetch: remote.fetcher,
+        }).initialize(false);
+        const retained = await next.retainedBatches();
+        for (let i = 0; i < state.queue.length; i++) {
+          const copy = retained.find((x) => x.id === state.queue[i]!.id)!;
+          expect(copy.gzip).toEqual(originalCopies[i]);
+          expect(copy.automaticDelivery).toEqual({
+            blocked: true,
+            reason: 'consent_policy_changed',
+          });
+        }
+        expect(JSON.stringify(await decodeDiagnosticBatch(retained[0]!.gzip!))).toContain(
+          'full unacknowledged evidence before policy change',
+        );
         await next.tick();
         expect(remote.calls).toEqual(['DELETE /v1/diagnostics/installation']);
         expect(remote.revoked()).toBe(true);
@@ -787,6 +817,14 @@ describe('consented diagnostic outbox', () => {
         };
         expect(renewed.consentPolicy).toBe(3);
         expect(renewed.credentials.installationId).not.toBe(oldInstallation);
+        await nextJournal.flush();
+        await next.tick();
+        for (const item of state.queue) {
+          expect(remote.batches.has(item.id)).toBe(false);
+          expect(
+            (await next.retainedBatches()).find((x) => x.id === item.id)?.automaticDelivery,
+          ).toEqual({ blocked: true, reason: 'consent_policy_changed' });
+        }
       } finally {
         await next.close();
         await nextJournal.close();

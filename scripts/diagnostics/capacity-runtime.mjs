@@ -67,7 +67,7 @@ export default {
   }
 };
 `;
-export function meteredRuntime(directory) {
+export function meteredRuntime(directory, dailyBatchLimit = 4800) {
   return new Miniflare({
     modules: [
       { type: 'ESModule', path: 'measurement.mjs', contents: instrumentation },
@@ -77,7 +77,7 @@ export function meteredRuntime(directory) {
     bindings: {
       ...bindings,
       DAILY_BYTES: '671088640',
-      DAILY_BATCHES: '4800',
+      DAILY_BATCHES: String(dailyBatchLimit),
       INSTALLATION_DAILY_BYTES: '16777216',
       INSTALLATION_DAILY_BATCHES: '128',
     },
