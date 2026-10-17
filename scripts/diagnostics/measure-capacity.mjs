@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { meteredRuntime } from './capacity-runtime.mjs';
+import { fullOutbox } from './outbox-capacity.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
 import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,7 @@ import { URL, fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { performance } from 'node:perf_hooks';
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { strict as assert } from 'node:assert';
 import { setImmediate as yieldIO } from 'node:timers/promises';
@@ -16,14 +17,14 @@ import { buildApp } from '../../apps/companion/src/app.ts';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.ts';
 import {
   DiagnosticDelivery,
+  DELIVERY_LIMITS,
   decodeDiagnosticBatch,
 } from '../../apps/companion/src/support/delivery.ts';
 import { runtime, migrate, bindings } from '../../tests/diagnostics/fixture.ts';
 import {
-  sealDiagnosticGzip,
   stampDiagnosticGzip,
   diagnosticGzipCreatedAt,
-  diagnosticInstallationId,
+  readDiagnosticGzipPermit,
 } from '../../packages/protocol/src/diagnostics-upload.ts';
 const { fetch, Headers, structuredClone } = globalThis;
 const fixture = JSON.parse(
@@ -313,6 +314,7 @@ async function profile(directory) {
       scope:
         'actual buildApp HTTP/GSI/browser collectors, performance window and durable spool plus app-owned NativeSource; real journal/disk/outbox; isolated injected journal root keeps the app-internal off-by-default uploader separate from the metered outbox; native input scales a real Rust-produced public fixture and runtime aggregates scale an actual public production snapshot at modeled rates, not 100 real games; accelerated time, IO catch-up each virtual minute; no account requests; no inference of game FPS or cloud CPU',
       minutes: 120,
+      epoch,
       rates: {
         gsiHz: 20,
         players: 16,
@@ -374,321 +376,404 @@ async function profile(directory) {
   }
 }
 
+/** Restore fixtures produced by the actual collector into the actual on-disk
+ * outbox format, then use only production initialize/tick/ACK/restart behavior.
+ * Cloning once per modeled session avoids recompressing the same public story
+ * for 100 machines; ownership is distinct and raw MTIME/SHA are set once. */
 async function cloud(directory, profileResult, faultResult) {
-  const root = await mkdtemp(join(directory, 'cloud-'));
-  const mf = meteredRuntime(root);
+  const root = await mkdtemp(join(directory, 'outbox-days-'));
+  const mf = meteredRuntime(join(root, 'server'));
   const endpoint = (await mf.ready).origin;
   const db = await mf.getD1Database('DIAGNOSTICS_DB');
   await migrate(db);
-  const call = (path, init) =>
-    fetch(endpoint + path, {
-      ...init,
-      headers: { 'cf-connecting-ip': '127.0.0.1', ...init.headers },
-    });
-  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-  const snapshot = async () => (await fetch(endpoint + '/__test/metrics')).json();
-  const counts = await snapshot();
-  const difference = (a, b) => Object.fromEntries(Object.keys(a).map((k) => [k, a[k] - b[k]]));
-  const source = profileResult.packets;
-  const profile = profileResult.report;
-  const totalBatchesPerInstallation = source.length * 3 + faultResult.packets.length;
-  const users = [];
+  const dayMs = 86400_000;
+  const epoch = Math.floor(Date.now() / dayMs) * dayMs;
+  let now = epoch;
+  let accepting = true;
+  let lostAck = true;
+  const clients = [];
+  const expected = new Set();
+  const received = new Set();
+  const offeredBytesByDay = [];
+  const minuteRequests = new Map();
+  const snapshots = [];
   const checkpoints = [];
-  const starts = performance.now();
-  const retainedDirectory = join(root, 'retained-refusals');
-  await mkdir(retainedDirectory);
-  const refusals = [];
-  let acceptedBatches = 0,
-    acceptedSessions = 0,
-    auditedSessions = 0;
-  const expiryNow = Date.now() + 181 * 86400_000;
-  try {
-    const registrationTotals = Object.fromEntries(Object.keys(counts).map((k) => [k, 0]));
-    for (let group = 0; group < 10; group++) {
-      const current = [];
-      for (let offset = 0; offset < 10; offset++) {
-        const installation = diagnosticInstallationId(Date.now(), randomBytes(16));
-        const before = await snapshot();
-        const enroll = await call('/v1/diagnostics/enroll', {
-          method: 'POST',
-          body: JSON.stringify({
-            consent: 'technical-diagnostics-v3',
-            enrollmentId: installation,
-            enrollmentSecret: hash('public-secret-' + installation),
-          }),
-        });
-        assert.equal(enroll.status, 200);
-        const identity = await enroll.json();
-        const cost = difference(await snapshot(), before);
-        for (const key of Object.keys(cost)) registrationTotals[key] += cost[key];
-        current.push({ installation, identity });
-      }
-      await Promise.all(
-        current.map(async ({ installation, identity }) => {
-          let expanded = 0,
-            compressed = 0;
-          for (let dailySession = 0; dailySession < 4; dailySession++) {
-            const currentSource = dailySession === 3 ? faultResult.packets : source;
-            const session = randomUUID();
-            let first;
-            for (let i = 0; i < currentSource.length; i++) {
-              const original = JSON.parse(
-                gunzipSync(Buffer.from(currentSource[i].bytes, 'base64')).toString(),
-              );
-              const oldSession = original.events[0].startupSessionId;
-              const plain = Buffer.from(JSON.stringify(original).replaceAll(oldSession, session));
-              const raw = Buffer.from(stampDiagnosticGzip(gzipSync(plain), Date.now()));
-              const issue = await call('/v1/diagnostics/permits/' + hash(raw), {
-                method: 'POST',
-                headers: {
-                  authorization: 'Bearer ' + identity.token,
-                  'x-diagnostics-created-at': String(diagnosticGzipCreatedAt(raw)),
-                },
-              });
-              if (issue.status === 429) {
-                const reason = await issue.json();
-                assert.equal(reason.error, 'permit_budget');
-                const id = hash(raw);
-                await writeFile(join(retainedDirectory, id + '.gz'), raw);
-                refusals.push({
-                  id,
-                  installation,
-                  session,
-                  bytes: raw.length,
-                  expandedBytes: plain.length,
-                  reason: reason.error,
-                });
-                continue;
-              }
-              assert.equal(issue.status, 200);
-              const permit = await issue.json();
-              const bytes = Buffer.from(sealDiagnosticGzip(raw, permit));
-              const id = hash(bytes);
-              const index = {
-                ...currentSource[i].index,
-                sessionId: session,
-                expandedBytes: plain.length,
-              };
-              const init = {
-                method: 'PUT',
-                headers: {
-                  authorization: 'Bearer ' + identity.token,
-                  'content-type': 'application/gzip',
-                  'x-content-sha256': id,
-                  'x-diagnostics-index': JSON.stringify(index),
-                },
-                body: bytes,
-              };
-              const accepted = await call('/v1/diagnostics/batches/' + id, init);
-              assert.equal(accepted.status, 200);
-              assert.equal((await accepted.json()).batchId, id);
-              acceptedBatches++;
-              first ??= { id, init };
-              expanded += plain.length;
-              compressed += bytes.length;
-            }
-            if (!first) continue;
-            acceptedSessions++;
-            const beforeReplay = await db
-              .prepare(
-                'SELECT object_key,received_at,expires_at FROM batches WHERE installation_id=? AND id=?',
-              )
-              .bind(installation, first.id)
-              .first();
-            const replay = await call('/v1/diagnostics/batches/' + first.id, first.init);
-            assert.equal(replay.status, 200);
-            assert.deepEqual(await replay.json(), {
-              accepted: true,
-              batchId: first.id,
-              sha256: first.id,
-            });
-            const afterReplay = await db
-              .prepare(
-                'SELECT object_key,received_at,expires_at FROM batches WHERE installation_id=? AND id=?',
-              )
-              .bind(installation, first.id)
-              .first();
-            assert.deepEqual(afterReplay, beforeReplay);
-            const downloaded = await call('/admin/bodies/' + installation + '/' + first.id, {
-              method: 'GET',
-              headers: { authorization: 'Bearer ' + bindings.ADMIN_KEY },
-            });
-            assert.equal(downloaded.status, 200);
-            const body = Buffer.from(await downloaded.arrayBuffer());
-            assert.equal(hash(body), first.id);
-            assert((await decodeDiagnosticBatch(body)).events.length > 0);
-            auditedSessions++;
+  const days = [];
+  const auditedSessions = new Set();
+  const receivedPayloads = new Map();
+  const sourceEpoch = profileResult.report.epoch;
+  const control = async () => {
+    const response = await fetch(endpoint + '/__test/control', {
+      method: 'POST',
+      body: JSON.stringify({ now, accepting }),
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+  };
+  const metrics = async () => (await fetch(endpoint + '/__test/metrics')).json();
+  const subtract = (a, b) =>
+    Object.fromEntries(Object.keys(a).map((key) => [key, a[key] - b[key]]));
+  const fileState = async (client) =>
+    JSON.parse(await readFile(join(client.path, 'diagnostic-outbox/state.json'), 'utf8'));
+  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const open = async (client) => {
+    client.journal ??= new SessionJournal(client.path, { appVersion: 'capacity-public' });
+    client.delivery = await new DiagnosticDelivery(client.path, client.journal, {
+      endpoint,
+      allowTestEndpoint: true,
+      now: () => now,
+      fetch: async (input, init) => {
+        const path = new URL(input).pathname;
+        const minute = Math.floor((now - epoch) / 60_000);
+        const rate = minuteRequests.get(minute) ?? { enroll: 0, other: 0 };
+        rate[path.endsWith('/enroll') ? 'enroll' : 'other']++;
+        minuteRequests.set(minute, rate);
+        const headers = new Headers(init.headers);
+        headers.set('cf-connecting-ip', '192.0.2.7');
+        const response = await fetch(input, { ...init, headers });
+        if (init.method === 'PUT' && response.ok) {
+          const permit = readDiagnosticGzipPermit(new Uint8Array(init.body));
+          assert(permit);
+          assert.equal(hash(permit.payload), permit.permit.payloadSha256);
+          const key = client.index + '|' + permit.permit.payloadSha256;
+          received.add(key);
+          const wireHash = hash(init.body);
+          const prior = receivedPayloads.get(key);
+          const locator = await db
+            .prepare('SELECT received_at,expires_at FROM batches WHERE installation_id=? AND id=?')
+            .bind(permit.permit.installationId, wireHash)
+            .first();
+          if (prior)
+            assert.deepEqual(locator, prior, 'lost ACK retry changed the original retention clock');
+          else receivedPayloads.set(key, locator);
+          const index = JSON.parse(headers.get('x-diagnostics-index'));
+          const auditKey = client.index + '|' + index.sessionId;
+          if (!auditedSessions.has(auditKey)) {
+            const audit = await fetch(
+              endpoint + '/admin/bodies/' + permit.permit.installationId + '/' + wireHash,
+              { headers: { authorization: 'Bearer ' + bindings.ADMIN_KEY } },
+            );
+            assert.equal(audit.status, 200);
+            assert(
+              Buffer.from(await audit.arrayBuffer()).equals(Buffer.from(init.body)),
+              'HTTP body read changed the sealed source bytes',
+            );
+            auditedSessions.add(auditKey);
           }
-          users.push({ installation, expanded, compressed });
-        }),
-      );
-      const userCount = (group + 1) * 10;
-      if ([10, 30, 100].includes(userCount)) {
-        const dimensions = await db
-          .prepare(
-            'SELECT (SELECT COUNT(*) FROM installations) installations,(SELECT COUNT(*) FROM sessions) sessions,(SELECT COUNT(*) FROM batches) batches,(SELECT COUNT(*) FROM upload_permits) permits',
-          )
-          .first();
-        const isolation = await db
-          .prepare(
-            'SELECT COUNT(*) count FROM sessions s LEFT JOIN installations i ON i.id=s.installation_id WHERE i.id IS NULL',
-          )
-          .first();
-        assert.equal(isolation.count, 0);
-        assert.equal(dimensions.sessions, acceptedSessions);
-        assert.equal(dimensions.batches, acceptedBatches);
-        assert.equal(acceptedBatches + refusals.length, userCount * totalBatchesPerInstallation);
-        checkpoints.push({
-          users: userCount,
-          hoursPerUser: 6,
-          sessionsPerUser: 4,
-          faultBurstsPerUser: 1,
-          actualDimensions: dimensions,
-          offeredBatches: userCount * totalBatchesPerInstallation,
-          refusedRetainedBatches: refusals.length,
-          cloudComplete: refusals.length === 0,
-          total: await snapshot(),
-          isolationVerified: true,
-        });
-        console.error(JSON.stringify(checkpoints.at(-1)));
+          if (lostAck) {
+            lostAck = false;
+            await response.arrayBuffer();
+            throw new TypeError('public multi-day lost ACK after durable commit');
+          }
+        }
+        return response;
+      },
+    }).initialize(false);
+  };
+  const close = async (client) => {
+    if (client.delivery) {
+      await client.delivery.close();
+      await client.journal.close();
+      client.delivery = null;
+      client.journal = null;
+    }
+  };
+  const fingerprint = async (client) => {
+    const state = await fileState(client);
+    const ids = [];
+    for (const item of state.queue) {
+      const bytes = await readFile(join(client.path, 'diagnostic-outbox', item.id + '.gz'));
+      assert.equal(hash(bytes), item.id);
+      ids.push(item.id);
+    }
+    return ids;
+  };
+  const restart = async (client) => {
+    await close(client);
+    const before = await fingerprint(client);
+    await open(client);
+    const after = new Set(await fingerprint(client));
+    assert(
+      before.every((id) => after.has(id)),
+      'restart discarded or changed an unacknowledged wire SHA',
+    );
+  };
+  const prototypes = async (day) => {
+    const result = [];
+    for (let session = 0; session < 4; session++) {
+      const original = session === 3 ? faultResult : profileResult;
+      const scope = `public-day-${day}-session-${session}`;
+      const target = epoch + day * dayMs + session * 2 * 3600_000;
+      const offset = target - (original.report.epoch ?? sourceEpoch);
+      const identifiers = new Map();
+      const id = (value) => {
+        if (!identifiers.has(value)) identifiers.set(value, randomUUID());
+        return identifiers.get(value);
+      };
+      const project = (value, key = '') => {
+        if (typeof value === 'string') {
+          if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value))
+            return new Date(Date.parse(value) + offset).toISOString();
+          if (key === 'detail' && (value.startsWith('{') || value.startsWith('['))) {
+            try {
+              return JSON.stringify(project(JSON.parse(value)));
+            } catch {
+              return value;
+            }
+          }
+          if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)) return id(value);
+          if (['sourceRecordId', 'groupId'].includes(key)) return hash(scope + '|' + value);
+          return value;
+        }
+        if (Array.isArray(value)) return value.map((item) => project(item));
+        if (value && typeof value === 'object')
+          return Object.fromEntries(
+            Object.entries(value).map(([name, item]) => [name, project(item, name)]),
+          );
+        return value;
+      };
+      for (const packet of original.packets) {
+        const body = project(
+          JSON.parse(gunzipSync(Buffer.from(packet.bytes, 'base64')).toString()),
+        );
+        const plain = Buffer.from(JSON.stringify(body));
+        const raw = gzipSync(plain);
+        assert(raw.length + 1024 <= DELIVERY_LIMITS.compressedBytes);
+        assert(plain.length <= DELIVERY_LIMITS.expandedBytes);
+        const index = {
+          ...project(packet.index),
+          sessionId: body.events[0].startupSessionId,
+          expandedBytes: plain.length,
+        };
+        const originalTime = diagnosticGzipCreatedAt(Buffer.from(packet.bytes, 'base64'));
+        const createdAt =
+          target + Math.max(0, originalTime - (original.report.epoch ?? sourceEpoch));
+        result.push({ raw, index, createdAt });
       }
     }
-    const uploadTotals = await snapshot();
-    const perUser = Object.fromEntries(
-      Object.keys(counts).map((k) => [k, (uploadTotals[k] - registrationTotals[k]) / 100]),
-    );
-    const registrationAndIndexTotal = await snapshot();
-    const beforeCleanup = await snapshot();
-    let cleaned = 0;
-    for (let page = 0; page < Math.ceil(totalBatchesPerInstallation) + 1; page++) {
-      const response = await fetch(
-        endpoint + '/__test/cleanup?now=' + (Date.now() + 8 * 86400000),
-        { method: 'POST' },
+    return result;
+  };
+  const loadDay = async (client, model, day) => {
+    // Suspend just the sender while loading the recovery fixture. Avoid
+    // manufacturing a second process restart on every ordinary modeled day.
+    if (client.delivery) {
+      await client.delivery.close();
+      client.delivery = null;
+    }
+    const state = await fileState(client);
+    for (const packet of model) {
+      const bytes = Buffer.from(
+        stampDiagnosticGzip(
+          packet.raw,
+          Math.floor(packet.createdAt / 1000) * 1000 + client.index * 1000,
+        ),
       );
-      assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { done: true });
-      cleaned++;
+      const id = hash(bytes);
+      const key = client.index + '|' + id;
+      assert(!expected.has(key));
+      expected.add(key);
+      offeredBytesByDay[day] = (offeredBytesByDay[day] ?? 0) + bytes.length + 1024;
+      state.queue.push({ id, bytes: bytes.length, index: packet.index });
+      await writeFile(join(client.path, 'diagnostic-outbox', id + '.gz'), bytes);
     }
-    const cleanupCost = difference(await snapshot(), beforeCleanup);
-    const remaining = await db
-      .prepare(
-        'SELECT (SELECT COUNT(*) FROM batches) batches,(SELECT COUNT(*) FROM sessions) sessions,(SELECT COUNT(*) FROM upload_permits) permits',
-      )
-      .first();
-    assert.equal(remaining.batches, 0);
-    assert.equal(remaining.sessions, acceptedSessions);
-    assert.equal(remaining.permits, acceptedBatches);
-    // Reopen exact refused bytes rather than dropping a saturated model input.
-    await writeFile(join(retainedDirectory, 'manifest.json'), JSON.stringify(refusals));
-    const recovered = JSON.parse(await readFile(join(retainedDirectory, 'manifest.json'), 'utf8'));
-    for (const item of recovered) {
-      const raw = await readFile(join(retainedDirectory, item.id + '.gz'));
-      assert.equal(hash(raw), item.id);
-      assert.equal(gunzipSync(raw).length, item.expandedBytes);
+    // Production initialize validates these same bounds; do not import beyond
+    // them, evict old entries, or put a refusal in an independent spill directory.
+    assert(state.queue.length <= 2048);
+    assert(state.queue.reduce((sum, b) => sum + b.bytes + 1024, 0) <= 64 * 1024 * 1024);
+    assert(Buffer.byteLength(JSON.stringify(state)) <= 2 * 1024 * 1024);
+    await writeFile(join(client.path, 'diagnostic-outbox/state.json'), JSON.stringify(state));
+    await open(client);
+    if (client.delivery.status().paused) await client.delivery.pause(false);
+  };
+  const pending = (group) =>
+    group.reduce((sum, client) => sum + client.delivery.status().queuedBatches, 0);
+  const drain = async (group, minutes) => {
+    const deadline = now + minutes * 60_000;
+    let position = 0;
+    while (pending(group) && now < deadline) {
+      await control();
+      const chunk = [];
+      for (let n = 0; n < Math.min(12, group.length); n++)
+        chunk.push(group[position++ % group.length]);
+      await Promise.all(chunk.map((client) => client.delivery.tick(false)));
+      now += 5000;
+      // Once everybody has been visited, honor the production backoff rather
+      // than hammering rejected packets or resetting nextAttemptAt by hand.
+      if (position >= group.length) {
+        position %= group.length;
+        const due = group
+          .filter((c) => c.delivery.status().queuedBatches)
+          .map((c) => c.delivery.status().nextAttemptAt);
+        if (due.length && Math.min(...due) > now)
+          now = Math.ceil(Math.min(deadline, Math.min(...due)));
+      }
     }
-    const beforeFiniteCleanup = await snapshot();
-    let finitePages = 0;
-    for (
-      let page = 0;
-      page < Math.ceil(Math.max(acceptedBatches, acceptedSessions) / 100) + 2;
-      page++
-    ) {
-      const response = await fetch(endpoint + '/__test/cleanup?now=' + expiryNow, {
-        method: 'POST',
+    await control();
+  };
+  try {
+    await control();
+    for (let index = 0; index < 100; index++) {
+      const client = {
+        index,
+        path: join(root, 'clients', String(index)),
+        journal: null,
+        delivery: null,
+      };
+      await mkdir(client.path, { recursive: true });
+      await open(client);
+      await client.delivery.consent(true);
+      await client.delivery.pause(true);
+      await close(client);
+      clients.push(client);
+    }
+    const baseline = await metrics();
+    const normalModel = await prototypes(0);
+    const modeledBytesPerUserDay = normalModel.reduce((n, p) => n + p.raw.length + 1024, 0);
+    assert(
+      normalModel.length * 100 < 4800 * 0.8,
+      'normal plus fault load needs at least 20% batch headroom',
+    );
+    assert(
+      modeledBytesPerUserDay * 100 < 1073741824 * 0.8,
+      'normal plus fault load needs at least 20% byte headroom',
+    );
+    now = epoch + 7 * 3600_000;
+    for (const size of [10, 30, 100]) {
+      const previous = size === 10 ? 0 : size === 30 ? 10 : 30;
+      const added = clients.slice(previous, size);
+      for (const client of added) await loadDay(client, normalModel, 0);
+      if (size === 10) {
+        accepting = false;
+        await control();
+        await drain(added, 5);
+        assert(pending(added) > 0);
+        for (const client of added) await restart(client);
+        snapshots.push({
+          reason: 'five-minute actual receiver refusal and restart',
+          users: 10,
+          unacknowledgedWireShaPreserved: true,
+        });
+        accepting = true;
+        await control();
+      }
+      await drain(added, 90);
+      assert.equal(pending(added), 0, 'healthy daily cohort did not drain');
+      checkpoints.push({
+        users: size,
+        offeredSessionsPerUser: 4,
+        hoursPerUser: 6,
+        backlog: 0,
+        total: subtract(await metrics(), baseline),
       });
+      console.error(JSON.stringify({ productionOutboxCheckpoint: checkpoints.at(-1) }));
+    }
+    const healthyCost = checkpoints.at(-1).total;
+    days.push({
+      day: 0,
+      receiver: 'healthy after five-minute refusal',
+      queued: 0,
+      cost: healthyCost,
+    });
+    // Two outage days, then continued ordinary use through bounded catch-up.
+    let consecutiveDrainedDays = 0;
+    for (let day = 1; day <= 12 && consecutiveDrainedDays < 2; day++) {
+      now = epoch + day * dayMs + 7 * 3600_000;
+      accepting = day > 2;
+      await control();
+      const model = await prototypes(day);
+      const before = await metrics();
+      for (const client of clients) await loadDay(client, model, day);
+      if (day <= 2) {
+        await drain(clients, 12 * 60);
+        assert(pending(clients) > 0);
+      } else await drain(clients, 12 * 60);
+      let bytes = 0,
+        maxBytes = 0,
+        maxBatches = 0;
+      for (const client of clients) {
+        await close(client);
+        const state = await fileState(client);
+        const current = state.queue.reduce((sum, b) => sum + b.bytes, 0);
+        bytes += current;
+        maxBytes = Math.max(maxBytes, current);
+        maxBatches = Math.max(maxBatches, state.queue.length);
+        assert(current <= 64 * 1024 * 1024);
+        assert(state.queue.length <= 2048);
+        await restart(client);
+        assert.equal(client.delivery.status().omitted, 0);
+      }
+      // Restart itself creates a genuine new session and recovery evidence.
+      // Include its transmission in the day's work before judging drain, rather
+      // than asserting that a just-restarted producer generated no new records.
+      if (accepting) await drain(clients, 60);
+      const restartSnapshot = { bytes, maxBytes, maxBatches };
+      bytes = clients.reduce((sum, client) => sum + client.delivery.status().queuedBytes, 0);
+      maxBytes = Math.max(...clients.map((client) => client.delivery.status().queuedBytes));
+      maxBatches = Math.max(...clients.map((client) => client.delivery.status().queuedBatches));
+      const remaining = pending(clients);
+      days.push({
+        day,
+        receiver: accepting ? 'accepting' : 'temporary outage',
+        queued: remaining,
+        queuedBytes: bytes,
+        maxClientBytes: maxBytes,
+        maxClientBatches: maxBatches,
+        beforeRestart: restartSnapshot,
+        cost: subtract(await metrics(), before),
+        restartPreservedAllUnacknowledgedWireSha: true,
+      });
+      consecutiveDrainedDays = accepting && remaining === 0 ? consecutiveDrainedDays + 1 : 0;
+      console.error(JSON.stringify({ productionOutboxDay: days.at(-1) }));
+    }
+    assert.equal(
+      consecutiveDrainedDays,
+      2,
+      'continued normal use did not reach two fully drained days',
+    );
+    assert(
+      [...expected].every((key) => received.has(key)),
+      'a producer fixture remains unacknowledged',
+    );
+    const maxRate = {
+      enroll: Math.max(...[...minuteRequests.values()].map((x) => x.enroll)),
+      other: Math.max(...[...minuteRequests.values()].map((x) => x.other)),
+    };
+    assert(maxRate.enroll <= 120);
+    assert(maxRate.other <= 300);
+    const sessionCardinality = await db.prepare('SELECT COUNT(*) count FROM sessions').first();
+    const measuredSessionsPerDay = Math.ceil(sessionCardinality.count / days.length);
+    // Measure an actual complete withdrawal while this identity still owns
+    // bodies and indexes, rather than reusing a previous revision's cost.
+    const withdrawalClient = clients[0];
+    const withdrawalState = await fileState(withdrawalClient);
+    const installation = withdrawalState.credentials.installationId;
+    const beforeWithdrawal = await metrics();
+    await withdrawalClient.delivery.consent(false);
+    await withdrawalClient.delivery.tick(false);
+    assert.equal(withdrawalClient.delivery.status().deletionPending, 0);
+    const afterWithdrawal = await db
+      .prepare(
+        'SELECT (SELECT COUNT(*) FROM batches WHERE installation_id=?) bodies,(SELECT COUNT(*) FROM sessions WHERE installation_id=?) sessions',
+      )
+      .bind(installation, installation)
+      .first();
+    assert.deepEqual(afterWithdrawal, { bodies: 0, sessions: 0 });
+    const withdrawalCost = subtract(await metrics(), beforeWithdrawal);
+    const beforeCleanup = await metrics();
+    const expiry = epoch + 181 * dayMs;
+    const totalPermits = await db.prepare('SELECT COUNT(*) count FROM upload_permits').first();
+    for (let page = 0; page < Math.ceil(totalPermits.count / 100) + 10; page++) {
+      const response = await fetch(endpoint + '/__test/cleanup?now=' + expiry, { method: 'POST' });
       assert.equal(response.status, 200);
       await response.json();
-      finitePages++;
     }
-    const finiteCleanupCost = difference(await snapshot(), beforeFiniteCleanup);
-    const finalRows = await db
+    const remaining = await db
       .prepare(
         'SELECT (SELECT COUNT(*) FROM installations) installations,(SELECT COUNT(*) FROM sessions) sessions,(SELECT COUNT(*) FROM batches) batches,(SELECT COUNT(*) FROM upload_permits) permits',
       )
       .first();
-    assert.deepEqual(finalRows, { installations: 0, sessions: 0, batches: 0, permits: 0 });
-    // Meter the destructive path separately while a real body and index exist.
-    // This is an isolated public installation, not a reused/expired cohort owner.
-    const maintenanceOwner = diagnosticInstallationId(Date.now(), randomBytes(16));
-    const enrolled = await call('/v1/diagnostics/enroll', {
-      method: 'POST',
-      body: JSON.stringify({
-        consent: 'technical-diagnostics-v3',
-        enrollmentId: maintenanceOwner,
-        enrollmentSecret: hash('public-maintenance-proof'),
-      }),
-    });
-    assert.equal(enrolled.status, 200);
-    const maintenanceIdentity = await enrolled.json();
-    const maintenanceRaw = Buffer.from(
-      stampDiagnosticGzip(
-        gzipSync(
-          JSON.stringify({
-            schema: 'mizar-technical-diagnostics/1',
-            events: [
-              { stage: 'normal_operation', evidence: { result: 'public cleanup evidence' } },
-            ],
-          }),
-        ),
-        Date.now(),
-      ),
-    );
-    const issued = await call('/v1/diagnostics/permits/' + hash(maintenanceRaw), {
-      method: 'POST',
-      headers: {
-        authorization: 'Bearer ' + maintenanceIdentity.token,
-        'x-diagnostics-created-at': String(diagnosticGzipCreatedAt(maintenanceRaw)),
-      },
-    });
-    assert.equal(issued.status, 200);
-    const maintenanceWire = Buffer.from(sealDiagnosticGzip(maintenanceRaw, await issued.json()));
-    const maintenanceId = hash(maintenanceWire);
-    const maintenanceUpload = await call('/v1/diagnostics/batches/' + maintenanceId, {
-      method: 'PUT',
-      body: maintenanceWire,
-      headers: {
-        authorization: 'Bearer ' + maintenanceIdentity.token,
-        'content-type': 'application/gzip',
-        'x-content-sha256': maintenanceId,
-        'x-diagnostics-index': JSON.stringify({
-          schema: 'mizar-technical-diagnostics/1',
-          events: 1,
-          expandedBytes: 256,
-          stages: ['normal_operation'],
-          sessionId: randomUUID(),
-        }),
-      },
-    });
-    assert.equal(maintenanceUpload.status, 200);
-    await maintenanceUpload.json();
-    const beforeWithdrawal = await snapshot();
-    const withdrawn = await call('/v1/diagnostics/installation', {
-      method: 'DELETE',
-      headers: { authorization: 'Bearer ' + maintenanceIdentity.token },
-    });
-    assert.equal(withdrawn.status, 200);
-    assert.deepEqual(await withdrawn.json(), {
-      installationId: maintenanceOwner,
-      revoked: true,
-      deletion: 'complete',
-    });
-    const withdrawalCost = difference(await snapshot(), beforeWithdrawal);
-    const afterWithdrawal = await db
-      .prepare(
-        'SELECT (SELECT COUNT(*) FROM batches) bodies,(SELECT COUNT(*) FROM sessions) sessions',
-      )
-      .first();
-    assert.deepEqual(afterWithdrawal, { bodies: 0, sessions: 0 });
-    const maintenanceCleanup = await fetch(endpoint + '/__test/cleanup?now=' + expiryNow, {
-      method: 'POST',
-    });
-    assert.equal(maintenanceCleanup.status, 200);
-    await maintenanceCleanup.json();
-    const health = await call('/admin/health', {
-      method: 'GET',
-      headers: { authorization: 'Bearer ' + bindings.ADMIN_KEY },
-    });
-    const healthBody = await health.json();
+    assert.deepEqual(remaining, { installations: 0, sessions: 0, batches: 0, permits: 0 });
+    const cleanupCost = subtract(await metrics(), beforeCleanup);
     const allocation = steadyAllocation(
       await readFile(
         new URL('../../apps/diagnostics-worker/migrations/0001_diagnostics.sql', import.meta.url),
@@ -696,77 +781,81 @@ async function cloud(directory, profileResult, faultResult) {
       ),
       root,
       {
-        sessionsPerDay: acceptedSessions,
-        meanCompressedBytes: Math.round(
-          users.reduce((n, x) => n + x.compressed, 0) / acceptedBatches,
-        ),
-        metadata: JSON.stringify(source[0].index),
+        sessionsPerDay: measuredSessionsPerDay,
+        meanCompressedBytes: Math.round(modeledBytesPerUserDay / normalModel.length),
+        metadata: JSON.stringify(normalModel[0].index),
       },
     );
-    const output = {
-      schema: 'mizar-final-cloud-capacity/1',
-      steadyAllocation: allocation,
-      withdrawal: { cost: withdrawalCost, remaining: afterWithdrawal, actualCompleteAck: true },
-      steadyDailyCost: {
-        scope:
-          'one complete measured cohort lifecycle amortized per day at steady retention, plus a conservative additional 100 measured one-body withdrawals; not account totals or other apps',
-        rowsRead:
-          uploadTotals.rowsRead +
-          cleanupCost.rowsRead +
-          finiteCleanupCost.rowsRead +
-          100 * withdrawalCost.rowsRead,
-        rowsWritten:
-          uploadTotals.rowsWritten +
-          cleanupCost.rowsWritten +
-          finiteCleanupCost.rowsWritten +
-          100 * withdrawalCost.rowsWritten,
-      },
+    const steadyDailyCost = {
+      rowsRead:
+        healthyCost.rowsRead +
+        Math.ceil((cleanupCost.rowsRead + withdrawalCost.rowsRead) / days.length) +
+        withdrawalCost.rowsRead,
+      rowsWritten:
+        healthyCost.rowsWritten +
+        Math.ceil((cleanupCost.rowsWritten + withdrawalCost.rowsWritten) / days.length) +
+        withdrawalCost.rowsWritten,
       scope:
-        'production handler over real HTTP with native local workerd R2 and SQLite D1 metered row metadata; rate limiter bypassed only for accelerated 100-user storage replay, separately tested actual shared-IP limiter; ten concurrent HTTP clients per group, three daily two-hour normal sessions plus one 6000-error burst per installation and one private body audit per session; one actual collector profile cloned with distinct installation/session identities, not 100 real CS2 computers, not deployed cloud CPU/request throughput',
-      profile: {
-        minutes: profile.minutes,
-        events: profile.events,
-        batches: source.length,
-        expanded: profile.expanded,
-        gzipBytes: profile.gzipBytes,
-      },
+        'measured 100-user healthy day plus complete cohort cleanup amortized daily and one extra actual multi-day installation withdrawal; excludes other apps and unknown writers',
+    };
+    const peakRecoveryDailyCost = {
+      rowsRead:
+        Math.max(...days.map((day) => day.cost.rowsRead)) +
+        Math.ceil((cleanupCost.rowsRead + withdrawalCost.rowsRead) / days.length) +
+        withdrawalCost.rowsRead,
+      rowsWritten:
+        Math.max(...days.map((day) => day.cost.rowsWritten)) +
+        Math.ceil((cleanupCost.rowsWritten + withdrawalCost.rowsWritten) / days.length) +
+        withdrawalCost.rowsWritten,
+      scope:
+        'highest actual recovery day plus measured steady maintenance and one additional complete multi-day installation withdrawal',
+    };
+    assert(
+      steadyDailyCost.rowsWritten < 80000,
+      'reserve at least twenty percent of D1 Free writes for the measured 100-user steady day',
+    );
+    assert(steadyDailyCost.rowsRead < 4000000);
+    assert(peakRecoveryDailyCost.rowsRead < 5000000);
+    assert(peakRecoveryDailyCost.rowsWritten < 100000);
+    const perUser = { compressedBytes: modeledBytesPerUserDay, batches: normalModel.length };
+    return {
+      schema: 'mizar-production-outbox-multiday/1',
+      steadyAllocation: allocation,
+      steadyDailyCost,
+      peakRecoveryDailyCost,
+      scope:
+        'actual producer-derived fixtures restored into 100 production on-disk outboxes, then actual initialize/permit/seal/HTTP/ACK/backoff/restart with real local R2 and SQLite; accelerated clock and native limiter bypass only in storage meter, audited logical request cadence and independently tested native shared-IP limiter; not 100 actual games or remote CPU',
       checkpoints,
-      perUserDayIncludingOneBodyAuditPerSession: perUser,
-      measuredHoursPerUser: 6,
-      measuredSessionsPerUser: 4,
-      registrationAndIndexTotal,
-      registrationTotals,
-      cleanup: { invocations: cleaned, cost: cleanupCost, remaining },
-      finiteCleanup: {
-        invocations: finitePages,
-        cost: finiteCleanupCost,
-        remaining: finalRows,
-        atDays: 181,
+      days,
+      snapshots,
+      maxLogicalMinuteRequests: maxRate,
+      limits: {
+        dailyBytes: 1073741824,
+        dailyBatches: 4800,
+        installationDailyBytes: 16777216,
+        outboxBytes: 64 * 1024 * 1024,
+        outboxBatches: 2048,
       },
-      offeredBatches: 100 * totalBatchesPerInstallation,
-      refusalRetention: {
-        batches: refusals.length,
-        bytes: refusals.reduce((n, x) => n + x.bytes, 0),
-        allOriginalShaReopened: true,
-        cloudComplete: refusals.length === 0,
-        scope:
-          'raw payload files and refusal manifest persisted/reopened in isolated measurement directory; production outbox retry/restart separately exercised by sharedIp',
+      perUserDay: perUser,
+      verifiedSustainableUsers: 100,
+      normalDayHeadroom: {
+        bytes: 1 - (modeledBytesPerUserDay * 100) / 1073741824,
+        batches: 1 - (normalModel.length * 100) / 4800,
       },
-      database: {
-        allocatedBytes: healthBody.d1AllocatedBytes,
-        allocationIncludesReusedFreePages: true,
-      },
-      health: healthBody,
-      retries: {
-        sameIdentityAuditsTotal: auditedSessions,
-        retentionClockUnchanged: true,
-        noExtraObjectWrites: registrationAndIndexTotal.put === acceptedBatches,
-      },
-      wallMs: performance.now() - starts,
+      modeledUserCeilingBeforeReserve: Math.floor(
+        Math.min(1073741824 / modeledBytesPerUserDay, 4800 / normalModel.length),
+      ),
+      allModeledPayloadsAcknowledged: expected.size,
+      unacknowledged: 0,
+      healthyCost,
+      measuredSessionsPerDay,
+      bodyAudits: auditedSessions.size,
+      withdrawal: { cost: withdrawalCost, remaining: afterWithdrawal, complete: true },
+      cleanup: { cost: cleanupCost, remaining },
       externalAccountRequests: 0,
     };
-    return output;
   } finally {
+    for (const client of clients) await close(client);
     await mf.dispose();
     await rm(root, { recursive: true, force: true });
   }
@@ -1019,6 +1108,7 @@ async function fault(directory) {
   const root = await mkdtemp(join(directory, 'fault-'));
   const journal = new SessionJournal(root, { appVersion: '1.4.0' });
   let now = Date.now();
+  const epoch = now;
   const delivery = await new DiagnosticDelivery(root, journal, {
     endpoint: 'https://capacity.invalid',
     now: () => now,
@@ -1072,6 +1162,7 @@ async function fault(directory) {
     assert.equal(delivery.status().omitted, 0);
     const output = {
       schema: 'mizar-final-fault/1',
+      epoch,
       scope:
         '6000 modeled faults per virtual minute through actual journal/outbox, async disk catch-up every64 records; queued paused, no external network; elapsed drain ticks are not field minutes',
       faults: errors,
@@ -1104,6 +1195,7 @@ const sourceFiles = [
   'packages/protocol/src/diagnostics-upload.ts',
   'scripts/diagnostics/measure-capacity.mjs',
   'scripts/diagnostics/capacity-runtime.mjs',
+  'scripts/diagnostics/outbox-capacity.mjs',
   'scripts/diagnostics/fixtures/capacity-producers.json',
   'tests/diagnostics/fixture.ts',
 ];
@@ -1145,6 +1237,7 @@ try {
     configured,
   ]);
   const cloudResult = await cloud(directory, result, faultResult);
+  const outboxBounds = await fullOutbox(directory);
   const report = {
     schema: 'mizar-integrated-capacity/1',
     sourceIdentity,
@@ -1154,6 +1247,7 @@ try {
     fault: faultResult.report,
     sharedIp: sharedResult,
     cloud: cloudResult,
+    outboxBounds,
   };
   if (process.argv[2]) await writeFile(process.argv[2], JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));

@@ -80,14 +80,16 @@ export async function fullLogArchive(
     }
   >();
   const files: ArchivedLogFile[] = [];
-  const include = (time: unknown) =>
-    typeof time !== 'string' ||
-    ((!range.from || time >= range.from) && (!range.to || time <= range.to));
+  const include = (time: unknown) => {
+    const utc = diagnosticSourceUtc(time);
+    return !utc || ((!range.from || utc >= range.from) && (!range.to || utc <= range.to));
+  };
   const sourceTime = (event: {
     time?: unknown;
     evidence?: { sourceRecord?: { time?: unknown } };
   }) => event.evidence?.sourceRecord?.time ?? event.time;
-  const includeRecord = (input: unknown) => {
+  const includeRecord = (input: unknown): boolean => {
+    if (!input || typeof input !== 'object') return true;
     const event = input as {
       stage?: string;
       time?: unknown;
@@ -96,14 +98,18 @@ export async function fullLogArchive(
         entries?: { entry?: Record<string, unknown> }[];
       };
     };
-    const consoles =
-      event.stage === 'cs2_console_records'
-        ? [input]
-        : event.stage === 'native_host_records'
-          ? (event.evidence?.entries ?? [])
-              .map((copied) => copied.entry)
-              .filter((entry) => entry?.stage === 'cs2_console_records')
-          : [];
+    // NativeSource groups by bytes, not by stage or source time. A console
+    // interval cannot stand in for an ordinary Host operation in the same group.
+    // Keep the full context if any original entry matches or has unknown time.
+    if (event.stage === 'native_host_records') {
+      const entries = event.evidence?.entries;
+      return (
+        !Array.isArray(entries) ||
+        !entries.length ||
+        entries.some((copied) => includeRecord(copied?.entry))
+      );
+    }
+    const consoles = event.stage === 'cs2_console_records' ? [input] : [];
     if (consoles.length) {
       for (const console of consoles) {
         const detail = diagnosticConsoleEvidence(console);

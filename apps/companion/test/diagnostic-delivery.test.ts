@@ -406,7 +406,7 @@ describe('consented diagnostic outbox', () => {
           Buffer.from(
             JSON.stringify({
               schema: 'mizar-technical-diagnostics/1',
-              events: [{ text: 'a'.repeat(3 * 1024 * 1024) }],
+              events: [{ text: 'a'.repeat(5 * 1024 * 1024) }],
             }),
           ),
         ),
@@ -513,7 +513,7 @@ describe('consented diagnostic outbox', () => {
         throw Object.assign(new Error('synthetic outbox busy'), { code: 'EBUSY' });
       return originalOpen(...args);
     });
-    for (let i = 0; i < 640; i++) {
+    for (let i = 0; i < 2304; i++) {
       journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
       if (i % 64 === 63) await journal.flush();
     }
@@ -531,7 +531,7 @@ describe('consented diagnostic outbox', () => {
         if (item.stage === 'load_fixture') indices.push(item.evidence.index!);
       }
     }
-    expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 640 }, (_, i) => i));
+    expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 2304 }, (_, i) => i));
     expect(delivery.status().omissionReasons).toHaveProperty(
       'memory_budget_recoverable_from_local_journal',
     );
@@ -563,7 +563,7 @@ describe('consented diagnostic outbox', () => {
       return originalOpen(...args);
     });
     try {
-      for (let i = 0; i < 64; i++) {
+      for (let i = 0; i < 256; i++) {
         journal.record('collection_prefix', { index: i, text: 'x'.repeat(24576) });
         if (i % 8 === 7) await journal.flush();
       }
@@ -574,7 +574,7 @@ describe('consented diagnostic outbox', () => {
       // The pause transaction joins the in-progress threshold collection without
       // forcing a second collection or using a timing/retry assertion.
       await delivery.pause(true);
-      expect(delivery.status().queuedBatches).toBe(1);
+      expect(delivery.status().queuedBatches).toBe(2);
       expect(delivery.status().pendingBytes).toBeGreaterThan(0);
       const first = (await readdir(join(dir, 'diagnostic-outbox'))).find((v) => v.endsWith('.gz'))!;
       const initial = await decodeDiagnosticBatch(
@@ -598,7 +598,7 @@ describe('consented diagnostic outbox', () => {
           if (item.stage === 'collection_prefix') prefix++;
         }
       }
-      expect(prefix).toBe(64);
+      expect(prefix).toBe(256);
       expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 10 }, (_, i) => i));
       expect(delivery.status().omitted).toBe(0);
     } finally {
@@ -608,7 +608,7 @@ describe('consented diagnostic outbox', () => {
       await journal.close();
     }
   });
-  it('collects normal operation batches every ten minutes while draining existing batches on the short poll', async () => {
+  it('collects normal operation batches every twenty minutes while draining existing batches on the short poll', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
     const remote = service(() => now);
@@ -627,8 +627,9 @@ describe('consented diagnostic outbox', () => {
         await journal.flush();
         now += 60_000;
         await delivery.tick(false);
-        expect(remote.batches.size).toBe(Math.floor(minute / 10));
+        expect(remote.batches.size).toBe(Math.floor(minute / 20));
       }
+      await delivery.tick(false);
       const records = [];
       for (const batch of remote.batches.values())
         records.push(...((await decodeDiagnosticBatch(Buffer.from(batch))).events ?? []));

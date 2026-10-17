@@ -1828,3 +1828,76 @@ it('exports unconfirmed journal memory with its full error chain and prefers the
     await journal.close();
   }
 });
+
+it('retains an in-range Host failure in a mixed copied console group after raw Host logs rotate, through real HTTP export and the production reader', async () => {
+  const dir = await directory();
+  const { NativeSource } = await import('../src/support/native-source.js');
+  const fixture = JSON.parse(
+    await readFile(
+      new URL('../../../scripts/diagnostics/fixtures/capacity-producers.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { consoleEntry: Record<string, unknown> & { detail: string } };
+  const consoleDetail = JSON.parse(fixture.consoleEntry.detail) as {
+    records: Record<string, unknown>[];
+  };
+  for (const record of consoleDetail.records) {
+    record.sourceAfterUtc = '2026-10-17T09:59:00.000Z';
+    record.capturedAt = '2026-10-17T09:59:30.000Z';
+  }
+  const common = { schemaVersion: 1, startupSessionId: 'mixed-range-host' };
+  const entries = [
+    {
+      ...fixture.consoleEntry,
+      ...common,
+      time: '2026-10-17T10:02:00.000Z',
+      sequence: 1,
+      detail: JSON.stringify(consoleDetail),
+    },
+    {
+      ...common,
+      time: '2026-10-17T10:00:30.000Z',
+      sequence: 2,
+      stage: 'workspace_exit',
+      result: 'failure',
+      detail: JSON.stringify({
+        phase: 'presentation',
+        cause: 'original mixed Host restore denied',
+        os_code: 5,
+      }),
+    },
+  ];
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    entries.map((x) => JSON.stringify(x) + '\n').join(''),
+  );
+  const journal = new SessionJournal(dir);
+  const source = new NativeSource(dir, journal);
+  await source.poll();
+  await source.close();
+  await journal.close();
+  // Confirm the real producer actually mixed these stages in one group.
+  const copied = (await readFile(join(dir, 'session.ndjson'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { stage: string; evidence?: { entries?: unknown[] } })
+    .find((x) => x.stage === 'native_host_records');
+  expect(copied?.evidence?.entries).toHaveLength(2);
+  await filesystem.unlink(join(dir, 'desktop.ndjson'));
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(address + '/debug/support-bundle', {
+      method: 'POST',
+      headers: { ...request.headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: '2026-10-17T10:00:00.000Z', to: '2026-10-17T10:01:00.000Z' }),
+    });
+    expect(response.status).toBe(200);
+    const timeline = await readRetainedTimeline(await response.text(), dir);
+    expect(timeline).toContain('original mixed Host restore denied');
+    expect(timeline).toContain('2026-10-17T10:00:30.000Z');
+    expect(timeline).toContain('workspace_exit');
+  } finally {
+    await app.close();
+  }
+});

@@ -25,16 +25,16 @@ import { diagnosticValue, SESSION_LIMITS, type SessionJournal } from './session-
 const compress = promisify(gzip);
 const decompress = promisify(gunzip);
 export const DELIVERY_LIMITS = {
-  expandedBytes: 2 * 1024 * 1024,
-  compressedBytes: 256 * 1024,
+  expandedBytes: 4 * 1024 * 1024,
+  compressedBytes: 512 * 1024,
   queueBytes: 64 * 1024 * 1024,
   batches: 2048,
   manifestBytes: 2 * 1024 * 1024,
-  pendingBytes: 2 * 1024 * 1024,
+  pendingBytes: 8 * 1024 * 1024,
   events: 4096,
   sessions: 128,
   tombstones: 8,
-  collectMs: 10 * 60_000,
+  collectMs: 20 * 60_000,
   pollMs: 5000,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
@@ -923,8 +923,13 @@ export class DiagnosticDelivery {
         if (
           this.state.queue.reduce((n, v) => n + v.bytes, 0) >
           DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
-        )
+        ) {
+          // Capacity may stop recovery before reaching the unqueued tail in a
+          // later segment. Keep scanning eligible source records after ACKs
+          // release space, including when this process has just restarted.
+          this.recoveryNeeded = true;
           return;
+        }
       }
     }
     await this.persist();

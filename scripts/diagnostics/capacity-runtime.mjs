@@ -9,6 +9,7 @@ const instrumentation = `
 import { handle, cleanup } from './production.mjs';
 const counts = { rowsRead:0, rowsWritten:0, queries:0, put:0, head:0, delete:0, get:0, list:0, requests:0 };
 const originals = new WeakMap();
+let clockNow; let accepting;
 function meta(result) {
   counts.queries++;
   counts.rowsRead += result.meta?.rows_read ?? 0;
@@ -32,6 +33,7 @@ function observed(environment) {
   const database = environment.DIAGNOSTICS_DB;
   return {
     ...environment,
+    ...(accepting === undefined ? {} : {ACCEPTING:accepting ? '1':'0'}),
     DIAGNOSTICS_DB: {
       prepare(sql) { return statement(database.prepare(sql)); },
       async batch(statements) {
@@ -58,12 +60,13 @@ export default {
   async fetch(request, environment) {
     const url = new URL(request.url);
     if (url.pathname === '/__test/metrics') return Response.json(counts);
+    if (url.pathname === '/__test/control') { const value=await request.json(); clockNow=value.now; accepting=value.accepting; return Response.json({done:true}); }
     if (url.pathname === '/__test/cleanup') {
       await cleanup(observed(environment), Number(url.searchParams.get('now')));
       return Response.json({done:true});
     }
     counts.requests++;
-    return handle(request, observed(environment));
+    return handle(request, observed(environment), clockNow ?? Date.now());
   }
 };
 `;
@@ -76,7 +79,7 @@ export function meteredRuntime(directory, dailyBatchLimit = 4800) {
     compatibilityDate: '2026-07-30',
     bindings: {
       ...bindings,
-      DAILY_BYTES: '671088640',
+      DAILY_BYTES: '1073741824',
       DAILY_BATCHES: String(dailyBatchLimit),
       INSTALLATION_DAILY_BYTES: '16777216',
       INSTALLATION_DAILY_BATCHES: '128',
