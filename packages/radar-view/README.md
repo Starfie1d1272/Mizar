@@ -57,6 +57,8 @@ const frame = fromPublicRadar(live.radar, {
 - 公共默认采样间断阈值 1500 ms，容纳 2 Hz lane；最多外推 100 ms。页面的 stale deadline 仍由页面判断。可通过 `sampleGapMs` 按实际采样周期配置。
 - 原始公共 null 位置不会由旧位置修补。本地 adapter 可显式开启已建立烟雾/死亡 anchor 的保留行为。公开没有速度时显示有位置的 utility，不伪造速度。
 
+接收回调与动画绘制使用同一 `performance.now()` 时钟；RAF 参数可能早于较晚执行的输入回调，不能据此得到超出 `[0,1]` 的退出动画比例。动画几何必须保持有效，单次投掷物消失不能使后续雷达绘制停止。页面全局 RAF、连接收帧与雷达自身绘制进度是独立证据。
+
 ## 可复现验证
 
 ```sh
