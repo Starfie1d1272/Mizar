@@ -1,4 +1,4 @@
-import { controlEvidence } from '../debug/control-journal';
+import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
@@ -19,15 +19,34 @@ async function localFile(url: string, file: File, type: string) {
     type: file.type,
     destination: url,
   });
+  let body: ArrayBuffer;
+  controlEvidence('music_file', 'read_begin', { operationId, name: file.name, bytes: file.size });
+  try {
+    body = await file.arrayBuffer();
+  } catch (error) {
+    controlEvidence('music_file', 'read_failed', {
+      operationId,
+      error: browserErrorEvidence(error),
+    });
+    throw new Error('文件未能读取，请确认文件仍在原位置且可以访问后重新选择。', { cause: error });
+  }
+  controlEvidence('music_file', 'read_success', { operationId, bytes: body.byteLength });
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': type, 'x-mizar-filename': encodeURIComponent(file.name) },
-      body: file,
+      headers: {
+        'content-type': type,
+        'x-mizar-filename': encodeURIComponent(file.name),
+        'x-mizar-operation-id': operationId,
+      },
+      body,
     });
   } catch (error) {
-    controlEvidence('music_file', 'upload_failed', { operationId, reason: String(error) });
+    controlEvidence('music_file', 'upload_failed', {
+      operationId,
+      error: browserErrorEvidence(error),
+    });
     throw new Error('曲目未能传到本机服务，请确认 Mizar 正在运行后重试。', { cause: error });
   }
   controlEvidence('music_file', 'uploaded', { operationId, status: response.status });

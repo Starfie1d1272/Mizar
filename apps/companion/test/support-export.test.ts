@@ -354,7 +354,11 @@ describe('support export', () => {
       return Promise.resolve(new Response(null, { status: 204 }));
     });
     const connection = new RivalHubConnection(path, fetchImpl);
-    connection.setBusinessEvidenceHandler((stage, evidence) => journal.write(stage, evidence));
+    const rawLiveEvidence: unknown[] = [];
+    connection.setBusinessEvidenceHandler((stage, evidence) => {
+      if (stage === 'business_live') rawLiveEvidence.push(evidence);
+      journal.write(stage, evidence);
+    });
     await connection.load();
     const snapshot = {
       matchId: 'match-281',
@@ -391,6 +395,17 @@ describe('support export', () => {
     outcome = 'accept';
     expect(await connection.sendReliable(event, snapshot)).toBe('accepted');
     await connection.sendLive(snapshot);
+    expect(rawLiveEvidence).toContainEqual(
+      expect.objectContaining({
+        reason: 'receiver_accepted',
+        httpStatus: 200,
+        serverDate: null,
+        map: snapshot.map,
+        capability: snapshot.capability,
+        cursor: snapshot.cursor,
+        receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
+      }),
+    );
     await journal.flush();
     const events = readBusinessHistory(dir).groups.find((g) => g.matchId === 'match-281')!.events;
     const reasons = events.map((e) => e.evidence.reason);
@@ -833,6 +848,7 @@ type FullArchive = {
   fullLogs: {
     range: unknown;
     fragmentedDetails: unknown;
+    focus: { componentSessions: string[] };
     files: {
       name: string;
       status: string;
@@ -866,6 +882,8 @@ function unpack(bundle: FullArchive, prefix: string) {
               stage: string;
               startupSessionId: string;
               writeFailuresBefore: number;
+              requestId?: string;
+              browserOperationId?: string | null;
               evidence: {
                 [key: string]: unknown;
                 route?: string;
@@ -894,6 +912,7 @@ it(
     const options = { supportLogsDirectory: logs, obsConfigPath: join(data, 'obs.json') };
     const first = buildApp(options);
     const origin = 'http://127.0.0.1:3000';
+    const browserOperationId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
     const frame = await readFile(new URL('./fixtures/diagnostic-tone.mp3', import.meta.url));
     const bytes = Buffer.concat(
       Array.from({ length: Math.ceil((6 * 1024 * 1024) / frame.length) }, () => frame),
@@ -907,6 +926,7 @@ it(
           origin,
           'content-type': 'application/x-mizar-audio',
           'x-mizar-filename': encodeURIComponent('诊断合成音.mp3'),
+          'x-mizar-operation-id': browserOperationId,
         },
         body: bytes,
       });
@@ -990,6 +1010,11 @@ it(
           event.startupSessionId === upload.startupSessionId,
       )!;
       expect(successful.evidence).toMatchObject({ httpStatus: 200, result: track! });
+      const validated = events.find(
+        (event) => event.stage === 'music_validate' && event.evidence.result === 'success',
+      )!;
+      expect(validated.requestId).toBe(upload.evidence.requestId);
+      expect(validated.browserOperationId).toBe(browserOperationId);
       expect(
         events.some(
           (event) =>
@@ -1244,6 +1269,51 @@ it('exports newly named native stages without projection and detects missing lon
       included: 1,
       complete: false,
     });
+  } finally {
+    await app.close();
+  }
+});
+
+it('focuses the Host session across restarts while retaining cross-process evidence for borrowed runtimes', async () => {
+  const dir = await directory();
+  for (const [host, operation] of [
+    ['host-A', 'first'],
+    ['host-A', 'restarted'],
+    ['host-B', 'unrelated'],
+  ] as const) {
+    const journal = new SessionJournal(dir, { hostStartupSessionId: host });
+    journal.record('host-linked-control', { operation });
+    await journal.close();
+  }
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    JSON.stringify({
+      startupSessionId: 'host-A',
+      time: new Date().toISOString(),
+      stage: 'cs2_launch_arguments',
+      result: 'begin',
+      detail: '-applaunch 730 -worldwide',
+    }) + '\n',
+  );
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await app.inject({ ...request, payload: { focusSessionId: 'host-A' } });
+    expect(response.statusCode).toBe(200);
+    const bundle = response.json<FullArchive>();
+    const controls = unpack(bundle, 'session.ndjson').filter(
+      (event) => event.stage === 'host-linked-control',
+    );
+    expect(controls.map((event) => event.evidence.operation)).toEqual([
+      'first',
+      'restarted',
+      'unrelated',
+    ]);
+    expect(bundle.fullLogs.focus.componentSessions).toHaveLength(3);
+    expect(new Set(controls.map((event) => event.startupSessionId)).size).toBe(3);
+    expect(unpack(bundle, 'desktop.').some((event) => event.stage === 'cs2_launch_arguments')).toBe(
+      true,
+    );
+    expect(JSON.stringify(controls)).toContain('unrelated');
   } finally {
     await app.close();
   }

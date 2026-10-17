@@ -883,6 +883,8 @@ export class RivalHubConnection {
     let failure: LiveFailure | undefined;
     const signal = AbortSignal.timeout(4000);
     const sentAt = new Date().toISOString();
+    let httpStatus: number | null = null;
+    let serverDate: string | null = null;
     try {
       // LIVE is disposable: one bounded request, no retries and no response payload logging.
       const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
@@ -896,6 +898,10 @@ export class RivalHubConnection {
         },
         body: JSON.stringify(snapshot),
       });
+      httpStatus = response.status;
+      const dateHeader = response.headers.get('date');
+      if (dateHeader && Number.isFinite(Date.parse(dateHeader)))
+        serverDate = new Date(dateHeader).toISOString();
       if (response.ok || response.status === 429) {
         // Bounded response consumption; remote details/URLs are never diagnostics.
         stage = 'read';
@@ -991,6 +997,13 @@ export class RivalHubConnection {
       failureStage: failure?.stage,
       causeCode: failure?.error.cause?.code ?? failure?.error.code,
       sentAt,
+      producedAt: snapshot.producedAt,
+      cursor: snapshot.cursor,
+      map: snapshot.map,
+      capability: snapshot.capability,
+      httpStatus,
+      serverDate,
+      receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
       acknowledgedAt: accepted ? new Date().toISOString() : null,
     });
     const previous = this.liveDelivery;

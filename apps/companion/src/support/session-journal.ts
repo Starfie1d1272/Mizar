@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { BOX_READ_TOKEN } from '../updates/contract.js';
 import { atomicJson, safePath } from '../resource-store/files.js';
 import { constants } from 'node:fs';
@@ -123,6 +124,17 @@ export function diagnosticValue(
 /** Small asynchronous observer of existing control/log boundaries; never runs filesystem I/O on ingress. */
 export class SessionJournal {
   readonly sessionId = randomUUID();
+  readonly hostStartupSessionId: string | null;
+  private readonly requestContext = new AsyncLocalStorage<{
+    requestId: string;
+    browserOperationId: string | null;
+  }>();
+  withRequest<T>(
+    context: { requestId: string; browserOperationId: string | null },
+    run: () => T,
+  ): T {
+    return this.requestContext.run(context, run);
+  }
   private sequence = 0;
   private pendingBytes = 0;
   private writer = Promise.resolve();
@@ -144,8 +156,14 @@ export class SessionJournal {
       appVersion?: string | null;
       gitSha?: string | null;
       artifactSha256?: string | null;
+      hostStartupSessionId?: string | null;
     } = {},
   ) {
+    const hostSession = identity.hostStartupSessionId ?? process.env.MIZAR_STARTUP_SESSION_ID;
+    this.hostStartupSessionId =
+      typeof hostSession === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(hostSession)
+        ? hostSession
+        : null;
     const appVersion = identity.appVersion ?? process.env.MIZAR_APP_VERSION;
     this.identity = {
       appVersion:
@@ -179,9 +197,11 @@ export class SessionJournal {
       JSON.stringify({
         time: new Date().toISOString(),
         startupSessionId: this.sessionId,
+        hostStartupSessionId: this.hostStartupSessionId,
         ...this.identity,
         sequence: ++this.sequence,
         stage,
+        ...this.requestContext.getStore(),
         droppedBefore: this.dropped,
         writeFailuresBefore: this.failures,
         evidence: diagnosticValue(evidence),

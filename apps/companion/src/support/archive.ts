@@ -32,13 +32,14 @@ const names = [
 /** Fixed product logs only, full retained bytes, compressed into independently verifiable volumes. */
 export async function fullLogArchive(
   directory: string | undefined,
-  range: { from?: string; to?: string; sessionId?: string } = {},
+  range: { from?: string; to?: string; focusSessionId?: string } = {},
 ) {
   const fragments = new Map<string, { id: string; expected: number; parts: Set<number> }>();
   const sessions = new Map<
     string,
     {
       sessionId: string;
+      hostStartupSessionId: string | null;
       first: string | null;
       last: string | null;
       events: number;
@@ -138,7 +139,6 @@ export async function fullLogArchive(
             ((range.from && time < range.from) || (range.to && time > range.to))
           )
             return '';
-          if (range.sessionId && typeof id === 'string' && id !== range.sessionId) return '';
           const rawDetail = event.error ?? event.detail;
           if (typeof rawDetail === 'string') {
             try {
@@ -167,6 +167,12 @@ export async function fullLogArchive(
           if (typeof id === 'string') {
             const session = sessions.get(id) ?? {
               sessionId: id,
+              hostStartupSessionId:
+                typeof event.hostStartupSessionId === 'string'
+                  ? event.hostStartupSessionId
+                  : /^(?:desktop|supervisor|companion)/.test(name)
+                    ? id
+                    : null,
               first: null,
               last: null,
               events: 0,
@@ -220,6 +226,18 @@ export async function fullLogArchive(
   return {
     status: 'available',
     range,
+    focus: {
+      requestedSessionId: range.focusSessionId ?? null,
+      componentSessions: [...sessions.values()]
+        .filter(
+          (session) =>
+            session.sessionId === range.focusSessionId ||
+            session.hostStartupSessionId === range.focusSessionId,
+        )
+        .map((session) => session.sessionId),
+      policy:
+        'focus is an index only; retained cross-process sources are not discarded, including borrowed runtimes',
+    },
     rangePolicy:
       'Timestamped records are filtered; business/retention snapshots and unscoped legacy text remain attached.',
     fragmentedDetails: [...fragments.values()].map((group) => ({

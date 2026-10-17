@@ -123,7 +123,9 @@ export class MusicStore {
     const target = join(this.directory, 'tracks', id);
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
     await safePath(join(this.directory, 'tracks'));
-    const fd = await open(temporary, 'wx', 0o600);
+    const fd = await this.stage('music_open_track', { name, id, target, temporary }, () =>
+      open(temporary, 'wx', 0o600),
+    );
     try {
       await this.stage('music_write', { name, id, bytes: bytes.length }, async () => {
         await fd.writeFile(bytes);
@@ -160,7 +162,10 @@ export class MusicStore {
   async configure(config: MusicConfig) {
     const parsed = musicConfigSchema.parse(config);
     for (const group of MUSIC_GROUPS)
-      for (const track of parsed.groups[group].tracks) await this.trackPath(track.id);
+      for (const track of parsed.groups[group].tracks)
+        await this.stage('music_validate_stored_track', { group, id: track.id }, () =>
+          this.trackPath(track.id),
+        );
     await this.update((s) => {
       s.config = parsed;
     });

@@ -409,6 +409,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       (entry) => sessionJournal?.record('business_evidence', entry),
     );
   }
+  const browserOperationId = (value: unknown): string | null =>
+    typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
+      ? value
+      : null;
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (sessionJournal)
+      sessionJournal.withRequest(
+        {
+          requestId: request.id,
+          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+        },
+        done,
+      );
+    else done();
+  });
   const isControl = (url: string, method: string) =>
     method !== 'GET' && /^(?:\/operator\/|\/runtime\/)/.test(url);
   const controlState = () => ({
@@ -422,7 +437,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (isControl(request.url, request.method))
       sessionJournal?.record('operation_received', {
         requestId: request.id,
-        browserOperationId: request.headers['x-mizar-operation-id'],
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
         method: request.method,
         route: request.routeOptions.url,
         before: controlState(),
@@ -433,7 +448,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (isControl(request.url, request.method))
       sessionJournal?.record('operation_begin', {
         requestId: request.id,
-        browserOperationId: request.headers['x-mizar-operation-id'],
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
         method: request.method,
         route: request.routeOptions.url,
         parameters: diagnosticValue(request.body),
@@ -453,7 +468,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
       sessionJournal?.record('operation_result', {
         requestId: request.id,
-        browserOperationId: request.headers['x-mizar-operation-id'],
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
         method: request.method,
         route: request.routeOptions.url,
         httpStatus: reply.statusCode,
@@ -463,9 +478,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }
     done(null, payload);
   });
-  options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) =>
-    businessJournal?.write(stage, evidence),
-  );
+  options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
+    if (stage === 'business_live') sessionJournal?.record('website_live_evidence', evidence);
+    businessJournal?.write(stage, evidence);
+  });
   app.addHook('onResponse', async (request, reply) => {
     if (
       reply.statusCode >= 400 ||
@@ -483,7 +499,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onError', async (request, _reply, error) => {
     sessionJournal?.record('request_error', {
       requestId: request.id,
-      browserOperationId: request.headers['x-mizar-operation-id'],
+      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
       method: request.method,
       route: request.routeOptions.url,
       error,

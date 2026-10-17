@@ -1,13 +1,48 @@
+let controlDeliveryFailures = 0;
+let browserDocumentId: string | null = null;
+
+export function browserErrorEvidence(error: unknown, seen = new Set<unknown>()): unknown {
+  if (!(error instanceof Error)) return error;
+  if (seen.has(error)) return { circular: true };
+  seen.add(error);
+  const fields = error as Error & { code?: unknown; errors?: unknown[] };
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    code: fields.code,
+    ...(error.cause === undefined ? {} : { cause: browserErrorEvidence(error.cause, seen) }),
+    ...(Array.isArray(fields.errors)
+      ? { errors: fields.errors.map((value) => browserErrorEvidence(value, seen)) }
+      : {}),
+  };
+}
+
 // Best effort local diagnostics. Failure is never allowed to change the product operation.
 export function controlEvidence(operation: string, phase: string, evidence: unknown): void {
   try {
+    browserDocumentId ??= crypto.randomUUID();
     void fetch('/debug/control-event', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ operation, phase, time: new Date().toISOString(), evidence }),
+      body: JSON.stringify({
+        operation,
+        phase,
+        time: new Date().toISOString(),
+        browserDocumentId,
+        deliveryFailuresBefore: controlDeliveryFailures,
+        evidence,
+      }),
       keepalive: true,
-    }).catch(() => undefined);
+    })
+      .then((response) => {
+        if (!response.ok) controlDeliveryFailures++;
+      })
+      .catch(() => {
+        controlDeliveryFailures++;
+      });
   } catch {
+    controlDeliveryFailures++;
     /* Diagnostics cannot change the operation. */
   }
 }
@@ -60,10 +95,14 @@ export function installControlJournal(): void {
       method === 'GET'
     )
       return transport(input, init);
-    const operationId = crypto.randomUUID();
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
+    const suppliedId = headers.get('x-mizar-operation-id');
+    const operationId =
+      suppliedId && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(suppliedId)
+        ? suppliedId
+        : crypto.randomUUID();
     headers.set('x-mizar-operation-id', operationId);
     controlEvidence('http_control', 'begin', { operationId, method, route: url.pathname });
     try {

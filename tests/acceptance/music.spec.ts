@@ -1,4 +1,6 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
+import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
@@ -14,10 +16,12 @@ test('saves real local choices, imports atomically, persists manual stop through
   context,
 }, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-music-ui-'));
+  const logsDirectory = join(directory, 'logs');
   const start = async () => {
-    const store = new MusicStore(directory);
+    const journal = new SessionJournal(logsDirectory);
+    const store = new MusicStore(directory, (stage, evidence) => journal.record(stage, evidence));
     await store.load();
-    const app = buildApp();
+    const app = buildApp({ supportLogsDirectory: logsDirectory, supportJournal: journal });
     const director = new MusicDirector(
       store,
       {
@@ -35,8 +39,14 @@ test('saves real local choices, imports atomically, persists manual stop through
     return { app, store };
   };
   let service = await start();
+  const frame = await readFile(
+    new URL('../../apps/companion/test/fixtures/diagnostic-tone.mp3', import.meta.url),
+  );
+  const mp3 = Buffer.concat(
+    Array.from({ length: Math.ceil((6 * 1024 * 1024) / frame.length) }, () => frame),
+  );
   await context.route(
-    /\/(?:local\/v1\/music|operator\/music(?:\/(?:track|import))?)$/,
+    /\/(?:local\/v1\/music|operator\/music(?:\/(?:track|import))?|debug\/(?:control-event|support-bundle))$/,
     async (route) => {
       const request = route.request(),
         payload = request.postDataBuffer();
@@ -62,18 +72,38 @@ test('saves real local choices, imports atomically, persists manual stop through
     await page
       .getByLabel('选择本地曲目', { exact: true })
       .first()
-      .setInputFiles({ name: '合成等待.wav', mimeType: 'audio/wav', buffer: musicWav() });
+      .setInputFiles({ name: '合成等待.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
     await expect(page.getByText('曲目已选，请保存音乐配置。')).toBeVisible();
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
-    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.wav');
+    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
     service.store.failure = true;
     service.store.ready = false;
     await page.reload();
     await expect(page.getByText(/音乐存储未就绪，原配置未加载/)).toBeVisible();
     await page.getByRole('button', { name: '重新检查音乐存储', exact: true }).click();
     await expect(page.getByText(/音乐存储未就绪，原配置未加载/)).toHaveCount(0);
-    await expect(page.getByText('合成等待.wav', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
+    await page.evaluate(() => {
+      const read = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        return this.name === 'unreadable.mp3'
+          ? Promise.reject(new DOMException('synthetic file read denied', 'NotReadableError'))
+          : read.call(this);
+      };
+    });
+    await page
+      .getByLabel('选择本地曲目', { exact: true })
+      .first()
+      .setInputFiles({
+        name: 'unreadable.mp3',
+        mimeType: 'audio/mpeg',
+        buffer: Buffer.from('ID3'),
+      });
+    await expect(
+      page.getByText('文件未能读取，请确认文件仍在原位置且可以访问后重新选择。'),
+    ).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
     await page
       .getByLabel('选择本地曲目', { exact: true })
       .first()
@@ -83,14 +113,63 @@ test('saves real local choices, imports atomically, persists manual stop through
         buffer: Buffer.from('invalid media'),
       });
     await expect(page.getByText('曲目未添加，请选择有效的本地音频（最大 32 MiB）。')).toBeVisible();
-    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.wav');
+    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
     await page.getByRole('button', { name: '停止音乐', exact: true }).click();
     await expect(page.getByText('音乐 · 手动停止')).toBeVisible();
     await service.app.close();
     service = await start();
     await page.reload();
     await expect(page.getByText('音乐 · 手动停止')).toBeVisible();
-    await expect(page.getByText('合成等待.wav', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
+    const exported = await service.app.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
+    expect(exported.statusCode).toBe(200);
+    const files = exported.json<{
+      fullLogs: { files: { name: string; status: string; volumes: { gzipBase64: string }[] }[] };
+    }>().fullLogs.files;
+    const events = files
+      .filter((file) => file.name.startsWith('session.ndjson') && file.status === 'read')
+      .flatMap((file) =>
+        Buffer.concat(
+          file.volumes.map((volume) => gunzipSync(Buffer.from(volume.gzipBase64, 'base64'))),
+        )
+          .toString('utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                stage: string;
+                evidence: {
+                  operation?: string;
+                  phase?: string;
+                  evidence?: { bytes?: number; error?: { name?: string } };
+                };
+              },
+          ),
+      );
+    expect(
+      events.some(
+        (event) =>
+          event.stage === 'browser_control' &&
+          event.evidence.operation === 'music_file' &&
+          event.evidence.phase === 'read_success' &&
+          (event.evidence.evidence?.bytes ?? 0) >= 6 * 1024 * 1024,
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.stage === 'browser_control' &&
+          event.evidence.phase === 'read_failed' &&
+          event.evidence.evidence?.error?.name === 'NotReadableError',
+      ),
+    ).toBe(true);
     await page.getByRole('button', { name: '恢复自动音乐', exact: true }).click();
     await expect(page.getByText('音乐 · 静音', { exact: true })).toBeVisible();
     const pack = musicZip({

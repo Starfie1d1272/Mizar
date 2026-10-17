@@ -168,7 +168,7 @@ export function registerSupportRoutes(
           properties: {
             from: { type: 'string', format: 'date-time' },
             to: { type: 'string', format: 'date-time' },
-            sessionId: { type: 'string', maxLength: 128 },
+            focusSessionId: { type: 'string', maxLength: 128 },
             desktop: {
               type: ['object', 'null'],
               additionalProperties: false,
@@ -271,8 +271,8 @@ export function registerSupportRoutes(
             ...(typeof record(request.body).to === 'string'
               ? { to: new Date(record(request.body).to as string).toISOString() }
               : {}),
-            ...(typeof record(request.body).sessionId === 'string'
-              ? { sessionId: record(request.body).sessionId as string }
+            ...(typeof record(request.body).focusSessionId === 'string'
+              ? { focusSessionId: record(request.body).focusSessionId as string }
               : {}),
           }),
           sessionLogHealth: options.sessionLogHealth?.() ?? null,
@@ -321,6 +321,8 @@ export function registerSupportRoutes(
               fullLogs: { encoding: 'gzip-base64', volumeBytes: 1024 * 1024 },
             },
             logPolicy: 'full-retained-product-logs-gzip-volumes; summaries-are-indexes',
+            browserCollection:
+              'locally delivered renderer events; per-document delivery failures are reported on later successful delivery; loss while offline or after a document closes may be unknown',
             sessionPolicy: 'full-log-and-business-identifiers-stable; summary-log-session-salted',
           },
           summary: [
