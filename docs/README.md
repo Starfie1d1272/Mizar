@@ -18,6 +18,7 @@
 | 理解实现与接入 | [架构](reference/architecture.md) · [协议](reference/protocol.md) · [游戏数据语义](reference/telemetry.md) · [应用内更新](reference/updates.md) |
 | 修改视觉与文案 | [设计系统](design/README.md) · [中文与术语](development/terminology.md) |
 | 维护依赖与发布版本 | [依赖维护](development/dependency-maintenance.md) · [发布流程](development/release-readiness.md) |
+| 审查诊断接收器部署 | [回传契约](reference/diagnostics-delivery.md) · [资源与权限清单](development/diagnostics-cloud-deployment.md) |
 | 查阅来源与决策 | [参考项目](reference/references.md) · [第三方说明](../THIRD-PARTY-NOTICES.md) · [决策维护](decisions/README.md) |
 
 ## 内容归属
