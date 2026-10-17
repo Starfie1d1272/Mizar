@@ -579,6 +579,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     logger: app.log,
     onDiagnostic: (diagnostic: LocalWebSocketDiagnostic) => {
+      sessionJournal?.record('local_transport', diagnostic);
       if (diagnostic.code === 'ws_closed' || diagnostic.code === 'ws_connected') return;
       app.log.debug(
         {
@@ -711,41 +712,66 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  let performanceWindowStart = performance.now();
+  let processing = { count: 0, totalMs: 0, maxMs: 0 };
+  let latestInput: TelemetryObservation['receive'] | null = null;
+  let latestRawInput: { sequence: number; receivedAt: string; receivedMonotonicMs: number } | null =
+    null;
+  let slowProcessingCount = 0;
+  const slowProcessing: { time: string; sequence: number; durationMs: number }[] = [];
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
   ): void => {
-    const source = programRuntime.getCurrentState().programSource;
-    const lastAccepted = source.lastAccepted;
-    if (
-      lastAccepted !== undefined &&
-      observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
-        programRuntime.getSnapshot().continuityPolicy.staleAfterMs
-    ) {
+    const processingStarted = performance.now();
+    latestInput = observation.receive;
+    try {
+      const source = programRuntime.getCurrentState().programSource;
+      const lastAccepted = source.lastAccepted;
+      if (
+        lastAccepted !== undefined &&
+        observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
+          programRuntime.getSnapshot().continuityPolicy.staleAfterMs
+      ) {
+        outputService.beforeRuntimeMutation();
+        const changed = programRuntime.advanceProgramSourceGeneration({
+          monotonicMs: observation.receive.receivedMonotonicMs,
+          utc: observation.receive.receivedAt,
+        });
+        const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
+        outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
+        programCueCoordinator.afterRuntimeMutation(changed);
+      }
       outputService.beforeRuntimeMutation();
-      const changed = programRuntime.advanceProgramSourceGeneration({
-        monotonicMs: observation.receive.receivedMonotonicMs,
-        utc: observation.receive.receivedAt,
-      });
-      const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-      outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-      programCueCoordinator.afterRuntimeMutation(changed);
+      const result = programRuntime.acceptObservation(observation);
+      if (sampleStageBinding) {
+        programRuntime.executeOperatorCommand({
+          kind: 'bind-current-map-execution-to-series-map',
+          mapOrder: sampleStageBinding.mapOrder,
+          reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
+        });
+      }
+      const bundle = projectionCoordinator.afterRuntimeMutation(result);
+      outputService.afterRuntimeMutation(result, bundle, outputBinding);
+      programCueCoordinator.afterRuntimeMutation(result);
+      debugEvidenceStore.recordNormalizedObservation(observation);
+      debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+      demoTest?.observationAccepted();
+    } finally {
+      const durationMs = performance.now() - processingStarted;
+      processing.count++;
+      processing.totalMs += durationMs;
+      processing.maxMs = Math.max(processing.maxMs, durationMs);
+      if (durationMs >= 50) {
+        slowProcessingCount++;
+        slowProcessing.push({
+          time: new Date().toISOString(),
+          sequence: observation.receive.sequence,
+          durationMs,
+        });
+        if (slowProcessing.length > 8) slowProcessing.shift();
+      }
     }
-    outputService.beforeRuntimeMutation();
-    const result = programRuntime.acceptObservation(observation);
-    if (sampleStageBinding) {
-      programRuntime.executeOperatorCommand({
-        kind: 'bind-current-map-execution-to-series-map',
-        mapOrder: sampleStageBinding.mapOrder,
-        reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
-      });
-    }
-    const bundle = projectionCoordinator.afterRuntimeMutation(result);
-    outputService.afterRuntimeMutation(result, bundle, outputBinding);
-    programCueCoordinator.afterRuntimeMutation(result);
-    debugEvidenceStore.recordNormalizedObservation(observation);
-    debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-    demoTest?.observationAccepted();
   };
 
   const rehearsal =
@@ -1212,6 +1238,61 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }),
   );
 
+  const recordPerformanceWindow = (reason: string) => {
+    if (!sessionJournal) return;
+    const now = performance.now();
+    const channels = (['program', 'radar', 'operator', 'assist'] as const).map((channel) => {
+      const publisher = projectionCoordinator.getPublisher(channel);
+      const current = publisher.getCurrent();
+      return {
+        channel,
+        channelSeq: current?.channelSeq ?? null,
+        cursor: current?.cursor ?? null,
+        subscribers: publisher.getHealth?.() ?? null,
+      };
+    });
+    sessionJournal.record('runtime_performance_window', {
+      reason,
+      windowMs: now - performanceWindowStart,
+      schedulerDelayMs:
+        reason === 'interval' ? Math.max(0, now - performanceWindowStart - 15000) : null,
+      input: {
+        raw: latestRawInput,
+        normalized: latestInput,
+        ageMs: latestInput
+          ? Math.max(0, debugClock.nowMonotonicMs() - latestInput.receivedMonotonicMs)
+          : null,
+      },
+      processing: {
+        ...processing,
+        meanMs: processing.count ? processing.totalMs / processing.count : null,
+        scope:
+          'synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery',
+      },
+      slowProcessing: {
+        count: slowProcessingCount,
+        omittedSamples: Math.max(0, slowProcessingCount - slowProcessing.length),
+        samples: slowProcessing.splice(0),
+      },
+      runtime: debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+      recorder: currentRecorder().getHealth(),
+      delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
+      channels,
+      cstv: {
+        program: cstvSources.program.getHealth(),
+        lookahead: cstvSources.lookahead.getHealth(),
+      },
+      scope:
+        'producer publish and local send counters do not prove pixels rendered or OBS capture latency',
+    });
+    processing = { count: 0, totalMs: 0, maxMs: 0 };
+    slowProcessingCount = 0;
+    performanceWindowStart = now;
+  };
+  const performanceTimer = sessionJournal
+    ? setInterval(() => recordPerformanceWindow('interval'), 15000)
+    : undefined;
+  performanceTimer?.unref();
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
   app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
@@ -1231,6 +1312,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     flushBusinessLog: async () => {
+      recordPerformanceWindow('export');
       await businessJournal?.flush();
       await sessionJournal?.flush();
     },
@@ -1263,6 +1345,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : { sequenceSource: options.gsiSequenceSource }),
       onAcceptedRaw: (input) => {
+        latestRawInput = {
+          sequence: input.sequence,
+          receivedAt: input.receivedAt,
+          receivedMonotonicMs: input.receivedMonotonicMs,
+        };
         debugEvidenceStore.recordAcceptedRaw(input);
         options.onAcceptedRaw?.(input);
       },
@@ -1387,6 +1474,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   app.addHook('onClose', async () => {
+    clearInterval(performanceTimer);
+    recordPerformanceWindow('close');
     clearInterval(directorTimer);
     presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();

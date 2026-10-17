@@ -27,6 +27,7 @@ export interface LocalChannelPublisher<
 > extends LocalWebOutboundPublisher<TSnapshot> {
   publish(snapshot: Omit<TSnapshot, 'channelSeq'>): void;
   getCurrent(): TSnapshot | null;
+  getHealth?(): readonly LatestWinsConsumerHealth[];
   subscribe(send: (snapshot: TSnapshot) => Promise<void>): LocalSubscription;
   close(): Promise<void>;
 }
@@ -82,6 +83,10 @@ class DefaultLocalChannelPublisher<
     this.channelSeq += 1;
     this.current = parsed;
     for (const subscriber of this.subscribers.values()) subscriber.offer(parsed);
+  }
+
+  getHealth(): readonly LatestWinsConsumerHealth[] {
+    return [...this.subscribers.values()].map((subscriber) => subscriber.getHealth());
   }
 
   getCurrent(): TSnapshot | null {

@@ -1,3 +1,4 @@
+import { installPerformanceJournal } from './debug/performance-journal';
 import { installControlJournal } from './debug/control-journal';
 import '@mizar/design-tokens/tokens.css';
 import { StrictMode } from 'react';
@@ -19,6 +20,7 @@ if (!rootElement) {
 }
 
 installControlJournal();
+installPerformanceJournal();
 
 createRoot(rootElement).render(
   <StrictMode>

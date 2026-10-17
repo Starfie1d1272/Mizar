@@ -1,3 +1,4 @@
+import { flushPerformanceJournal } from './performance-journal';
 import { flushControlSnapshots } from './control-journal';
 import { useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
@@ -114,6 +115,7 @@ export function SupportExport() {
           ])
         : [null, null];
       await flushControlSnapshots();
+      await flushPerformanceJournal();
       const response = await fetch('/debug/support-bundle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

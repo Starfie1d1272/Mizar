@@ -19,11 +19,16 @@ export function browserErrorEvidence(error: unknown, seen = new Set<unknown>()):
 }
 
 // Best effort local diagnostics. Failure is never allowed to change the product operation.
-export function controlEvidence(operation: string, phase: string, evidence: unknown): void {
+export function sendControlEvidence(
+  operation: string,
+  phase: string,
+  evidence: unknown,
+): Promise<void> {
   try {
     browserDocumentId ??= crypto.randomUUID();
-    void fetch('/debug/control-event', {
+    return fetch('/debug/control-event', {
       method: 'POST',
+      signal: AbortSignal.timeout(3000),
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         operation,
@@ -44,7 +49,12 @@ export function controlEvidence(operation: string, phase: string, evidence: unkn
   } catch {
     controlDeliveryFailures++;
     /* Diagnostics cannot change the operation. */
+    return Promise.resolve();
   }
+}
+
+export function controlEvidence(operation: string, phase: string, evidence: unknown): void {
+  void sendControlEvidence(operation, phase, evidence);
 }
 
 /** Observe controls inside Mizar only; never inspect arbitrary files or other applications. */
