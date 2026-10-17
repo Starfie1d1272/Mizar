@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
@@ -43,8 +43,10 @@ it('copies user resources into a unique pack with no automatic lists and leaves 
   expect(verifyIsolatedPack(undefined, pack.name)).toBe(false);
   expect(verifyIsolatedPack(root, '../Mtp')).toBe(false);
 });
-it('rejects symlinked resources and never seals a failed copy', async () => {
+it('rejects linked resources and never seals a failed copy', async () => {
   const { root, source } = await fixture();
-  await symlink(join(source, 'Mtp.yaml'), join(source, 'CamMacros', 'link.yaml'));
+  // Windows hardlinks exercise the same no-alias boundary without requiring symlink privileges.
+  const createLink = process.platform === 'win32' ? link : symlink;
+  await createLink(join(source, 'Mtp.yaml'), join(source, 'CamMacros', 'link.yaml'));
   await expect(prepareIsolatedPack(source, root)).rejects.toThrow('pack_unsafe_entry');
 });
