@@ -1,0 +1,21 @@
+﻿{
+    "nativeExecutable":  true,
+    "fixture":  false,
+    "pid":  4864,
+    "destination":  "D:\\a\\_temp\\Mizar published cold chain\\fresh core with spaces",
+    "completionObserved":  true,
+    "names":  [
+                  "",
+                  "",
+                  "Mizar",
+                  "安装完成",
+                  "Mizar 已安装。",
+                  "",
+                  "启动 Mizar",
+                  "完成",
+                  "关闭",
+                  "详情",
+                  "打开安装位置"
+              ],
+    "launchMethod":  "close completed installer then explicit real Mizar --no-browser"
+}

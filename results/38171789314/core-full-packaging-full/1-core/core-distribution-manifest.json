@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "gitSha": "433c86836cfc36224bdadb17928cff58385f2c7b",
+  "appVersion": "1.3.0",
+  "contentDigest": "d395d1bffdea8fc774cd821cbd3c8539e8b774bc58e3cd6077f71cebd9742470",
+  "originalArchiveSha256": "7c3095ec20cfa79e817c7496b0800f0c09afef7d1adae9ac5b83f3d1574083c5",
+  "archive": "Mizar-v1.3.0-Windows-x64-Core-Setup.exe",
+  "archiveSha256": "41832b00f5430e79050bdfae1348b78de731a24be046af657c3e09fa581b1c33",
+  "archiveBytes": 65194158,
+  "format": "nsis-setup",
+  "installerVersion": "v3.11",
+  "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+  "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030",
+  "installerAssets": [
+    {
+      "path": "wizard.bmp",
+      "sha256": "14d9d972f8379fc91f9d03e128b128d78c1e857d3e7546ac726c23ebc40ac4bc",
+      "bytes": 1390446
+    },
+    {
+      "path": "header.bmp",
+      "sha256": "da708c8132a92e15b247bd3b728864b42795cdf5f62c01aced64df8dc41d196c",
+      "bytes": 231246
+    },
+    {
+      "path": "wizard.svg",
+      "sha256": "8c662a3a4f0a4d5ec7a5dc932692672e03579562a5b54a51d55accd3ac36eab7",
+      "bytes": 3042
+    },
+    {
+      "path": "header.svg",
+      "sha256": "1a956279ddbca132c1db3e1cbe5efe3f1faae72430c227066971bc92229015a3",
+      "bytes": 2826
+    }
+  ],
+  "installerAssetsManifestSha256": "2a236c640a953725b655ed79c4b1acc7d4f720dcf71e5f553a513818546e3386",
+  "installerIconSha256": "6a20efd73550b48d99e7da186a00dba9aae7270cebb119b90c2379e3c74eb953",
+  "installerLicense": "NSIS-LICENSE.txt",
+  "installerLicenseSha256": "e7dd514003ab96cb3ddccbc028fe5c795fccf57dc41f21cfb9d4dd16ead23bf5",
+  "verifiedFiles": 4055
+}

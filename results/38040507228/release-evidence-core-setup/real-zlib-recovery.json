@@ -1,0 +1,12 @@
+{
+  "sourceSha": "cc57b05ab6482c2da64a65ba44b8629b88a08acb",
+  "payloadSourceSha": "678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf",
+  "lane": "core-setup",
+  "realInstallerSha256": "3ca725fdb31ecf009e53ab579c8e857431740b99bea9400fa312d090537f4050",
+  "realWriterObserved": true,
+  "writerFullyStopped": true,
+  "preparedCancellation": true,
+  "interruptedPartialPayloadRestored": true,
+  "userStatePreserved": true,
+  "promotable": false
+}

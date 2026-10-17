@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 1,
+  "candidateSourceSha": "433c86836cfc36224bdadb17928cff58385f2c7b",
+  "candidateRun": "38112555048",
+  "toolsSourceSha": "5c88702a553225822da86a03e098fb7af76ee18a",
+  "first": "core",
+  "publication": false,
+  "rustCompilationCount": 0,
+  "assemblyBoundary": "Full: Node fs.cp of verified compiled Full payload into fresh output. Core: production prepareCoreCandidate copies that same Full payload, strips optional assets, regenerates and verifies identity. Common compilation, dependency deploy and original Full staging are excluded; no rebuild.",
+  "cacheBoundary": "Round 1: first packaging invocation on fresh runner, inputs already read by extraction and verification. Rounds 2-3: warm repeated invocation; fresh output every time. OS page cache is not flushed; no physical disk-cold claim.",
+  "runner": {
+    "os": "Microsoft Windows NT 10.0.26100.0",
+    "image": "20260925.250.1",
+    "cpu": "AMD EPYC 7763 64-Core Processor                ",
+    "processors": 4,
+    "node": "v24.21.0",
+    "powershell": "7.6.6"
+  },
+  "preparation": [
+    {
+      "phase": "download-and-verify-original-candidate",
+      "durationMs": 39843,
+      "status": "success"
+    },
+    {
+      "phase": "install-fixed-nsis-tools",
+      "durationMs": 12612,
+      "status": "success"
+    }
+  ],
+  "originals": [
+    {
+      "mode": "full",
+      "archive": "Mizar-v1.3.0-Windows-x64.zip",
+      "bytes": 100675996,
+      "sha256": "039d37f22a5a1b23f9cf64392e10f59f80ee261ee444b899b115c28993c27030",
+      "contentDigest": "63a17fdfca5dd39580b09d717808baa675de7dff8d5c453c5b5a3d3148417e1f"
+    },
+    {
+      "mode": "core",
+      "archive": "Mizar-v1.3.0-Windows-x64-Core.zip",
+      "bytes": 66295223,
+      "sha256": "f3a98352f910e1e9a9721e41111d0ee1a66b04b7841872d58098489260c98e2a",
+      "contentDigest": "d395d1bffdea8fc774cd821cbd3c8539e8b774bc58e3cd6077f71cebd9742470"
+    }
+  ],
+  "samples": [
+    {
+      "round": 1,
+      "mode": "core",
+      "cache": "first-invocation-input-prewarmed",
+      "phases": [
+        {
+          "phase": "prepare-shared-full-input-excluded-from-comparison",
+          "durationMs": 4023,
+          "status": "success"
+        },
+        {
+          "phase": "core-partition-and-compression-total-with-input-verification",
+          "durationMs": 17344,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 45404,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 2456,
+          "status": "success"
+        }
+      ],
+      "corePartitionPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 3770,
+          "status": "success"
+        },
+        {
+          "phase": "partition-and-verify-core",
+          "durationMs": 4543,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 7804,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 66295223,
+      "zipSha256": "f8474c75e4ceecf964be2425f5bdfb291c295ea5d3c35d39b5aecbc4c87d67ae",
+      "setupBytes": 65194158,
+      "setupSha256": "3064eac9f0dd8d4279dad2dfc13c665a79ffb35b4eedf299b3919b8b60367c3b",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    },
+    {
+      "round": 1,
+      "mode": "full",
+      "cache": "first-invocation-input-prewarmed",
+      "phases": [
+        {
+          "phase": "full-assembly-and-compression-total",
+          "durationMs": 13594,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 41474,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 1533,
+          "status": "success"
+        }
+      ],
+      "fullPackagingPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 4003,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 9491,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 100675996,
+      "zipSha256": "97f29db95807fb19870b5a9f4f33336c5ae2cddb45e7dfeb4723eedb498d0f1b",
+      "setupBytes": 99427288,
+      "setupSha256": "75e2c4684ba1a7e94a618016694b74b2d3f1bb23a5e1502168b28f66efd5916e",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    },
+    {
+      "round": 2,
+      "mode": "full",
+      "cache": "warm-repeat-fresh-output",
+      "phases": [
+        {
+          "phase": "full-assembly-and-compression-total",
+          "durationMs": 13490,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 41388,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 1489,
+          "status": "success"
+        }
+      ],
+      "fullPackagingPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 3857,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 9546,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 100675996,
+      "zipSha256": "f40e0edf502e26826a65bbc37b7259cd5c0a556a62dcdeac5c839d4703e08913",
+      "setupBytes": 99427288,
+      "setupSha256": "75e2c4684ba1a7e94a618016694b74b2d3f1bb23a5e1502168b28f66efd5916e",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    },
+    {
+      "round": 2,
+      "mode": "core",
+      "cache": "warm-repeat-fresh-output",
+      "phases": [
+        {
+          "phase": "prepare-shared-full-input-excluded-from-comparison",
+          "durationMs": 3962,
+          "status": "success"
+        },
+        {
+          "phase": "core-partition-and-compression-total-with-input-verification",
+          "durationMs": 17175,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 37592,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 1515,
+          "status": "success"
+        }
+      ],
+      "corePartitionPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 3823,
+          "status": "success"
+        },
+        {
+          "phase": "partition-and-verify-core",
+          "durationMs": 4369,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 7697,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 66295223,
+      "zipSha256": "59473a281da4235872cc15f46e6363f93cbc2c46563a7e440b37fe0fb8ab4052",
+      "setupBytes": 65194156,
+      "setupSha256": "211d7cb2c5dda3d31f1b4090889157b4b8a3ef9f0873d995680b395a9013ca18",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    },
+    {
+      "round": 3,
+      "mode": "core",
+      "cache": "warm-repeat-fresh-output",
+      "phases": [
+        {
+          "phase": "prepare-shared-full-input-excluded-from-comparison",
+          "durationMs": 3908,
+          "status": "success"
+        },
+        {
+          "phase": "core-partition-and-compression-total-with-input-verification",
+          "durationMs": 16937,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 37516,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 1540,
+          "status": "success"
+        }
+      ],
+      "corePartitionPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 3724,
+          "status": "success"
+        },
+        {
+          "phase": "partition-and-verify-core",
+          "durationMs": 4416,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 7604,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 66295223,
+      "zipSha256": "61f202350caf524f92917b4a09ce750ae30e0cdf43b6c0cdf7071bd0ada98805",
+      "setupBytes": 65194155,
+      "setupSha256": "14a83d8dbe5ffa349ab4ace7c532fdfe9e9f9de4f05fd389b07381990a42bbe7",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    },
+    {
+      "round": 3,
+      "mode": "full",
+      "cache": "warm-repeat-fresh-output",
+      "phases": [
+        {
+          "phase": "full-assembly-and-compression-total",
+          "durationMs": 13455,
+          "status": "success"
+        },
+        {
+          "phase": "original-setup-lifecycle",
+          "durationMs": 41145,
+          "status": "success"
+        },
+        {
+          "phase": "cleanup-runner-installation",
+          "durationMs": 1498,
+          "status": "success"
+        }
+      ],
+      "fullPackagingPhases": [
+        {
+          "phase": "copy-full-payload",
+          "durationMs": 3914,
+          "status": "success"
+        },
+        {
+          "phase": "zip-archive",
+          "durationMs": 9457,
+          "status": "success"
+        }
+      ],
+      "zipBytes": 100675996,
+      "zipSha256": "6560d1aec30de2324b7797b735816c836a8b68a4ca8d2c818bc3a57ec74d4286",
+      "setupBytes": 99427288,
+      "setupSha256": "75e2c4684ba1a7e94a618016694b74b2d3f1bb23a5e1502168b28f66efd5916e",
+      "installerCompilerSha256": "f497e92deb9f179f7b8f7553fcb3bd04f511bb2949e5e4a2aee80a10f7b20431",
+      "installerScriptSha256": "403b9a0bd0b5e40f24408865bc8eab4f829589f674d77933473d2a68f9ea6030"
+    }
+  ],
+  "desktopExeSha256": "0d8dba58fcd08f4b28bc109bce2c8883ea1c73e378e030f13d8888bed859a79b"
+}

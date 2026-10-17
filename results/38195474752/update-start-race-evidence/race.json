@@ -1,0 +1,23 @@
+{
+  "scenario": "late Mizar startup",
+  "exitCode": 1,
+  "result": {
+    "status": "recovery-required",
+    "code": "update_installation_failed",
+    "recoveryDirectory": "install-e338ce9d566145a090b9134d34fc8e96",
+    "version": "1.3.1"
+  },
+  "journal": {
+    "phase": "installing"
+  },
+  "licensePresent": false,
+  "backupLicensePresent": true,
+  "desktopMutexCreated": "True",
+  "afterClosingMizar": {
+    "status": "restored",
+    "code": "update_rolled_back",
+    "recoveryDirectory": "install-e338ce9d566145a090b9134d34fc8e96",
+    "version": "1.3.1"
+  },
+  "restoreCommand": "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0update-install.ps1\" -Mode Recover -StageRoot \"%~dp0.\"\r\npause"
+}

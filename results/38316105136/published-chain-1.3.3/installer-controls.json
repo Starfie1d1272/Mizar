@@ -1,0 +1,62 @@
+﻿[
+    {
+        "name":  "",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.Window.8.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.Window.8.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "Mizar",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "安装 Mizar",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "欢迎使用 Mizar，安装或更新后开始准备你的比赛。",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "安装",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.BUTTON.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "关闭",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.BUTTON.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "详情",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "安装位置",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.STATIC.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "C:\\Users\\runneradmin\\AppData\\Local\\Programs\\Mizar",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.EDIT.app.0.73673b_r6_ad1"
+    },
+    {
+        "name":  "更改",
+        "type":  "ControlType.Pane",
+        "class":  "WindowsForms10.BUTTON.app.0.73673b_r6_ad1"
+    }
+]

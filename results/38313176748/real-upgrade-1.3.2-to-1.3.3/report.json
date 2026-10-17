@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "acceptanceSourceSha": "359535390f40c15574681f8efba4c55416ee67c3",
+  "acceptanceRunId": "38313176748",
+  "classification": "real released EXE / original old helper / real new NSIS",
+  "oldVersion": "1.3.2",
+  "oldSha": "d7206962d0d33b3889f8c89cd3d79aea01f6f4ab",
+  "newVersion": "1.3.3",
+  "nextSha": "427cfdecffcbaf170cb67c62be5d8268608f1a1e",
+  "qualificationRun": "38309501102",
+  "applicationState": "default installed LOCALAPPDATA/Mizar; disposable hosted runner",
+  "helperOptions": [
+    "NoLaunch",
+    "NoStatusWindow",
+    "KeepBackup"
+  ],
+  "limits": [
+    "no physical user machine, CS2 or OBS",
+    "no fault injection or failed-upgrade recovery claim"
+  ],
+  "checks": [
+    {
+      "name": "both original Full NSIS and manifests authenticate to their exact main Qualification sources",
+      "result": "PASS"
+    },
+    {
+      "name": "released 1.3.2 real NSIS installs in space-containing path; full payload and native version verified",
+      "result": "PASS",
+      "installed": "D:\\a\\_temp\\Mizar real upgrade acceptance\\installed path with spaces\\Mizar",
+      "contentDigest": "2113df0d4ecae42314b6316b876b293f9b0aec1426f9fec1ee07364f8dabe2ba"
+    },
+    {
+      "name": "old product API saves local match, HUD theme, OBS config and disabled automatic check",
+      "result": "PASS"
+    },
+    {
+      "name": "old production Prepare stages original old helper and real new installer bytes",
+      "result": "PASS",
+      "helperSha256": "e2805c1bb5465013baf1f03d992b584c5eee2518ffa50eb81a6e32e0b1c32cbe",
+      "installerSha256": "fef55206edfac3902bb1927b6c0f870c5712d4c51188c31ca2acc7a81e3bb20f"
+    },
+    {
+      "name": "real native repeated start rejected during ready handoff; original host remains healthy",
+      "result": "PASS",
+      "oldHostPid": 7456,
+      "helperPid": 1564,
+      "readyEvent": "Global\\MizarUpdateReady-7456-1791841933696",
+      "duplicateExit": 1
+    },
+    {
+      "name": "original Mizar --stop --no-browser completes normal shutdown; original host exits zero",
+      "result": "PASS"
+    },
+    {
+      "name": "real native repeated start rejected during installation mutation",
+      "result": "PASS",
+      "exit": 1,
+      "journalPhase": "installing"
+    },
+    {
+      "name": "real old helper commits actual 1.3.3 Full NSIS; full new payload and retained original backup match",
+      "result": "PASS",
+      "transactionResult": {
+        "status": "installed",
+        "code": "update_completed",
+        "recoveryDirectory": "install-b5fb0658345c4ad7a4f084ba6a9a18c3",
+        "version": "1.3.3"
+      },
+      "newContentDigest": "024e844173785ee346aa598fe086b277f324d249c824c343351c30286e6e95df"
+    },
+    {
+      "name": "new real product starts and reads identical local match, HUD, OBS and disabled automatic-check preferences",
+      "result": "PASS"
+    },
+    {
+      "name": "new product also shuts down normally",
+      "result": "PASS"
+    }
+  ],
+  "result": "PASS",
+  "matchId": "7d4ea002-6870-4ed3-9713-d8b10ef15895",
+  "themeId": "60b5a12e-9ada-424c-9081-d5d84ea70817",
+  "imageUnavailableSamples": 2,
+  "sentinelSha256": "8bc50b6450ab568a6e7385fcdf54be4c8c7cc7452a7ecdd43dc9875d2f57f951"
+}

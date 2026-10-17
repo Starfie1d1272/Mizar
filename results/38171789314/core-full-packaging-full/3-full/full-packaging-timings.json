@@ -1,0 +1,14 @@
+{
+  "phases": [
+    {
+      "phase": "copy-full-payload",
+      "durationMs": 3871,
+      "status": "success"
+    },
+    {
+      "phase": "zip-archive",
+      "durationMs": 9398,
+      "status": "success"
+    }
+  ]
+}

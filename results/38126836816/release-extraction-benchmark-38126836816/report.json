@@ -1,0 +1,27 @@
+{
+  "sourceSha": "433c86836cfc36224bdadb17928cff58385f2c7b",
+  "archiveSha256": "039d37f22a5a1b23f9cf64392e10f59f80ee261ee444b899b115c28993c27030",
+  "measurements": [
+    {
+      "mode": "powershell",
+      "extractionMs": 6794,
+      "payloadVerified": true
+    },
+    {
+      "mode": "native",
+      "extractionMs": 1306,
+      "payloadVerified": true
+    },
+    {
+      "mode": "native",
+      "extractionMs": 1307,
+      "payloadVerified": true
+    },
+    {
+      "mode": "powershell",
+      "extractionMs": 6284,
+      "payloadVerified": true
+    }
+  ],
+  "publication": false
+}

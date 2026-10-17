@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "gitSha": "433c86836cfc36224bdadb17928cff58385f2c7b",
+  "appVersion": "1.3.0",
+  "archive": "Mizar-v1.3.0-Windows-x64-Setup.exe",
+  "phases": [
+    {
+      "phase": "compile",
+      "durationMs": 22425,
+      "status": "success"
+    },
+    {
+      "phase": "first-install",
+      "durationMs": 3692,
+      "status": "success"
+    },
+    {
+      "phase": "first-payload-verification",
+      "durationMs": 2133,
+      "status": "success"
+    },
+    {
+      "phase": "overwrite-install",
+      "durationMs": 5134,
+      "status": "success"
+    },
+    {
+      "phase": "uninstall-and-user-data",
+      "durationMs": 1541,
+      "status": "success"
+    },
+    {
+      "phase": "reinstall",
+      "durationMs": 5077,
+      "status": "success"
+    },
+    {
+      "phase": "reinstall-payload-verification",
+      "durationMs": 1342,
+      "status": "success"
+    }
+  ]
+}

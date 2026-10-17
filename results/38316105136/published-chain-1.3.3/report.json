@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "acceptanceSourceSha": "7d20d6b949ddb965b08e798cfb1b6cc6f561c52d",
+  "acceptanceRunId": "38316105136",
+  "productSha": "427cfdecffcbaf170cb67c62be5d8268608f1a1e",
+  "version": "1.3.3",
+  "checks": [
+    {
+      "name": "actual public Stable and original lightweight EXE/four manifests authenticate to frozen main source",
+      "result": "PASS",
+      "releaseId": 411031220,
+      "publishedAt": "2026-10-12T22:03:31Z"
+    },
+    {
+      "name": "real published native EXE completes cold first Core NSIS plus production SDK/App/Store resources",
+      "result": "PASS",
+      "coreContentDigest": "70baf597d5d5c09216970c8970a2d7a0be82ea85c9f706fabd589db74569b5d5"
+    },
+    {
+      "name": "deployed SDK authenticates real Stable dual signatures, selected Core and resource dual-proof policy",
+      "result": "PASS",
+      "coreInstaller": "Mizar-v1.3.3-Windows-x64-Core-Setup.exe",
+      "coreInstallerSha256": "cb9bb024a76a76af2282217180a37a05c8c5f6e155252b303fe9ccce11404d1b",
+      "coreArchiveSha256": "686f92637e31e7e14d20cbdb3498cedd67d09a7738b546b1162a66aa6ceb1ba3",
+      "resourceArchiveSha256": "5c1f891c2997e1db2dff18c5618179380d2fbea6a2ab708569d438c4417e95d4"
+    },
+    {
+      "name": "installed actual Core starts with ready official resource Store and serves all default EPL manifests/video Range",
+      "result": "PASS"
+    },
+    {
+      "name": "real packaged Node outbound block confirmed; persisted authorized cache restarts offline and serves default EPL",
+      "result": "PASS"
+    }
+  ],
+  "result": "PASS",
+  "limits": [
+    "hosted Windows without CS2 or OBS",
+    "no old updater automatic relaunch, updater status window or fault rollback acceptance"
+  ],
+  "installerUi": {
+    "nativeExecutable": true,
+    "fixture": false,
+    "pid": 4864,
+    "destination": "D:\\a\\_temp\\Mizar published cold chain\\fresh core with spaces",
+    "completionObserved": true,
+    "names": [
+      "",
+      "",
+      "Mizar",
+      "安装完成",
+      "Mizar 已安装。",
+      "",
+      "启动 Mizar",
+      "完成",
+      "关闭",
+      "详情",
+      "打开安装位置"
+    ],
+    "launchMethod": "close completed installer then explicit real Mizar --no-browser"
+  },
+  "coreContentDigest": "70baf597d5d5c09216970c8970a2d7a0be82ea85c9f706fabd589db74569b5d5",
+  "onlineResources": {
+    "packId": "official:epl-default",
+    "phase": "ready",
+    "downloadedBytes": 85680266,
+    "activeVersion": "1.0.0",
+    "preparedVersion": null,
+    "rollbackVersion": null,
+    "failure": null
+  },
+  "offlineResources": {
+    "packId": "official:epl-default",
+    "phase": "ready",
+    "downloadedBytes": 85680266,
+    "activeVersion": "1.0.0",
+    "preparedVersion": null,
+    "rollbackVersion": null,
+    "failure": null
+  }
+}

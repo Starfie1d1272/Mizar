@@ -1,0 +1,16 @@
+{
+  "scenario": "baseline",
+  "exitCode": 0,
+  "result": {
+    "status": "installed",
+    "code": "update_completed",
+    "recoveryDirectory": "install-a535618d6ed44a13bb92050cafd540ee",
+    "version": "1.3.1"
+  },
+  "journal": {
+    "phase": "committed"
+  },
+  "licensePresent": true,
+  "backupLicensePresent": true,
+  "restoreCommand": "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0update-install.ps1\" -Mode Recover -StageRoot \"%~dp0.\"\r\npause"
+}

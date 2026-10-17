@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "mode": "serial",
+  "toolsSourceSha": "07fb17f07c8f6fa1d5c7d316ed03aee1018147a0",
+  "candidateSourceSha": "fbf4bf51680dd206e0f0cb303884af82714011b7",
+  "candidateRun": "38134657329",
+  "publication": false,
+  "phases": [
+    {
+      "phase": "candidate-download-and-identity",
+      "durationMs": 8538,
+      "status": "success"
+    },
+    {
+      "phase": "preparation",
+      "durationMs": 20598,
+      "status": "success"
+    },
+    {
+      "phase": "native-update-recovery",
+      "durationMs": 32789,
+      "status": "success"
+    },
+    {
+      "phase": "serial-extraction",
+      "durationMs": 12776,
+      "status": "success"
+    },
+    {
+      "phase": "core-build-install-and-all-qualification-checks",
+      "durationMs": 78250,
+      "status": "success"
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "sourceSha": "433c86836cfc36224bdadb17928cff58385f2c7b",
+  "startedAt": "2026-10-11T09:23:08.668Z",
+  "finishedAt": "2026-10-11T09:24:02.985Z",
+  "wallMs": 54316,
+  "measurements": [
+    {
+      "mode": "remote",
+      "subject": "release-manifest.json",
+      "verified": true,
+      "durationMs": 4608
+    },
+    {
+      "mode": "remote",
+      "subject": "core-release-manifest.json",
+      "verified": true,
+      "durationMs": 3599
+    },
+    {
+      "mode": "remote",
+      "subject": "distribution-manifest.json",
+      "verified": true,
+      "durationMs": 3730
+    },
+    {
+      "mode": "bundle",
+      "subject": "release-manifest.json",
+      "verified": true,
+      "durationMs": 3328
+    },
+    {
+      "mode": "bundle",
+      "subject": "core-release-manifest.json",
+      "verified": true,
+      "durationMs": 2614
+    },
+    {
+      "mode": "bundle",
+      "subject": "distribution-manifest.json",
+      "verified": true,
+      "durationMs": 2712
+    },
+    {
+      "mode": "bundle",
+      "subject": "release-manifest.json",
+      "verified": true,
+      "durationMs": 3125
+    },
+    {
+      "mode": "bundle",
+      "subject": "core-release-manifest.json",
+      "verified": true,
+      "durationMs": 3164
+    },
+    {
+      "mode": "bundle",
+      "subject": "distribution-manifest.json",
+      "verified": true,
+      "durationMs": 2307
+    },
+    {
+      "mode": "remote",
+      "subject": "release-manifest.json",
+      "verified": true,
+      "durationMs": 3070
+    },
+    {
+      "mode": "remote",
+      "subject": "core-release-manifest.json",
+      "verified": true,
+      "durationMs": 3705
+    },
+    {
+      "mode": "remote",
+      "subject": "distribution-manifest.json",
+      "verified": true,
+      "durationMs": 3916
+    }
+  ],
+  "negativeChecks": [
+    {
+      "name": "altered bytes",
+      "rejected": true
+    },
+    {
+      "name": "wrong source",
+      "rejected": true
+    },
+    {
+      "name": "wrong signer workflow",
+      "rejected": true
+    },
+    {
+      "name": "malformed bundle",
+      "rejected": true
+    }
+  ],
+  "publication": false
+}

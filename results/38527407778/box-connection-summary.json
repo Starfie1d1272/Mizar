@@ -1,0 +1,340 @@
+{
+  "run": 38527407778,
+  "job": 115730920586,
+  "sourceSha": "f91d24a41e169abf296c7b2a4e9f0cdf5b7e7f35",
+  "extraction": "JSON console records, strict safe-field allowlist; no raw job logs",
+  "records": [
+    {
+      "node": "v22.23.3",
+      "globalKeepAlive": true,
+      "globalSocketTimeout": 5000,
+      "proxyConfigured": false
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "native",
+      "freshAgent": false
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "socket",
+      "elapsedMs": 15,
+      "reused": false
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "lookup",
+      "elapsedMs": 3100,
+      "family": 4
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "connect",
+      "elapsedMs": 3449
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "tls",
+      "elapsedMs": 3879,
+      "authorized": true,
+      "sessionReused": false,
+      "peerHash": "6ee7b6a05878"
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "request_sent",
+      "elapsedMs": 3880
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "headers",
+      "elapsedMs": 4285,
+      "status": 200
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "body_end",
+      "elapsedMs": 4286,
+      "bytes": 98
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "success",
+      "elapsedMs": 4290,
+      "bytes": 98,
+      "validLink": true
+    },
+    {
+      "label": "control_before_A1",
+      "phase": "socket_timeout",
+      "elapsedMs": 9288
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "native",
+      "freshAgent": false
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "socket",
+      "elapsedMs": 2,
+      "reused": false
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "lookup",
+      "elapsedMs": 2,
+      "family": 4
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "connect",
+      "elapsedMs": 358
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "tls",
+      "elapsedMs": 709,
+      "authorized": true,
+      "sessionReused": true,
+      "peerHash": "6ee7b6a05878"
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "request_sent",
+      "elapsedMs": 709
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "headers",
+      "elapsedMs": 1077,
+      "status": 200
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "body_end",
+      "elapsedMs": 1077,
+      "bytes": 111
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "success",
+      "elapsedMs": 1078,
+      "bytes": 111,
+      "validLink": true
+    },
+    {
+      "label": "B1_fetch_stable",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "fetch",
+      "freshAgent": false
+    },
+    {
+      "label": "B1_fetch_stable",
+      "phase": "fetch_beforeConnect",
+      "elapsedMs": 4
+    },
+    {
+      "label": "B1_fetch_stable",
+      "phase": "fetch_connected",
+      "elapsedMs": 708
+    },
+    {
+      "label": "B1_fetch_stable",
+      "phase": "headers",
+      "elapsedMs": 1068,
+      "status": 200
+    },
+    {
+      "label": "B1_fetch_stable",
+      "phase": "success",
+      "elapsedMs": 1070,
+      "bytes": 111,
+      "validLink": true
+    },
+    {
+      "label": "B2_fetch_stable",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "fetch",
+      "freshAgent": false
+    },
+    {
+      "label": "B2_fetch_stable",
+      "phase": "headers",
+      "elapsedMs": 348,
+      "status": 200
+    },
+    {
+      "label": "B2_fetch_stable",
+      "phase": "success",
+      "elapsedMs": 349,
+      "bytes": 111,
+      "validLink": true
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "native",
+      "freshAgent": false
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "socket",
+      "elapsedMs": 1,
+      "reused": true
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "request_sent",
+      "elapsedMs": 1
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "headers",
+      "elapsedMs": 353,
+      "status": 200
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "body_end",
+      "elapsedMs": 353,
+      "bytes": 98
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "success",
+      "elapsedMs": 354,
+      "bytes": 98,
+      "validLink": true
+    },
+    {
+      "label": "A1_native_stable",
+      "phase": "socket_timeout",
+      "elapsedMs": 7851
+    },
+    {
+      "label": "control_before_A2",
+      "phase": "socket_timeout",
+      "elapsedMs": 5355
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "native",
+      "freshAgent": false
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "socket",
+      "elapsedMs": 2,
+      "reused": false
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "lookup",
+      "elapsedMs": 2,
+      "family": 4
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "connect",
+      "elapsedMs": 344
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "tls",
+      "elapsedMs": 698,
+      "authorized": true,
+      "sessionReused": true,
+      "peerHash": "6ee7b6a05878"
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "request_sent",
+      "elapsedMs": 698
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "headers",
+      "elapsedMs": 1059,
+      "status": 200
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "body_end",
+      "elapsedMs": 1059,
+      "bytes": 111
+    },
+    {
+      "label": "A2_native_stable",
+      "phase": "success",
+      "elapsedMs": 1060,
+      "bytes": 111,
+      "validLink": true
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "begin",
+      "elapsedMs": 0,
+      "transport": "native",
+      "freshAgent": true
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "socket",
+      "elapsedMs": 1,
+      "reused": false
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "lookup",
+      "elapsedMs": 2,
+      "family": 4
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "connect",
+      "elapsedMs": 336
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "tls",
+      "elapsedMs": 685,
+      "authorized": true,
+      "sessionReused": false,
+      "peerHash": "6ee7b6a05878"
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "request_sent",
+      "elapsedMs": 685
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "headers",
+      "elapsedMs": 1028,
+      "status": 200
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "body_end",
+      "elapsedMs": 1029,
+      "bytes": 111
+    },
+    {
+      "label": "C_fresh_native_stable",
+      "phase": "success",
+      "elapsedMs": 1029,
+      "bytes": 111,
+      "validLink": true
+    }
+  ]
+}

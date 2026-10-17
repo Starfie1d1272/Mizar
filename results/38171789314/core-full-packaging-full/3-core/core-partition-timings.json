@@ -1,0 +1,19 @@
+{
+  "phases": [
+    {
+      "phase": "copy-full-payload",
+      "durationMs": 4268,
+      "status": "success"
+    },
+    {
+      "phase": "partition-and-verify-core",
+      "durationMs": 5667,
+      "status": "success"
+    },
+    {
+      "phase": "zip-archive",
+      "durationMs": 7833,
+      "status": "success"
+    }
+  ]
+}
