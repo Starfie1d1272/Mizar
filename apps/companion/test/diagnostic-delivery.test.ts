@@ -272,7 +272,18 @@ describe('consented diagnostic outbox', () => {
     await journal.close();
     expect(() => diagnosticsEndpoint('http://example.com')).toThrow();
     expect(() => diagnosticsEndpoint('https://user:pass@example.com')).toThrow();
-    await expect(decodeDiagnosticBatch(gzipSync(Buffer.alloc(1024 * 1024, 65)))).rejects.toThrow();
+    await expect(
+      decodeDiagnosticBatch(
+        gzipSync(
+          Buffer.from(
+            JSON.stringify({
+              schema: 'mizar-technical-diagnostics/1',
+              events: [{ text: 'a'.repeat(3 * 1024 * 1024) }],
+            }),
+          ),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'ERR_BUFFER_TOO_LARGE' });
     const bad = await directory();
     await writeFile(join(bad, 'outside.json'), '{}');
     await import('node:fs/promises').then((fs) => fs.mkdir(join(bad, 'diagnostic-outbox')));
@@ -346,11 +357,21 @@ describe('consented diagnostic outbox', () => {
     const journal = new SessionJournal(dir);
     const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
     await delivery.consent(true);
+    // Block the actual outbox write while the independent journal continues,
+    // so background threshold collection cannot drain away the saturation.
+    let blocked = true;
+    const originalOpen = filesystem.open;
+    const intercept = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      if (blocked && String(args[0]).endsWith('.gz'))
+        throw Object.assign(new Error('synthetic outbox busy'), { code: 'EBUSY' });
+      return originalOpen(...args);
+    });
     for (let i = 0; i < 640; i++) {
       journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
       if (i % 64 === 63) await journal.flush();
     }
     await journal.flush();
+    blocked = false;
     await delivery.tick();
     const files = (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) => v.endsWith('.gz'));
     const indices: number[] = [];
@@ -367,8 +388,82 @@ describe('consented diagnostic outbox', () => {
     expect(delivery.status().omissionReasons).toHaveProperty(
       'memory_budget_recoverable_from_local_journal',
     );
+    intercept.mockRestore();
     await delivery.close();
     await journal.close();
+  });
+  it('collects normal operation batches every ten minutes while draining existing batches on the short poll', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    remote.setState(join(dir, 'diagnostic-outbox', 'state.json'));
+    let now = Date.now();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+      now: () => now,
+    }).initialize(false);
+    try {
+      await delivery.consent(true);
+      for (let minute = 1; minute <= 20; minute++) {
+        for (let operation = 0; operation < 300; operation++)
+          journal.record('normal_operation', { minute, operation });
+        await journal.flush();
+        now += 60_000;
+        await delivery.tick(false);
+        expect(remote.batches.size).toBe(Math.floor(minute / 10));
+      }
+      const records = [];
+      for (const batch of remote.batches.values())
+        records.push(...((await decodeDiagnosticBatch(Buffer.from(batch))).events ?? []));
+      expect(
+        records.filter((value) => (value as { stage: string }).stage === 'normal_operation'),
+      ).toHaveLength(6000);
+      expect(delivery.status().omitted).toBe(0);
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
+  it('requires fresh consent for a longer identifiable index and durably fences the previous policy', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const previous = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await previous.consent(true);
+    await previous.close();
+    await journal.close();
+    const path = join(dir, 'diagnostic-outbox', 'state.json');
+    const state = JSON.parse(await readFile(path, 'utf8')) as {
+      consentPolicy: number;
+      credentials: { installationId: string };
+    };
+    const oldInstallation = state.credentials.installationId;
+    state.consentPolicy = 1;
+    await writeFile(path, JSON.stringify(state));
+    const nextJournal = new SessionJournal(dir);
+    const next = await new DiagnosticDelivery(dir, nextJournal).initialize(false);
+    try {
+      expect(next.status()).toMatchObject({
+        consent: false,
+        error: 'consent_policy_changed',
+        queuedBatches: 0,
+      });
+      expect(
+        (await readdir(join(dir, 'diagnostic-outbox'))).some((name) =>
+          name.startsWith('consent-revoked-'),
+        ),
+      ).toBe(true);
+      await next.consent(true);
+      const renewed = JSON.parse(await readFile(path, 'utf8')) as {
+        consentPolicy: number;
+        credentials: { installationId: string };
+      };
+      expect(renewed.consentPolicy).toBe(2);
+      expect(renewed.credentials.installationId).not.toBe(oldInstallation);
+    } finally {
+      await next.close();
+      await nextJournal.close();
+    }
   });
   it('serializes rapid consent changes and coalesces durable revocation fences', async () => {
     const dir = await directory();
@@ -432,10 +527,22 @@ describe('consented diagnostic outbox', () => {
     expect(disk.queue).toHaveLength(1);
     expect(disk.acknowledged).toBe(0);
     spy.mockRestore();
+    await journal.flush();
     now += 86400_000;
     await delivery.tick();
     expect(remote.batches.size).toBe(1);
-    expect(delivery.status()).toMatchObject({ acknowledged: 1, queuedBatches: 0 });
+    expect(delivery.status()).toMatchObject({ acknowledged: 1, queuedBatches: 1 });
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({ acknowledged: 2, queuedBatches: 0 });
+    const events = (
+      await Promise.all(
+        [...remote.batches.values()].map((value) => decodeDiagnosticBatch(Buffer.from(value))),
+      )
+    ).flatMap((value) => value.events ?? []);
+    expect(
+      events.filter((value) => (value as { stage: string }).stage === 'operation_result'),
+    ).toHaveLength(1);
+    expect(JSON.stringify(events)).toContain('injected receipt manifest I/O failure');
     await delivery.close();
     await journal.close();
   });

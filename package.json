@@ -68,6 +68,7 @@
     "prettier": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "miniflare": "4.20260730.0"
   }
 }
