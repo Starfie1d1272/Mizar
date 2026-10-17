@@ -353,6 +353,19 @@ jobs:
         shell: pwsh
         run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
 
+      - name: Install locked Node dependencies for native console qualification
+        if: matrix.lane == 'host'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared producer and archive dependencies
+        if: matrix.lane == 'host'
+        run: pnpm --filter @mizar/companion^... --fail-if-no-match run build
+
+      - name: Restore real native console evidence through restart, private ingest and full export
+        if: matrix.lane == 'host'
+        timeout-minutes: 3
+        run: pnpm --filter @mizar/companion exec tsx ../../tests/diagnostics/console.production.ts
+
       - name: Verify Setup preparation overlap and failure joining
         if: matrix.lane == 'recovery'
         shell: pwsh

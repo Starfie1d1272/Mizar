@@ -44,6 +44,29 @@ const directStages: Record<string, DiagnosticFailureKind> = {
   native_source_failure: 'diagnostic_io',
   website_original_error: 'business',
 };
+/** Only the dedicated native producer format; raw game files are never an input. */
+export function diagnosticConsoleEvidence(value: unknown): Record<string, unknown> | null {
+  const entry = object(value);
+  if (
+    entry.stage !== 'cs2_console_records' ||
+    typeof entry.detail !== 'string' ||
+    entry.detail.length > 8192
+  )
+    return null;
+  try {
+    const detail = object(JSON.parse(entry.detail));
+    return detail.source === 'owned-cs2-technical-console' &&
+      detail.rawFileIncluded === false &&
+      typeof detail.binding === 'string' &&
+      /^[a-f0-9]{64}$/.test(detail.binding) &&
+      Array.isArray(detail.records) &&
+      detail.records.length <= 256
+      ? detail
+      : null;
+  } catch {
+    return null;
+  }
+}
 /** Parse the authorized producer envelopes once, after cloud consent filtering.
  * Indexes count records containing failure evidence, not independent incidents or root causes.
  * Known deferred producers never substitute collection time for an unavailable source clock. */
@@ -62,7 +85,18 @@ export function diagnosticEnvelope(value: unknown): {
     const entries = array(evidence.entries);
     for (const item of entries) {
       const entry = object(object(item).entry);
-      stamps.push(entry.time);
+      if (entry.stage === 'cs2_console_records') {
+        const detail = diagnosticConsoleEvidence(entry);
+        const records = array(detail?.records);
+        if (!records.length && detail?.cloudCoverage) stamps.push(entry.time);
+        for (const item of records) {
+          const record = object(item);
+          const after = diagnosticSourceUtc(record.sourceAfterUtc);
+          const captured = diagnosticSourceUtc(record.capturedAt);
+          if (after && captured && after <= captured) stamps.push(after, captured);
+          if (failed(record.result) && typeof record.failureKind === 'string') kinds.add('native');
+        }
+      } else stamps.push(entry.time);
       if (failed(entry.result) || errorPresent(entry.error)) kinds.add('native');
     }
     // An empty consent-filtered group is current exclusion metadata, not an old Host operation.

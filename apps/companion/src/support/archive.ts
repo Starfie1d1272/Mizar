@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { diagnosticValue, SESSION_LIMITS } from './session-journal.js';
 import { PerformanceSpool } from './performance-spool.js';
 import { decodeDiagnosticBatch, type RetainedDiagnosticBatch } from './delivery.js';
+import { diagnosticConsoleEvidence, diagnosticSourceUtc } from './envelope.js';
 const compress = promisify(gzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
@@ -85,6 +86,39 @@ export async function fullLogArchive(
     time?: unknown;
     evidence?: { sourceRecord?: { time?: unknown } };
   }) => event.evidence?.sourceRecord?.time ?? event.time;
+  const includeRecord = (input: unknown) => {
+    const event = input as {
+      stage?: string;
+      time?: unknown;
+      evidence?: {
+        sourceRecord?: { time?: unknown };
+        entries?: { entry?: Record<string, unknown> }[];
+      };
+    };
+    const consoles =
+      event.stage === 'cs2_console_records'
+        ? [input]
+        : event.stage === 'native_host_records'
+          ? (event.evidence?.entries ?? [])
+              .map((copied) => copied.entry)
+              .filter((entry) => entry?.stage === 'cs2_console_records')
+          : [];
+    if (consoles.length) {
+      for (const console of consoles) {
+        const detail = diagnosticConsoleEvidence(console);
+        if (!detail || !Array.isArray(detail.records) || !detail.records.length) return true;
+        for (const value of detail.records as Record<string, unknown>[]) {
+          const after = diagnosticSourceUtc(value.sourceAfterUtc);
+          const captured = diagnosticSourceUtc(value.capturedAt);
+          if (!after || !captured || after > captured) return true;
+          if ((!range.from || captured >= range.from) && (!range.to || after <= range.to))
+            return true;
+        }
+      }
+      return false;
+    }
+    return include(sourceTime(event));
+  };
   const indexRecord = (
     event: Record<string, unknown>,
     time: unknown,
@@ -121,7 +155,7 @@ export async function fullLogArchive(
       const records = extra.journalMemory.map((line) => JSON.parse(line) as { time?: unknown });
       const bytes = Buffer.from(
         records
-          .filter((event) => include(sourceTime(event)))
+          .filter(includeRecord)
           .map((event) => {
             indexRecord(event, sourceTime(event), 'retained-copy');
             return JSON.stringify(diagnosticValue(event)) + '\n';
@@ -158,7 +192,7 @@ export async function fullLogArchive(
         const body = await decodeDiagnosticBatch(retained.gzip);
         const bytes = Buffer.from(
           (body.events ?? [])
-            .filter((event) => include(sourceTime(event as { time?: unknown })))
+            .filter(includeRecord)
             .map((event) => {
               indexRecord(
                 event as Record<string, unknown>,
@@ -310,11 +344,7 @@ export async function fullLogArchive(
                 : stamp;
             if (typeof event.startupSessionId === 'string') currentSession = event.startupSessionId;
             const id = event.startupSessionId ?? currentSession;
-            if (
-              typeof time === 'string' &&
-              ((range.from && time < range.from) || (range.to && time > range.to))
-            )
-              return '';
+            if (!includeRecord({ ...event, time })) return '';
             const rawDetail = event.error ?? event.detail;
             if (typeof rawDetail === 'string') {
               try {
@@ -431,7 +461,7 @@ export async function fullLogArchive(
         'focus is an index only; retained cross-process sources are not discarded, including borrowed runtimes',
     },
     rangePolicy:
-      'Timestamped records are filtered; business/retention snapshots and unscoped legacy text remain attached.',
+      'Timestamped records are filtered; console write intervals use conservative overlap and unknown bounds remain attached; business/retention snapshots and unscoped legacy text remain attached.',
     fragmentedDetails: [...fragments.values()].map((group) => ({
       id: group.id,
       expected: group.expected,

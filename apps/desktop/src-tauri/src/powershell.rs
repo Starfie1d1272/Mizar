@@ -49,28 +49,7 @@ fn redact(log: &DesktopLog, text: &str) -> String {
             value = value.replace(token.trim(), "[redacted]");
         }
     }
-    value
-        .lines()
-        .map(|line| {
-            let lower = line.to_lowercase();
-            if [
-                "password",
-                "token",
-                "authorization",
-                "api_key",
-                "apikey",
-                "secret",
-            ]
-            .iter()
-            .any(|key| lower.contains(key))
-            {
-                "[credential-bearing line redacted]"
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    crate::startup_log::redact_text(&value)
 }
 
 pub fn diagnostic(log: &DesktopLog, operation: &str, phase: &str, detail: &str) {
@@ -206,7 +185,7 @@ mod tests {
                 .creation_flags(0x08000000);
             c
         };
-        let error = run(command("[Console]::Error.WriteLine('original-failure test-private-credential'); [Console]::Out.Write(('x' * 70000)); exit 7"), &log, "GSI 检测", Duration::from_secs(15)).unwrap_err();
+        let error = run(command("[Console]::Error.WriteLine('stage=launch token=PRIVATE-TOKEN cause=original-failure test-private-credential'); [Console]::Out.Write(('x' * 70000)); exit 7"), &log, "GSI 检测", Duration::from_secs(15)).unwrap_err();
         assert!(error.contains("GSI 检测"));
         assert!(!error.contains("original-failure"));
         let error = run(
@@ -242,6 +221,9 @@ mod tests {
         let text = std::fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
         for expected in [
             "original-failure",
+            "stage=launch",
+            "cause=original-failure",
+            "token=[redacted]",
             "exit=Some(7)",
             "output truncated",
             "before-timeout",
@@ -251,6 +233,7 @@ mod tests {
             assert!(text.contains(expected), "missing {expected}");
         }
         assert!(!text.contains("test-private-credential"));
+        assert!(!text.contains("PRIVATE-TOKEN"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
