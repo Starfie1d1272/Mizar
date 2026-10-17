@@ -422,6 +422,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         {
           requestId: request.id,
           browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+          taskId: browserOperationId(request.headers['x-mizar-task-id']),
+          parentOperationId: browserOperationId(request.headers['x-mizar-parent-operation-id']),
+          trigger:
+            request.headers['x-mizar-trigger'] === 'user'
+              ? 'user'
+              : request.headers['x-mizar-trigger'] === 'system'
+                ? 'system'
+                : 'unattributed',
         },
         done,
       );

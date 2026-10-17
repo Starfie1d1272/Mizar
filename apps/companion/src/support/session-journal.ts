@@ -128,9 +128,18 @@ export class SessionJournal {
   private readonly requestContext = new AsyncLocalStorage<{
     requestId: string;
     browserOperationId: string | null;
+    taskId?: string | null;
+    parentOperationId?: string | null;
+    trigger?: 'user' | 'system' | 'unattributed';
   }>();
   withRequest<T>(
-    context: { requestId: string; browserOperationId: string | null },
+    context: {
+      requestId: string;
+      browserOperationId: string | null;
+      taskId?: string | null;
+      parentOperationId?: string | null;
+      trigger?: 'user' | 'system' | 'unattributed';
+    },
     run: () => T,
   ): T {
     return this.requestContext.run(context, run);
@@ -241,6 +250,8 @@ export class SessionJournal {
         ...this.identity,
         sequence: ++this.sequence,
         stage,
+        taskId: null,
+        trigger: 'system',
         ...this.requestContext.getStore(),
         droppedBefore: this.dropped,
         writeFailuresBefore: this.failures,

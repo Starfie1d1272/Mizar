@@ -8,6 +8,19 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+thread_local! {
+    static TASK_CONTEXT: std::cell::RefCell<Value> = const { std::cell::RefCell::new(Value::Null) };
+}
+struct TaskContextGuard(Value);
+impl Drop for TaskContextGuard {
+    fn drop(&mut self) { TASK_CONTEXT.with(|slot| { slot.replace(self.0.take()); }); }
+}
+fn diagnostic_uuid(value: Option<&str>) -> Option<&str> {
+    value.filter(|text| text.len() == 36 && text.bytes().enumerate().all(|(i, byte)| {
+        if [8, 13, 18, 23].contains(&i) { byte == b'-' } else { byte.is_ascii_hexdigit() }
+    }))
+}
+
 pub const LOG_LIMIT: u64 = 25 * 1024 * 1024;
 const HISTORY: usize = 3;
 const MESSAGE_LIMIT: usize = 8192;
@@ -217,6 +230,14 @@ impl DesktopLog {
         detail: Option<&str>,
     ) -> io::Result<()> {
         let mut entry = log.identity.clone();
+        entry["trigger"] = json!("system");
+        entry["taskId"] = Value::Null;
+        entry["operationId"] = Value::Null;
+        TASK_CONTEXT.with(|slot| {
+            if let Value::Object(context) = &*slot.borrow() {
+                for (key, value) in context { entry[key] = value.clone(); }
+            }
+        });
         entry["time"] = json!(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
         entry["stage"] = json!(stage);
         entry["result"] = json!(result);
@@ -239,6 +260,14 @@ impl DesktopLog {
         let mut file = OpenOptions::new().create(true).append(true).open(current)?;
         file.write_all(&bytes)?;
         file.flush()
+    }
+
+    /// Scope synchronous native work only; async/spawned work must enter its own scope.
+    pub fn with_task<T>(&self, task_id: Option<&str>, operation_id: Option<&str>, trigger: Option<&str>, run: impl FnOnce() -> T) -> T {
+        let task_id = diagnostic_uuid(task_id);
+        let context = json!({"taskId":task_id,"operationId":diagnostic_uuid(operation_id),"trigger":if task_id.is_some() { match trigger { Some("user") => "user", Some("system") => "system", _ => "unattributed" } } else {"unattributed"}});
+        let _guard = TaskContextGuard(TASK_CONTEXT.with(|slot| slot.replace(context)));
+        run()
     }
 
     pub fn event(&self, stage: &str, result: &str, detail: Option<&str>) {
@@ -312,6 +341,38 @@ mod tests {
         ));
         fs::create_dir_all(path.join("resources/metadata")).unwrap();
         path
+    }
+
+    #[test]
+    fn task_context_survives_native_steps_without_leaking_between_threads_or_system_work() {
+        let root = root("task-context");
+        let log = DesktopLog::new(&root, None).unwrap();
+        let task = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let operation = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        log.with_task(Some(task), Some(operation), Some("user"), || {
+            log.step("task_native_step", || Ok::<_, String>(())).unwrap();
+            log.with_task(Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc"), Some(operation), Some("system"), || log.event("nested_system_task", "success", None));
+            log.event("task_native_step", "success", None);
+            let other = log.clone();
+            std::thread::spawn(move || other.event("other_system_thread", "success", None)).join().unwrap();
+        });
+        log.event("later_system_work", "success", None);
+        let text = fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        for line in text.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            if value["stage"] == "task_native_step" {
+                assert_eq!(value["taskId"], task);
+                assert_eq!(value["operationId"], operation);
+                assert_eq!(value["trigger"], "user");
+            } else if value["stage"] == "nested_system_task" {
+                assert_eq!(value["taskId"], "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+                assert_eq!(value["trigger"], "system");
+            } else {
+                assert!(value["taskId"].is_null());
+                assert_eq!(value["trigger"], "system");
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
