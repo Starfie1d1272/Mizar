@@ -87,8 +87,9 @@ it('keeps drawing new samples after a projectile disappears when a RAF timestamp
     entry![1](timestamp);
   };
   try {
-    await act(() => {
+    await act(async () => {
       root.render(<RadarView client={client} assetBaseUrl="/radar-assets" />);
+      await Promise.resolve();
     });
     draw(100);
     // Browser RAF timestamps may predate performance.now() in later callbacks.
@@ -103,8 +104,9 @@ it('keeps drawing new samples after a projectile disappears when a RAF timestamp
     expect(host.querySelector('canvas')?.dataset.radarSampleSequence).toBe('3');
     expect(callbacks.size).toBe(1);
   } finally {
-    await act(() => {
+    await act(async () => {
       root.unmount();
+      await Promise.resolve();
     });
     host.remove();
   }
