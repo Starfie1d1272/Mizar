@@ -747,9 +747,21 @@ async function cloud(directory, profileResult, faultResult) {
     const withdrawalClient = clients[0];
     const withdrawalState = await fileState(withdrawalClient);
     const installation = withdrawalState.credentials.installationId;
+    const ownedBodies = await db
+      .prepare('SELECT COUNT(*) count FROM batches WHERE installation_id=?')
+      .bind(installation)
+      .first();
+    assert(ownedBodies.count > 0, 'withdrawal must exercise actual retained bodies');
     const beforeWithdrawal = await metrics();
     await withdrawalClient.delivery.consent(false);
-    await withdrawalClient.delivery.tick(false);
+    let withdrawalRequests = 0;
+    for (let page = 0; page <= Math.ceil(ownedBodies.count / 99); page++) {
+      if (!withdrawalClient.delivery.status().deletionPending) break;
+      now = Math.ceil(Math.max(now, withdrawalClient.delivery.status().nextAttemptAt));
+      await control();
+      await withdrawalClient.delivery.tick(false);
+      withdrawalRequests++;
+    }
     assert.equal(withdrawalClient.delivery.status().deletionPending, 0);
     const afterWithdrawal = await db
       .prepare(
@@ -850,7 +862,13 @@ async function cloud(directory, profileResult, faultResult) {
       healthyCost,
       measuredSessionsPerDay,
       bodyAudits: auditedSessions.size,
-      withdrawal: { cost: withdrawalCost, remaining: afterWithdrawal, complete: true },
+      withdrawal: {
+        cost: withdrawalCost,
+        originalBodies: ownedBodies.count,
+        requests: withdrawalRequests,
+        remaining: afterWithdrawal,
+        complete: true,
+      },
       cleanup: { cost: cleanupCost, remaining },
       externalAccountRequests: 0,
     };
