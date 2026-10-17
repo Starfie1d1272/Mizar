@@ -50,15 +50,23 @@ afterEach(() => {
 });
 const button = (text: string) =>
   Array.from(container.querySelectorAll('button')).find((v) => v.textContent?.includes(text))!;
-it('requires explicit informed consent and separates pause with retained queue from withdrawal', async () => {
+it('offers local reporting without an ineffective consent control when sending is unavailable', () => {
   act(() => root.render(<DiagnosticDeliverySettings />));
   expect(mocks.command).not.toHaveBeenCalled();
-  expect(container.textContent).toContain('并非匿名数据');
-  expect(container.textContent).toContain('不会使用 R2');
-  expect(button('同意并保存设置').disabled).toBe(true);
+  expect(container.textContent).toContain('暂不可用');
+  expect(container.querySelector('input[type=checkbox]')).toBeNull();
+  expect(button('保存问题标记')).toBeDefined();
+});
+it('requires consent before sending and keeps pause separate from withdrawal', async () => {
+  mocks.status.configured = true;
+  act(() => root.render(<DiagnosticDeliverySettings />));
+  expect(mocks.command).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('维护者管理的 Cloudflare');
+  expect(container.textContent).toContain('七天');
+  expect(button('同意并开启').disabled).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
   await act(async () => {
-    button('同意并保存设置').click();
+    button('同意并开启').click();
     await Promise.resolve();
   });
   expect(mocks.command).toHaveBeenCalledWith('/operator/diagnostics/consent', {
@@ -66,22 +74,24 @@ it('requires explicit informed consent and separates pause with retained queue f
     revision: 'technical-diagnostics-v1',
   });
   await act(async () => {
-    button('暂停回传').click();
+    button('暂停发送').click();
     await Promise.resolve();
   });
   expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/pause', { paused: true });
-  expect(container.textContent).toContain('待传 3 批');
-  expect(container.textContent).toContain('已暂停回传，本机记录和待传副本继续保留');
+  expect(container.textContent).toContain('已暂停发送。');
   await act(async () => {
-    button('确认撤回并请求删除').click();
+    button('确认关闭并请求删除').click();
     await Promise.resolve();
   });
   expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
     enabled: false,
     revision: 'technical-diagnostics-v1',
   });
+  mocks.status.deletionPending = 1;
+  act(() => root.render(<DiagnosticDeliverySettings />));
+  expect(container.textContent).toContain('删除请求等待同步');
 });
-it('does not claim cloud receipt when a local marker is saved and shows a nearby failure when it cannot be saved', async () => {
+it('acknowledges a saved marker briefly and shows write failures beside the action', async () => {
   act(() => root.render(<DiagnosticDeliverySettings />));
   await act(async () => {
     button('保存问题标记').click();
@@ -91,7 +101,7 @@ it('does not claim cloud receipt when a local marker is saved and shows a nearby
     '/operator/diagnostics/report',
     expect.objectContaining({ category: 'hud' }),
   );
-  expect(container.textContent).toContain('这不代表云端已收到');
+  expect(container.textContent).toContain('已记录问题时间。');
   mocks.command.mockRejectedValueOnce(new Error('问题标记未确认写入'));
   await act(async () => {
     button('保存问题标记').click();
