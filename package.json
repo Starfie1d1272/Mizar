@@ -54,7 +54,8 @@
     "design:contracts:test": "vitest run --config vitest.config.ts packages/design-tokens/scripts/tokens.test.mjs",
     "build:packages": "pnpm --filter './packages/*...' --fail-if-no-match run build",
     "acceptance:prepare": "pnpm build:packages",
-    "diagnostics:console:qualify": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx ../../tests/diagnostics/console.production.ts"
+    "diagnostics:console:qualify": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx ../../tests/diagnostics/console.production.ts",
+    "diagnostics:capacity": "pnpm --filter @mizar/companion^... --fail-if-no-match run build && pnpm --filter @mizar/companion exec tsx ../../scripts/diagnostics/measure-capacity.mjs"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

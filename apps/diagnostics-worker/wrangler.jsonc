@@ -10,8 +10,8 @@
   "r2_buckets": [{ "binding": "DIAGNOSTICS_BUCKET", "bucket_name": "mizar-telemetry" }],
   "d1_databases": [{ "binding": "DIAGNOSTICS_DB", "database_name": "mizar-telemetry", "database_id": "e85505ac-5388-471c-abbe-7a4d9e15bde7", "migrations_dir": "migrations" }],
   "ratelimits": [
-    { "name": "ENROLL_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
-    { "name": "UPLOAD_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+    { "name": "ENROLL_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } },
+    { "name": "UPLOAD_LIMITER", "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
   ],
   "vars": {
     "ACCEPTING": "0",

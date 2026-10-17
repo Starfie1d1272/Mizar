@@ -107,6 +107,10 @@ jobs:
         if: ${{ matrix.lane == 'unit' }}
         run: pnpm test
 
+      - name: Measure integrated diagnostic capacity with real local R2 and D1
+        if: ${{ matrix.lane == 'unit' }}
+        run: pnpm diagnostics:capacity
+
       - name: Verify generated assets and real-derived fixtures
         if: ${{ matrix.lane == 'fixtures' }}
         run: |

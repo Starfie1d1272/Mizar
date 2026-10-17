@@ -25,7 +25,7 @@ export interface Env {
 }
 const DAY = 86400_000;
 export const LIMITS = {
-  compressedBytes: 128 * 1024,
+  compressedBytes: 256 * 1024,
   expandedBytes: 2 * 1024 * 1024,
   events: 4096,
   metadataBytes: 4096,

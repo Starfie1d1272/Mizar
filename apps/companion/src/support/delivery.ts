@@ -20,7 +20,7 @@ const compress = promisify(gzip);
 const decompress = promisify(gunzip);
 export const DELIVERY_LIMITS = {
   expandedBytes: 2 * 1024 * 1024,
-  compressedBytes: 128 * 1024,
+  compressedBytes: 256 * 1024,
   queueBytes: 64 * 1024 * 1024,
   batches: 2048,
   manifestBytes: 2 * 1024 * 1024,

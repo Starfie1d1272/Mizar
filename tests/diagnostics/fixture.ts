@@ -40,7 +40,7 @@ export const bindings = {
   INSTALLATION_DAILY_BYTES: '16777216',
   INSTALLATION_DAILY_BATCHES: '200',
 };
-export function runtime(directory: string, uploadLimit = 30) {
+export function runtime(directory: string, uploadLimit = 300, enrollmentLimit = 120) {
   return new Miniflare({
     modules: true,
     script,
@@ -51,7 +51,7 @@ export function runtime(directory: string, uploadLimit = 30) {
     r2Buckets: ['DIAGNOSTICS_BUCKET'],
     r2Persist: join(directory, 'r2'),
     ratelimits: {
-      ENROLL_LIMITER: { namespace_id: '1001', simple: { limit: 5, period: 60 } },
+      ENROLL_LIMITER: { namespace_id: '1001', simple: { limit: enrollmentLimit, period: 60 } },
       UPLOAD_LIMITER: { namespace_id: '1002', simple: { limit: uploadLimit, period: 60 } },
     },
   });

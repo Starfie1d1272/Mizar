@@ -516,7 +516,7 @@ it('withholds ACK on a real D1 index failure, retries without resetting R2 TTL, 
     expect(summary).toMatchObject({ events: 1, failures: 1, version: '1.4.0', source_from: stamp });
     const before = await db.prepare('SELECT bytes,batches FROM daily').first();
     expect((await upload(bytes, { ...index, events: 99999 })).status).toBe(400);
-    expect((await upload(Buffer.alloc(129 * 1024))).status).toBe(413);
+    expect((await upload(Buffer.alloc(257 * 1024))).status).toBe(413);
     expect(await db.prepare('SELECT bytes,batches FROM daily').first()).toEqual(before);
     // Reproduce a crash after reserving, before any R2 object exists. A retry can
     // deliver the full body; it cannot manufacture proof that the old writer ended.
