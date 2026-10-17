@@ -1,4 +1,4 @@
-import { controlEvidence } from '../debug/control-journal';
+import { controlEvidence, nativeSnapshot } from '../debug/control-journal';
 import { useEffect, useState } from 'react';
 import {
   programSceneStateSchema,
@@ -83,8 +83,16 @@ export async function desktopInvoke<T>(
       diagnosticOperationId: operationId,
     });
     if (observe) controlEvidence(command, 'result', { operationId, result });
+    if (!observe && command !== 'save_support_bundle') nativeSnapshot(command, result);
     return result;
   } catch (error) {
+    if (!observe && command !== 'save_support_bundle')
+      nativeSnapshot(command, {
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message, stack: error.stack }
+            : error,
+      });
     if (observe)
       controlEvidence(command, 'failure', {
         operationId,

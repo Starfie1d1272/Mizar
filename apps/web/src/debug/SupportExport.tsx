@@ -1,3 +1,4 @@
+import { flushControlSnapshots } from './control-journal';
 import { useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
@@ -112,6 +113,7 @@ export function SupportExport() {
             boundedStatus(desktopInvoke('cs2_host_status')),
           ])
         : [null, null];
+      await flushControlSnapshots();
       const response = await fetch('/debug/support-bundle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -1,11 +1,15 @@
 // Best effort local diagnostics. Failure is never allowed to change the product operation.
 export function controlEvidence(operation: string, phase: string, evidence: unknown): void {
-  void fetch('/debug/control-event', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ operation, phase, time: new Date().toISOString(), evidence }),
-    keepalive: true,
-  }).catch(() => undefined);
+  try {
+    void fetch('/debug/control-event', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation, phase, time: new Date().toISOString(), evidence }),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    /* Diagnostics cannot change the operation. */
+  }
 }
 
 /** Observe controls inside Mizar only; never inspect arbitrary files or other applications. */
@@ -77,4 +81,65 @@ export function installControlJournal(): void {
       throw error;
     }
   };
+}
+
+// Polling reads are snapshots, not new user actions. Preserve changes and aggregate
+// identical observations with first/last times and counts, then flush on export.
+interface NativeSnapshot {
+  signature: string;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  observations: number;
+  result: unknown;
+}
+const nativeSnapshots = new Map<string, NativeSnapshot>();
+function snapshotEvidence({
+  firstObservedAt,
+  lastObservedAt,
+  observations,
+  result,
+}: NativeSnapshot) {
+  return { firstObservedAt, lastObservedAt, observations, result };
+}
+
+export function nativeSnapshot(operation: string, result: unknown): void {
+  try {
+    const signature = JSON.stringify(result) ?? 'null';
+    const previous = nativeSnapshots.get(operation);
+    const now = new Date().toISOString();
+    if (previous?.signature === signature) {
+      previous.lastObservedAt = now;
+      previous.observations++;
+      return;
+    }
+    if (previous) controlEvidence(operation, 'snapshot_aggregate', snapshotEvidence(previous));
+    const snapshot = {
+      signature,
+      firstObservedAt: now,
+      lastObservedAt: now,
+      observations: 1,
+      result: JSON.parse(signature) as unknown,
+    };
+    nativeSnapshots.set(operation, snapshot);
+    controlEvidence(operation, 'snapshot', snapshotEvidence(snapshot));
+  } catch {
+    controlEvidence(operation, 'snapshot_failed', { reason: 'unserializable_snapshot' });
+  }
+}
+export async function flushControlSnapshots(): Promise<void> {
+  await Promise.allSettled(
+    [...nativeSnapshots].map(([operation, evidence]) =>
+      fetch('/debug/control-event', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          operation,
+          phase: 'snapshot_aggregate',
+          time: new Date().toISOString(),
+          evidence: snapshotEvidence(evidence),
+        }),
+        signal: AbortSignal.timeout(2000),
+      }),
+    ),
+  );
 }
