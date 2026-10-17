@@ -1273,7 +1273,7 @@ mod tests {
         assert!(!managed.has_external());
         managed.store.save(&json!({"version":1,"pid":external.child.id(),"created":created,"executable":actual_path})).unwrap();
         assert!(managed.attach_external(external.child.id(), created, &actual_path).is_err());
-        std::fs::remove_file(external.root.join("data/cs2-session/pending.json")).unwrap();
+        std::fs::remove_file(managed.store.backup_directory().join("pending.json")).unwrap();
         managed.attach_external(external.child.id(), created, &actual_path).unwrap();
         assert!(managed.preserve_settings());
         let borrowed_process = managed.workspace_process().unwrap().unwrap();
