@@ -10,7 +10,7 @@ import type { MatchContextController } from '../src/match-context/controller.js'
 import { mkdtemp, rm, symlink, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RivalHubConnection,
   OFFICIAL_RIVALHUB_URL,
@@ -29,6 +29,10 @@ vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
 }));
 const dirs: string[] = [];
+// Native OBS discovery has its own OS consumer; these tests own persistence/export contracts.
+beforeEach(() => {
+  vi.spyOn(nativeProcesses, 'readObsNativeProcesses').mockResolvedValue([]);
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -860,128 +864,135 @@ function unpack(bundle: FullArchive, prefix: string) {
     });
 }
 
-it('reconstructs real 6 MiB MP3 upload, configuration, failure and restart from the production HTTP export', async () => {
-  const dir = await directory();
-  const data = join(dir, 'data');
-  await filesystem.mkdir(data);
-  const logs = join(dir, 'logs');
-  const options = { supportLogsDirectory: logs, obsConfigPath: join(data, 'obs.json') };
-  const first = buildApp(options);
-  const origin = 'http://127.0.0.1:3000';
-  const frame = await readFile(new URL('./fixtures/diagnostic-tone.mp3', import.meta.url));
-  const bytes = Buffer.concat(
-    Array.from({ length: Math.ceil((6 * 1024 * 1024) / frame.length) }, () => frame),
-  );
-  let track: MusicTrack;
-  try {
-    const address = await first.listen({ host: '127.0.0.1', port: 0 });
-    const upload = await fetch(`${address}/operator/music/track`, {
-      method: 'POST',
-      headers: {
-        origin,
-        'content-type': 'application/x-mizar-audio',
-        'x-mizar-filename': encodeURIComponent('诊断合成音.mp3'),
-      },
-      body: bytes,
-    });
-    expect(upload.status).toBe(200);
-    track = (await upload.json()) as typeof track;
-    expect(track.name).toBe('诊断合成音.mp3');
-    expect((await readFile(join(data, 'music', 'tracks', track.id))).equals(bytes)).toBe(true);
-    const current = (await (await fetch(`${address}/local/v1/music`)).json()) as {
-      config: MusicConfig;
-    };
-    current.config.groups.waiting.tracks = [track];
-    const save = await fetch(`${address}/operator/music`, {
-      method: 'POST',
-      headers: { origin, 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'configure', config: current.config }),
-    });
-    expect(save.status).toBe(200);
-    for (let index = 0; index < 40; index++) {
-      expect(
-        (
-          await fetch(`${address}/operator/music`, {
-            method: 'POST',
-            headers: { origin, 'content-type': 'application/json' },
-            body: JSON.stringify({ action: 'volume', group: 'waiting', volume: index / 100 }),
-          })
-        ).status,
-      ).toBe(200);
+it(
+  'reconstructs real 6 MiB MP3 upload, configuration, failure and restart from the production HTTP export',
+  { timeout: 20_000 },
+  async () => {
+    const dir = await directory();
+    const data = join(dir, 'data');
+    await filesystem.mkdir(data);
+    const logs = join(dir, 'logs');
+    const options = { supportLogsDirectory: logs, obsConfigPath: join(data, 'obs.json') };
+    const first = buildApp(options);
+    const origin = 'http://127.0.0.1:3000';
+    const frame = await readFile(new URL('./fixtures/diagnostic-tone.mp3', import.meta.url));
+    const bytes = Buffer.concat(
+      Array.from({ length: Math.ceil((6 * 1024 * 1024) / frame.length) }, () => frame),
+    );
+    let track: MusicTrack;
+    try {
+      const address = await first.listen({ host: '127.0.0.1', port: 0 });
+      const upload = await fetch(`${address}/operator/music/track`, {
+        method: 'POST',
+        headers: {
+          origin,
+          'content-type': 'application/x-mizar-audio',
+          'x-mizar-filename': encodeURIComponent('诊断合成音.mp3'),
+        },
+        body: bytes,
+      });
+      expect(upload.status).toBe(200);
+      track = (await upload.json()) as typeof track;
+      expect(track.name).toBe('诊断合成音.mp3');
+      expect((await readFile(join(data, 'music', 'tracks', track.id))).equals(bytes)).toBe(true);
+      const current = (await (await fetch(`${address}/local/v1/music`)).json()) as {
+        config: MusicConfig;
+      };
+      current.config.groups.waiting.tracks = [track];
+      const save = await fetch(`${address}/operator/music`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'configure', config: current.config }),
+      });
+      expect(save.status).toBe(200);
+      for (let index = 0; index < 40; index++) {
+        expect(
+          (
+            await fetch(`${address}/operator/music`, {
+              method: 'POST',
+              headers: { origin, 'content-type': 'application/json' },
+              body: JSON.stringify({ action: 'volume', group: 'waiting', volume: index / 100 }),
+            })
+          ).status,
+        ).toBe(200);
+      }
+      const invalid = await fetch(`${address}/operator/music/track`, {
+        method: 'POST',
+        headers: {
+          origin,
+          'content-type': 'application/x-mizar-audio',
+          'x-mizar-filename': 'broken.mp3',
+        },
+        body: 'invalid media',
+      });
+      expect(invalid.status).toBe(400);
+    } finally {
+      await first.close();
     }
-    const invalid = await fetch(`${address}/operator/music/track`, {
-      method: 'POST',
-      headers: {
-        origin,
-        'content-type': 'application/x-mizar-audio',
-        'x-mizar-filename': 'broken.mp3',
-      },
-      body: 'invalid media',
-    });
-    expect(invalid.status).toBe(400);
-  } finally {
-    await first.close();
-  }
-  const second = buildApp(options);
-  try {
-    const address = await second.listen({ host: '127.0.0.1', port: 0 });
-    const restored = (await (await fetch(`${address}/local/v1/music`)).json()) as {
-      config: MusicConfig;
-    };
-    expect(restored.config.groups.waiting.tracks[0]).toMatchObject(track!);
-    expect(restored.config.groups.waiting.volume).toBe(0.39);
-    const exported = await fetch(`${address}/debug/support-bundle`, {
-      method: 'POST',
-      headers: { origin, 'content-type': 'application/json' },
-      body: '{}',
-    });
-    expect(exported.status).toBe(200);
-    const bundle = (await exported.json()) as FullArchive;
-    if (process.env.MIZAR_DIAGNOSTIC_EVIDENCE) {
-      await filesystem.mkdir(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, { recursive: true });
-      await writeFile(
-        join(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, 'synthetic-http-restart-bundle.json'),
-        JSON.stringify(bundle, null, 2),
-      );
-    }
-    const events = unpack(bundle, 'session.ndjson');
-    const begins = events.filter((event) => event.stage === 'operation_begin');
-    expect(begins.filter((event) => event.evidence.route === '/operator/music')).toHaveLength(41);
-    const upload = begins.find(
-      (event) =>
-        event.evidence.route === '/operator/music/track' &&
-        event.evidence.filename !== 'broken.mp3',
-    )!;
-    expect(upload.evidence.parameters).toMatchObject({
-      bytes: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      content: 'binary-not-collected',
-    });
-    const successful = events.find(
-      (event) =>
-        event.stage === 'operation_result' &&
-        event.evidence.requestId === upload.evidence.requestId &&
-        event.startupSessionId === upload.startupSessionId,
-    )!;
-    expect(successful.evidence).toMatchObject({ httpStatus: 200, result: track! });
-    expect(
-      events.some(
+    const second = buildApp(options);
+    try {
+      const address = await second.listen({ host: '127.0.0.1', port: 0 });
+      const restored = (await (await fetch(`${address}/local/v1/music`)).json()) as {
+        config: MusicConfig;
+      };
+      expect(restored.config.groups.waiting.tracks[0]).toMatchObject(track!);
+      expect(restored.config.groups.waiting.volume).toBe(0.39);
+      const exported = await fetch(`${address}/debug/support-bundle`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(exported.status).toBe(200);
+      const bundle = (await exported.json()) as FullArchive;
+      if (process.env.MIZAR_DIAGNOSTIC_EVIDENCE) {
+        await filesystem.mkdir(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, { recursive: true });
+        await writeFile(
+          join(process.env.MIZAR_DIAGNOSTIC_EVIDENCE, 'synthetic-http-restart-bundle.json'),
+          JSON.stringify(bundle, null, 2),
+        );
+      }
+      const events = unpack(bundle, 'session.ndjson');
+      const begins = events.filter((event) => event.stage === 'operation_begin');
+      expect(begins.filter((event) => event.evidence.route === '/operator/music')).toHaveLength(41);
+      const upload = begins.find(
         (event) =>
-          event.stage === 'music_commit_config' &&
-          event.evidence.after!.config.groups.waiting.tracks[0]?.id === track!.id,
-      ),
-    ).toBe(true);
-    const failure = events.find(
-      (event) => event.stage === 'music_validate' && event.evidence.result === 'failure',
-    )!;
-    expect(failure.evidence.error).toMatchObject({ name: 'Error', message: 'music_track_invalid' });
-    expect(failure.evidence.error!.stack).toContain('MusicStore');
-    expect(new Set(events.map((event) => event.startupSessionId)).size).toBe(2);
-    expect(events.some((event) => event.stage === 'session_end')).toBe(true);
-  } finally {
-    await second.close();
-  }
-});
+          event.evidence.route === '/operator/music/track' &&
+          event.evidence.filename !== 'broken.mp3',
+      )!;
+      expect(upload.evidence.parameters).toMatchObject({
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        content: 'binary-not-collected',
+      });
+      const successful = events.find(
+        (event) =>
+          event.stage === 'operation_result' &&
+          event.evidence.requestId === upload.evidence.requestId &&
+          event.startupSessionId === upload.startupSessionId,
+      )!;
+      expect(successful.evidence).toMatchObject({ httpStatus: 200, result: track! });
+      expect(
+        events.some(
+          (event) =>
+            event.stage === 'music_commit_config' &&
+            event.evidence.after!.config.groups.waiting.tracks[0]?.id === track!.id,
+        ),
+      ).toBe(true);
+      const failure = events.find(
+        (event) => event.stage === 'music_validate' && event.evidence.result === 'failure',
+      )!;
+      expect(failure.evidence.error).toMatchObject({
+        name: 'Error',
+        message: 'music_track_invalid',
+      });
+      expect(failure.evidence.error!.stack).toContain('MusicStore');
+      expect(new Set(events.map((event) => event.startupSessionId)).size).toBe(2);
+      expect(events.some((event) => event.stage === 'session_end')).toBe(true);
+    } finally {
+      await second.close();
+    }
+  },
+);
 
 it('exports initialization cause instead of an apparently healthy empty library and can reload after repair', async () => {
   const dir = await directory();

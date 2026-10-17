@@ -101,6 +101,32 @@ fn rotate(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn credential_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace(['_', '-'], "");
+    ["password", "passwd", "token", "secret", "credential", "authorization", "cookie", "streamkey", "apikey"].iter().any(|word| key.contains(word))
+}
+
+fn redact_value(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(fields.into_iter().map(|(key, value)| {
+            let value = if credential_key(&key) { json!("[redacted]") } else { redact_value(value) };
+            (key, value)
+        }).collect()),
+        Value::Array(fields) => Value::Array(fields.into_iter().map(redact_value).collect()),
+        Value::String(text) if text.starts_with("http://") || text.starts_with("https://") => {
+            if let Some((path, query)) = text.split_once('?') {
+                let query = query.split('&').map(|part| {
+                    if let Some((key, value)) = part.split_once('=') {
+                        format!("{key}={}", if credential_key(key) || ["code", "key", "auth"].contains(&key) { "[redacted]" } else { value })
+                    } else { part.to_owned() }
+                }).collect::<Vec<_>>().join("&");
+                json!(format!("{path}?{query}"))
+            } else { json!(text) }
+        },
+        other => other,
+    }
+}
+
 fn bounded(text: &str) -> String {
     if text.len() <= MESSAGE_LIMIT {
         return text.into();
@@ -191,7 +217,7 @@ impl DesktopLog {
                 "error"
             } else {
                 "detail"
-            }] = json!(bounded(detail));
+            }] = json!(bounded(&serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned())));
         }
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
@@ -232,6 +258,10 @@ impl DesktopLog {
         }
     }
 
+    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(&self, command: &str, result: &Result<T, E>) {
+        self.event("native_command", if result.is_ok() { "success" } else { "failure" }, Some(&json!({"command":command,"outcome":format!("{result:?}")}).to_string()));
+    }
+
     pub fn install_panic_hook(&self) {
         let logger = self.clone();
         let previous = std::panic::take_hook();
@@ -269,6 +299,28 @@ mod tests {
         ));
         fs::create_dir_all(path.join("resources/metadata")).unwrap();
         path
+    }
+
+    #[test]
+    fn persists_every_control_stage_and_precise_redaction_across_restart() {
+        let root = root("control-evidence");
+        let log = DesktopLog::new(&root, None).unwrap();
+        log.event("native_command", "begin", Some(&json!({"command":"start_demo_test", "token":"private-token", "password":"private-password", "arguments":["-applaunch","730","-worldwide"],"width":1920}).to_string()));
+        for _ in 0..40 { log.event("main_page_load", "success", None); }
+        let failed: Result<(), String> = Err("restore_stage: PermissionDenied osCode=5".into());
+        log.native_outcome("finish_workspace", &failed);
+        let directory = log.directory.clone();
+        drop(log);
+        let _restarted = DesktopLog::new(&root, None).unwrap();
+        let text = fs::read_to_string(directory.join("desktop.1.ndjson")).unwrap();
+        assert!(!text.contains("private-token"));
+        assert!(!text.contains("private-password"));
+        let events: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(events.iter().filter(|entry| entry["stage"] == "main_page_load").count(), 40);
+        assert!(text.contains("-worldwide"));
+        assert!(text.contains("PermissionDenied osCode=5"));
+        assert!(events.iter().any(|entry| entry["stage"] == "native_command" && entry["result"] == "failure"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

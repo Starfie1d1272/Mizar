@@ -134,7 +134,13 @@ test('workspace exit outcome survives a closed dock and failure allows a single 
   ).toBeDisabled();
   await expect(result.getByRole('button', { name: '正在退出…' })).toBeDisabled();
   await result.getByRole('button', { name: '运行诊断', exact: true }).click();
-  expect(calls).toContainEqual({ command: 'open_tool', args: { tool: 'diagnostics' } });
+  expect(calls).toContainEqual({
+    command: 'open_tool',
+    args: expect.objectContaining({
+      tool: 'diagnostics',
+      diagnosticOperationId: expect.any(String),
+    }),
+  });
   await page.close();
   release();
   await expect(result).toContainText('CS2 尚未退出，请手动退出游戏后重试恢复。');

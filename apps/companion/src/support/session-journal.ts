@@ -103,6 +103,8 @@ export class SessionJournal {
   private sequence = 0;
   private pendingBytes = 0;
   private writer = Promise.resolve();
+  private pending: { line: string; bytes: number }[] = [];
+  private draining = false;
   private dropped = 0;
   private failures = 0;
   private size = -1;
@@ -138,51 +140,70 @@ export class SessionJournal {
       return;
     }
     this.pendingBytes += bytes;
-    this.writer = this.writer
-      .then(async () => {
-        await this.initialize();
-        if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
-        await safePath(this.directory);
-        const path = join(this.directory, 'session.ndjson');
-        const before = await lstat(path).catch((error) => {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-          return null;
-        });
-        if (before && (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1))
-          throw new Error('unsafe_session_log');
-        const fd = await open(
-          path,
-          constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-          0o600,
-        );
-        if (!(await fd.stat()).isFile() || (await fd.stat()).nlink !== 1) {
-          await fd.close();
-          throw new Error('unsafe_session_log');
-        }
-        try {
-          await safePath(this.directory);
-          const named = await lstat(path);
-          const opened = await fd.stat();
-          if (
-            named.isSymbolicLink() ||
-            named.ino !== opened.ino ||
-            named.dev !== opened.dev ||
-            (before && (before.ino !== opened.ino || before.dev !== opened.dev))
-          )
-            throw new Error('session_log_changed');
-          await fd.writeFile(line);
-          this.size += bytes;
-        } finally {
-          await fd.close();
-        }
-      })
-      .catch(() => {
-        this.failures++;
-      })
-      .finally(() => {
-        this.pendingBytes -= bytes;
-      });
+    this.pending.push({ line, bytes });
+    if (!this.draining) {
+      this.draining = true;
+      this.writer = Promise.resolve().then(() => this.drain());
+    }
   }
+  private async drain(): Promise<void> {
+    try {
+      while (this.pending.length) {
+        const batch = [];
+        let bytes = 0;
+        do {
+          const entry = this.pending.shift()!;
+          batch.push(entry.line);
+          bytes += entry.bytes;
+        } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
+        try {
+          await this.append(batch.join(''), bytes);
+        } catch {
+          this.failures++;
+        } finally {
+          this.pendingBytes -= bytes;
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
+  }
+  private async append(line: string, bytes: number) {
+    await this.initialize();
+    if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
+    await safePath(this.directory);
+    const path = join(this.directory, 'session.ndjson');
+    const before = await lstat(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (before && (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1))
+      throw new Error('unsafe_session_log');
+    const fd = await open(
+      path,
+      constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      await safePath(this.directory);
+      const named = await lstat(path);
+      const opened = await fd.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        named.isSymbolicLink() ||
+        named.ino !== opened.ino ||
+        named.dev !== opened.dev ||
+        (before && (before.ino !== opened.ino || before.dev !== opened.dev))
+      )
+        throw new Error('session_log_changed');
+      await fd.writeFile(line);
+      this.size += bytes;
+    } finally {
+      await fd.close();
+    }
+  }
+
   write(line: string): void {
     try {
       this.record('service_log', JSON.parse(line));

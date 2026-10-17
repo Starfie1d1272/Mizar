@@ -18,10 +18,13 @@ export function installControlJournal(): void {
     if (!(element instanceof HTMLElement)) return;
     if (event.type === 'click' && !['BUTTON', 'A'].includes(element.tagName)) return;
     const input = element as HTMLInputElement;
-    const label = element.getAttribute('aria-label') ?? input.name ?? element.id;
+    const label =
+      element.getAttribute('aria-label') ??
+      input.labels?.[0]?.textContent?.trim() ??
+      (input.name || element.id);
     const sensitive =
       input.type === 'password' ||
-      /password|passwd|token|secret|credential|api.?key|stream.?key/i.test(
+      /password|passwd|token|secret|credential|api.?key|stream.?key|密码|令牌|密钥|授权码|验证码/i.test(
         `${label} ${element.id}`,
       );
     controlEvidence('ui_control', event.type, {
