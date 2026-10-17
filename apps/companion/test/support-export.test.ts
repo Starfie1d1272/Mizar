@@ -1182,6 +1182,16 @@ it('keeps the control response when session writes fail and exports the failure 
 
 it('exports newly named native stages without projection and detects missing long-error fragments in a selected interval', async () => {
   const dir = await directory();
+  await writeFile(
+    join(dir, 'desktop.ndjson.1'),
+    JSON.stringify({
+      startupSessionId: 'legacy-native-session',
+      time: '2026-01-01T00:00:01.000Z',
+      stage: 'legacy_control',
+      result: 'success',
+      detail: 'kept in full',
+    }) + '\n',
+  );
   const message = 'outer cause; ' + '技术原因'.repeat(3000) + '; leaf=EACCES';
   const event = (part: number, time: string, text: string) => ({
     startupSessionId: 'native-session',
@@ -1209,6 +1219,7 @@ it('exports newly named native stages without projection and detects missing lon
       complete: true,
     });
     const events = unpack(bundle, 'desktop.');
+    expect(events.some((event) => event.stage === 'legacy_control')).toBe(true);
     expect(events.filter((event) => event.stage === 'new_native_failure_stage')).toHaveLength(2);
     const path = join(dir, 'export.json');
     await writeFile(path, response.body);

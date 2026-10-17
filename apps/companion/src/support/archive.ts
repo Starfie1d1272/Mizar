@@ -11,6 +11,7 @@ const compress = promisify(gzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
 const names = [
+  ...[1, 2, 3].map((index) => `desktop.ndjson.${index}`),
   'session-retention.json',
   'business-history.json',
   'business.ndjson',
