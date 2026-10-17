@@ -159,6 +159,8 @@ export async function fullOutbox(directory) {
           tailIds.every((index) => retained.has(index)),
           'test tail was already rotated away',
         );
+        assert(actualTailBytes > DELIVERY_LIMITS.pendingBytes);
+        retainedTailBytes = actualTailBytes;
       }
       await journal.close();
       await open();
