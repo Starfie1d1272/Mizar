@@ -110,6 +110,10 @@ describe('consented diagnostic outbox', () => {
         { time: 'invalid', evidence: 'unknown-source-time' },
       ],
     });
+    journal.record('performance_anomaly_begin', {
+      originalPrivateContext: 'private-recovered-before-consent',
+      sourceRecord: { time: new Date(Date.now() - 86400_000).toISOString() },
+    });
     journal.record('native_host_records', {
       entries: [
         {
@@ -155,6 +159,8 @@ describe('consented diagnostic outbox', () => {
     expect(text).not.toContain('private-chat');
     expect(text).not.toContain('private-pre-consent-sample');
     expect(text).not.toContain('unknown-source-time');
+    expect(text).not.toContain('private-recovered-before-consent');
+    expect(text).toContain('recovered_source_before_consent_or_unknown_time');
     expect(text).toContain('permitted-after-consent');
     expect(text).toContain('excludedPreConsentOrUnknownTimeSamples');
     expect(text).not.toContain('private-native-before-consent');

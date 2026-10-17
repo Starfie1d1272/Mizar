@@ -7,6 +7,7 @@ import { join, resolve, parse } from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { diagnosticValue, SESSION_LIMITS } from './session-journal.js';
+import { PerformanceSpool } from './performance-spool.js';
 const compress = promisify(gzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
@@ -15,6 +16,7 @@ export interface ArchivedLogFile {
   status: string;
   sourceBytes: number;
   readBytes: number;
+  durability?: 'durable-pending' | 'memory-only';
   sha256?: string;
   volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
 }
@@ -55,6 +57,7 @@ const names = [
 export async function fullLogArchive(
   directory: string | undefined,
   range: { from?: string; to?: string; focusSessionId?: string } = {},
+  memoryPerformance: readonly unknown[] = [],
 ) {
   const fragments = new Map<string, { id: string; expected: number; parts: Set<number> }>();
   const sessions = new Map<
@@ -70,6 +73,25 @@ export async function fullLogArchive(
     }
   >();
   const files: ArchivedLogFile[] = [];
+  const include = (time: unknown) =>
+    typeof time !== 'string' ||
+    ((!range.from || time >= range.from) && (!range.to || time <= range.to));
+  if (memoryPerformance.length) {
+    const values = memoryPerformance.filter((event) =>
+      include((event as { time?: unknown } | null)?.time),
+    );
+    const bytes = Buffer.from(
+      values.map((event) => JSON.stringify(diagnosticValue(event)) + '\n').join(''),
+    );
+    files.push({
+      name: 'performance-memory.ndjson',
+      status: 'read',
+      durability: 'memory-only',
+      sourceBytes: 0,
+      readBytes: 0,
+      ...(await encodeLogVolumes(bytes)),
+    });
+  }
   if (!directory) return { status: 'not_configured', files };
   try {
     await lstat(directory);
@@ -141,7 +163,9 @@ export async function fullLogArchive(
       const processLine = (line: string) => {
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
-          const stamp = event.time ?? event.timestamp;
+          const source = (event.evidence as { sourceRecord?: { time?: unknown } } | undefined)
+            ?.sourceRecord;
+          const stamp = source?.time ?? event.time ?? event.timestamp;
           const time =
             typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 && stamp < 1e14
               ? new Date(stamp).toISOString()
@@ -227,6 +251,47 @@ export async function fullLogArchive(
     } finally {
       await fd?.close();
     }
+  }
+  try {
+    for await (const pending of new PerformanceSpool(directory).export()) {
+      if (pending.status === 'unreadable') {
+        files.push({
+          name: pending.name,
+          status: 'unreadable',
+          sourceBytes: pending.sourceBytes,
+          readBytes: 0,
+          volumes: [],
+        });
+        continue;
+      }
+      const lines = pending.bytes
+        .toString('utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { time?: unknown });
+      const bytes = Buffer.from(
+        lines
+          .filter((event) => include(event.time))
+          .map((event) => JSON.stringify(diagnosticValue(event)) + '\n')
+          .join(''),
+      );
+      files.push({
+        name: pending.name,
+        status: 'read',
+        durability: 'durable-pending',
+        sourceBytes: pending.sourceBytes,
+        readBytes: pending.sourceBytes,
+        ...(await encodeLogVolumes(bytes)),
+      });
+    }
+  } catch {
+    files.push({
+      name: 'performance-pending',
+      status: 'unreadable',
+      sourceBytes: 0,
+      readBytes: 0,
+      volumes: [],
+    });
   }
   return {
     status: 'available',

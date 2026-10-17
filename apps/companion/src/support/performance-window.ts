@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { setImmediate as yieldIO } from 'node:timers/promises';
 import type { SessionJournal } from './session-journal.js';
+import { diagnosticValue } from './session-journal.js';
+import {
+  PerformanceSpool,
+  performanceRecordEvent,
+  type PendingPerformanceRecord,
+} from './performance-spool.js';
 
 /** A fixed technical selection; never copy auth, player names, chat or unknown payload fields. */
 export function selectedGsiContext(payload: Record<string, unknown>) {
@@ -42,7 +48,7 @@ export const PERFORMANCE_WINDOW_LIMITS = {
   maximumPostMs: 30000,
   ringBytes: 1024 * 1024,
   sampleBytes: 12 * 1024,
-  chunkBytes: 64 * 1024,
+  chunkBytes: 128 * 1024,
   pendingBytes: 2 * 1024 * 1024,
 };
 type Sample = { time: string; monotonicMs: number; sequence: number; evidence: unknown };
@@ -64,10 +70,19 @@ export class PerformanceWindow {
   private ringBytes = 0;
   private lastSample = -Infinity;
   private current: Active | null = null;
-  private pending: { stage: string; evidence: unknown; bytes: number }[] = [];
+  private pending: { record: PendingPerformanceRecord; bytes: number }[] = [];
   private pendingBytes = 0;
   private writing: Promise<void> | undefined;
   private closed = false;
+  private readonly spool: PerformanceSpool | undefined;
+  private batchTimer: ReturnType<typeof setTimeout> | undefined;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private exportSnapshot: ReturnType<typeof performanceRecordEvent>[] | undefined;
+  private nextAttemptAt = 0;
+  private writeFailures = 0;
+  private writeError: unknown = null;
+  private sourceSequence = 0;
+  private exporting = 0;
   private coverage = {
     oversizedSamples: 0,
     ringBudgetEvictions: 0,
@@ -77,7 +92,11 @@ export class PerformanceWindow {
   constructor(
     private readonly journal: SessionJournal,
     private readonly now: () => number,
-  ) {}
+    directory?: string,
+  ) {
+    this.spool = directory ? new PerformanceSpool(directory) : undefined;
+    if (this.spool) this.startWriter();
+  }
   shouldSample(monotonicMs: number): boolean {
     return !this.closed && monotonicMs - this.lastSample >= PERFORMANCE_WINDOW_LIMITS.sampleMs;
   }
@@ -205,8 +224,13 @@ export class PerformanceWindow {
     });
     this.current = null;
   }
-  private enqueue(stage: string, evidence: unknown, estimate?: number, samples = 0): void {
-    const bytes = estimate ?? Buffer.byteLength(JSON.stringify(evidence));
+  private enqueue(
+    stage: PendingPerformanceRecord['stage'],
+    evidence: Record<string, unknown>,
+    estimate?: number,
+    samples = 0,
+  ): void {
+    const bytes = (estimate ?? Buffer.byteLength(JSON.stringify(evidence))) + 512;
     if (
       bytes > PERFORMANCE_WINDOW_LIMITS.chunkBytes ||
       this.pendingBytes + bytes > PERFORMANCE_WINDOW_LIMITS.pendingBytes
@@ -215,33 +239,150 @@ export class PerformanceWindow {
       this.coverage.omittedContextSamples += samples;
       return;
     }
-    this.pending.push({ stage, evidence, bytes });
+    this.pending.push({
+      record: {
+        id: randomUUID(),
+        windowId: evidence.id as string,
+        stage,
+        evidence,
+        source: {
+          time: new Date().toISOString(),
+          sessionId: this.journal.sessionId,
+          hostSessionId: this.journal.hostStartupSessionId,
+          queuedAfterSequence: this.journal.health().sequence,
+          recordSequence: ++this.sourceSequence,
+          monotonicMs: this.now(),
+        },
+      },
+      bytes,
+    });
     this.pendingBytes += bytes;
     this.startWriter();
   }
-  private startWriter() {
-    if (!this.writing)
-      this.writing = this.journal.withSystem(() =>
-        this.drain().finally(() => {
+  private startWriter(force = false) {
+    if (this.writing || this.exporting) return;
+    if (!force) {
+      this.batchTimer ??= setTimeout(() => {
+        this.batchTimer = undefined;
+        this.startWriter(true);
+      }, 50);
+      this.batchTimer.unref();
+      return;
+    }
+    clearTimeout(this.batchTimer);
+    this.batchTimer = undefined;
+    this.writing = this.journal.withSystem(() =>
+      this.drain()
+        .catch((error: unknown) => {
+          this.writeFailures++;
+          this.writeError = diagnosticValue(error);
+          if (this.nextAttemptAt <= Date.now()) this.nextAttemptAt = Date.now() + 1000;
+        })
+        .finally(() => {
           this.writing = undefined;
-          if (this.pending.length) this.startWriter();
+          if (
+            !this.closed &&
+            (this.pending.length ||
+              this.spool?.health().pendingFiles ||
+              this.spool?.health().unreadableFiles)
+          ) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = setTimeout(
+              () => {
+                this.retryTimer = undefined;
+                this.startWriter(true);
+              },
+              Math.max(
+                this.spool?.health().unreadableFiles ? 1000 : 50,
+                this.nextAttemptAt - Date.now(),
+              ),
+            );
+            this.retryTimer.unref();
+          }
         }),
+    );
+  }
+  private remove(ids: string[]) {
+    const committed = new Set(ids);
+    this.pending = this.pending.filter((item) => {
+      if (!committed.has(item.record.id)) return true;
+      this.pendingBytes -= item.bytes;
+      return false;
+    });
+  }
+  private async promote(records: PendingPerformanceRecord[]) {
+    let group: PendingPerformanceRecord[] = [];
+    let bytes = 0;
+    const commit = async () => {
+      await yieldIO();
+      await Promise.all(
+        group.map((record) =>
+          this.journal.recordCommitted(record.stage, performanceRecordEvent(record).evidence),
+        ),
       );
+      group = [];
+      bytes = 0;
+    };
+    for (const record of records) {
+      const size = Buffer.byteLength(JSON.stringify(record));
+      if (bytes + size > 128 * 1024 && group.length) await commit();
+      group.push(record);
+      bytes += size;
+    }
+    if (group.length) await commit();
   }
   private async drain(): Promise<void> {
-    // Historical redaction/journal serialization yields after the ingress handoff.
-    while (this.pending.length) {
-      await yieldIO();
-      const item = this.pending.shift()!;
-      this.pendingBytes -= item.bytes;
-      this.journal.record(item.stage, item.evidence);
+    await yieldIO();
+    if (this.spool) {
+      let appendFailure: unknown;
+      try {
+        if (this.pending.length)
+          await this.spool.append(
+            this.pending.map((item) => item.record),
+            (ids) => this.remove(ids),
+          );
+        else await this.spool.initialize();
+      } catch (error) {
+        appendFailure = error;
+      }
+      if (Date.now() < this.nextAttemptAt) {
+        if (appendFailure)
+          throw new Error('performance_spool_append_failed', { cause: appendFailure });
+        return;
+      }
+      let packet;
+      while ((packet = await this.spool.oldest())) {
+        await this.promote(packet.records);
+        await this.spool.acknowledge(
+          packet.name,
+          packet.records.map((record) => record.id),
+        );
+        await yieldIO();
+      }
+      // A full spool must be drained before new input is admitted again; an
+      // append failure cannot prevent already durable evidence from recovering.
+      if (appendFailure && this.pending.length)
+        await this.spool.append(
+          this.pending.map((item) => item.record),
+          (ids) => this.remove(ids),
+        );
+    } else {
+      const records = this.pending.map((item) => item.record);
+      await this.promote(records);
+      this.remove(records.map((record) => record.id));
     }
+    this.writeError = null;
+    this.nextAttemptAt = 0;
   }
   health() {
     return {
       ringSamples: this.ring.length,
       ringBytes: this.ringBytes,
       pendingBytes: this.pendingBytes,
+      pendingRecords: this.pending.length,
+      spool: this.spool?.health() ?? null,
+      writeFailures: this.writeFailures,
+      writeError: this.writeError,
       coverage: { ...this.coverage },
       active: this.current?.id ?? null,
       limits: PERFORMANCE_WINDOW_LIMITS,
@@ -250,12 +391,58 @@ export class PerformanceWindow {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     this.finish('shutdown');
     await this.flush();
     this.journal.record('performance_context_health', this.health());
   }
   async flush() {
     this.chunk('after');
-    while (this.writing) await this.writing;
+    clearTimeout(this.batchTimer);
+    this.batchTimer = undefined;
+    await this.writing;
+    this.nextAttemptAt = 0;
+    this.startWriter(true);
+    await this.writing;
+  }
+  exportMemory() {
+    return (
+      this.exportSnapshot ??
+      this.pending.map((item) =>
+        performanceRecordEvent(diagnosticValue(item.record) as PendingPerformanceRecord),
+      )
+    );
+  }
+  async beginExport(): Promise<() => Promise<void>> {
+    this.exporting++;
+    await this.writing;
+    this.exportSnapshot = this.exportMemory();
+    let release: (() => Promise<void>) | undefined;
+    try {
+      release = await this.spool?.pin();
+    } catch (error) {
+      this.writeError = diagnosticValue(error);
+      this.writeFailures++;
+    }
+    if (release) {
+      this.exporting--;
+      this.startWriter();
+    }
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      try {
+        await release?.();
+      } catch (error) {
+        this.writeError = diagnosticValue(error);
+        this.writeFailures++;
+      } finally {
+        this.exportSnapshot = undefined;
+        if (!release) this.exporting--;
+        if (!this.closed) this.startWriter();
+      }
+    };
   }
 }

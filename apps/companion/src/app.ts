@@ -403,7 +403,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
   const performanceContext = sessionJournal
-    ? new PerformanceWindow(sessionJournal, () => debugClock.nowMonotonicMs())
+    ? new PerformanceWindow(
+        sessionJournal,
+        () => debugClock.nowMonotonicMs(),
+        options.supportLogsDirectory,
+      )
     : undefined;
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
@@ -787,7 +791,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       demoTest?.observationAccepted();
     } catch (error) {
       sessionJournal?.record('observation_failure', { error, receive: observation.receive });
-      performanceContext?.trigger('observation_failure', { receive: observation.receive });
+      performanceContext?.trigger('observation_failure', {
+        receive: observation.receive,
+        error: diagnosticValue(error),
+      });
       throw error;
     } finally {
       const durationMs = performance.now() - processingStarted;
@@ -1381,6 +1388,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         observedAt: body.time,
         browserDocumentId: body.browserDocumentId,
         contextCapturedAt: new Date().toISOString(),
+        originalEvidence: (body as { evidence?: unknown }).evidence,
       });
     return reply.code(204).send();
   });
@@ -1412,7 +1420,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await businessJournal?.flush();
       await sessionJournal?.flush();
     },
-    sessionLogHealth: () => sessionJournal?.health() ?? null,
+    sessionLogHealth: () =>
+      sessionJournal
+        ? { ...sessionJournal.health(), performanceContext: performanceContext?.health() ?? null }
+        : null,
+    pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
+    beginPerformanceExport: () =>
+      performanceContext?.beginExport() ?? Promise.resolve(async () => {}),
     ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
@@ -1485,7 +1499,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       },
       onRuntimeDiagnostic: (code, failure) => {
         sessionJournal?.record('telemetry_failure', { code, ...failure });
-        performanceContext?.trigger('telemetry_diagnostic', { code, receive: failure.receive });
+        performanceContext?.trigger('telemetry_diagnostic', {
+          code,
+          receive: failure.receive,
+          error: diagnosticValue(failure.error),
+        });
         recordRuntimeDiagnostic(code, 'telemetry');
       },
     });

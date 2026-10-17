@@ -7,7 +7,7 @@ import { PerformanceWindow, selectedGsiContext } from '../../src/support/perform
 const directory = await mkdtemp(join(tmpdir(), 'mizar-context-cost-'));
 const journal = new SessionJournal(directory);
 let now = 0;
-const context = new PerformanceWindow(journal, () => now);
+const context = new PerformanceWindow(journal, () => now, directory);
 const payload = {
   map: { name: 'de_ancient', phase: 'live', round: 10 },
   round: { phase: 'live' },
@@ -26,6 +26,7 @@ const payload = {
 };
 const durations: number[] = [];
 const started = performance.now();
+let persistenceMs = 0;
 try {
   for (let sequence = 0; sequence < 144000; sequence++) {
     now = sequence * 50;
@@ -47,6 +48,15 @@ try {
     if (sequence % 1200 === 600) context.trigger('public-benchmark-error', { sequence });
     durations.push(performance.now() - start);
     if (sequence % 20 === 0) await yieldIO();
+    // Virtual time runs thousands of times faster than wall time. Permit the
+    // real disk writer to catch up once per virtual minute, outside the timed
+    // synchronous handoff, rather than claiming this is a disk throughput test.
+    if (sequence % 1200 === 1199) {
+      const persistenceStart = performance.now();
+      await context.flush();
+      await journal.flush();
+      persistenceMs += performance.now() - persistenceStart;
+    }
   }
   await context.close();
   await journal.close();
@@ -54,9 +64,10 @@ try {
   console.log(
     JSON.stringify({
       scope:
-        'accelerated 2h/20Hz synthetic 16-player bounded context handoff plus 120 anomaly windows; excludes actual telemetry adaptation/runtime/render/OS game and is not a field latency result',
+        'accelerated 2h/20Hz synthetic 16-player bounded context handoff plus 120 anomaly windows; real disk catch-up each virtual minute is outside synchronous timings; not a disk throughput or field latency result; excludes telemetry adaptation/runtime/render/OS game',
       frames: durations.length,
       wallMs: performance.now() - started,
+      persistenceCatchUpMs: persistenceMs,
       synchronousMs: {
         p50: durations[Math.floor(durations.length * 0.5)],
         p99: durations[Math.floor(durations.length * 0.99)],

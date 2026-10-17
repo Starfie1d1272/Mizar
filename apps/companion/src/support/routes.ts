@@ -139,6 +139,8 @@ export function registerSupportRoutes(
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
     readonly sessionLogHealth?: () => unknown;
+    readonly pendingPerformanceEvidence?: () => readonly unknown[];
+    readonly beginPerformanceExport?: () => Promise<() => Promise<void>>;
     readonly flushBusinessLog?: () => Promise<void>;
     readonly businessLogHealth?: () => ReturnType<BusinessJournal['getHealth']>;
     readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
@@ -236,8 +238,10 @@ export function registerSupportRoutes(
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
       let streaming = false;
+      let releasePerformance: (() => Promise<void>) | undefined;
       try {
         await options.flushBusinessLog?.();
+        releasePerformance = await options.beginPerformanceExport?.();
         const [logs, obs, nativeObs] = await Promise.all([
           readSupportLogs(options.logsDirectory, 160 * 1024),
           options.obs().catch(() => undefined),
@@ -268,17 +272,21 @@ export function registerSupportRoutes(
         const businessHealth = options.businessLogHealth?.();
         const bundle = {
           schema: 'mizar-support-bundle/1',
-          fullLogs: await fullLogArchive(options.logsDirectory, {
-            ...(typeof record(request.body).from === 'string'
-              ? { from: new Date(record(request.body).from as string).toISOString() }
-              : {}),
-            ...(typeof record(request.body).to === 'string'
-              ? { to: new Date(record(request.body).to as string).toISOString() }
-              : {}),
-            ...(typeof record(request.body).focusSessionId === 'string'
-              ? { focusSessionId: record(request.body).focusSessionId as string }
-              : {}),
-          }).then((archive) => ({
+          fullLogs: await fullLogArchive(
+            options.logsDirectory,
+            {
+              ...(typeof record(request.body).from === 'string'
+                ? { from: new Date(record(request.body).from as string).toISOString() }
+                : {}),
+              ...(typeof record(request.body).to === 'string'
+                ? { to: new Date(record(request.body).to as string).toISOString() }
+                : {}),
+              ...(typeof record(request.body).focusSessionId === 'string'
+                ? { focusSessionId: record(request.body).focusSessionId as string }
+                : {}),
+            },
+            options.pendingPerformanceEvidence?.(),
+          ).then((archive) => ({
             ...archive,
             productLogStatus: archive.status,
             status: obsRelatedLogFiles.length ? 'available' : archive.status,
@@ -499,6 +507,7 @@ export function registerSupportRoutes(
           message: '诊断包暂时无法生成；若记录较多，请缩小导出时间范围后重试。',
         });
       } finally {
+        await releasePerformance?.();
         if (!streaming) exporting = false;
       }
     },
