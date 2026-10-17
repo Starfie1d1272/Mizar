@@ -112,10 +112,7 @@ export function installControlJournal(): void {
     } catch (error) {
       controlEvidence('http_control', 'failure', {
         operationId,
-        reason:
-          error instanceof Error
-            ? { name: error.name, message: error.message, stack: error.stack }
-            : String(error),
+        error: browserErrorEvidence(error),
       });
       throw error;
     }
