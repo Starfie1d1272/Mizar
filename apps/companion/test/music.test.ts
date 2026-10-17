@@ -450,8 +450,8 @@ it('uses the real obs-websocket client to reconcile owned media after a connecti
   try {
     await director.tick();
     expect(r.obs.restarts()).toBe(1);
-    await provider.session(async () => undefined);
-    await provider.session(async () => undefined);
+    await provider.session(() => Promise.resolve());
+    await provider.session(() => Promise.resolve());
     expect(connections).toBe(1);
     await provider.close();
     await director.tick();

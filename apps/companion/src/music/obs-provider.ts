@@ -57,7 +57,7 @@ export class ObsMusicProvider {
         this.retryAt = Date.now() + 2000;
         await this.close();
         throw new Error('music_obs_unavailable', {
-          cause: diagnosticValue(error, '', new Set(), [config.password]),
+          cause: error,
         });
       } finally {
         if (timer) clearTimeout(timer);
@@ -98,7 +98,7 @@ export class ObsMusicProvider {
           this.retryAt = Date.now() + 2000;
           await this.close();
           throw new Error('music_obs_unavailable', {
-            cause: diagnosticValue(error, '', new Set(), [config.password]),
+            cause: error,
           });
         } finally {
           if (timer) clearTimeout(timer);
