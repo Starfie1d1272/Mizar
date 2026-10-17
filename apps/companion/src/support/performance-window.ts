@@ -221,10 +221,12 @@ export class PerformanceWindow {
   }
   private startWriter() {
     if (!this.writing)
-      this.writing = this.drain().finally(() => {
-        this.writing = undefined;
-        if (this.pending.length) this.startWriter();
-      });
+      this.writing = this.journal.withSystem(() =>
+        this.drain().finally(() => {
+          this.writing = undefined;
+          if (this.pending.length) this.startWriter();
+        }),
+      );
   }
   private async drain(): Promise<void> {
     // Historical redaction/journal serialization yields after the ingress handoff.

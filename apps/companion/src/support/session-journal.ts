@@ -145,6 +145,10 @@ export class SessionJournal {
     return this.requestContext.run(context, run);
   }
   private readonly listeners = new Set<(line: string) => void>();
+  /** Background collectors must not inherit the request that happened to flush them. */
+  withSystem<T>(run: () => T): T {
+    return this.requestContext.exit(run);
+  }
   subscribe(listener: (line: string) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

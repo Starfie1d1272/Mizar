@@ -178,7 +178,11 @@ function cloudValue(value: unknown, key = ''): unknown {
 function cloudRecord(line: string, consentAt: string | null): unknown {
   const value = JSON.parse(line) as {
     stage?: string;
-    evidence?: { samples?: { time?: string }[]; [key: string]: unknown };
+    evidence?: {
+      samples?: { time?: string }[];
+      entries?: { entry?: { time?: string; stage?: string } }[];
+      [key: string]: unknown;
+    };
   };
   if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
     const original = value.evidence.samples;
@@ -192,6 +196,28 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
       consentAt,
       excludedPreConsentOrUnknownTimeSamples: original.length - value.evidence.samples.length,
       scope: 'only source samples since consent; local window metadata describes original scope',
+    };
+  }
+  if (value.stage === 'native_host_records' && Array.isArray(value.evidence?.entries)) {
+    const original = value.evidence.entries;
+    const since = consentAt ? Date.parse(consentAt) : NaN;
+    value.evidence.entries = original.filter((record) => {
+      const entry = record?.entry;
+      if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
+      const time = Date.parse(entry.time);
+      return (
+        Number.isFinite(since) &&
+        Number.isFinite(time) &&
+        time >= since &&
+        typeof entry.stage === 'string' &&
+        !/chat/i.test(entry.stage)
+      );
+    });
+    value.evidence.cloudCoverage = {
+      consentAt,
+      excludedPreConsentUnknownTimeOrChatRecords: original.length - value.evidence.entries.length,
+      scope:
+        'original Host source time controls consent; delayed copying cannot authorize historical upload',
     };
   }
   return cloudValue(diagnosticValue(value));

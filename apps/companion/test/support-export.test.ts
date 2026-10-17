@@ -8,7 +8,7 @@ import Fastify from 'fastify';
 import { createWriteStream } from 'node:fs';
 import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
 import type { MatchContextController } from '../src/match-context/controller.js';
-import { mkdtemp, rm, symlink, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile, readFile, stat, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1427,6 +1427,7 @@ it('focuses the Host session across restarts while retaining cross-process evide
     join(dir, 'desktop.ndjson'),
     JSON.stringify({
       startupSessionId: 'host-A',
+      schemaVersion: 1,
       time: new Date().toISOString(),
       stage: 'cs2_launch_arguments',
       result: 'begin',
@@ -1454,5 +1455,43 @@ it('focuses the Host session across restarts while retaining cross-process evide
     expect(JSON.stringify(controls)).toContain('unrelated');
   } finally {
     await app.close();
+  }
+  await appendFile(
+    join(dir, 'desktop.ndjson'),
+    JSON.stringify({
+      schemaVersion: 1,
+      startupSessionId: 'host-B',
+      time: new Date().toISOString(),
+      stage: 'workspace_exit_wait',
+      result: 'waiting',
+      detail: JSON.stringify({ stage: 'cs2_finish', elapsedSeconds: 5, terminalConfirmed: false }),
+    }) + '\n',
+  );
+  const restarted = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await restarted.inject(request);
+    expect(response.statusCode).toBe(200);
+    const records = unpack(response.json<FullArchive>(), 'session.ndjson');
+    const native = records
+      .filter((entry) => entry.stage === 'native_host_records')
+      .flatMap(
+        (record) =>
+          record.evidence.entries as {
+            sourceRecordId: string;
+            entry: { startupSessionId: string; stage: string; detail: string };
+          }[],
+      );
+    expect(native.map((record) => [record.entry.startupSessionId, record.entry.stage])).toEqual([
+      ['host-A', 'cs2_launch_arguments'],
+      ['host-B', 'workspace_exit_wait'],
+    ]);
+    expect(native[0]?.entry.detail).toContain('-worldwide');
+    expect(JSON.parse(native[1]!.entry.detail)).toMatchObject({
+      stage: 'cs2_finish',
+      terminalConfirmed: false,
+    });
+    expect(new Set(native.map((record) => record.sourceRecordId)).size).toBe(2);
+  } finally {
+    await restarted.close();
   }
 });
