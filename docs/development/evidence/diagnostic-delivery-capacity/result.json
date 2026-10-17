@@ -6,7 +6,7 @@
     {
       "profile": "normal",
       "modelMinutes": 120,
-      "wallMs": 3599.6168209999996,
+      "wallMs": 3031.8098689999997,
       "emittedEvents": 30612,
       "queuedEvents": 30613,
       "stages": {
@@ -21,7 +21,7 @@
       "expandedBatchBytes": 14444905,
       "batchIndexJsonBytes": 25173,
       "localManifestBytes": 37119,
-      "gzipBytes": 791322,
+      "gzipBytes": 784798,
       "batches": 120,
       "failureChainsVerified": 12,
       "omissions": {},
@@ -32,7 +32,7 @@
     {
       "profile": "fault",
       "modelMinutes": 1,
-      "wallMs": 1231.0708049999998,
+      "wallMs": 1274.966316,
       "emittedEvents": 6000,
       "queuedEvents": 6001,
       "stages": {
@@ -41,7 +41,7 @@
       "expandedBatchBytes": 7825808,
       "batchIndexJsonBytes": 2202,
       "localManifestBytes": 4700,
-      "gzipBytes": 249038,
+      "gzipBytes": 248985,
       "batches": 21,
       "failureChainsVerified": 6000,
       "omissions": {
@@ -56,9 +56,9 @@
     {
       "installations": 10,
       "modelMinutesEach": 1,
-      "wallMs": 297.0870639999994,
+      "wallMs": 313.61920400000054,
       "emittedEvents": 2560,
-      "gzipBytes": 69577,
+      "gzipBytes": 68973,
       "expandedBytes": 1209750,
       "failureChainsVerified": 10,
       "productionLocalPipelines": 10,
@@ -67,9 +67,9 @@
     {
       "installations": 30,
       "modelMinutesEach": 1,
-      "wallMs": 855.5424380000004,
+      "wallMs": 711.2715529999996,
       "emittedEvents": 7680,
-      "gzipBytes": 208391,
+      "gzipBytes": 206992,
       "expandedBytes": 3629290,
       "failureChainsVerified": 30,
       "productionLocalPipelines": 30,
@@ -78,9 +78,9 @@
     {
       "installations": 100,
       "modelMinutesEach": 1,
-      "wallMs": 3545.1944949999997,
+      "wallMs": 2344.7489700000006,
       "emittedEvents": 25600,
-      "gzipBytes": 695191,
+      "gzipBytes": 690032,
       "expandedBytes": 12097680,
       "failureChainsVerified": 100,
       "productionLocalPipelines": 100,
@@ -91,9 +91,9 @@
     {
       "installations": 10,
       "twoHourSessionsPerInstallationPerDay": 3,
-      "gzipBytesPerHour": 395661,
-      "gzipBytesPerInstallationPerDay": 2373966,
-      "gzipBytesSevenDaysAll": 166177620,
+      "gzipBytesPerHour": 392399,
+      "gzipBytesPerInstallationPerDay": 2354394,
+      "gzipBytesSevenDaysAll": 164807580,
       "uploadPutsPerDayAll": 3600,
       "measuredIndexJsonBytes90DaysAll": 67967100,
       "indexEnvelopeBytesAt1KiB90DaysAll": 331776000
@@ -101,9 +101,9 @@
     {
       "installations": 30,
       "twoHourSessionsPerInstallationPerDay": 3,
-      "gzipBytesPerHour": 395661,
-      "gzipBytesPerInstallationPerDay": 2373966,
-      "gzipBytesSevenDaysAll": 498532860,
+      "gzipBytesPerHour": 392399,
+      "gzipBytesPerInstallationPerDay": 2354394,
+      "gzipBytesSevenDaysAll": 494422740,
       "uploadPutsPerDayAll": 10800,
       "measuredIndexJsonBytes90DaysAll": 203901300,
       "indexEnvelopeBytesAt1KiB90DaysAll": 995328000
@@ -111,9 +111,9 @@
     {
       "installations": 100,
       "twoHourSessionsPerInstallationPerDay": 3,
-      "gzipBytesPerHour": 395661,
-      "gzipBytesPerInstallationPerDay": 2373966,
-      "gzipBytesSevenDaysAll": 1661776200,
+      "gzipBytesPerHour": 392399,
+      "gzipBytesPerInstallationPerDay": 2354394,
+      "gzipBytesSevenDaysAll": 1648075800,
       "uploadPutsPerDayAll": 36000,
       "measuredIndexJsonBytes90DaysAll": 679671000,
       "indexEnvelopeBytesAt1KiB90DaysAll": 3317760000

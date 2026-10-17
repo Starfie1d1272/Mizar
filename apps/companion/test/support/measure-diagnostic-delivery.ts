@@ -131,10 +131,11 @@ async function measure(profile: 'normal' | 'fault', minutes: number) {
           });
       }
       // A root operation with state transitions every minute, including 12 failed attempts.
+      const operationId = randomUUID();
       for (const phase of ['received', 'begin', 'result'])
         await emit(`operation_${phase}`, {
           taskId,
-          operationId: randomUUID(),
+          operationId,
           trigger: 'user',
           route: '/operator/production/config',
           method: 'POST',
