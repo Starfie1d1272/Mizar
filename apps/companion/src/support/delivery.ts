@@ -1,3 +1,4 @@
+import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
@@ -36,6 +37,7 @@ interface Credentials {
 interface Batch {
   id: string;
   bytes: number;
+  serverExpired?: boolean;
   index: {
     schema: string;
     events: number;
@@ -46,6 +48,8 @@ interface Batch {
     to?: string | null;
     version?: string | null;
     failures?: number;
+    failureKinds?: string[];
+    sourceTimeUnknownRecords?: number;
   };
 }
 interface State {
@@ -97,6 +101,7 @@ const stateSchema = z
         z.object({
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
+          serverExpired: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
             events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
@@ -111,6 +116,11 @@ const stateSchema = z
               .nullable()
               .optional(),
             failures: counter.optional(),
+            failureKinds: z
+              .array(z.string().regex(/^[a-z_]{1,32}$/))
+              .max(16)
+              .optional(),
+            sourceTimeUnknownRecords: counter.optional(),
           }),
         }),
       )
@@ -200,6 +210,43 @@ function cloudValue(value: unknown, key = ''): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloudValue(v, k)]));
   return value;
 }
+function cloudBrowserPerformance(
+  value: unknown,
+  observedAt: unknown,
+  consentAt: string | null,
+): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const evidence = { ...(value as Record<string, unknown>) };
+  const anomalies = Array.isArray(evidence.anomalies) ? evidence.anomalies : [];
+  const kept = anomalies.filter((item) => {
+    const time = diagnosticSourceUtc((item as { time?: unknown } | null)?.time);
+    return time && consentAt && time >= consentAt;
+  });
+  const source = diagnosticSourceUtc(observedAt);
+  const span = evidence.windowMs;
+  const crossing =
+    !source ||
+    !consentAt ||
+    typeof span !== 'number' ||
+    !Number.isFinite(span) ||
+    span < 0 ||
+    Date.parse(source) - span < Date.parse(consentAt) ||
+    kept.length !== anomalies.length;
+  evidence.anomalies = kept;
+  if (crossing) {
+    for (const field of ['frames', 'longTasks', 'channels']) delete evidence[field];
+    evidence.anomalyCount = kept.length;
+    evidence.omittedAnomalySamples = null;
+  }
+  evidence.cloudCoverage = {
+    excludedPreConsentOrUnknownTimeAnomalies: anomalies.length - kept.length,
+    aggregateWindowExcluded: crossing,
+    scope: crossing
+      ? 'known post-consent anomaly records and current surfaces only; original aggregate/omitted sample times unavailable, local evidence retained'
+      : 'source window and anomaly UTC after consent',
+  };
+  return evidence;
+}
 function cloudRecord(line: string, consentAt: string | null): unknown {
   const value = JSON.parse(line) as {
     stage?: string;
@@ -211,11 +258,40 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     };
   };
   if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.sourceRecord) {
-    const sourceTime = Date.parse(value.evidence.sourceRecord.time ?? '');
-    const since = Date.parse(consentAt ?? '');
-    if (!Number.isFinite(sourceTime) || !Number.isFinite(since) || sourceTime < since) {
+    const sourceTime = diagnosticSourceUtc(value.evidence.sourceRecord.time);
+    if (!sourceTime || !consentAt || sourceTime < consentAt) {
       value.stage = 'diagnostic_source_excluded';
       value.evidence = { reason: 'recovered_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage === 'browser_control' && value.evidence?.operation === 'browser_performance')
+    value.evidence.evidence = cloudBrowserPerformance(
+      value.evidence.evidence,
+      value.evidence.time,
+      consentAt,
+    );
+  if (['browser_control', 'business_evidence', 'update_stage'].includes(value.stage ?? '')) {
+    const source = diagnosticEnvelope(value).times;
+    if (!consentAt || !source.length || source.some((time) => time < consentAt)) {
+      value.stage = 'diagnostic_source_excluded';
+      value.evidence = { reason: 'deferred_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.correlation) {
+    const correlation = value.evidence.correlation as Record<string, unknown>;
+    if (correlation.operation === 'browser_performance')
+      correlation.originalEvidence = cloudBrowserPerformance(
+        correlation.originalEvidence,
+        correlation.observedAt,
+        consentAt,
+      );
+    if (typeof correlation.operation === 'string' && correlation.operation.startsWith('browser_')) {
+      const source = diagnosticSourceUtc(correlation.observedAt);
+      if (!source || !consentAt || source < consentAt)
+        value.evidence.correlation = {
+          sourceEvidenceExcluded: true,
+          reason: 'browser_source_before_consent_or_unknown_time',
+        };
     }
   }
   if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
@@ -223,7 +299,8 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     const since = consentAt ? Date.parse(consentAt) : NaN;
     value.evidence.samples = original.filter((sample) => {
       if (!sample || typeof sample !== 'object') return false;
-      const time = typeof sample.time === 'string' ? Date.parse(sample.time) : NaN;
+      const source = diagnosticSourceUtc(sample.time);
+      const time = source ? Date.parse(source) : NaN;
       return Number.isFinite(since) && Number.isFinite(time) && time >= since;
     });
     value.evidence.cloudCoverage = {
@@ -238,7 +315,8 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     value.evidence.entries = original.filter((record) => {
       const entry = record?.entry;
       if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
-      const time = Date.parse(entry.time);
+      const source = diagnosticSourceUtc(entry.time);
+      const time = source ? Date.parse(source) : NaN;
       return (
         Number.isFinite(since) &&
         Number.isFinite(time) &&
@@ -307,13 +385,8 @@ function batchMetadata(sessionId: string, events: unknown[]) {
     stage?: string;
     evidence?: { sourceRecord?: { time?: unknown } };
   }[];
-  const times = records
-    .map((value) => value.evidence?.sourceRecord?.time ?? value.time)
-    .filter(
-      (time): time is string =>
-        typeof time === 'string' && z.iso.datetime().safeParse(time).success,
-    )
-    .sort();
+  const envelopes = records.map(diagnosticEnvelope);
+  const times = envelopes.flatMap((value) => value.times).sort();
   const version = records.find(
     (value) =>
       typeof value.appVersion === 'string' && /^[a-zA-Z0-9.+_-]{1,64}$/.test(value.appVersion),
@@ -323,7 +396,9 @@ function batchMetadata(sessionId: string, events: unknown[]) {
     from: times[0] ?? null,
     to: times.at(-1) ?? null,
     version: typeof version === 'string' ? version : null,
-    failures: records.filter((value) => /failure|error/.test(value.stage ?? '')).length,
+    failures: envelopes.filter((value) => value.failureKinds.length > 0).length,
+    failureKinds: [...new Set(envelopes.flatMap((value) => value.failureKinds))].sort(),
+    sourceTimeUnknownRecords: envelopes.filter((value) => value.sourceTimeUnknown).length,
   };
 }
 
@@ -461,6 +536,7 @@ export class DiagnosticDelivery {
       paused: this.requestedPause,
       consentAt: this.state.consentAt,
       queuedBatches: this.state.queue.length,
+      blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
       pendingBytes: this.pendingBytes,
       omitted: this.state.omitted,
@@ -687,7 +763,7 @@ export class DiagnosticDelivery {
     }
     this.pending.push({ line, sessionId: value.startupSessionId, sequence: value.sequence });
     this.pendingBytes += bytes;
-    if (/problem_marker/.test(value.stage))
+    if (value.stage === 'problem_report')
       this.nextCollectionAt = Math.min(this.nextCollectionAt, this.now() + 15_000);
     if (
       !recovering &&
@@ -981,7 +1057,7 @@ export class DiagnosticDelivery {
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       await this.transaction(() => this.save());
-      const batch = this.state.queue[0];
+      const batch = this.state.queue.find((value) => !value.serverExpired);
       if (!batch) return;
       const bytes = await secureRead(
         this.queueDirectory,
@@ -1006,7 +1082,32 @@ export class DiagnosticDelivery {
         batchId: string;
         sha256: string;
         accepted: boolean;
+        error?: unknown;
       };
+      if (response.status === 410 && ack.error === 'batch_retention_expired') {
+        await this.transaction(async () => {
+          if (epoch !== this.epoch || !this.consentActive()) return;
+          const previous = structuredClone(this.state);
+          const retained = this.state.queue.find((value) => value.id === batch.id);
+          if (!retained || retained.serverExpired) return;
+          retained.serverExpired = true;
+          this.omitted('server_retention_expired', batch.index.events);
+          try {
+            await this.save();
+          } catch (error) {
+            this.state = previous;
+            throw error;
+          }
+          this.error = 'server_retention_expired_local_copy_retained';
+          this.journal.record('diagnostic_cloud_expired', {
+            batchId: batch.id,
+            events: batch.index.events,
+            reason: 'server_retention_expired',
+            localCopy: 'retained; not acknowledged or evicted',
+          });
+        });
+        return;
+      }
       if (
         !response.ok ||
         ack.batchId !== batch.id ||

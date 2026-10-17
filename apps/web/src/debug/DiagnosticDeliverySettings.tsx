@@ -11,6 +11,7 @@ interface DeliveryStatus {
   queuedBytes: number;
   acknowledged: number;
   deletionPending: number;
+  blockedBatches?: number;
   omitted?: number;
   error?: string | null;
 }
@@ -117,6 +118,11 @@ export function DiagnosticDeliverySettings() {
         {unavailable ? '暂不可用' : !value.consent ? '关闭' : value.paused ? '已暂停' : '已开启'}
       </p>
       {unavailable ? <p>仍可导出本机诊断报告。</p> : null}
+      {value?.blockedBatches ? (
+        <StatusBanner tone="warning">
+          有 {value.blockedBatches} 批诊断已超过接收端保留期，本机副本仍保留。
+        </StatusBanner>
+      ) : null}
       {value?.consent ? (
         <>
           <Button disabled={busy || unavailable} onClick={() => void pause(!value.paused)}>

@@ -570,3 +570,293 @@ it('retrieves every indexed session and body locator across tied-timestamp pages
     await rm(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+it('indexes single-source failures and their original UTC through real envelopes, restart and healthy subsequent batches', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-cloud-envelopes-'));
+  const mf = runtime(join(directory, 'server'));
+  const endpoint = (await mf.ready).origin;
+  const client = join(directory, 'client');
+  const realNow = Date.now();
+  const sourceUtc = new Date(realNow - 3600_000).toISOString();
+  const laterUtc = new Date(realNow - 1800_000).toISOString();
+  const rootSource = () => ({
+    id: randomUUID(),
+    time: sourceUtc,
+    sessionId: randomUUID(),
+    hostSessionId: 'original-owned-host',
+    queuedAfterSequence: 12,
+    recordSequence: 1,
+    monotonicMs: 50,
+  });
+  const browser = (operation = 'browser_error') => ({
+    operation,
+    phase: 'failure',
+    time: sourceUtc,
+    browserDocumentId: randomUUID(),
+    evidence: {
+      error: {
+        name: 'Error',
+        message: 'original browser failure',
+        cause: { message: 'draw failed', code: 'EACCES' },
+      },
+    },
+  });
+  const browserPerformance = {
+    page: '/program',
+    reason: 'interval',
+    windowMs: 30 * 60_000,
+    visibility: 'visible',
+    frames: { callbacks: 100, maxGapMs: 9999, over50ms: 1 },
+    longTasks: { supported: true, count: 1, maxDurationMs: 5000 },
+    channels: [],
+    anomalyCount: 1,
+    omittedAnomalySamples: 0,
+    anomalies: [
+      {
+        time: sourceUtc,
+        kind: 'radar_draw_not_advancing',
+        drawnSequence: 41,
+        receivedSequence: 77,
+        ageMs: 4000,
+      },
+    ],
+  };
+  const cases: { stage: string; evidence: unknown; kind: string }[] = [
+    { stage: 'browser_control', evidence: browser(), kind: 'browser' },
+    {
+      stage: 'native_host_records',
+      evidence: {
+        source: { name: 'desktop.ndjson', identity: 'public-file-id' },
+        entries: [
+          {
+            sourceRecordId: randomUUID(),
+            offset: 1024,
+            bytes: 256,
+            entry: {
+              time: sourceUtc,
+              startupSessionId: 'original-owned-host',
+              stage: 'native_command',
+              result: 'failure',
+              detail: JSON.stringify({
+                command: 'finish_workspace',
+                outcome: 'Err(original native restore EACCES)',
+                operationId: randomUUID(),
+              }),
+            },
+          },
+        ],
+      },
+      kind: 'native',
+    },
+    {
+      stage: 'performance_anomaly_begin',
+      evidence: {
+        id: randomUUID(),
+        reason: 'telemetry_diagnostic',
+        sourceRecord: rootSource(),
+        correlation: { error: { name: 'Error', message: 'original pre-restart telemetry cause' } },
+      },
+      kind: 'telemetry',
+    },
+    {
+      stage: 'performance_anomaly_trigger',
+      evidence: {
+        id: randomUUID(),
+        reason: 'browser_anomaly',
+        sourceRecord: { ...rootSource(), time: laterUtc },
+        correlation: {
+          operation: 'browser_unhandled_rejection',
+          observedAt: sourceUtc,
+          originalEvidence: browser('browser_unhandled_rejection').evidence,
+        },
+      },
+      kind: 'browser',
+    },
+    {
+      stage: 'update_stage',
+      evidence: {
+        event: 'update',
+        time: realNow - 3600_000,
+        stage: 'result_load',
+        code: 'update_initialization_failed',
+        diagnostic: {
+          operationId: randomUUID(),
+          result: 'failure',
+          error: { name: 'Error', message: 'original update recovery cause' },
+        },
+      },
+      kind: 'update',
+    },
+    {
+      stage: 'business_evidence',
+      evidence: {
+        stage: 'business_runtime',
+        recordedAt: sourceUtc,
+        startupSessionId: randomUUID(),
+        evidence: {
+          status: 'rejected',
+          identity: 'mismatch',
+          binding: 'needs_operator',
+          blockers: ['roster_conflict'],
+          reason: 'roster_conflict',
+        },
+      },
+      kind: 'business',
+    },
+    {
+      stage: 'browser_control',
+      evidence: {
+        operation: 'browser_performance',
+        phase: 'window',
+        time: laterUtc,
+        browserDocumentId: randomUUID(),
+        evidence: browserPerformance,
+      },
+      kind: 'performance',
+    },
+    {
+      stage: 'performance_anomaly_trigger',
+      evidence: {
+        id: randomUUID(),
+        reason: 'browser_anomaly',
+        sourceRecord: { ...rootSource(), time: laterUtc },
+        correlation: {
+          operation: 'browser_performance',
+          observedAt: laterUtc,
+          originalEvidence: browserPerformance,
+        },
+      },
+      kind: 'performance',
+    },
+  ];
+  const fetcher: typeof fetch = (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set('cf-connecting-ip', '127.0.0.1');
+    return fetch(input, { ...init, headers });
+  };
+  let journal: SessionJournal | undefined;
+  let delivery: DiagnosticDelivery | undefined;
+  const drain = async () => {
+    for (let poll = 0; delivery!.status().queuedBatches && poll < 10; poll++)
+      await delivery!.tick();
+    expect(delivery!.status().queuedBatches).toBe(0);
+  };
+  try {
+    await migrate(await mf.getD1Database('DIAGNOSTICS_DB'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(realNow - 2 * 3600_000);
+    journal = new SessionJournal(client, { appVersion: '1.4.0' });
+    delivery = await new DiagnosticDelivery(client, journal, {
+      endpoint,
+      allowTestEndpoint: true,
+      fetch: fetcher,
+    }).initialize(false);
+    await delivery.consent(true);
+    await journal.flush();
+    await delivery.tick();
+    await drain();
+    await delivery.close();
+    await journal.close();
+    vi.setSystemTime(realNow);
+    for (const fixture of cases) {
+      journal = new SessionJournal(client, { appVersion: '1.4.0' });
+      journal.record(fixture.stage, fixture.evidence);
+      await journal.flush();
+      delivery = await new DiagnosticDelivery(client, journal, {
+        endpoint,
+        allowTestEndpoint: true,
+        fetch: fetcher,
+      }).initialize(false);
+      await delivery.tick();
+      await drain();
+      // A separate successful batch must not reset the earlier failure or source bounds.
+      journal.record('operation_result', { httpStatus: 200, result: { confirmed: true } });
+      await journal.flush();
+      await delivery.tick();
+      await drain();
+      const response = await fetch(
+        `${endpoint}/admin/sessions?session=${journal.sessionId}&onlyFailures=1&from=${sourceUtc}&to=${sourceUtc}`,
+        { headers: adminHeaders },
+      );
+      expect(response.status).toBe(200);
+      const result = (await response.json()) as {
+        sessions: {
+          failures: number;
+          failure_kinds: string;
+          source_from: string;
+          batches: number;
+          source_time_unknown: number;
+        }[];
+      };
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]).toMatchObject({
+        failures: 1,
+        source_from: sourceUtc,
+        source_time_unknown: 0,
+      });
+      expect(JSON.parse(result.sessions[0]!.failure_kinds)).toContain(fixture.kind);
+      expect(result.sessions[0]!.batches).toBeGreaterThan(1);
+      await delivery.close();
+      await journal.close();
+    }
+    journal = new SessionJournal(client, { appVersion: '1.4.0' });
+    delivery = await new DiagnosticDelivery(client, journal, {
+      endpoint,
+      allowTestEndpoint: true,
+      fetch: fetcher,
+    }).initialize(false);
+    const currentUtc = new Date().toISOString();
+    journal.record('browser_control', {
+      operation: 'task',
+      phase: 'terminal',
+      time: currentUtc,
+      evidence: { evidence: { result: 'cancelled' } },
+    });
+    journal.record('performance_anomaly_begin', {
+      id: randomUUID(),
+      reason: 'input_silence',
+      sourceRecord: { ...rootSource(), time: currentUtc },
+      correlation: { ageMs: 10000 },
+    });
+    journal.record('browser_control', {
+      ...browser(),
+      time: new Date(realNow - 3 * 3600_000).toISOString(),
+      evidence: { error: { message: 'must_not_upload_pre_consent_browser' } },
+    });
+    journal.record('performance_anomaly_trigger', {
+      id: randomUUID(),
+      reason: 'browser_anomaly',
+      sourceRecord: { ...rootSource(), time: currentUtc },
+      correlation: {
+        operation: 'browser_error',
+        observedAt: new Date(realNow - 3 * 3600_000).toISOString(),
+        originalEvidence: { error: { message: 'must_not_upload_pre_consent_window_cause' } },
+      },
+    });
+    await journal.flush();
+    await delivery.tick();
+    await drain();
+    const healthy = (await (
+      await fetch(`${endpoint}/admin/sessions?session=${journal.sessionId}&onlyFailures=1`, {
+        headers: adminHeaders,
+      })
+    ).json()) as { sessions: unknown[] };
+    expect(healthy.sessions).toHaveLength(0);
+    const bucket = await mf.getR2Bucket('DIAGNOSTICS_BUCKET');
+    for (const item of (await bucket.list()).objects) {
+      const body = await (await bucket.get(item.key))!.arrayBuffer();
+      expect(JSON.stringify(await decodeDiagnosticBatch(Buffer.from(body)))).not.toContain(
+        'must_not_upload_pre_consent',
+      );
+    }
+    expect(await readFile(join(client, 'session.ndjson'), 'utf8')).toContain(
+      'must_not_upload_pre_consent_browser',
+    );
+  } finally {
+    vi.useRealTimers();
+    await delivery?.close();
+    await journal?.close();
+    await mf.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);

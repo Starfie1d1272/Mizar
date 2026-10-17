@@ -22,7 +22,7 @@ CREATE TABLE sessions (
   installation_id TEXT NOT NULL, session_id TEXT NOT NULL,
   first_received_at INTEGER NOT NULL, last_received_at INTEGER NOT NULL,
   source_from TEXT, source_to TEXT, version TEXT, events INTEGER NOT NULL,
-  failures INTEGER NOT NULL, batches INTEGER NOT NULL, bytes INTEGER NOT NULL,
+  failures INTEGER NOT NULL, failure_kinds TEXT NOT NULL DEFAULT '[]', source_time_unknown INTEGER NOT NULL DEFAULT 0, batches INTEGER NOT NULL, bytes INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, PRIMARY KEY(installation_id,session_id)
 );
 CREATE INDEX sessions_expiry ON sessions(expires_at);

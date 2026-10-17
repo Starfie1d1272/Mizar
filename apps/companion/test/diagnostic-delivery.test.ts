@@ -425,6 +425,96 @@ describe('consented diagnostic outbox', () => {
       await journal.close();
     }
   });
+  it('retains a server-expired unacknowledged body across restart while continuing to send new evidence', async () => {
+    const dir = await directory();
+    let journal = new SessionJournal(dir);
+    const remote = service();
+    let expiredId: string | undefined;
+    const fetcher: typeof fetch = async (input, init) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      if (init?.method === 'PUT') {
+        expiredId ??= path.split('/').at(-1)!;
+        if (path.endsWith(expiredId))
+          return Response.json({ error: 'batch_retention_expired' }, { status: 410 });
+      }
+      return remote.fetcher(input, init);
+    };
+    let delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: fetcher,
+    }).initialize(false);
+    try {
+      await delivery.consent(true);
+      journal.record('old_operation_failure', {
+        error: new Error('original retained expired cause'),
+      });
+      await journal.flush();
+      await delivery.tick();
+      expect(delivery.status()).toMatchObject({
+        acknowledged: 0,
+        queuedBatches: 1,
+        blockedBatches: 1,
+      });
+      await delivery.close();
+      await journal.close();
+      journal = new SessionJournal(dir);
+      delivery = await new DiagnosticDelivery(dir, journal, {
+        endpoint: 'https://diagnostics.example',
+        fetch: fetcher,
+      }).initialize(false);
+      journal.record('new_operation', { result: 'confirmed' });
+      await journal.flush();
+      await delivery.tick();
+      for (let poll = 0; poll < 6 && delivery.status().queuedBatches > 1; poll++)
+        await delivery.tick();
+      expect(delivery.status()).toMatchObject({ queuedBatches: 1, blockedBatches: 1 });
+      expect(delivery.status().acknowledged).toBeGreaterThan(0);
+      expect(
+        JSON.stringify(
+          await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', `${expiredId}.gz`)),
+          ),
+        ),
+      ).toContain('original retained expired cause');
+      expect(
+        JSON.stringify(
+          await Promise.all(
+            [...remote.batches.values()].map((value) => decodeDiagnosticBatch(Buffer.from(value))),
+          ),
+        ),
+      ).toContain('new_operation');
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
+  it('collects a committed problem marker within fifteen seconds without forcing normal batches early', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    let now = Date.now();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+      now: () => now,
+    }).initialize(false);
+    try {
+      await delivery.consent(true);
+      await journal.recordCommitted('problem_report', { category: 'hud' });
+      now += 14999;
+      await delivery.tick(false);
+      expect(remote.batches.size).toBe(0);
+      now++;
+      await delivery.tick(false);
+      expect(remote.batches.size).toBe(1);
+      expect(
+        JSON.stringify(await decodeDiagnosticBatch(Buffer.from([...remote.batches.values()][0]!))),
+      ).toContain('problem_report');
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('requires fresh consent for a longer identifiable index and durably fences the previous policy', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);

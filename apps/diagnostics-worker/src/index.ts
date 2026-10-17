@@ -143,6 +143,8 @@ interface Metadata {
   to: string | null;
   version: string | null;
   failures: number;
+  failureKinds: string[];
+  sourceTimeUnknownRecords: number;
 }
 function metadata(text: string | null): Metadata | null {
   if (!text || encoder.encode(text).length > LIMITS.metadataBytes) return null;
@@ -168,6 +170,8 @@ function metadata(text: string | null): Metadata | null {
           'to',
           'version',
           'failures',
+          'failureKinds',
+          'sourceTimeUnknownRecords',
         ].includes(key),
     ) ||
     value.schema !== 'mizar-technical-diagnostics/1' ||
@@ -200,6 +204,19 @@ function metadata(text: string | null): Metadata | null {
         Number(value.failures) > Number(value.events)))
   )
     return null;
+  if (
+    (value.failureKinds !== undefined &&
+      (!Array.isArray(value.failureKinds) ||
+        value.failureKinds.length > 16 ||
+        value.failureKinds.some(
+          (kind) => typeof kind !== 'string' || !/^[a-z_]{1,32}$/.test(kind),
+        ))) ||
+    (value.sourceTimeUnknownRecords !== undefined &&
+      (!Number.isSafeInteger(value.sourceTimeUnknownRecords) ||
+        Number(value.sourceTimeUnknownRecords) < 0 ||
+        Number(value.sourceTimeUnknownRecords) > Number(value.events)))
+  )
+    return null;
   return {
     schema: value.schema,
     events: Number(value.events),
@@ -210,6 +227,8 @@ function metadata(text: string | null): Metadata | null {
     to: (value.to as string) ?? null,
     version: (value.version as string) ?? null,
     failures: Number(value.failures ?? 0),
+    failureKinds: (value.failureKinds as string[] | undefined) ?? [],
+    sourceTimeUnknownRecords: Number(value.sourceTimeUnknownRecords ?? 0),
   };
 }
 interface BatchRow {
@@ -406,12 +425,14 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     await env.DIAGNOSTICS_DB.batch([
       sql(
         env,
-        `INSERT INTO sessions(installation_id,session_id,first_received_at,last_received_at,source_from,source_to,version,events,failures,batches,bytes,expires_at)
-        SELECT ?,?,?,?,?,?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM batches WHERE installation_id=? AND id=? AND owner=? AND state='pending')
+        `INSERT INTO sessions(installation_id,session_id,first_received_at,last_received_at,source_from,source_to,version,events,failures,failure_kinds,source_time_unknown,batches,bytes,expires_at)
+        SELECT ?,?,?,?,?,?,?,?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM batches WHERE installation_id=? AND id=? AND owner=? AND state='pending')
         AND EXISTS(SELECT 1 FROM installations WHERE id=? AND revoked_at IS NULL)
         ON CONFLICT(installation_id,session_id) DO UPDATE SET last_received_at=MAX(sessions.last_received_at,excluded.last_received_at),
         source_from=CASE WHEN sessions.source_from IS NULL THEN excluded.source_from ELSE MIN(sessions.source_from,COALESCE(excluded.source_from,sessions.source_from)) END,source_to=CASE WHEN sessions.source_to IS NULL THEN excluded.source_to ELSE MAX(sessions.source_to,COALESCE(excluded.source_to,sessions.source_to)) END,
         version=COALESCE(excluded.version,sessions.version),events=sessions.events+excluded.events,failures=sessions.failures+excluded.failures,
+        failure_kinds=(SELECT json_group_array(kind) FROM (SELECT value AS kind FROM json_each(sessions.failure_kinds) UNION SELECT value AS kind FROM json_each(excluded.failure_kinds) ORDER BY kind LIMIT 16)),
+        source_time_unknown=sessions.source_time_unknown+excluded.source_time_unknown,
         batches=sessions.batches+1,bytes=sessions.bytes+excluded.bytes,expires_at=MAX(sessions.expires_at,excluded.expires_at)`,
         installation,
         storedIndex.sessionId ?? 'legacy-unknown',
@@ -422,6 +443,8 @@ async function upload(request: Request, env: Env, id: string, installation: stri
         storedIndex.version,
         storedIndex.events,
         storedIndex.failures,
+        JSON.stringify(storedIndex.failureKinds),
+        storedIndex.sourceTimeUnknownRecords,
         row.bytes,
         row.received_at + LIMITS.indexDays * DAY,
         installation,
