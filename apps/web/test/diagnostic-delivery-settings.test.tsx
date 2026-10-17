@@ -71,7 +71,7 @@ it('requires consent before sending and keeps pause separate from withdrawal', a
   });
   expect(mocks.command).toHaveBeenCalledWith('/operator/diagnostics/consent', {
     enabled: true,
-    revision: 'technical-diagnostics-v1',
+    revision: 'technical-diagnostics-v2',
   });
   await act(async () => {
     button('暂停发送').click();
@@ -85,7 +85,7 @@ it('requires consent before sending and keeps pause separate from withdrawal', a
   });
   expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
     enabled: false,
-    revision: 'technical-diagnostics-v1',
+    revision: 'technical-diagnostics-v2',
   });
   mocks.status.deletionPending = 1;
   act(() => root.render(<DiagnosticDeliverySettings />));

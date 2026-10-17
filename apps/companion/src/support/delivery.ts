@@ -1,3 +1,10 @@
+import {
+  DIAGNOSTIC_PERMIT_BYTES,
+  diagnosticPermit,
+  sealDiagnosticGzip,
+} from '@mizar/protocol/diagnostics-upload';
+import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
@@ -12,17 +19,19 @@ import { diagnosticValue, SESSION_LIMITS, type SessionJournal } from './session-
 const compress = promisify(gzip);
 const decompress = promisify(gunzip);
 export const DELIVERY_LIMITS = {
-  expandedBytes: 512 * 1024,
+  expandedBytes: 2 * 1024 * 1024,
   compressedBytes: 128 * 1024,
-  queueBytes: 32 * 1024 * 1024,
-  batches: 256,
-  manifestBytes: 256 * 1024,
+  queueBytes: 64 * 1024 * 1024,
+  batches: 2048,
+  manifestBytes: 2 * 1024 * 1024,
   pendingBytes: 2 * 1024 * 1024,
-  events: 512,
+  events: 4096,
   sessions: 128,
   tombstones: 8,
+  collectMs: 10 * 60_000,
+  pollMs: 5000,
 };
-const CONSENT = 'technical-diagnostics-v1';
+const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
 interface Credentials {
   installationId: string;
   enrollmentSecret: string;
@@ -33,10 +42,25 @@ interface Credentials {
 interface Batch {
   id: string;
   bytes: number;
-  index: { schema: string; events: number; expandedBytes: number; stages: string[] };
+  serverExpired?: boolean;
+  sealed?: boolean;
+  index: {
+    schema: string;
+    events: number;
+    expandedBytes: number;
+    stages: string[];
+    sessionId?: string;
+    from?: string | null;
+    to?: string | null;
+    version?: string | null;
+    failures?: number;
+    failureKinds?: string[];
+    sourceTimeUnknownRecords?: number;
+  };
 }
 interface State {
   version: 1;
+  consentPolicy: 1 | 2;
   consent: boolean;
   paused: boolean;
   consentAt: string | null;
@@ -68,6 +92,7 @@ const credentialsSchema = z
 const stateSchema = z
   .object({
     version: z.literal(1),
+    consentPolicy: z.union([z.literal(1), z.literal(2)]).default(1),
     consent: z.boolean(),
     paused: z.boolean().default(false),
     consentAt: z.iso.datetime().nullable(),
@@ -82,11 +107,27 @@ const stateSchema = z
         z.object({
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
+          serverExpired: z.boolean().optional(),
+          sealed: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
             events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
             expandedBytes: z.number().int().min(1).max(DELIVERY_LIMITS.expandedBytes),
             stages: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)).max(32),
+            sessionId: identifier.optional(),
+            from: z.iso.datetime().nullable().optional(),
+            to: z.iso.datetime().nullable().optional(),
+            version: z
+              .string()
+              .regex(/^[a-zA-Z0-9.+_-]{1,64}$/)
+              .nullable()
+              .optional(),
+            failures: counter.optional(),
+            failureKinds: z
+              .array(z.string().regex(/^[a-z_]{1,32}$/))
+              .max(16)
+              .optional(),
+            sourceTimeUnknownRecords: counter.optional(),
           }),
         }),
       )
@@ -101,7 +142,8 @@ const stateSchema = z
   .refine(
     (v) =>
       Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
-      v.queue.reduce((n, b) => n + b.bytes, 0) <= DELIVERY_LIMITS.queueBytes &&
+      v.queue.reduce((n, b) => n + b.bytes, 0) <=
+        DELIVERY_LIMITS.queueBytes + DELIVERY_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
       (!v.consent || v.credentials !== null),
   );
 async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
@@ -137,6 +179,7 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 }
 const initial = (): State => ({
   version: 1,
+  consentPolicy: 2,
   consent: false,
   paused: false,
   consentAt: null,
@@ -175,6 +218,43 @@ function cloudValue(value: unknown, key = ''): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloudValue(v, k)]));
   return value;
 }
+function cloudBrowserPerformance(
+  value: unknown,
+  observedAt: unknown,
+  consentAt: string | null,
+): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const evidence = { ...(value as Record<string, unknown>) };
+  const anomalies = Array.isArray(evidence.anomalies) ? evidence.anomalies : [];
+  const kept = anomalies.filter((item) => {
+    const time = diagnosticSourceUtc((item as { time?: unknown } | null)?.time);
+    return time && consentAt && time >= consentAt;
+  });
+  const source = diagnosticSourceUtc(observedAt);
+  const span = evidence.windowMs;
+  const crossing =
+    !source ||
+    !consentAt ||
+    typeof span !== 'number' ||
+    !Number.isFinite(span) ||
+    span < 0 ||
+    Date.parse(source) - span < Date.parse(consentAt) ||
+    kept.length !== anomalies.length;
+  evidence.anomalies = kept;
+  if (crossing) {
+    for (const field of ['frames', 'longTasks', 'channels']) delete evidence[field];
+    evidence.anomalyCount = kept.length;
+    evidence.omittedAnomalySamples = null;
+  }
+  evidence.cloudCoverage = {
+    excludedPreConsentOrUnknownTimeAnomalies: anomalies.length - kept.length,
+    aggregateWindowExcluded: crossing,
+    scope: crossing
+      ? 'known post-consent anomaly records and current surfaces only; original aggregate/omitted sample times unavailable, local evidence retained'
+      : 'source window and anomaly UTC after consent',
+  };
+  return evidence;
+}
 function cloudRecord(line: string, consentAt: string | null): unknown {
   const value = JSON.parse(line) as {
     stage?: string;
@@ -186,11 +266,40 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     };
   };
   if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.sourceRecord) {
-    const sourceTime = Date.parse(value.evidence.sourceRecord.time ?? '');
-    const since = Date.parse(consentAt ?? '');
-    if (!Number.isFinite(sourceTime) || !Number.isFinite(since) || sourceTime < since) {
+    const sourceTime = diagnosticSourceUtc(value.evidence.sourceRecord.time);
+    if (!sourceTime || !consentAt || sourceTime < consentAt) {
       value.stage = 'diagnostic_source_excluded';
       value.evidence = { reason: 'recovered_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage === 'browser_control' && value.evidence?.operation === 'browser_performance')
+    value.evidence.evidence = cloudBrowserPerformance(
+      value.evidence.evidence,
+      value.evidence.time,
+      consentAt,
+    );
+  if (['browser_control', 'business_evidence', 'update_stage'].includes(value.stage ?? '')) {
+    const source = diagnosticEnvelope(value).times;
+    if (!consentAt || !source.length || source.some((time) => time < consentAt)) {
+      value.stage = 'diagnostic_source_excluded';
+      value.evidence = { reason: 'deferred_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.correlation) {
+    const correlation = value.evidence.correlation as Record<string, unknown>;
+    if (correlation.operation === 'browser_performance')
+      correlation.originalEvidence = cloudBrowserPerformance(
+        correlation.originalEvidence,
+        correlation.observedAt,
+        consentAt,
+      );
+    if (typeof correlation.operation === 'string' && correlation.operation.startsWith('browser_')) {
+      const source = diagnosticSourceUtc(correlation.observedAt);
+      if (!source || !consentAt || source < consentAt)
+        value.evidence.correlation = {
+          sourceEvidenceExcluded: true,
+          reason: 'browser_source_before_consent_or_unknown_time',
+        };
     }
   }
   if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
@@ -198,7 +307,8 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     const since = consentAt ? Date.parse(consentAt) : NaN;
     value.evidence.samples = original.filter((sample) => {
       if (!sample || typeof sample !== 'object') return false;
-      const time = typeof sample.time === 'string' ? Date.parse(sample.time) : NaN;
+      const source = diagnosticSourceUtc(sample.time);
+      const time = source ? Date.parse(source) : NaN;
       return Number.isFinite(since) && Number.isFinite(time) && time >= since;
     });
     value.evidence.cloudCoverage = {
@@ -213,7 +323,8 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     value.evidence.entries = original.filter((record) => {
       const entry = record?.entry;
       if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
-      const time = Date.parse(entry.time);
+      const source = diagnosticSourceUtc(entry.time);
+      const time = source ? Date.parse(source) : NaN;
       return (
         Number.isFinite(since) &&
         Number.isFinite(time) &&
@@ -265,6 +376,40 @@ export async function decodeDiagnosticBatch(bytes: Buffer) {
     throw new Error('invalid_diagnostics_batch');
   return value;
 }
+function transportReceiptError(operation: string, status: number, receipt: unknown) {
+  const code =
+    receipt && typeof receipt === 'object' ? (receipt as { error?: unknown }).error : undefined;
+  const reason =
+    typeof code === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(code) ? code : 'receipt_invalid';
+  return Object.assign(
+    new Error(`${operation}_unconfirmed_${status}`, { cause: new Error(reason) }),
+    { status, reason },
+  );
+}
+function batchMetadata(sessionId: string, events: unknown[]) {
+  const records = events as {
+    time?: unknown;
+    appVersion?: unknown;
+    stage?: string;
+    evidence?: { sourceRecord?: { time?: unknown } };
+  }[];
+  const envelopes = records.map(diagnosticEnvelope);
+  const times = envelopes.flatMap((value) => value.times).sort();
+  const version = records.find(
+    (value) =>
+      typeof value.appVersion === 'string' && /^[a-zA-Z0-9.+_-]{1,64}$/.test(value.appVersion),
+  )?.appVersion;
+  return {
+    sessionId,
+    from: times[0] ?? null,
+    to: times.at(-1) ?? null,
+    version: typeof version === 'string' ? version : null,
+    failures: envelopes.filter((value) => value.failureKinds.length > 0).length,
+    failureKinds: [...new Set(envelopes.flatMap((value) => value.failureKinds))].sort(),
+    sourceTimeUnknownRecords: envelopes.filter((value) => value.sourceTimeUnknown).length,
+  };
+}
+
 /** One local outbox. Queue references and source cursors commit together, before upload. */
 export class DiagnosticDelivery {
   private state = initial();
@@ -288,6 +433,8 @@ export class DiagnosticDelivery {
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
   private readonly queueDirectory: string;
+  private nextCollectionAt: number;
+  private collectionScheduled = false;
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
@@ -301,6 +448,7 @@ export class DiagnosticDelivery {
     this.endpoint = diagnosticsEndpoint(options.endpoint, options.allowTestEndpoint);
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? Date.now;
+    this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
     this.queueDirectory = join(directory, 'diagnostic-outbox');
   }
   async initialize(startTimer = true) {
@@ -327,6 +475,14 @@ export class DiagnosticDelivery {
         if (this.fences.size >= 64) throw new Error('revocation_marker_budget');
         this.fences.set(entry.name, Promise.resolve());
       }
+    // The ninety-day identifiable index needs fresh consent, not an implicit
+    // extension of the earlier seven-day-body-only disclosure.
+    if (this.state.consent && this.state.consentPolicy !== 2) {
+      const name = `consent-revoked-${randomUUID()}.flag`;
+      await this.createFence(name);
+      this.fences.set(name, Promise.resolve());
+      this.error = 'consent_policy_changed';
+    }
     if (this.fences.size) {
       this.revocationFenced = true;
       if (
@@ -341,6 +497,8 @@ export class DiagnosticDelivery {
       this.state.credentials = null;
       this.state.sessions = {};
       this.state.queue = [];
+      this.state.failures = 0;
+      this.state.nextAttemptAt = 0;
       await this.save();
     }
     this.requestedConsent = this.state.consent;
@@ -362,10 +520,10 @@ export class DiagnosticDelivery {
     }
     if (startTimer) {
       this.timer = setInterval(() => {
-        void this.tick().catch(() => {
+        void this.tick(false).catch(() => {
           this.error = 'delivery_failed';
         });
-      }, 60_000);
+      }, DELIVERY_LIMITS.pollMs);
       this.timer.unref();
     }
     return this;
@@ -388,6 +546,7 @@ export class DiagnosticDelivery {
       paused: this.requestedPause,
       consentAt: this.state.consentAt,
       queuedBatches: this.state.queue.length,
+      blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
       pendingBytes: this.pendingBytes,
       omitted: this.state.omitted,
@@ -481,6 +640,7 @@ export class DiagnosticDelivery {
           throw new Error('withdrawal_sync_required');
         const previous = structuredClone(this.state);
         this.state.consent = true;
+        this.state.consentPolicy = 2;
         this.state.consentAt = new Date(this.now()).toISOString();
         this.state.credentials = {
           installationId: randomUUID(),
@@ -613,6 +773,25 @@ export class DiagnosticDelivery {
     }
     this.pending.push({ line, sessionId: value.startupSessionId, sequence: value.sequence });
     this.pendingBytes += bytes;
+    if (value.stage === 'problem_report')
+      this.nextCollectionAt = Math.min(this.nextCollectionAt, this.now() + 15_000);
+    if (
+      !recovering &&
+      !this.collectionScheduled &&
+      this.pendingBytes >= DELIVERY_LIMITS.pendingBytes * 0.75
+    ) {
+      this.collectionScheduled = true;
+      void this.transaction(async () => {
+        await this.persist();
+        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+      })
+        .catch(() => {
+          this.error = 'queue_write_unconfirmed';
+        })
+        .finally(() => {
+          this.collectionScheduled = false;
+        });
+    }
   }
   private async recover() {
     const startedSequence = this.journal.health().sequence;
@@ -667,7 +846,8 @@ export class DiagnosticDelivery {
         const length = Buffer.byteLength(item.line);
         if (
           selected.length &&
-          (bytes + length > DELIVERY_LIMITS.expandedBytes ||
+          (item.sessionId !== selected[0]!.sessionId ||
+            bytes + length > DELIVERY_LIMITS.expandedBytes ||
             selected.length >= DELIVERY_LIMITS.events)
         )
           break;
@@ -689,7 +869,7 @@ export class DiagnosticDelivery {
       let compressed = await compress(raw);
       while (
         selected.length > 1 &&
-        (compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        (compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
           raw.length > DELIVERY_LIMITS.expandedBytes)
       ) {
         selected.splice(Math.ceil(selected.length / 2));
@@ -709,7 +889,7 @@ export class DiagnosticDelivery {
       }
       if (!this.consentActive() || epoch !== this.epoch) return;
       if (
-        compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
         raw.length > DELIVERY_LIMITS.expandedBytes
       ) {
         this.omitted('batch_size_budget', selected.length);
@@ -719,7 +899,12 @@ export class DiagnosticDelivery {
       }
       if (
         this.state.queue.length >= DELIVERY_LIMITS.batches ||
-        this.state.queue.reduce((n, v) => n + v.bytes, 0) + compressed.length >
+        this.state.queue.reduce(
+          (n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES),
+          0,
+        ) +
+          compressed.length +
+          DIAGNOSTIC_PERMIT_BYTES >
           DELIVERY_LIMITS.queueBytes
       ) {
         this.error = 'queue_budget_local_journal_retained';
@@ -762,6 +947,7 @@ export class DiagnosticDelivery {
           events: events.length,
           expandedBytes: raw.length,
           stages: [...new Set(events.map((v) => (v as { stage: string }).stage))].slice(0, 32),
+          ...batchMetadata(selected[0]!.sessionId, events),
         },
       };
       const oldCursors = structuredClone(this.state.sessions);
@@ -804,8 +990,9 @@ export class DiagnosticDelivery {
         enrollmentSecret: value.enrollmentSecret,
       }),
     });
-    if (!response.ok) throw new Error(`enrollment_http_${response.status}`);
-    const data = (await responseJson(response, signal)) as {
+    const responseData = await responseJson(response, signal);
+    if (!response.ok) throw transportReceiptError('enrollment', response.status, responseData);
+    const data = responseData as {
       installationId: string;
       token: string;
       expiresAt: number;
@@ -823,11 +1010,15 @@ export class DiagnosticDelivery {
     value.expiresAt = data.expiresAt;
     return data.token;
   }
-  async tick() {
+  async tick(forceCollection = true) {
     await this.transaction(async () => {
-      await this.persist();
+      const collecting = forceCollection || this.now() >= this.nextCollectionAt;
+      if (collecting) {
+        await this.persist();
+        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+      }
       if (this.recoveryNeeded) await this.recover();
-      await this.persist();
+      if (collecting) await this.persist();
     });
     if (!this.endpoint || this.closed || this.now() < this.state.nextAttemptAt) return;
     this.sending ??= this.send().finally(() => {
@@ -881,14 +1072,77 @@ export class DiagnosticDelivery {
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       await this.transaction(() => this.save());
-      const batch = this.state.queue[0];
-      if (!batch) return;
-      const bytes = await secureRead(
+      const selectedBatch = this.state.queue.find((value) => !value.serverExpired);
+      if (!selectedBatch) return;
+      let batch: Batch = selectedBatch;
+      let bytes = await secureRead(
         this.queueDirectory,
         `${batch.id}.gz`,
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
+      if (!batch.sealed) {
+        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/permits/${batch.id}`, {
+          method: 'POST',
+          redirect: 'error',
+          signal,
+          headers: { authorization: `Bearer ${bearer}` },
+        });
+        const receipt = await responseJson(response, signal);
+        const permit = diagnosticPermit(receipt);
+        if (
+          response.status === 410 &&
+          (receipt as { error?: string }).error === 'batch_retention_expired'
+        ) {
+          await this.retainExpiredBatch(batch, epoch);
+          return;
+        }
+        if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
+        if (
+          !permit ||
+          permit.installationId !== identity.installationId ||
+          permit.payloadSha256 !== batch.id
+        )
+          throw new Error('invalid_batch_permit');
+        const sealed = Buffer.from(sealDiagnosticGzip(bytes, permit));
+        const oldBatch = batch;
+        const newBatch = { ...batch, id: checksum(sealed), bytes: sealed.length, sealed: true };
+        await this.transaction(async () => {
+          if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
+          const name = `${newBatch.id}.gz`;
+          await safePath(this.queueDirectory, name).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          const file = await open(
+            join(this.queueDirectory, name),
+            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+            0o600,
+          );
+          try {
+            await file.writeFile(sealed);
+            await file.sync();
+          } catch (error) {
+            await file.close();
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          } finally {
+            await file.close();
+          }
+          const previous = this.state.queue;
+          this.state.queue = previous.map((item) => (item.id === oldBatch.id ? newBatch : item));
+          try {
+            await this.save();
+          } catch (error) {
+            this.state.queue = previous;
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          }
+          batch = newBatch;
+          bytes = sealed;
+          await unlink(join(this.queueDirectory, `${oldBatch.id}.gz`));
+        });
+      }
+
       if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
       const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
         method: 'PUT',
@@ -906,14 +1160,20 @@ export class DiagnosticDelivery {
         batchId: string;
         sha256: string;
         accepted: boolean;
+        error?: unknown;
       };
+      if (response.status === 410 && ack.error === 'batch_retention_expired') {
+        await this.retainExpiredBatch(batch, epoch);
+        return;
+      }
+
       if (
         !response.ok ||
         ack.batchId !== batch.id ||
         ack.sha256 !== batch.id ||
         ack.accepted !== true
       )
-        throw new Error(`upload_unconfirmed_${response.status}`);
+        throw transportReceiptError('upload', response.status, ack);
       await this.transaction(async () => {
         if (epoch !== this.epoch || !this.consentActive()) return;
         const previous = structuredClone(this.state);
@@ -939,11 +1199,47 @@ export class DiagnosticDelivery {
           Math.min(6 * 3600_000, 30_000 * 2 ** Math.min(this.state.failures - 1, 10)) *
             (0.8 + (randomBytes(1)[0]! / 255) * 0.4);
         this.error = error instanceof Error ? error.message : 'delivery_failed';
+        this.journal.record('diagnostic_transport_failure', {
+          error: diagnosticValue(error, '', new Set(), [
+            this.state.credentials?.enrollmentSecret ?? '',
+            this.state.credentials?.token ?? '',
+            ...this.state.withdrawals.flatMap((value) => [
+              value.enrollmentSecret,
+              value.token ?? '',
+            ]),
+          ]),
+          failures: this.state.failures,
+          nextAttemptAt: this.state.nextAttemptAt,
+          queue: 'retained; no server acknowledgment',
+        });
         await this.save();
       });
     } finally {
       this.abort = undefined;
     }
+  }
+  private async retainExpiredBatch(batch: Batch, epoch: number) {
+    await this.transaction(async () => {
+      if (epoch !== this.epoch || !this.consentActive()) return;
+      const previous = structuredClone(this.state);
+      const retained = this.state.queue.find((value) => value.id === batch.id);
+      if (!retained || retained.serverExpired) return;
+      retained.serverExpired = true;
+      this.omitted('server_retention_expired', batch.index.events);
+      try {
+        await this.save();
+      } catch (error) {
+        this.state = previous;
+        throw error;
+      }
+      this.error = 'server_retention_expired_local_copy_retained';
+      this.journal.record('diagnostic_cloud_expired', {
+        batchId: batch.id,
+        events: batch.index.events,
+        reason: 'server_retention_expired',
+        localCopy: 'retained; not acknowledged or evicted',
+      });
+    });
   }
   async close() {
     this.closed = true;

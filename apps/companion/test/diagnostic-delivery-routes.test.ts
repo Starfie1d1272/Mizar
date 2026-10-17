@@ -54,7 +54,7 @@ it('requires loopback origin and explicit current consent; pauses without cleari
       await app.inject({
         method: 'POST',
         url: '/operator/diagnostics/consent',
-        payload: { enabled: true, revision: 'technical-diagnostics-v1' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
       })
     ).statusCode,
   ).toBe(403);
@@ -74,10 +74,30 @@ it('requires loopback origin and explicit current consent; pauses without cleari
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: true, revision: 'technical-diagnostics-v1' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
       })
     ).statusCode,
   ).toBe(503);
+  expect(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/operator/diagnostics/consent',
+        headers,
+        payload: { enabled: true, revision: 'technical-diagnostics-v1' },
+      })
+    ).statusCode,
+  ).toBe(400);
+  expect(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/operator/diagnostics/consent',
+        headers,
+        payload: { enabled: false, revision: 'technical-diagnostics-v1' },
+      })
+    ).statusCode,
+  ).toBe(200);
   const report = await app.inject({
     method: 'POST',
     url: '/operator/diagnostics/report',
@@ -104,7 +124,7 @@ it('requires loopback origin and explicit current consent; pauses without cleari
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: false, revision: 'technical-diagnostics-v1' },
+        payload: { enabled: false, revision: 'technical-diagnostics-v2' },
       })
     ).json(),
   ).toMatchObject({ consent: false, deletionPending: 0 });
@@ -143,7 +163,7 @@ it('keeps normal service usable when diagnostics directory cannot initialize', a
         method: 'POST',
         url: '/operator/diagnostics/consent',
         headers,
-        payload: { enabled: true, revision: 'technical-diagnostics-v1' },
+        payload: { enabled: true, revision: 'technical-diagnostics-v2' },
       })
     ).statusCode,
   ).toBe(503);
