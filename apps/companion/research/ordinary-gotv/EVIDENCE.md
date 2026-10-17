@@ -112,3 +112,9 @@ REA_GHIDRA_STARTUP_TIMEOUT_MS=600000 \
 - Source 1、Source 2、Demo 文件、HTTP CSTV+、GNS 与 Steam 账号身份的能力边界见 DESIGN；没有将任何一个替代另一个。
 
 下一步需要的是 WINDOWS-TEST 中的最少真实证据，不是更多外围框架。若 record 正常出口失败且缺少合法游戏内层诊断，普通客户端握手仍是未完成的核心阻塞。
+
+## 第二轮补充
+
+逐 tick 连续性已与 cursor 节流分离，输出事件前再次校验；失败报告区分源截断/替换、输入格式、时钟与 I/O。审阅给出的 6400 → 6463 → 6432 反例已覆盖；[回归输出](evidence/continuity-regression.txt) 与 [真实录像重跑](evidence/offline-verification-phase2.json) 保留实际结果。第二轮握手组件、二进制精确身份、源码与调用路径见 [HANDSHAKE-EVIDENCE.md](HANDSHAKE-EVIDENCE.md)。
+
+首轮 CI static 因 rea-health.json 未按仓库格式化失败；已修复并执行全仓 format/lint 与架构检查。修复提交 5c8b71a6c4324a7b7507d7dbe42f3d680df29d32 的全部 GitHub 检查通过，这不等于 Windows 游戏观战测试通过。

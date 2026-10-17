@@ -61,3 +61,26 @@ pnpm --filter @mizar/companion exec tsx research/ordinary-gotv/decode.ts --input
 - 若录制出口不可用：可选 `wire.py` 摘要及格式不支持错误。不要上传原始 PCAP、二进制、完整日志或任何认证材料。
 
 足以推进的结果可能是“官方普通观众能看，但 record 被权限拒绝，只有加密外层元数据”。这会明确剩余接口缺口，不包装成已完成接入。
+
+## 一次性采集包（方便时执行，无需现在开机）
+
+新增的 `capture.py` 只读取用户指定的安装目录、可选现有日志/录像，不启动游戏，不连接服务器，不抓包，不读取登录资料。先按上文在一个新授权测试时段正常观战；可录制时再带上 `--demo`。需要 Python 3.11+。
+
+```powershell
+python apps/companion/research/ordinary-gotv/capture.py --game-dir 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive' --output 'C:\private\viewer-capture-01' --demo 'C:\private\mizar_viewer_probe.dem' --seconds 90
+```
+
+录制被拒绝就省略 `--demo`；有既存本机 console 日志可加 `--console-log 'C:\private\console.log'`，脚本只投影有限的状态/协议/错误字段，不复制原始行或票据/端点。当前只识别列出的英文日志形式，未匹配不代表事件不存在。日志解析不是通用脱敏器，原始日志始终留本机。
+
+本机实际安装和录像路径以用户电脑为准，不要照抄示例不存在的路径。安装根目录应包含 `game\bin\win64\engine2.dll` 和 `game\csgo\steam.inf`。输出目录必须不存在。
+
+在另一个终端按第 2 节运行 decode 的跟随命令。采集结束后分享 `capture.json`、decode `report.json` 和录制接受/拒绝结论即可；完整日志、录像、PCAP、票据和二进制不上传。
+
+| 一次采集解答的未知       | 成功/有效证据                                                | 仍不能解答                                           |
+| ------------------------ | ------------------------------------------------------------ | ---------------------------------------------------- |
+| 云端函数地址是否适用本机 | engine2/networksystem hash 与本文一致；不同则重新定位        | 相同 marketing version 不够；PE 时间戳不证明文件可信 |
+| 当前正常观众实际连接阶段 | 原始日志可识别的状态迁移/断开码；用户看到持续推进            | 没有内层消息时不能补写 auth/full 证明                |
+| 官方录制出口是否持续可用 | 至少 60 秒文件增长，录制未结束已有新 tick/事件，结束后可重读 | 自有客户端票据/GNS/网络通道及无画面资格              |
+| 正式事件是否有覆盖       | 真实 round_start/end、开火/击杀；狙击枪/taser 分别记录       | 未发生的事件不能用合成数据补足                       |
+
+`capture.py` 已在云端对本次官方文件实际运行；Windows 执行和真实观战仍为 NOT_RUN。它是参考样本采集工具，不是轻量观众客户端。
