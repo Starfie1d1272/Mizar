@@ -355,7 +355,9 @@ jobs:
       - name: Compile and test the actual Windows host
         if: matrix.lane == 'host'
         shell: pwsh
-        run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+        # Real PowerShell/window/process fixtures share the runner's OS resources.
+        # Serialize test cases without changing their internal concurrency or deadlines.
+        run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- --test-threads=1
 
       - name: Install locked Node dependencies for native console qualification
         if: matrix.lane == 'host'

@@ -195,7 +195,11 @@ mod tests {
             Duration::from_secs(15),
         )
         .unwrap_err();
-        assert!(error.contains("无法读取当前 Steam 客户端的程序位置"));
+        assert!(
+            error.contains("无法读取当前 Steam 客户端的程序位置"),
+            "{error}\n{}",
+            std::fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap_or_default()
+        );
         assert!(!error.contains("配置工具发生内部错误"));
         assert!(run(
             command("[Console]::Error.WriteLine('before-timeout'); Start-Sleep -Seconds 10"),
