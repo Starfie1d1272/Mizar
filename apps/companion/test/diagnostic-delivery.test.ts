@@ -429,6 +429,75 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
+  it('freezes a threshold collection before real disk IO while preserving later records for the next batch', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalOpen = filesystem.open;
+    let blocked = true;
+    const spy = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      if (blocked && String(args[0]).endsWith('.gz')) {
+        blocked = false;
+        entered();
+        await gate;
+      }
+      return originalOpen(...args);
+    });
+    try {
+      for (let i = 0; i < 64; i++) {
+        journal.record('collection_prefix', { index: i, text: 'x'.repeat(24576) });
+        if (i % 8 === 7) await journal.flush();
+      }
+      await started;
+      for (let i = 0; i < 10; i++) journal.record('collection_later', { index: i });
+      await journal.flush();
+      release();
+      // The pause transaction joins the in-progress threshold collection without
+      // forcing a second collection or using a timing/retry assertion.
+      await delivery.pause(true);
+      expect(delivery.status().queuedBatches).toBe(1);
+      expect(delivery.status().pendingBytes).toBeGreaterThan(0);
+      const first = (await readdir(join(dir, 'diagnostic-outbox'))).find((v) => v.endsWith('.gz'))!;
+      const initial = await decodeDiagnosticBatch(
+        await readFile(join(dir, 'diagnostic-outbox', first)),
+      );
+      expect(
+        initial.events?.some((value) => (value as { stage: string }).stage === 'collection_later'),
+      ).toBe(false);
+      await delivery.tick();
+      const indices: number[] = [];
+      let prefix = 0;
+      for (const file of (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) =>
+        v.endsWith('.gz'),
+      )) {
+        const decoded = await decodeDiagnosticBatch(
+          await readFile(join(dir, 'diagnostic-outbox', file)),
+        );
+        for (const value of decoded.events ?? []) {
+          const item = value as { stage: string; evidence: { index: number } };
+          if (item.stage === 'collection_later') indices.push(item.evidence.index);
+          if (item.stage === 'collection_prefix') prefix++;
+        }
+      }
+      expect(prefix).toBe(64);
+      expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 10 }, (_, i) => i));
+      expect(delivery.status().omitted).toBe(0);
+    } finally {
+      release();
+      spy.mockRestore();
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('collects normal operation batches every ten minutes while draining existing batches on the short poll', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
