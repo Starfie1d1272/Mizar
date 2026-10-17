@@ -1,5 +1,5 @@
 import { DIAGNOSTIC_BODY_LIFETIME_MS } from '@mizar/protocol/diagnostics-upload';
-import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ import {
   decodeDiagnosticBatch,
   diagnosticsEndpoint,
 } from '../src/support/delivery.js';
-import { SessionJournal } from '../src/support/session-journal.js';
+import { SESSION_LIMITS, SessionJournal } from '../src/support/session-journal.js';
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
 }));
@@ -395,6 +395,92 @@ describe('consented diagnostic outbox', () => {
       }
     },
   );
+  it('recovers healthy records after a crash-truncated tail is sealed by real journal rotation', async () => {
+    const dir = await directory();
+    let journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    await journal.flush();
+    await delivery.close();
+    // Real admitted records fill most of the production 8 MiB segment. Inject
+    // a crash's unfinished append within the writer's 2 MiB admission budget.
+    for (let index = 0; index < 7; index++) {
+      journal.record('sealed_prefix', { index, text: 'x'.repeat(1024 * 1024) });
+      await journal.flush();
+    }
+    await journal.close();
+    const active = join(dir, 'session.ndjson');
+    const prefix = await readFile(active);
+    const tailBytes = SESSION_LIMITS.segmentBytes - 1 - prefix.length;
+    expect(tailBytes).toBeGreaterThan(0);
+    expect(tailBytes).toBeLessThan(SESSION_LIMITS.pendingBytes);
+    await appendFile(active, '{"stage":"interrupted_append","text":"'.padEnd(tailBytes, 'x'));
+    const damaged = await readFile(active);
+    expect(damaged.at(-1)).not.toBe(10);
+    journal = new SessionJournal(dir);
+    // The actual startup append must rotate the nearly full crash segment.
+    await journal.flush();
+    const sealed = join(dir, 'session.ndjson.1');
+    expect((await readFile(sealed)).equals(damaged)).toBe(true);
+    journal.record('recovery_healthy', { index: 0 });
+    await journal.flush();
+    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    try {
+      await delivery.tick();
+      let damageReportedInBatch = false;
+      const events = async () => {
+        const result: { stage: string; evidence: { index?: number } }[] = [];
+        for (const name of (await readdir(join(dir, 'diagnostic-outbox'))).filter((name) =>
+          name.endsWith('.gz'),
+        )) {
+          const batch = await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', name)),
+          );
+          const coverage = (batch as { coverage?: { reasons?: Record<string, number> } }).coverage;
+          damageReportedInBatch ||= (coverage?.reasons?.truncated_sealed_journal_record ?? 0) > 0;
+          result.push(...(batch.events as typeof result));
+        }
+        return result;
+      };
+      expect((await events()).filter((event) => event.stage === 'recovery_healthy')).toHaveLength(
+        1,
+      );
+      expect(delivery.status().pendingBytes).toBe(0);
+      journal.record('recovery_healthy', { index: 1 });
+      await journal.flush();
+      expect(delivery.status().pendingBytes).toBeGreaterThan(0);
+      await delivery.tick();
+      await delivery.close();
+      await journal.close();
+      journal = new SessionJournal(dir);
+      await journal.flush();
+      delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      journal.record('recovery_healthy', { index: 2 });
+      await journal.flush();
+      await delivery.tick();
+      const recovered = await events();
+      for (const [stage, expected] of [
+        ['sealed_prefix', [0, 1, 2, 3, 4, 5, 6]],
+        ['recovery_healthy', [0, 1, 2]],
+      ] as const)
+        expect(
+          recovered
+            .filter((event) => event.stage === stage)
+            .map((event) => event.evidence.index)
+            .sort(),
+        ).toEqual(expected);
+      expect(delivery.status().omissionReasons.truncated_sealed_journal_record).toBeGreaterThan(0);
+      expect(damageReportedInBatch).toBe(true);
+      const saved = JSON.parse(
+        await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+      ) as { omissionReasons: Record<string, number> };
+      expect(saved.omissionReasons.truncated_sealed_journal_record).toBeGreaterThan(0);
+      expect((await readFile(sealed)).equals(damaged)).toBe(true);
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('keeps offline batches across restart, recovers source journal records and retries an identical accepted batch after lost acknowledgment', async () => {
     const dir = await directory();
     const remote = service(() => now);

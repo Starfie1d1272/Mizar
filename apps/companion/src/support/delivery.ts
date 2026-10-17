@@ -923,8 +923,8 @@ export class DiagnosticDelivery {
       }
       let count = 0;
       // A concurrent append can be visible before its final newline. Only
-      // complete journal records are eligible; retain the cursor and rescan
-      // the unfinished tail after its writer commits instead of reporting loss.
+      // complete journal records are eligible. An active tail may still commit;
+      // a rotated segment is sealed and its truncated tail cannot be completed.
       const completeBytes = bytes.lastIndexOf(10) + 1;
       for (const line of bytes.subarray(0, completeBytes).toString('utf8').split('\n')) {
         if (!line) continue;
@@ -947,7 +947,12 @@ export class DiagnosticDelivery {
           return;
         }
       }
-      if (completeBytes < bytes.length) return;
+      if (completeBytes < bytes.length) {
+        if (i === 0) return;
+        // Preserve the original file for export and report the damaged record,
+        // but do not let a sealed crash fragment block later healthy segments.
+        this.omitted('truncated_sealed_journal_record');
+      }
     }
     // A stable source clock does not mean the scan completed. Capacity or
     // unreadable source can leave an unadmitted tail; keep its cursors and the
