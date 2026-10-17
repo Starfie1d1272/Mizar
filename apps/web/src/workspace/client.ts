@@ -1,3 +1,4 @@
+import { controlEvidence } from '../debug/control-journal';
 import { useEffect, useState } from 'react';
 import {
   programSceneStateSchema,
@@ -70,9 +71,28 @@ export async function desktopInvoke<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
+  const operationId = crypto.randomUUID();
+  const observe =
+    !/^(?:gsi_status|cs2_host_status|cs2_config_status|workspace_exit_status|read_obs_configuration_context|save_support_bundle)$/.test(
+      command,
+    );
+  if (observe) controlEvidence(command, 'begin', { operationId, args });
   try {
-    return await window.__TAURI_INTERNALS__.invoke<T>(command, args);
+    const result = await window.__TAURI_INTERNALS__.invoke<T>(command, {
+      ...args,
+      diagnosticOperationId: operationId,
+    });
+    if (observe) controlEvidence(command, 'result', { operationId, result });
+    return result;
   } catch (error) {
+    if (observe)
+      controlEvidence(command, 'failure', {
+        operationId,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message, stack: error.stack }
+            : error,
+      });
     if (
       error &&
       typeof error === 'object' &&

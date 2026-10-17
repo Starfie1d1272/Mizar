@@ -1,3 +1,5 @@
+import { checkLocalWebOrigin } from './local-web/origin-policy.js';
+import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -372,8 +374,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programRuntime.getSnapshot().current.programSource.lastAccepted?.receivedMonotonicMs ?? 0;
       return Math.max(performance.now(), lastReceived);
     });
+  const sessionJournal = options.supportLogsDirectory
+    ? new SessionJournal(options.supportLogsDirectory)
+    : undefined;
   const app = Fastify({
-    logger: options.logger ?? false,
+    logger: sessionJournal
+      ? {
+          stream: {
+            write: (line: string) => {
+              sessionJournal.write(line);
+              if (options.logger) process.stdout.write(line);
+            },
+          },
+        }
+      : (options.logger ?? false),
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
@@ -388,6 +402,60 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime?.appVersion,
     );
   }
+  const isControl = (url: string, method: string) =>
+    method !== 'GET' && /^(?:\/operator\/|\/runtime\/)/.test(url);
+  const controlState = () => ({
+    production: production.get(),
+    program: sceneController.get(),
+    runtime: debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    hud: hudConfigStore.getState().document,
+    match: matchContextController?.getActiveBinding() ?? null,
+  });
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (isControl(request.url, request.method))
+      sessionJournal?.record('operation_received', {
+        requestId: request.id,
+        browserOperationId: request.headers['x-mizar-operation-id'],
+        method: request.method,
+        route: request.routeOptions.url,
+        before: controlState(),
+      });
+    done();
+  });
+  app.addHook('preHandler', (request, _reply, done) => {
+    if (isControl(request.url, request.method))
+      sessionJournal?.record('operation_begin', {
+        requestId: request.id,
+        browserOperationId: request.headers['x-mizar-operation-id'],
+        method: request.method,
+        route: request.routeOptions.url,
+        parameters: diagnosticValue(request.body),
+        filename: request.headers['x-mizar-filename'],
+      });
+    done();
+  });
+  app.addHook('onSend', (request, reply, payload, done) => {
+    if (isControl(request.url, request.method)) {
+      let result: unknown = payload;
+      if (typeof payload === 'string') {
+        try {
+          result = JSON.parse(payload);
+        } catch {
+          result = { bytes: Buffer.byteLength(payload) };
+        }
+      }
+      sessionJournal?.record('operation_result', {
+        requestId: request.id,
+        browserOperationId: request.headers['x-mizar-operation-id'],
+        method: request.method,
+        route: request.routeOptions.url,
+        httpStatus: reply.statusCode,
+        result,
+        after: controlState(),
+      });
+    }
+    done(null, payload);
+  });
   options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) =>
     businessJournal?.write(stage, evidence),
   );
@@ -406,6 +474,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
   });
   app.addHook('onError', async (request, _reply, error) => {
+    sessionJournal?.record('request_error', {
+      requestId: request.id,
+      browserOperationId: request.headers['x-mizar-operation-id'],
+      method: request.method,
+      route: request.routeOptions.url,
+      error,
+    });
     request.log.error({ err: error, route: request.routeOptions.url }, 'Local operation failed');
   });
   registerStaticHost(app, {
@@ -842,9 +917,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     () => production.get().mode !== 'preparation',
   );
   if (obsConfigStore && options.obsConfigPath) {
-    const musicStore = new MusicStore(join(dirname(options.obsConfigPath), 'music'));
+    const musicStore = new MusicStore(
+      join(dirname(options.obsConfigPath), 'music'),
+      (stage, evidence) => sessionJournal?.record(stage, evidence),
+    );
     app.addHook('onReady', async () => {
-      await musicStore.load().catch(() => {
+      await musicStore.load().catch((error) => {
+        app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
       });
     });
@@ -1003,6 +1082,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     for (const record of outputService.getReliableRecords())
       businessJournal?.reliable(record, 'restored');
     await businessJournal?.flush();
+    sessionJournal?.record('configuration_snapshot', {
+      ...controlState(),
+      obs: await obsConfigStore
+        ?.read()
+        .catch((error: unknown) => ({ readError: diagnosticValue(error) })),
+    });
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
@@ -1102,6 +1187,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
+  app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
+    if (
+      !checkLocalWebOrigin(localWebTransport.getOriginPolicy(), request.headers.origin).allowed ||
+      localWebTransport.getOriginPolicy().mode !== 'loopback'
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    sessionJournal?.record('browser_control', request.body);
+    return reply.code(204).send();
+  });
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.supportLogsDirectory === undefined
@@ -1109,7 +1203,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
-    flushBusinessLog: () => businessJournal?.flush() ?? Promise.resolve(),
+    flushBusinessLog: async () => {
+      await businessJournal?.flush();
+      await sessionJournal?.flush();
+    },
+    sessionLogHealth: () => sessionJournal?.health() ?? null,
     ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
@@ -1279,6 +1377,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await hudConfigStore.flush();
     await currentRecorder().finalize();
     await businessJournal?.close();
+    await sessionJournal?.close();
   });
 
   return app;

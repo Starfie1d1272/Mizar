@@ -5,6 +5,7 @@ import { Button, Field } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
 
 export interface MusicView {
+  storage?: { ready: boolean; failed: boolean };
   config: MusicConfig;
   status: MusicStatus;
 }

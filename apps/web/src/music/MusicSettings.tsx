@@ -1,3 +1,4 @@
+import { controlEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
@@ -10,17 +11,35 @@ import { command, useLocalRead } from '../preparation/client';
 import { MusicControls, MUSIC_LABELS, type MusicView } from './MusicControls';
 
 async function localFile(url: string, file: File, type: string) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': type, 'x-mizar-filename': encodeURIComponent(file.name) },
-    body: file,
+  const operationId = crypto.randomUUID();
+  controlEvidence('music_file', 'selected', {
+    operationId,
+    name: file.name,
+    bytes: file.size,
+    type: file.type,
+    destination: url,
   });
-  if (!response.ok)
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': type, 'x-mizar-filename': encodeURIComponent(file.name) },
+      body: file,
+    });
+  } catch (error) {
+    controlEvidence('music_file', 'upload_failed', { operationId, reason: String(error) });
+    throw new Error('曲目未能传到本机服务，请确认 Mizar 正在运行后重试。', { cause: error });
+  }
+  controlEvidence('music_file', 'uploaded', { operationId, status: response.status });
+  if (!response.ok) {
+    const reason = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(
-      url.endsWith('import')
-        ? '音乐包未导入，原配置已保留。请检查 music.json、文件格式与大小限制。'
-        : '曲目未添加，请检查音频格式与大小（最大 32 MiB）。',
+      reason?.message ??
+        (url.endsWith('import')
+          ? '音乐包未导入，原配置已保留。请检查 music.json、文件格式与大小限制。'
+          : '曲目未添加，请检查音频格式与大小（最大 32 MiB）。'),
     );
+  }
   return response.json() as Promise<MusicView & MusicTrack>;
 }
 export function MusicSettings() {
@@ -28,21 +47,31 @@ export function MusicSettings() {
   const [draft, setConfig] = useState<MusicConfig | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageAt, setMessageAt] = useState<MusicGroup | 'import' | 'save'>('import');
+  const [failed, setFailed] = useState(false);
   const config = draft ?? current?.config ?? null;
-  const change = (group: MusicGroup, patch: Partial<MusicConfig['groups'][MusicGroup]>) =>
+  const change = (group: MusicGroup, patch: Partial<MusicConfig['groups'][MusicGroup]>) => {
+    controlEvidence('music_draft', 'change', { group, patch });
     setConfig((c) => {
       const base = c ?? config;
       return base
         ? { ...base, groups: { ...base.groups, [group]: { ...base.groups[group], ...patch } } }
         : null;
     });
-  const action = async (run: () => Promise<void>) => {
+  };
+  const action = async (
+    run: () => Promise<void>,
+    at: MusicGroup | 'import' | 'save' = 'import',
+  ) => {
+    setMessageAt(at);
+    setFailed(false);
     if (busy) return;
     setBusy(true);
     setMessage('');
     try {
       await run();
     } catch (e) {
+      setFailed(true);
       setMessage(e instanceof Error ? e.message : '操作未完成，请重试。');
     } finally {
       setBusy(false);
@@ -56,6 +85,22 @@ export function MusicSettings() {
           由 OBS 播放本地音频。默认启用，未选曲时保持静音。游戏声音与麦克风继续使用 OBS 原混音。
         </p>
         <MusicControls />
+        {current?.storage && (!current.storage.ready || current.storage.failed) ? (
+          <StatusBanner tone="danger">
+            音乐存储未就绪，原配置未加载。请检查数据目录权限或状态文件后重新检查。
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void action(async () => {
+                  await command('/operator/music', { action: 'reload' });
+                  setMessage('音乐存储已重新加载。');
+                })
+              }
+            >
+              重新检查音乐存储
+            </Button>
+          </StatusBanner>
+        ) : null}
         <Field
           label="一键导入音乐包"
           message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
@@ -75,7 +120,9 @@ export function MusicSettings() {
         />
         <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
       </Panel>
-      {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
+      {message && messageAt === 'import' ? (
+        <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+      ) : null}
       {!config ? (
         <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
       ) : (
@@ -121,9 +168,12 @@ export function MusicSettings() {
                             );
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');
-                        });
+                        }, group);
                     }}
                   />
+                  {message && messageAt === group ? (
+                    <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+                  ) : null}
                   <Field
                     label="音量"
                     type="range"
@@ -215,11 +265,14 @@ export function MusicSettings() {
                 void action(async () => {
                   await command('/operator/music', { action: 'configure', config });
                   setMessage('音乐配置已保存。');
-                })
+                }, 'save')
               }
             >
               保存音乐配置
             </Button>
+            {message && messageAt === 'save' ? (
+              <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+            ) : null}
           </div>
         </>
       )}

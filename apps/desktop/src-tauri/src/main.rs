@@ -621,13 +621,24 @@ async fn finish_workspace(
     let _gate = production_exit::WorkspaceExitGuard(&gate);
     let feedback = app.state::<production_exit::WorkspaceExit>();
     feedback.stage("checking");
+    app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string()));
+    // Keep a visible waiting record if a native lock, process or presentation call stalls.
+    let (waiting_done, waiting) = std::sync::mpsc::channel::<()>();
+    let waiting_host = app.clone();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while waiting.recv_timeout(Duration::from_secs(5)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            let phase = waiting_host.state::<production_exit::WorkspaceExit>().status().stage;
+            waiting_host.state::<DesktopLog>().event("workspace_exit", "waiting", Some(&serde_json::json!({"phase":phase,"elapsedMs":started.elapsed().as_millis()}).to_string()));
+        }
+    });
     // This task belongs to Host, so hiding or closing a WebView cannot lose it.
     let host = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+        let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|_| "CS2 配置状态不可用。"))?;
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
@@ -638,42 +649,44 @@ async fn finish_workspace(
                 Some(&format!("phase=workspace_recovery_window; cause={error}")),
             );
         }
-        let trial = demo_test::status(&log)?;
+        let trial = log.step("workspace_exit_trial_status", || demo_test::status(&log))?;
         if trial["active"] == true || cs2.has_demo_journal()? {
             feedback.stage("restoration");
             let _activity = activity.begin(2);
             if confirm_steam_cancelled == Some(true) {
-                cs2.restore_backup(true)?;
+                log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
-            cs2.finish()?;
+            log.step("workspace_exit_game_finish", || cs2.finish())?;
         } else {
             production_exit::finish_then_restore(
                 || {
                     feedback.stage("production");
-                    production_exit::finish_workspace_production(&log)
+                    log.step("workspace_exit_production", || production_exit::finish_workspace_production(&log))
                 },
                 || {
                     feedback.stage("restoration");
                     let _activity = activity.begin(2);
                     production_exit::finish_managed_game(&log, |requires_proof| {
                         if confirm_steam_cancelled == Some(true) {
-                            cs2.restore_backup(true)?;
+                            log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
                         }
-                        cs2.finish()?;
+                        log.step("workspace_exit_game_finish", || cs2.finish())?;
                         if requires_proof {
-                            cs2.confirm_game_stopped()?;
+                            log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
                         }
                         Ok(())
                     })
                 },
             )?;
         }
+        log.event("workspace_exit_feedback", "begin", None);
         refresh_finished_window_feedback(&host, &cs2);
+        log.event("workspace_exit_feedback", "success", None);
         drop(cs2);
         feedback.stage("presentation");
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
-        present_production_inner(&host, false)
+        log.step("workspace_exit_presentation", || present_production_inner(&host, false))
     })
     .await
     .unwrap_or_else(|error| {
@@ -694,6 +707,8 @@ async fn finish_workspace(
             )),
         );
     }
+    app.state::<DesktopLog>().event("workspace_exit", if result.is_ok() { "success" } else { "failure" }, Some(&serde_json::json!({"phase":feedback.status().stage,"error":result.as_ref().err()}).to_string()));
+    let _ = waiting_done.send(());
     feedback.complete(&result);
     if result.is_err() {
         // Keep the original local failure; never replace it with window errors.
@@ -1640,7 +1655,17 @@ fn run_desktop(
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(updates::PendingUpdate::new(update_stage))
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke| {
+            let command = invoke.message.command();
+            if !["gsi_status", "cs2_host_status", "cs2_config_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
+                let log = invoke.message.webview_ref().state::<DesktopLog>();
+                let payload = match invoke.message.payload() {
+                    tauri::ipc::InvokeBody::Json(value) => value.clone(),
+                    tauri::ipc::InvokeBody::Raw(bytes) => serde_json::json!({"binaryBytes":bytes.len()}),
+                };
+                log.event("native_command", "begin", Some(&serde_json::json!({"command":command,"window":invoke.message.webview_ref().label(),"parameters":payload}).to_string()));
+            }
+            tauri::generate_handler![
             restore_layout,
             restore_cs2_focus,
             set_program_overlay_enabled,
@@ -1678,7 +1703,8 @@ fn run_desktop(
             ensure_gsi,
             select_cs2_installation,
             open_cs2_config_directory
-        ])
+        ](invoke)
+        })
         .setup(move |app| {
             let handle = app.handle();
             let page_log = setup_log.clone();

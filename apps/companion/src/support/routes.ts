@@ -1,3 +1,4 @@
+import { fullLogArchive } from './archive.js';
 import {
   collectObsNativeEvidence,
   failedObsNativeEvidence,
@@ -17,7 +18,7 @@ import type { BusinessJournal } from './business-journal.js';
 import { readBusinessHistory } from './business-history.js';
 import { choice, count, digest, readSupportLogs, record, recorderCodes } from './logs.js';
 
-export const SUPPORT_BUNDLE_MAX_BYTES = 1024 * 1024;
+export const SUPPORT_BUNDLE_MAX_BYTES = 256 * 1024 * 1024;
 const findingCodes = [
   'configuration_unchecked',
   'configuration_check_failed',
@@ -135,6 +136,7 @@ export function registerSupportRoutes(
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
+    readonly sessionLogHealth?: () => unknown;
     readonly flushBusinessLog?: () => Promise<void>;
     readonly businessLogHealth?: () => ReturnType<BusinessJournal['getHealth']>;
     readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
@@ -162,6 +164,9 @@ export function registerSupportRoutes(
           type: 'object',
           additionalProperties: false,
           properties: {
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+            sessionId: { type: 'string', maxLength: 128 },
             desktop: {
               type: ['object', 'null'],
               additionalProperties: false,
@@ -256,6 +261,18 @@ export function registerSupportRoutes(
         const businessHealth = options.businessLogHealth?.();
         const bundle = {
           schema: 'mizar-support-bundle/1',
+          fullLogs: await fullLogArchive(options.logsDirectory, {
+            ...(typeof record(request.body).from === 'string'
+              ? { from: new Date(record(request.body).from as string).toISOString() }
+              : {}),
+            ...(typeof record(request.body).to === 'string'
+              ? { to: new Date(record(request.body).to as string).toISOString() }
+              : {}),
+            ...(typeof record(request.body).sessionId === 'string'
+              ? { sessionId: record(request.body).sessionId as string }
+              : {}),
+          }),
+          sessionLogHealth: options.sessionLogHealth?.() ?? null,
           businessHistory: {
             ...businessHistory,
             manifest: {
@@ -292,17 +309,20 @@ export function registerSupportRoutes(
             },
             limits: {
               bundleBytes: SUPPORT_BUNDLE_MAX_BYTES,
-              files: 20,
-              eventsPerFile: 32,
-              tailBytesPerFile: 65536,
-              headerBytesPerFile: 4096,
+              summaryIndex: {
+                files: 20,
+                eventsPerFile: 32,
+                tailBytesPerFile: 65536,
+                headerBytesPerFile: 4096,
+              },
+              fullLogs: { encoding: 'gzip-base64', volumeBytes: 1024 * 1024 },
             },
-            logPolicy: 'allowlisted-events; bounded-redacted-error-causes-and-technical-paths',
-            sessionPolicy: 'ordinary-log-session-salted; business-identifiers-stable',
+            logPolicy: 'full-retained-product-logs-gzip-volumes; summaries-are-indexes',
+            sessionPolicy: 'full-log-and-business-identifiers-stable; summary-log-session-salted',
           },
           summary: [
-            '本文件包含比赛业务 ID、阵容核对所需的 Steam64、队伍与槽位；不含凭据、完整配置或原始遥测。异常可能包含必要技术路径，用户目录名已脱敏。',
-            '日志保留阶段、结果、错误码及有界脱敏的异常消息、原因链和堆栈。session 只在本文件内关联。',
+            '本文件包含本机产品操作、相关配置、技术路径、比赛及账号信息。凭据值被替换；不自动上传，请私下交付维护者。',
+            'fullLogs 为保留期内完整产品日志的压缩分卷；logs 与 businessHistory 是索引。原始会话编号支持跨进程关联。',
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
             'nativeObs 只读取本机 OBS 配置、近期日志和进程元数据；配置来自已保存文件，不等同于当前节目画面。日志成功不证明当前画面正常，进程时间关联不证明实际 hook PID；缺失或未知均不能判为黑屏根因。',
@@ -447,10 +467,11 @@ export function registerSupportRoutes(
             `attachment; filename="mizar-support-${exportedAt.replaceAll(':', '-')}.json"`,
           )
           .send(json);
-      } catch {
+      } catch (error) {
+        request.log.error({ err: error, stage: 'support_export' }, '诊断导出失败');
         return reply.code(503).send({
           error: 'support_export_unavailable',
-          message: '诊断包暂时无法生成，请稍后重试。',
+          message: '诊断包暂时无法生成；若记录较多，请缩小导出时间范围后重试。',
         });
       } finally {
         exporting = false;

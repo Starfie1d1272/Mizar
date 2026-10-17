@@ -168,13 +168,10 @@ impl DesktopLog {
             .inner
             .lock()
             .map_err(|_| io::Error::other("desktop log lock unavailable"))?;
-        // Aggregate successful navigation at the producer so bounded log tails
-        // still contain the preparation/startup failure that preceded reloads.
+        // Preserve each navigation in the full retained product log.
         if stage == "main_page_load" && result == "success" {
             log.page_loads = log.page_loads.saturating_add(1);
-            if !log.page_loads.is_power_of_two() {
-                return Ok(());
-            }
+
         }
         Self::write_entry(&log, stage, result, detail)
     }
@@ -197,11 +194,7 @@ impl DesktopLog {
             }] = json!(bounded(detail));
         }
         if stage == "main_page_load" && result == "success" {
-            entry["occurrences"] = json!(if log.page_loads <= 1 {
-                1
-            } else {
-                log.page_loads / 2
-            });
+            entry["occurrences"] = json!(1);
         }
         let mut bytes = serde_json::to_vec(&entry)?;
         bytes.push(b'\n');

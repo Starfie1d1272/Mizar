@@ -1,0 +1,273 @@
+import { atomicJson, safePath } from '../resource-store/files.js';
+import { constants } from 'node:fs';
+import { randomUUID, createHash } from 'node:crypto';
+import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export const SESSION_LIMITS = {
+  segmentBytes: 8 * 1024 * 1024,
+  segments: 8,
+  retentionDays: 14,
+  pendingBytes: 2 * 1024 * 1024,
+};
+const credential =
+  /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code)$/i;
+/** Preserve technical context; replace credential values, never whole events. */
+export function diagnosticValue(value: unknown, key = '', seen = new Set<object>()): unknown {
+  if (credential.test(key)) return '[redacted]';
+  if (value instanceof Error) {
+    if (seen.has(value)) return '[circular error]';
+    seen.add(value);
+    const fields = Object.fromEntries(
+      Object.getOwnPropertyNames(value).map((name) => [
+        name,
+        (value as unknown as Record<string, unknown>)[name],
+      ]),
+    );
+    const result = diagnosticValue(
+      { ...fields, name: value.name, message: value.message, stack: value.stack },
+      key,
+      seen,
+    );
+    seen.delete(value);
+    return result;
+  }
+  if (Buffer.isBuffer(value))
+    return {
+      bytes: value.length,
+      sha256: createHash('sha256').update(value).digest('hex'),
+      content: 'binary-not-collected',
+    };
+  if (typeof value === 'string' && /^data:[^,]+;base64,/.test(value))
+    return {
+      content: 'media-not-collected',
+      bytes: Buffer.byteLength(value),
+      sha256: createHash('sha256').update(value).digest('hex'),
+    };
+  if (typeof value === 'string') {
+    if (/^\s*[{[]/.test(value)) {
+      try {
+        return JSON.stringify(diagnosticValue(JSON.parse(value), key, seen));
+      } catch {
+        /* A plain error or partial record remains text. */
+      }
+    }
+    return value
+      .replace(/\b(?:https?|wss?|rtmps?|ftp):\/\/[^\s"'<>]+/gi, (text) => {
+        try {
+          const url = new URL(text);
+          if (url.username || url.password) {
+            url.username = '[redacted]';
+            url.password = '';
+          }
+          for (const name of [...url.searchParams.keys()])
+            if (credential.test(name) || /^(?:code|auth|key)$/i.test(name))
+              url.searchParams.set(name, '[redacted]');
+          if (/^rtmps?:$/.test(url.protocol)) {
+            const parts = url.pathname.split('/');
+            if (parts.length > 2) {
+              parts[parts.length - 1] = '[redacted]';
+              url.pathname = parts.join('/');
+            }
+          }
+          return url.toString();
+        } catch {
+          return text;
+        }
+      })
+      .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 [redacted]')
+      .replace(/rh_mizar_[a-zA-Z0-9_-]+/g, '[redacted]')
+      .replace(
+        /((?:password|passwd|access[_-]?token|refresh[_-]?token|token|secret|credential|api[_-]?key|stream[_-]?key)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
+        '$1[redacted]',
+      );
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  const result = Array.isArray(value)
+    ? value.map((v) => diagnosticValue(v, '', seen))
+    : Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [
+          k,
+          diagnosticValue(v, k === 'key' && /stream/i.test(key) ? 'streamKey' : k, seen),
+        ]),
+      );
+  seen.delete(value);
+  return result;
+}
+
+/** Small asynchronous observer of existing control/log boundaries; never runs filesystem I/O on ingress. */
+export class SessionJournal {
+  readonly sessionId = randomUUID();
+  private sequence = 0;
+  private pendingBytes = 0;
+  private writer = Promise.resolve();
+  private dropped = 0;
+  private failures = 0;
+  private size = -1;
+  private initialized = false;
+  private retention = { rotatedFiles: 0, rotatedBytes: 0, expiredFiles: 0, expiredBytes: 0 };
+  constructor(private readonly directory: string) {
+    this.record('session_start', {
+      limits: SESSION_LIMITS,
+      durability: 'async; abrupt power loss may lose pending or OS-buffered records',
+    });
+  }
+  record(stage: string, evidence: unknown): void {
+    try {
+      this.enqueue(stage, evidence);
+    } catch {
+      this.failures++;
+    }
+  }
+  private enqueue(stage: string, evidence: unknown): void {
+    const line =
+      JSON.stringify({
+        time: new Date().toISOString(),
+        startupSessionId: this.sessionId,
+        sequence: ++this.sequence,
+        stage,
+        droppedBefore: this.dropped,
+        writeFailuresBefore: this.failures,
+        evidence: diagnosticValue(evidence),
+      }) + '\n';
+    const bytes = Buffer.byteLength(line);
+    if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
+      this.dropped++;
+      return;
+    }
+    this.pendingBytes += bytes;
+    this.writer = this.writer
+      .then(async () => {
+        await this.initialize();
+        if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
+        await safePath(this.directory);
+        const path = join(this.directory, 'session.ndjson');
+        const before = await lstat(path).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          return null;
+        });
+        if (before && (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1))
+          throw new Error('unsafe_session_log');
+        const fd = await open(
+          path,
+          constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+          0o600,
+        );
+        if (!(await fd.stat()).isFile() || (await fd.stat()).nlink !== 1) {
+          await fd.close();
+          throw new Error('unsafe_session_log');
+        }
+        try {
+          await safePath(this.directory);
+          const named = await lstat(path);
+          const opened = await fd.stat();
+          if (
+            named.isSymbolicLink() ||
+            named.ino !== opened.ino ||
+            named.dev !== opened.dev ||
+            (before && (before.ino !== opened.ino || before.dev !== opened.dev))
+          )
+            throw new Error('session_log_changed');
+          await fd.writeFile(line);
+          this.size += bytes;
+        } finally {
+          await fd.close();
+        }
+      })
+      .catch(() => {
+        this.failures++;
+      })
+      .finally(() => {
+        this.pendingBytes -= bytes;
+      });
+  }
+  write(line: string): void {
+    try {
+      this.record('service_log', JSON.parse(line));
+    } catch {
+      this.record('service_log', { text: line });
+    }
+  }
+  private async initialize() {
+    if (this.initialized) return;
+    await mkdir(this.directory, { recursive: true });
+    await safePath(this.directory);
+    try {
+      const path = await safePath(this.directory, 'session-retention.json');
+      const stat = await lstat(path);
+      if (stat.size > 4096) throw new Error('invalid_retention_metadata');
+      const value = JSON.parse(await readFile(path, 'utf8')) as typeof this.retention;
+      for (const key of Object.keys(this.retention) as (keyof typeof this.retention)[])
+        if (Number.isSafeInteger(value[key]) && value[key] >= 0) this.retention[key] = value[key];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failures++;
+    }
+    for (let index = 0; index < SESSION_LIMITS.segments; index++) {
+      const path = join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson');
+      try {
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+          throw new Error('unsafe_session_log');
+        if (Date.now() - stat.mtimeMs > SESSION_LIMITS.retentionDays * 86400_000) {
+          await unlink(path);
+          this.retention.expiredFiles++;
+          this.retention.expiredBytes += stat.size;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    this.size = await lstat(join(this.directory, 'session.ndjson')).then(
+      (s) => s.size,
+      () => 0,
+    );
+    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    this.initialized = true;
+  }
+  private async rotate() {
+    const oldest = await lstat(
+      join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`),
+    ).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (oldest) {
+      this.retention.rotatedFiles++;
+      this.retention.rotatedBytes += oldest.size;
+    }
+    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    await unlink(join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`)).catch(
+      (e) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      },
+    );
+    for (let index = SESSION_LIMITS.segments - 2; index >= 0; index--) {
+      await rename(
+        join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson'),
+        join(this.directory, `session.ndjson.${index + 1}`),
+      ).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      });
+    }
+    this.size = 0;
+  }
+  async flush() {
+    await this.writer;
+  }
+  health() {
+    return {
+      sessionId: this.sessionId,
+      sequence: this.sequence,
+      dropped: this.dropped,
+      writeFailures: this.failures,
+      pendingBytes: this.pendingBytes,
+      retention: this.retention,
+    };
+  }
+  async close() {
+    this.record('session_end', this.health());
+    await this.flush();
+  }
+}

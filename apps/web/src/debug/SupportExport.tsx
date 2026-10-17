@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Panel, StatusBanner } from '../ui';
+import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
 type CollectedStatus = { collectionStatus: 'available' | 'failed' | 'timeout'; value: unknown };
@@ -95,6 +95,8 @@ function supportGsi(value: unknown) {
 }
 
 export function SupportExport() {
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
 
@@ -114,6 +116,8 @@ export function SupportExport() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(from ? { from: new Date(from).toISOString() } : {}),
+          ...(to ? { to: new Date(to).toISOString() } : {}),
           desktop: desktop
             ? {
                 gsi:
@@ -131,12 +135,12 @@ export function SupportExport() {
             : null,
         }),
         cache: 'no-store',
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(120_000),
       });
       if (!response.ok) throw new Error('export_failed');
       const text = await response.text();
       if (
-        new TextEncoder().encode(text).length > 1024 * 1024 ||
+        new TextEncoder().encode(text).length > 256 * 1024 * 1024 ||
         (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
       )
         throw new Error('invalid_bundle');
@@ -144,9 +148,7 @@ export function SupportExport() {
         const saved = await desktopInvoke<boolean>('save_support_bundle', { contents: text });
         setResult({
           error: false,
-          message: saved
-            ? '诊断包已保存，可将文件附在问题反馈中。'
-            : '已取消保存。可以随时重新导出。',
+          message: saved ? '诊断包已保存，请私下交付维护者。' : '已取消保存。可以随时重新导出。',
         });
       } else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
@@ -159,14 +161,13 @@ export function SupportExport() {
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         setResult({
           error: false,
-          message: '已发起下载。请在浏览器下载列表中确认文件后，再附在问题反馈中。',
+          message: '已发起下载。请在浏览器下载列表中确认文件后，再私下交付维护者。',
         });
       }
     } catch {
       setResult({
         error: true,
-        message:
-          '诊断包未能导出。请确认 Mizar 本地服务正在运行，并检查保存位置是否可写，然后重试。',
+        message: '诊断包未能导出。请确认本地服务与保存位置；记录较多时选择较短时间范围后重试。',
       });
     } finally {
       setBusy(false);
@@ -198,6 +199,21 @@ export function SupportExport() {
           在 GitHub 反馈问题
         </a>
       </p>
+      <details>
+        <summary>导出时间范围</summary>
+        <Field
+          label="开始时间（留空包含全部保留记录）"
+          type="datetime-local"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <Field
+          label="结束时间（留空至导出时）"
+          type="datetime-local"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+        />
+      </details>
       <Button
         loading={busy}
         onClick={() => void exportBundle()}

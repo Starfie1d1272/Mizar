@@ -67,6 +67,23 @@ test('saves real local choices, imports atomically, persists manual stop through
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.wav');
+    service.store.failure = true;
+    service.store.ready = false;
+    await page.reload();
+    await expect(page.getByText(/音乐存储未就绪，原配置未加载/)).toBeVisible();
+    await page.getByRole('button', { name: '重新检查音乐存储', exact: true }).click();
+    await expect(page.getByText(/音乐存储未就绪，原配置未加载/)).toHaveCount(0);
+    await expect(page.getByText('合成等待.wav', { exact: true }).first()).toBeVisible();
+    await page
+      .getByLabel('选择本地曲目', { exact: true })
+      .first()
+      .setInputFiles({
+        name: 'broken.mp3',
+        mimeType: 'audio/mpeg',
+        buffer: Buffer.from('invalid media'),
+      });
+    await expect(page.getByText('曲目未添加，请选择有效的本地音频（最大 32 MiB）。')).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.wav');
     await page.getByRole('button', { name: '停止音乐', exact: true }).click();
     await expect(page.getByText('音乐 · 手动停止')).toBeVisible();
     await service.app.close();

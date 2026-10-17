@@ -1,3 +1,4 @@
+import { errorEvidence } from '../updates/diagnostics.js';
 import type { FastifyInstance } from 'fastify';
 import { musicConfigSchema, MUSIC_GROUPS, type MusicGroup } from '@mizar/protocol/music';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -22,9 +23,11 @@ export function registerMusicRoutes(
       (request.headers.origin && !allowed(request.headers.origin))
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    return reply
-      .header('cache-control', 'no-store')
-      .send({ config: store.state.config, status: director.get() });
+    return reply.header('cache-control', 'no-store').send({
+      config: store.state.config,
+      status: director.get(),
+      storage: { ready: store.ready, failed: store.failure },
+    });
   });
   app.post('/operator/music', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
@@ -36,7 +39,9 @@ export function registerMusicRoutes(
       volume?: unknown;
     } | null;
     try {
-      if (body?.action === 'configure') {
+      if (body?.action === 'reload') {
+        await store.load();
+      } else if (body?.action === 'configure') {
         const config = musicConfigSchema.parse(body.config);
         director.invalidate();
         await store.configure(config);
@@ -55,10 +60,24 @@ export function registerMusicRoutes(
       } else if (body?.action === 'stop' || body?.action === 'resume' || body?.action === 'next')
         await director.command(body.action);
       else return reply.code(400).send({ error: 'music_command_invalid' });
-      return { config: store.state.config, status: director.get() };
-    } catch {
+      return {
+        config: store.state.config,
+        status: director.get(),
+        storage: { ready: store.ready, failed: store.failure },
+      };
+    } catch (error) {
+      request.log.error(
+        {
+          stage: 'music_operation',
+          result: 'failure',
+          reason: error instanceof Error ? error.message : 'music_unknown',
+          error: errorEvidence(error),
+        },
+        '音乐操作失败',
+      );
       return reply.code(400).send({
         error: 'music_operation_failed',
+        requestId: request.id,
         message: '音乐操作未完成，原配置已保留。请检查文件后重试。',
       });
     }
@@ -81,10 +100,24 @@ export function registerMusicRoutes(
       if (!Buffer.isBuffer(request.body)) throw new Error('music_archive_invalid');
       await store.import(request.body);
       director.invalidate();
-      return { config: store.state.config, status: director.get() };
-    } catch {
+      return {
+        config: store.state.config,
+        status: director.get(),
+        storage: { ready: store.ready, failed: store.failure },
+      };
+    } catch (error) {
+      request.log.error(
+        {
+          stage: 'music_operation',
+          result: 'failure',
+          reason: error instanceof Error ? error.message : 'music_unknown',
+          error: errorEvidence(error),
+        },
+        '音乐操作失败',
+      );
       return reply.code(400).send({
         error: 'music_import_failed',
+        requestId: request.id,
         message: '音乐包未导入，原配置已保留。请检查清单、音频格式及 ZIP 安全限制。',
       });
     }
@@ -97,10 +130,26 @@ export function registerMusicRoutes(
       if (!Buffer.isBuffer(request.body) || !name || /[\\/]/.test(name))
         throw new Error('music_track_invalid');
       return await store.add(name, request.body);
-    } catch {
+    } catch (error) {
+      request.log.error(
+        {
+          stage: 'music_operation',
+          result: 'failure',
+          reason: error instanceof Error ? error.message : 'music_unknown',
+          error: errorEvidence(error),
+        },
+        '音乐操作失败',
+      );
       return reply.code(400).send({
         error: 'music_track_invalid',
-        message: '曲目未添加，请选择有效的本地音频（最大 32 MiB）。',
+        requestId: request.id,
+        message:
+          store.failure || !store.ready
+            ? '音乐存储尚未就绪，请先重新检查音乐存储。'
+            : (error as NodeJS.ErrnoException).code === 'EACCES' ||
+                (error as NodeJS.ErrnoException).code === 'EPERM'
+              ? '曲目未保存，请检查 Mizar 数据目录的写入权限。'
+              : '曲目未添加，请选择有效的本地音频（最大 32 MiB）。',
       });
     }
   });

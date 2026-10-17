@@ -924,6 +924,11 @@ impl ManagedCs2 {
                         .ok_or("Demo 播放 CFG 名称缺失。")?,
                 ]);
             }
+            self.log.event("cs2_launch_arguments", "begin", Some(&json!({
+                "program": command.get_program().to_string_lossy(),
+                "arguments": command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "preserveSettings": size.is_none(), "runtime":"unverified"
+            }).to_string()));
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
             let mut time = FileTime::default();
