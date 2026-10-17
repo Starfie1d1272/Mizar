@@ -14,6 +14,7 @@ fn main() {
             "mulnx_handoff_status",
             "open_mulnx_browser",
             "start_managed_cs2",
+            "attach_external_cs2",
             "finish_managed_cs2",
             "finish_workspace",
             "workspace_exit_status",

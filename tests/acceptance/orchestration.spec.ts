@@ -242,48 +242,101 @@ test('external-game browser entry uses real production lifecycle without native 
   }
 });
 
-test('Host handoff preparation shows process identity and only requests the fixed browser opener', async ({
+test('Host handoff binds the selected external instance and detaches without managed launch or close', async ({
   page,
   context,
 }, testInfo) => {
   const calls: string[] = [];
-  await context.exposeBinding('cameraNative', (_source, command: string) => {
-    calls.push(command);
-    if (command === 'mulnx_handoff_status')
-      return {
-        processes: [
-          {
-            pid: 4212,
-            created: '134065746000000000',
-            executable: 'D:\\Steam\\CS2\\game\\bin\\win64\\cs2.exe',
-            managed: false,
-          },
-        ],
-        url: 'http://127.0.0.1:3000/',
-      };
-    if (command === 'cs2_config_status') return { pending: false, running: false, phase: 'idle' };
-    if (command === 'workspace_exit_status') return { busy: false, stage: '', message: null };
-    if (command === 'open_mulnx_browser') return null;
-    throw new Error(`unexpected native command ${command}`);
+  let borrowed = false;
+  let production = { mode: 'preparation', revision: 'external-1', canEnter: true };
+  await context.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
+  await context.route('**/local/v1/demo-test', (route) =>
+    route.fulfill({ json: { active: false } }),
+  );
+  await context.route('**/local/v1/obs', (route) =>
+    route.fulfill({ json: { connection: 'connected', findings: [] } }),
+  );
+  await context.route('**/operator/production', (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      action: 'enter',
+      expectedRevision: 'external-1',
+    });
+    production = { ...production, mode: 'live', revision: 'external-2' };
+    return route.fulfill({ json: production });
   });
+  await context.exposeBinding(
+    'cameraNative',
+    (_source, command: string, args?: Record<string, unknown>) => {
+      calls.push(command);
+      if (command === 'mulnx_handoff_status')
+        return {
+          processes: [
+            {
+              pid: 4212,
+              created: '134065746000000000',
+              executable: 'D:\\Steam\\CS2\\game\\bin\\win64\\cs2.exe',
+              managed: false,
+            },
+          ],
+          url: 'http://127.0.0.1:3000/',
+        };
+      if (command === 'cs2_config_status')
+        return {
+          pending: false,
+          running: borrowed,
+          borrowed,
+          preserveSettings: borrowed,
+          phase: 'idle',
+        };
+      if (command === 'gsi_status') return { installed: true, conflict: false };
+      if (command === 'attach_external_cs2') {
+        expect(args).toMatchObject({
+          pid: 4212,
+          created: '134065746000000000',
+          expectedRevision: 'external-1',
+        });
+        borrowed = true;
+        return false;
+      }
+      if (command === 'present_production') return null;
+      if (command === 'finish_workspace') {
+        borrowed = false;
+        production = { ...production, mode: 'preparation', revision: 'external-3' };
+        return null;
+      }
+      if (command === 'workspace_exit_status') return { busy: false, stage: '', message: null };
+      if (command === 'open_mulnx_browser') return null;
+      throw new Error(`unexpected native command ${command}`);
+    },
+  );
   await context.addInitScript(() =>
     Object.assign(window, {
       __TAURI_INTERNALS__: {
-        invoke: (command: string) =>
+        invoke: (command: string, args?: Record<string, unknown>) =>
           (
-            window as unknown as { cameraNative: (command: string) => Promise<unknown> }
-          ).cameraNative(command),
+            window as unknown as {
+              cameraNative: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+            }
+          ).cameraNative(command, args),
       },
     }),
   );
   await page.goto('/settings?tab=music');
-  await page.getByText('MulNX 浏览器联调', { exact: true }).click();
+  await page.getByText('MulNX 游戏交接', { exact: true }).click();
   await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
   await expect(page.getByText(/PID 4212 · 外部进程/)).toBeVisible();
   await page.getByRole('button', { name: '打开浏览器联调', exact: true }).click();
   await expect.poll(() => calls.filter((c) => c === 'open_mulnx_browser').length).toBe(1);
   expect(calls).not.toContain('start_managed_cs2');
   expect(calls).not.toContain('finish_managed_cs2');
-  await page.getByText('MulNX 浏览器联调', { exact: true }).scrollIntoViewIfNeeded();
+  await page.getByText('MulNX 游戏交接', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('mulnx-host-handoff-preparation.png') });
+  await page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }).click();
+  await expect.poll(() => calls.includes('present_production')).toBe(true);
+  await expect(page.getByText('已借用外部 CS2', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '结束制作并解除借用', exact: true }).click();
+  await expect.poll(() => calls.includes('finish_workspace')).toBe(true);
+  expect(borrowed).toBe(false);
+  expect(calls).not.toContain('start_managed_cs2');
+  expect(calls).not.toContain('finish_managed_cs2');
 });

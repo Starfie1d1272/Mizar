@@ -240,3 +240,5 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 ## 本机地图编排控制
 
 `GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及 RC 验收见[地图自动编排](orchestration.md)。
+
+桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。

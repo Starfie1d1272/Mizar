@@ -622,6 +622,53 @@ fn open_mulnx_browser(log: tauri::State<'_, DesktopLog>, diagnostic_operation_id
 }
 
 #[tauri::command]
+async fn attach_external_cs2(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    pid: u32,
+    created: String,
+    expected_revision: String,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<bool, String> {
+    if window.label() != "main" { return Err("请在准备中心选择外部游戏。".into()); }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence_log = log.clone();
+    let task = diagnostic_task_id.clone();
+    let operation = diagnostic_operation_id.clone();
+    let trigger = diagnostic_trigger.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || log.with_task(task.as_deref(), operation.as_deref(), trigger.as_deref(), || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(3);
+        // Same read-only selected-installation discovery as GSI; never accept an executable path from the UI.
+        let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
+        let gsi = powershell::parse(&log, "外部游戏安装位置核对", &output)?;
+        if gsi["detected"] != true || gsi["installed"] != true || gsi["conflict"] != false || gsi["readFailed"] != false {
+            return Err("请先完成所选 CS2 的 GSI 配置，再重新检查外部游戏。".into());
+        }
+        let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
+        let executable = cfg.parent().and_then(Path::parent).and_then(Path::parent)
+            .ok_or("CS2 安装位置无效。")?.join("bin").join("win64").join("cs2.exe");
+        let created = created.parse::<u64>().map_err(|_| "游戏创建标识无效。")?;
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        production_exit::prepare_external_entry(&log, &expected_revision)?;
+        cs2.attach_external(pid, created, &executable)?;
+        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+            tracker.preserve_settings = true;
+        }
+        Ok(false) // No game was launched or acquired as an owned process.
+    })).await.map_err(|_| "外部游戏交接未完成，请重新检查实例。".to_string())?;
+    evidence_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || evidence_log.native_outcome("attach_external_cs2", diagnostic_operation_id.as_deref(), &result));
+    result
+}
+
+#[tauri::command]
 async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
@@ -691,6 +738,7 @@ async fn finish_managed_cs2(app: tauri::AppHandle, diagnostic_operation_id: Opti
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("finish_managed_cs2", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(2);
+        if cs2.has_external() { return Err("请使用退出工作台解除借用；外部游戏由原启动方退出。".into()); }
         production_exit::finish_managed_game(&app.state::<DesktopLog>(), |requires_proof| {
             cs2.finish()?;
             if requires_proof {
@@ -790,6 +838,12 @@ async fn finish_workspace(
                     log.step("workspace_exit_production", || production_exit::finish_workspace_production(&log))
                 },
                 || {
+                    if cs2.has_external() {
+                        feedback.stage("detachment");
+                        let _activity = activity.begin(3);
+                        // Production has safely finished. Detach without granting game-stop/recycle proof.
+                        return log.step("workspace_external_detach", || cs2.finish());
+                    }
                     feedback.stage("restoration");
                     let _activity = activity.begin(2);
                     production_exit::finish_managed_game(&log, |requires_proof| {
@@ -1260,7 +1314,7 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
             let process = cs2.workspace_process()?;
-            let request = process.as_ref().and_then(|process| {
+            let request = process.as_ref().filter(|process| process.owned).and_then(|process| {
                 app.state::<HostState>().entry_focus.lock().ok()?
                     .request(focus_session(process), source)
             });
@@ -1994,6 +2048,7 @@ fn run_desktop(
             mulnx_handoff_status,
             open_mulnx_browser,
             start_managed_cs2,
+            attach_external_cs2,
             finish_managed_cs2,
             finish_workspace,
             workspace_exit_status,
@@ -2124,6 +2179,13 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            if cs2.external_isolation_pending() {
+                                let log = host.state::<DesktopLog>();
+                                match production_exit::disconnect_camera(&log) {
+                                    Ok(()) => cs2.external_isolated(),
+                                    Err(error) => log.event("external_game_isolation", "failure", Some(&error)),
+                                }
+                            }
                             refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
@@ -2157,7 +2219,7 @@ fn run_desktop(
                     let mut group_outcome = None;
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
                         let failure = workspace_group::synchronize(
-                            &mut group, process.as_ref(), panels, &allowed,
+                            &mut group, process.as_ref().filter(|process| process.owned), panels, &allowed,
                         );
                         group_outcome = Some((group.restored, failure));
                         if let Some(failure) = failure {

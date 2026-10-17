@@ -548,9 +548,11 @@ export function WorkspaceDock() {
           <small className="workspace-exit-help">
             {exit?.busy
               ? workspaceExitLabel(exit.stage)
-              : cs2?.preserveSettings
-                ? '关闭本次游戏，保留游戏设置'
-                : '关闭游戏并恢复配置'}
+              : cs2?.borrowed
+                ? '解除借用，游戏保持运行'
+                : cs2?.preserveSettings
+                  ? '关闭本次游戏，保留游戏设置'
+                  : '关闭游戏并恢复配置'}
           </small>
           <Button
             disabled={busy}

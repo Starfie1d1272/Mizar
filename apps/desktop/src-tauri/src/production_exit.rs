@@ -420,6 +420,26 @@ pub fn finish_managed_game(
     )
 }
 
+/// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.
+pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
+    if code != 200 || view["mode"] != "preparation" || view["revision"].as_str() != Some(expected_revision) {
+        return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
+    }
+    disconnect_camera(log)?;
+    invalidate_local_match_exit(log)
+}
+
+pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
+    let (code, camera) = request(log, "POST", "/operator/orchestration", r#"{"action":"disconnect"}"#,
+        Instant::now() + Duration::from_secs(2))?;
+    if code != 200 || camera["status"]["held"] != true || camera["status"]["connected"] != false {
+        return Err("旧运镜连接未能隔离，请检查本地服务；执行及停止均未确认。".into());
+    }
+    Ok(())
+}
+
 pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
     finish_production(log, "shutdown")
 }

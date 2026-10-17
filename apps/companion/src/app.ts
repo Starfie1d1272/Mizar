@@ -883,6 +883,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
     beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeFinish: () => cameraDirector?.hold('正在结束制作；已停用自动运镜，停止结果未确认。'),
     finishTrial: async () => {
       await demoTest?.finish();
     },

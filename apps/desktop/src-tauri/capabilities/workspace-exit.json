@@ -5,5 +5,5 @@
   "remote": {
     "urls": ["http://127.0.0.1:3000/*"]
   },
-  "permissions": ["allow-finish-workspace"]
+  "permissions": ["allow-finish-workspace", "allow-attach-external-cs2"]
 }
