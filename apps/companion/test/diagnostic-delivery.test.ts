@@ -388,15 +388,20 @@ describe('consented diagnostic outbox', () => {
   it('does not resume old consent after a withdrawal manifest write fails and the process restarts', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    const remote = service();
+    const options = { endpoint: 'https://diagnostics.example', fetch: remote.fetcher };
+    let delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
     await delivery.consent(true);
+    journal.record('operation_result', { result: 'enrolled-before-io-failure' });
+    await journal.flush();
+    await delivery.tick();
     const internal = delivery as unknown as { save(): Promise<void> };
     const spy = vi.spyOn(internal, 'save').mockRejectedValue(new Error('disk failure'));
     await expect(delivery.consent(false)).rejects.toThrow('disk failure');
     expect(delivery.status().consent).toBe(false);
     spy.mockRestore();
     await delivery.close();
-    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
     expect(delivery.status()).toMatchObject({
       consent: false,
       queuedBatches: 0,
@@ -544,6 +549,100 @@ describe('consented diagnostic outbox', () => {
     expect(
       (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.gz')),
     ).toEqual([]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('pauses transport across restart while continuing to retain local queued evidence', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    let delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.consent(true);
+    await delivery.pause(true);
+    journal.record('operation_result', { result: 'during-pause' });
+    await journal.flush();
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    expect(delivery.status()).toMatchObject({ consent: true, paused: true, queuedBatches: 1 });
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    await delivery.pause(false);
+    await delivery.tick();
+    expect(remote.batches.size).toBeGreaterThan(0);
+    await delivery.close();
+    await journal.close();
+  });
+  it('does not cancel a concurrent consent request when pausing transport', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await Promise.all([delivery.consent(true), delivery.pause(true)]);
+    journal.record('operation_result', { result: 'retained-with-consent-and-pause' });
+    await journal.flush();
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({ consent: true, paused: true, queuedBatches: 1 });
+    expect(remote.calls).toEqual([]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('keeps transport paused when resuming cannot be saved and does not let an older failure override a newer pause', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+    }).initialize(false);
+    await delivery.consent(true);
+    await delivery.pause(true);
+    journal.record('operation_result', { result: 'keep-paused-after-resume-failure' });
+    await journal.flush();
+    const internal = delivery as unknown as { save(): Promise<void> };
+    const save = internal.save.bind(delivery);
+    const spy = vi.spyOn(internal, 'save').mockRejectedValueOnce(new Error('resume write failed'));
+    await expect(delivery.pause(false)).rejects.toThrow('resume write failed');
+    expect(delivery.status().paused).toBe(true);
+    await delivery.tick();
+    expect(remote.calls).toEqual([]);
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    spy
+      .mockImplementationOnce(async () => {
+        entered();
+        await barrier;
+        throw new Error('older resume failed');
+      })
+      .mockImplementation(save);
+    const resume = delivery.pause(false);
+    const failed = expect(resume).rejects.toThrow('older resume failed');
+    await started;
+    const pause = delivery.pause(true);
+    release();
+    await failed;
+    await pause;
+    expect(delivery.status().paused).toBe(true);
+    const disk = JSON.parse(await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8')) as {
+      paused: boolean;
+    };
+    expect(disk.paused).toBe(true);
     await delivery.close();
     await journal.close();
   });

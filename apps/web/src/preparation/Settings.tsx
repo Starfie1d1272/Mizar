@@ -1,3 +1,4 @@
+import { DiagnosticDeliverySettings } from '../debug/DiagnosticDeliverySettings';
 import { MusicSettings } from '../music/MusicSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ObsCaptureGuidance } from '../workspace/ObsCaptureGuidance';
@@ -260,6 +261,7 @@ export function Settings({ tab }: { tab: string }) {
           </Panel>
           <Panel className="settings-card">
             <h2>诊断与支持</h2>
+            <DiagnosticDeliverySettings />
             <p>导出版本、运行状态和最近启动记录，便于定位问题。</p>
             <div className="preparation-actions">
               <Button onClick={() => void action(() => openTool('diagnostics'))}>
