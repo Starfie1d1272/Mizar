@@ -918,6 +918,8 @@ it(
     const options = { supportLogsDirectory: logs, obsConfigPath: join(data, 'obs.json') };
     const first = buildApp(options);
     const origin = 'http://127.0.0.1:3000';
+    const taskId = '11111111-1111-4111-8111-111111111111';
+    const parentOperationId = '22222222-2222-4222-8222-222222222222';
     const browserOperationId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
     const frame = await readFile(new URL('./fixtures/diagnostic-tone.mp3', import.meta.url));
     const bytes = Buffer.concat(
@@ -933,6 +935,9 @@ it(
           'content-type': 'application/x-mizar-audio',
           'x-mizar-filename': encodeURIComponent('诊断合成音.mp3'),
           'x-mizar-operation-id': browserOperationId,
+          'x-mizar-task-id': taskId,
+          'x-mizar-parent-operation-id': parentOperationId,
+          'x-mizar-trigger': 'user',
         },
         body: bytes,
       });
@@ -1021,6 +1026,7 @@ it(
       )!;
       expect(validated.requestId).toBe(upload.evidence.requestId);
       expect(validated.browserOperationId).toBe(browserOperationId);
+      expect(validated).toMatchObject({ taskId, parentOperationId, trigger: 'user' });
       expect(
         events.some(
           (event) =>

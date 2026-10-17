@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
@@ -6,6 +7,38 @@ import { HudConfigStore } from '../../apps/companion/src/hud-config/store.js';
 import { parseRealProgramArtifact } from '../../apps/web/src/program/fixtures/real-program-fixtures.js';
 import { type HudResolvedPreset } from '../../packages/hud-config/src/index.js';
 import { expect, test as baseTest } from './companion-isolation.js';
+
+interface TaskRecord {
+  stage: string;
+  taskId?: string | null;
+  trigger?: string;
+  startupSessionId: string;
+  evidence: {
+    operation?: string;
+    phase?: string;
+    route?: string;
+    evidence?: {
+      kind?: string;
+      taskId?: string;
+      evidence?: { result?: string; activeRevision?: string };
+    };
+  };
+}
+async function taskRecords(directory: string): Promise<TaskRecord[]> {
+  const text = await readFile(join(directory, 'logs/session.ndjson'), 'utf8').catch(() => '');
+  return text.split('\n').flatMap((line) => {
+    try {
+      return [JSON.parse(line) as TaskRecord];
+    } catch {
+      return [];
+    }
+  });
+}
+function taskKind(record: TaskRecord) {
+  return record.stage === 'browser_control' && record.evidence.operation === 'task'
+    ? record.evidence.evidence?.kind
+    : undefined;
+}
 
 const test = baseTest.extend({
   context: async ({ context }, use) => {
@@ -23,32 +56,35 @@ test('HUD settings preview → save → disk reload → activate → Program', a
   const directory = await mkdtemp(join(tmpdir(), 'mizar-hud-customization-'));
   const filePath = join(directory, 'hud.json');
   let store = new HudConfigStore({ filePath });
-  let app = buildApp({ hudConfigStore: store });
+  let app = buildApp({ hudConfigStore: store, supportLogsDirectory: join(directory, 'logs') });
   let restarting = false;
   try {
     await app.ready();
-    await context.route(/\/(?:operator|local\/v1)\/hud-config$/, async (route) => {
-      if (restarting) {
-        await route.fulfill({
-          status: 503,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: 'companion_offline' }),
+    await context.route(
+      /\/(?:operator|local\/v1)\/hud-config$|\/debug\/control-event$/,
+      async (route) => {
+        if (restarting) {
+          await route.fulfill({
+            status: 503,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'companion_offline' }),
+          });
+          return;
+        }
+        const request = route.request();
+        const response = await app.inject({
+          method: request.method() as 'GET' | 'POST',
+          url: new URL(request.url()).pathname,
+          headers: request.headers(),
+          ...(request.postData() === null ? {} : { payload: request.postData()! }),
         });
-        return;
-      }
-      const request = route.request();
-      const response = await app.inject({
-        method: request.method() as 'GET' | 'POST',
-        url: new URL(request.url()).pathname,
-        headers: request.headers(),
-        ...(request.postData() === null ? {} : { payload: request.postData()! }),
-      });
-      await route.fulfill({
-        status: response.statusCode,
-        headers: response.headers as Record<string, string>,
-        body: response.body,
-      });
-    });
+        await route.fulfill({
+          status: response.statusCode,
+          headers: response.headers as Record<string, string>,
+          body: response.body,
+        });
+      },
+    );
     const artifact = parseRealProgramArtifact(
       JSON.parse(
         await readFile(
@@ -89,13 +125,21 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await page.getByRole('button', { name: '另存为', exact: true }).click();
     await expect(page.getByText('已另存为「内容定制验收」。', { exact: true })).toBeVisible();
     expect(store.getState().etag).toBe(originalEtag);
+    await expect
+      .poll(
+        async () =>
+          (await taskRecords(directory)).filter(
+            (record) => taskKind(record) === 'hud_save-as' && record.evidence.phase === 'terminal',
+          ).length,
+      )
+      .toBe(1);
     // The editor keeps polling while the disk-backed Companion is restarted.
     restarting = true;
     await app.close();
     expect(await page.evaluate(async () => (await fetch('/operator/hud-config')).status)).toBe(503);
     store = new HudConfigStore({ filePath });
     await store.load();
-    app = buildApp({ hudConfigStore: store });
+    app = buildApp({ hudConfigStore: store, supportLogsDirectory: join(directory, 'logs') });
     await app.ready();
     restarting = false;
     await page.reload();
@@ -151,6 +195,61 @@ test('HUD settings preview → save → disk reload → activate → Program', a
         .resolved,
     ).toEqual(resolved);
     await program.close();
+    await expect
+      .poll(
+        async () =>
+          (await taskRecords(directory)).filter(
+            (record) =>
+              taskKind(record) === 'hud_activate-preset' && record.evidence.phase === 'terminal',
+          ).length,
+      )
+      .toBe(1);
+    const exported = await app.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers: { origin: 'http://127.0.0.1:4173' },
+      payload: {},
+    });
+    expect(exported.statusCode).toBe(200);
+    const bundlePath = join(directory, 'task-bundle.json');
+    await writeFile(bundlePath, exported.body);
+    const timeline = execFileSync(
+      process.execPath,
+      ['scripts/diagnostics/read-support-bundle.mjs', bundlePath],
+      { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as TaskRecord);
+    const starts = timeline.filter(
+      (record) => record.evidence?.phase === 'begin' && taskKind(record),
+    );
+    for (const kind of ['hud_save-as', 'hud_save-resource', 'hud_activate-preset']) {
+      const start = starts.find((record) => taskKind(record) === kind);
+      expect(start, `${kind} root preserved in the real exported archive`).toBeDefined();
+      const id = start!.evidence.evidence!.taskId;
+      expect(start!.taskId).toBe(id);
+      const result = timeline.find(
+        (record) => record.taskId === id && record.evidence.phase === 'terminal',
+      );
+      expect(result?.evidence.evidence?.evidence?.result).toBe('confirmed');
+      expect(
+        timeline.some(
+          (record) =>
+            record.stage === 'operation_result' &&
+            record.taskId === id &&
+            record.evidence.route === '/operator/hud-config',
+        ),
+      ).toBe(true);
+    }
+    expect(new Set(starts.map((record) => record.startupSessionId)).size).toBe(2);
+    const activation = timeline.find(
+      (record) =>
+        taskKind(record) === 'hud_activate-preset' && record.evidence.phase === 'terminal',
+    );
+    expect(activation?.evidence.evidence?.evidence?.activeRevision).toBe(
+      store.getState().activeRevision,
+    );
   } finally {
     await context.unrouteAll({ behavior: 'wait' });
     await app.close();

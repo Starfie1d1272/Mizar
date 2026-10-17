@@ -606,13 +606,18 @@ async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
     diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
 ) -> Result<bool, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<bool, String> = async move {
     app.state::<production_exit::ExitGate>().check()?;
-    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
+    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("start_managed_cs2", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -629,12 +634,13 @@ async fn start_managed_cs2(
             tracker.preserve_settings = cs2.preserve_settings();
         }
         result
+        })
     } })
     .await
     .map_err(|error| command_log.preserve_error("start_managed_cs2", native_operation_id.as_deref(), &error, "CS2 启动未完成。".to_string()))?
 
     }.await;
-    diagnostic_log.native_outcome("start_managed_cs2", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("start_managed_cs2", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -652,12 +658,15 @@ fn refresh_finished_window_feedback(app: &tauri::AppHandle, cs2: &managed_cs2::M
 }
 
 #[tauri::command]
-async fn finish_managed_cs2(app: tauri::AppHandle, diagnostic_operation_id: Option<String>) -> Result<(), String> {
+async fn finish_managed_cs2(app: tauri::AppHandle, diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
-    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
+    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("finish_managed_cs2", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -671,12 +680,13 @@ async fn finish_managed_cs2(app: tauri::AppHandle, diagnostic_operation_id: Opti
         })?;
         refresh_finished_window_feedback(&app, &cs2);
         Ok(())
+        })
     } })
     .await
     .map_err(|error| command_log.preserve_error("finish_managed_cs2", native_operation_id.as_deref(), &error, "CS2 原配置恢复未完成。".to_string()))?
 
     }.await;
-    diagnostic_log.native_outcome("finish_managed_cs2", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("finish_managed_cs2", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -693,10 +703,14 @@ async fn finish_workspace(
     app: tauri::AppHandle,
     confirm_steam_cancelled: Option<bool>,
     diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
         return Err("请在准备中心或工作台退出本次制作。".into());
@@ -708,20 +722,25 @@ async fn finish_workspace(
     let _gate = production_exit::WorkspaceExitGuard(&gate);
     let feedback = app.state::<production_exit::WorkspaceExit>();
     feedback.stage("checking");
-    app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string()));
+    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string())));
     // Keep a visible waiting record if a native lock, process or presentation call stalls.
     let (waiting_done, waiting) = std::sync::mpsc::channel::<()>();
     let waiting_host = app.clone();
-    std::thread::spawn(move || {
+    let waiting_log = command_log.clone();
+    let waiting_task = native_task_id.clone();
+    let waiting_trigger = native_trigger.clone();
+    let waiting_operation = native_operation_id.clone();
+    std::thread::spawn(move || waiting_log.with_task(waiting_task.as_deref(), waiting_operation.as_deref(), waiting_trigger.as_deref(), || {
         let started = std::time::Instant::now();
         while waiting.recv_timeout(Duration::from_secs(5)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
             let phase = waiting_host.state::<production_exit::WorkspaceExit>().status().stage;
             waiting_host.state::<DesktopLog>().event("workspace_exit", "waiting", Some(&serde_json::json!({"phase":phase,"elapsedMs":started.elapsed().as_millis()}).to_string()));
         }
-    });
+    }));
     // This task belongs to Host, so hiding or closing a WebView cannot lose it.
     let host = app.clone();
-    let result = tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || -> Result<(), String> {
+    let result = tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || -> Result<(), String> {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -772,6 +791,7 @@ async fn finish_workspace(
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
         log.step("workspace_exit_presentation", || present_production_inner(&host, false))
+        })
     } })
     .await
     .unwrap_or_else(|error| {
@@ -792,7 +812,7 @@ async fn finish_workspace(
             )),
         );
     }
-    app.state::<DesktopLog>().event("workspace_exit", if result.is_ok() { "success" } else { "failure" }, Some(&serde_json::json!({"phase":feedback.status().stage,"error":result.as_ref().err()}).to_string()));
+    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", if result.is_ok() { "success" } else { "failure" }, Some(&serde_json::json!({"phase":feedback.status().stage,"error":result.as_ref().err()}).to_string())));
     let _ = waiting_done.send(());
     feedback.complete(&result);
     if result.is_err() {
@@ -803,7 +823,7 @@ async fn finish_workspace(
     result
 
     }.await;
-    diagnostic_log.native_outcome("finish_workspace", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("finish_workspace", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -916,14 +936,19 @@ async fn enter_demo_test(
     app: tauri::AppHandle,
     request_id: String,
     diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
     demo_main_window(&window)?;
     let host = app.clone();
-    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
+    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         host.state::<production_exit::ExitGate>().check()?;
@@ -932,13 +957,14 @@ async fn enter_demo_test(
         demo_test::request(&host.state::<DesktopLog>(), "playing", &request_id, None)?;
         drop(cs2);
         present_production_inner(&host, true)
+        })
     } })
     .await
     .map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "Demo 工作台未能打开。".to_string()))??;
     Ok(())
 
     }.await;
-    diagnostic_log.native_outcome("enter_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("enter_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -948,16 +974,21 @@ async fn finish_demo_test(
     app: tauri::AppHandle,
     request_id: Option<String>,
     diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
         return Err("请在制作中心或试播工作台结束 Demo 试播。".into());
     }
     let host = app.clone();
-    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
+    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("finish_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -980,13 +1011,14 @@ async fn finish_demo_test(
         cs2.finish()?;
         refresh_finished_window_feedback(&host, &cs2);
         present_production_inner(&host, false)
+        })
     } })
     .await
     .map_err(|error| command_log.preserve_error("finish_demo_test", native_operation_id.as_deref(), &error, "Demo 试播恢复未完成。".to_string()))??;
     Ok(())
 
     }.await;
-    diagnostic_log.native_outcome("finish_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("finish_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -1022,12 +1054,17 @@ async fn restore_cs2_backup(
     app: tauri::AppHandle,
     confirm_steam_cancelled: bool,
     diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
-    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
+    tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("restore_cs2_backup", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -1035,12 +1072,13 @@ async fn restore_cs2_backup(
         cs2.restore_backup(confirm_steam_cancelled)?;
         refresh_finished_window_feedback(&app, &cs2);
         Ok(())
+        })
     } })
     .await
     .map_err(|error| command_log.preserve_error("restore_cs2_backup", native_operation_id.as_deref(), &error, "CS2 原配置恢复未完成。".to_string()))?
 
     }.await;
-    diagnostic_log.native_outcome("restore_cs2_backup", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("restore_cs2_backup", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 
@@ -1172,16 +1210,18 @@ fn open_main(app: tauri::AppHandle, path: Option<String>, diagnostic_operation_i
 }
 
 #[tauri::command]
-async fn present_production(app: tauri::AppHandle, live: bool, diagnostic_operation_id: Option<String>) -> Result<(), String> {
+async fn present_production(app: tauri::AppHandle, live: bool, diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
-    tauri::async_runtime::spawn_blocking(move || present_production_inner(&app, live))
+    tauri::async_runtime::spawn_blocking({ let log = command_log.clone(); let operation = native_operation_id.clone(); move || log.with_task(native_task_id.as_deref(), operation.as_deref(), native_trigger.as_deref(), || present_production_inner(&app, live)) })
         .await.map_err(|error| command_log.preserve_error("present_production", native_operation_id.as_deref(), &error, "现场窗口未能打开。".to_string()))?
 
     }.await;
-    diagnostic_log.native_outcome("present_production", diagnostic_operation_id.as_deref(), &diagnostic_result);
+    diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("present_production", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
 }
 

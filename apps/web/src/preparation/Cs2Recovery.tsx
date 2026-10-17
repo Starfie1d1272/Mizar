@@ -1,3 +1,5 @@
+import { browserErrorEvidence } from '../debug/control-journal';
+import { ControlTask } from '../debug/control-task';
 import { useState } from 'react';
 import { Button, Checkbox, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
@@ -7,6 +9,8 @@ import {
   useCs2Status,
   useWorkspaceExitStatus,
   workspaceExitLabel,
+  type Cs2ConfigStatus,
+  type WorkspaceExitStatus,
 } from './cs2-status';
 
 /** Cross-window recovery reads the Host journal, never browser storage. */
@@ -16,16 +20,72 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   const [busy, setBusy] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [feedback, setFeedback] = useState('');
-  async function run(action: () => Promise<unknown>, success = '恢复检查已完成。') {
+  async function run(
+    action: (task: ControlTask) => Promise<unknown>,
+    success = '恢复检查已完成。',
+    expected: 'restored' | 'workspace' = 'restored',
+  ) {
     if (busy || phase) return;
     setBusy(true);
     setFeedback('');
+    const task = new ControlTask('recovery_action', 'user', {
+      status,
+      workspaceExit: exit,
+      expected,
+    });
+    let acknowledged = false;
     try {
-      await action();
-      setFeedback(success);
+      const outcome = await action(task);
+      acknowledged = true;
+      const after = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
+      const workspaceExit = await desktopInvoke<WorkspaceExitStatus>(
+        'workspace_exit_status',
+        undefined,
+        task,
+      );
+      const restored =
+        !after.busy &&
+        !after.running &&
+        !after.pending &&
+        !after.spectatorRecoveryPending &&
+        !after.demoCleanupPending &&
+        !after.canPreserve &&
+        after.phase !== 'uncertain' &&
+        !workspaceExit.busy &&
+        !workspaceExit.message &&
+        !workspaceExit.windowMessage;
+      const confirmed =
+        expected === 'restored'
+          ? restored
+          : outcome === 'confirmed' && after.running === true && !after.busy;
+      task.finish(
+        confirmed
+          ? 'confirmed'
+          : outcome === 'blocked' || outcome === 'cancelled'
+            ? outcome
+            : 'unconfirmed',
+        {
+          after,
+          workspaceExit,
+          confirmation: confirmed ? 'host_command_and_status_readback' : 'recovery_still_pending',
+        },
+      );
+      setFeedback(confirmed ? success : '处理结果仍待确认，请查看当前状态；备份和处理记录仍保留。');
       setCancelled(false);
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : '恢复未完成，请重试。');
+      if (acknowledged)
+        task.finish('unconfirmed', {
+          reason: 'host_readback_failed',
+          error: browserErrorEvidence(reason),
+        });
+      else task.fail(reason);
+      setFeedback(
+        acknowledged
+          ? '处理结果尚未确认，请检查当前状态后重试。'
+          : reason instanceof Error
+            ? reason.message
+            : '恢复未完成，请重试。',
+      );
     } finally {
       setBusy(false);
     }
@@ -60,10 +120,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || exit.busy || Boolean(phase) || (uncertain && !cancelled)}
               onClick={() =>
-                void run(async () => {
+                void run(async (task) => {
                   await desktopInvoke(
                     'finish_workspace',
                     uncertain ? { confirmSteamCancelled: cancelled } : undefined,
+                    task,
                   );
                 }, '')
               }
@@ -207,8 +268,9 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               disabled={busy || Boolean(phase)}
               onClick={() =>
                 void run(
-                  () => productionAction('enter', production, true),
+                  (task) => productionAction('enter', production, true, task),
                   '已保持原游戏设置打开工作台。',
+                  'workspace',
                 )
               }
             >
@@ -219,7 +281,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || Boolean(phase)}
               onClick={() =>
-                void run(() => productionAction('enter', production), '工作台已打开。')
+                void run(
+                  (task) => productionAction('enter', production, false, task),
+                  '工作台已打开。',
+                  'workspace',
+                )
               }
             >
               打开直播工作台
@@ -229,8 +295,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || Boolean(phase) || Boolean(status.running)}
               onClick={() =>
-                void run(() =>
-                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }),
+                void run((task) =>
+                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }, task),
                 )
               }
             >
@@ -241,8 +307,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || Boolean(phase) || Boolean(status.running)}
               onClick={() =>
-                void run(() =>
-                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }),
+                void run((task) =>
+                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }, task),
                 )
               }
             >
@@ -254,14 +320,18 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               disabled={busy || Boolean(phase) || !production || (uncertain && !cancelled)}
               onClick={() =>
                 void run(
-                  () =>
+                  (task) =>
                     status.running && production
                       ? production.mode === 'preparation'
-                        ? desktopInvoke('finish_managed_cs2')
-                        : productionAction('finish', production)
+                        ? desktopInvoke('finish_managed_cs2', undefined, task)
+                        : productionAction('finish', production, false, task)
                       : production?.mode === 'preparation'
-                        ? desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: cancelled })
-                        : productionAction('finish', production!),
+                        ? desktopInvoke(
+                            'restore_cs2_backup',
+                            { confirmSteamCancelled: cancelled },
+                            task,
+                          )
+                        : productionAction('finish', production!, false, task),
                   status.preserveSettings
                     ? '本次启动已结束，游戏设置保持不变。'
                     : '恢复检查已完成。',

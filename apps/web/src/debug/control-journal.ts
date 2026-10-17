@@ -26,10 +26,24 @@ export function sendControlEvidence(
 ): Promise<void> {
   try {
     browserDocumentId ??= crypto.randomUUID();
+    const context =
+      evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    for (const [field, header] of [
+      ['taskId', 'x-mizar-task-id'],
+      ['operationId', 'x-mizar-operation-id'],
+      ['parentOperationId', 'x-mizar-parent-operation-id'],
+    ] as const) {
+      const value = context[field];
+      if (typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value))
+        headers[header] = value;
+    }
+    if (context.trigger === 'user' || context.trigger === 'system')
+      headers['x-mizar-trigger'] = context.trigger;
     return fetch('/debug/control-event', {
       method: 'POST',
       signal: AbortSignal.timeout(3000),
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({
         operation,
         phase,
@@ -114,13 +128,32 @@ export function installControlJournal(): void {
         ? suppliedId
         : crypto.randomUUID();
     headers.set('x-mizar-operation-id', operationId);
-    controlEvidence('http_control', 'begin', { operationId, method, route: url.pathname });
+    const taskId = headers.get('x-mizar-task-id');
+    const trigger = headers.get('x-mizar-trigger') ?? 'unattributed';
+    const parentOperationId = headers.get('x-mizar-parent-operation-id');
+    controlEvidence('http_control', 'begin', {
+      taskId,
+      trigger,
+      parentOperationId,
+      operationId,
+      method,
+      route: url.pathname,
+    });
     try {
       const response = await transport(input, { ...init, headers });
-      controlEvidence('http_control', 'result', { operationId, status: response.status });
+      controlEvidence('http_control', 'result', {
+        taskId,
+        trigger,
+        parentOperationId,
+        operationId,
+        status: response.status,
+      });
       return response;
     } catch (error) {
       controlEvidence('http_control', 'failure', {
+        taskId,
+        trigger,
+        parentOperationId,
         operationId,
         error: browserErrorEvidence(error),
       });
